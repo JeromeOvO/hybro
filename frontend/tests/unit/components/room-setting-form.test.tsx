@@ -79,13 +79,6 @@ describe('RoomSettingForm', () => {
       expect(screen.getByRole('button', { name: /Create Room/ })).toBeInTheDocument()
     })
 
-    it('should render debate mode switch', () => {
-      render(<RoomSettingForm {...defaultProps} />)
-
-      expect(screen.getByText('Debate Mode')).toBeInTheDocument()
-      expect(screen.getAllByRole('switch')).toHaveLength(1)
-    })
-
     it('should show "Update Room" when isEditing is true', () => {
       render(<RoomSettingForm {...defaultProps} isEditing />)
 
@@ -133,7 +126,7 @@ describe('RoomSettingForm', () => {
       await user.click(screen.getByRole('button', { name: /Create Room/ }))
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Object), { debateMode: false })
+        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Array))
       })
     })
 
@@ -162,30 +155,10 @@ describe('RoomSettingForm', () => {
       await user.click(screen.getByRole('button', { name: /Create Room/ }))
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith('My Test Room', expect.any(Object), { debateMode: false })
+        expect(onSubmit).toHaveBeenCalledWith('My Test Room', expect.any(Array))
       })
     })
 
-    it('should submit with debate mode toggled on', async () => {
-      const onSubmit = vi.fn()
-      const user = userEvent.setup()
-
-      render(
-        <RoomSettingForm
-          onSubmit={onSubmit}
-          requireRoomName={false}
-        />
-      )
-
-      // Debate Mode is the only switch (Supervisor moved to chat input)
-      const switches = screen.getAllByRole('switch')
-      await user.click(switches[0])
-      await user.click(screen.getByRole('button', { name: /Create Room/ }))
-
-      await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith('', expect.any(Object), { debateMode: true })
-      })
-    })
   })
 
   describe('initialData', () => {
@@ -197,7 +170,6 @@ describe('RoomSettingForm', () => {
           initialData={{
             roomName: 'Existing Room',
             selectedAgents: { 'agent-1': 'Research Bot' },
-            debateMode: true,
           }}
         />
       )
@@ -305,8 +277,7 @@ describe('RoomSettingForm', () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalledWith(
           '',
-          expect.arrayContaining(['agent-1']),
-          { debateMode: false }
+          expect.arrayContaining(['agent-1'])
         )
       })
     })

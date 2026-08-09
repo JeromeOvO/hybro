@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 
 from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
@@ -368,7 +368,6 @@ async def inquiry_room_messages(
 @router.post("/roomCenter/sendMessage")
 async def send_message(
     request: Request,
-    background_tasks: BackgroundTasks,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
@@ -386,15 +385,13 @@ async def send_message(
     room_id = request_data.get("room_id")
     message = request_data.get("message")
     client_request_id = request_data.get("client_request_id")
-    mode = request_data.get("mode", "direct")
-    if mode is None:
-        mode = "direct"
-    if not isinstance(mode, str) or mode not in {"direct", "supervisor", "debate"}:
+    mode = request_data.get("mode")
+    if mode not in {"direct", "supervisor"}:
         return RoomCenterUserMessageResponse(
             message_id=None,
             message=None,
             success=False,
-            error="mode must be one of: direct, supervisor, debate",
+            error="mode is required and must be one of: direct, supervisor",
             status_code=400,
         )
 
@@ -419,180 +416,115 @@ async def send_message(
             status_code=400,
         )
 
-    if "target_group" in request_data:
+    legacy_fields = {
+        "selected_agent_ids",
+        "candidate_scope_mode",
+        "candidate_scope_group_id",
+        "message_target_mode",
+        "target_group_id",
+        "target_group",
+        "target_agent_ids",
+        "mentioned_agent_ids",
+    }
+    supplied_legacy_fields = sorted(legacy_fields.intersection(request_data))
+    if supplied_legacy_fields:
         return RoomCenterUserMessageResponse(
             message_id=None,
             message=None,
             success=False,
-            error="target_group is no longer supported; use message_target_mode and target_group_id",
+            error=(
+                "legacy targeting fields are no longer supported; use agent_scope: "
+                + ", ".join(supplied_legacy_fields)
+            ),
             status_code=400,
         )
 
-    room = await _get_verified_room(room_id, user, store)
-    room_uses_supervisor = (
-        isinstance(room.extend_info, dict)
-        and room.extend_info.get("use_supervisor", False) is True
-    )
-    is_supervisor_orchestration = mode == "supervisor" and room_uses_supervisor
+    raw_scope = request_data.get("agent_scope")
+    if not isinstance(raw_scope, dict):
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error="agent_scope is required",
+            status_code=400,
+        )
+    source = raw_scope.get("source")
+    if source not in {"mention", "room_default", "all_agents", "saved_group"}:
+        return RoomCenterUserMessageResponse(
+            message_id=None,
+            message=None,
+            success=False,
+            error=(
+                "agent_scope.source must be one of: mention, room_default, "
+                "all_agents, saved_group"
+            ),
+            status_code=400,
+        )
 
-    message_target_mode = request_data.get("message_target_mode")
-    target_group_id = request_data.get("target_group_id")
-    mentioned_agent_ids = request_data.get("mentioned_agent_ids")
-    selected_agent_ids = request_data.get("selected_agent_ids")
-    candidate_scope_mode = request_data.get("candidate_scope_mode")
-    candidate_scope_group_id = request_data.get("candidate_scope_group_id")
-    has_target_group_id = "target_group_id" in request_data
-
-    if selected_agent_ids is not None:
-        if not isinstance(selected_agent_ids, list) or not all(
+    normalized_scope: dict[str, object] = {"source": source}
+    if source == "mention":
+        if set(raw_scope) != {"source", "agent_ids"}:
+            return RoomCenterUserMessageResponse(
+                message_id=None,
+                message=None,
+                success=False,
+                error="mention agent_scope accepts only source and agent_ids",
+                status_code=400,
+            )
+        raw_agent_ids = raw_scope.get("agent_ids")
+        if not isinstance(raw_agent_ids, list) or not raw_agent_ids or not all(
             isinstance(agent_id, str) and agent_id.strip()
-            for agent_id in selected_agent_ids
+            for agent_id in raw_agent_ids
         ):
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
                 success=False,
-                error="selected_agent_ids must be a list of non-empty strings",
+                error="mention agent_scope.agent_ids must be a non-empty string list",
                 status_code=400,
             )
-        selected_agent_ids = [agent_id.strip() for agent_id in selected_agent_ids]
-
-    if candidate_scope_mode is not None:
-        if (
-            not isinstance(candidate_scope_mode, str)
-            or not candidate_scope_mode.strip()
-        ):
+        normalized_scope["agent_ids"] = list(
+            dict.fromkeys(agent_id.strip() for agent_id in raw_agent_ids)
+        )
+    elif source == "saved_group":
+        if set(raw_scope) != {"source", "group_id"}:
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
                 success=False,
-                error="candidate_scope_mode must be a non-empty string",
+                error="saved_group agent_scope accepts only source and group_id",
                 status_code=400,
             )
-        candidate_scope_mode = candidate_scope_mode.strip()
-
-    if candidate_scope_group_id is not None:
-        if (
-            not isinstance(candidate_scope_group_id, str)
-            or not candidate_scope_group_id.strip()
-        ):
+        group_id = raw_scope.get("group_id")
+        if not isinstance(group_id, str) or not group_id.strip():
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
                 success=False,
-                error="candidate_scope_group_id must be a non-empty string",
+                error="saved_group agent_scope.group_id is required",
                 status_code=400,
             )
-        candidate_scope_group_id = candidate_scope_group_id.strip()
-
-    if mentioned_agent_ids is not None:
-        if not isinstance(mentioned_agent_ids, list) or not all(
-            isinstance(agent_id, str) and agent_id.strip()
-            for agent_id in mentioned_agent_ids
-        ):
+        normalized_group_id = group_id.strip()
+        if normalized_group_id in {"room_team", "all_agents"}:
             return RoomCenterUserMessageResponse(
                 message_id=None,
                 message=None,
                 success=False,
-                error="mentioned_agent_ids must be a list of non-empty strings",
+                error="saved_group agent_scope.group_id cannot be reserved",
                 status_code=400,
             )
-        mentioned_agent_ids = [agent_id.strip() for agent_id in mentioned_agent_ids]
-
-    # Reject mixed payloads: mentions + target mode should not coexist.
-    if (
-        mentioned_agent_ids
-        and message_target_mode is not None
-        and not is_supervisor_orchestration
-    ):
+        normalized_scope["group_id"] = normalized_group_id
+    elif set(raw_scope) != {"source"}:
         return RoomCenterUserMessageResponse(
             message_id=None,
             message=None,
             success=False,
-            error="Cannot specify both mentioned_agent_ids and message_target_mode",
+            error=f"{source} agent_scope accepts only source",
             status_code=400,
         )
 
-    if message_target_mode is not None:
-        if message_target_mode == "saved_group":
-            if not isinstance(target_group_id, str) or not target_group_id.strip():
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="target_group_id is required when message_target_mode is saved_group",
-                    status_code=400,
-                )
-            target_group_id = target_group_id.strip()
-            if target_group_id in {"room_team", "all_agents"}:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="target_group_id cannot be a reserved target group",
-                    status_code=400,
-                )
-            target_group = target_group_id
-        elif message_target_mode == "room_default":
-            if has_target_group_id:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="target_group_id is only supported when message_target_mode is saved_group",
-                    status_code=400,
-                )
-            target_group = "room_team"
-        elif message_target_mode == "all_agents":
-            if has_target_group_id:
-                return RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error="target_group_id is only supported when message_target_mode is saved_group",
-                    status_code=400,
-                )
-            target_group = "all_agents"
-        else:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error=(
-                    "message_target_mode must be one of: room_default, "
-                    "all_agents, saved_group"
-                ),
-                status_code=400,
-            )
-    elif is_supervisor_orchestration and selected_agent_ids:
-        if has_target_group_id:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="target_group_id is only supported when message_target_mode is saved_group",
-                status_code=400,
-            )
-        target_group = "room_team"
-    elif mentioned_agent_ids:
-        if has_target_group_id:
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error="target_group_id is only supported when message_target_mode is saved_group",
-                status_code=400,
-            )
-        target_group = "room_team"
-    else:
-        return RoomCenterUserMessageResponse(
-            message_id=None,
-            message=None,
-            success=False,
-            error="message_target_mode is required when mentioned_agent_ids is not provided",
-            status_code=400,
-        )
-
+    await _get_verified_room(room_id, user, store)
+    mentioned_agent_ids = normalized_scope.get("agent_ids")
     attachments, inline_file_ids, err = _extract_attachments(request_data, message)
     if err is not None:
         return err
@@ -603,11 +535,8 @@ async def send_message(
             "room_id": room_id,
             "client_request_id": client_request_id,
             "mode": mode,
-            "room_supervisor": room_uses_supervisor,
-            "target_mode": message_target_mode,
-            "target_group_id": target_group_id,
-            "mentioned_count": len(mentioned_agent_ids or []),
-            "selected_count": len(selected_agent_ids or []),
+            "scope_source": source,
+            "scope_size": len(mentioned_agent_ids or []),
             "attachment_count": len(attachments or []),
             "inline_file_count": len(inline_file_ids or []),
             "message_length": _message_text_len(message),
@@ -626,15 +555,9 @@ async def send_message(
         attachments=jsonable_encoder(attachments),
         inline_file_ids=inline_file_ids,
         client_request_id=client_request_id,
-        target_group=target_group,
-        target_group_id=target_group_id,
-        message_target_mode=message_target_mode,
-        mentioned_agent_ids=mentioned_agent_ids,
-        selected_agent_ids=selected_agent_ids,
-        candidate_scope_mode=candidate_scope_mode,
-        candidate_scope_group_id=candidate_scope_group_id,
         parent_message_id=related_message_id or None,
         mode=mode,
+        agent_scope=normalized_scope,
     )
     ack = await engine.execute(execution_request)
     logger.info(
@@ -662,11 +585,7 @@ async def send_message(
                 "client_request_id": client_request_id,
             },
         )
-        background_tasks.add_task(
-            engine.start_orchestration,
-            execution_request,
-            ack,
-        )
+        engine.schedule_orchestration(execution_request, ack)
 
     return RoomCenterUserMessageResponse(**ack.model_dump())
 

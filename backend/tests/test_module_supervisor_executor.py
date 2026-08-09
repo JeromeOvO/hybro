@@ -983,7 +983,7 @@ async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_tr
         room_id="room-1",
         user_message_id="msg-1",
         goal="Need quote",
-        candidate_agent_ids=["agent-1"],
+        candidate_agent_ids=["agent-1", "agent-2"],
         status=OrchestrationStatus.RUNNING,
         client_request_id="cr-1",
         dispatch_intents=[
@@ -995,7 +995,16 @@ async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_tr
                 agent_id="agent-1",
                 task="Find pricing",
                 task_hash="hash",
-            )
+            ),
+            DispatchIntent(
+                step_id="msg-1:step-1",
+                step_target_id="msg-1:step-1:target-2",
+                dispatch_intent_id="msg-1:step-1:target-2:intent",
+                planned_agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                task="Check terms",
+                task_hash="hash-2",
+            ),
         ],
         agent_outputs=[
             AgentOutputRecord(
@@ -1003,7 +1012,13 @@ async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_tr
                 agent_id="agent-1",
                 status=StepStatus.SUCCESS.value,
                 text="Agent found the enterprise quote.",
-            )
+            ),
+            AgentOutputRecord(
+                agent_message_id="agent-msg-2",
+                agent_id="agent-2",
+                status=StepStatus.SUCCESS.value,
+                text="Agent confirmed the terms.",
+            ),
         ],
     )
     state = await executor.run_store.create_run(state)
@@ -1011,7 +1026,7 @@ async def test_run_synthesis_action_projects_state_agent_outputs_to_synthesis_tr
     result = await executor._run_synthesis_action(
         state=state,
         planner_action=PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="Summarize",
             synthesis_instruction="Write the final answer",
         ),
@@ -1287,16 +1302,6 @@ class TestLogAndReturn:
         assert returned is result
         assert returned.status == "completed"
 
-    @pytest.mark.asyncio
-    async def test_returns_result_in_debate_mode(self):
-        trajectory = SupervisorTrajectory()
-        result = SupervisorRunResult(status="completed", trajectory=trajectory)
-        se = _make_supervisor_executor()
-        returned = await se._log_and_return(
-            "room-1", trajectory, result, debate_mode=True
-        )
-        assert returned is result
-
 
 # =============================================================================
 # CLARIFY cleanup compensation Tests
@@ -1313,7 +1318,6 @@ class TestClarifyCleanupCompensation:
 
     def _make_room_config(self):
         cfg = MagicMock()
-        cfg.is_debate_mode = False
         return cfg
 
     @pytest.mark.asyncio

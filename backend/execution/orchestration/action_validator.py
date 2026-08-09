@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from execution.orchestration.completion_policy import (
+    CompletionPolicyError,
+    determine_finalization_mode,
+)
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_evaluator import effective_output_key
 from execution.orchestration.outcome_policy import (
@@ -101,11 +105,7 @@ class PlannerActionValidator:
             )
 
         if (
-            action.action
-            in (
-                PlannerActionType.SYNTHESIZE,
-                PlannerActionType.COMPLETE,
-            )
+            action.action == PlannerActionType.COMPLETE
             and run_state is not None
         ):
             PlannerActionValidator._validate_completion(
@@ -133,13 +133,35 @@ class PlannerActionValidator:
             evidence,
             guardrails_enabled=guardrails_enabled,
         )
-        if (
-            action.action != PlannerActionType.COMPLETE
-            or not guardrails_enabled
-            or evidence is None
-        ):
+        try:
+            determine_finalization_mode(
+                run_state,
+                action.action,
+                completion_evidence=evidence,
+            )
+        except CompletionPolicyError as exc:
+            raise PlannerActionValidationError(
+                str(exc), code="completion_gate_rejected"
+            ) from exc
+        has_required_scope = any(
+            progress.remaining_required_obligations
+            for progress in run_state.goal_progress
+        ) or any(
+            outcome.remaining_required_obligations or outcome.missing_output_keys
+            for outcome in run_state.delegation_outcomes
+        )
+        if evidence is None:
+            if has_required_scope:
+                raise PlannerActionValidationError(
+                    "complete action requires evidence for required outputs",
+                    code="completion_required_output_missing",
+                )
             return
         PlannerActionValidator._validate_completion_disposition_requests(evidence)
+        if has_required_scope:
+            PlannerActionValidator._validate_completion_scope(evidence, run_state)
+        if not guardrails_enabled:
+            return
         _validate_completion_references(run_state, evidence)
         if not evidence.satisfied_criteria or any(
             not criterion.strip() for criterion in evidence.satisfied_criteria
@@ -148,8 +170,7 @@ class PlannerActionValidator:
                 "complete action requires satisfied criteria",
                 code="completion_evidence_invalid",
             )
-        if guardrails_enabled:
-            PlannerActionValidator._validate_completion_scope(evidence, run_state)
+        PlannerActionValidator._validate_completion_scope(evidence, run_state)
 
     @staticmethod
     def _validate_delegate_outcome_policy(
@@ -162,13 +183,11 @@ class PlannerActionValidator:
         if run_state is None or not guardrails_enabled:
             return
         participant_snapshot = run_state.participant_snapshot
-        if participant_snapshot is not None and participant_snapshot.turn_policy in {
-            "debate_rounds",
-            "sequential_rounds",
-        }:
-            # The participant policy owns ordering and repeat eligibility for
-            # structured rounds. Treating the shared debate prompt as a
-            # fulfilled goal would incorrectly block the next participant.
+        if (
+            participant_snapshot is not None
+            and participant_snapshot.turn_policy == "sequential_rounds"
+        ):
+            # The participant policy owns ordering and repeat eligibility.
             return
 
         target_fingerprints = [
@@ -551,7 +570,6 @@ def _validate_step_budget(
 ) -> None:
     if steps_used >= step_budget and action.action not in (
         PlannerActionType.PLATFORM_ANSWER,
-        PlannerActionType.SYNTHESIZE,
         PlannerActionType.COMPLETE,
         PlannerActionType.ASK_USER,
         PlannerActionType.FAIL,
@@ -576,20 +594,13 @@ def _validate_delegate(
             "delegate action requires at least one target",
             code="delegate_target_missing",
         )
-    if len(action.targets) > 1:
-        parallel_groups = {target.parallel_group for target in action.targets}
-        has_single_group = len(parallel_groups) == 1 and all(
-            isinstance(group, str) and bool(group.strip()) for group in parallel_groups
+    if len(action.targets) > 1 and any(
+        target.depends_on for target in action.targets
+    ):
+        raise PlannerActionValidationError(
+            "multi-target delegate tasks must be independent",
+            code="parallel_dependency_unspecified",
         )
-        has_intra_action_dependency = any(
-            target.depends_on for target in action.targets
-        )
-        if not has_single_group or has_intra_action_dependency:
-            raise PlannerActionValidationError(
-                "multi-target delegate requires one explicit independent "
-                "parallel_group",
-                code="parallel_dependency_unspecified",
-            )
     candidate_ids = set(candidate_agent_ids)
     for target in action.targets:
         if target.agent_id not in candidate_ids:
@@ -635,11 +646,7 @@ def _validate_terminal_output(
     has_agent_output: bool,
 ) -> None:
     if (
-        action.action
-        in (
-            PlannerActionType.SYNTHESIZE,
-            PlannerActionType.COMPLETE,
-        )
+        action.action == PlannerActionType.COMPLETE
         and not has_agent_output
     ):
         raise PlannerActionValidationError(

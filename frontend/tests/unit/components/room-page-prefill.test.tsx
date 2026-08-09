@@ -145,7 +145,9 @@ describe("Room page — prefill handoff consumer", () => {
   it("auto-sends when handoffMode is not set and final dispatch is persisted", async () => {
     useRoomUiStore.getState().setPendingRoomData("room-abc", {
       initialMessage: "Hello agents",
-      dispatch: { message_target_mode: "room_default" },
+      mode: 'direct',
+      agentScope: { source: 'room_default' },
+      clientRequestId: 'request-stable',
     })
 
     render(<RoomChatPage />)
@@ -155,15 +157,43 @@ describe("Room page — prefill handoff consumer", () => {
     })
     expect(mockSendUserMessage.mock.calls[0][0]).toEqual({
       userInput: "Hello agents",
-      dispatch: { message_target_mode: "room_default" },
+      mode: "direct",
+      agentScope: { source: "room_default" },
+      clientRequestId: 'request-stable',
       pendingAttachments: undefined,
     })
+  })
+
+  it("reuses the same client request id when pending autosend is retried", async () => {
+    mockSendUserMessage.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    useRoomUiStore.getState().setPendingRoomData("room-abc", {
+      initialMessage: "Retry this request",
+      mode: 'supervisor',
+      agentScope: { source: 'all_agents' },
+      clientRequestId: 'request-stable-retry',
+    })
+
+    const firstRender = render(<RoomChatPage />)
+    await waitFor(() => {
+      expect(mockSendUserMessage).toHaveBeenCalledTimes(1)
+      expect(useRoomUiStore.getState().pendingRoomData["room-abc"]).toBeDefined()
+    })
+    firstRender.unmount()
+
+    render(<RoomChatPage />)
+    await waitFor(() => {
+      expect(mockSendUserMessage).toHaveBeenCalledTimes(2)
+    })
+
+    expect(mockSendUserMessage.mock.calls.map(([input]) => input.clientRequestId)).toEqual([
+      'request-stable-retry',
+      'request-stable-retry',
+    ])
   })
 
   it("blocks pending autosend when final dispatch is missing", async () => {
     useRoomUiStore.getState().setPendingRoomData("room-abc", {
       initialMessage: "Hello stale agents",
-      targetGroup: "all_agents",
     })
 
     render(<RoomChatPage />)
@@ -186,7 +216,8 @@ describe("Room page — prefill handoff consumer", () => {
       userInput: "Send this literal <@agent-mentioned|Mentioned>",
       quoteData: undefined,
       pendingAttachments: undefined,
-      dispatch: { message_target_mode: 'saved_group', target_group_id: 'group-abc' },
+      mode: "direct",
+      agentScope: { source: 'saved_group', group_id: 'group-abc' },
     })
   })
 })

@@ -65,10 +65,6 @@ export function handleHubAgentEvent(sseMessage: RoomSSEFrameMap['hub_agent_event
   console.debug('Room SSE hub_agent_event:', sseMessage.data)
 }
 
-export function handleDebateRound(sseMessage: RoomSSEFrameMap['debate_round']): void {
-  console.debug('Room SSE debate_round:', sseMessage.data)
-}
-
 export function handleRunEvent(
   ctx: SSEHandlerDeps,
   lifecycle: ProcessingLifecycle,

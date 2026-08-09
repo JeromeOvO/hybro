@@ -258,12 +258,11 @@ def test_execution_scaffold_adapters_are_available():
     assert hitl._persistence is hitl_persistence
 
     deps = _make_room_message_center_port_deps()
-    runtime = create_room_message_center(**deps, debate_rounds=7)
+    runtime = create_room_message_center(**deps)
     assert runtime.message_reader is deps["message_reader"]
     assert runtime.message_writer is deps["message_writer"]
     assert runtime.task_state_store is deps["task_state_store"]
     assert runtime.continuation_store is deps["continuation_store"]
-    assert runtime.debate_rounds == 7
     assert isinstance(room_message_center, BoundRoomMessageCenterProxy)
 
 
@@ -303,7 +302,6 @@ def _make_room_message_center_port_deps():
         "a2a_transport": MagicMock(),
         "remote_task_reader": MagicMock(),
         "room_memory": MagicMock(),
-        "debate_prompt_injector": MagicMock(),
         "rate_limit_service": MagicMock(),
         "room_supervisor_service": MagicMock(),
         "context_assembly": MagicMock(),
@@ -320,7 +318,6 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     deps = _make_room_message_center_port_deps()
     runtime = create_room_message_center(
         **deps,
-        debate_rounds=5,
         orphan_threshold_minutes=9,
     )
 
@@ -345,9 +342,7 @@ def test_room_message_center_factory_propagates_overrides_to_children():
     assert runtime.agent_dispatcher._message_writer is deps["message_writer"]
     assert runtime.agent_dispatcher._agent_lookup is deps["agent_lookup"]
     assert runtime.agent_dispatcher._agent_group_reader is deps["agent_group_reader"]
-    assert runtime.debate_rounds == 5
     assert runtime.orphan_threshold_minutes == 9
-    assert runtime.supervisor_executor.debate_rounds == 5
     assert runtime.agent_dispatcher.agent_resolver is deps["agent_resolver_service"]
     assert runtime.agent_response_handler._message_writer is deps["message_writer"]
     assert runtime.agent_response_handler._task_writer is deps["message_writer"]
@@ -392,9 +387,6 @@ def test_room_message_center_factory_propagates_overrides_to_children():
         runtime.queue_executor.internal_event_publisher
         is deps["internal_event_publisher"]
     )
-    assert (
-        runtime.queue_executor.debate_prompt_injector is deps["debate_prompt_injector"]
-    )
     assert runtime.queue_executor.hitl_coordinator is deps["hitl_coordinator"]
     assert runtime.supervisor_executor.task_state_store is deps["task_state_store"]
     assert runtime.supervisor_executor.message_reader is deps["message_reader"]
@@ -421,7 +413,7 @@ def test_room_message_center_factory_requires_internal_event_publisher():
     deps.pop("internal_event_publisher")
 
     with pytest.raises(RuntimeError, match="internal_event_publisher"):
-        create_room_message_center(**deps, debate_rounds=5)
+        create_room_message_center(**deps)
 
 
 def test_room_message_center_factory_owns_default_dependency_wiring():
@@ -443,12 +435,11 @@ def test_room_message_center_factory_owns_default_dependency_wiring():
     assert "globals()" not in inspect.getsource(RoomMessageCenter.__init__)
 
     deps = _make_room_message_center_port_deps()
-    runtime = create_room_message_center(**deps, debate_rounds=6)
+    runtime = create_room_message_center(**deps)
 
     assert runtime.message_reader is deps["message_reader"]
     assert runtime.delivery is deps["delivery"]
     assert runtime.room_runtime is deps["room_runtime"]
-    assert runtime.debate_rounds == 6
     assert runtime.context_assembly is deps["context_assembly"]
     assert runtime.memory_search is deps["memory_search"]
     assert runtime.context_compaction is deps["context_compaction"]
@@ -638,7 +629,7 @@ def test_room_message_center_constructor_requires_internal_event_publisher():
     deps["internal_event_publisher"] = None
 
     with pytest.raises(RuntimeError, match="internal_event_publisher"):
-        RoomMessageCenter(**deps, debate_rounds=5)
+        RoomMessageCenter(**deps)
 
 
 def test_room_message_center_uses_common_room_lock_protocol():

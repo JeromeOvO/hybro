@@ -10,7 +10,6 @@ from common.dto.llm import LLMResponse, LLMStructuredResponse
 from llm_gateway.errors import LLMModelRoutingError
 from llm_gateway.services import (
     AgentSelectionLLMService,
-    DebateLLMService,
     DiscoveryLLMService,
     EmbeddingLLMService,
     MessageParserLLMService,
@@ -127,17 +126,6 @@ async def test_agent_selection_ranking_falls_back_for_unparseable_output():
         "agent-a",
         "agent-b",
     ]
-
-
-@pytest.mark.asyncio
-async def test_debate_service_uses_lead_model():
-    gateway = FakeWorkflowGateway()
-    service = DebateLLMService(gateway)
-
-    result = await service.short_debate_with_openai("question", "answer")
-
-    assert result == "generated"
-    assert gateway.generate_calls[0][1]["model"] == "lead_ai_model"
 
 
 @pytest.mark.asyncio
@@ -346,6 +334,25 @@ async def test_supervisor_service_uses_default_supervisor_model_for_json_text_an
     assert gateway.structured_calls[0][1]["model"] == "supervisor_model"
     assert gateway.generate_calls[0][1]["model"] == "supervisor_model"
     assert gateway.stream_calls[0][1]["model"] == "supervisor_model"
+
+
+@pytest.mark.asyncio
+async def test_supervisor_service_uses_configured_timeout_defaults():
+    gateway = FakeWorkflowGateway(structured_data={"action": "complete"})
+    service = SupervisorLLMService(
+        gateway,
+        json_timeout_seconds=7.5,
+        text_timeout_seconds=8.5,
+        stream_timeout_seconds=9.5,
+    )
+
+    await service.call_json("system", "user")
+    await service.call_text("system", "user")
+    _ = [chunk async for chunk in service.call_text_stream("system", "user")]
+
+    assert gateway.structured_calls[0][1]["timeout_seconds"] == 7.5
+    assert gateway.generate_calls[0][1]["timeout_seconds"] == 8.5
+    assert gateway.stream_calls[0][1]["timeout_seconds"] == 9.5
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,6 @@ from common.dto import (
     AgentMessagePartial,
     ArtifactUpdateEvent,
     CancellationEvent,
-    DebateRoundEvent,
     DeliveryEnvelope,
     DeliveryEvent,
     DeliveryEventBase,
@@ -579,15 +578,6 @@ def test_delivery_event_schemas_match_design_doc():
             "status",
             "partial",
         },
-        DebateRoundEvent: {
-            "room_id",
-            "timestamp",
-            "trace_id",
-            "event_type",
-            "round_number",
-            "agent_id",
-            "message_id",
-        },
     }
 
     for dto, fields in expected_fields.items():
@@ -620,7 +610,6 @@ def test_delivery_event_schemas_match_design_doc():
         ArtifactUpdateEvent: {"room_id", "message_id", "agent_id", "artifact"},
         ErrorEvent: {"room_id", "error"},
         HubAgentEvent: {"room_id", "hub_id", "agent_id", "message_id", "status"},
-        DebateRoundEvent: {"room_id", "round_number", "agent_id", "message_id"},
     }
 
     for dto, fields in expected_required_fields.items():
@@ -719,6 +708,7 @@ def test_protocol_methods_match_design_doc():
         protocols.ExecutionEngine: {
             "execute",
             "start_orchestration",
+            "schedule_orchestration",
             "cancel",
             "get_run",
             "get_runs_for_room",
@@ -753,7 +743,7 @@ def test_protocol_methods_match_design_doc():
             "get_room_status",
         },
         protocols.WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
-        protocols.RoomDistributedLock: {"acquire", "release"},
+        protocols.RoomDistributedLock: {"acquire", "renew", "release"},
         protocols.RoomMembershipSeedSource: {
             "get_saved_group",
             "list_current_agents",
@@ -1220,7 +1210,6 @@ def test_protocol_methods_match_design_doc():
             "filter_ids",
             "requesting_user_id",
             "required_input_modes",
-            "is_debate_mode",
         ],
     )
     assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)

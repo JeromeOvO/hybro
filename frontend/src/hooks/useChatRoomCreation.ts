@@ -8,6 +8,7 @@ import type { Agent } from '@/lib/types/agent'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import {
   BUILTIN_GROUP_ALL_AGENTS,
+  dispatchToAgentScope,
   isBuiltinGroup,
   isMentionDispatchInput,
   resolveSelectedGroupDispatch,
@@ -27,7 +28,6 @@ interface CreateRoomOptions {
   selectedAgents?: Agent[]
   /** @deprecated Use membership instead. */
   appliedFromGroup?: string
-  debateMode?: boolean
   useSupervisor?: boolean
   roomName?: string
   dispatch?: MessageDispatchInput
@@ -87,7 +87,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     const { 
       selectedAgents = [], 
       appliedFromGroup,
-      debateMode = false,
       useSupervisor = true,
       roomName: customRoomName,
       dispatch: explicitDispatch,
@@ -156,7 +155,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         : displayMessage) || 'New Chat'
 
       const extendInfo = {
-        debateMode,
         use_supervisor: useSupervisor,
         initialMessage: userMessage
       }
@@ -183,8 +181,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         // manual snapshots display All Agents while retaining room-default routing.
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
-          dispatch: handoffDispatch,
-          targetGroup: handoffTargetGroup,
+          mode: useSupervisor ? 'supervisor' : 'direct',
+          agentScope: dispatchToAgentScope(handoffDispatch),
+          clientRequestId: crypto.randomUUID(),
           attachments: options.attachments,
         })
         

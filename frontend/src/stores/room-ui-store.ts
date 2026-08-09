@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { PendingAttachment } from '@/lib/types/attachments'
-import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { AgentScopeInput, ExecutionMode } from '@/lib/types/request'
 import type { ConversationScrollSnapshot } from '@/lib/conversation/conversation-scroll'
 
 type RoomId = string
@@ -29,9 +29,9 @@ function touchDetailScrollSnapshot(
 
 interface PendingRoomData {
   initialMessage: string
-  dispatch?: MessageDispatchInput
-  /** @deprecated Use dispatch instead. */
-  targetGroup?: string
+  mode?: ExecutionMode
+  agentScope?: AgentScopeInput
+  clientRequestId?: string
   attachments?: PendingAttachment[]
   handoffMode?: "autosend" | "prefill"
 }

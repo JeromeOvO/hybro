@@ -68,7 +68,6 @@ class AgentProfile(BaseModel):
 class RoomConfig(BaseModel):
     """Room configuration relevant to the Supervisor."""
 
-    is_debate_mode: bool = False
     room_agent_set: dict[str, str] = Field(default_factory=dict)
     explicit_mentions: list[dict] = Field(default_factory=list)
 
@@ -81,7 +80,6 @@ class RoomConfig(BaseModel):
 class ActionType(StrEnum):
     DELEGATE = "delegate"
     PLATFORM_ANSWER = "platform_answer"
-    SYNTHESIZE = "synthesize"
     CLARIFY = "clarify"
     DONE = "done"
 
@@ -122,7 +120,7 @@ class SupervisorAction(BaseModel):
     # DELEGATE fields
     targets: list[DelegateTarget] = Field(default_factory=list)
 
-    # SYNTHESIZE fields
+    # Finalization fields
     synthesis_instruction: str | None = None
 
     # CLARIFY fields (used for all supervisor questions, pre-plan or mid-loop)
@@ -178,7 +176,7 @@ class StepResult(BaseModel):
 class TrajectoryEntry(BaseModel):
     """One step in the execution trajectory.
 
-    Created for ALL action types (DELEGATE, SYNTHESIZE, CLARIFY, DONE),
+    Created for all action types (DELEGATE, PLATFORM_ANSWER, CLARIFY, DONE),
     not just DELEGATE.  This ensures the trajectory is a complete audit
     log of every supervisor decision.
     """
@@ -206,8 +204,6 @@ class SupervisorTrajectory(BaseModel):
     status: TrajectoryStatus = TrajectoryStatus.RUNNING
     total_supervisor_calls: int = 0
     created_at: datetime = Field(default_factory=utcnow)
-
-    debate_agent_ids: list[str] | None = None
 
     system_agent_message_id: str | None = None
     """The message ID of the orchestrator task (system:hybro). Stored here so it

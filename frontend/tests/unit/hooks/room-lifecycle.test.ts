@@ -146,7 +146,7 @@ describe('Room lifecycle characterization tests', () => {
       // Establish processing state through normal flow
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-nav-1' })
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -305,7 +305,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Backend active run lag', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Backend active run lag', mode: 'direct', agentScope: { source: 'room_default' } })
       })
 
       expect(useMessageStore.getState().entities['msg-active-run-lag'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
@@ -364,7 +364,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Missed terminal turn', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Missed terminal turn', mode: 'direct', agentScope: { source: 'room_default' } })
       })
 
       expect(useMessageStore.getState().entities['msg-missed-terminal'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
@@ -442,7 +442,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -463,7 +463,7 @@ describe('Room lifecycle characterization tests', () => {
       // Send a message first to establish processing state
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-cancel-1' })
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -498,7 +498,7 @@ describe('Room lifecycle characterization tests', () => {
       // Send + cancel
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-cancel-2' })
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Test', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Test', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       const clientRequestId = latestClientRequestId('room-1')
       expect(clientRequestId).toBeTruthy()

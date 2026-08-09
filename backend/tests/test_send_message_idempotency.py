@@ -142,8 +142,8 @@ def _execution_request(message_text: str = "hello") -> ExecutionRequest:
             "message_content": {"message_text": message_text},
         },
         attachments=[{"file_id": "file-1"}],
-        target_group="all_agents",
-        message_target_mode="all_agents",
+        mode="direct",
+        agent_scope={"source": "all_agents"},
     )
 
 

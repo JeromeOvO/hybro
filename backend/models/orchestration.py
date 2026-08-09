@@ -8,7 +8,14 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from common.utils.time import utcnow
 
@@ -22,6 +29,7 @@ class OrchestrationStatus(StrEnum):
     WAITING_AGENT = "waiting_agent"
     INGESTING = "ingesting"
     AWAITING_USER = "awaiting_user"
+    FINALIZING = "finalizing"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
@@ -73,7 +81,6 @@ class PlannerActionType(StrEnum):
     DELEGATE = "delegate"
     PLATFORM_ANSWER = "platform_answer"
     ASK_USER = "ask_user"
-    SYNTHESIZE = "synthesize"
     COMPLETE = "complete"
     FAIL = "fail"
 
@@ -356,19 +363,33 @@ class ActiveDispatchRef(BaseModel):
 
 class PlannerActionRecord(BaseModel):
     action: str
-    reasoning: str
+    decision_summary: str = Field(
+        max_length=500,
+        validation_alias=AliasChoices("decision_summary", "reasoning"),
+    )
     created_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def reasoning(self) -> str:  # provider compatibility; never serialized
+        return self.decision_summary
 
 
 class PlannerAction(BaseModel):
     planner_action_schema_version: int = 2
     action: PlannerActionType
-    reasoning: str
+    decision_summary: str = Field(
+        max_length=500,
+        validation_alias=AliasChoices("decision_summary", "reasoning"),
+    )
     targets: list[PlannedDelegateTarget] = Field(default_factory=list)
     questions: list[PlannerQuestion] = Field(default_factory=list)
     synthesis_instruction: str | None = None
     failure_reason: str | None = None
     completion_evidence: CompletionEvidence | None = None
+
+    @property
+    def reasoning(self) -> str:  # provider compatibility; never serialized
+        return self.decision_summary
 
 
 class DispatchIntent(BaseModel):
@@ -495,6 +516,10 @@ class OrchestrationRunState(BaseModel):
     dispatch_intents: list[DispatchIntent] = Field(default_factory=list)
     decision_log: list[dict[str, Any]] = Field(default_factory=list)
     pending_hitl_request_ids: list[str] = Field(default_factory=list)
+    finalization_mode: str | None = None
+    final_source_message_id: str | None = None
+    finalization_committed_at: datetime | None = None
+    phase_durations_ms: dict[str, int] = Field(default_factory=dict)
     summary_intent_id: str | None = None
     summary_message_id: str | None = None
     step_budget: int = 8

@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import type { MutableRefObject } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { cancelMessage } from '@/lib/api/sse'
-import { updateRoomAgentSet, updateRoomName, updateRoomExtendInfo } from '@/lib/api/room'
+import { updateRoomAgentSet, updateRoomName } from '@/lib/api/room'
 import { ApiError } from '@/lib/api-client'
 import { banner } from '@/components/ui/banner'
 import { useRoomUiStore } from '@/stores/room-ui-store'
@@ -23,25 +23,21 @@ export function useRoomActions(
   lifecycle: ProcessingLifecycle,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
   roomQuery: UseQueryResult<unknown, Error>,
-  getDebateMode: () => boolean,
   reconcileWithDb: (roomId: string) => Promise<void>,
   setCancelling: (v: boolean) => void,
   setUpdatingRoom: (v: boolean) => void,
   sseEnabled: boolean,
   setSseEnabled: (v: boolean) => void,
 ) {
-  // Update room settings - now includes debate mode
+  // Update room name and membership. Execution mode is request-scoped.
   const updateRoomSettings = useCallback(async (
     roomName: string,
     membershipAgentIds: string[],
-    options: { debateMode: boolean }
   ) => {
     if (!room) {
       banner.error('Room data not available')
       return false
     }
-
-    const { debateMode } = options
 
     try {
       setUpdatingRoom(true)
@@ -56,7 +52,7 @@ export function useRoomActions(
 
       // Only update membership when the set actually changed.
       // This avoids backend rejection of deleted stale members when the user
-      // only changed the room name or toggled debateMode.
+      // only changed the room name.
       const currentAgentIds = new Set(Object.keys(room.room_agent_set || {}))
       const newAgentIds = new Set(membershipAgentIds)
       const membershipChanged = currentAgentIds.size !== newAgentIds.size
@@ -77,25 +73,6 @@ export function useRoomActions(
         }
       }
 
-      // Only update debateMode in extend_info; supervisor mode is managed
-      // separately by the chat input toggle and handleSendMessage.
-      // Refetch room first to get the latest extend_info from backend,
-      // avoiding stale use_supervisor from the React Query cache.
-      const currentDebateMode = getDebateMode()
-      if (debateMode !== currentDebateMode) {
-        const freshRoom = await roomQuery.refetch()
-        const freshExtendInfo = ((freshRoom.data as { extend_info?: object })?.extend_info as object) || {}
-        const updatedExtendInfo = {
-          ...freshExtendInfo,
-          debateMode,
-        }
-
-        const extendInfoResponse = await updateRoomExtendInfo(roomId, updatedExtendInfo)
-        if (!extendInfoResponse.success) {
-          throw new Error(`Failed to update room settings: ${extendInfoResponse.error}`)
-        }
-      }
-
       // Reload room settings to get updated data from backend
       await roomQuery.refetch()
 
@@ -109,7 +86,7 @@ export function useRoomActions(
     } finally {
       setUpdatingRoom(false)
     }
-  }, [room, roomId, roomQuery, getDebateMode, setUpdatingRoom, getToken])
+  }, [room, roomId, roomQuery, setUpdatingRoom, getToken])
 
   // Cancel ongoing message processing
   const cancelProcessing = useCallback(async () => {

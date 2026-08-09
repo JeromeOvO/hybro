@@ -28,7 +28,6 @@ export type RoomSSEType =
   | 'hitl_response'
   | 'cancellation'
   | 'hub_agent_event'
-  | 'debate_round'
 
 export const ROOM_SSE_TYPES = [
   'connected',
@@ -45,7 +44,6 @@ export const ROOM_SSE_TYPES = [
   'hitl_response',
   'cancellation',
   'hub_agent_event',
-  'debate_round',
 ] as const satisfies readonly RoomSSEType[]
 
 const ROOM_SSE_TYPE_SET = new Set<string>(ROOM_SSE_TYPES)
@@ -220,7 +218,6 @@ export type RoomSSEFrameMap = {
   hitl_response: SSEFrame<'hitl_response', HITLStatusUpdateData>
   cancellation: SSEFrame<'cancellation', GenericRoomEventData>
   hub_agent_event: SSEFrame<'hub_agent_event', GenericRoomEventData>
-  debate_round: SSEFrame<'debate_round', GenericRoomEventData>
 }
 
 export type RoomSSEMessage = RoomSSEFrameMap[RoomSSEType]

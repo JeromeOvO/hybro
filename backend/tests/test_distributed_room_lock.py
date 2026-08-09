@@ -272,77 +272,15 @@ class TestDistributedConcurrency:
 
 class TestRedisDisconnectionMidAcquisition:
     @pytest.mark.asyncio
-    async def test_falls_back_to_local_when_redis_errors_mid_poll(self):
-        """If Redis starts erroring mid-acquisition, the lock degrades to
-        local-only after 2 consecutive errors and still succeeds."""
+    async def test_redis_errors_fail_closed(self):
         redis = _make_redis(connected=True)
-
-        call_count = 0
-
-        async def flaky_client_set(key, value, nx=False, ex=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return None  # contended on first poll
-            raise ConnectionError("Redis went away")
-
-        redis._client.set = AsyncMock(side_effect=flaky_client_set)
+        redis._client.set = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
         rmc = _make_rmc(redis=redis)
 
         owner = await rmc._acquire_room_lock("room-1", timeout=5)
-        # Should succeed via local-only fallback (not time out)
-        assert owner is not None
-        assert rmc._room_locks["room-1"].locked()
-        await rmc._release_room_lock("room-1", owner)
 
-    @pytest.mark.asyncio
-    async def test_single_redis_error_retries_rather_than_falling_back(self):
-        """One transient error followed by success stays on the distributed path."""
-        redis = _make_redis(connected=True)
-
-        call_count = 0
-
-        async def transient_client_set(key, value, nx=False, ex=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ConnectionError("blip")
-            return True  # succeeds on retry
-
-        redis._client.set = AsyncMock(side_effect=transient_client_set)
-        rmc = _make_rmc(redis=redis)
-
-        owner = await rmc._acquire_room_lock("room-1", timeout=5)
-        assert owner is not None
-        # Distributed lock was acquired (eval_script will be called on release)
-        await rmc._release_room_lock("room-1", owner)
-        redis._client.eval.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_non_consecutive_errors_dont_trigger_fallback(self):
-        """error → contention → error resets the counter, so no fallback."""
-        redis = _make_redis(connected=True)
-
-        call_count = 0
-
-        async def interleaved_client_set(key, value, nx=False, ex=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ConnectionError("err1")
-            if call_count == 2:
-                return None  # contention (resets counter)
-            if call_count == 3:
-                raise ConnectionError("err2")
-            return True  # succeeds
-
-        redis._client.set = AsyncMock(side_effect=interleaved_client_set)
-        rmc = _make_rmc(redis=redis)
-
-        owner = await rmc._acquire_room_lock("room-1", timeout=5)
-        assert owner is not None
-        await rmc._release_room_lock("room-1", owner)
-        redis._client.eval.assert_awaited_once()
+        assert owner is None
+        assert "room-1" not in rmc._room_locks
 
     @pytest.mark.asyncio
     async def test_lock_reused_after_release(self):

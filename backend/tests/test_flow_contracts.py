@@ -173,17 +173,17 @@ class TestRoomLifecycleFlow:
             return_value={
                 "room_id": room_id,
                 "message": user_msg.model_dump(),
-                "message_target_mode": "room_default",
+                "mode": "direct",
+                "agent_scope": {"source": "room_default"},
                 "client_request_id": "c7c9a000-0000-4000-8000-000000000003",
             }
         )
-        bg = MagicMock()
         send_resp = await send_message(
-            req3, bg, flow_user, store=mock_db, engine=mock_execution_engine
+            req3, flow_user, store=mock_db, engine=mock_execution_engine
         )
         assert send_resp.success is True
         assert send_resp.message_id == message_id
-        bg.add_task.assert_called_once()
+        mock_execution_engine.schedule_orchestration.assert_called_once()
 
         # Step 4: Query messages
         req4 = MagicMock()
@@ -240,19 +240,20 @@ class TestRoomLifecycleFlow:
                 await endpoint_fn(req, other_user, **kwargs)
             assert exc.value.status_code == 403
 
-        # send_message has a different signature (request, background_tasks, user)
+        # send_message verifies ownership before executing.
         req = MagicMock()
         req.json = AsyncMock(
             return_value={
                 "room_id": "guarded-room",
                 "message": {"message_text": "x"},
-                "message_target_mode": "room_default",
+                "mode": "direct",
+                "agent_scope": {"source": "room_default"},
                 "client_request_id": "c7c9a000-0000-4000-8000-000000000004",
             }
         )
         with pytest.raises(HTTPException) as exc:
             await send_message(
-                req, MagicMock(), other_user, store=mock_db, engine=MagicMock()
+                req, other_user, store=mock_db, engine=MagicMock()
             )
         assert exc.value.status_code == 403
 

@@ -99,7 +99,6 @@ describe('useRoomWebhook consumer contract', () => {
       'availableAgents',
       'cancelProcessing',
       'cancelling',
-      'debateMode',
       'getAgentList',
       'getRoomFormData',
       'loading',
@@ -176,7 +175,6 @@ describe('useRoomWebhook consumer contract', () => {
     expect(typeof result.current.cancelling).toBe('boolean')
     expect(typeof result.current.updatingRoom).toBe('boolean')
     expect(typeof result.current.sseEnabled).toBe('boolean')
-    expect(typeof result.current.debateMode).toBe('boolean')
     expect(typeof result.current.supervisorMode).toBe('boolean')
 
     // Loading can be boolean

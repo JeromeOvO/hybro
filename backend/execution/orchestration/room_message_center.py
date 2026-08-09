@@ -91,7 +91,6 @@ class _UnboundRoomMessageCenterStore:
 a2a_transport = None
 agent_resolver_service = None
 default_store = _UnboundRoomMessageCenterStore()
-debate_prompt_injector = None
 room_memory = None
 task_notifier = None
 rate_limit_service = None
@@ -172,7 +171,6 @@ class RoomMessageCenter:
         a2a_transport: A2ATransportPort,
         remote_task_reader: RemoteTaskReaderPort,
         room_memory: RoomMemoryPort,
-        debate_prompt_injector,
         rate_limit_service: RateLimitPort | None = None,
         room_supervisor_service,
         hitl_coordinator: HITLCoordinator,
@@ -188,7 +186,6 @@ class RoomMessageCenter:
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
-        debate_rounds: int = 2,
         orchestration_run_store=None,
         orchestration_planner=None,
         orchestration_resource_provider=None,
@@ -233,7 +230,6 @@ class RoomMessageCenter:
             if orphan_threshold_minutes is None
             else orphan_threshold_minutes
         )
-        self.debate_rounds = debate_rounds
         self.orchestration_run_store = (
             orchestration_run_store
             if orchestration_run_store is not None
@@ -320,7 +316,6 @@ class RoomMessageCenter:
             agent_lookup=self.agent_lookup,
             room_reader=self.room_reader,
             memory_reader=self.memory_reader,
-            debate_prompt_injector=debate_prompt_injector,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -341,7 +336,6 @@ class RoomMessageCenter:
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
             hitl_coordinator=hitl_coordinator,
-            debate_rounds=self.debate_rounds,
             orchestration_run_store=self.orchestration_run_store,
             orchestration_planner=self.orchestration_planner,
             orchestration_resource_provider=orchestration_resource_provider,
@@ -702,15 +696,11 @@ class RoomMessageCenter:
                     break
                 if result is None:
                     redis_errors += 1
-                    if redis_errors >= 2:
-                        logger.warning(
-                            "Redis unhealthy (%d consecutive errors) while acquiring "
-                            "lock for room %s — falling back to local lock only",
-                            redis_errors,
-                            room_id,
-                        )
-                        use_distributed = False
-                        break
+                    logger.error(
+                        "Redis room lock unavailable for room %s; failing closed",
+                        room_id,
+                    )
+                    return None
                 else:
                     redis_errors = 0
                 await asyncio.sleep(poll_interval)
@@ -740,6 +730,24 @@ class RoomMessageCenter:
             raise
 
         return owner
+
+    async def _renew_room_lock(self, room_id: str, owner: str) -> None:
+        lock = getattr(self, "_room_distributed_lock", None)
+        if lock is None:
+            await asyncio.Future()
+            return
+        interval = max(1.0, ROOM_LOCK_HOLD_TTL_SECONDS / 3)
+        while True:
+            await asyncio.sleep(interval)
+            renewed = await lock.renew(
+                room_id,
+                owner,
+                ROOM_LOCK_HOLD_TTL_SECONDS,
+            )
+            if not renewed:
+                raise RuntimeError(
+                    f"lost distributed room lock for room {room_id}"
+                )
 
     async def _release_room_lock(
         self,
@@ -938,6 +946,10 @@ class RoomMessageCenter:
                 self._heartbeat_processing_claim(room_user_message_id),
                 name=f"processing-claim-heartbeat:{room_user_message_id}",
             )
+            lock_renewal = traced_create_task(
+                self._renew_room_lock(room_id, lock_owner),
+                name=f"room-lock-renewal:{room_user_message_id}",
+            )
         except BaseException:
             self._release_cancellation_token(room_user_message_id, owned_token)
             try:
@@ -951,12 +963,28 @@ class RoomMessageCenter:
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
         try:
-            return await self._process_room_user_message_locked(
-                request,
-                room_id,
-                room_user_message_id,
-                token=owned_token,
+            body_task = traced_create_task(
+                self._process_room_user_message_locked(
+                    request,
+                    room_id,
+                    room_user_message_id,
+                    token=owned_token,
+                ),
+                name=f"room-message-body:{room_user_message_id}",
             )
+            done, _ = await asyncio.wait(
+                {body_task, lock_renewal},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if lock_renewal in done:
+                body_task.cancel()
+                try:
+                    await body_task
+                except asyncio.CancelledError:
+                    pass
+                await lock_renewal
+                raise RuntimeError("distributed room lock renewal stopped")
+            return await body_task
         except asyncio.CancelledError as exc:
             self._release_cancellation_token(room_user_message_id, owned_token)
             if is_graceful_shutdown_cancellation(exc):
@@ -985,12 +1013,19 @@ class RoomMessageCenter:
             body_error = sys.exc_info()[1]
             cleanup_error: BaseException | None = None
             claim_heartbeat.cancel()
+            lock_renewal.cancel()
             try:
                 await claim_heartbeat
             except asyncio.CancelledError:
                 pass
             except BaseException as exc:
                 cleanup_error = exc
+            try:
+                await lock_renewal
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
             try:
                 await self._release_room_lock(
                     room_id, lock_owner, acquired_at=lock_acquired_at
@@ -1248,15 +1283,7 @@ class RoomMessageCenter:
                 error="Processing cancelled by user",
                 status_code=200,
             )
-        room = await self.room_reader.get_room_by_room_id(room_id)
-        is_debate = bool(
-            room
-            and isinstance(room.extend_info, dict)
-            and room.extend_info.get("debateMode", False)
-        )
-        summary_coro = self._emit_unified_summary(
-            room_id, room_user_message_id, is_debate=is_debate
-        )
+        summary_coro = self._emit_unified_summary(room_id, room_user_message_id)
         try:
             turn_completion_kind, _ = await token.race(summary_coro)
         except CancellationError:
@@ -1487,12 +1514,6 @@ class RoomMessageCenter:
             profiles_by_id[agent_id] = profile
             agent_registry.append(profile)
 
-        room = await self.room_reader.get_room_by_room_id(room_id)
-        is_debate_mode = (
-            room is not None
-            and isinstance(room.extend_info, dict)
-            and room.extend_info.get("debateMode", False)
-        )
         mentioned_agent_ids = extend.get("mentioned_agent_ids")
         explicit_mentions: list[dict[str, str]] = []
         if isinstance(mentioned_agent_ids, list):
@@ -1512,7 +1533,6 @@ class RoomMessageCenter:
                 )
 
         room_config = RoomConfig(
-            is_debate_mode=bool(is_debate_mode),
             room_agent_set={
                 profile.agent_id: profile.agent_name for profile in agent_registry
             },
@@ -1816,89 +1836,16 @@ class RoomMessageCenter:
 
         match result.status:
             case RunStatus.COMPLETED:
-                trajectory_responses = (
-                    self._trajectory_responses_from_supervisor_result(result)
-                )
-                is_debate = (
-                    bool(
-                        room
-                        and isinstance(room.extend_info, dict)
-                        and room.extend_info.get("debateMode", False)
-                    )
-                    if room
-                    else False
-                )
-
                 if completion_cancellable and token is not None and token.is_cancelled:
                     await self._emit_completion_race_cancellation(
                         room_id, user_message_id, token
                     )
                     return
 
-                if result.synthesis_text is not None:
-                    summary_coro = self._emit_unified_summary(
-                        room_id,
-                        user_message_id,
-                        synthesis_text=result.synthesis_text,
-                        trajectory_responses=trajectory_responses,
-                        is_debate=is_debate,
-                        working_already_emitted=True,
-                    )
-                    try:
-                        turn_completion_kind, _ = (
-                            await token.race(summary_coro)
-                            if completion_cancellable and token is not None
-                            else await summary_coro
-                        )
-                    except CancellationError:
-                        await self._emit_completion_race_cancellation(
-                            room_id, user_message_id, token
-                        )
-                        return
-                    turn_completion_kind = turn_completion_kind or "deterministic"
-                elif is_debate and len(trajectory_responses) >= 2:
-                    summary_coro = self._emit_unified_summary(
-                        room_id,
-                        user_message_id,
-                        synthesis_text=None,
-                        trajectory_responses=trajectory_responses,
-                        is_debate=True,
-                        working_already_emitted=False,
-                        skip_db_write=True,
-                    )
-                    try:
-                        turn_completion_kind, generated_summary = (
-                            await token.race(summary_coro)
-                            if completion_cancellable and token is not None
-                            else await summary_coro
-                        )
-                    except CancellationError:
-                        await self._emit_completion_race_cancellation(
-                            room_id, user_message_id, token
-                        )
-                        return
-                    turn_completion_kind = turn_completion_kind or "deterministic"
-                    if generated_summary:
-                        result.synthesis_text = generated_summary
-                elif len(trajectory_responses) >= 2:
-                    digest_coro = self._emit_deterministic_digest(
-                        room_id,
-                        user_message_id,
-                        agent_count=len(trajectory_responses),
-                    )
-                    try:
-                        if completion_cancellable and token is not None:
-                            await token.race(digest_coro)
-                        else:
-                            await digest_coro
-                    except CancellationError:
-                        await self._emit_completion_race_cancellation(
-                            room_id, user_message_id, token
-                        )
-                        return
-                    turn_completion_kind = "deterministic"
-                else:
-                    turn_completion_kind = "deterministic"
+                # Supervisor owns finalization. Never write or emit a second summary.
+                turn_completion_kind = (
+                    "synthesis" if result.synthesis_text is not None else "deterministic"
+                )
 
                 if completion_cancellable and token is not None and token.is_cancelled:
                     await self._emit_completion_race_cancellation(
@@ -2280,18 +2227,11 @@ class RoomMessageCenter:
                     )
                     return True
 
-                room = await self.room_reader.get_room_by_room_id(result.room_id)
-                is_debate = bool(
-                    room
-                    and isinstance(room.extend_info, dict)
-                    and room.extend_info.get("debateMode", False)
-                )
                 try:
                     summary_result = await completion_token.race(
                         self._emit_unified_summary(
                             result.room_id,
                             result.user_message_id,
-                            is_debate=is_debate,
                         )
                     )
                 except CancellationError:
@@ -2478,7 +2418,6 @@ class RoomMessageCenter:
         *,
         synthesis_text: str | None = None,
         trajectory_responses: list[dict] | None = None,
-        is_debate: bool = False,
         working_already_emitted: bool = False,
         skip_db_write: bool = False,
     ) -> tuple[str | None, str | None]:
@@ -2591,7 +2530,6 @@ class RoomMessageCenter:
                     summary_client_request_id,
                 )
 
-                mode = "debate" if is_debate else "non_debate"
                 if self.summary_service is None:
                     raise LLMServiceNotBoundError("SummaryLLMService is not bound")
                 content = await self._stream_summary_content(
@@ -2599,7 +2537,6 @@ class RoomMessageCenter:
                     summary_message_id,
                     self.summary_service.summarize_agent_responses_stream(
                         agent_responses,
-                        mode=mode,
                         user_question=user_question_text,
                     ),
                     summary_client_request_id,
@@ -2638,7 +2575,7 @@ class RoomMessageCenter:
                 extend_info={
                     "is_coordinator_summary": True,
                     "source_user_message_id": user_message_id,
-                    "summary_type": "debate" if is_debate else "non_debate",
+                    "summary_type": "synthesis",
                     "summary_origin": origin,
                 },
             )

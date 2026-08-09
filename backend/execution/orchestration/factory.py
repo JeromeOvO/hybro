@@ -10,11 +10,7 @@ from execution.orchestration.room_message_center import (
 )
 
 
-def create_room_message_center(
-    *,
-    debate_rounds: int,
-    **kwargs: Any,
-) -> RoomMessageCenter:
+def create_room_message_center(**kwargs: Any) -> RoomMessageCenter:
     guardrails_enabled = kwargs.pop("guardrails_enabled", None)
     default_store = _defaults.default_store
     deps: dict[str, Any] = {
@@ -40,7 +36,6 @@ def create_room_message_center(
         "a2a_transport": _defaults.a2a_transport,
         "remote_task_reader": _defaults.remote_task_reader,
         "room_memory": _defaults.room_memory,
-        "debate_prompt_injector": _defaults.debate_prompt_injector,
         "rate_limit_service": _defaults.rate_limit_service,
         "room_supervisor_service": _defaults.room_supervisor_service,
         "orchestration_run_store": _defaults.orchestration_run_store,
@@ -58,7 +53,6 @@ def create_room_message_center(
         "build_turn_content_func": _defaults.build_turn_content,
         "supervisor_planning_error_cls": _defaults.SupervisorPlanningError,
         "orphan_threshold_minutes": _defaults.settings.orphan_threshold_minutes,
-        "debate_rounds": debate_rounds,
         "cloud_health_cache_ttl": 30.0,
         "cloud_health_check_timeout": 5.0,
     }

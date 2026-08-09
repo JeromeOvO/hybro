@@ -130,7 +130,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let firstResult: boolean | undefined
     await act(async () => {
-      firstResult = await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+      firstResult = await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(firstResult).toBe(true)
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
@@ -138,7 +138,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let secondResult: boolean | undefined
     await act(async () => {
-      secondResult = await result.current.sendUserMessage({ userInput: 'Second message', dispatch: { message_target_mode: 'room_default' } })
+      secondResult = await result.current.sendUserMessage({ userInput: 'Second message', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(secondResult).toBe(false)
     expect(mockSendMessage).toHaveBeenCalledTimes(1)
@@ -149,7 +149,7 @@ describe('useRoomWebhook double-send guard', () => {
     expect(capturedOnMessage).toBeDefined()
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(flags().processing).toBe(true)
     const clientRequestId = latestClientRequestId()
@@ -167,7 +167,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let secondResult: boolean | undefined
     await act(async () => {
-      secondResult = await result.current.sendUserMessage({ userInput: 'Follow up', dispatch: { message_target_mode: 'room_default' } })
+      secondResult = await result.current.sendUserMessage({ userInput: 'Follow up', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(secondResult).toBe(true)
     expect(mockSendMessage).toHaveBeenCalledTimes(2)
@@ -178,7 +178,7 @@ describe('useRoomWebhook double-send guard', () => {
     expect(capturedOnMessage).toBeDefined()
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(flags().processing).toBe(true)
     const clientRequestId = latestClientRequestId()
@@ -214,7 +214,7 @@ describe('useRoomWebhook double-send guard', () => {
 
     let sendResult: boolean | undefined
     await act(async () => {
-      sendResult = await result.current.sendUserMessage({ userInput: 'Another message', dispatch: { message_target_mode: 'room_default' } })
+      sendResult = await result.current.sendUserMessage({ userInput: 'Another message', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(sendResult).toBe(true)
   })

@@ -5,7 +5,6 @@ from common.dto import (
     AgentMessagePartial,
     ArtifactUpdateEvent,
     CancellationEvent,
-    DebateRoundEvent,
     ErrorEvent,
     HITLRequestEvent,
     HITLResolvedEvent,
@@ -507,23 +506,3 @@ def test_error_event_translation():
     frame = to_sse_frame(event, timestamp=NOW)
     assert frame["type"] == "error"
     assert frame["data"]["error_type"] == "rate_limit_exceeded"
-
-
-def test_debate_round_translation():
-    event = DebateRoundEvent(
-        room_id="room-1",
-        round_number=3,
-        agent_id="agent-1",
-        message_id="msg-1",
-    )
-
-    assert to_sse_frame(event, timestamp=NOW) == {
-        "type": "debate_round",
-        "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
-        "data": {
-            "round_number": 3,
-            "agent_id": "agent-1",
-            "message_id": "msg-1",
-        },
-    }

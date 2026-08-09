@@ -49,6 +49,12 @@ from execution.orchestration.candidate_scope import (
     candidate_scope_from_envelope,
     normalize_candidate_scope,
 )
+from execution.orchestration.completion_policy import (
+    CompletionPolicyError,
+    FinalizationMode,
+    determine_finalization_mode,
+    successful_agent_outputs,
+)
 from execution.orchestration.context_builder import build_orchestration_planner_context
 from execution.orchestration.continuation_policy import (
     claim_continuation,
@@ -56,7 +62,6 @@ from execution.orchestration.continuation_policy import (
     continuation_match,
     reconcile_continuation,
 )
-from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
 from execution.orchestration.dispatch_payload import (
     DispatchPayloadValidationError,
     ResolvedDispatchPayload,
@@ -118,7 +123,6 @@ from models.orchestration import (
     OrchestrationRunEvent,
     OrchestrationRunState,
     OrchestrationStatus,
-    ParticipantSnapshot,
     PendingAgentContinuation,
     PlannedDelegateTarget,
     PlannerAction,
@@ -165,7 +169,6 @@ _GENERIC_AGENT_FAILURE_MESSAGE = "Agent processing failed"
 _GENERIC_AGENT_FAILURE_CODE = "agent_execution_failed"
 
 
-DEFAULT_DEBATE_ROUNDS = 2
 DISPATCH_REF_PROJECTION_MAX_CHARS = 1600
 PLATFORM_ATTACHMENT_CONTEXT_MAX_CHARS = 40_000
 RECENT_ROOM_ATTACHMENT_RESOURCE_LIMIT = 8
@@ -312,7 +315,6 @@ class SupervisorExecutor:
         agent_message_processor: AgentMessageProcessor,
         slot_lifecycle=None,
         hitl_coordinator: HITLCoordinator | None = None,
-        debate_rounds: int = 2,
         orchestration_run_store: OrchestrationRunStore | None = None,
         orchestration_planner: OrchestrationPlanner | None = None,
         orchestration_resource_provider: OrchestrationResourceProvider | None = None,
@@ -337,7 +339,6 @@ class SupervisorExecutor:
         self.agent_message_processor = agent_message_processor
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
-        self.debate_rounds = debate_rounds
         self.orchestration_run_store = (
             orchestration_run_store or InMemoryOrchestrationRunStore()
         )
@@ -438,10 +439,6 @@ class SupervisorExecutor:
         trajectory.system_agent_message_id = (
             state.system_agent_message_id or state.summary_message_id
         )
-        if state.participant_snapshot is not None:
-            trajectory.debate_agent_ids = list(
-                state.participant_snapshot.ordered_agent_ids
-            )
         if state.status == OrchestrationStatus.COMPLETED:
             trajectory.status = TrajectoryStatus.COMPLETED
         elif state.status == OrchestrationStatus.CANCELED:
@@ -910,6 +907,72 @@ class SupervisorExecutor:
         )
         if terminal_result is not None:
             return terminal_result
+        if state.status == OrchestrationStatus.FINALIZING:
+            committed = state.finalization_committed_at is not None
+            final_message_id = (
+                state.final_source_message_id
+                if state.finalization_mode == FinalizationMode.DIRECT_AGENT.value
+                else state.summary_message_id
+            )
+            final_message = None
+            if not committed and final_message_id:
+                final_message = (
+                    await self.message_reader.get_room_agent_message_by_message_id(
+                        final_message_id
+                    )
+                )
+                final_text = (
+                    final_message.message_content.message_text
+                    if final_message is not None and final_message.message_content
+                    else None
+                )
+                if isinstance(final_text, str) and final_text.strip():
+                    if state.finalization_mode != FinalizationMode.DIRECT_AGENT.value:
+                        client_req_id = state.client_request_id or (
+                            await self.task_state_store.resolve_client_request_id_for_message_id(
+                                user_message_id
+                            )
+                        )
+                        await self.delivery.send_agent_response(
+                            room_id=room_id,
+                            message_id=final_message_id,
+                            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                            content=final_text,
+                            related_message_id=user_message_id,
+                            client_request_id=client_req_id,
+                        )
+
+                    def mark_recovered_commit(updated: OrchestrationRunState) -> None:
+                        updated.finalization_committed_at = utcnow()
+
+                    state = await self._save_orchestration_state(
+                        state,
+                        event_type=OrchestrationEventType.STATE_REDUCED,
+                        payload={"finalization_committed": True, "recovered": True},
+                        mutate=mark_recovered_commit,
+                    )
+                    committed = True
+            state = await self._mark_orchestration_terminal(
+                state,
+                (
+                    OrchestrationStatus.COMPLETED
+                    if committed
+                    else OrchestrationStatus.FAILED
+                ),
+                reason=(
+                    "recovered committed finalization"
+                    if committed
+                    else "interrupted finalization has no persisted final response"
+                ),
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(
+                    status=self._run_status_from_orchestration_status(state.status),
+                    state=state,
+                ),
+            )
         if (
             state.status == OrchestrationStatus.INGESTING
             and state.pending_hitl_request_ids
@@ -1125,6 +1188,7 @@ class SupervisorExecutor:
                     supervisor_service=self.supervisor_service
                 )
                 self.orchestration_planner = planner
+            planner_started_at = time.perf_counter()
             plan_coro = planner.plan(context)
             try:
                 planner_action = (
@@ -1347,7 +1411,9 @@ class SupervisorExecutor:
                     len(state.blockers),
                 )
             state = await self._record_orchestration_planner_action(
-                state, planner_action
+                state,
+                planner_action,
+                duration_ms=int((time.perf_counter() - planner_started_at) * 1000),
             )
 
             match planner_action.action:
@@ -1387,22 +1453,6 @@ class SupervisorExecutor:
                             ),
                         )
 
-                case PlannerActionType.SYNTHESIZE:
-                    await self._emit_supervisor_stage(
-                        room_id=room_id,
-                        user_message_id=user_message_id,
-                        client_request_id=state.client_request_id,
-                        details="Goal complete. Preparing final response...",
-                        stage="goal_complete",
-                    )
-                    return await self._run_synthesis_action(
-                        state=state,
-                        planner_action=planner_action,
-                        room_id=room_id,
-                        user_message_id=user_message_id,
-                        token=token,
-                    )
-
                 case PlannerActionType.PLATFORM_ANSWER:
                     stage_details, disclosure = _platform_answer_copy(state)
                     await self._emit_supervisor_stage(
@@ -1439,30 +1489,6 @@ class SupervisorExecutor:
                         details="Goal complete. Preparing final response...",
                         stage="goal_complete",
                     )
-                    if state.participant_snapshot is not None:
-
-                        def record_completion_evidence(
-                            updated: OrchestrationRunState,
-                            evidence=planner_action.completion_evidence,
-                        ) -> None:
-                            updated.completion_evidence = evidence
-
-                        state = await self._mark_orchestration_terminal(
-                            state,
-                            OrchestrationStatus.COMPLETED,
-                            reason=planner_action.reasoning,
-                            mutate=record_completion_evidence,
-                        )
-                        return await self._log_state_and_return(
-                            room_id,
-                            state,
-                            self._state_run_result(
-                                status=self._run_status_from_orchestration_status(
-                                    state.status
-                                ),
-                                state=state,
-                            ),
-                        )
                     return await self._run_synthesis_action(
                         state=state,
                         planner_action=planner_action,
@@ -1531,39 +1557,9 @@ class SupervisorExecutor:
         )
 
     @staticmethod
-    def _debate_participant_snapshot(
-        agent_registry: list[AgentProfile],
-        *,
-        debate_rounds: int,
-    ) -> ParticipantSnapshot | None:
-        ordered_once = [
-            agent.agent_id
-            for agent in agent_registry
-            if agent.is_healthy and agent.agent_id
-        ]
-        if not ordered_once:
-            return None
-        rounds = max(debate_rounds, 1)
-        return ParticipantSnapshot(
-            mode="debate",
-            ordered_agent_ids=ordered_once * rounds,
-            max_rounds=rounds,
-            turn_policy="debate_rounds",
-        )
-
-    def _configured_debate_rounds(self) -> int:
-        value = getattr(self, "debate_rounds", None)
-        if isinstance(value, int) and value > 0:
-            return value
-        return DEFAULT_DEBATE_ROUNDS
-
-    @staticmethod
     def _next_participant_agent_id(state: OrchestrationRunState) -> str | None:
         snapshot = state.participant_snapshot
-        if snapshot is None or snapshot.turn_policy not in {
-            "debate_rounds",
-            "sequential_rounds",
-        }:
+        if snapshot is None or snapshot.turn_policy != "sequential_rounds":
             return None
 
         completed_counts: dict[str, int] = {}
@@ -1674,7 +1670,6 @@ class SupervisorExecutor:
 
         if planner_action.action in {
             PlannerActionType.COMPLETE,
-            PlannerActionType.SYNTHESIZE,
             PlannerActionType.PLATFORM_ANSWER,
         }:
             return SupervisorExecutor._delegate_action_for_next_participant(
@@ -1729,27 +1724,17 @@ class SupervisorExecutor:
             room_id=room_id,
             user_message_id=user_message_id,
         )
-        if (
-            state.participant_snapshot is not None
-            or not room_config
-            or not getattr(room_config, "is_debate_mode", False)
-            or not agent_registry
-        ):
+        snapshot = state.participant_snapshot
+        if snapshot is None or snapshot.mode != "debate":
+            return state
+        if state.status in TERMINAL_ORCHESTRATION_STATUSES:
             return state
 
-        updated = state.model_copy(deep=True)
-        updated.participant_snapshot = self._debate_participant_snapshot(
-            self._orchestration_candidate_scope(updated, agent_registry),
-            debate_rounds=self._configured_debate_rounds(),
+        updated = mark_terminal(
+            state,
+            OrchestrationStatus.FAILED,
+            reason="legacy debate orchestration is no longer supported",
         )
-        if updated.participant_snapshot is None:
-            return state
-        updated.step_budget = max(
-            updated.step_budget,
-            len(updated.participant_snapshot.ordered_agent_ids) + 1,
-        )
-        updated.state_version = state.state_version + 1
-        updated.updated_at = utcnow()
         try:
             return await self.run_store.save_state(
                 updated,
@@ -1821,24 +1806,6 @@ class SupervisorExecutor:
             )
             state.candidate_agent_ids = []
         state.step_budget = self._step_budget_from_request(user_message, room_config)
-        if (
-            room_config
-            and getattr(room_config, "is_debate_mode", False)
-            and agent_registry
-        ):
-            state.participant_snapshot = self._debate_participant_snapshot(
-                agent_registry,
-                debate_rounds=self._configured_debate_rounds(),
-            )
-            debate_agent_ids = [
-                agent_id
-                for agent_id in (
-                    state.participant_snapshot.ordered_agent_ids
-                    if state.participant_snapshot is not None
-                    else []
-                )
-            ]
-            state.step_budget = max(state.step_budget, len(debate_agent_ids) + 1)
         try:
             return await self.run_store.create_run(state)
         except OrchestrationStoreConflict:
@@ -1877,7 +1844,12 @@ class SupervisorExecutor:
             return state
 
         expected_version = state.state_version
-        updated = mark_running(state)
+        if state.status == OrchestrationStatus.RUNNING:
+            updated = state.model_copy(deep=True)
+            updated.state_version += 1
+            updated.updated_at = utcnow()
+        else:
+            updated = mark_running(state)
         if not updated.summary_intent_id:
             updated.summary_intent_id = f"{updated.run_id}:summary"
         if not updated.summary_message_id:
@@ -1950,6 +1922,8 @@ class SupervisorExecutor:
         self,
         state: OrchestrationRunState,
         planner_action: PlannerAction,
+        *,
+        duration_ms: int = 0,
     ) -> OrchestrationRunState:
         target_agent_ids = [target.agent_id for target in planner_action.targets]
         artifact_refs = [
@@ -1988,6 +1962,9 @@ class SupervisorExecutor:
             reduced = record_planner_action(updated, planner_action)
             updated.last_planner_action = reduced.last_planner_action
             updated.decision_log = reduced.decision_log
+            updated.phase_durations_ms["planner"] = (
+                updated.phase_durations_ms.get("planner", 0) + max(duration_ms, 0)
+            )
             resolve_open_planner_validation_failures(updated)
 
         saved = await self._save_orchestration_state(
@@ -2170,6 +2147,7 @@ class SupervisorExecutor:
             ),
         )
 
+        dispatch_started_at = time.perf_counter()
         results = await self._dispatch_targets(
             targets=action.targets,
             agent_registry=agent_registry,
@@ -2188,6 +2166,22 @@ class SupervisorExecutor:
         )
         if persisted_after_dispatch is not None:
             state = persisted_after_dispatch
+        dispatch_duration_ms = int(
+            (time.perf_counter() - dispatch_started_at) * 1000
+        )
+
+        def record_dispatch_duration(updated: OrchestrationRunState) -> None:
+            updated.phase_durations_ms["dispatch"] = (
+                updated.phase_durations_ms.get("dispatch", 0)
+                + max(dispatch_duration_ms, 0)
+            )
+
+        state = await self._save_orchestration_state(
+            state,
+            event_type=OrchestrationEventType.STATE_REDUCED,
+            payload={"phase": "dispatch", "duration_ms": dispatch_duration_ms},
+            mutate=record_dispatch_duration,
+        )
         await self._emit_supervisor_stage(
             room_id=room_id,
             user_message_id=user_message_id,
@@ -4900,6 +4894,95 @@ class SupervisorExecutor:
                 ),
             )
 
+        try:
+            finalization_mode = determine_finalization_mode(
+                state,
+                planner_action.action,
+                completion_evidence=planner_action.completion_evidence,
+            )
+        except CompletionPolicyError as exc:
+            state = await self._mark_orchestration_terminal(
+                state,
+                OrchestrationStatus.FAILED,
+                reason=str(exc),
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.FAILED, state=state),
+            )
+
+        successful_outputs = successful_agent_outputs(state)
+        direct_source = successful_outputs[-1] if successful_outputs else None
+        finalizing_started_at = time.perf_counter()
+
+        def begin_finalizing(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.FINALIZING
+            updated.finalization_mode = finalization_mode.value
+            updated.final_source_message_id = (
+                direct_source.agent_message_id if direct_source is not None else None
+            )
+            if finalization_mode != FinalizationMode.DIRECT_AGENT:
+                updated.summary_intent_id = (
+                    updated.summary_intent_id
+                    or f"{updated.run_id}:finalization:{finalization_mode.value}"
+                )
+
+        state = await self._save_orchestration_state(
+            state,
+            event_type=OrchestrationEventType.STATE_REDUCED,
+            payload={
+                "status": OrchestrationStatus.FINALIZING.value,
+                "finalization_mode": finalization_mode.value,
+            },
+            mutate=begin_finalizing,
+        )
+
+        if finalization_mode == FinalizationMode.DIRECT_AGENT:
+            persisted_source = (
+                await self.message_reader.get_room_agent_message_by_message_id(
+                    direct_source.agent_message_id
+                )
+                if direct_source is not None
+                else None
+            )
+            persisted_text = (
+                persisted_source.message_content.message_text
+                if persisted_source is not None and persisted_source.message_content
+                else None
+            )
+            if not isinstance(persisted_text, str) or not persisted_text.strip():
+                state = await self._mark_orchestration_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason="direct final response was not durably persisted",
+                )
+                return await self._log_state_and_return(
+                    room_id,
+                    state,
+                    self._state_run_result(status=RunStatus.FAILED, state=state),
+                )
+
+            def record_direct_completion(updated: OrchestrationRunState) -> None:
+                updated.completion_evidence = planner_action.completion_evidence
+                updated.finalization_committed_at = utcnow()
+                updated.phase_durations_ms["finalizing"] = int(
+                    (time.perf_counter() - finalizing_started_at) * 1000
+                )
+                updated.phase_durations_ms.setdefault("terminal_tail", 0)
+
+            state = await self._mark_orchestration_terminal(
+                state,
+                OrchestrationStatus.COMPLETED,
+                reason=planner_action.decision_summary,
+                mutate=record_direct_completion,
+            )
+            return await self._log_state_and_return(
+                room_id,
+                state,
+                self._state_run_result(status=RunStatus.COMPLETED, state=state),
+            )
+
         trajectory = self._trajectory_from_state(state)
         entry = TrajectoryEntry(
             step_number=state.steps_used + 1,
@@ -4978,12 +5061,15 @@ class SupervisorExecutor:
                 db_msg = await self.message_reader.get_room_agent_message_by_message_id(
                     trajectory.system_agent_message_id
                 )
-                if db_msg and db_msg.message_content:
-                    db_msg.message_content.message_text = synthesis
-                    await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
-                        db_msg.message_id,
-                        db_msg.message_content,
-                    )
+                if db_msg is None or db_msg.message_content is None:
+                    raise RuntimeError("final response message was not preallocated")
+                db_msg.message_content.message_text = synthesis
+                persisted = await self.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+                    db_msg.message_id,
+                    db_msg.message_content,
+                )
+                if not persisted:
+                    raise RuntimeError("failed to persist final response content")
 
                 await self.delivery.send_agent_response(
                     room_id=room_id,
@@ -5012,10 +5098,19 @@ class SupervisorExecutor:
                     state,
                     self._state_run_result(status=RunStatus.CANCELED, state=state),
                 )
-            except Exception:
-                logger.warning(
-                    "Failed to emit orchestration agent_response for supervisor synthesis",
-                    exc_info=True,
+            except Exception as exc:
+                logger.exception(
+                    "Failed to commit orchestration supervisor final response"
+                )
+                state = await self._mark_orchestration_terminal(
+                    state,
+                    OrchestrationStatus.FAILED,
+                    reason=f"final response commit failed: {type(exc).__name__}",
+                )
+                return await self._log_state_and_return(
+                    room_id,
+                    state,
+                    self._state_run_result(status=RunStatus.FAILED, state=state),
                 )
 
         if token is not None and token.is_cancelled:
@@ -5036,6 +5131,12 @@ class SupervisorExecutor:
 
         def record_completion_evidence(updated: OrchestrationRunState) -> None:
             updated.completion_evidence = planner_action.completion_evidence
+            updated.summary_message_id = trajectory.system_agent_message_id
+            updated.finalization_committed_at = utcnow()
+            updated.phase_durations_ms["finalizing"] = int(
+                (time.perf_counter() - finalizing_started_at) * 1000
+            )
+            updated.phase_durations_ms.setdefault("terminal_tail", 0)
 
         state = await self._mark_orchestration_terminal(
             state,
@@ -5294,6 +5395,7 @@ class SupervisorExecutor:
         if not results:
             return state
 
+        ingest_started_at = time.perf_counter()
         self._normalize_awaiting_input_results(results)
         # Use the latest in-memory intent state for each loop iteration so no-message-id
         # results consume exactly one matching planned intent in order.
@@ -5363,6 +5465,14 @@ class SupervisorExecutor:
                     ),
                 )
 
+            if index == len(results) - 1:
+                ingest_duration_ms = int(
+                    (time.perf_counter() - ingest_started_at) * 1000
+                )
+                next_state.phase_durations_ms["ingest"] = (
+                    next_state.phase_durations_ms.get("ingest", 0)
+                    + max(ingest_duration_ms, 0)
+                )
             next_state.state_version = expected_version + 1
             next_state.updated_at = utcnow()
 
@@ -5998,7 +6108,7 @@ class SupervisorExecutor:
             goal_family_fingerprint=fingerprints.goal_family_fingerprint,
             goal_revision_fingerprint=fingerprints.goal_revision_fingerprint,
             depends_on=list(target.depends_on),
-            parallel_group=target.parallel_group,
+            parallel_group=target.parallel_group or f"{step_id}:parallel",
             required_resource_refs=list(target.required_resource_refs),
             context_refs=list(target.context_refs),
             artifact_refs=list(target.artifact_refs),
@@ -6038,12 +6148,6 @@ class SupervisorExecutor:
                     )
                     for target in planner_action.targets
                 ],
-            )
-        if planner_action.action == PlannerActionType.SYNTHESIZE:
-            return SupervisorAction(
-                action=ActionType.SYNTHESIZE,
-                reasoning=planner_action.reasoning,
-                synthesis_instruction=planner_action.synthesis_instruction,
             )
         if planner_action.action == PlannerActionType.PLATFORM_ANSWER:
             return SupervisorAction(
@@ -7762,8 +7866,6 @@ class SupervisorExecutor:
         room_id: str,
         trajectory: SupervisorTrajectory,
         result: SupervisorRunResult,
-        *,
-        debate_mode: bool = False,
     ) -> SupervisorRunResult:
         """Log ``supervisor_run_completed`` and return the result."""
         logger.info(
@@ -7779,7 +7881,6 @@ class SupervisorExecutor:
                 ),
                 "total_steps": len(trajectory.entries),
                 "total_supervisor_calls": trajectory.total_supervisor_calls,
-                "debate_mode": debate_mode,
             },
         )
 
@@ -7971,100 +8072,3 @@ class SupervisorExecutor:
             kwargs["orchestration_run_id"] = run_id.strip()
 
         return kwargs
-
-    @staticmethod
-    def _build_debate_task(
-        original_task: str,
-        prior_responses: list[tuple[str, str]],
-        max_chars: int = 3000,
-    ) -> str:
-        """Build the debate-enriched task for the next agent.
-
-        Delegates to shared SequentialDebateDispatcher.
-
-        Args:
-            original_task: The original user task
-            prior_responses: List of (agent_name, response_text) tuples
-            max_chars: Maximum characters to include from prior response
-
-        Returns:
-            The debate-enriched task prompt, or original_task if no prior responses
-        """
-        if not prior_responses:
-            return original_task
-        last_name, last_text = prior_responses[-1]
-        return SequentialDebateDispatcher.build_debate_prompt(
-            original_task=original_task,
-            prior_agent_name=last_name,
-            prior_response=last_text,
-            max_chars=max_chars,
-        )
-
-    @staticmethod
-    def _snapshot_debate_agents(
-        agent_registry: list[AgentProfile],
-        trajectory: SupervisorTrajectory,
-        debate_rounds: int = 2,
-    ) -> list[str]:
-        """Initialize or restore debate participant snapshot.
-
-        First call: records healthy agent IDs into trajectory.debate_agent_ids,
-        repeated for each debate round (e.g. 2 agents × 2 rounds = [a1, a2, a1, a2]).
-        Subsequent calls: returns the existing snapshot (idempotent).
-        """
-        if trajectory.debate_agent_ids is not None:
-            return trajectory.debate_agent_ids
-        num_rounds = debate_rounds or 1
-        base_ids = [a.agent_id for a in agent_registry if a.is_healthy]
-        ids = base_ids * num_rounds
-        trajectory.debate_agent_ids = ids
-        return ids
-
-    @staticmethod
-    def _get_remaining_debate_agent_ids(
-        debate_agent_ids: list[str],
-        trajectory: SupervisorTrajectory,
-    ) -> list[str]:
-        """Return agent IDs not yet dispatched (preserving original order).
-
-        Supports multi-round debate where the same agent_id appears multiple
-        times in debate_agent_ids (e.g. [a1, a2, a1, a2] for 2 rounds).
-        Counts completed dispatches per agent and removes that many from the list.
-
-        Inflight entries (DELEGATE with empty results) are NOT counted as
-        dispatched — the crash happened before dispatch completed, so the
-        agent needs to be re-dispatched.
-        """
-        from collections import Counter
-
-        dispatch_counts: Counter[str] = Counter()
-        for entry in trajectory.entries:
-            if entry.action.action == ActionType.DELEGATE and entry.results:
-                for target in entry.action.targets:
-                    dispatch_counts[target.agent_id] += 1
-
-        remaining: list[str] = []
-        consume_counts: Counter[str] = Counter()
-        for aid in debate_agent_ids:
-            consume_counts[aid] += 1
-            if consume_counts[aid] > dispatch_counts.get(aid, 0):
-                remaining.append(aid)
-        return remaining
-
-    @staticmethod
-    def _collect_prior_debate_responses(
-        trajectory: SupervisorTrajectory,
-    ) -> list[tuple[str, str]]:
-        """Collect (agent_name, response_text) pairs in order, successful results only."""
-        responses: list[tuple[str, str]] = []
-        for entry in trajectory.entries:
-            if entry.action.action != ActionType.DELEGATE:
-                continue
-            for result in entry.results:
-                if (
-                    result.success
-                    and result.status == StepStatus.SUCCESS
-                    and result.response_text
-                ):
-                    responses.append((result.agent_name, result.response_text))
-        return responses

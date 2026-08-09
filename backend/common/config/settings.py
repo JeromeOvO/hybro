@@ -71,7 +71,6 @@ class Settings(BaseSettings):
     # Compaction
     compaction_concurrency: int = 5
 
-    debate_rounds: int = 2  # todo: can be as parameter
     parse_confidence_threshold: float = 0.3
 
     # Clerk Authentication

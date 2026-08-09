@@ -20,9 +20,68 @@ class OrchestrationTransitionError(ValueError):
     pass
 
 
+_ALLOWED_TRANSITIONS: dict[OrchestrationStatus, set[OrchestrationStatus]] = {
+    OrchestrationStatus.CREATED: {
+        OrchestrationStatus.RUNNING,
+        OrchestrationStatus.FAILED,
+    },
+    OrchestrationStatus.RUNNING: {
+        OrchestrationStatus.DISPATCHING,
+        OrchestrationStatus.AWAITING_USER,
+        OrchestrationStatus.FINALIZING,
+        OrchestrationStatus.COMPLETED,
+        OrchestrationStatus.FAILED,
+        OrchestrationStatus.BUDGET_EXHAUSTED,
+    },
+    OrchestrationStatus.DISPATCHING: {
+        OrchestrationStatus.WAITING_AGENT,
+        OrchestrationStatus.INGESTING,
+        OrchestrationStatus.RUNNING,
+        OrchestrationStatus.AWAITING_USER,
+        OrchestrationStatus.FINALIZING,
+        OrchestrationStatus.FAILED,
+    },
+    OrchestrationStatus.WAITING_AGENT: {
+        OrchestrationStatus.INGESTING,
+        OrchestrationStatus.RUNNING,
+        OrchestrationStatus.AWAITING_USER,
+        OrchestrationStatus.FINALIZING,
+        OrchestrationStatus.FAILED,
+    },
+    OrchestrationStatus.INGESTING: {
+        OrchestrationStatus.RUNNING,
+        OrchestrationStatus.AWAITING_USER,
+        OrchestrationStatus.FINALIZING,
+        OrchestrationStatus.FAILED,
+    },
+    OrchestrationStatus.AWAITING_USER: {
+        OrchestrationStatus.RUNNING,
+        OrchestrationStatus.INGESTING,
+        OrchestrationStatus.FAILED,
+    },
+    OrchestrationStatus.FINALIZING: {
+        OrchestrationStatus.COMPLETED,
+        OrchestrationStatus.FAILED,
+    },
+}
+
+
+def validate_transition(
+    current: OrchestrationStatus,
+    target: OrchestrationStatus,
+) -> None:
+    if current in TERMINAL_ORCHESTRATION_STATUSES:
+        raise OrchestrationTransitionError("terminal runs cannot be rewritten")
+    if target == OrchestrationStatus.CANCELED:
+        return
+    if target not in _ALLOWED_TRANSITIONS.get(current, set()):
+        raise OrchestrationTransitionError(
+            f"invalid orchestration transition: {current.value} -> {target.value}"
+        )
+
+
 def mark_running(state: OrchestrationRunState) -> OrchestrationRunState:
-    if state.status in TERMINAL_ORCHESTRATION_STATUSES:
-        raise OrchestrationTransitionError("terminal runs cannot be resumed")
+    validate_transition(state.status, OrchestrationStatus.RUNNING)
     updated = state.model_copy(deep=True)
     updated.status = OrchestrationStatus.RUNNING
     updated.state_version += 1
@@ -36,11 +95,10 @@ def mark_terminal(
     *,
     reason: str,
 ) -> OrchestrationRunState:
-    if state.status in TERMINAL_ORCHESTRATION_STATUSES:
-        raise OrchestrationTransitionError("terminal runs cannot be rewritten")
     terminal_status = OrchestrationStatus(status)
     if terminal_status not in TERMINAL_ORCHESTRATION_STATUSES:
         raise OrchestrationTransitionError(f"{terminal_status} is not terminal")
+    validate_transition(state.status, terminal_status)
     updated = state.model_copy(deep=True)
     updated.status = terminal_status
     updated.terminal_reason = reason

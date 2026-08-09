@@ -633,22 +633,22 @@ class ExecutionFacade:
             )
 
     @staticmethod
-    def _room_request_extend_info(request: ExecutionRequest) -> dict[str, Any] | None:
-        extend_info: dict[str, Any] = {}
-        if (
-            request.mode != "direct"
-            or request.selected_agent_ids is not None
-            or request.candidate_scope_mode is not None
-            or request.candidate_scope_group_id is not None
-        ):
-            extend_info["mode"] = request.mode
-        if request.selected_agent_ids is not None:
-            extend_info["selected_agent_ids"] = list(request.selected_agent_ids)
-        if request.candidate_scope_mode is not None:
-            extend_info["candidate_scope_mode"] = request.candidate_scope_mode
-        if request.candidate_scope_group_id is not None:
-            extend_info["candidate_scope_group_id"] = request.candidate_scope_group_id
-        return extend_info or None
+    def _room_request_extend_info(request: ExecutionRequest) -> dict[str, Any]:
+        return {
+            "execution_mode": request.mode,
+            "agent_scope": request.agent_scope.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _scope_routing(request: ExecutionRequest) -> tuple[str, list[str] | None]:
+        scope = request.agent_scope
+        if scope.source == "mention":
+            return "room_team", list(scope.agent_ids)
+        if scope.source == "all_agents":
+            return "all_agents", None
+        if scope.source == "saved_group":
+            return scope.group_id, None
+        return "room_team", None
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
         request, idempotency = self._prepare_request_idempotency(request)
@@ -685,13 +685,14 @@ class ExecutionFacade:
                 rejection=active_run_rejection,
             )
 
+        target_group, mentioned_agent_ids = self._scope_routing(request)
         (
             persisted_response,
             preflight_context,
         ) = await self._room_center.persist_message_to_room(
             room_request,
-            request.target_group,
-            request.mentioned_agent_ids,
+            target_group,
+            mentioned_agent_ids,
             idempotency_fingerprint=idempotency.fingerprint,
             idempotency_fingerprint_version=idempotency.fingerprint_version,
         )
@@ -751,6 +752,33 @@ class ExecutionFacade:
                 name=f"execution-orchestrate-{ack.message_id}",
             )
         await task
+
+    def schedule_orchestration(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None:
+        if not ack.success or not ack.message_id or not ack.should_start_orchestration:
+            return
+        orchestration_request = OrchestrationRequest(
+            room_id=request.room_id,
+            room_user_message_id=ack.message_id,
+            room_related_message_id=request.parent_message_id,
+            user_id=request.sender_id,
+            client_request_id=request.client_request_id,
+        )
+        with bind_log_context(
+            client_request_id=request.client_request_id,
+            room_id=request.room_id,
+            user_message_id=ack.message_id,
+            message_id=ack.message_id,
+        ):
+            self._spawn_orchestration(
+                self._room_message_center.process_room_user_message(
+                    orchestration_request
+                ),
+                name=f"execution-orchestrate-{ack.message_id}",
+            )
 
     def schedule_recovery_orchestration(
         self,

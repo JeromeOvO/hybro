@@ -64,12 +64,6 @@ export function useRoomData(
 
   const room = roomQuery.data ?? null
 
-  const getDebateMode = useCallback((): boolean => {
-    if (!room?.extend_info) return false
-    const extendInfo = room.extend_info as { debateMode?: boolean }
-    return extendInfo.debateMode || false
-  }, [room])
-
   const getSupervisorMode = useCallback((): boolean => {
     if (!room?.extend_info) return false
     const extendInfo = room.extend_info as { use_supervisor?: boolean }
@@ -91,10 +85,9 @@ export function useRoomData(
       selectedAgents: room.room_agent_set || {},
       roomOwnerId: room.room_owner_id || '',
       roomOwnerName: room.room_owner_name || '',
-      debateMode: getDebateMode(),
       resolvedAgents: resolvedAgentsRef.current,
     }
-  }, [room, getDebateMode])
+  }, [room])
 
   const refreshRoomSetting = useCallback(async () => {
     await roomQuery.refetch()
@@ -113,7 +106,6 @@ export function useRoomData(
     roomQuery,
     resolvedAgentsRef,
     loading,
-    getDebateMode,
     getSupervisorMode,
     getAgentList,
     getRoomFormData,

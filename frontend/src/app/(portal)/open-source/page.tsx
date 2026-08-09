@@ -356,7 +356,7 @@ export default function OpenSourcePage() {
               },
               {
                 title: "Multi-Agent Rooms",
-                body: "Open a room for your agents to collaborate, debate, and solve multi-step problems.",
+                body: "Open a room for your agents to collaborate and solve multi-step problems.",
                 tint: "hover:bg-[hsl(var(--color-hybro-hy)/0.03)]",
                 rule: "bg-[hsl(var(--color-hybro-hy))]",
               },

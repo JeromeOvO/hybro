@@ -172,7 +172,6 @@ describe('useChatRoomCreation', () => {
       await act(async () => {
         roomId = await result.current.createRoomWithMessage('Hello world', {
           selectedAgents: [mockAgent],
-          debateMode: true,
           roomName: 'My Room',
         })
       })
@@ -184,7 +183,7 @@ describe('useChatRoomCreation', () => {
         'Test User',
         defaultProps.getToken,
         { 'agent-1': 'Test Agent' },
-        { debateMode: true, use_supervisor: true, initialMessage: 'Hello world' },
+        { use_supervisor: true, initialMessage: 'Hello world' },
         undefined,
         undefined
       )
@@ -237,8 +236,9 @@ describe('useChatRoomCreation', () => {
       const pending = useRoomUiStore.getState().pendingRoomData['room-store']
       expect(pending).toEqual({
         initialMessage: 'Hello',
-        dispatch: { message_target_mode: 'room_default' },
-        targetGroup: 'g-1',
+        mode: 'supervisor',
+        agentScope: { source: 'room_default' },
+        clientRequestId: expect.any(String),
         attachments: undefined,
       })
     })
@@ -305,8 +305,9 @@ describe('useChatRoomCreation', () => {
       })
 
       const pending = useRoomUiStore.getState().pendingRoomData['room-carry']
-      expect(pending?.targetGroup).toBe('all_agents')
-      expect(pending?.dispatch).toEqual({ message_target_mode: 'all_agents' })
+      expect(pending?.agentScope).toEqual({ source: 'all_agents' })
+      expect(pending?.mode).toBe('supervisor')
+      expect(pending?.clientRequestId).toEqual(expect.any(String))
     })
 
     it('should prefer selectedAgents over saved group seed', async () => {
@@ -329,8 +330,8 @@ describe('useChatRoomCreation', () => {
       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
       expect(Object.keys(roomAgentSet)).toContain('agent-1')
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual']
-      expect(pending?.dispatch).toEqual({ message_target_mode: 'room_default' })
-      expect(pending?.targetGroup).toBeUndefined()
+      expect(pending?.agentScope).toEqual({ source: 'room_default' })
+      expect(pending?.mode).toBe('supervisor')
     })
 
     it('should preserve explicit mention dispatch when selectedAgents seed the room', async () => {
@@ -356,8 +357,9 @@ describe('useChatRoomCreation', () => {
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual-mention']
       expect(pending).toEqual({
         initialMessage: 'Hello <@agent-mentioned|Mentioned>',
-        dispatch: { mentioned_agent_ids: ['agent-mentioned'] },
-        targetGroup: undefined,
+        mode: 'supervisor',
+        agentScope: { source: 'mention', agent_ids: ['agent-mentioned'] },
+        clientRequestId: expect.any(String),
         attachments: undefined,
       })
     })
@@ -382,8 +384,9 @@ describe('useChatRoomCreation', () => {
       const pending = useRoomUiStore.getState().pendingRoomData['room-mention']
       expect(pending).toEqual({
         initialMessage: 'Hello <@agent-mentioned|Mentioned>',
-        dispatch: { mentioned_agent_ids: ['agent-mentioned'] },
-        targetGroup: undefined,
+        mode: 'supervisor',
+        agentScope: { source: 'mention', agent_ids: ['agent-mentioned'] },
+        clientRequestId: expect.any(String),
         attachments: undefined,
       })
     })
@@ -408,8 +411,9 @@ describe('useChatRoomCreation', () => {
       const pending = useRoomUiStore.getState().pendingRoomData['room-explicit-all']
       expect(pending).toEqual({
         initialMessage: 'Hello everyone',
-        dispatch: { message_target_mode: 'all_agents' },
-        targetGroup: undefined,
+        mode: 'supervisor',
+        agentScope: { source: 'all_agents' },
+        clientRequestId: expect.any(String),
         attachments: undefined,
       })
     })

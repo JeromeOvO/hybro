@@ -116,6 +116,19 @@ export type MessageDispatchInput =
   | MentionDispatchInput
   | TargetModeDispatchInput
 
+export type AgentScopeInput =
+  import('@/lib/types/request').AgentScopeInput
+
+export function dispatchToAgentScope(dispatch: MessageDispatchInput): AgentScopeInput {
+  if (isMentionDispatchInput(dispatch)) {
+    return { source: 'mention', agent_ids: dispatch.mentioned_agent_ids }
+  }
+  if (dispatch.message_target_mode === 'saved_group') {
+    return { source: 'saved_group', group_id: dispatch.target_group_id }
+  }
+  return { source: dispatch.message_target_mode }
+}
+
 export function isMentionDispatchInput(dispatch: MessageDispatchInput): dispatch is MentionDispatchInput {
   return Array.isArray(dispatch.mentioned_agent_ids) && dispatch.mentioned_agent_ids.length > 0
 }

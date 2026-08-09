@@ -44,10 +44,7 @@ class MatchResult:
     filtered_count: int
 
 
-def select_top_agents(
-    ranked: list[MatchedAgent],
-    is_debate_mode: bool,
-) -> list[MatchedAgent]:
+def select_top_agents(ranked: list[MatchedAgent]) -> list[MatchedAgent]:
     converted = [
         {
             "index": index,
@@ -55,7 +52,7 @@ def select_top_agents(
         }
         for index, match in enumerate(ranked)
     ]
-    selected = select_top_matches(converted, is_debate_mode=is_debate_mode)
+    selected = select_top_matches(converted)
     return [ranked[item["index"]] for item in selected]
 
 
@@ -79,7 +76,6 @@ class AgentMatcher:
         self,
         message_text: str,
         user_id: str | None = None,
-        is_debate_mode: bool = False,
         required_input_modes: list[str] | None = None,
     ) -> MatchResult:
         facade = self._require_facade()
@@ -88,7 +84,6 @@ class AgentMatcher:
                 message_text,
                 requesting_user_id=user_id,
                 required_input_modes=required_input_modes,
-                is_debate_mode=is_debate_mode,
             )
         else:
             matches = await facade.match_agents(

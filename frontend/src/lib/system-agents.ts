@@ -13,7 +13,7 @@ export const SYSTEM_AGENTS: Record<string, SystemAgentInfo> = {
   'system:hybro': {
     name: 'HYBRO AI',
     description:
-      'The built-in platform agent that orchestrates workflows, summarizes debates, and asks clarifying questions.',
+      'The built-in platform agent that orchestrates workflows, synthesizes results, and asks clarifying questions.',
   },
   'system:clarifier': {
     name: 'HYBRO AI',

@@ -207,8 +207,7 @@ async def test_execute_persists_ack_without_starting_orchestration():
             "message_type": "user",
             "message_content": {"message_text": "hello"},
         },
-        target_group=None,
-        mentioned_agent_ids=["agent-1"],
+        agent_scope={"source": "mention", "agent_ids": ["agent-1"]},
     )
 
     ack = await facade.execute(request)
@@ -219,7 +218,7 @@ async def test_execute_persists_ack_without_starting_orchestration():
     assert sent_request.user_id == "user-1"
     assert sent_request.message.message_content.message_text == "hello"
     assert deps["room_center"].send_message_to_room.await_args.args[1:] == (
-        None,
+        "room_team",
         ["agent-1"],
     )
     deps["room_message_center"].process_room_user_message.assert_not_called()

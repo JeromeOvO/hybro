@@ -390,9 +390,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
-            from execution.orchestration.debate_prompt_injector import (
-                DebatePromptInjector,
-            )
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
@@ -464,7 +461,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
             route_room_center = RoomRouteAdapter()
-            debate_prompt_injector = DebatePromptInjector()
             synthesis_coordinator = SynthesisCoordinator()
             remote_task_reader = RemoteTaskReader()
             _delivery_config = create_delivery_config(runtime.settings)
@@ -605,6 +601,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             supervisor_llm_service = SupervisorLLMService(
                 llm_provider=llm_provider,
                 default_model=llm_gateway_config.default_supervisor_model,
+                json_timeout_seconds=(
+                    llm_gateway_config.supervisor_json_timeout_seconds
+                ),
+                text_timeout_seconds=(
+                    llm_gateway_config.supervisor_text_timeout_seconds
+                ),
+                stream_timeout_seconds=(
+                    llm_gateway_config.supervisor_stream_timeout_seconds
+                ),
             )
             summary_llm_service = SummaryLLMService(llm_provider=llm_provider)
             agent_selection_llm_service = AgentSelectionLLMService(
@@ -615,7 +620,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             room_supervisor_service.bind_supervisor_service(supervisor_llm_service)
             room_runtime.bind_message_parser_service(message_parser_llm_service)
-            room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)
             room_runtime.bind_capability_issue_reader(agent_capability_issue_service)
             synthesis_coordinator.bind_summary_service(summary_llm_service)
             agent_card_resolver = AgentCardResolverImpl()
@@ -873,15 +877,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
             )
-            debate_message_store = SimpleNamespace(
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
-                update_room_agent_message_with_new_message_content_by_message_id=(
-                    message_store.update_room_agent_message_with_new_message_content_by_message_id
-                ),
-            )
             room_coordinator_message_store = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
                 get_agent_name_by_agent_id=agent_room_store.get_agent_name_by_agent_id,
@@ -1111,7 +1106,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_remote_task_reader = remote_task_reader
 
             membership_source.bind_store(agent_room_store)
-            debate_prompt_injector.bind_store(debate_message_store)
             synthesis_coordinator.bind_store(room_coordinator_message_store)
             synthesis_coordinator.bind_delivery(execution_delivery)
             bind_notification_store(task_notification_store)
@@ -1255,7 +1249,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 a2a_transport=execution_a2a_transport,
                 remote_task_reader=execution_remote_task_reader,
                 room_memory=execution_room_memory,
-                debate_prompt_injector=debate_prompt_injector,
                 rate_limit_service=agent_rate_limiter,
                 room_supervisor_service=room_supervisor_service,
                 orchestration_run_store=orchestration_run_store,
@@ -1276,7 +1269,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 build_turn_content_func=build_turn_content,
                 supervisor_planning_error_cls=SupervisorPlanningError,
                 orphan_threshold_minutes=runtime.settings.orphan_threshold_minutes,
-                debate_rounds=runtime.settings.debate_rounds,
                 cloud_health_cache_ttl=runtime.settings.cloud_health_cache_ttl,
                 cloud_health_check_timeout=runtime.settings.cloud_health_check_timeout,
             )

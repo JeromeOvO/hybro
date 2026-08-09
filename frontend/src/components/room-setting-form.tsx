@@ -13,13 +13,11 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-  FormDescription,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
 import { AgentSelector } from "@/components/agent-selector"
-import { MessageCircleMore, X } from "lucide-react"
+import { X } from "lucide-react"
 import type { Agent } from "@/lib/types/agent"
 import type { StaleAgentRef, AgentAvailability } from "@/lib/types/agent-group"
 import type { RoomAgentRefWire } from "@/lib/types/response"
@@ -31,7 +29,6 @@ const formSchemaRequired = z.object({
   }).max(50, {
     message: "Room name must be less than 50 characters.",
   }),
-  debateMode: z.boolean(),
 })
 
 // Schema with optional room name (for pre-configuration)
@@ -39,22 +36,16 @@ const formSchemaOptional = z.object({
   roomName: z.string().max(50, {
     message: "Room name must be less than 50 characters.",
   }).optional().or(z.literal('')),
-  debateMode: z.boolean(),
 })
 
 interface RoomFormData {
   roomName: string
   selectedAgents: { [agentId: string]: string }
-  debateMode?: boolean
   resolvedAgents?: RoomAgentRefWire[] | null
 }
 
-export interface RoomModeOptions {
-  debateMode: boolean
-}
-
 interface RoomSettingFormProps {
-  onSubmit: (roomName: string, membershipAgentIds: string[], options: RoomModeOptions) => void
+  onSubmit: (roomName: string, membershipAgentIds: string[]) => void
   isSubmitting?: boolean
   availableAgents?: Agent[]
   loadingAgents?: boolean
@@ -98,7 +89,6 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
     resolver: zodResolver(formSchema),
     defaultValues: {
       roomName: "",
-      debateMode: false,
     },
   })
 
@@ -116,7 +106,6 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
 
     if (isFirstInit) {
       form.setValue('roomName', initialData.roomName)
-      form.setValue('debateMode', initialData.debateMode || false)
     }
 
     const agentMapping: { [agentId: string]: Agent } = {}
@@ -174,9 +163,7 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
       ...Object.keys(selectedAgents),
       ...staleAgentRefs.map(r => r.id),
     ]
-    onSubmit(roomName, membershipAgentIds, {
-      debateMode: values.debateMode ?? false,
-    })
+    onSubmit(roomName, membershipAgentIds)
   }
 
   // Reset form function
@@ -212,33 +199,6 @@ export const RoomSettingForm = forwardRef<RoomSettingFormHandle, RoomSettingForm
                 />
               </FormControl>
               <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <Separator />
-
-        {/* Debate Mode Switch */}
-        <FormField
-          control={form.control}
-          name="debateMode"
-          render={({ field }) => (
-            <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 bg-card">
-              <div className="space-y-0.5 flex-1">
-                <FormLabel className="text-base flex items-center gap-2">
-                  <MessageCircleMore className="h-4 w-4" />
-                  Debate Mode
-                </FormLabel>
-                <FormDescription className="text-sm">
-                  Enable debate mode for enhanced agent discussions and collaborative problem-solving
-                </FormDescription>
-              </div>
-              <FormControl>
-                <Switch
-                  checked={field.value}
-                  onCheckedChange={field.onChange}
-                />
-              </FormControl>
             </FormItem>
           )}
         />

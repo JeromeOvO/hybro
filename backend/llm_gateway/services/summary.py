@@ -12,7 +12,6 @@ class SummaryLLMService:
     def summarize_agent_responses_stream(
         self,
         agent_responses: list[RoomMessageSummary],
-        mode: str = "non_debate",
         user_question: str | None = None,
     ) -> AsyncIterator[str]:
         answers = "\n\n".join(
@@ -29,12 +28,6 @@ class SummaryLLMService:
             "'Requesting ...'. Preserve agent attribution only when it helps the user.\n\n"
             + HYBRO_MARKDOWN_RESPONSE_FORMAT
         )
-        if mode == "debate":
-            system_prompt = (
-                "You are HYBRO AI summarizing a multi-agent debate. Compare "
-                "perspectives, agreements, disagreements, and actionable conclusions.\n\n"
-                + HYBRO_MARKDOWN_RESPONSE_FORMAT
-            )
         user_prompt = (
             f"The user asked: {user_question or 'Not provided'}\n\n"
             f"Agent responses:\n{answers}\n\n"

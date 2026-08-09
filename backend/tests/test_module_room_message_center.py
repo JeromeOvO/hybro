@@ -1017,7 +1017,7 @@ async def test_supervisor_uses_single_run_entrypoint_for_orchestration_envelope(
 
 
 @pytest.mark.asyncio
-async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs():
+async def test_completed_state_run_result_does_not_duplicate_execution_finalization():
     rmc = RoomMessageCenter.__new__(RoomMessageCenter)
     rmc.cancellation_control = make_cancellation_control()
     user_message = RoomUserMessage(
@@ -1056,19 +1056,8 @@ async def test_completed_state_run_result_uses_agent_outputs_for_summary_inputs(
         user_message=user_message,
     )
 
-    summary_kwargs = rmc._emit_unified_summary.await_args.kwargs
-    assert summary_kwargs["trajectory_responses"] == [
-        {
-            "agent_id": "agent-1",
-            "agent_name": "agent-1",
-            "message": "Pricing is $42.",
-        },
-        {
-            "agent_id": "agent-2",
-            "agent_name": "agent-2",
-            "message": "Delivery is Friday.",
-        },
-    ]
+    rmc._emit_unified_summary.assert_not_awaited()
+    rmc._run_supervisor_terminal_post_loop_integration.assert_awaited_once()
 
 
 def _supervisor_completion_race_center(token, emit_summary):
@@ -1110,7 +1099,7 @@ async def test_supervisor_canceled_token_preserves_durable_completed_winner():
         token=token,
     )
 
-    summary.assert_awaited_once()
+    summary.assert_not_awaited()
     statuses = [
         call.kwargs["status"] for call in center._emit_processing_status.await_args_list
     ]
@@ -1118,46 +1107,6 @@ async def test_supervisor_canceled_token_preserves_durable_completed_winner():
     center._turn_event_appender.append.assert_not_awaited()
     terminal_call = center._emit_processing_status.await_args
     assert terminal_call.kwargs["turn_event_enabled"] is True
-
-
-@pytest.mark.asyncio
-async def test_supervisor_cancel_during_summary_suppresses_completed_projection():
-    token = CancellationToken(message_id="msg-1")
-    entered = asyncio.Event()
-
-    async def emit_summary(*_args, **_kwargs):
-        entered.set()
-        await asyncio.Event().wait()
-
-    center = _supervisor_completion_race_center(token, emit_summary)
-    handling = asyncio.create_task(
-        center._handle_supervisor_run_result(
-            SupervisorRunResult(
-                status=RunStatus.COMPLETED,
-                run_id="msg-1",
-                run_state=_completed_state_with_agent_outputs().model_copy(
-                    update={"status": OrchestrationStatus.RUNNING}
-                ),
-                synthesis_text="Final synthesis",
-            ),
-            room_id="room-1",
-            user_message_id="msg-1",
-            token=token,
-        )
-    )
-    await entered.wait()
-    token.cancel()
-    await handling
-
-    statuses = [
-        call.kwargs["status"] for call in center._emit_processing_status.await_args_list
-    ]
-    assert statuses == [SSEProcessingStatus.CANCELED]
-    turn_types = [
-        call.args[2] for call in center._turn_event_appender.append.await_args_list
-    ]
-    assert "turn_completed" not in turn_types
-    center._persist_turn_completion_kind.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -11,9 +11,15 @@ class SupervisorLLMService:
         self,
         llm_provider: LLMGateway,
         default_model: str = "supervisor_model",
+        json_timeout_seconds: float | None = None,
+        text_timeout_seconds: float | None = None,
+        stream_timeout_seconds: float | None = None,
     ) -> None:
         self._llm_provider = llm_provider
         self._default_model = default_model
+        self._json_timeout_seconds = json_timeout_seconds
+        self._text_timeout_seconds = text_timeout_seconds
+        self._stream_timeout_seconds = stream_timeout_seconds
 
     async def call_json(
         self,
@@ -29,7 +35,11 @@ class SupervisorLLMService:
             schema=schema,
             json_mode=schema is None,
             model=model or self._default_model,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=(
+                timeout_seconds
+                if timeout_seconds is not None
+                else self._json_timeout_seconds
+            ),
         )
         return structured_response_data(response)
 
@@ -44,7 +54,11 @@ class SupervisorLLMService:
         response = await self._llm_provider.generate(
             _supervisor_messages(system_prompt, user_prompt),
             model=model or self._default_model,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=(
+                timeout_seconds
+                if timeout_seconds is not None
+                else self._text_timeout_seconds
+            ),
         )
         return response_content(response)
 
@@ -59,7 +73,11 @@ class SupervisorLLMService:
         return self._llm_provider.generate_stream(
             _supervisor_messages(system_prompt, user_prompt),
             model=model or self._default_model,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=(
+                timeout_seconds
+                if timeout_seconds is not None
+                else self._stream_timeout_seconds
+            ),
         )
 
 

@@ -261,8 +261,8 @@ without importing domain models:
   embedding consumers; future features must opt in explicitly.
 - `DiscoveryLLMService`: discovery query expansion.
 - `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
-- `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
-  and `DebateLLMService`: DTO-backed workflows used directly by runtime modules
+- `AgentSelectionLLMService`, `MessageParserLLMService`, and
+  `RoomMemoryLLMService`: DTO-backed workflows used directly by runtime modules
   or tested as focused LLM capabilities.
 
 `container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
@@ -1804,3 +1804,53 @@ Focused tests are organized by module and workflow:
 
 For architecture-sensitive changes, run the closest focused tests first, then
 the full suite before merging.
+
+## Unified per-message execution contract
+
+`POST /roomCenter/sendMessage` now requires a request-scoped execution contract:
+
+```json
+{
+  "mode": "direct | supervisor",
+  "agent_scope": { "source": "room_default | all_agents" }
+}
+```
+
+`agent_scope` is a discriminated union. `mention` carries a non-empty `agent_ids`
+array and `saved_group` carries only `group_id`. The gateway rejects the former
+public targeting fields (`selected_agent_ids`, `candidate_scope_*`,
+`message_target_mode`, `target_group*`, `target_agent_ids`, and
+`mentioned_agent_ids`). Room, all-Agent, and saved-group membership are expanded
+and authorized by Room Services; clients never send expanded group members.
+Mention IDs define the Supervisor candidate scope, not mandatory dispatch targets.
+
+The resolved `execution_mode` is persisted in the user-message orchestration
+envelope. `mode=supervisor` is the only Supervisor gate; `room.use_supervisor` is
+retained only as a frontend default for newly composed messages. The v2 request
+fingerprint hashes `mode + agent_scope`, so retries with the same
+`client_request_id` must reuse exactly the same contract.
+
+Supervisor planner actions are `DELEGATE`, `ASK_USER`, `PLATFORM_ANSWER`,
+`COMPLETE`, and `FAIL`. Provider aliases are normalized only at the provider
+boundary. Candidate Agent IDs are constrained in the per-call JSON schema;
+Execution creates dispatch IDs and parallel groups. Planner prompts and schemas
+live in `execution/orchestration/planner_prompt.py`.
+
+Completion is governed by `completion_policy.py`. A single successful Agent result
+is published directly without another synthesis or duplicate response. Results
+from two or more unique successful Agents are synthesized once. Platform answers
+and completions that must disclose a non-recoverable failure use a HYBRO final.
+Pending dispatches/continuations, recoverable failures, validated blockers, and
+required gaps deterministically reject `COMPLETE`. Final response work persists
+`FINALIZING`, `finalization_mode`, `final_source_message_id`, and stable summary
+identity before terminal completion. Cancellation may win from every non-terminal
+state, including `FINALIZING`; a recovered finalizing run never returns to planning
+or dispatch.
+
+HTTP handling no longer uses FastAPI `BackgroundTasks` for orchestration. It hands
+the acknowledged message to the Execution-owned tracked-task registry. The Redis
+room lock fails closed when configured but unavailable, renews with the owner token,
+and cancels the local body if lease ownership is lost.
+
+Debate is not an execution mode. Legacy room `debateMode` metadata is ignored, and
+legacy active Debate orchestration is failed during recovery rather than resumed.

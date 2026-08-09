@@ -85,27 +85,3 @@ async def test_summary_service_system_prompt_includes_markdown_format() -> None:
     assert "final answer to the user's request" in system_prompt
     assert "do not force a TL;DR" in system_prompt
     assert "Do not write `1.` for every item" in system_prompt
-
-
-@pytest.mark.asyncio
-async def test_summary_service_debate_prompt_includes_markdown_format() -> None:
-    gateway = FakeStreamGateway()
-    service = SummaryLLMService(gateway)
-
-    async for _ in service.summarize_agent_responses_stream(
-        [
-            RoomMessageSummary(
-                agent_id="agent-a",
-                agent_name="Agent A",
-                message="Response A",
-            )
-        ],
-        mode="debate",
-        user_question="question",
-    ):
-        pass
-
-    system_prompt = gateway.stream_calls[0][0][0]["content"]
-    assert "multi-agent debate" in system_prompt
-    assert "do not force a TL;DR" in system_prompt
-    assert "Do not write `1.` for every item" in system_prompt

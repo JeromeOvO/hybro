@@ -74,7 +74,6 @@ async def test_facade_delegates_to_matcher(mock_matched_agents):
         mock_matcher_instance.match.assert_called_once_with(
             message_text="test message",
             user_id="user-123",
-            is_debate_mode=False,
             required_input_modes=None,
         )
 
@@ -233,32 +232,6 @@ async def test_facade_passes_required_input_modes(mock_matched_agents):
         assert call_kwargs["required_input_modes"] == ["image/png", "image/jpeg"]
 
 
-@pytest.mark.asyncio
-async def test_facade_passes_is_debate_mode(mock_matched_agents):
-    """Test that is_debate_mode is correctly forwarded."""
-    mock_match_result = MatchResult(
-        agents=mock_matched_agents,
-        total_candidates=10,
-        filtered_count=5,
-    )
-
-    with patch("agent.selection_service.AgentMatcher") as MockMatcher:
-        mock_matcher_instance = AsyncMock()
-        mock_matcher_instance.match.return_value = mock_match_result
-        MockMatcher.return_value = mock_matcher_instance
-
-        service = AgentSelectionService()
-        await service.select_agents_for_message(
-            message_text="test message",
-            is_debate_mode=True,
-        )
-
-        # Verify is_debate_mode was passed through
-        mock_matcher_instance.match.assert_called_once()
-        call_kwargs = mock_matcher_instance.match.call_args[1]
-        assert call_kwargs["is_debate_mode"] is True
-
-
 def test_derive_required_input_modes_with_attachments():
     """Test _derive_required_input_modes with attachments."""
     from room.compat.runtime import RoomServices
@@ -315,27 +288,15 @@ def test_resolve_strategy_supervisor():
     """Test resolve_strategy with supervisor mode."""
     strategy = resolve_strategy(
         use_supervisor=True,
-        is_debate_mode=False,
         agent_count=3,
     )
     assert strategy == DispatchStrategy.SUPERVISOR
-
-
-def test_resolve_strategy_debate():
-    """Test resolve_strategy with debate mode."""
-    strategy = resolve_strategy(
-        use_supervisor=False,
-        is_debate_mode=True,
-        agent_count=3,
-    )
-    assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
 
 
 def test_resolve_strategy_multi_agent():
     """Test resolve_strategy with multiple agents."""
     strategy = resolve_strategy(
         use_supervisor=False,
-        is_debate_mode=False,
         agent_count=3,
     )
     assert strategy == DispatchStrategy.SEQUENTIAL
@@ -345,7 +306,6 @@ def test_resolve_strategy_single():
     """Test resolve_strategy with single agent."""
     strategy = resolve_strategy(
         use_supervisor=False,
-        is_debate_mode=False,
         agent_count=1,
     )
     assert strategy == DispatchStrategy.SINGLE
@@ -445,27 +405,6 @@ async def test_llm_rerank_failure_preserves_lexical_order(mock_matched_agents):
     ]
 
 
-def test_resolve_strategy_supervisor_overrides_debate():
-    """Supervisor takes precedence over debate mode."""
-    strategy = resolve_strategy(
-        use_supervisor=True,
-        is_debate_mode=True,
-        agent_count=3,
-    )
-    assert strategy == DispatchStrategy.SUPERVISOR
-
-
-def test_resolve_strategy_debate_with_single_agent():
-    """Debate mode applies even with 1 agent."""
-    strategy = resolve_strategy(
-        use_supervisor=False,
-        is_debate_mode=True,
-        agent_count=1,
-    )
-    assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
-
-
-@pytest.mark.asyncio
 async def test_suggest_agents_uses_facade(mock_matched_agents):
     """Test that suggest_agents still works through facade."""
     mock_match_result = MatchResult(
@@ -490,7 +429,6 @@ async def test_suggest_agents_uses_facade(mock_matched_agents):
         mock_matcher_instance.match.assert_awaited_once_with(
             message_text="test message",
             user_id="owner-user",
-            is_debate_mode=False,
             required_input_modes=None,
         )
         mock_reranker.rank_agents_for_task.assert_not_awaited()

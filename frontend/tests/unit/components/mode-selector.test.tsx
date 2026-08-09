@@ -21,14 +21,6 @@ describe('ModeSelector', () => {
     })
   }
 
-  it.each([
-    ['ultimate_debate', 'Ultimate'],
-    ['fast_debate', 'Fast'],
-  ] as const)('renders legacy %s mode as %s', (mode, label) => {
-    render(<ModeSelector mode={mode} onModeChange={vi.fn()} />)
-    expect(screen.getByText(label)).toBeTruthy()
-  })
-
   for (const { mode, label, description } of SELECTABLE_MODES) {
     it(`trigger tooltip shows description for ${mode} on hover`, async () => {
       const user = userEvent.setup()

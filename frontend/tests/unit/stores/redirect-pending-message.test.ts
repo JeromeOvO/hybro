@@ -19,13 +19,13 @@ describe('Room redirect – pending message in empty room', () => {
   it('consumePendingRoomData returns and clears the data', () => {
     useRoomUiStore.getState().setPendingRoomData('room-x', {
       initialMessage: 'Test message',
-      targetGroup: 'all_agents',
+      mode: 'direct', agentScope: { source: 'all_agents' }, clientRequestId: 'request-1',
     })
 
     const consumed = useRoomUiStore.getState().consumePendingRoomData('room-x')
     expect(consumed).toEqual({
       initialMessage: 'Test message',
-      targetGroup: 'all_agents',
+      mode: 'direct', agentScope: { source: 'all_agents' }, clientRequestId: 'request-1',
     })
 
     const afterConsume = useRoomUiStore.getState().pendingRoomData['room-x']
@@ -45,25 +45,27 @@ describe('Room redirect – pending message in empty room', () => {
     const stored = useRoomUiStore.getState().pendingRoomData['room-empty-1']
     expect(stored).toBeDefined()
     expect(stored.initialMessage).toBe('My message')
-    expect(stored.targetGroup).toBeUndefined()
+    expect(stored.agentScope).toBeUndefined()
   })
 
   it('pending data with explicit targetGroup survives store roundtrip', () => {
     const pendingData = {
       initialMessage: 'Explicit target',
-      targetGroup: 'grp-saved-123',
-    }
+      mode: 'supervisor',
+      agentScope: { source: 'saved_group', group_id: 'grp-saved-123' },
+      clientRequestId: 'request-1',
+    } as const
 
     useRoomUiStore.getState().setPendingRoomData('room-target', pendingData)
 
     const consumed = useRoomUiStore.getState().consumePendingRoomData('room-target')
     expect(consumed).toBeDefined()
-    expect(consumed!.targetGroup).toBe('grp-saved-123')
+    expect(consumed!.agentScope).toEqual({ source: 'saved_group', group_id: 'grp-saved-123' })
     expect(consumed!.initialMessage).toBe('Explicit target')
   })
 
   it('re-storing pending data after failed send preserves content', () => {
-    const pendingData = { initialMessage: 'Will fail', targetGroup: undefined }
+    const pendingData = { initialMessage: 'Will fail', agentScope: undefined }
 
     useRoomUiStore.getState().setPendingRoomData('room-fail', pendingData)
     const consumed = useRoomUiStore.getState().consumePendingRoomData('room-fail')
@@ -81,11 +83,11 @@ describe('Room redirect – pending message in empty room', () => {
     })
     useRoomUiStore.getState().setPendingRoomData('room-b', {
       initialMessage: 'Message B',
-      targetGroup: 'all_agents',
+      mode: 'direct', agentScope: { source: 'all_agents' }, clientRequestId: 'request-1',
     })
 
     expect(useRoomUiStore.getState().pendingRoomData['room-a']?.initialMessage).toBe('Message A')
-    expect(useRoomUiStore.getState().pendingRoomData['room-b']?.targetGroup).toBe('all_agents')
+    expect(useRoomUiStore.getState().pendingRoomData['room-b']?.agentScope).toEqual({ source: 'all_agents' })
 
     useRoomUiStore.getState().consumePendingRoomData('room-a')
     expect(useRoomUiStore.getState().pendingRoomData['room-a']).toBeUndefined()

@@ -41,7 +41,6 @@ def _preflight_context(agent_count: int) -> RoomMessagePreflightContext:
         user_message=user_message,
         client_request_id=None,
         room=room,
-        is_debate_mode=False,
         use_supervisor=False,
         message_text="Route this request",
         pre_resolved_mentions=None,
