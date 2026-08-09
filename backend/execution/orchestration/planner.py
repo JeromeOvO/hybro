@@ -70,15 +70,16 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                     "expected_outputs": {
                         "type": "array",
+                        "maxItems": 1,
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
                             "properties": {
                                 "output_key": {"type": ["string", "null"]},
                                 "kind": {"type": "string"},
-                                "required": {"type": "boolean"},
+                                "required": {"type": "boolean", "const": True},
                                 "description": {"type": ["string", "null"]},
-                                "artifact_name": {"type": ["string", "null"]},
+                                "artifact_name": {"type": "null"},
                                 "required_fields": {
                                     "type": "array",
                                     "items": {"type": "string"},

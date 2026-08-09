@@ -49,6 +49,19 @@ class Rooms:
             self.doc.setdefault("write_leases", []).append(deepcopy(pushed))
         return True
 
+    async def find_one_and_update(self, query, update, **kwargs):
+        projection = kwargs.get("projection")
+        changed = await self.update_one(query, update)
+        if not changed:
+            return None
+        if projection:
+            return {
+                key: deepcopy(self.doc.get(key))
+                for key in projection
+                if key in self.doc
+            }
+        return deepcopy(self.doc)
+
     async def find_one(self, query, *, projection=None):
         del projection
         if query.get("room_id") != self.doc.get("room_id"):

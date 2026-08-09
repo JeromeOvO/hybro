@@ -659,9 +659,7 @@ async def test_same_terminal_state_can_backfill_final_agent_response():
         "message_content.message_task.status.state": "completed",
         "message_content.message_text": None,
     }
-    assert update == {
-        "$set": {"message_content.message_text": "Final travel plan"}
-    }
+    assert update == {"$set": {"message_content.message_text": "Final travel plan"}}
 
 
 @pytest.mark.asyncio
@@ -1326,6 +1324,47 @@ async def test_runtime_store_sparse_room_update_preserves_membership():
 
     _, update_doc, _ = rooms.update_one_calls[-1]
     assert "room_agent_set" not in update_doc["$set"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_store_hydrated_room_update_preserves_active_write_lease():
+    from dal.runtime_store import RuntimeRepositoryStore
+    from models.room import Room
+
+    lease = {
+        "lease_id": "lease-1",
+        "owner": "agent-artifact",
+        "acquired_at": datetime(2026, 5, 11, tzinfo=UTC),
+        "expires_at": datetime(2026, 5, 11, 0, 1, tzinfo=UTC),
+    }
+    room_repo, _, rooms = _room_repo(
+        [
+            {
+                "room_id": "r1",
+                "room_owner_id": "owner-1",
+                "room_owner_name": "Owner",
+                "room_name": "Old",
+                "lifecycle_state": "active",
+                "write_leases": [lease],
+            }
+        ]
+    )
+    store = RuntimeRepositoryStore(
+        mongo=FakeMongo(),
+        room_repository=room_repo,
+        message_repository=object(),
+        agent_repository=object(),
+    )
+    renamed = Room.model_validate(rooms.docs[0]).model_copy(
+        update={"room_name": "Renamed"}
+    )
+
+    assert await store.update_room_by_room_id("r1", renamed) is True
+    assert rooms.docs[0]["write_leases"] == [lease]
+    assert rooms.docs[0]["lifecycle_state"] == "active"
+    _, update_doc, _ = rooms.update_one_calls[-1]
+    assert "write_leases" not in update_doc["$set"]
+    assert "lifecycle_state" not in update_doc["$set"]
 
 
 @pytest.mark.asyncio

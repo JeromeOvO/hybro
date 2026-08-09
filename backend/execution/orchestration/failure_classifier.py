@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from common.utils.artifact_delivery import OUTPUT_DELIVERY_FAILURE_CODE
 from common.utils.time import utcnow
 from models.orchestration import OpenFailureRecord
 
@@ -127,7 +128,7 @@ def _failure_fingerprint(
     message: str,
 ) -> str:
     parts = [agent_id]
-    if dispatch_intent_id:
+    if dispatch_intent_id and code != OUTPUT_DELIVERY_FAILURE_CODE:
         parts.append(f"dispatch:{dispatch_intent_id}")
     parts.extend((code, _fingerprint_message(message)))
     return ":".join(parts)

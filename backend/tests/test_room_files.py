@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -8,8 +9,12 @@ from uuid import uuid4
 
 import pytest
 
-from common.errors import FileStoragePlatformError
+from common.errors import (
+    FileStoragePlatformError,
+    RetryableFileStoragePlatformError,
+)
 from room_files import MemoryFileContentStore, RoomFiles
+from room_files.errors import FileOperationError
 
 
 class InMemoryCollection:
@@ -60,6 +65,15 @@ class InMemoryCollection:
 
     def find(self, query):
         return AsyncCursor([deepcopy(doc) for doc in self.docs if _matches(doc, query)])
+
+
+class AlwaysValidLeases:
+    @asynccontextmanager
+    async def hold(self, _room_id, _owner):
+        yield "test-lease"
+
+    async def assert_valid(self, _room_id, _lease_id):
+        return None
 
 
 class UncertainFinalizeCollection(InMemoryCollection):
@@ -215,6 +229,61 @@ async def test_user_upload_survives_lost_finalize_acknowledgement():
     assert await files.get_bytes(file_id, max_bytes=5) == b"hello"
 
 
+async def test_agent_artifact_rejects_configured_room_without_write_leases():
+    collection = InMemoryCollection()
+    rooms = InMemoryCollection()
+    rooms.docs.append({"room_id": "room-1", "room_owner_id": "user-1"})
+    content_store = MemoryFileContentStore()
+    files = RoomFiles(
+        metadata=collection,
+        content=content_store,
+        rooms=rooms,
+        lease_writes=False,
+    )
+
+    with pytest.raises(FileStoragePlatformError) as exc_info:
+        await files.store_agent_artifact(
+            room_id="room-1",
+            source_message_id="message-1",
+            origin_key="origin-1",
+            content=b"result",
+            file_name="result.txt",
+            mime_type="text/plain",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert collection.docs == []
+    assert content_store._contents == {}
+
+
+async def test_agent_artifact_translates_transient_content_backend_failure():
+    class FailingContentStore(MemoryFileContentStore):
+        async def write(self, file_id, content, content_type):
+            raise FileOperationError("temporary filesystem failure")
+
+    collection = InMemoryCollection()
+    rooms = InMemoryCollection()
+    rooms.docs.append({"room_id": "room-1", "room_owner_id": "user-1"})
+    files = RoomFiles(
+        metadata=collection,
+        content=FailingContentStore(),
+        rooms=rooms,
+    )
+    files._leases = AlwaysValidLeases()
+
+    with pytest.raises(RetryableFileStoragePlatformError) as exc_info:
+        await files.store_agent_artifact(
+            room_id="room-1",
+            source_message_id="message-1",
+            origin_key="origin-1",
+            content=b"result",
+            file_name="result.txt",
+            mime_type="text/plain",
+        )
+
+    assert exc_info.value.status_code == 503
+
+
 async def test_agent_artifact_survives_lost_finalize_acknowledgement():
     file_id = uuid4().hex
     collection = UncertainFinalizeCollection()
@@ -227,6 +296,7 @@ async def test_agent_artifact_survives_lost_finalize_acknowledgement():
         rooms=rooms,
         file_id_factory=lambda: file_id,
     )
+    files._leases = AlwaysValidLeases()
 
     stored = await files.store_agent_artifact(
         room_id="room-1",
@@ -251,6 +321,7 @@ async def test_room_files_normalizes_mime_types_before_persistence():
         content=MemoryFileContentStore(),
         rooms=rooms,
     )
+    files._leases = AlwaysValidLeases()
 
     uploaded = await files.upload(
         file_bytes=b"user",
@@ -350,6 +421,7 @@ async def test_room_files_materializes_agent_artifact_idempotently():
         content=content_store,
         rooms=rooms,
     )
+    files._leases = AlwaysValidLeases()
 
     first = await files.store_agent_artifact(
         room_id="room-1",
@@ -374,6 +446,49 @@ async def test_room_files_materializes_agent_artifact_idempotently():
     assert len(collection.docs) == 1
 
 
+async def test_room_files_resumes_pending_agent_artifact_without_duplicate_origin():
+    collection = InMemoryCollection()
+    rooms = InMemoryCollection()
+    rooms.docs.append({"room_id": "room-1", "room_owner_id": "user-1"})
+    content_store = MemoryFileContentStore()
+    file_id = "a" * 32
+    digest = "f6a214f7a5fcda0c2cee9660b7fc29f5649e3c68aad48e20e950137c98913a68"
+    collection.docs.append(
+        {
+            "file_id": file_id,
+            "room_id": "room-1",
+            "owner_id": "user-1",
+            "source": "agent_artifact",
+            "source_message_id": "message-1",
+            "origin_key": "origin-1",
+            "file_name": "result.txt",
+            "mime_type": "text/plain",
+            "size_bytes": 6,
+            "sha256": digest,
+            "status": "pending",
+            "version": 1,
+        }
+    )
+    await content_store.write(file_id, b"result", "text/plain")
+    files = RoomFiles(metadata=collection, content=content_store, rooms=rooms)
+    files._leases = AlwaysValidLeases()
+
+    stored = await files.store_agent_artifact(
+        room_id="room-1",
+        source_message_id="message-1",
+        origin_key="origin-1",
+        content=b"result",
+        content_sha256=digest,
+        file_name="result.txt",
+        mime_type="text/plain",
+    )
+
+    assert stored["file_id"] == file_id
+    assert stored["status"] == "ready"
+    assert len(collection.docs) == 1
+    assert collection.docs[0]["status"] == "ready"
+
+
 async def test_room_files_deletes_only_superseded_agent_artifacts():
     ids = iter(["a" * 32, "b" * 32])
     collection = InMemoryCollection()
@@ -386,6 +501,7 @@ async def test_room_files_deletes_only_superseded_agent_artifacts():
         rooms=rooms,
         file_id_factory=lambda: next(ids),
     )
+    files._leases = AlwaysValidLeases()
     old = await files.store_agent_artifact(
         room_id="room-1",
         source_message_id="message-1",

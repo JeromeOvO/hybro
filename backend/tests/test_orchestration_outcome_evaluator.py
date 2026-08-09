@@ -1,3 +1,5 @@
+import pytest
+
 from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
     canonical_content_fingerprint,
@@ -140,6 +142,119 @@ def test_nonempty_text_fulfills_text_expected_output_without_semantic_fact():
     assert outcome.status == "fulfilled"
     assert outcome.satisfied_output_keys == ["travel_plan"]
     assert outcome.remaining_required_obligations == []
+
+
+def test_image_mime_expected_output_matches_image_artifact_without_exact_name():
+    message_id = "msg-image"
+    intent = _intent(message_id)
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="generated_image",
+            kind="image/png",
+            required=True,
+        )
+    ]
+    output = _output(message_id, text="")
+    output.artifact_keys = [f"{message_id}:artifact:image"]
+    image = {
+        "artifact_key": f"{message_id}:artifact:image",
+        "source_agent_message_id": message_id,
+        "source_agent_id": "agent-1",
+        "name": "image_generated-by-agent",
+        "parts": [
+            {
+                "kind": "file",
+                "file": {"uri": "/files/image", "mimeType": "image/png"},
+            }
+        ],
+    }
+
+    outcome = DelegationOutcomeEvaluator().evaluate(
+        _state(),
+        _state(artifacts=[image]),
+        intent,
+        output,
+        [],
+    )
+
+    assert outcome.status == "fulfilled"
+    assert outcome.satisfied_output_keys == ["generated_image"]
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        {"mime_type": "application/json", "parts": [{"kind": "data", "data": {}}]},
+        {"parts": [{"kind": "data", "data": {"answer": 42}}]},
+    ],
+)
+def test_json_expected_output_matches_structured_artifact(artifact):
+    message_id = "msg-json"
+    intent = _intent(message_id)
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="structured_result",
+            kind="application/json",
+            required=True,
+        )
+    ]
+    output = _output(message_id, text="")
+    output.artifact_keys = [f"{message_id}:artifact:data"]
+    artifact.update(
+        {
+            "artifact_key": f"{message_id}:artifact:data",
+            "source_agent_message_id": message_id,
+            "source_agent_id": "agent-1",
+        }
+    )
+
+    outcome = DelegationOutcomeEvaluator().evaluate(
+        _state(),
+        _state(artifacts=[artifact]),
+        intent,
+        output,
+        [],
+    )
+
+    assert outcome.status == "fulfilled"
+    assert outcome.satisfied_output_keys == ["structured_result"]
+
+
+def test_wrong_media_artifact_does_not_satisfy_image_expected_output():
+    message_id = "msg-image"
+    intent = _intent(message_id)
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="generated_image",
+            kind="image/png",
+            required=True,
+        )
+    ]
+    output = _output(message_id, text="")
+    output.artifact_keys = [f"{message_id}:artifact:file"]
+    document = {
+        "artifact_key": f"{message_id}:artifact:file",
+        "source_agent_message_id": message_id,
+        "source_agent_id": "agent-1",
+        "name": "document.pdf",
+        "parts": [
+            {
+                "kind": "file",
+                "file": {"uri": "/files/document", "mimeType": "application/pdf"},
+            }
+        ],
+    }
+
+    outcome = DelegationOutcomeEvaluator().evaluate(
+        _state(),
+        _state(artifacts=[document]),
+        intent,
+        output,
+        [],
+    )
+
+    assert outcome.status == "no_progress"
+    assert outcome.remaining_required_obligations == ["generated_image:$present"]
 
 
 def test_agent_text_fact_is_not_semantic_progress():

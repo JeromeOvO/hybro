@@ -9,12 +9,17 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from pymongo.errors import ConnectionFailure, ExecutionTimeout, WTimeoutError
+
 from common.dto import FileInfo
-from common.errors import FileStoragePlatformError
+from common.errors import (
+    FileStoragePlatformError,
+    RetryableFileStoragePlatformError,
+)
 from common.protocols import PreparedFileStream
 from common.utils.time import ensure_utc, utcnow
 from room_files.content_store import FileContentStore
-from room_files.errors import FileConflictError, FileStorageError
+from room_files.errors import FileConflictError, FileOperationError, FileStorageError
 from room_files.leases import RoomWriteLeases
 from room_files.mime import normalize_mime_type
 
@@ -67,6 +72,10 @@ class RoomFiles:
         max_bytes: int = 50 * 1024 * 1024,
         content_sha256: str | None = None,
     ) -> dict[str, Any]:
+        if self._rooms is not None and self._leases is None:
+            raise FileStoragePlatformError(
+                409, {"message": "Artifact write lease is unavailable"}
+            )
         try:
             async with self.write_lease(room_id, "agent-artifact") as lease_id:
                 return await self._store_agent_artifact(
@@ -80,10 +89,35 @@ class RoomFiles:
                     content_sha256=content_sha256,
                     lease_id=lease_id,
                 )
-        except FileConflictError as exc:
-            raise FileStoragePlatformError(
-                409, {"message": "Room is being deleted"}
-            ) from exc
+        except FileConflictError as conflict_exc:
+            conflict = str(conflict_exc).lower()
+            if "lease" in conflict:
+                message = "Artifact write lease conflict"
+            elif "deleting" in conflict or "unavailable" in conflict:
+                message = "Room unavailable for artifact write"
+            else:
+                message = "Artifact content conflict"
+            raise FileStoragePlatformError(409, {"message": message}) from conflict_exc
+        except (
+            FileOperationError,
+            ConnectionFailure,
+            ExecutionTimeout,
+            WTimeoutError,
+        ) as transient_exc:
+            raise RetryableFileStoragePlatformError(
+                503, {"message": "Artifact storage backend is temporarily unavailable"}
+            ) from transient_exc
+
+    async def _assert_artifact_write_fence(
+        self, room_id: str, lease_id: str | None
+    ) -> None:
+        if self._leases is None:
+            if self._rooms is not None:
+                raise FileConflictError("artifact write lease is unavailable")
+            return
+        if lease_id is None:
+            raise FileConflictError("artifact write lease is unavailable")
+        await self._leases.assert_valid(room_id, lease_id)
 
     async def _store_agent_artifact(
         self,
@@ -104,20 +138,14 @@ class RoomFiles:
         digest = content_sha256 or await asyncio.to_thread(
             lambda: hashlib.sha256(content).hexdigest()
         )
-        existing = await self._metadata.find_one(
-            {
-                "origin_key": origin_key,
-                "source": "agent_artifact",
-                "status": "ready",
-            }
+        resumed = await self._recover_agent_artifact_origin(
+            origin_key=origin_key,
+            digest=digest,
+            room_id=room_id,
+            lease_id=lease_id,
         )
-        if existing is not None:
-            if existing.get("sha256") != digest:
-                raise FileStoragePlatformError(
-                    409,
-                    {"message": "Artifact origin conflicts with existing content"},
-                )
-            return dict(existing)
+        if resumed is not None:
+            return resumed
 
         owner_id = await self._room_owner(room_id)
         if owner_id is None:
@@ -144,7 +172,7 @@ class RoomFiles:
         try:
             await self._metadata.insert_one(pending)
             await self._content.write(file_id, content, pending["mime_type"])
-            await self._assert_lease(room_id, lease_id)
+            await self._assert_artifact_write_fence(room_id, lease_id)
             result = await self._metadata.update_one(
                 {"file_id": file_id, "status": "pending", "version": 1},
                 {
@@ -166,6 +194,86 @@ class RoomFiles:
                 return dict(existing)
             raise
         return pending | {"status": "ready", "version": 2}
+
+    async def _recover_agent_artifact_origin(
+        self,
+        *,
+        origin_key: str,
+        digest: str,
+        room_id: str,
+        lease_id: str | None,
+    ) -> dict[str, Any] | None:
+        existing = await self._metadata.find_one(
+            {"origin_key": origin_key, "source": "agent_artifact"}
+        )
+        if existing is None:
+            return None
+        if existing.get("sha256") != digest:
+            raise FileStoragePlatformError(
+                409, {"message": "Artifact origin conflicts with existing content"}
+            )
+        resumed = await self._resume_agent_artifact_origin(
+            existing,
+            digest=digest,
+            room_id=room_id,
+            lease_id=lease_id,
+        )
+        if resumed is not None:
+            return resumed
+        remaining = await self._metadata.find_one(
+            {"origin_key": origin_key, "source": "agent_artifact"}
+        )
+        if remaining is not None:
+            raise FileStoragePlatformError(
+                409, {"message": "Artifact origin finalization is still in progress"}
+            )
+        return None
+
+    async def _resume_agent_artifact_origin(
+        self,
+        existing: dict[str, Any],
+        *,
+        digest: str,
+        room_id: str,
+        lease_id: str | None,
+    ) -> dict[str, Any] | None:
+        status = existing.get("status")
+        if status == "ready":
+            return dict(existing)
+        file_id = str(existing["file_id"])
+        if status == "pending":
+            if await self._content.exists(
+                file_id,
+                expected_size=int(existing.get("size_bytes") or 0),
+                expected_sha256=digest,
+            ):
+                await self._assert_artifact_write_fence(room_id, lease_id)
+                version = int(existing.get("version", 1))
+                result = await self._metadata.update_one(
+                    {"file_id": file_id, "status": "pending", "version": version},
+                    {
+                        "$set": {"status": "ready", "updated_at": self._now()},
+                        "$inc": {"version": 1},
+                    },
+                )
+                if _changed(result):
+                    return dict(existing) | {
+                        "status": "ready",
+                        "version": version + 1,
+                    }
+                ready = await self._metadata.find_one(
+                    {"file_id": file_id, "status": "ready", "sha256": digest}
+                )
+                if ready is not None:
+                    return dict(ready)
+            await self._resolve_or_compensate_upload(file_id, digest)
+            return None
+        if status == "delete_pending":
+            await self._delete_claimed(file_id, int(existing.get("version", 1)))
+            return None
+        raise FileStoragePlatformError(
+            409, {"message": "Artifact origin has an invalid storage state"}
+        )
 
     async def _wait_for_ready_origin(
         self, origin_key: str, digest: str

@@ -13,6 +13,7 @@ from common.errors.platform import (
     FileStoragePlatformError,
     GatewayPlatformError,
     PlatformRouteError,
+    RetryableFileStoragePlatformError,
 )
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "HybroError",
     "NotFoundError",
     "PlatformRouteError",
+    "RetryableFileStoragePlatformError",
     "TransientError",
     "UpstreamError",
     "ValidationError",

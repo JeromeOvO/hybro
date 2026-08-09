@@ -1077,6 +1077,14 @@ because the bytes may still exist on another instance. Recovery deletes local
 content that has no metadata, but it does not tombstone ready metadata solely
 because the current process cannot see the corresponding local file.
 
+Agent artifact writes acquire an atomic room-scoped write lease before content
+is stored. Lease acquisition and release mutate only the `write_leases` field;
+general room snapshots explicitly exclude lease, lifecycle, and deletion-fencing
+fields so stale room updates cannot erase active ownership. A lease conflict is
+surfaced as a retryable persistence failure; there is no lease-free artifact
+write path. Finalization verifies that the same lease is still valid before
+promoting file metadata to `ready`, so durable deletion fencing always wins.
+
 Agent artifact replacement is also owned by this boundary. After an
 `append=false` journal replacement commits, superseded file IDs are claimed and
 deleted only after the complete committed journal confirms that no artifact
@@ -1481,11 +1489,23 @@ messages for other roles or states, failure details, interactive prompts,
 noncompleted artifact/message content, and inline `file.bytes` are not persisted
 or emitted; file artifacts must be converted to
 addressable URIs or a safe `file_unavailable` marker before public projection.
-Materialization records payload-free failure categories for observability. A remote
-`completed` task whose advertised files all fail delivery and which has no other
-usable output is projected as a local `artifact_delivery_failed` result; the
-original remote state is retained in task metadata. Valid completed responses with
-no advertised files remain completed, and partial useful output remains usable.
+Materialization records payload-free failure categories for observability.
+Transient platform storage failures retry persistence of the original decoded
+bytes with the same deterministic origin key; they never re-dispatch the remote
+agent or regenerate paid media. Only lease/finalization conflicts, rate limits,
+and server failures are retried; deterministic 409 conflicts and client errors
+are not. A
+remote `completed` task whose advertised files all fail delivery and which has
+no other usable output is projected as a local `artifact_delivery_failed` result;
+the original remote state is retained in task metadata. That failure identity is
+stable across dispatch intents and the planner cannot repair it by asking the
+same agent to regenerate output. Generic repeated operational failures also have
+an agent-level retry ceiling. Valid completed responses with no advertised files
+remain completed, and partial useful output remains usable.
+
+Streaming text producers must expose one logical artifact identity. Bundled
+Story and Travel agents aggregate provider deltas and emit one final text
+artifact rather than treating token chunks as hundreds of durable artifacts.
 List/section markdown repair runs only in the
 frontend remark plugin pipeline
 (`frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown

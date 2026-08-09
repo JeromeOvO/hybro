@@ -115,10 +115,7 @@ class PlannerActionValidator:
                 guardrails_enabled=guardrails_enabled,
             )
 
-        if (
-            action.action == PlannerActionType.COMPLETE
-            and run_state is not None
-        ):
+        if action.action == PlannerActionType.COMPLETE and run_state is not None:
             PlannerActionValidator._validate_completion(
                 action,
                 run_state,
@@ -606,9 +603,7 @@ def _validate_delegate(
             "delegate action requires at least one target",
             code="delegate_target_missing",
         )
-    if len(action.targets) > 1 and any(
-        target.depends_on for target in action.targets
-    ):
+    if len(action.targets) > 1 and any(target.depends_on for target in action.targets):
         raise PlannerActionValidationError(
             "multi-target delegate tasks must be independent",
             code="parallel_dependency_unspecified",
@@ -629,6 +624,8 @@ def _validate_delegate(
             target,
             candidate_output_modes.get(target.agent_id, ()),
         )
+        if run_state is not None:
+            _validate_agent_operational_retry_budget(target, run_state)
         selected_resource_refs = {
             *target.required_resource_refs,
             *(
@@ -656,6 +653,75 @@ def _validate_delegate(
             _validate_required_artifact_refs(target, run_state)
 
 
+def _output_family(kind: str) -> str:
+    normalized = kind.strip().lower()
+    if normalized in {"text", "markdown"} or normalized.startswith("text/"):
+        return "text"
+    if normalized in {"image", "audio", "video"}:
+        return normalized
+    if "/" in normalized:
+        return normalized.split("/", 1)[0]
+    return normalized
+
+
+def _validate_agent_operational_retry_budget(
+    target: PlannedDelegateTarget,
+    run_state: OrchestrationRunState,
+) -> None:
+    artifact_failures = [
+        failure
+        for failure in run_state.open_failures
+        if failure.status in {"open", "abandoned"}
+        and failure.error_code == "artifact_delivery_failed"
+    ]
+    target_families = {
+        _output_family(output.kind)
+        for output in target.expected_outputs
+        if output.required
+    }
+    for failure in artifact_failures:
+        failed_intent = next(
+            (
+                intent
+                for intent in run_state.dispatch_intents
+                if intent.dispatch_intent_id == failure.dispatch_intent_id
+            ),
+            None,
+        )
+        failed_families = (
+            {
+                _output_family(output.kind)
+                for output in failed_intent.expected_outputs
+                if output.required
+            }
+            if failed_intent is not None
+            else set()
+        )
+        same_untracked_agent = (
+            failed_intent is None and failure.agent_id == target.agent_id
+        )
+        if same_untracked_agent or target_families.intersection(failed_families):
+            raise PlannerActionValidationError(
+                "artifact delivery failed and cannot be repaired by regenerating output",
+                code="artifact_delivery_retry_forbidden",
+                recoverable=False,
+            )
+
+    generic_failures = [
+        failure
+        for failure in run_state.open_failures
+        if failure.agent_id == target.agent_id
+        and failure.status in {"open", "abandoned"}
+        and failure.error_code == "agent_execution_failed"
+    ]
+    if len(generic_failures) >= 2:
+        raise PlannerActionValidationError(
+            "agent operational retry budget exhausted",
+            code="recovery_retry_exhausted",
+            recoverable=False,
+        )
+
+
 def _validate_expected_output_modes(
     target: PlannedDelegateTarget,
     output_modes: tuple[str, ...],
@@ -666,11 +732,26 @@ def _validate_expected_output_modes(
     )
     for expected in target.expected_outputs:
         kind = expected.kind.strip().lower()
-        requests_artifact = kind == "artifact" or bool(expected.artifact_name)
+        requests_artifact = (
+            kind == "artifact"
+            or kind in {"file", "image", "audio", "video"}
+            or ("/" in kind and kind not in textual_modes)
+            or bool(expected.artifact_name)
+        )
         if text_only and requests_artifact:
             raise PlannerActionValidationError(
                 f"delegate target {target.agent_id!r} advertises only text output "
                 "but the planner requested an artifact",
+                code="unsupported_expected_output_mode",
+            )
+        if (
+            requests_artifact
+            and output_modes
+            and not _supports_artifact_kind(kind, output_modes, textual_modes)
+        ):
+            raise PlannerActionValidationError(
+                f"delegate target {target.agent_id!r} does not advertise a "
+                f"compatible {kind!r} output mode",
                 code="unsupported_expected_output_mode",
             )
         if kind in textual_modes and (
@@ -683,15 +764,32 @@ def _validate_expected_output_modes(
             )
 
 
+def _supports_artifact_kind(
+    kind: str,
+    output_modes: tuple[str, ...],
+    textual_modes: set[str],
+) -> bool:
+    non_text_modes = [
+        mode
+        for mode in output_modes
+        if mode not in textual_modes and not mode.startswith("text/")
+    ]
+    if kind in {"artifact", "file"}:
+        return bool(non_text_modes)
+    if kind in {"image", "audio", "video"}:
+        return any(mode.startswith(f"{kind}/") for mode in non_text_modes)
+    if kind.endswith("/*"):
+        prefix = kind.removesuffix("*")
+        return any(mode.startswith(prefix) for mode in non_text_modes)
+    return kind in non_text_modes
+
+
 def _validate_terminal_output(
     action: PlannerAction,
     *,
     has_agent_output: bool,
 ) -> None:
-    if (
-        action.action == PlannerActionType.COMPLETE
-        and not has_agent_output
-    ):
+    if action.action == PlannerActionType.COMPLETE and not has_agent_output:
         raise PlannerActionValidationError(
             f"planner action {action.action.value!r} requires agent output"
         )

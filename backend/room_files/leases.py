@@ -33,7 +33,7 @@ class RoomWriteLeases:
             {"$pull": {"write_leases": {"expires_at": {"$lte": now}}}},
         )
         lease_id = uuid4().hex
-        result = await self._rooms.update_one(
+        room = await self._rooms.find_one_and_update(
             {
                 "room_id": room_id,
                 "$or": [
@@ -52,8 +52,14 @@ class RoomWriteLeases:
                     }
                 },
             },
+            return_document=True,
+            projection={"write_leases": 1},
         )
-        if not _changed(result):
+        if room is None or not any(
+            lease.get("lease_id") == lease_id
+            for lease in room.get("write_leases", [])
+            if isinstance(lease, dict)
+        ):
             raise FileConflictError("room is deleting or unavailable")
         return lease_id
 

@@ -34,6 +34,10 @@ from common.config import settings as _settings
 from common.message_commit_events import publish_message_committed
 from common.observability import bind_log_context, safe_exception_metadata
 from common.utils.a2a_helpers import artifacts_to_dicts
+from common.utils.artifact_delivery import (
+    OUTPUT_DELIVERY_FAILURE_CODE,
+    OUTPUT_DELIVERY_FAILURE_MESSAGE,
+)
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
@@ -186,6 +190,32 @@ _OPERATIONAL_FAILURE_STATUSES = frozenset(
         "timeout",
     }
 )
+
+
+def _planner_rejection_terminal_reason(
+    state: OrchestrationRunState,
+    fallback: str,
+) -> str:
+    operational_failures = [
+        failure
+        for failure in state.open_failures
+        if failure.source != "planner_validator"
+        and failure.status in {"open", "abandoned"}
+    ]
+    if not operational_failures:
+        return fallback
+    failure = next(
+        (
+            item
+            for item in reversed(operational_failures)
+            if item.error_code == OUTPUT_DELIVERY_FAILURE_CODE
+        ),
+        next(
+            (item for item in reversed(operational_failures) if not item.recoverable),
+            operational_failures[-1],
+        ),
+    )
+    return f"{failure.error_code}: {failure.error_message}"
 
 
 def _log_value(value: Any) -> Any:
@@ -1261,7 +1291,7 @@ class SupervisorExecutor:
                     state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
-                        reason=str(exc),
+                        reason=_planner_rejection_terminal_reason(state, str(exc)),
                     )
                     return await self._log_state_and_return(
                         room_id,
@@ -1341,7 +1371,7 @@ class SupervisorExecutor:
                     state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
-                        reason=str(exc),
+                        reason=_planner_rejection_terminal_reason(state, str(exc)),
                     )
                     return await self._log_state_and_return(
                         room_id,
@@ -1359,7 +1389,7 @@ class SupervisorExecutor:
                     state = await self._mark_orchestration_terminal(
                         state,
                         OrchestrationStatus.FAILED,
-                        reason=str(exc),
+                        reason=_planner_rejection_terminal_reason(state, str(exc)),
                     )
                     return await self._log_state_and_return(
                         room_id,
@@ -1962,9 +1992,9 @@ class SupervisorExecutor:
             reduced = record_planner_action(updated, planner_action)
             updated.last_planner_action = reduced.last_planner_action
             updated.decision_log = reduced.decision_log
-            updated.phase_durations_ms["planner"] = (
-                updated.phase_durations_ms.get("planner", 0) + max(duration_ms, 0)
-            )
+            updated.phase_durations_ms["planner"] = updated.phase_durations_ms.get(
+                "planner", 0
+            ) + max(duration_ms, 0)
             resolve_open_planner_validation_failures(updated)
 
         saved = await self._save_orchestration_state(
@@ -2166,15 +2196,12 @@ class SupervisorExecutor:
         )
         if persisted_after_dispatch is not None:
             state = persisted_after_dispatch
-        dispatch_duration_ms = int(
-            (time.perf_counter() - dispatch_started_at) * 1000
-        )
+        dispatch_duration_ms = int((time.perf_counter() - dispatch_started_at) * 1000)
 
         def record_dispatch_duration(updated: OrchestrationRunState) -> None:
-            updated.phase_durations_ms["dispatch"] = (
-                updated.phase_durations_ms.get("dispatch", 0)
-                + max(dispatch_duration_ms, 0)
-            )
+            updated.phase_durations_ms["dispatch"] = updated.phase_durations_ms.get(
+                "dispatch", 0
+            ) + max(dispatch_duration_ms, 0)
 
         state = await self._save_orchestration_state(
             state,
@@ -4883,7 +4910,7 @@ class SupervisorExecutor:
             state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason=str(exc),
+                reason=_planner_rejection_terminal_reason(state, str(exc)),
             )
             return await self._log_state_and_return(
                 room_id,
@@ -4904,7 +4931,7 @@ class SupervisorExecutor:
             state = await self._mark_orchestration_terminal(
                 state,
                 OrchestrationStatus.FAILED,
-                reason=str(exc),
+                reason=_planner_rejection_terminal_reason(state, str(exc)),
             )
             return await self._log_state_and_return(
                 room_id,
@@ -7577,14 +7604,17 @@ class SupervisorExecutor:
                         or "Agent processing failed"
                     )
                 )
+                result_failure_code = (
+                    OUTPUT_DELIVERY_FAILURE_CODE
+                    if result.response_text == OUTPUT_DELIVERY_FAILURE_MESSAGE
+                    else result.status_message
+                )
                 error_code = (
-                    None
-                    if is_success or preflight_failure is None
-                    else (preflight_code or result.status_message)
+                    None if is_success else (preflight_code or result_failure_code)
                 )
                 status_message = (
                     None
-                    if is_success or preflight_failure is None
+                    if is_success
                     else (preflight_message or result.status_message or error_text)
                 )
                 if not is_success and preflight_failure is not None:

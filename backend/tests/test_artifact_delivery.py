@@ -1,5 +1,9 @@
 import pytest
 
+from common.errors import (
+    FileStoragePlatformError,
+    RetryableFileStoragePlatformError,
+)
 from common.types import (
     Artifact,
     DataPart,
@@ -56,6 +60,177 @@ async def test_materialization_reports_storage_failure_without_logging_payload(c
     assert report["failures"][0]["exception_type"] == "OSError"
     assert "SECRET_STORAGE_DETAIL" not in caplog.text
     assert secret_artifact_id not in caplog.text
+    assert artifact.parts[0].root.data["type"] == "file_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_materialization_retries_transient_platform_storage_failure():
+    from a2a_adapter.artifact_storage import bind_artifact_files, materialize_artifacts
+
+    class TransientStorage:
+        def __init__(self):
+            self.calls = 0
+
+        async def store_agent_artifact(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise FileStoragePlatformError(409, "Artifact could not be finalized")
+            return {
+                "file_id": "file-1",
+                "file_name": "image.png",
+                "mime_type": "image/png",
+                "size_bytes": 5,
+                "sha256": "digest",
+            }
+
+        def content_url(self, file_id):
+            return f"/api/v1/files/{file_id}/content"
+
+    storage = TransientStorage()
+    bind_artifact_files(storage)
+    artifact = Artifact(
+        artifact_id="artifact-1",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="aGVsbG8=", mimeType="image/png", name="image.png"
+                    )
+                )
+            )
+        ],
+    )
+    report = new_materialization_report()
+
+    converted = await materialize_artifacts(
+        [artifact], "room-1", "message-1", report=report
+    )
+
+    assert storage.calls == 2
+    assert converted == 1
+    assert report["stored"] == 1
+    assert report["unavailable"] == 0
+    assert artifact.parts[0].root.file.uri == "/api/v1/files/file-1/content"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RetryableFileStoragePlatformError(
+            503, {"message": "storage backend unavailable"}
+        )
+    ],
+)
+def test_transient_storage_backend_errors_are_retryable(error):
+    from a2a_adapter.artifact_storage import _is_retryable_store_error
+
+    assert _is_retryable_store_error(error) is True
+
+
+@pytest.mark.asyncio
+async def test_materialization_retries_transient_content_store_failure():
+    from a2a_adapter.artifact_storage import bind_artifact_files, materialize_artifacts
+
+    class TransientStorage:
+        def __init__(self):
+            self.calls = 0
+
+        async def store_agent_artifact(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RetryableFileStoragePlatformError(
+                    503, {"message": "temporary filesystem error"}
+                )
+            return {
+                "file_id": "file-1",
+                "file_name": "image.png",
+                "mime_type": "image/png",
+                "size_bytes": 5,
+                "sha256": "digest",
+            }
+
+        def content_url(self, file_id):
+            return f"/api/v1/files/{file_id}/content"
+
+    storage = TransientStorage()
+    bind_artifact_files(storage)
+    artifact = Artifact(
+        artifact_id="artifact-1",
+        parts=[
+            Part(
+                root=FilePart(
+                    file=FileContent(
+                        bytes="aGVsbG8=", mimeType="image/png", name="image.png"
+                    )
+                )
+            )
+        ],
+    )
+
+    converted = await materialize_artifacts([artifact], "room-1", "message-1")
+
+    assert storage.calls == 2
+    assert converted == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_does_not_retry_non_transient_platform_failure():
+    from a2a_adapter.artifact_storage import bind_artifact_files, materialize_artifacts
+
+    class RejectedStorage:
+        def __init__(self):
+            self.calls = 0
+
+        async def store_agent_artifact(self, **_kwargs):
+            self.calls += 1
+            raise FileStoragePlatformError(413, "Artifact exceeds size limit")
+
+    storage = RejectedStorage()
+    bind_artifact_files(storage)
+    artifact = Artifact(
+        artifact_id="artifact-1",
+        parts=[
+            Part(root=FilePart(file=FileContent(bytes="aGVsbG8=", name="image.png")))
+        ],
+    )
+
+    await materialize_artifacts([artifact], "room-1", "message-1")
+
+    assert storage.calls == 1
+    assert artifact.parts[0].root.data["type"] == "file_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Room unavailable for artifact write",
+        "Artifact origin conflicts with existing content",
+    ],
+)
+async def test_materialization_does_not_retry_deterministic_conflicts(message):
+    from a2a_adapter.artifact_storage import bind_artifact_files, materialize_artifacts
+
+    class ConflictStorage:
+        def __init__(self):
+            self.calls = 0
+
+        async def store_agent_artifact(self, **_kwargs):
+            self.calls += 1
+            raise FileStoragePlatformError(409, message)
+
+    storage = ConflictStorage()
+    bind_artifact_files(storage)
+    artifact = Artifact(
+        artifact_id="artifact-1",
+        parts=[
+            Part(root=FilePart(file=FileContent(bytes="aGVsbG8=", name="image.png")))
+        ],
+    )
+
+    await materialize_artifacts([artifact], "room-1", "message-1")
+
+    assert storage.calls == 1
     assert artifact.parts[0].root.data["type"] == "file_unavailable"
 
 
@@ -243,3 +418,53 @@ def test_artifact_delivery_failure_is_not_recoverable_agent_failure():
     assert failure is not None
     assert failure.error_code == OUTPUT_DELIVERY_FAILURE_CODE
     assert failure.recoverable is False
+
+
+def test_planner_rejection_terminal_reason_preserves_artifact_delivery_failure():
+    from types import SimpleNamespace
+
+    from execution.orchestration.failure_classifier import classify_agent_failure
+    from execution.orchestration.supervisor_executor import (
+        _planner_rejection_terminal_reason,
+    )
+
+    failure = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="message-1",
+        error="Agent output could not be processed.",
+        status_message=None,
+        error_code=OUTPUT_DELIVERY_FAILURE_CODE,
+        dispatch_intent_id="intent-1",
+    )
+
+    reason = _planner_rejection_terminal_reason(
+        SimpleNamespace(open_failures=[failure]),
+        "ask_user action references a non-validated blocker",
+    )
+
+    assert reason == ("artifact_delivery_failed: Agent output could not be processed.")
+
+
+def test_artifact_delivery_failure_identity_is_stable_across_dispatch_attempts():
+    from execution.orchestration.failure_classifier import classify_agent_failure
+
+    first = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="message-1",
+        error="Agent output could not be processed.",
+        status_message=None,
+        error_code=OUTPUT_DELIVERY_FAILURE_CODE,
+        dispatch_intent_id="intent-1",
+    )
+    second = classify_agent_failure(
+        agent_id="agent-1",
+        agent_message_id="message-2",
+        error="Agent output could not be processed.",
+        status_message=None,
+        error_code=OUTPUT_DELIVERY_FAILURE_CODE,
+        dispatch_intent_id="intent-2",
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.fingerprint == second.fingerprint

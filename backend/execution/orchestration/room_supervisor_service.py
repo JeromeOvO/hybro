@@ -922,8 +922,12 @@ class RoomSupervisorService:
                         normalized_outputs.append(output)
                         continue
                     kind = output.get("kind")
-                    is_text = (
-                        isinstance(kind, str) and kind.strip().lower() in textual_kinds
+                    normalized_kind = (
+                        kind.strip().lower() if isinstance(kind, str) else ""
+                    )
+                    is_text = normalized_kind in textual_kinds
+                    is_binary_media = normalized_kind.startswith(
+                        ("image/", "audio/", "video/")
                     )
                     normalized_outputs.append(
                         {
@@ -932,16 +936,17 @@ class RoomSupervisorService:
                             "required": output.get("required", True),
                             "description": output.get("description"),
                             # Structured-output providers require these schema
-                            # fields even for text contracts and may populate
-                            # them despite the prompt. Text output has no
-                            # artifact identity or structured field obligations,
-                            # so canonicalize that contradictory metadata at the
-                            # provider boundary before stable keys are derived.
+                            # fields even for text and binary-media contracts and
+                            # may populate them despite the prompt. Those outputs
+                            # have no structured field obligations, so canonicalize
+                            # contradictory metadata before stable keys are derived.
                             "artifact_name": (
                                 None if is_text else output.get("artifact_name")
                             ),
                             "required_fields": (
-                                [] if is_text else output.get("required_fields", [])
+                                []
+                                if is_text or is_binary_media
+                                else output.get("required_fields", [])
                             ),
                             "allow_partial": output.get("allow_partial", True),
                         }

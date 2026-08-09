@@ -978,6 +978,10 @@ class TestFinalizeStreamingWritesArtifacts:
         task = current_message.message_content.message_task
         assert task.status.state == TaskState.failed
         assert task.metadata["output_failure_code"] == "artifact_delivery_failed"
+        assert proc._platform_failure(current_message) == (
+            "Agent output could not be processed.",
+            "artifact_delivery_failed",
+        )
         event = proc.response_handler.handle.await_args.args[0]
         assert event.kind == "response"
         assert event.state == "completed"

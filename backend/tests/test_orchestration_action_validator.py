@@ -110,8 +110,7 @@ def test_text_only_candidate_rejects_artifact_expected_output():
     target.expected_outputs = [
         DispatchExpectedOutput(
             output_key="answer",
-            kind="artifact",
-            artifact_name="answer-file",
+            kind="image/png",
         )
     ]
 
@@ -122,6 +121,30 @@ def test_text_only_candidate_rejects_artifact_expected_output():
         )
 
     assert exc_info.value.code == "unsupported_expected_output_mode"
+
+
+def test_candidate_accepts_compatible_media_expected_output():
+    state = _state_for_validation()
+    state.candidate_scope = CandidateScopeSnapshot(
+        snapshot_id="scope-image",
+        source="mention",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Image Agent",
+                output_modes=["text", "image/png"],
+            )
+        ],
+    )
+    target = _target()
+    target.expected_outputs = [
+        DispatchExpectedOutput(output_key="image", kind="image/png")
+    ]
+    action = _action(PlannerActionType.DELEGATE, targets=[target])
+
+    assert PlannerActionValidator.validate(action, run_state=state) is action
 
 
 def test_text_expected_output_rejects_artifact_fields():
@@ -142,6 +165,99 @@ def test_text_expected_output_rejects_artifact_fields():
         )
 
     assert exc_info.value.code == "invalid_text_output_contract"
+
+
+def test_artifact_delivery_failure_forbids_regenerating_with_same_agent():
+    state = _state_for_validation()
+    state.open_failures = [
+        OpenFailureRecord(
+            failure_id="failure-artifact",
+            fingerprint="artifact-family",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            agent_message_id="agent-msg-1",
+            error_code="artifact_delivery_failed",
+            error_message="Agent output could not be processed.",
+            recoverable=False,
+            status="open",
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[_target()]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "artifact_delivery_retry_forbidden"
+    assert exc_info.value.recoverable is False
+
+
+def test_artifact_delivery_failure_forbids_same_output_family_on_replacement_agent():
+    state = _state_for_validation()
+    state.candidate_agent_ids.append("agent-2")
+    intent = _completed_quote_intent()
+    intent.dispatch_intent_id = "failed-image-intent"
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="generated_image", kind="image/png", required=True
+        )
+    ]
+    state.dispatch_intents = [intent]
+    state.open_failures = [
+        OpenFailureRecord(
+            failure_id="failure-artifact",
+            fingerprint="artifact-family",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            dispatch_intent_id=intent.dispatch_intent_id,
+            error_code="artifact_delivery_failed",
+            error_message="Agent output could not be processed.",
+            recoverable=False,
+            status="open",
+        )
+    ]
+    target = _target("agent-2")
+    target.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="replacement_image", kind="image/jpeg", required=True
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[target]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "artifact_delivery_retry_forbidden"
+
+
+def test_repeated_generic_agent_failures_exhaust_operational_retry_budget():
+    state = _state_for_validation()
+    state.open_failures = [
+        OpenFailureRecord(
+            failure_id=f"failure-{index}",
+            fingerprint=f"generic-{index}",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            agent_message_id=f"agent-msg-{index}",
+            error_code="agent_execution_failed",
+            error_message="Agent processing failed",
+            recoverable=True,
+            status="open",
+        )
+        for index in range(2)
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[_target()]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "recovery_retry_exhausted"
+    assert exc_info.value.recoverable is False
 
 
 def test_valid_delegate_returns_action_unchanged():
@@ -1369,6 +1485,15 @@ def test_planner_parser_canonicalizes_contradictory_text_output_metadata():
     assert output.output_key == "forecast"
 
 
+def test_planner_schema_requires_listed_outputs_and_disallows_invented_names():
+    output_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["targets"]["items"][
+        "properties"
+    ]["expected_outputs"]["items"]["properties"]
+
+    assert output_schema["required"]["const"] is True
+    assert output_schema["artifact_name"] == {"type": "null"}
+
+
 def test_planner_prompt_is_compact_and_execution_owned():
     from execution.orchestration.planner_prompt import PLANNER_SYSTEM_PROMPT
 
@@ -1377,7 +1502,8 @@ def test_planner_prompt_is_compact_and_execution_owned():
     assert "execution generates all ids and parallel groups" in prompt
     assert "never repeat an identical request without new evidence" in prompt
     assert "use text expected outputs for text-only agents" in prompt
-    assert "never relabel an ordinary written answer as an artifact" in prompt
+    assert "never invent a caption, filename" in prompt
+    assert "never relabel an ordinary written answer" in prompt
     assert "decision_summary under 500 characters" in prompt
     assert "private chain-of-thought" in prompt
 

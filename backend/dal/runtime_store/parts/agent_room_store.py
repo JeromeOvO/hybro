@@ -142,6 +142,19 @@ class AgentRoomRuntimeStorePart:
     async def update_room_by_room_id(self, room_id: str, room: Room) -> bool:
         try:
             updates = room.model_dump(exclude_unset=True, mode="json")
+            # Lifecycle fencing is owned by RoomFiles. A Room model hydrated
+            # before an artifact write contains a stale write_leases snapshot;
+            # writing that snapshot back can erase an active lease between file
+            # content persistence and finalization. Legacy room updates may not
+            # mutate deletion/fencing state.
+            for protected_field in (
+                "write_leases",
+                "lifecycle_state",
+                "deletion_id",
+                "deletion_started_at",
+                "deletion_phase",
+            ):
+                updates.pop(protected_field, None)
             updated = await self._room_repository.update(room_id, updates)
             if updated:
                 return True
