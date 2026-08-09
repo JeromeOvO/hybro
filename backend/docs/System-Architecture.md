@@ -641,6 +641,13 @@ search, and compaction:
   storage.
 - `content_repository`: stores full content references for compacted turns.
 
+Room-memory persistence uses two transition-era history limits. The top-level
+`conversation_history` is the canonical, unwindowed source for normalization and
+lossless compaction. The nested `memory_content.conversation_history` remains a
+legacy display window of at most 20 turns. Appends summarize only old turns that
+leave that nested window; compaction updates canonical turns and rebuilds the
+nested window from the canonical tail.
+
 The facade uses:
 
 - MongoDB for room memory and stored content documents.

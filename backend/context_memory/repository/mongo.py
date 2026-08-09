@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from common.protocols import MongoCollection, MongoDAL
+from common.utils.context_utils import MAX_HISTORY_TURNS
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
@@ -262,7 +263,7 @@ class MemoryMongoRepository:
         query: dict | None = None,
     ) -> dict | None:
         query = query or {"room_id": room_id}
-        update = _push_turn_update(turn, max_turns, summary_stub, max_summary_chars)
+        update = _push_turn_update(turn, max_turns, max_summary_chars)
         return await self._memories.find_one_and_update(
             query,
             update,
@@ -481,180 +482,118 @@ def _history_contains_turn(doc: dict, turn_id: str) -> bool:
 def _push_turn_update(
     turn: dict,
     max_turns: int,
-    summary_stub: str,
     max_summary_chars: int,
 ) -> list[dict]:
-    reconciled_history = _append_turn_with_history_fallback(
-        turn,
-        primary_path="$memory_content.conversation_history",
-        fallback_path="$conversation_history",
-    )
+    canonical_history = _canonical_history_expression()
+    appended_history = {"$concatArrays": [canonical_history, [turn]]}
     return [
         {
             "$set": {
-                "memory_content.conversation_history": reconciled_history,
-                "conversation_history": reconciled_history,
-                "last_activity_at": "$$NOW",
-                "total_messages": {"$add": [{"$ifNull": ["$total_messages", 0]}, 1]},
-            }
-        },
-        {
-            "$set": {
-                "memory_content.summary": _summary_append_when_trimmed_expression(
-                    summary_stub=summary_stub,
+                # Direct history is the lossless canonical source for persistence and
+                # compaction. Only the nested compatibility view is windowed.
+                "conversation_history": appended_history,
+                "memory_content.conversation_history": {
+                    "$slice": [appended_history, {"$multiply": [-1, max_turns]}]
+                },
+                "memory_content.summary": _summary_append_evicted_turns_expression(
+                    turn=turn,
                     max_turns=max_turns,
                     max_summary_chars=max_summary_chars,
                 ),
-                "memory_content.conversation_history": {
-                    "$slice": [
-                        "$memory_content.conversation_history",
-                        {"$multiply": [-1, max_turns]},
-                    ]
-                },
-                "conversation_history": {
-                    "$slice": [
-                        "$conversation_history",
-                        {"$multiply": [-1, max_turns]},
-                    ]
-                },
+                "last_activity_at": "$$NOW",
+                "total_messages": {"$add": [{"$ifNull": ["$total_messages", 0]}, 1]},
             }
-        },
+        }
     ]
 
 
-def _append_turn_with_history_fallback(
+def _canonical_history_expression() -> dict:
+    """Use direct history when present, falling back only for legacy documents."""
+    return {
+        "$cond": [
+            {"$isArray": "$conversation_history"},
+            "$conversation_history",
+            {"$ifNull": ["$memory_content.conversation_history", []]},
+        ]
+    }
+
+
+def _legacy_window_before_append_expression() -> dict:
+    return {
+        "$cond": [
+            {"$isArray": "$memory_content.conversation_history"},
+            "$memory_content.conversation_history",
+            _canonical_history_expression(),
+        ]
+    }
+
+
+def _summary_append_evicted_turns_expression(
+    *,
     turn: dict,
-    *,
-    primary_path: str,
-    fallback_path: str,
-) -> dict:
-    return {
-        "$let": {
-            "vars": {
-                "primary": {"$ifNull": [primary_path, []]},
-                "fallback": {"$ifNull": [fallback_path, []]},
-            },
-            "in": {
-                "$concatArrays": [
-                    _merge_histories_expression("$$primary", "$$fallback"),
-                    [turn],
-                ]
-            },
-        }
-    }
-
-
-def _merge_histories_expression(primary: str, fallback: str) -> dict:
-    # TODO: remove after dual conversation_history migration completes. This
-    # reconciliation is O(n^2), but the update path trims history to a small window.
-    return {
-        "$let": {
-            "vars": {
-                "combined": {"$concatArrays": [primary, fallback]},
-            },
-            "in": {
-                "$reduce": {
-                    "input": "$$combined",
-                    "initialValue": [],
-                    "in": {
-                        "$cond": [
-                            {"$eq": ["$$this.turn_id", None]},
-                            {"$concatArrays": ["$$value", ["$$this"]]},
-                            {
-                                "$cond": [
-                                    {
-                                        "$in": [
-                                            "$$this.turn_id",
-                                            {
-                                                "$map": {
-                                                    "input": "$$value",
-                                                    "as": "existing",
-                                                    "in": "$$existing.turn_id",
-                                                }
-                                            },
-                                        ]
-                                    },
-                                    {
-                                        "$map": {
-                                            "input": "$$value",
-                                            "as": "existing",
-                                            "in": {
-                                                "$cond": [
-                                                    {
-                                                        "$eq": [
-                                                            "$$existing.turn_id",
-                                                            "$$this.turn_id",
-                                                        ]
-                                                    },
-                                                    "$$this",
-                                                    "$$existing",
-                                                ]
-                                            },
-                                        }
-                                    },
-                                    {"$concatArrays": ["$$value", ["$$this"]]},
-                                ]
-                            },
-                        ]
-                    },
-                }
-            },
-        }
-    }
-
-
-def _summary_append_when_trimmed_expression(
-    *,
-    summary_stub: str,
     max_turns: int,
     max_summary_chars: int,
 ) -> dict:
-    return {
-        "$cond": {
-            "if": {
-                "$gt": [
-                    {
-                        "$size": {
-                            "$ifNull": [
-                                "$memory_content.conversation_history",
-                                [],
-                            ]
-                        }
-                    },
-                    max_turns,
+    window_before = _legacy_window_before_append_expression()
+    appended_history = {"$concatArrays": [_canonical_history_expression(), [turn]]}
+    window_after = {"$slice": [appended_history, {"$multiply": [-1, max_turns]}]}
+    addition = {
+        "$reduce": {
+            "input": _evicted_turns_expression(),
+            "initialValue": "",
+            "in": {
+                "$concat": [
+                    "$$value",
+                    {"$cond": [{"$eq": ["$$value", ""]}, "", "\n"]},
+                    _turn_summary_preview_expression("$$this"),
                 ]
             },
-            "then": {
+        }
+    }
+    return {
+        "$let": {
+            "vars": {
+                "windowBefore": window_before,
+                "windowAfter": window_after,
+            },
+            "in": {
                 "$let": {
                     "vars": {
                         "existing": {"$ifNull": ["$memory_content.summary", ""]},
+                        "addition": addition,
                     },
                     "in": {
                         "$let": {
                             "vars": {
                                 "concatenated": {
-                                    "$cond": {
-                                        "if": {"$eq": ["$$existing", ""]},
-                                        "then": summary_stub,
-                                        "else": {
-                                            "$concat": [
-                                                "$$existing",
-                                                "\n",
-                                                summary_stub,
+                                    "$cond": [
+                                        {"$eq": ["$$addition", ""]},
+                                        "$$existing",
+                                        {
+                                            "$cond": [
+                                                {"$eq": ["$$existing", ""]},
+                                                "$$addition",
+                                                {
+                                                    "$concat": [
+                                                        "$$existing",
+                                                        "\n",
+                                                        "$$addition",
+                                                    ]
+                                                },
                                             ]
                                         },
-                                    }
+                                    ]
                                 }
                             },
                             "in": {
-                                "$cond": {
-                                    "if": {
+                                "$cond": [
+                                    {
                                         "$gt": [
                                             {"$strLenCP": "$$concatenated"},
                                             max_summary_chars,
                                         ]
                                     },
-                                    "then": {
+                                    {
                                         "$concat": [
                                             "...",
                                             {
@@ -673,29 +612,134 @@ def _summary_append_when_trimmed_expression(
                                             },
                                         ]
                                     },
-                                    "else": "$$concatenated",
-                                }
+                                    "$$concatenated",
+                                ]
                             },
                         }
                     },
                 }
             },
-            "else": {"$ifNull": ["$memory_content.summary", ""]},
         }
+    }
+
+
+def _evicted_turns_expression() -> dict:
+    evicted_indexes = {
+        "$filter": {
+            "input": {"$range": [0, {"$size": "$$windowBefore"}]},
+            "as": "index",
+            "cond": {
+                "$let": {
+                    "vars": {
+                        "candidate": {"$arrayElemAt": ["$$windowBefore", "$$index"]}
+                    },
+                    "in": {
+                        "$gte": [
+                            {
+                                "$size": {
+                                    "$filter": {
+                                        "input": {
+                                            "$slice": [
+                                                "$$windowBefore",
+                                                0,
+                                                "$$index",
+                                            ]
+                                        },
+                                        "as": "prior",
+                                        "cond": _same_turn_identity_expression(
+                                            "$$candidate", "$$prior"
+                                        ),
+                                    }
+                                }
+                            },
+                            {
+                                "$size": {
+                                    "$filter": {
+                                        "input": "$$windowAfter",
+                                        "as": "remaining",
+                                        "cond": _same_turn_identity_expression(
+                                            "$$candidate", "$$remaining"
+                                        ),
+                                    }
+                                }
+                            },
+                        ]
+                    },
+                }
+            },
+        }
+    }
+    return {
+        "$map": {
+            "input": evicted_indexes,
+            "as": "index",
+            "in": {"$arrayElemAt": ["$$windowBefore", "$$index"]},
+        }
+    }
+
+
+def _same_turn_identity_expression(left: str, right: str) -> dict:
+    return {
+        "$cond": [
+            {"$ne": [f"{left}.turn_id", None]},
+            {"$eq": [f"{left}.turn_id", f"{right}.turn_id"]},
+            {
+                "$and": [
+                    {"$eq": [f"{right}.turn_id", None]},
+                    {"$eq": [left, right]},
+                ]
+            },
+        ]
+    }
+
+
+def _turn_summary_preview_expression(turn: str) -> dict:
+    role_label = {
+        "$switch": {
+            "branches": [
+                {"case": {"$eq": [f"{turn}.role", "user"]}, "then": "User"},
+                {
+                    "case": {"$eq": [f"{turn}.role", "agent"]},
+                    "then": {"$ifNull": [f"{turn}.agent_name", "Agent"]},
+                },
+                {
+                    "case": {"$eq": [f"{turn}.role", "supervisor"]},
+                    "then": "Supervisor",
+                },
+            ],
+            "default": {"$ifNull": [f"{turn}.role", "Unknown"]},
+        }
+    }
+    content = {
+        "$cond": [
+            {"$eq": [{"$type": f"{turn}.content"}, "string"]},
+            f"{turn}.content",
+            "[compact turn]",
+        ]
+    }
+    return {
+        "$concat": [
+            "[",
+            role_label,
+            "] ",
+            {"$substrCP": [content, 0, 200]},
+            "...",
+        ]
     }
 
 
 def _compact_turns_pipeline(compacted_turns: list[dict]) -> list[dict]:
     turn_ids = [entry["turn_id"] for entry in compacted_turns]
+    compacted_history = _compact_history_expression(
+        _canonical_history_expression(), compacted_turns, turn_ids
+    )
     return [
         {
             "$set": {
-                "memory_content.conversation_history": _compact_history_expression(
-                    "$memory_content.conversation_history", compacted_turns, turn_ids
-                ),
-                "conversation_history": _compact_history_expression(
-                    "$conversation_history", compacted_turns, turn_ids
-                ),
+                "conversation_history": compacted_history,
+                "memory_content.conversation_history": {
+                    "$slice": [compacted_history, -MAX_HISTORY_TURNS]
+                },
                 "last_activity_at": "$$NOW",
                 "total_compactions": {
                     "$add": [{"$ifNull": ["$total_compactions", 0]}, 1]
@@ -706,7 +750,7 @@ def _compact_turns_pipeline(compacted_turns: list[dict]) -> list[dict]:
 
 
 def _compact_history_expression(
-    history_path: str, compacted_turns: list[dict], turn_ids: list[str]
+    history_path: str | dict, compacted_turns: list[dict], turn_ids: list[str]
 ) -> dict:
     mapped = {
         "$map": {

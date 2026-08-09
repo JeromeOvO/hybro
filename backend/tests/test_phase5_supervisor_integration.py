@@ -281,6 +281,7 @@ def room_memory():
     return RoomMemory(
         room_id="test_room",
         memory_content=MemoryContent(conversation_history=turns),
+        conversation_history=turns,
         room_summary=RoomSummary(current_goal="Write tests"),
     )
 
@@ -831,6 +832,7 @@ class TestMaxContextCharsEnforcement:
             room_memory = RoomMemory(
                 room_id="test_room",
                 memory_content=MemoryContent(conversation_history=turns),
+                conversation_history=turns,
             )
 
             result = service.build_supervisor_context(
@@ -856,6 +858,7 @@ class TestMaxContextCharsEnforcement:
             room_memory = RoomMemory(
                 room_id="test_room",
                 memory_content=MemoryContent(conversation_history=turns),
+                conversation_history=turns,
             )
 
             result = service.build_agent_execution_context(

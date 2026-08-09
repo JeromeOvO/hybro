@@ -293,7 +293,7 @@ def test_supervisor_large_truncation_fixed_golden():
     assert result.metadata["was_truncated"] is True
 
 
-def test_direct_and_legacy_history_shape_fixed_golden():
+def test_canonical_direct_history_shape_fixed_golden():
     result = assembly.assemble_supervisor_context_from_memory(
         _direct_legacy_room_doc(),
         "current task",
@@ -303,18 +303,17 @@ def test_direct_and_legacy_history_shape_fixed_golden():
     assert result.metadata["context"] == (
         "[Recent conversation]\n"
         "User: direct fresh\n"
-        "User: legacy only\n"
         "Builder: direct only\n"
         "\n"
         "[Current request]\n"
         "User: current task"
     )
-    assert result.total_tokens == 29
+    assert result.total_tokens == 24
     assert result.metadata["stable_prefix_tokens"] == 0
-    assert result.metadata["dynamic_suffix_tokens"] == 29
-    assert result.metadata["turns_included"] == 3
+    assert result.metadata["dynamic_suffix_tokens"] == 24
+    assert result.metadata["turns_included"] == 2
     assert result.metadata["turns_truncated"] == 0
-    assert result.metadata["full_turns"] == 3
+    assert result.metadata["full_turns"] == 2
     assert result.metadata["compact_turns"] == 0
     assert result.metadata["truncation_reason"] is None
     assert result.metadata["was_truncated"] is False

@@ -599,7 +599,7 @@ def test_extract_message_text_empty_values():
     assert projection.extract_message_text({}) == ""
 
 
-def test_normalize_room_memory_falls_back_to_legacy_when_direct_history_empty():
+def test_normalize_room_memory_treats_empty_direct_history_as_canonical():
     state = normalize_room_memory(
         {
             "room_id": "r1",
@@ -613,4 +613,4 @@ def test_normalize_room_memory_falls_back_to_legacy_when_direct_history_empty():
         }
     )
 
-    assert [turn.turn_id for turn in state.conversation_history] == ["legacy"]
+    assert state.conversation_history == []

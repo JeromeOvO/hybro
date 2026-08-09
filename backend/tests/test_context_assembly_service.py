@@ -172,6 +172,7 @@ class TestContextAssemblyService:
         return RoomMemory(
             room_id="test_room_123",
             memory_content=memory_content,
+            conversation_history=turns,
             room_summary=RoomSummary(
                 current_goal="Test the context assembly service",
                 key_decisions=["Use pytest", "Mock settings"],
@@ -266,6 +267,7 @@ class TestContextAssemblyService:
             for i in range(100)
         ]
         sample_room_memory.memory_content.conversation_history = many_turns
+        sample_room_memory.conversation_history = many_turns
 
         result = service.build_agent_execution_context(
             room_memory=sample_room_memory,
@@ -320,6 +322,7 @@ class TestContextAssemblyService:
             for i in range(100)
         ]
         sample_room_memory.memory_content.conversation_history = many_turns
+        sample_room_memory.conversation_history = many_turns
 
         result = service.build_agent_execution_context(
             room_memory=sample_room_memory,
@@ -550,6 +553,7 @@ class TestHardCapEnforcement:
         return RoomMemory(
             room_id="test_room_large",
             memory_content=memory_content,
+            conversation_history=turns,
             room_summary=RoomSummary(
                 current_goal="Test hard cap enforcement",
             ),

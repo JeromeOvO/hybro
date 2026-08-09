@@ -43,7 +43,12 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
     memory_content = doc.get("memory_content") or {}
     direct_history = doc.get("conversation_history")
     legacy_history = memory_content.get("conversation_history")
-    history = _reconcile_histories(legacy_history, direct_history)
+    if isinstance(direct_history, list):
+        history = direct_history
+    elif isinstance(legacy_history, list):
+        history = legacy_history
+    else:
+        history = []
 
     return RoomMemoryState(
         room_id=doc.get("room_id", ""),
@@ -58,23 +63,6 @@ def normalize_room_memory(memory: dict | Any) -> RoomMemoryState:
         total_compactions=int(doc.get("total_compactions") or 0),
         raw=doc,
     )
-
-
-def _reconcile_histories(
-    primary_history: list | None,
-    fallback_history: list | None,
-) -> list:
-    merged: list = []
-    positions_by_turn_id: dict[str, int] = {}
-    for turn in [*(primary_history or []), *(fallback_history or [])]:
-        turn_id = turn.get("turn_id") if isinstance(turn, dict) else None
-        if turn_id:
-            if turn_id in positions_by_turn_id:
-                merged[positions_by_turn_id[turn_id]] = turn
-                continue
-            positions_by_turn_id[turn_id] = len(merged)
-        merged.append(turn)
-    return merged
 
 
 def summary_from_dict(doc: dict[str, Any]) -> RoomSummaryData:

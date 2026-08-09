@@ -142,6 +142,26 @@ async def test_should_compact_above_full_turns():
 
 
 @pytest.mark.asyncio
+async def test_should_compact_uses_canonical_direct_history_beyond_legacy_window():
+    direct_turns = [
+        full_turn(f"t{index}", f"short {index}", tokens=1) for index in range(1, 22)
+    ]
+    doc = room_doc(direct_turns)
+    doc["memory_content"]["conversation_history"] = direct_turns[-20:]
+    repo = StateMemoryRepository(doc)
+    default_config = CompactionConfig(
+        enabled=True,
+        max_total_tokens=80_000,
+        preserve_recent_turns=10,
+        content_ttl_days=0,
+        concurrency=2,
+    )
+
+    assert default_config.max_full_turns == 20
+    assert await compaction.should_compact(repo, "r1", default_config)
+
+
+@pytest.mark.asyncio
 async def test_should_compact_above_token_threshold():
     repo = StateMemoryRepository(room_doc([full_turn("t1", "one", tokens=50)]))
 

@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from context_memory import compaction
+from context_memory.config import CompactionConfig
 from context_memory.repository import (
     ContentStorageMongoRepository,
     MemoryMongoRepository,
@@ -305,7 +307,7 @@ async def test_push_and_trim_seeds_direct_history_from_legacy_nested_history(
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_uses_fuller_legacy_history_when_direct_history_is_stale(
+async def test_push_and_trim_uses_canonical_direct_history_when_legacy_is_stale(
     memory_repo,
 ):
     await memory_repo.create_room_memory(
@@ -334,7 +336,7 @@ async def test_push_and_trim_uses_fuller_legacy_history_when_direct_history_is_s
     )
 
     doc = await memory_repo.get_room_memory("r1")
-    expected = ["legacy-1", "legacy-2", "new"]
+    expected = ["legacy-2", "new"]
     assert [
         turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
     ] == expected
@@ -344,7 +346,7 @@ async def test_push_and_trim_uses_fuller_legacy_history_when_direct_history_is_s
     ] == expected
 
 
-def test_normalize_room_memory_prefers_fuller_legacy_history_when_direct_history_is_stale():
+def test_normalize_room_memory_uses_canonical_direct_history_when_legacy_is_stale():
     state = normalize_room_memory(
         {
             "room_id": "r1",
@@ -361,15 +363,11 @@ def test_normalize_room_memory_prefers_fuller_legacy_history_when_direct_history
         }
     )
 
-    assert [turn.turn_id for turn in state.conversation_history] == [
-        "legacy-1",
-        "legacy-2",
-        "direct-1",
-    ]
+    assert [turn.turn_id for turn in state.conversation_history] == ["direct-1"]
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_reconciles_equal_length_divergent_histories(memory_repo):
+async def test_push_and_trim_does_not_merge_legacy_into_canonical_history(memory_repo):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -395,7 +393,7 @@ async def test_push_and_trim_reconciles_equal_length_divergent_histories(memory_
     )
 
     doc = await memory_repo.get_room_memory("r1")
-    expected = ["legacy-only", "direct-only", "new"]
+    expected = ["direct-only", "new"]
     assert [
         turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
     ] == expected
@@ -405,7 +403,7 @@ async def test_push_and_trim_reconciles_equal_length_divergent_histories(memory_
     ] == expected
 
 
-def test_normalize_room_memory_reconciles_equal_length_divergent_histories():
+def test_normalize_room_memory_does_not_merge_divergent_legacy_history():
     state = normalize_room_memory(
         {
             "room_id": "r1",
@@ -421,10 +419,7 @@ def test_normalize_room_memory_reconciles_equal_length_divergent_histories():
         }
     )
 
-    assert [turn.turn_id for turn in state.conversation_history] == [
-        "legacy-only",
-        "direct-only",
-    ]
+    assert [turn.turn_id for turn in state.conversation_history] == ["direct-only"]
 
 
 @pytest.mark.asyncio
@@ -531,14 +526,13 @@ async def test_push_and_trim_keeps_multiple_no_id_turns(memory_repo):
 
     doc = await memory_repo.get_room_memory("r1")
     assert [turn.get("content") for turn in doc["conversation_history"]] == [
-        "legacy without id",
         "direct without id",
         "new",
     ]
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_trim_appends_caller_summary_stub(memory_repo):
+async def test_divergent_window_summary_uses_only_turns_leaving_nested(memory_repo):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -567,13 +561,17 @@ async def test_reconciliation_trim_appends_caller_summary_stub(memory_repo):
 
     doc = await memory_repo.get_room_memory("r1")
     assert [turn["turn_id"] for turn in doc["conversation_history"]] == [
+        "direct-1",
         "direct-2",
         "new",
     ]
+    assert [
+        turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
+    ] == ["direct-2", "new"]
     summary = doc["memory_content"]["summary"]
-    assert summary == "[User] new"
-    assert "legacy one" not in summary
-    assert "legacy two" not in summary
+    assert "legacy one" in summary
+    assert "legacy two" in summary
+    assert "new" not in summary
     assert "direct one" not in summary
 
 
@@ -601,7 +599,7 @@ async def test_push_and_trim_does_not_append_summary_without_trim(memory_repo):
 
 
 @pytest.mark.asyncio
-async def test_push_and_trim_summary_uses_caller_stub_when_trimmed(memory_repo):
+async def test_push_and_trim_summary_uses_evicted_turn_preview(memory_repo):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -627,8 +625,14 @@ async def test_push_and_trim_summary_uses_caller_stub_when_trimmed(memory_repo):
     )
 
     doc = await memory_repo.get_room_memory("r1")
-    assert [turn["turn_id"] for turn in doc["conversation_history"]] == ["new"]
-    assert doc["memory_content"]["summary"] == "[User] new content"
+    assert [turn["turn_id"] for turn in doc["conversation_history"]] == [
+        "old",
+        "new",
+    ]
+    assert [
+        turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
+    ] == ["new"]
+    assert doc["memory_content"]["summary"] == "[User] old content..."
 
 
 @pytest.mark.asyncio
@@ -658,7 +662,78 @@ async def test_push_and_trim_summary_ignores_non_string_legacy_content(memory_re
     )
 
     doc = await memory_repo.get_room_memory("r1")
-    assert doc["memory_content"]["summary"] == "[User] new content"
+    assert doc["memory_content"]["summary"] == "[User] [compact turn]..."
+
+
+@pytest.mark.asyncio
+async def test_summary_tracks_duplicate_turns_without_ids_by_occurrence(memory_repo):
+    duplicate = {"role": "user", "content": "duplicate legacy content"}
+    await memory_repo.create_room_memory(
+        {
+            "room_id": "r1",
+            "memory_id": "m1",
+            "memory_content": {
+                "conversation_history": [deepcopy(duplicate), deepcopy(duplicate)],
+                "summary": "",
+            },
+            "conversation_history": [deepcopy(duplicate)],
+        }
+    )
+
+    await memory_repo.push_and_trim_conversation_turn(
+        "r1",
+        {"turn_id": "new", "role": "user", "content": "new"},
+        max_turns=2,
+        summary_stub="new preview",
+        max_summary_chars=500,
+    )
+
+    doc = await memory_repo.get_room_memory("r1")
+    assert doc["memory_content"]["summary"].count("duplicate legacy content") == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_matches_turn_id_across_representation_changes(memory_repo):
+    await memory_repo.create_room_memory(
+        {
+            "room_id": "r1",
+            "memory_id": "m1",
+            "memory_content": {
+                "conversation_history": [
+                    {
+                        "turn_id": "same",
+                        "role": "user",
+                        "representation": "full",
+                        "content": "already summarized content",
+                    }
+                ],
+                "summary": "existing summary",
+            },
+            "conversation_history": [
+                {
+                    "turn_id": "same",
+                    "role": "user",
+                    "representation": "compact",
+                    "content": None,
+                    "content_ref": {"document_id": "same"},
+                }
+            ],
+        }
+    )
+
+    await memory_repo.push_and_trim_conversation_turn(
+        "r1",
+        {"turn_id": "new", "role": "user", "content": "new"},
+        max_turns=2,
+        summary_stub="new preview",
+        max_summary_chars=500,
+    )
+
+    doc = await memory_repo.get_room_memory("r1")
+    assert doc["memory_content"]["summary"] == "existing summary"
+    assert doc["memory_content"]["conversation_history"][0]["representation"] == (
+        "compact"
+    )
 
 
 @pytest.mark.asyncio
@@ -692,11 +767,101 @@ async def test_push_and_trim_appends_summary_only_when_trimmed_and_keeps_tail(
     )
 
     doc = await memory_repo.get_room_memory("r1")
-    assert [turn["turn_id"] for turn in doc["conversation_history"]] == ["t2", "t3"]
+    assert [turn["turn_id"] for turn in doc["conversation_history"]] == [
+        "t1",
+        "t2",
+        "t3",
+    ]
+    assert [
+        turn["turn_id"] for turn in doc["memory_content"]["conversation_history"]
+    ] == ["t2", "t3"]
     assert doc["memory_content"]["summary"].startswith("...")
-    assert "important summary" in doc["memory_content"]["summary"]
-    assert "[compact turn]" not in doc["memory_content"]["summary"]
-    assert doc["memory_content"]["summary"].endswith("important summary")
+    assert "compact turn" in doc["memory_content"]["summary"]
+    assert "latest important summary" not in doc["memory_content"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_twenty_first_short_turn_survives_and_triggers_default_compaction(
+    memory_repo, content_repo
+):
+    await memory_repo.create_room_memory(
+        {
+            "room_id": "r1",
+            "memory_id": "m1",
+            "memory_content": {"conversation_history": [], "summary": ""},
+            "conversation_history": [],
+        }
+    )
+
+    for index in range(1, 22):
+        await memory_repo.push_and_trim_conversation_turn(
+            "r1",
+            {
+                "turn_id": f"t{index}",
+                "role": "user",
+                "representation": "full",
+                "content": f"short message {index}",
+                "content_type": "text",
+                "estimated_tokens_full": 3,
+                "estimated_tokens_compact": 20,
+            },
+            max_turns=20,
+            summary_stub=f"new turn preview {index}",
+            max_summary_chars=1000,
+        )
+
+    doc = await memory_repo.get_room_memory("r1")
+    assert len(doc["conversation_history"]) == 21
+    assert len(doc["memory_content"]["conversation_history"]) == 20
+    assert doc["conversation_history"][0]["turn_id"] == "t1"
+    assert doc["memory_content"]["conversation_history"][0]["turn_id"] == "t2"
+    assert "short message 1" in doc["memory_content"]["summary"]
+    assert "short message 2" not in doc["memory_content"]["summary"]
+    assert "short message 21" not in doc["memory_content"]["summary"]
+    assert "new turn preview 21" not in doc["memory_content"]["summary"]
+    assert len(normalize_room_memory(doc).conversation_history) == 21
+
+    default_config = CompactionConfig(
+        enabled=True,
+        max_total_tokens=80_000,
+        preserve_recent_turns=10,
+        content_ttl_days=0,
+        concurrency=2,
+    )
+    assert default_config.max_full_turns == 20
+    result = await compaction.compact_if_needed(
+        repository=memory_repo,
+        content_repository=content_repo,
+        room_id="r1",
+        config=default_config,
+        now=lambda: datetime.now(UTC),
+    )
+
+    assert result is not None
+    assert result.compacted_count == 11
+    compacted_doc = await memory_repo.get_room_memory("r1")
+    assert len(compacted_doc["conversation_history"]) == 21
+    assert len(compacted_doc["memory_content"]["conversation_history"]) == 20
+    assert all(
+        turn["representation"] == "compact"
+        for turn in compacted_doc["conversation_history"][:11]
+    )
+    assert [
+        turn["turn_id"]
+        for turn in compacted_doc["conversation_history"][-10:]
+        if turn["representation"] == "full"
+    ] == [f"t{index}" for index in range(12, 22)]
+    nested_by_id = {
+        turn["turn_id"]: turn
+        for turn in compacted_doc["memory_content"]["conversation_history"]
+    }
+    assert all(
+        nested_by_id[f"t{index}"]["representation"] == "compact"
+        for index in range(2, 12)
+    )
+    assert all(
+        nested_by_id[f"t{index}"]["representation"] == "full" for index in range(12, 22)
+    )
 
 
 @pytest.mark.asyncio
@@ -919,7 +1084,9 @@ async def test_compact_turns_bulk_skips_already_compact_db_turn(memory_repo):
 
 
 @pytest.mark.asyncio
-async def test_compact_turns_bulk_preserves_absent_history_shapes(memory_repo, mongo):
+async def test_compact_turns_bulk_migrates_legacy_history_to_canonical(
+    memory_repo, mongo
+):
     await memory_repo.create_room_memory(
         {
             "room_id": "r1",
@@ -942,8 +1109,8 @@ async def test_compact_turns_bulk_preserves_absent_history_shapes(memory_repo, m
     direct_history_expression = update[0]["$set"]["conversation_history"]
     doc = await memory_repo.get_room_memory("r1")
     assert ok is True
-    assert direct_history_expression["$cond"][2] == "$$REMOVE"
-    assert "conversation_history" not in doc
+    assert "$cond" in direct_history_expression
+    assert doc["conversation_history"][0]["representation"] == "compact"
     assert (
         doc["memory_content"]["conversation_history"][0]["representation"] == "compact"
     )
@@ -1275,47 +1442,14 @@ def _apply_update(
         for stage in update:
             stage_source = deepcopy(doc)
             for path, value in stage.get("$set", {}).items():
-                if path.endswith("conversation_history") and (
-                    "$map" in value or "$cond" in value
-                ):
-                    entries = _compact_entries_from_expression(value)
-                    turns = _get_path(doc, path) or []
-                    for turn in turns:
-                        if (
-                            turn.get("turn_id") in entries
-                            and turn.get("representation") == "full"
-                        ):
-                            entry = entries[turn["turn_id"]]
-                            turn["representation"] = "compact"
-                            turn["content"] = None
-                            turn["content_ref"] = deepcopy(entry["content_ref"])
-                            turn["estimated_tokens_compact"] = entry[
-                                "estimated_tokens_compact"
-                            ]
-                elif path.endswith("conversation_history"):
-                    if "$let" in value:
-                        _set_path(
-                            doc,
-                            path,
-                            _eval_history_append_expression(stage_source, value),
-                        )
-                    elif "$concatArrays" in value:
-                        existing = _get_path(stage_source, path) or []
-                        turn = value["$concatArrays"][1][0]
-                        _set_path(doc, path, existing + [deepcopy(turn)])
-                    elif "$slice" in value:
-                        source_path = value["$slice"][0].lstrip("$")
-                        source = _get_path(stage_source, source_path) or []
-                        limit_expr = value["$slice"][1]
-                        if isinstance(limit_expr, dict) and "$multiply" in limit_expr:
-                            limit = (
-                                limit_expr["$multiply"][0] * limit_expr["$multiply"][1]
-                            )
-                        else:
-                            limit = limit_expr
-                        _set_path(doc, path, deepcopy(source[limit:]))
+                if path.endswith("conversation_history"):
+                    _set_path(
+                        doc,
+                        path,
+                        _eval_history_expression(stage_source, value),
+                    )
                 elif path == "memory_content.summary":
-                    if "$cond" in value:
+                    if "$cond" in value or "$let" in value:
                         _set_path(
                             doc, path, _eval_summary_expression(stage_source, value)
                         )
@@ -1378,50 +1512,130 @@ def _assert_no_update_path_conflicts(update: dict | list[dict]) -> None:
 
 
 def _eval_summary_expression(doc: dict, expression: dict) -> str:
-    cond = expression["$cond"]
-    max_turns = cond["if"]["$gt"][1]
-    existing = _get_path(doc, "memory_content.summary") or ""
-    history = _get_path(doc, "memory_content.conversation_history") or []
-    if len(history) <= max_turns:
-        return existing
-
-    concatenated_expr = cond["then"]["$let"]["in"]["$let"]["vars"]["concatenated"][
-        "$cond"
-    ]
-    summary_addition = concatenated_expr["then"]
-    concatenated = (
-        summary_addition if existing == "" else f"{existing}\n{summary_addition}"
+    outer_vars = expression["$let"]["vars"]
+    window_after_expr = outer_vars["windowAfter"]["$slice"]
+    max_turns = abs(
+        window_after_expr[1]["$multiply"][0] * window_after_expr[1]["$multiply"][1]
     )
-    cap_cond = cond["then"]["$let"]["in"]["$let"]["in"]["$cond"]
-    max_summary_chars = cap_cond["if"]["$gt"][1]
+    new_turn = window_after_expr[0]["$concatArrays"][1][0]
+    cap_cond = expression["$let"]["in"]["$let"]["in"]["$let"]["in"]["$cond"]
+    max_summary_chars = cap_cond[0]["$gt"][1]
+    existing = _get_path(doc, "memory_content.summary") or ""
+    nested = _get_path(doc, "memory_content.conversation_history")
+    history = (
+        nested
+        if isinstance(nested, list)
+        else _get_path(doc, "conversation_history") or []
+    )
+    direct = _get_path(doc, "conversation_history")
+    canonical = direct if isinstance(direct, list) else history
+    window_after = [*canonical, new_turn][-max_turns:]
+    remaining_counts: dict[object, int] = {}
+    for turn in window_after:
+        identity = _turn_identity(turn)
+        remaining_counts[identity] = remaining_counts.get(identity, 0) + 1
+    seen_counts: dict[object, int] = {}
+    evicted = []
+    for turn in history:
+        identity = _turn_identity(turn)
+        occurrence = seen_counts.get(identity, 0)
+        seen_counts[identity] = occurrence + 1
+        if occurrence >= remaining_counts.get(identity, 0):
+            evicted.append(turn)
+    previews = [_turn_summary_preview(turn) for turn in evicted]
+    addition = "\n".join(previews)
+    concatenated = (
+        existing
+        if not addition
+        else addition
+        if not existing
+        else f"{existing}\n{addition}"
+    )
     if len(concatenated) > max_summary_chars:
         return "..." + concatenated[-(max_summary_chars - 3) :]
     return concatenated
 
 
-def _eval_history_append_expression(doc: dict, expression: dict) -> list[dict]:
-    let_expr = expression["$let"]
-    primary_path = let_expr["vars"]["primary"]["$ifNull"][0].lstrip("$")
-    fallback_path = let_expr["vars"]["fallback"]["$ifNull"][0].lstrip("$")
-    primary = _get_path(doc, primary_path) or []
-    fallback = _get_path(doc, fallback_path) or []
-    turn = let_expr["in"]["$concatArrays"][1][0]
-    base = _merge_history_docs(primary, fallback)
-    return deepcopy(base) + [deepcopy(turn)]
+def _turn_identity(turn) -> object:
+    if isinstance(turn, dict) and turn.get("turn_id") is not None:
+        return "turn_id", turn["turn_id"]
+    return "document", _freeze_value(turn)
 
 
-def _merge_history_docs(primary: list[dict], fallback: list[dict]) -> list[dict]:
-    merged = []
-    positions_by_turn_id = {}
-    for turn in [*primary, *fallback]:
-        turn_id = turn.get("turn_id")
-        if turn_id:
-            if turn_id in positions_by_turn_id:
-                merged[positions_by_turn_id[turn_id]] = turn
-                continue
-            positions_by_turn_id[turn_id] = len(merged)
-        merged.append(turn)
-    return merged
+def _freeze_value(value):
+    if isinstance(value, dict):
+        return tuple((key, _freeze_value(item)) for key, item in sorted(value.items()))
+    if isinstance(value, list):
+        return tuple(_freeze_value(item) for item in value)
+    return value
+
+
+def _turn_summary_preview(turn: dict) -> str:
+    role = turn.get("role")
+    if role == "user":
+        label = "User"
+    elif role == "agent":
+        label = turn.get("agent_name") or "Agent"
+    elif role == "supervisor":
+        label = "Supervisor"
+    else:
+        label = role or "Unknown"
+    content = turn.get("content")
+    if not isinstance(content, str):
+        content = "[compact turn]"
+    return f"[{label}] {content[:200]}..."
+
+
+def _eval_history_expression(doc: dict, expression) -> list[dict]:
+    if _contains_operator(expression, "$map"):
+        entries = _compact_entries_from_expression(expression)
+        direct = _get_path(doc, "conversation_history")
+        source = (
+            direct
+            if isinstance(direct, list)
+            else _get_path(doc, "memory_content.conversation_history") or []
+        )
+        turns = deepcopy(source)
+        for turn in turns:
+            if turn.get("turn_id") in entries and turn.get("representation") == "full":
+                entry = entries[turn["turn_id"]]
+                turn["representation"] = "compact"
+                turn["content"] = None
+                turn["content_ref"] = deepcopy(entry["content_ref"])
+                turn["estimated_tokens_compact"] = entry["estimated_tokens_compact"]
+        if "$slice" in expression:
+            return turns[expression["$slice"][1] :]
+        return turns
+    if "$concatArrays" in expression:
+        base = _eval_history_expression(doc, expression["$concatArrays"][0])
+        return base + deepcopy(expression["$concatArrays"][1])
+    if "$slice" in expression:
+        source = _eval_history_expression(doc, expression["$slice"][0])
+        limit_expr = expression["$slice"][1]
+        limit = (
+            limit_expr["$multiply"][0] * limit_expr["$multiply"][1]
+            if isinstance(limit_expr, dict) and "$multiply" in limit_expr
+            else limit_expr
+        )
+        return source[limit:]
+    if "$cond" in expression:
+        direct = _get_path(doc, "conversation_history")
+        if isinstance(direct, list):
+            return deepcopy(direct)
+        return deepcopy(_get_path(doc, "memory_content.conversation_history") or [])
+    if isinstance(expression, str):
+        return deepcopy(_get_path(doc, expression.lstrip("$")) or [])
+    raise AssertionError(f"Unsupported history expression: {expression}")
+
+
+def _contains_operator(expression, operator: str) -> bool:
+    if isinstance(expression, dict):
+        return operator in expression or any(
+            _contains_operator(value, operator) for value in expression.values()
+        )
+    if isinstance(expression, list):
+        return any(_contains_operator(value, operator) for value in expression)
+    return False
 
 
 def _set_array_filtered(doc: dict, path: str, value, array_filters) -> None:
@@ -1448,9 +1662,8 @@ def query_turn_id(doc: dict, array_path: str) -> str | None:
 
 
 def _compact_entries_from_expression(expression: dict) -> dict[str, dict]:
-    if "$cond" in expression:
-        expression = expression["$cond"][1]
-    patch = expression["$map"]["in"]["$cond"][1]["$mergeObjects"][1]
+    map_expression = _find_operator(expression, "$map")
+    patch = map_expression["$map"]["in"]["$cond"][1]["$mergeObjects"][1]
     ref_branches = patch["content_ref"]["$switch"]["branches"]
     token_branches = patch["estimated_tokens_compact"]["$switch"]["branches"]
     entries: dict[str, dict] = {}
@@ -1461,3 +1674,22 @@ def _compact_entries_from_expression(expression: dict) -> dict[str, dict]:
         turn_id = branch["case"]["$eq"][1]
         entries.setdefault(turn_id, {})["estimated_tokens_compact"] = branch["then"]
     return entries
+
+
+def _find_operator(expression: dict, operator: str) -> dict:
+    if operator in expression:
+        return expression
+    for value in expression.values():
+        if isinstance(value, dict):
+            try:
+                return _find_operator(value, operator)
+            except KeyError:
+                pass
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    try:
+                        return _find_operator(item, operator)
+                    except KeyError:
+                        pass
+    raise KeyError(operator)
