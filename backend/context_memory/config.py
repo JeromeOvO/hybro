@@ -54,6 +54,10 @@ class TokenBudgetConfig:
                 raise ValueError(f"{name} must be finite and between 0 and 1")
         if sum(value for _, value in percentages) > 1:
             raise ValueError("context allocation percentages must not exceed 1")
+        if self.fixed_reserve_tokens > self.model_context_window:
+            raise ValueError(
+                "fixed_reserve_tokens must not exceed model_context_window"
+            )
 
     @property
     def fixed_reserve_tokens(self) -> int:
@@ -76,7 +80,7 @@ class TokenBudgetConfig:
         return int(self.available_for_content * self.current_task_pct)
 
     def with_model_window(self, token_budget: int) -> TokenBudgetConfig:
-        model_context_window = max(0, int(token_budget))
+        model_context_window = int(token_budget)
         return TokenBudgetConfig(
             model_context_window=model_context_window,
             system_prompt=self.system_prompt,
@@ -127,6 +131,8 @@ class CompactionConfig:
             "content_ttl_days",
         ):
             _require_non_negative(name, getattr(self, name))
+        if self.preserve_recent_turns > self.max_full_turns:
+            raise ValueError("preserve_recent_turns must not exceed max_full_turns")
         if self.concurrency < 1:
             raise ValueError("concurrency must be at least 1")
 

@@ -59,9 +59,9 @@ def test_direct_zero_model_window_does_not_crash():
         "current task",
         token_budget=TokenBudgetConfig(
             model_context_window=0,
-            system_prompt=10,
-            tool_schemas=10,
-            response_reserve=10,
+            system_prompt=0,
+            tool_schemas=0,
+            response_reserve=0,
         ),
     )
 

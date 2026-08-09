@@ -60,6 +60,31 @@ def test_token_budget_accepts_zero_values_and_percentage_boundaries():
     assert config.available_for_content == 0
 
 
+def test_token_budget_accepts_fixed_reserve_equal_to_model_window():
+    config = TokenBudgetConfig(
+        model_context_window=9000,
+        system_prompt=2000,
+        tool_schemas=3000,
+        response_reserve=4000,
+    )
+
+    assert config.fixed_reserve_tokens == config.model_context_window
+    assert config.available_for_content == 0
+
+
+def test_token_budget_rejects_fixed_reserve_above_model_window():
+    with pytest.raises(
+        ValueError,
+        match="fixed_reserve_tokens must not exceed model_context_window",
+    ):
+        TokenBudgetConfig(
+            model_context_window=8999,
+            system_prompt=2000,
+            tool_schemas=3000,
+            response_reserve=4000,
+        )
+
+
 @pytest.mark.parametrize(
     "field_name",
     [
@@ -90,6 +115,20 @@ def test_compaction_accepts_zero_thresholds_preserve_and_ttl():
 
     assert config.max_full_turns == 0
     assert config.expires_delta() is None
+
+
+def test_compaction_accepts_preserve_recent_turns_equal_to_max_full_turns():
+    config = CompactionConfig(max_full_turns=3, preserve_recent_turns=3)
+
+    assert config.preserve_recent_turns == config.max_full_turns
+
+
+def test_compaction_rejects_preserve_recent_turns_above_max_full_turns():
+    with pytest.raises(
+        ValueError,
+        match="preserve_recent_turns must not exceed max_full_turns",
+    ):
+        CompactionConfig(max_full_turns=3, preserve_recent_turns=4)
 
 
 @pytest.mark.parametrize(

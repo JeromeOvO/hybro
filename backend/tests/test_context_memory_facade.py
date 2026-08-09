@@ -289,7 +289,7 @@ def facade(memory_repo=None, content_repo=None, history=None, **overrides):
     )
 
 
-def test_token_budget_with_model_window_preserves_small_caller_budget():
+def test_token_budget_with_model_window_rejects_window_below_fixed_reserve():
     budget = TokenBudgetConfig(
         model_context_window=128000,
         system_prompt=2000,
@@ -297,9 +297,25 @@ def test_token_budget_with_model_window_preserves_small_caller_budget():
         response_reserve=4000,
     )
 
-    scoped = budget.with_model_window(5000)
+    with pytest.raises(
+        ValueError,
+        match="fixed_reserve_tokens must not exceed model_context_window",
+    ):
+        budget.with_model_window(5000)
 
-    assert scoped.model_context_window == 5000
+
+def test_token_budget_with_model_window_accepts_fixed_reserve_boundary():
+    budget = TokenBudgetConfig(
+        model_context_window=128000,
+        system_prompt=2000,
+        tool_schemas=3000,
+        response_reserve=4000,
+    )
+
+    scoped = budget.with_model_window(9000)
+
+    assert scoped.model_context_window == 9000
+    assert scoped.available_for_content == 0
 
 
 def test_facade_uses_noop_tracer_by_default():
@@ -377,14 +393,14 @@ async def test_facade_assemble_context_agent_path_does_not_use_agent_id_as_name(
 
 
 @pytest.mark.asyncio
-async def test_facade_assemble_context_zero_token_budget_does_not_crash():
+async def test_facade_assemble_context_rejects_budget_below_fixed_reserve():
     service = facade(memory_repo=StateMemoryRepository(existing_doc()))
 
-    result = await service.assemble_context("r1", "m1", token_budget=0)
-
-    assert result.room_id == "r1"
-    assert result.total_tokens >= 0
-    assert "hello" in result.metadata["context"]
+    with pytest.raises(
+        ValueError,
+        match="fixed_reserve_tokens must not exceed model_context_window",
+    ):
+        await service.assemble_context("r1", "m1", token_budget=0)
 
 
 @pytest.mark.asyncio
