@@ -26,35 +26,26 @@ import { FRAMEWORKS } from "@/components/framework-badges"
 import { TypingTerminal } from "@/components/open-source/typing-terminal"
 
 // Delegates to install.sh rather than restating its steps: the script also
-// generates the shared registrar token and regenerates the default-agent
-// Compose services, both of which are easy to miss and break registration.
-// Ports come from docker-compose.yml.
+// generates the shared registrar token, which the .env.example files leave
+// empty and which default-agent registration fails without (HTTP 401).
+// Ports come from docker-compose.yml; the install path from install.sh.
 const AI_SETUP_PROMPT = `Set up Hybro AI on my machine and get it running locally.
-
 Repo: https://github.com/hybroai/hybro
 Requires: git, Docker, Docker Compose.
-
 1. Run the official installer, which clones the repo, creates the
    .env files, generates the shared registrar token and starts everything:
-
    curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh
-
    Do not hand-roll these steps. Copying the .env.example files yourself
    leaves the registrar token empty and default agents fail to register
    with HTTP 401.
-
    It installs into ~/hybro. cd there for the remaining steps.
-
 2. Ask me for my OPENAI_API_KEY, then set the same value in both
    backend/.env and default_agents/.env. The agents register without it,
    but their calls fail until a valid key is set.
-
 3. Restart so the key is picked up: docker compose up -d --build
-
 4. Verify:
    App  http://localhost:3000
    API  http://localhost:8000
-
 If a container fails, show me its \`docker compose logs\` output and fix it.`
 
 const QUICK_START_COMMANDS = {
