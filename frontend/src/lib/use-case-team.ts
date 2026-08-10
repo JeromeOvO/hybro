@@ -1,5 +1,6 @@
 import {
   createAgentGroup,
+  getAgentGroup,
   listAgentGroups,
   updateAgentGroup,
 } from '@/lib/api/agent-group'
@@ -40,10 +41,21 @@ async function ensureUseCaseTeamAgents(
     group_id: group.group_id,
     agents: agentIds,
   }, getToken)
-  if (!response.success || !response.group) {
-    throw new Error(response.error || 'Failed to update preset team')
+  if (response.success && response.group) return response.group
+
+  // Concurrent tabs may submit the same reconciliation. Mongo reports the
+  // losing no-op update as false, so verify the persisted membership before
+  // treating the response as a failure.
+  const currentResponse = await getAgentGroup(group.group_id, getToken)
+  if (
+    currentResponse.success
+    && currentResponse.group
+    && hasSameAgents(currentResponse.group, agentIds)
+  ) {
+    return currentResponse.group
   }
-  return response.group
+
+  throw new Error(response.error || 'Failed to update preset team')
 }
 
 interface EnsureUseCaseTeamOptions {

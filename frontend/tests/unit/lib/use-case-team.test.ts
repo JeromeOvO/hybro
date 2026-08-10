@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Youtube } from 'lucide-react'
 import {
   createAgentGroup,
+  getAgentGroup,
   listAgentGroups,
   updateAgentGroup,
 } from '@/lib/api/agent-group'
@@ -16,11 +17,13 @@ import {
 
 vi.mock('@/lib/api/agent-group', () => ({
   createAgentGroup: vi.fn(),
+  getAgentGroup: vi.fn(),
   listAgentGroups: vi.fn(),
   updateAgentGroup: vi.fn(),
 }))
 
 const mockCreateAgentGroup = vi.mocked(createAgentGroup)
+const mockGetAgentGroup = vi.mocked(getAgentGroup)
 const mockListAgentGroups = vi.mocked(listAgentGroups)
 const mockUpdateAgentGroup = vi.mocked(updateAgentGroup)
 
@@ -120,6 +123,46 @@ describe('use case preset teams', () => {
       agents: ['agent-001', 'agent-002'],
     }, undefined)
     expect(mockCreateAgentGroup).not.toHaveBeenCalled()
+  })
+
+  it('accepts a concurrent no-op update when persisted agents are correct', async () => {
+    const stalePreset = { ...makePresetTeam(), agents: ['agent-001'] }
+    const reconciledPreset = makePresetTeam()
+    mockListAgentGroups.mockResolvedValue({ success: true, groups: [stalePreset] })
+    mockUpdateAgentGroup.mockResolvedValue({
+      success: false,
+      error: 'Failed to update agent group',
+    })
+    mockGetAgentGroup.mockResolvedValue({
+      success: true,
+      group: reconciledPreset,
+    })
+
+    await expect(ensureUseCaseTeam({
+      template,
+      ownerId: 'user-1',
+      catalog,
+    })).resolves.toBe(reconciledPreset)
+    expect(mockGetAgentGroup).toHaveBeenCalledWith('preset-team-1', undefined)
+  })
+
+  it('keeps the update failure when persisted agents are still stale', async () => {
+    const stalePreset = { ...makePresetTeam(), agents: ['agent-001'] }
+    mockListAgentGroups.mockResolvedValue({ success: true, groups: [stalePreset] })
+    mockUpdateAgentGroup.mockResolvedValue({
+      success: false,
+      error: 'Failed to update agent group',
+    })
+    mockGetAgentGroup.mockResolvedValue({
+      success: true,
+      group: stalePreset,
+    })
+
+    await expect(ensureUseCaseTeam({
+      template,
+      ownerId: 'user-1',
+      catalog,
+    })).rejects.toThrow('Failed to update agent group')
   })
 
   it('creates the preset team with the resolved template agents when absent', async () => {
