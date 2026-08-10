@@ -110,15 +110,23 @@ class RoomRedisDistributedLock(_RedisOwnerClient):
         except Exception:
             return None
 
-    async def renew(self, room_id: str, owner: str, ttl: int) -> bool:
+    async def renew(self, room_id: str, owner: str, ttl: int) -> bool | None:
         if not self._enabled:
-            return False
-        return await self._owner_eval(
-            _RENEW_SCRIPT,
-            f"{self._ROOM_LOCK_PREFIX}{room_id}",
-            owner,
-            str(ttl),
-        )
+            return None
+        client = self._ensure_client()
+        if client is None:
+            return None
+        try:
+            result = await client.eval(
+                _RENEW_SCRIPT,
+                1,
+                f"{self._ROOM_LOCK_PREFIX}{room_id}",
+                owner,
+                str(ttl),
+            )
+            return result == 1
+        except Exception:
+            return None
 
     async def release(self, room_id: str, owner: str) -> None:
         if not self._enabled:

@@ -10,6 +10,7 @@ Covers:
 """
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -78,6 +79,7 @@ class TestDistributedLockPrimitives:
         redis = _make_redis(connected=False)
 
         assert await redis.acquire("room-1", "owner-abc", ttl=60) is None
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is None
         await redis.release("room-1", "owner-abc")
 
         redis._client.set.assert_not_awaited()
@@ -88,6 +90,17 @@ class TestDistributedLockPrimitives:
         rmc = _make_rmc(redis=None)
         result = await rmc._acquire_distributed_lock("room-1", "owner-abc")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_renew_distinguishes_backend_error_from_ownership_loss(self):
+        redis = _make_redis()
+        redis._client.eval = AsyncMock(
+            side_effect=[ConnectionError("Redis unavailable"), 0, 1]
+        )
+
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is None
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is False
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is True
 
     @pytest.mark.asyncio
     async def test_release_calls_eval_script_with_lua(self):
@@ -269,6 +282,26 @@ class TestDistributedConcurrency:
         owner2 = await rmc._acquire_room_lock("room-1", timeout=5)
         assert owner2 is not None
         await rmc._release_room_lock("room-1", owner2)
+
+
+class TestRoomLockRenewal:
+    @pytest.mark.asyncio
+    async def test_transient_backend_error_retries_until_confirmed_loss(
+        self, monkeypatch
+    ):
+        lock = SimpleNamespace(
+            renew=AsyncMock(side_effect=[None, True, False]),
+        )
+        rmc = _make_rmc(redis=lock)
+        sleep = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+
+        with pytest.raises(RuntimeError, match="lost distributed room lock"):
+            await rmc._renew_room_lock("room-1", "owner-abc")
+
+        assert lock.renew.await_count == 3
+        assert sleep.await_args_list[1].args == (1.0,)
+        assert sleep.await_args_list[2].args == (ROOM_LOCK_HOLD_TTL_SECONDS / 3,)
 
 
 class TestRedisDisconnectionMidAcquisition:

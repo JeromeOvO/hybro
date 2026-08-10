@@ -744,15 +744,28 @@ class RoomMessageCenter:
             await asyncio.Future()
             return
         interval = max(1.0, ROOM_LOCK_HOLD_TTL_SECONDS / 3)
+        retry_delay = 1.0
+        next_delay = interval
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(next_delay)
             renewed = await lock.renew(
                 room_id,
                 owner,
                 ROOM_LOCK_HOLD_TTL_SECONDS,
             )
-            if not renewed:
+            if renewed is True:
+                retry_delay = 1.0
+                next_delay = interval
+                continue
+            if renewed is False:
                 raise RuntimeError(f"lost distributed room lock for room {room_id}")
+            logger.warning(
+                "Redis room lock renewal unavailable for room %s; retrying in %.1fs",
+                room_id,
+                retry_delay,
+            )
+            next_delay = retry_delay
+            retry_delay = min(retry_delay * 2, 30.0)
 
     async def _release_room_lock(
         self,
