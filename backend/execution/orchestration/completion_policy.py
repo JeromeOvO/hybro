@@ -30,6 +30,29 @@ class CompletionPolicyError(ValueError):
     """Raised when COMPLETE would discard unfinished required work."""
 
 
+def remaining_required_obligation_gaps(
+    state: OrchestrationRunState,
+) -> set[str]:
+    """Return required obligation/output gaps with no completion evidence."""
+
+    return _remaining_required_gaps(state, None)
+
+
+def required_missing_output_keys(state: OrchestrationRunState) -> set[str]:
+    """Return required output keys still missing from delegation outcomes."""
+
+    required_output_keys = {
+        output.output_key
+        for intent in state.dispatch_intents
+        for output in intent.expected_outputs
+        if output.required and output.output_key
+    }
+    gaps: set[str] = set()
+    for outcome in state.delegation_outcomes:
+        gaps.update(set(outcome.missing_output_keys or []) & required_output_keys)
+    return gaps
+
+
 def successful_agent_outputs(state: OrchestrationRunState) -> list:
     return [
         output
@@ -180,5 +203,7 @@ __all__ = [
     "CompletionPolicyError",
     "FinalizationMode",
     "determine_finalization_mode",
+    "remaining_required_obligation_gaps",
+    "required_missing_output_keys",
     "successful_agent_outputs",
 ]
