@@ -17,6 +17,7 @@ import pytest
 from dal.redis.lock import RoomRedisDistributedLock
 from execution.orchestration.room_message_center import (
     ROOM_LOCK_HOLD_TTL_SECONDS,
+    RoomLockBackendUnavailable,
     RoomMessageCenter,
 )
 
@@ -277,9 +278,9 @@ class TestRedisDisconnectionMidAcquisition:
         redis._client.set = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
         rmc = _make_rmc(redis=redis)
 
-        owner = await rmc._acquire_room_lock("room-1", timeout=5)
+        with pytest.raises(RoomLockBackendUnavailable):
+            await rmc._acquire_room_lock("room-1", timeout=5)
 
-        assert owner is None
         assert "room-1" not in rmc._room_locks
 
     @pytest.mark.asyncio

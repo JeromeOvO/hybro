@@ -693,7 +693,7 @@ def test_normalize_independent_parallel_group_skips_dependent_targets():
     assert [target.parallel_group for target in normalized.targets] == [None, None]
 
 
-def test_normalize_prose_expected_outputs_clears_text_contracts():
+def test_normalize_prose_expected_outputs_keeps_text_and_drops_summary_contracts():
     action = PlannerAction(
         action=PlannerActionType.DELEGATE,
         reasoning="fan out",
@@ -726,7 +726,9 @@ def test_normalize_prose_expected_outputs_clears_text_contracts():
 
     normalized = normalize_prose_expected_outputs(action)
 
-    assert normalized.targets[0].expected_outputs == []
+    assert [output.kind for output in normalized.targets[0].expected_outputs] == [
+        "text"
+    ]
     assert normalized.targets[1].expected_outputs == []
 
 
@@ -756,9 +758,39 @@ def test_normalize_prose_expected_outputs_keeps_artifact_contracts():
 
     normalized = normalize_prose_expected_outputs(action)
 
-    assert len(normalized.targets[0].expected_outputs) == 1
-    assert normalized.targets[0].expected_outputs[0].output_key == "quote"
-    assert normalized.targets[0].expected_outputs[0].kind == "artifact"
+    assert [output.kind for output in normalized.targets[0].expected_outputs] == [
+        "artifact",
+        "text",
+    ]
+
+
+def test_normalize_prose_expected_outputs_keeps_text_media_and_artifact_kinds():
+    outputs = [
+        DispatchExpectedOutput(output_key="copy", kind="text"),
+        DispatchExpectedOutput(output_key="image", kind="image/png"),
+        DispatchExpectedOutput(output_key="file", kind="artifact"),
+        DispatchExpectedOutput(output_key="summary", kind="summary"),
+        DispatchExpectedOutput(output_key="shape", kind="structured"),
+    ]
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="mixed contracts",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-1",
+                task="Produce supported outputs.",
+                expected_outputs=outputs,
+            )
+        ],
+    )
+
+    normalized = normalize_prose_expected_outputs(action)
+
+    assert [output.kind for output in normalized.targets[0].expected_outputs] == [
+        "text",
+        "image/png",
+        "artifact",
+    ]
 
 
 def test_normalize_prose_expected_outputs_clears_invented_structured_contracts():
@@ -787,7 +819,7 @@ def test_normalize_prose_expected_outputs_clears_invented_structured_contracts()
     assert normalized.targets[0].expected_outputs == []
 
 
-def test_normalize_prose_expected_outputs_clears_text_with_required_fields():
+def test_normalize_prose_expected_outputs_canonicalizes_text_constraints():
     shaped = DispatchExpectedOutput(
         output_key="weather_report",
         kind="text",
@@ -807,4 +839,7 @@ def test_normalize_prose_expected_outputs_clears_text_with_required_fields():
 
     normalized = normalize_prose_expected_outputs(action)
 
-    assert normalized.targets[0].expected_outputs == []
+    output = normalized.targets[0].expected_outputs[0]
+    assert output.kind == "text"
+    assert output.artifact_name is None
+    assert output.required_fields == []

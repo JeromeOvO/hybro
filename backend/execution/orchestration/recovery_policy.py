@@ -317,28 +317,28 @@ def normalize_independent_parallel_group(action: PlannerAction) -> PlannerAction
     return action.model_copy(update={"targets": targets}, deep=True)
 
 
-def _is_unenforceable_expected_output(output: DispatchExpectedOutput) -> bool:
-    """Return True when Execution cannot score the contract via artifacts.
-
-    Outcome evaluation only matches owned artifacts for ``kind: artifact``.
-    Other kinds (``text``, ``summary``, ``structured``, custom labels) require
-    semantic facts keyed by ``output_key``, and free-text Agent replies are
-    intentionally excluded from that fact map. Planner-invented non-artifact
-    contracts therefore create permanent ``no_progress`` / blocked completion.
-    """
+def _is_enforceable_expected_output(output: DispatchExpectedOutput) -> bool:
+    """Return whether Execution can score the declared output contract."""
 
     kind = (output.kind or "").strip().lower()
-    return kind != _ENFORCEABLE_EXPECTED_OUTPUT_KIND
+    return (
+        kind
+        in {
+            _ENFORCEABLE_EXPECTED_OUTPUT_KIND,
+            "file",
+            "image",
+            "audio",
+            "video",
+            "text",
+            "markdown",
+        }
+        or kind.startswith("text/")
+        or "/" in kind
+    )
 
 
 def normalize_prose_expected_outputs(action: PlannerAction) -> PlannerAction:
-    """Drop unenforceable expected_outputs so legacy text scoring applies.
-
-    Keep only ``kind: artifact`` contracts. Clear every other kind so completed
-    non-empty Agent text can fulfill the legacy empty-contract path instead of
-    looping as ``no_progress`` when the planner invents prose or pseudo-
-    structured contracts that Execution cannot score.
-    """
+    """Drop invented contracts while preserving enforceable text and media outputs."""
 
     if action.action != PlannerActionType.DELEGATE:
         return action
@@ -346,15 +346,23 @@ def normalize_prose_expected_outputs(action: PlannerAction) -> PlannerAction:
     targets: list[PlannedDelegateTarget] = []
     changed = False
     for target in action.targets:
-        kept = [
-            output
-            for output in target.expected_outputs
-            if not _is_unenforceable_expected_output(output)
-        ]
-        if len(kept) == len(target.expected_outputs):
+        kept: list[DispatchExpectedOutput] = []
+        for output in target.expected_outputs:
+            if not _is_enforceable_expected_output(output):
+                changed = True
+                continue
+            kind = (output.kind or "").strip().lower()
+            normalized = output
+            if kind in {"text", "markdown"} or kind.startswith("text/"):
+                normalized = output.model_copy(
+                    update={"artifact_name": None, "required_fields": []},
+                    deep=True,
+                )
+            changed = changed or normalized != output
+            kept.append(normalized)
+        if kept == target.expected_outputs:
             targets.append(target)
             continue
-        changed = True
         targets.append(target.model_copy(update={"expected_outputs": kept}, deep=True))
     if not changed:
         return action

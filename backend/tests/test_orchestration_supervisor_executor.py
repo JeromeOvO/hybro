@@ -2436,6 +2436,91 @@ async def test_run_allows_direct_finalization_after_step_budget_is_consumed():
 
 
 @pytest.mark.asyncio
+async def test_run_direct_finalization_accepts_durable_artifact_without_text():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Generate an image"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Generate the image",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Image Agent",
+                    task="Generate an image",
+                    expected_outputs=[
+                        DispatchExpectedOutput(
+                            output_key="image",
+                            kind="image/png",
+                            required=True,
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="Image generated",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    async def process_artifact_only(message, *_args, **_kwargs):
+        persisted = await executor.message_reader.get_room_agent_message_by_message_id(
+            message.message_id
+        )
+        persisted.message_content.message_text = ""
+        persisted.message_content.message_task = {
+            "status": {"state": "completed"},
+            "artifacts": [
+                {
+                    "artifact_id": "image-1",
+                    "name": "generated-image",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "uri": "/api/v1/files/image-1/content",
+                                "mimeType": "image/png",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        return ProcessingResult(ProcessingStatus.SUCCESS, response_text="")
+
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=process_artifact_only
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Generate an image",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Image Agent")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED, result.run_state.terminal_reason
+    assert result.run_state.finalization_mode == FinalizationMode.DIRECT_AGENT.value
+    assert result.synthesis_text is None
+
+
+@pytest.mark.asyncio
 async def test_run_complete_without_evidence_passes_through_single_agent():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -11445,6 +11530,8 @@ async def _recover_finalizing_state(
     *,
     committed: bool,
     persisted_text: str | None,
+    finalization_mode: FinalizationMode = FinalizationMode.SYNTHESIS,
+    persisted_artifacts: bool = False,
 ) -> tuple[SupervisorRunResult, SupervisorExecutor]:
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(
@@ -11456,7 +11543,12 @@ async def _recover_finalizing_state(
     )
     state = _run_state(
         status=OrchestrationStatus.FINALIZING,
-        finalization_mode=FinalizationMode.SYNTHESIS.value,
+        finalization_mode=finalization_mode.value,
+        final_source_message_id=(
+            "sys-message-1"
+            if finalization_mode == FinalizationMode.DIRECT_AGENT
+            else None
+        ),
         summary_message_id="sys-message-1",
         system_agent_message_id="sys-message-1",
         finalization_committed_at=(datetime.now(UTC) if committed else None),
@@ -11465,9 +11557,26 @@ async def _recover_finalizing_state(
     executor = _executor(
         store=store, planner=RecordingPlanner(), user_message=user_message
     )
-    if persisted_text is not None:
+    if persisted_text is not None or persisted_artifacts:
         persisted = _agent_message("sys-message-1")
-        persisted.message_content.message_text = persisted_text
+        persisted.message_content.message_text = persisted_text or ""
+        if persisted_artifacts:
+            persisted.message_content.message_task = {
+                "artifacts": [
+                    {
+                        "artifact_id": "image-1",
+                        "parts": [
+                            {
+                                "kind": "file",
+                                "file": {
+                                    "uri": "/api/v1/files/image-1/content",
+                                    "mimeType": "image/png",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
         executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
             return_value=persisted
         )
@@ -11506,6 +11615,20 @@ async def test_finalizing_recovery_after_persistence_replays_and_commits():
     assert result.status == RunStatus.COMPLETED
     assert result.run_state.finalization_committed_at is not None
     executor.delivery.send_agent_response.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalizing_recovery_commits_direct_artifact_without_text():
+    result, executor = await _recover_finalizing_state(
+        committed=False,
+        persisted_text=None,
+        finalization_mode=FinalizationMode.DIRECT_AGENT,
+        persisted_artifacts=True,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.run_state.finalization_committed_at is not None
+    executor.delivery.send_agent_response.assert_not_awaited()
 
 
 @pytest.mark.asyncio

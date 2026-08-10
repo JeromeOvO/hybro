@@ -27,7 +27,10 @@ from execution.orchestration.queue_executor import (
     QueueResult,
     ResumeResult,
 )
-from execution.orchestration.room_message_center import RoomMessageCenter
+from execution.orchestration.room_message_center import (
+    RoomLockBackendUnavailable,
+    RoomMessageCenter,
+)
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from models.agent import AgentStatus
@@ -903,6 +906,54 @@ async def test_failed_room_lock_defers_child_transition_to_durable_projection():
     rmc.task_notifications.notify_task_update.assert_not_awaited()
     emit.assert_awaited_once()
     rmc.delivery.send_processing_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_room_lock_backend_returns_service_unavailable():
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="umsg-1",
+        is_recovery=False,
+    )
+    rmc.message_writer = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        unclaim_user_message=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(
+        side_effect=RoomLockBackendUnavailable("redis unavailable")
+    )
+    emit = AsyncMock()
+    rmc._processing_status_emitter = emit
+
+    result = await rmc.process_room_user_message(request)
+
+    assert result.status_code == 503
+    assert "temporarily unavailable" in result.error
+    rmc.message_writer.unclaim_user_message.assert_awaited_once_with("umsg-1")
+    emit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_preserves_continuation_when_lock_backend_is_unavailable():
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._acquire_room_lock = AsyncMock(
+        side_effect=RoomLockBackendUnavailable("redis unavailable")
+    )
+
+    resumed = await center.resume_queue_from_continuation("agent-msg-1")
+
+    assert resumed is False
+    center.continuation_store.get_and_clear_continuation_on_message.assert_not_awaited()
+    center.continuation_store.get_and_clear_continuation_on_user_message.assert_not_awaited()
 
 
 def _supervisor_agent(agent_id: str, name: str):

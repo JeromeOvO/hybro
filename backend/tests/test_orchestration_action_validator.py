@@ -1631,7 +1631,7 @@ async def test_planner_adapter_normalizes_blank_independent_parallel_group():
 
 
 @pytest.mark.asyncio
-async def test_planner_adapter_strips_prose_expected_outputs():
+async def test_planner_adapter_keeps_enforceable_text_expected_output():
     adapter = RoomSupervisorPlannerAdapter(
         raw_action_provider=lambda _context: {
             "action": "delegate",
@@ -1681,7 +1681,7 @@ async def test_planner_adapter_strips_prose_expected_outputs():
     action = await adapter.plan(context)
 
     assert action.action == PlannerActionType.DELEGATE
-    assert action.targets[0].expected_outputs == []
+    assert [output.kind for output in action.targets[0].expected_outputs] == ["text"]
 
 
 def test_planner_prompt_requires_domain_supported_agent_suitability():

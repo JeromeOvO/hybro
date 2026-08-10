@@ -128,6 +128,11 @@ class _RoomMessageCenterSettings:
 
 settings = _RoomMessageCenterSettings()
 
+
+class RoomLockBackendUnavailable(RuntimeError):
+    """Raised when the distributed lock backend cannot fence room processing."""
+
+
 # Maximum time (seconds) to wait for a per-room lock before giving up.
 # MUST be shorter than orphan_threshold_minutes (default 2 min = 120s) to
 # prevent the stale-task checker from reclaiming a message that is still
@@ -700,7 +705,9 @@ class RoomMessageCenter:
                         "Redis room lock unavailable for room %s; failing closed",
                         room_id,
                     )
-                    return None
+                    raise RoomLockBackendUnavailable(
+                        "distributed room lock backend is unavailable"
+                    )
                 else:
                     redis_errors = 0
                 await asyncio.sleep(poll_interval)
@@ -902,6 +909,26 @@ class RoomMessageCenter:
         # ----- Per-room lock: serialise all processing within a room -----
         try:
             lock_owner = await self._acquire_room_lock(room_id)
+        except RoomLockBackendUnavailable:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            details = (
+                "Room processing is temporarily unavailable — please retry shortly"
+            )
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
+                details=details,
+                system_message_id=f"sys-{room_user_message_id}",
+            )
+            await self.message_writer.unclaim_user_message(room_user_message_id)
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error=details,
+                status_code=503,
+            )
         except BaseException:
             self._release_cancellation_token(room_user_message_id, owned_token)
             raise
@@ -2104,7 +2131,16 @@ class RoomMessageCenter:
         room_id = continuation.get("room_id")
         lock_acquired_at: float | None = None
         if room_id:
-            lock_owner = await self._acquire_room_lock(room_id)
+            try:
+                lock_owner = await self._acquire_room_lock(room_id)
+            except RoomLockBackendUnavailable:
+                logger.error(
+                    "RoomMessageCenter: distributed room lock backend unavailable "
+                    "during resume for room %s (message %s)",
+                    room_id,
+                    message_id,
+                )
+                return False
             lock_acquired_at = time.monotonic()
             if lock_owner is None:
                 logger.error(

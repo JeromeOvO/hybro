@@ -1008,7 +1008,17 @@ class SupervisorExecutor:
                     if final_message is not None and final_message.message_content
                     else None
                 )
-                if isinstance(final_text, str) and final_text.strip():
+                final_artifacts = self._orchestration_artifacts_from_agent_message(
+                    final_message
+                )
+                has_final_text = isinstance(final_text, str) and bool(
+                    final_text.strip()
+                )
+                has_direct_artifacts = (
+                    state.finalization_mode == FinalizationMode.DIRECT_AGENT.value
+                    and bool(final_artifacts)
+                )
+                if has_final_text or has_direct_artifacts:
                     if state.finalization_mode != FinalizationMode.DIRECT_AGENT.value:
                         client_req_id = state.client_request_id or (
                             await self.task_state_store.resolve_client_request_id_for_message_id(
@@ -5153,7 +5163,13 @@ class SupervisorExecutor:
                 if persisted_source is not None and persisted_source.message_content
                 else None
             )
-            if not isinstance(persisted_text, str) or not persisted_text.strip():
+            persisted_artifacts = self._orchestration_artifacts_from_agent_message(
+                persisted_source
+            )
+            has_persisted_text = isinstance(persisted_text, str) and bool(
+                persisted_text.strip()
+            )
+            if not has_persisted_text and not persisted_artifacts:
                 state = await self._mark_orchestration_terminal(
                     state,
                     OrchestrationStatus.FAILED,
