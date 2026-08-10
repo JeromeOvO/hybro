@@ -23,6 +23,7 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
 import { UseCaseCard } from "@/components/use-case-card"
 import { useCaseTemplates } from "@/lib/use-case-templates"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
+import { ensureUseCaseTeam } from '@/lib/use-case-team'
 import { isMentionDispatchInput, type MessageDispatchInput } from "@/lib/types/agent-group"
 
 export default function ChatPage() {
@@ -34,6 +35,7 @@ function ChatPageContent() {
     const { getToken } = useAuth()
     const [promptPrefill, setPromptPrefill] = useState("")
     const [hasError, setHasError] = useState(false)
+    const [settingUpTemplate, setSettingUpTemplate] = useState<string | null>(null)
 
     // Local chat mode selection
     const [localChatMode, setLocalChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
@@ -52,7 +54,6 @@ function ChatPageContent() {
     const {
         creating,
         createAndNavigate,
-        createFromTemplate,
     } = useChatRoomCreation({
         userId: user?.id,
         userName: user?.firstName || user?.username || 'User',
@@ -126,12 +127,26 @@ function ChatPageContent() {
     )
 
     const handleTemplateClick = async (template: UseCaseTemplate) => {
+      if (!user?.id) {
+        handleRequireAuth()
+        return
+      }
+
+      setSettingUpTemplate(template.id)
       try {
-        setHasError(false)
-        await createFromTemplate(template, gm.availableAgents)
+        const team = await ensureUseCaseTeam({
+          template,
+          ownerId: user.id,
+          catalog: gm.availableAgents,
+          getToken,
+        })
+        gm.handleGroupCreated(team)
+        setPromptPrefill(template.prefillMessage)
       } catch (error) {
-        console.error("Failed to create room from template:", error)
-        setHasError(true)
+        console.error('Failed to prepare use case:', error)
+        banner.error(error instanceof Error ? error.message : 'Failed to prepare use case')
+      } finally {
+        setSettingUpTemplate(null)
       }
     }
 
@@ -221,11 +236,13 @@ function ChatPageContent() {
                     </div>
 
                     {/* Creating state */}
-                    {creating && (
-                        <div className="w-full max-w-3xl flex items-center justify-center mb-6">
+                    {(creating || settingUpTemplate) && (
+                        <div className="w-full max-w-3xl flex items-center justify-center mb-6" role="status" aria-live="polite">
                             <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 rounded-lg border border-primary/20">
                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                                <span className="text-sm">Finding the best agents for you...</span>
+                                <span className="text-sm">
+                                    {settingUpTemplate ? 'Preparing your preset team...' : 'Finding the best agents for you...'}
+                                </span>
                             </div>
                         </div>
                     )}
@@ -234,7 +251,7 @@ function ChatPageContent() {
                     <div className="w-full max-w-3xl mb-6">
                         <RoomChatInput
                             onSubmit={handleSubmit}
-                            disableSend={creating}
+                            disableSend={creating || settingUpTemplate !== null}
                             agents={agentListForMentions}
                             showGroupSelector={true}
                             groups={gm.groups}
@@ -278,7 +295,7 @@ function ChatPageContent() {
                                         template={template}
                                         catalog={gm.availableAgents}
                                         onClick={() => handleTemplateClick(template)}
-                                        disabled={creating || catalogLoading}
+                                        disabled={creating || settingUpTemplate !== null || catalogLoading || gm.loadingGroups}
                                     />
                                 ))}
                             </div>

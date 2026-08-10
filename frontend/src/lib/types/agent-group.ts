@@ -234,6 +234,8 @@ export interface AgentGroupCreateRequest {
   description?: string
   owner_id: string
   agents: string[]
+  /** Stable owner-scoped key for idempotent preset creation. */
+  preset_key?: string
 }
 
 export interface AgentGroupUpdateRequest {

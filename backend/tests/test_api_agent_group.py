@@ -9,6 +9,7 @@ Tests cover:
 """
 
 from unittest.mock import AsyncMock, MagicMock
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
@@ -55,6 +56,81 @@ class TestCreateAgentGroup:
         assert result["group"]["name"] == "My Group"
         assert result["group"]["owner_id"] == mock_user.user_id
         mock_db_service.add_agent_group.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reuses_existing_group_for_same_preset_key(
+        self, mock_db_service, mock_user
+    ):
+        expected_group_id = uuid5(
+            NAMESPACE_URL,
+            f"hybro-agent-group:{mock_user.user_id}:hybro-use-case:travel-planner",
+        ).hex
+        existing = AgentGroup(
+            group_id=expected_group_id,
+            name="Travel Planner Team",
+            type="user",
+            owner_id=mock_user.user_id,
+            agents=["weather", "travel"],
+        )
+        mock_db_service.get_agent_group_by_id = AsyncMock(return_value=existing)
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "name": "Travel Planner Team",
+                "owner_id": mock_user.user_id,
+                "agents": ["weather", "travel"],
+                "preset_key": "hybro-use-case:travel-planner",
+            }
+        )
+
+        result = await create_agent_group(
+            mock_request, user=mock_user, db=mock_db_service
+        )
+
+        assert result["success"] is True
+        assert result["group"] == existing.model_dump(mode="json")
+        mock_db_service.get_agent_group_by_id.assert_awaited_once_with(
+            expected_group_id
+        )
+        mock_db_service.add_agent_group.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reuses_preset_created_by_concurrent_request(
+        self, mock_db_service, mock_user
+    ):
+        expected_group_id = uuid5(
+            NAMESPACE_URL,
+            f"hybro-agent-group:{mock_user.user_id}:hybro-use-case:travel-planner",
+        ).hex
+        created = AgentGroup(
+            group_id=expected_group_id,
+            name="Travel Planner Team",
+            type="user",
+            owner_id=mock_user.user_id,
+            agents=["weather", "travel"],
+        )
+        mock_db_service.get_agent_group_by_id = AsyncMock(
+            side_effect=[None, created]
+        )
+        mock_db_service.add_agent_group = AsyncMock(return_value=False)
+        mock_request = MagicMock()
+        mock_request.json = AsyncMock(
+            return_value={
+                "name": "Travel Planner Team",
+                "owner_id": mock_user.user_id,
+                "agents": ["weather", "travel"],
+                "preset_key": "hybro-use-case:travel-planner",
+            }
+        )
+
+        result = await create_agent_group(
+            mock_request, user=mock_user, db=mock_db_service
+        )
+
+        assert result["success"] is True
+        assert result["group"]["owner_id"] == mock_user.user_id
+        inserted_group = mock_db_service.add_agent_group.await_args.args[0]
+        assert inserted_group.group_id == expected_group_id
 
     @pytest.mark.asyncio
     async def test_rejects_missing_name(self, mock_db_service, mock_user):

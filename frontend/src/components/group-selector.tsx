@@ -189,7 +189,7 @@ export function GroupSelector({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 min-h-8 min-w-0 max-w-full flex-1 px-3 gap-2 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+                  className="h-8 min-h-8 min-w-0 max-w-full flex-1 px-3 gap-1.5 font-normal hover:bg-muted/50 flex items-center border-none shadow-none focus-visible:ring-0 focus-visible:border-transparent"
                   onMouseLeave={() => {
                     ignoreTooltipRef.current = false
                   }}
@@ -197,7 +197,7 @@ export function GroupSelector({
                   <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
                     {displayInfo.icon}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-left font-medium">{displayInfo.label}</span>
+                  <span className="min-w-0 truncate text-left font-medium">{displayInfo.label}</span>
                   <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>

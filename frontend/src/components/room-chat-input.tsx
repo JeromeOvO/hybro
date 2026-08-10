@@ -317,7 +317,9 @@ export function RoomChatInput({
 
   // Handle external value changes (e.g., quick start templates)
   useEffect(() => {
-    if (externalValue && externalValue !== message) {
+    if (!externalValue) return
+
+    if (externalValue !== message) {
       setMessage(externalValue)
       const displayLength = externalValue.replace(/<@[^|]+\|([^>]+)>/g, '@$1').length
       setPlainTextLength(displayLength)
@@ -332,8 +334,11 @@ export function RoomChatInput({
         selection?.addRange(range)
         editorRef.current.focus()
       }
-      onExternalValueConsumed?.()
     }
+
+    // Consume even when the same template is selected twice. Otherwise the
+    // retained external value would overwrite the user's next edit.
+    onExternalValueConsumed?.()
   }, [externalValue, message, onExternalValueConsumed])
 
   // Get plain text from editor (display format)

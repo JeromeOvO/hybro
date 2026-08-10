@@ -6,7 +6,15 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
 
 // --- Mocks ---
 
-const mockCreateFromTemplate = vi.fn().mockResolvedValue(true)
+const presetTeam = {
+  group_id: 'travel-team',
+  name: 'Travel Planner Team',
+  description: 'Preset team for Travel Planner',
+  type: 'user' as const,
+  owner_id: 'user-1',
+  agents: ['a1', 'a2'],
+}
+const mockEnsureUseCaseTeam = vi.fn().mockResolvedValue(presetTeam)
 const mockCreateAndNavigate = vi.fn().mockResolvedValue(true)
 const mockLoadAvailableAgents = vi.fn()
 
@@ -21,7 +29,7 @@ function makeAgent(id: string, name: string): Agent {
     },
   }
 }
-const agents = [makeAgent("a1", "YouTube Creator Finder Agent"), makeAgent("a2", "GPT-5-mini Agent")]
+const agents = [makeAgent("a1", "Weather Agent"), makeAgent("a2", "Travel Planner Agent")]
 
 // Mock useGroupManagement — returns controllable state
 let gmState: Record<string, unknown> = {}
@@ -34,7 +42,6 @@ vi.mock("@/hooks/useChatRoomCreation", () => ({
   useChatRoomCreation: () => ({
     creating: false,
     createAndNavigate: mockCreateAndNavigate,
-    createFromTemplate: mockCreateFromTemplate,
     loadDefaultAgents: vi.fn(),
     getAgentSuggestions: vi.fn(),
     createRoomWithMessage: vi.fn(),
@@ -43,9 +50,13 @@ vi.mock("@/hooks/useChatRoomCreation", () => ({
   }),
 }))
 
-// Mock Clerk
-vi.mock("@clerk/nextjs", () => ({
-  useUser: () => ({ user: { id: "user-1", firstName: "Test" }, isLoaded: true }),
+vi.mock('@/lib/use-case-team', () => ({
+  ensureUseCaseTeam: (...args: unknown[]) => mockEnsureUseCaseTeam(...args),
+}))
+
+// Mock auth wrapper
+vi.mock('@/lib/auth', () => ({
+  useUser: () => ({ user: { id: 'user-1', firstName: 'Test' }, isLoaded: true }),
   useAuth: () => ({ getToken: vi.fn() }),
 }))
 
@@ -105,15 +116,72 @@ describe("Chat page — Use Case Cards integration", () => {
     expect(screen.queryByText("Creator Discovery & Export")).toBeNull()
   })
 
-  it("calls createFromTemplate with catalog on card click", async () => {
-    render(<ChatPage />)
+  it("fills the composer and selects the preset team without navigating", async () => {
+    const handleGroupCreated = vi.fn()
+    gmState = { ...gmState, handleGroupCreated }
+    const { container } = render(<ChatPage />)
     await waitFor(() => {
       expect(screen.getByText("Travel Planner")).toBeDefined()
     })
+
     fireEvent.click(screen.getByText("Travel Planner").closest("button")!)
+
     await waitFor(() => {
-      expect(mockCreateFromTemplate).toHaveBeenCalledOnce()
-      expect(mockCreateFromTemplate.mock.calls[0][1]).toEqual(agents)
+      expect(mockEnsureUseCaseTeam).toHaveBeenCalledWith(expect.objectContaining({
+        ownerId: 'user-1',
+        catalog: agents,
+      }))
+      expect(handleGroupCreated).toHaveBeenCalledWith(presetTeam)
+      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Generate a travel plan for 7-days travel',
+      )
+    })
+    expect(mockCreateAndNavigate).not.toHaveBeenCalled()
+  })
+
+  it('uses the Story & Image preset and fills its own prompt', async () => {
+    const storyTeam = {
+      ...presetTeam,
+      group_id: 'story-team',
+      name: 'Story & Image Creator Team',
+    }
+    const handleGroupCreated = vi.fn()
+    mockEnsureUseCaseTeam.mockResolvedValueOnce(storyTeam)
+    gmState = { ...gmState, handleGroupCreated }
+    const { container } = render(<ChatPage />)
+
+    fireEvent.click(await screen.findByText('Story & Image Creator'))
+
+    await waitFor(() => {
+      expect(mockEnsureUseCaseTeam).toHaveBeenCalledWith(expect.objectContaining({
+        template: expect.objectContaining({ id: 'story-and-image' }),
+      }))
+      expect(handleGroupCreated).toHaveBeenCalledWith(storyTeam)
+      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Give me a short fun story about AI Agents',
+      )
+    })
+  })
+
+  it('allows editing after the same use case is selected twice', async () => {
+    const { container } = render(<ChatPage />)
+    const card = await screen.findByText('Travel Planner')
+
+    fireEvent.click(card.closest('button')!)
+    await waitFor(() => {
+      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Generate a travel plan',
+      )
+    })
+    fireEvent.click(card.closest('button')!)
+    await waitFor(() => expect(mockEnsureUseCaseTeam).toHaveBeenCalledTimes(2))
+
+    const editor = container.querySelector('[contenteditable="true"]') as HTMLElement
+    editor.textContent = 'My edited trip request'
+    fireEvent.input(editor)
+
+    await waitFor(() => {
+      expect(editor.textContent).toBe('My edited trip request')
     })
   })
 

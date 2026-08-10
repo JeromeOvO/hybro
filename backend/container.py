@@ -1981,6 +1981,7 @@ def create_mongo_dal() -> MongoDAL:
 
 async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     agent_search_index_ready = await _ensure_agent_indexes(mongo)
+    await _ensure_agent_group_indexes(mongo)
     memory_search_index_ready = await _ensure_context_memory_indexes(mongo)
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
@@ -2060,6 +2061,17 @@ async def _create_index(
             exc_info=True,
         )
         return False
+
+
+async def _ensure_agent_group_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "agent_groups",
+        [("group_id", 1)],
+        name="agent_group_id_unique",
+        unique=True,
+        critical=True,
+    )
 
 
 async def _ensure_context_memory_indexes(mongo: MongoDAL) -> bool:

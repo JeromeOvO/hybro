@@ -25,6 +25,7 @@ Follow the more specific instructions in `frontend/AGENTS.md` or `backend/AGENTS
 Run commands from the relevant directory unless noted otherwise.
 
 - Repository root: `docker compose up -d --build`
+- After every completed code change in this repository, run `docker compose up -d --build` from the repository root so the local product images and containers are rebuilt with the latest code for manual testing. Treat this as a required final verification step unless the user explicitly asks not to rebuild.
 - Frontend: `npm run dev`, `npm run lint`, `npm run test`, `npm run test:e2e`, `npm run build`
 - Backend: `uv sync --extra dev`, `uv run pytest`, `uv run ruff check .`, `uv run ruff format .`
 - Default agents: use `default_agents/run_tests.sh` for its focused test suite.
