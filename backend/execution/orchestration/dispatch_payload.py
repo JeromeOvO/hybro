@@ -7,6 +7,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
+from execution.orchestration.context_ref_resolution import (
+    context_ref_text_payload,
+    resolve_context_ref_to_fact_id,
+)
 from models.orchestration import (
     DispatchContentRef,
     DispatchRefKind,
@@ -287,60 +291,149 @@ async def _resolve_context_refs(
     selected: list[str] = []
     payloads: list[ResolvedResourcePayload] = []
     for ref in context_refs:
-        if ref.ref_id in fact_ids:
-            selected.append(ref.ref_id)
-            continue
-        payload = await _resolve_resource_payload(
+        handled = await _resolve_one_context_ref(
+            run_state=run_state,
             ref=ref,
-            run_id=run_state.run_id,
+            fact_ids=fact_ids,
             original_attachments=original_attachments,
             resource_provider=resource_provider,
+            max_resource_text_chars=max_resource_text_chars,
+            selected=selected,
+            payloads=payloads,
         )
-        if payload is not None:
-            resolved_payload = ResolvedResourcePayload.model_validate(
-                payload.model_dump(mode="json")
-                if hasattr(payload, "model_dump")
-                else payload
-            )
-            invalid_code = _context_payload_invalid_code(resolved_payload)
-            if invalid_code is not None:
-                fallback_payload = await _resolve_context_projection_fallback(
-                    ref=ref,
-                    run_id=run_state.run_id,
-                    original_attachments=original_attachments,
-                    resource_provider=resource_provider,
-                )
-                fallback_invalid_code = (
-                    _context_payload_invalid_code(fallback_payload)
-                    if fallback_payload is not None
-                    else None
-                )
-                if fallback_payload is None or fallback_invalid_code is not None:
-                    if not ref.required:
-                        continue
-                    raise DispatchPayloadValidationError(
-                        _context_payload_invalid_message(
-                            ref_id=ref.ref_id,
-                            code=invalid_code,
-                        ),
-                        code=invalid_code,
-                    )
-                resolved_payload = fallback_payload
-            text = resolved_payload.text
-            if isinstance(text, str) and len(text) > max_resource_text_chars:
-                raise DispatchPayloadValidationError(
-                    f"Resource payload too large: {ref.ref_id}.",
-                    code="resource_payload_too_large",
-                )
-            selected.append(resolved_payload.ref_id)
-            payloads.append(resolved_payload)
+        if handled or not ref.required:
             continue
-        if ref.required:
-            raise DispatchPayloadValidationError(
-                f"Context ref not found: {ref.ref_id}.",
-                code="context_ref_not_found",
-            )
+        raise DispatchPayloadValidationError(
+            f"Context ref not found: {ref.ref_id}.",
+            code="context_ref_not_found",
+        )
     return selected, payloads
+
+
+def _append_bounded_context_payload(
+    *,
+    payload: ResolvedResourcePayload,
+    max_resource_text_chars: int,
+    selected: list[str],
+    payloads: list[ResolvedResourcePayload],
+) -> None:
+    text = payload.text
+    if isinstance(text, str) and len(text) > max_resource_text_chars:
+        raise DispatchPayloadValidationError(
+            f"Resource payload too large: {payload.ref_id}.",
+            code="resource_payload_too_large",
+        )
+    selected.append(payload.ref_id)
+    payloads.append(payload)
+
+
+def _maybe_add_alias_payload(
+    *,
+    run_state: OrchestrationRunState,
+    ref: DispatchContentRef,
+    resolved_fact_id: str,
+    max_resource_text_chars: int,
+    payloads: list[ResolvedResourcePayload],
+) -> None:
+    aliased_payload = context_ref_text_payload(
+        run_state,
+        ref,
+        resolved_fact_id=resolved_fact_id,
+    )
+    if aliased_payload is None:
+        return
+    payload = ResolvedResourcePayload.model_validate(aliased_payload)
+    text = payload.text
+    if isinstance(text, str) and len(text) > max_resource_text_chars:
+        raise DispatchPayloadValidationError(
+            f"Resource payload too large: {payload.ref_id}.",
+            code="resource_payload_too_large",
+        )
+    payloads.append(payload)
+
+
+async def _resolve_one_context_ref(
+    *,
+    run_state: OrchestrationRunState,
+    ref: DispatchContentRef,
+    fact_ids: set[str],
+    original_attachments: Sequence[UserAttachment],
+    resource_provider: Any | None,
+    max_resource_text_chars: int,
+    selected: list[str],
+    payloads: list[ResolvedResourcePayload],
+) -> bool:
+    aliased_fact_id = resolve_context_ref_to_fact_id(run_state, ref)
+    if ref.ref_id in fact_ids:
+        selected.append(ref.ref_id)
+        return True
+    if aliased_fact_id is not None and aliased_fact_id in fact_ids:
+        selected.append(aliased_fact_id)
+        _maybe_add_alias_payload(
+            run_state=run_state,
+            ref=ref,
+            resolved_fact_id=aliased_fact_id,
+            max_resource_text_chars=max_resource_text_chars,
+            payloads=payloads,
+        )
+        return True
+
+    payload = await _resolve_resource_payload(
+        ref=ref,
+        run_id=run_state.run_id,
+        original_attachments=original_attachments,
+        resource_provider=resource_provider,
+    )
+    if payload is not None:
+        resolved_payload = ResolvedResourcePayload.model_validate(
+            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        )
+        invalid_code = _context_payload_invalid_code(resolved_payload)
+        if invalid_code is not None:
+            fallback_payload = await _resolve_context_projection_fallback(
+                ref=ref,
+                run_id=run_state.run_id,
+                original_attachments=original_attachments,
+                resource_provider=resource_provider,
+            )
+            fallback_invalid_code = (
+                _context_payload_invalid_code(fallback_payload)
+                if fallback_payload is not None
+                else None
+            )
+            if fallback_payload is None or fallback_invalid_code is not None:
+                if not ref.required:
+                    return True
+                raise DispatchPayloadValidationError(
+                    _context_payload_invalid_message(
+                        ref_id=ref.ref_id,
+                        code=invalid_code,
+                    ),
+                    code=invalid_code,
+                )
+            resolved_payload = fallback_payload
+        _append_bounded_context_payload(
+            payload=resolved_payload,
+            max_resource_text_chars=max_resource_text_chars,
+            selected=selected,
+            payloads=payloads,
+        )
+        return True
+
+    aliased_payload = context_ref_text_payload(
+        run_state,
+        ref,
+        resolved_fact_id=aliased_fact_id,
+    )
+    if aliased_payload is None:
+        return False
+    _append_bounded_context_payload(
+        payload=ResolvedResourcePayload.model_validate(aliased_payload),
+        max_resource_text_chars=max_resource_text_chars,
+        selected=selected,
+        payloads=payloads,
+    )
+    return True
 
 
 async def _resolve_context_projection_fallback(

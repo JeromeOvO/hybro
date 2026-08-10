@@ -91,6 +91,7 @@ from execution.orchestration.recovery_policy import (
     action_for_fulfilled_goal_recovery,
     action_for_rejected_ask_user,
     action_for_rejected_delegate,
+    normalize_context_refs_with_available_facts,
     normalize_delegate_repair_lineage,
     normalize_independent_parallel_group,
     normalize_prose_expected_outputs,
@@ -1356,11 +1357,10 @@ class SupervisorExecutor:
                         )
                     if recovery_action is not None:
                         try:
-                            planner_action = PlannerActionValidator.validate(
+                            planner_action = self._validate_recovery_planner_action(
+                                state,
                                 recovery_action,
-                                run_state=state,
                                 resource_fingerprints=resource_fingerprints,
-                                guardrails_enabled=self.guardrails_enabled,
                             )
                         except PlannerActionValidationError as recovery_exc:
                             logger.warning(
@@ -1408,11 +1408,10 @@ class SupervisorExecutor:
                     if recovery_action is None:
                         continue
                     try:
-                        planner_action = PlannerActionValidator.validate(
+                        planner_action = self._validate_recovery_planner_action(
+                            state,
                             recovery_action,
-                            run_state=state,
                             resource_fingerprints=resource_fingerprints,
-                            guardrails_enabled=self.guardrails_enabled,
                         )
                     except PlannerActionValidationError as recovery_exc:
                         logger.warning(
@@ -1437,6 +1436,10 @@ class SupervisorExecutor:
             )
             planner_action = normalize_independent_parallel_group(planner_action)
             planner_action = normalize_prose_expected_outputs(planner_action)
+            planner_action = normalize_context_refs_with_available_facts(
+                planner_action,
+                state,
+            )
             planner_action = normalize_delegate_repair_lineage(
                 planner_action,
                 state,
@@ -1530,11 +1533,10 @@ class SupervisorExecutor:
                         )
                     if recovery_action is not None:
                         try:
-                            planner_action = PlannerActionValidator.validate(
+                            planner_action = self._validate_recovery_planner_action(
+                                state,
                                 recovery_action,
-                                run_state=state,
                                 resource_fingerprints=resource_fingerprints,
-                                guardrails_enabled=self.guardrails_enabled,
                             )
                         except PlannerActionValidationError as recovery_exc:
                             logger.warning(
@@ -1593,11 +1595,10 @@ class SupervisorExecutor:
                         continue
 
                     try:
-                        planner_action = PlannerActionValidator.validate(
+                        planner_action = self._validate_recovery_planner_action(
+                            state,
                             fallback_action,
-                            run_state=state,
                             resource_fingerprints=resource_fingerprints,
-                            guardrails_enabled=self.guardrails_enabled,
                         )
                     except PlannerActionValidationError as fallback_exc:
                         logger.warning(
@@ -2192,6 +2193,32 @@ class SupervisorExecutor:
             mutate=mutate,
         )
         return saved
+
+    def _validate_recovery_planner_action(
+        self,
+        state: OrchestrationRunState,
+        recovery_action: PlannerAction,
+        *,
+        resource_fingerprints: dict[str, str],
+    ) -> PlannerAction:
+        """Validate a recovery action after clearing prior planner-schema failures.
+
+        Open ``planner_validator`` failures block COMPLETE via the completion gate.
+        Recovery actions are chosen specifically to supersede those failures, so
+        resolve them before validation.
+        """
+
+        if recovery_action.action in {
+            PlannerActionType.COMPLETE,
+            PlannerActionType.PLATFORM_ANSWER,
+        }:
+            resolve_open_planner_validation_failures(state)
+        return PlannerActionValidator.validate(
+            recovery_action,
+            run_state=state,
+            resource_fingerprints=resource_fingerprints,
+            guardrails_enabled=self.guardrails_enabled,
+        )
 
     async def _record_orchestration_planner_rejection(
         self,

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from typing import Any
 
 from execution.orchestration.completion_policy import (
     CompletionPolicyError,
     determine_finalization_mode,
+    successful_agent_outputs,
 )
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_evaluator import effective_output_key
@@ -67,27 +69,19 @@ class PlannerActionValidator:
     ) -> PlannerAction:
         """Return ``action`` unchanged when it is valid for the run state."""
 
-        candidate_output_modes: dict[str, tuple[str, ...]] = {}
-        if run_state is not None:
-            candidate_agent_ids = (
-                run_state.candidate_scope.agent_ids
-                if run_state.candidate_scope is not None
-                else run_state.candidate_agent_ids
-            )
-            if run_state.candidate_scope is not None:
-                candidate_output_modes = {
-                    agent.agent_id: tuple(
-                        mode.strip().lower()
-                        for mode in agent.output_modes
-                        if isinstance(mode, str) and mode.strip()
-                    )
-                    for agent in run_state.candidate_scope.agents
-                }
-            steps_used = run_state.steps_used
-            step_budget = run_state.step_budget
-            has_agent_output = bool(run_state.agent_outputs)
-            if action.action == PlannerActionType.COMPLETE:
-                has_agent_output = bool(run_state.agent_outputs or run_state.facts)
+        context = _validation_runtime_context(
+            action,
+            run_state=run_state,
+            candidate_agent_ids=candidate_agent_ids,
+            steps_used=steps_used,
+            step_budget=step_budget,
+            has_agent_output=has_agent_output,
+        )
+        candidate_agent_ids = context["candidate_agent_ids"]
+        candidate_output_modes = context["candidate_output_modes"]
+        steps_used = context["steps_used"]
+        step_budget = context["step_budget"]
+        has_agent_output = context["has_agent_output"]
 
         _validate_step_budget(action, steps_used=steps_used, step_budget=step_budget)
         if action.action == PlannerActionType.DELEGATE:
@@ -106,6 +100,8 @@ class PlannerActionValidator:
             )
         if action.action == PlannerActionType.PLATFORM_ANSWER:
             _validate_platform_answer(action, run_state=run_state)
+        if action.action == PlannerActionType.FAIL and run_state is not None:
+            _validate_fail_action(action, run_state=run_state)
         if action.action != PlannerActionType.COMPLETE:
             _validate_terminal_output(action, has_agent_output=has_agent_output)
         if action.action == PlannerActionType.ASK_USER and run_state is not None:
@@ -114,18 +110,13 @@ class PlannerActionValidator:
                 run_state,
                 guardrails_enabled=guardrails_enabled,
             )
-
-        if action.action == PlannerActionType.COMPLETE and run_state is not None:
-            PlannerActionValidator._validate_completion(
+        if action.action == PlannerActionType.COMPLETE:
+            _validate_complete_action(
                 action,
-                run_state,
+                run_state=run_state,
+                has_agent_output=has_agent_output,
                 guardrails_enabled=guardrails_enabled,
             )
-        elif action.action == PlannerActionType.COMPLETE and not has_agent_output:
-            raise PlannerActionValidationError(
-                f"planner action {action.action.value!r} requires agent output"
-            )
-
         return action
 
     @staticmethod
@@ -615,6 +606,12 @@ def _validate_delegate(
             "multi-target delegate tasks must be independent",
             code="parallel_dependency_unspecified",
         )
+    same_step_output_keys = {
+        output.output_key
+        for target in action.targets
+        for output in target.expected_outputs
+        if output.output_key
+    }
     candidate_ids = set(candidate_agent_ids)
     for target in action.targets:
         if target.agent_id not in candidate_ids:
@@ -658,6 +655,12 @@ def _validate_delegate(
             )
         if run_state is not None:
             _validate_required_artifact_refs(target, run_state)
+            _validate_required_context_refs(
+                target,
+                run_state,
+                same_step_output_keys=same_step_output_keys,
+                multi_target=len(action.targets) > 1,
+            )
 
 
 def _output_family(kind: str) -> str:
@@ -791,6 +794,65 @@ def _supports_artifact_kind(
     return kind in non_text_modes
 
 
+def _validation_runtime_context(
+    action: PlannerAction,
+    *,
+    run_state: OrchestrationRunState | None,
+    candidate_agent_ids: Iterable[str],
+    steps_used: int,
+    step_budget: int,
+    has_agent_output: bool,
+) -> dict[str, Any]:
+    candidate_output_modes: dict[str, tuple[str, ...]] = {}
+    if run_state is not None:
+        candidate_agent_ids = (
+            run_state.candidate_scope.agent_ids
+            if run_state.candidate_scope is not None
+            else run_state.candidate_agent_ids
+        )
+        if run_state.candidate_scope is not None:
+            candidate_output_modes = {
+                agent.agent_id: tuple(
+                    mode.strip().lower()
+                    for mode in agent.output_modes
+                    if isinstance(mode, str) and mode.strip()
+                )
+                for agent in run_state.candidate_scope.agents
+            }
+        steps_used = run_state.steps_used
+        step_budget = run_state.step_budget
+        has_agent_output = bool(run_state.agent_outputs)
+        if action.action == PlannerActionType.COMPLETE:
+            has_agent_output = bool(run_state.agent_outputs or run_state.facts)
+    return {
+        "candidate_agent_ids": candidate_agent_ids,
+        "candidate_output_modes": candidate_output_modes,
+        "steps_used": steps_used,
+        "step_budget": step_budget,
+        "has_agent_output": has_agent_output,
+    }
+
+
+def _validate_complete_action(
+    action: PlannerAction,
+    *,
+    run_state: OrchestrationRunState | None,
+    has_agent_output: bool,
+    guardrails_enabled: bool,
+) -> None:
+    if run_state is not None:
+        PlannerActionValidator._validate_completion(
+            action,
+            run_state,
+            guardrails_enabled=guardrails_enabled,
+        )
+        return
+    if not has_agent_output:
+        raise PlannerActionValidationError(
+            f"planner action {action.action.value!r} requires agent output"
+        )
+
+
 def _validate_terminal_output(
     action: PlannerAction,
     *,
@@ -826,6 +888,38 @@ def _validate_platform_answer(
         raise PlannerActionValidationError(
             "platform_answer is blocked by active dispatches",
             code="platform_answer_active_dispatch",
+        )
+
+
+def _goal_already_satisfied(run_state: OrchestrationRunState) -> bool:
+    if not successful_agent_outputs(run_state):
+        return False
+    if not any(
+        outcome.status == "fulfilled" for outcome in run_state.delegation_outcomes
+    ):
+        return False
+    if run_state.goal_progress:
+        return not any(
+            progress.remaining_required_obligations
+            for progress in run_state.goal_progress
+        )
+    return not any(
+        outcome.remaining_required_obligations
+        for outcome in run_state.delegation_outcomes
+        if outcome.status != "fulfilled"
+    )
+
+
+def _validate_fail_action(
+    action: PlannerAction,
+    *,
+    run_state: OrchestrationRunState,
+) -> None:
+    if _goal_already_satisfied(run_state):
+        raise PlannerActionValidationError(
+            "fail is not allowed when agent results already satisfy remaining "
+            "obligations",
+            code="fail_goal_already_satisfied",
         )
 
 
@@ -955,4 +1049,28 @@ def _validate_required_artifact_refs(
                 f"delegate target {target.agent_id!r} references "
                 f"unknown artifact {ref.ref_id!r}",
                 code="artifact_ref_not_found",
+            )
+
+
+def _validate_required_context_refs(
+    target: PlannedDelegateTarget,
+    run_state: OrchestrationRunState,
+    *,
+    same_step_output_keys: set[str],
+    multi_target: bool,
+) -> None:
+    del run_state  # Resolution of opaque/alias refs happens at dispatch time.
+    if not multi_target:
+        return
+    own_keys = {
+        output.output_key for output in target.expected_outputs if output.output_key
+    }
+    for ref in target.context_refs:
+        if not ref.required:
+            continue
+        if ref.ref_id in same_step_output_keys and ref.ref_id not in own_keys:
+            raise PlannerActionValidationError(
+                "multi-target delegate cannot reference another target's "
+                f"expected output {ref.ref_id!r} in the same step",
+                code="parallel_context_dependency",
             )

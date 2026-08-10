@@ -7,6 +7,9 @@ from execution.orchestration.blocker_matching import (
     match_tokens,
     normalize_match_text,
 )
+from execution.orchestration.context_ref_resolution import (
+    rewrite_context_refs_with_available_facts,
+)
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_policy import OutcomeHistoryView
 from models.orchestration import (
@@ -110,8 +113,21 @@ def _ask_user_action_for_validated_blockers(
 
 
 def _has_completable_agent_progress(state: OrchestrationRunState) -> bool:
-    """True only when at least one delegation outcome is fulfilled."""
-    return any(outcome.status == "fulfilled" for outcome in state.delegation_outcomes)
+    """True when fulfilled Agent work remains and no required gaps are open."""
+    if not any(outcome.status == "fulfilled" for outcome in state.delegation_outcomes):
+        return False
+    if state.goal_progress:
+        return not any(
+            progress.remaining_required_obligations for progress in state.goal_progress
+        )
+    # Prefer goal_progress when present. Without it, ignore remaining lists on
+    # already-fulfilled outcomes (common in older fixtures) and only block when
+    # a non-fulfilled outcome still declares required gaps.
+    return not any(
+        outcome.remaining_required_obligations
+        for outcome in state.delegation_outcomes
+        if outcome.status != "fulfilled"
+    )
 
 
 def action_for_rejected_delegate(
@@ -173,6 +189,7 @@ _TERMINAL_INTENT_RECOVERY_CODES = frozenset(
         # Planner already tried to end the turn; empty-evidence complete is safe.
         "completion_evidence_invalid",
         "platform_answer_instruction_missing",
+        "fail_goal_already_satisfied",
     }
 )
 _EXHAUSTED_ONLY_RECOVERY_CODES = frozenset(
@@ -314,6 +331,29 @@ def normalize_independent_parallel_group(action: PlannerAction) -> PlannerAction
         target.model_copy(update={"parallel_group": group_id}, deep=True)
         for target in action.targets
     ]
+    return action.model_copy(update={"targets": targets}, deep=True)
+
+
+def normalize_context_refs_with_available_facts(
+    action: PlannerAction,
+    state: OrchestrationRunState,
+) -> PlannerAction:
+    """Rewrite symbolic context_refs onto durable fact IDs before validation."""
+
+    if action.action != PlannerActionType.DELEGATE:
+        return action
+    targets: list[PlannedDelegateTarget] = []
+    changed = False
+    for target in action.targets:
+        original = list(target.context_refs)
+        rewritten = rewrite_context_refs_with_available_facts(state, original)
+        if rewritten is original:
+            targets.append(target)
+            continue
+        changed = True
+        targets.append(target.model_copy(update={"context_refs": rewritten}, deep=True))
+    if not changed:
+        return action
     return action.model_copy(update={"targets": targets}, deep=True)
 
 
