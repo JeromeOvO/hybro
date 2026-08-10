@@ -1,8 +1,8 @@
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from common.dto.base import FrozenDTO
 
@@ -16,6 +16,34 @@ class RunState(str, Enum):
     CANCELED = "canceled"
 
 
+class _StrictAgentScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MentionAgentScope(_StrictAgentScope):
+    source: Literal["mention"]
+    agent_ids: list[str] = Field(min_length=1)
+
+
+class RoomDefaultAgentScope(_StrictAgentScope):
+    source: Literal["room_default"]
+
+
+class AllAgentsScope(_StrictAgentScope):
+    source: Literal["all_agents"]
+
+
+class SavedGroupAgentScope(_StrictAgentScope):
+    source: Literal["saved_group"]
+    group_id: str = Field(min_length=1)
+
+
+AgentScopeInput = Annotated[
+    MentionAgentScope | RoomDefaultAgentScope | AllAgentsScope | SavedGroupAgentScope,
+    Field(discriminator="source"),
+]
+
+
 class ExecutionRequest(FrozenDTO):
     room_id: str
     sender_id: str
@@ -24,17 +52,12 @@ class ExecutionRequest(FrozenDTO):
     message_text: str | None = None
     attachments: list[dict[str, JsonValue]] | None = None
     inline_file_ids: list[str] | None = None
-    target_agent_ids: list[str] | None = None
-    target_group: str | None = None
-    target_group_id: str | None = None
-    message_target_mode: str | None = None
-    mentioned_agent_ids: list[str] | None = None
-    selected_agent_ids: list[str] | None = None
-    candidate_scope_mode: str | None = None
-    candidate_scope_group_id: str | None = None
     parent_message_id: str | None = None
     client_request_id: str | None = None
-    mode: Literal["direct", "supervisor", "debate"] = "direct"
+    mode: Literal["direct", "supervisor"] = "direct"
+    agent_scope: AgentScopeInput = Field(
+        default_factory=lambda: RoomDefaultAgentScope(source="room_default")
+    )
 
 
 class ExecutionResult(FrozenDTO):
@@ -162,12 +185,17 @@ class AgentEvent(FrozenDTO):
 
 __all__ = [
     "AgentEvent",
+    "AgentScopeInput",
+    "AllAgentsScope",
     "ExecutionAck",
     "ExecutionRequest",
     "ExecutionResult",
     "HITLRequest",
+    "MentionAgentScope",
     "HITLResponse",
+    "RoomDefaultAgentScope",
     "RunInfo",
     "RunState",
+    "SavedGroupAgentScope",
     "WorkflowState",
 ]

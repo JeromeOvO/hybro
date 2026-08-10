@@ -135,7 +135,7 @@ class TestEmitUnifiedSummary:
 
         seen_agent_responses = []
 
-        async def mock_stream(agent_responses, mode="non_debate", user_question=None):
+        async def mock_stream(agent_responses, user_question=None):
             seen_agent_responses.extend(agent_responses)
             yield "OpenAI "
             yield "summary."
@@ -149,7 +149,6 @@ class TestEmitUnifiedSummary:
                 {"agent_name": "A", "message": "text A"},
                 {"agent_name": "B", "message": "text B"},
             ],
-            is_debate=True,
         )
 
         rmc.delivery.send_artifact_update.assert_not_awaited()
@@ -162,7 +161,7 @@ class TestEmitUnifiedSummary:
             saved_msg.message_content.message_task.status.state == TaskState.completed
         )
         assert saved_msg.extend_info["summary_origin"] == "coordinator"
-        assert saved_msg.extend_info["summary_type"] == "debate"
+        assert saved_msg.extend_info["summary_type"] == "synthesis"
         rmc.delivery.send_agent_response.assert_awaited_once()
         assert rmc.delivery.send_agent_response.await_args.args[3] == "OpenAI summary."
 
@@ -257,7 +256,7 @@ class TestEmitUnifiedSummary:
             side_effect=["Agent A", "Agent B"]
         )
 
-        async def mock_stream(agent_responses, mode="non_debate", user_question=None):
+        async def mock_stream(agent_responses, user_question=None):
             yield "Combined "
             yield "summary."
 

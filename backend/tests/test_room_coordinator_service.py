@@ -25,9 +25,9 @@ from models.room import Room
 # ---------------------------------------------------------------------------
 
 
-def _make_room(debate_mode: bool = False) -> Room:
+def _make_room() -> Room:
     room = MagicMock(spec=Room)
-    room.extend_info = {"debateMode": debate_mode} if debate_mode else {}
+    room.extend_info = {}
     return room
 
 
@@ -74,10 +74,10 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     """Verify behaviour when trajectory_responses is provided."""
 
     @pytest.mark.asyncio
-    async def test_two_responses_debate_mode_generates_summary(self, coordinator):
-        """Two trajectory entries in debate mode → debate summary generated."""
+    async def test_two_responses_generate_summary(self, coordinator):
+        """Two trajectory entries produce one summary."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=True)
+            return_value=_make_room()
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
             return_value=_stream_text("Debate summary text.")
@@ -102,7 +102,6 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         ]
         coordinator.summary_service.summarize_agent_responses_stream.assert_called_with(
             passed_responses,
-            mode="debate",
             user_question=None,
         )
         coordinator._create_and_emit_summary_message.assert_awaited_once()
@@ -110,7 +109,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_uses_bound_summary_service_when_available(self, coordinator):
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=False)
+            return_value=_make_room()
         )
         coordinator.summary_service = MagicMock()
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
@@ -137,7 +136,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     @pytest.mark.asyncio
     async def test_missing_summary_service_fails_fast(self, coordinator):
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=False)
+            return_value=_make_room()
         )
         coordinator.summary_service = None
 
@@ -152,10 +151,10 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
             )
 
     @pytest.mark.asyncio
-    async def test_two_responses_non_debate_mode_generates_summary(self, coordinator):
-        """Two trajectory entries in non-debate mode → non_debate summary."""
+    async def test_two_responses_use_default_summary_prompt(self, coordinator):
+        """Two trajectory entries use the unified summary prompt."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=False)
+            return_value=_make_room()
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
             return_value=_stream_text("Combined summary text.")
@@ -177,7 +176,6 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
         assert [item.agent_name for item in passed_responses] == ["Agent A", "Agent B"]
         coordinator.summary_service.summarize_agent_responses_stream.assert_called_with(
             passed_responses,
-            mode="non_debate",
             user_question=None,
         )
         coordinator._create_and_emit_summary_message.assert_awaited_once()
@@ -186,7 +184,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     async def test_one_response_skips_summary(self, coordinator):
         """Only one trajectory entry → summary requires ≥2, so nothing emitted."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=True)
+            return_value=_make_room()
         )
 
         await coordinator.on_room_user_message_completed(
@@ -204,7 +202,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     async def test_db_bfs_not_called_when_trajectory_provided(self, coordinator):
         """When trajectory_responses is supplied, BFS DB read must be skipped."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=True)
+            return_value=_make_room()
         )
         coordinator._message_store.get_room_agent_messages_by_related_message_id = (
             AsyncMock()
@@ -228,7 +226,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     async def test_empty_trajectory_responses_falls_back_to_db(self, coordinator):
         """Empty list is falsy → falls back to DB BFS path."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=True)
+            return_value=_make_room()
         )
         # BFS returns nothing so summary is skipped — we just verify the BFS was called.
         coordinator._message_store.get_room_agent_messages_by_related_message_id = (
@@ -250,7 +248,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     async def test_none_trajectory_responses_falls_back_to_db(self, coordinator):
         """None → falls back to DB BFS path (existing behaviour)."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=True)
+            return_value=_make_room()
         )
         coordinator._message_store.get_room_agent_messages_by_related_message_id = (
             AsyncMock(return_value=[])
@@ -287,7 +285,7 @@ class TestOnRoomUserMessageCompletedTrajectoryPath:
     async def test_summarize_returns_empty_skips_emit(self, coordinator):
         """If the LLM returns an empty summary, no message is emitted."""
         coordinator._message_store.get_room_by_room_id = AsyncMock(
-            return_value=_make_room(debate_mode=True)
+            return_value=_make_room()
         )
         coordinator.summary_service.summarize_agent_responses_stream = MagicMock(
             return_value=_stream_text("")

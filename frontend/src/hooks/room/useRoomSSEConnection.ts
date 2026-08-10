@@ -159,28 +159,50 @@ export function useRoomSSEConnection(
       }).catch(() => { /* ignore — safety-net, not critical */ })
     }
 
-    // Safety-net: while processing is active, periodically verify backend truth.
-    // This covers both reconnect gaps and cases where terminal SSE events are
-    // missed without an explicit disconnect marker.
+    // Safety-net: keep verifying backend truth for the entire active turn.
+    // A one-shot check can observe the run while it is still active and then
+    // never notice a later missed terminal SSE, leaving the UI spinning until
+    // the page is refreshed.
     let safetyTimer: ReturnType<typeof setTimeout> | null = null
-    if (sseConnected && processing) {
+    let safetyCheckCancelled = false
+    const scheduleSafetyCheck = () => {
       safetyTimer = setTimeout(async () => {
-        const hasActiveLifecycle = await backendHasActiveLifecycle()
-        if (hasActiveLifecycle === false) {
-          await reconcileWithDb(roomId)
-          await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
-          if (!hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
-            return
+        let terminalRecovered = false
+        try {
+          const hasActiveLifecycle = await backendHasActiveLifecycle()
+          if (safetyCheckCancelled) return
+
+          if (hasActiveLifecycle === false) {
+            await reconcileWithDb(roomId)
+            if (safetyCheckCancelled) return
+            await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
+            if (safetyCheckCancelled) return
+            if (hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
+              lifecycle.stopProcessing()
+              lifecycle.clearSseDisconnection()
+              terminalRecovered = true
+            }
           }
-          lifecycle.stopProcessing()
-          lifecycle.clearSseDisconnection()
+        } catch {
+          // A transient reconcile failure must not permanently disable the
+          // lifecycle safety-net. The next bounded poll retries backend truth.
+        } finally {
+          // Keep polling while React still considers this lifecycle active. The
+          // effect cleanup cancels the loop as soon as processing resolves.
+          if (!safetyCheckCancelled && !terminalRecovered) {
+            scheduleSafetyCheck()
+          }
         }
       }, 5000)
+    }
+    if (sseConnected && processing) {
+      scheduleSafetyCheck()
     }
 
     prevSseConnectedRef.current = sseConnected
 
     return () => {
+      safetyCheckCancelled = true
       if (safetyTimer) clearTimeout(safetyTimer)
     }
   }, [sseConnected, processing, roomId, getToken, getAgentName, getAgentSource, hitlRequestIndex, lifecycle, reconcileWithDb])

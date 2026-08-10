@@ -219,12 +219,6 @@ def _make_executor() -> SupervisorExecutor:  # noqa: C901
                         for target in action.targets
                     ],
                 )
-            if action.action == ActionType.SYNTHESIZE:
-                return PlannerAction(
-                    action=PlannerActionType.SYNTHESIZE,
-                    reasoning=action.reasoning,
-                    synthesis_instruction=action.synthesis_instruction,
-                )
             if context.state_context.agent_outputs:
                 return PlannerAction(
                     action=PlannerActionType.COMPLETE,
@@ -393,7 +387,7 @@ class TestSupervisorSSEStageNotifications:
         assert "Evaluating agent results..." in details
 
     @pytest.mark.asyncio
-    async def test_synthesizing_status_emitted_before_synthesis(self):
+    async def test_single_agent_completion_skips_synthesizing_status(self):
         """'Synthesizing responses...' emitted before synthesis call."""
         se = _make_executor()
         se.supervisor_service.decide_next.side_effect = [
@@ -405,9 +399,8 @@ class TestSupervisorSSEStageNotifications:
                 ],
             ),
             SupervisorAction(
-                action=ActionType.SYNTHESIZE,
-                reasoning="synthesize",
-                synthesis_instruction="combine",
+                action=ActionType.DONE,
+                reasoning="complete",
             ),
         ]
         se._dispatch_targets = AsyncMock(
@@ -443,7 +436,7 @@ class TestSupervisorSSEStageNotifications:
         )
 
         details = _get_sse_details(se)
-        assert "Synthesizing responses..." in details
+        assert "Synthesizing responses..." not in details
 
     @pytest.mark.asyncio
     async def test_full_stage_sequence_delegate_then_done(self):
@@ -493,7 +486,6 @@ class TestSupervisorSSEStageNotifications:
             "Reviewing progress...",
             "Planning next action...",  # second loop iteration before DONE
             "Goal complete. Preparing final response...",
-            "Synthesizing responses...",
         ]
 
     @pytest.mark.asyncio

@@ -319,12 +319,6 @@ class AgentResolverPort(Protocol):
     ) -> Any: ...
 
 
-class DebateServicePort(Protocol):
-    async def inject_short_debate_for_agent_message(
-        self, agent_message: RoomAgentMessage
-    ) -> RoomAgentMessage | None: ...
-
-
 class CoordinatorSynthesisPort(Protocol):
     async def emit_synthesis_message(
         self,

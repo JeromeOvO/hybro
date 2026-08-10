@@ -49,7 +49,6 @@ LLM_SETTINGS_FIELDS = {
     "openai_api_key",
     "google_api_key",
     "bedrock_region",
-    "debate_rounds",
 }
 
 
@@ -143,7 +142,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "agent_selection_service=agent_selection_llm_service,",
         "room_supervisor_service.bind_supervisor_service(supervisor_llm_service)",
         "room_runtime.bind_message_parser_service(message_parser_llm_service)",
-        "room_runtime.bind_debate_rounds(runtime.settings.debate_rounds)",
         "synthesis_coordinator.bind_summary_service(summary_llm_service)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
@@ -187,7 +185,6 @@ def test_focused_llm_binding_targets_expose_startup_methods():
 
     bindings = [
         (room_runtime, "bind_message_parser_service"),
-        (room_runtime, "bind_debate_rounds"),
         (synthesis_coordinator, "bind_summary_service"),
         (room_supervisor_service, "bind_supervisor_service"),
     ]

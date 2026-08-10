@@ -67,7 +67,6 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
     await act(async () => {
       await result.current.createRoomWithMessage('Hello', {
         selectedAgents: [mockAgent],
-        debateMode: false,
         useSupervisor: true,
         roomName: 'Supervisor Room',
       })
@@ -80,7 +79,6 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       defaultProps.getToken,
       { 'agent-1': 'Test Agent' },
       expect.objectContaining({
-        debateMode: false,
         use_supervisor: true,
         initialMessage: 'Hello',
       }),
@@ -117,7 +115,6 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
 
     await act(async () => {
       await result.current.createRoomWithMessage('Hello', {
-        debateMode: true,
       })
     })
 
@@ -126,7 +123,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
     expect(extendInfoArg.use_supervisor).toBe(true)
   })
 
-  it('should include both debateMode and use_supervisor in extendInfo', async () => {
+  it('should omit debateMode from extendInfo', async () => {
     mockCreateNewRoom.mockResolvedValue({
       success: true,
       room: { room_id: 'room-sv-4' },
@@ -137,14 +134,12 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
     await act(async () => {
       await result.current.createRoomWithMessage('Hello', {
         selectedAgents: [mockAgent],
-        debateMode: true,
         useSupervisor: true,
       })
     })
 
     const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
     expect(extendInfoArg).toEqual(expect.objectContaining({
-      debateMode: true,
       use_supervisor: true,
       initialMessage: 'Hello',
     }))
@@ -161,7 +156,6 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
     await act(async () => {
       await result.current.createAndNavigate('Navigate test', {
         useSupervisor: true,
-        debateMode: false,
       })
     })
 

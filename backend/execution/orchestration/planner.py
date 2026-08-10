@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from execution.orchestration.action_validator import PlannerActionValidator
 from execution.orchestration.context_builder import OrchestrationPlannerContext
+from execution.orchestration.planner_prompt import planner_action_schema
 from execution.orchestration.recovery_policy import (
     normalize_independent_parallel_group,
     normalize_prose_expected_outputs,
@@ -76,9 +77,9 @@ PLANNER_ACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                             "properties": {
                                 "output_key": {"type": ["string", "null"]},
                                 "kind": {"type": "string"},
-                                "required": {"type": "boolean"},
+                                "required": {"type": "boolean", "const": True},
                                 "description": {"type": ["string", "null"]},
-                                "artifact_name": {"type": ["string", "null"]},
+                                "artifact_name": {"type": "null"},
                                 "required_fields": {
                                     "type": "array",
                                     "items": {"type": "string"},
@@ -455,7 +456,8 @@ class RoomSupervisorPlannerAdapter:
             "must be the exact instruction the target agent should execute, with "
             "enough non-resource context to act without reading hidden planner state. "
             "Agent dispatch instructions are private execution payloads, not "
-            "user-facing responses. Keep each target.task concise and operational. "
+            "user-facing responses. Give each target a concise operational task and "
+            "selected refs and expected outputs; keep target.task concise and operational. "
             "Include only the concrete objective, constraints that materially affect "
             "execution, and the expected result. Do not include planner reasoning, "
             "run IDs, orchestration metadata, candidate-Agent information, "
@@ -468,10 +470,12 @@ class RoomSupervisorPlannerAdapter:
             "For a delegate action, each target may include context_refs, "
             "artifact_refs, attachment_refs, expected_outputs, and "
             "required_resource_refs. Use expected_outputs: [] for free-text Agent "
-            "replies. Only declare kind: artifact when the Agent is known to return "
-            "a named structured DataPart artifact; never invent text, summary, or "
-            "structured contracts, artifact names, or required_fields for prose "
-            "agents. Select resources by business relevance. Select "
+            "replies. Only declare an expected output when the Agent advertises that "
+            "native media or structured result. Use the advertised MIME type (for "
+            "example image/png), require every listed output, and never invent a "
+            "caption, filename, artifact name, required field, or extra deliverable. "
+            "Do not relabel an ordinary written answer as an artifact. Select "
+            "resources by business relevance. Select "
             "the smallest sufficient resource set. Prefer a structured artifact over "
             "copied prose and "
             "a text projection over a raw attachment when the raw file is unnecessary. "
@@ -482,6 +486,7 @@ class RoomSupervisorPlannerAdapter:
             "Execution will decide the compatible representation for the target "
             "Agent before dispatch. Use attachment_refs only when the task needs "
             "the raw attachment, not merely its extracted text.\n\n"
+            "Execution generates all IDs and parallel groups. "
             "Every delegate target must include parallel_group, depends_on, "
             "and required_resource_refs. For a single target, parallel_group may "
             "be null. For multiple targets, use one shared non-null parallel_group "
@@ -504,7 +509,10 @@ class RoomSupervisorPlannerAdapter:
         return await self._supervisor_service.call_planner_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            schema=PLANNER_ACTION_RESPONSE_SCHEMA,
+            schema=planner_action_schema(
+                PLANNER_ACTION_RESPONSE_SCHEMA,
+                context.candidate_agent_ids,
+            ),
         )
 
     def _parse_action(

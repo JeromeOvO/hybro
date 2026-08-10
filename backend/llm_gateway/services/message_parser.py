@@ -16,9 +16,6 @@ class MessageParserLLMService:
         self._default_model = default_model
 
     async def parse_user_message(self, request: ParsedUserMessageRequest) -> dict:
-        if request.is_debate_mode:
-            return _parse_debate_message(request)
-
         response = await self._llm_provider.generate_structured(
             _parse_messages(request),
             schema=None,
@@ -27,61 +24,6 @@ class MessageParserLLMService:
         )
         data = response if isinstance(response, dict) else response.data
         return _normalize_parse_result(data, request)
-
-
-def _parse_debate_message(request: ParsedUserMessageRequest) -> dict:
-    mention_pattern = r"<@([^|]+)\|([^>]+)>"
-    mentions = re.findall(mention_pattern, request.message_text)
-    if mentions:
-        debate_agents = [
-            {
-                "agent_id": agent_id.strip(),
-                "agent_name": request.selected_agents.get(
-                    agent_id.strip(), agent_name.strip()
-                ),
-            }
-            for agent_id, agent_name in mentions
-            if agent_id.strip() in request.selected_agents
-        ]
-        message_type = "DEBATE_WITH_MENTIONS"
-    else:
-        debate_agents = [
-            {"agent_id": agent_id, "agent_name": agent_name}
-            for agent_id, agent_name in request.selected_agents.items()
-        ]
-        message_type = "DEBATE_NO_MENTIONS"
-    if not debate_agents:
-        raise ValueError("No agents available for debate mode")
-
-    clean_content = request.message_text
-    for match in re.finditer(mention_pattern, request.message_text):
-        clean_content = clean_content.replace(match.group(0), "")
-    clean_content = re.sub(r"\s+", " ", clean_content).strip()
-
-    task_steps: list[dict[str, Any]] = []
-    previous_step_id = None
-    step_counter = 1
-    for _round_num in range(1, request.debate_rounds + 1):
-        for agent in debate_agents:
-            step_id = f"step_{step_counter}"
-            task_steps.append(
-                {
-                    "step_id": step_id,
-                    "agent_id": agent["agent_id"],
-                    "agent_name": agent["agent_name"],
-                    "task_content": clean_content,
-                    "dependencies": [previous_step_id] if previous_step_id else [],
-                }
-            )
-            previous_step_id = step_id
-            step_counter += 1
-
-    return {
-        "message_type": message_type,
-        "original_text": request.message_text,
-        "needs_decomposition": False,
-        "task_steps": task_steps,
-    }
 
 
 def _parse_messages(request: ParsedUserMessageRequest) -> list[dict[str, str]]:

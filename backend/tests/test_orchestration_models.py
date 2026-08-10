@@ -326,7 +326,7 @@ def test_mark_terminal_rejects_rewriting_already_terminal_state():
 
 
 def test_mark_terminal_coerces_raw_string_status_to_enum():
-    state = _run_state()
+    state = _run_state(status=OrchestrationStatus.FINALIZING)
 
     updated = mark_terminal(state, "completed", reason="done")
 

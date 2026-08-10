@@ -4,7 +4,6 @@ Integration tests for Agent Matching & Dispatch Pipeline
 End-to-end tests verifying data flow across:
 - AgentMatcher → AgentSelectionService
 - RoomServices → AgentSelectionService → AgentMatcher
-- SequentialDebateDispatcher (shared by DebatePromptInjector + SupervisorExecutor)
 - DispatchStrategy resolution
 - required_input_modes threading
 
@@ -23,8 +22,6 @@ from agent.matcher import (
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
-from execution.orchestration.debate_dispatcher import SequentialDebateDispatcher
-from execution.orchestration.debate_prompt_injector import DebatePromptInjector
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
@@ -85,7 +82,6 @@ async def test_all_agents_uses_agent_matcher():
         result = await service.select_agents_for_message(
             message_text="Test message",
             user_id="user123",
-            is_debate_mode=False,
         )
 
         # Verify matcher was called
@@ -93,7 +89,6 @@ async def test_all_agents_uses_agent_matcher():
         call_args = mock_match.call_args
         assert call_args[1]["message_text"] == "Test message"
         assert call_args[1]["user_id"] == "user123"
-        assert call_args[1]["is_debate_mode"] is False
 
         # Verify result conversion from MatchResult → AgentSelectionResult
         assert result.strategy == RoutingStrategy.PARALLEL  # 2 agents → PARALLEL
@@ -139,7 +134,6 @@ async def test_room_team_bypasses_matcher():
             room=room,
             message_text="Test message",
             target_group="room_team",
-            is_debate_mode=False,
             sender_user_id="user123",
         )
 
@@ -180,7 +174,6 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         room=room,
         message_text="A request that lexical search would normally filter",
         target_group="all_agents",
-        is_debate_mode=False,
         sender_user_id="user123",
     )
 
@@ -203,71 +196,18 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
     room_runtime.agent_selection_service.select_agents_for_message.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_debate_dispatcher_shared_by_both_paths():
-    """Verify both debate_service and SequentialDebateDispatcher produce same output."""
-    original_task = "Analyze this data"
-    prior_agent_name = "DataExpert"
-    prior_response = "Here is my analysis of the data..."
-
-    # Call SequentialDebateDispatcher directly
-    direct_prompt = SequentialDebateDispatcher.build_debate_prompt(
-        original_task=original_task,
-        prior_agent_name=prior_agent_name,
-        prior_response=prior_response,
-    )
-
-    # Verify first agent gets raw task
-    first_agent_prompt = SequentialDebateDispatcher.build_debate_prompt(
-        original_task=original_task,
-        prior_agent_name=None,
-        prior_response=None,
-    )
-    assert first_agent_prompt == original_task
-
-    # Verify subsequent agent gets enriched prompt
-    assert "YOUR TASK: " in direct_prompt
-    assert original_task in direct_prompt
-    assert "RESPONSE FROM PREVIOUS AGENT (DataExpert)" in direct_prompt
-    assert prior_response in direct_prompt
-    assert "DEBATE MODE INSTRUCTIONS:" in direct_prompt
-
-
 def test_dispatch_strategy_resolution_all_cases():
-    """Test resolve_strategy() with all 4 dispatch strategy cases."""
-    # Case 1: SUPERVISOR (supervisor=True)
-    strategy = resolve_strategy(
-        use_supervisor=True, is_debate_mode=False, agent_count=3
+    assert (
+        resolve_strategy(use_supervisor=True, agent_count=3)
+        == DispatchStrategy.SUPERVISOR
     )
-    assert strategy == DispatchStrategy.SUPERVISOR
-
-    # Case 2: SEQUENTIAL_DEBATE (debate=True, multi-agent)
-    strategy = resolve_strategy(
-        use_supervisor=False, is_debate_mode=True, agent_count=3
+    assert (
+        resolve_strategy(use_supervisor=False, agent_count=3)
+        == DispatchStrategy.SEQUENTIAL
     )
-    assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
-
-    # Case 3: SEQUENTIAL (multi-agent, no debate, no supervisor)
-    strategy = resolve_strategy(
-        use_supervisor=False, is_debate_mode=False, agent_count=3
+    assert (
+        resolve_strategy(use_supervisor=False, agent_count=1) == DispatchStrategy.SINGLE
     )
-    assert strategy == DispatchStrategy.SEQUENTIAL
-
-    # Case 4: SINGLE (single agent)
-    strategy = resolve_strategy(
-        use_supervisor=False, is_debate_mode=False, agent_count=1
-    )
-    assert strategy == DispatchStrategy.SINGLE
-
-    # Edge case: supervisor=True + debate=True → supervisor wins
-    strategy = resolve_strategy(use_supervisor=True, is_debate_mode=True, agent_count=3)
-    assert strategy == DispatchStrategy.SUPERVISOR
-
-    # Edge case: debate with 1 agent → still SEQUENTIAL_DEBATE
-    strategy = resolve_strategy(
-        use_supervisor=False, is_debate_mode=True, agent_count=1
-    )
-    assert strategy == DispatchStrategy.SEQUENTIAL_DEBATE
 
 
 @pytest.mark.asyncio
@@ -320,7 +260,6 @@ async def test_derive_required_input_modes_flows_to_matcher():
         await service.select_agents_for_message(
             message_text="Analyze these files",
             required_input_modes=required_modes,
-            is_debate_mode=False,
         )
 
         # Verify required_input_modes reached the matcher
@@ -343,7 +282,6 @@ async def test_no_matching_agents_graceful_fallback():
         service = AgentSelectionService()
         result = await service.select_agents_for_message(
             message_text="Test message",
-            is_debate_mode=False,
         )
 
         # Verify graceful fallback
@@ -365,7 +303,6 @@ async def test_matcher_error_propagates_to_caller():
         with pytest.raises(RuntimeError, match="Database connection failed"):
             await service.select_agents_for_message(
                 message_text="Test message",
-                is_debate_mode=False,
             )
 
 
@@ -416,146 +353,6 @@ def test_no_file_penalty_without_attachments():
     assert accepts_input_modes(agent_text, None) is True
 
 
-def test_debate_prompt_truncation_consistent():
-    """Verify debate prompt truncation is consistent and predictable."""
-    original_task = "Analyze this topic"
-    prior_agent_name = "ExpertAgent"
-
-    # Create very long response (over 3000 chars)
-    long_response = "A" * 3500
-
-    prompt = SequentialDebateDispatcher.build_debate_prompt(
-        original_task=original_task,
-        prior_agent_name=prior_agent_name,
-        prior_response=long_response,
-    )
-
-    # Verify truncation marker appears
-    assert "[truncated — full response: 3500 chars]" in prompt
-
-    # Verify total length is reasonable (not massively oversized)
-    assert len(prompt) < 3600
-
-    # Verify task and prior agent name still present
-    assert original_task in prompt
-    assert prior_agent_name in prompt
-
-
-def test_sequential_debate_first_agent_gets_raw_task():
-    """Verify first agent in debate receives original task unchanged."""
-    original_task = "Write a Python script to process data"
-
-    prompt = SequentialDebateDispatcher.build_debate_prompt(
-        original_task=original_task,
-        prior_agent_name=None,
-        prior_response=None,
-    )
-
-    assert prompt == original_task
-    assert "DEBATE MODE INSTRUCTIONS" not in prompt
-    assert "RESPONSE FROM PREVIOUS AGENT" not in prompt
-
-
-@pytest.mark.asyncio
-async def test_debate_service_uses_shared_dispatcher():
-    """Verify DebatePromptInjector delegates to SequentialDebateDispatcher."""
-    from a2a.types import Message, Role, Task, TaskState, TaskStatus, TextPart
-
-    from models.room import RoomAgentMessage
-
-    # Create mock agent message with related message
-    prior_message = RoomAgentMessage(
-        room_id="room123",
-        message_id="msg_prior",
-        agent_id="agent_prior",
-        message_content=MessageContent(
-            message_text="Previous agent response",
-            message_task=Task(
-                id="task_prior",
-                contextId="context1",
-                status=TaskStatus(state=TaskState.completed),
-                history=[
-                    Message(
-                        messageId="msg1",
-                        role=Role.user,
-                        parts=[TextPart(text="Original task")],
-                    )
-                ],
-            ),
-        ),
-    )
-
-    current_message = RoomAgentMessage(
-        room_id="room123",
-        message_id="msg_current",
-        agent_id="agent_current",
-        related_message_id="msg_prior",
-        task_content="Original task",
-        message_content=MessageContent(
-            message_text="Current response",
-            message_task=Task(
-                id="task_current",
-                contextId="context2",
-                status=TaskStatus(state=TaskState.working),
-                history=[
-                    Message(
-                        messageId="msg2",
-                        role=Role.user,
-                        parts=[TextPart(text="Original task")],
-                    )
-                ],
-            ),
-        ),
-    )
-
-    injector = DebatePromptInjector()
-
-    # Mock database calls
-    with (
-        patch.object(
-            injector._message_store,
-            "get_room_agent_message_by_message_id",
-            new_callable=AsyncMock,
-        ) as mock_get_msg,
-        patch.object(
-            injector._message_store,
-            "get_agent_name_by_agent_id",
-            new_callable=AsyncMock,
-        ) as mock_get_name,
-        patch.object(
-            injector._message_store,
-            "update_room_agent_message_with_new_message_content_by_message_id",
-            new_callable=AsyncMock,
-        ) as mock_update,
-    ):
-        mock_get_msg.side_effect = [prior_message, current_message]
-        mock_get_name.return_value = "PriorAgent"
-        mock_update.return_value = True
-
-        await injector.inject_short_debate_for_agent_message(current_message)
-        assert mock_update.called
-
-
-def test_select_top_agents_debate_mode_diversity():
-    """Verify debate mode returns 3-5 agents for diversity."""
-    agents = [
-        MatchedAgent(
-            _make_agent(f"agent{i}", f"Agent{i}", f"Desc{i}"),
-            lexical_score=0.8 - i * 0.05,
-            final_score=0.8 - i * 0.05,
-        )
-        for i in range(6)
-    ]
-
-    # Debate mode: returns at most five actual lexical hits.
-    selected = select_top_agents(agents, is_debate_mode=True)
-    assert len(selected) == 5
-
-    # Non-debate mode also preserves lexical order without score-gap heuristics.
-    selected_non_debate = select_top_agents(agents, is_debate_mode=False)
-    assert len(selected_non_debate) == 5
-
-
 def test_select_top_agents_preserves_valid_lexical_candidates():
     """Non-debate selection does not apply legacy score-gap thresholds."""
     agents = [
@@ -576,7 +373,7 @@ def test_select_top_agents_preserves_valid_lexical_candidates():
         ),
     ]
 
-    selected = select_top_agents(agents, is_debate_mode=False)
+    selected = select_top_agents(agents)
 
     assert [item.agent.agent_id for item in selected] == [
         "agent1",

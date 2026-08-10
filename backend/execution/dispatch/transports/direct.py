@@ -166,6 +166,7 @@ class DirectTransport(AgentTransport):
         if (
             isinstance(metadata, dict)
             and metadata.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
+            and metadata.get("remote_task_state") == "completed"
         ):
             return OUTPUT_DELIVERY_FAILURE_MESSAGE, OUTPUT_DELIVERY_FAILURE_CODE
         return _PUBLIC_AGENT_FAILURE_MESSAGE, _PUBLIC_AGENT_FAILURE_CODE
@@ -2099,7 +2100,12 @@ class DirectTransport(AgentTransport):
             # P1: Non-completed terminal states are dispatch failures so
             # QueueExecutor / SupervisorExecutor treat them correctly.
             is_success = actual_state == CommonTaskState.COMPLETED
-            return is_success, full_response_text or public_error_text, None, None
+            response_text = (
+                full_response_text
+                if is_success
+                else (public_error_text or full_response_text)
+            )
+            return is_success, response_text, None, None
 
         # Handle "task" response (async path)
         if response.get("type") == "task":

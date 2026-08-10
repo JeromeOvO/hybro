@@ -17,7 +17,7 @@ import { useGroupManagement } from "@/hooks/useGroupManagement"
 import type { QuoteData } from "@/lib/types/quote"
 import type { PendingAttachment } from "@/lib/types/attachments"
 import type { ChatMode } from "@/lib/types/chat-mode"
-import { DEFAULT_CHAT_MODE, chatModeToFlags } from "@/lib/types/chat-mode"
+import { DEFAULT_CHAT_MODE, chatModeToExecutionMode } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
 import { useRoomUiStore } from "@/stores/room-ui-store"
 import { UseCaseCard } from "@/components/use-case-card"
@@ -91,8 +91,7 @@ function ChatPageContent() {
             setHasError(false)
 
             const options = {
-                debateMode: chatModeToFlags(localChatMode).debateMode,
-                useSupervisor: chatModeToFlags(localChatMode).use_supervisor,
+                useSupervisor: chatModeToExecutionMode(localChatMode) === 'supervisor',
                 dispatch,
                 targetGroup: isMentionDispatchInput(dispatch) ? undefined : gm.selectedGroup,
                 attachments,

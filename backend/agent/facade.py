@@ -165,7 +165,6 @@ class AgentFacade:
         filter_ids: list[str] | None = None,
         requesting_user_id: str | None = None,
         required_input_modes: list[str] | None = None,
-        is_debate_mode: bool = False,
     ) -> list[dict[str, Any]]:
         return await self._match_agent_records(
             query,
@@ -174,7 +173,6 @@ class AgentFacade:
             respect_visibility=True,
             requesting_user_id=requesting_user_id,
             required_input_modes=required_input_modes,
-            is_debate_mode=is_debate_mode,
         )
 
     async def register_agent(
@@ -553,7 +551,6 @@ class AgentFacade:
         respect_visibility: bool = True,
         requesting_user_id: str | None = None,
         required_input_modes: list[str] | None = None,
-        is_debate_mode: bool = False,
     ) -> list[dict[str, Any]]:
         if not is_searchable_query(query) or filter_ids == []:
             return []
@@ -615,11 +612,7 @@ class AgentFacade:
             mongo_matched_ids=mongo_matched_ids,
             query=query,
         )
-        selected = select_top_matches(
-            ranked,
-            is_debate_mode=is_debate_mode,
-            limit=limit,
-        )
+        selected = select_top_matches(ranked, limit=limit)
         for match in selected:
             match["agent"] = agent_info_from_doc(match["agent"])
         return selected

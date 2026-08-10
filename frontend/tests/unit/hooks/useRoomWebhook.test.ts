@@ -1127,7 +1127,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await waitFor(() => expect(result.current.room).toBeTruthy())
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Tell me a story', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Tell me a story', mode: 'direct', agentScope: { source: 'room_default' } })
     })
 
     const userEntity = useMessageStore
@@ -1156,7 +1156,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)?.clientRequestId
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Analyze current project status', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Analyze current project status', mode: 'direct', agentScope: { source: 'room_default' } })
     })
 
     const clientRequestId = latestClientRequestId()
@@ -1321,7 +1321,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await waitFor(() => expect(result.current.room).toBeTruthy())
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Handle structured processing details', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Handle structured processing details', mode: 'direct', agentScope: { source: 'room_default' } })
     })
 
     const clientRequestId = useMessageStore
@@ -1396,7 +1396,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await act(async () => {
       await result.current.sendUserMessage({
         userInput: 'Terminal event wins before hydration',
-        dispatch: { message_target_mode: 'room_default' },
+        mode: 'direct', agentScope: { source: 'room_default' },
       })
     })
 
@@ -1503,7 +1503,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Old turn', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Old turn', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     const oldUser = latestUser()
     const oldClientRequestId = oldUser?.clientRequestId
@@ -1524,7 +1524,7 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(useMessageStore.getState().entities['msg-old'].turnTerminalStatus).toBe('completed')
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'New turn', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'New turn', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     const newUser = latestUser()
     const newClientRequestId = newUser?.clientRequestId
@@ -1645,7 +1645,7 @@ describe('useRoomWebhook SSE message handling', () => {
     await waitFor(() => expect(result.current.room).toBeTruthy())
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Run with agent processing updates', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Run with agent processing updates', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     const userEntity = useMessageStore
       .getState()
@@ -1704,7 +1704,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let oldSendPromise!: Promise<boolean>
     await act(async () => {
-      oldSendPromise = result.current.sendUserMessage({ userInput: 'Fast terminal turn', dispatch: { message_target_mode: 'room_default' } })
+      oldSendPromise = result.current.sendUserMessage({ userInput: 'Fast terminal turn', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
     const oldClientRequestId = latestUser()?.clientRequestId
@@ -1729,7 +1729,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let newSendPromise!: Promise<boolean>
     await act(async () => {
-      newSendPromise = result.current.sendUserMessage({ userInput: 'Next turn with early detail', dispatch: { message_target_mode: 'room_default' } })
+      newSendPromise = result.current.sendUserMessage({ userInput: 'Next turn with early detail', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
     const newClientRequestId = latestUser()?.clientRequestId
@@ -1771,7 +1771,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage({ userInput: 'Flush buffered output', dispatch: { message_target_mode: 'room_default' } })
+      sendPromise = result.current.sendUserMessage({ userInput: 'Flush buffered output', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1810,7 +1810,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let secondSendResult: boolean | undefined
     await act(async () => {
-      secondSendResult = await result.current.sendUserMessage({ userInput: 'Should still be guarded', dispatch: { message_target_mode: 'room_default' } })
+      secondSendResult = await result.current.sendUserMessage({ userInput: 'Should still be guarded', mode: 'direct', agentScope: { source: 'room_default' } })
     })
 
     expect(secondSendResult).toBe(false)
@@ -1829,7 +1829,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage({ userInput: 'Need HITL fast', dispatch: { message_target_mode: 'room_default' } })
+      sendPromise = result.current.sendUserMessage({ userInput: 'Need HITL fast', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1868,7 +1868,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let secondSendResult: boolean | undefined
     await act(async () => {
-      secondSendResult = await result.current.sendUserMessage({ userInput: 'Allowed after HITL', dispatch: { message_target_mode: 'room_default' } })
+      secondSendResult = await result.current.sendUserMessage({ userInput: 'Allowed after HITL', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     expect(secondSendResult).toBe(true)
     expect(vi.mocked(SendMessage)).toHaveBeenCalledTimes(2)
@@ -1896,7 +1896,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Old turn', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Old turn', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     const oldClientRequestId = latestUser()?.clientRequestId
     expect(oldClientRequestId).toBeTruthy()
@@ -1915,7 +1915,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', dispatch: { message_target_mode: 'room_default' } })
+      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -1991,7 +1991,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Old legacy turn', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Old legacy turn', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     const oldUser = latestUser()
     const oldClientRequestId = oldUser?.clientRequestId
@@ -2022,7 +2022,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', dispatch: { message_target_mode: 'room_default' } })
+      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -2092,7 +2092,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .at(-1)
 
     await act(async () => {
-      await result.current.sendUserMessage({ userInput: 'Old fast-terminal turn', dispatch: { message_target_mode: 'room_default' } })
+      await result.current.sendUserMessage({ userInput: 'Old fast-terminal turn', mode: 'direct', agentScope: { source: 'room_default' } })
     })
     const oldClientRequestId = latestUser()?.clientRequestId
     expect(oldClientRequestId).toBeTruthy()
@@ -2125,7 +2125,7 @@ describe('useRoomWebhook SSE message handling', () => {
 
     let sendPromise!: Promise<boolean>
     await act(async () => {
-      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', dispatch: { message_target_mode: 'room_default' } })
+      sendPromise = result.current.sendUserMessage({ userInput: 'New unresolved turn', mode: 'direct', agentScope: { source: 'room_default' } })
       await Promise.resolve()
     })
 
@@ -2173,7 +2173,7 @@ describe('useRoomWebhook SSE message handling', () => {
           .at(-1)?.clientRequestId
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: `Trigger ${terminalStatus}`, dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: `Trigger ${terminalStatus}`, mode: 'direct', agentScope: { source: 'room_default' } })
       })
 
       const clientRequestId = latestClientRequestId()
@@ -2239,7 +2239,7 @@ describe('useRoomWebhook SSE message handling', () => {
           .at(-1)?.clientRequestId
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Trigger per-agent terminal', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Trigger per-agent terminal', mode: 'direct', agentScope: { source: 'room_default' } })
       })
 
       const clientRequestId = latestClientRequestId()

@@ -91,7 +91,6 @@ class _UnboundRoomMessageCenterStore:
 a2a_transport = None
 agent_resolver_service = None
 default_store = _UnboundRoomMessageCenterStore()
-debate_prompt_injector = None
 room_memory = None
 task_notifier = None
 rate_limit_service = None
@@ -128,6 +127,42 @@ class _RoomMessageCenterSettings:
 
 
 settings = _RoomMessageCenterSettings()
+
+
+class RoomLockBackendUnavailable(RuntimeError):
+    """Raised when the distributed lock backend cannot fence room processing."""
+
+
+class RoomLockRenewalFailed(RuntimeError):
+    """Raised when an active room lock can no longer safely fence processing."""
+
+
+async def _await_cleanup_task(
+    task: asyncio.Task[Any],
+) -> tuple[BaseException | None, bool]:
+    """Wait through repeated cancellation and preserve it for the caller."""
+
+    cancellation_seen = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                cancellation_seen = True
+            if task.done():
+                break
+            continue
+        except BaseException:
+            break
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return None, cancellation_seen
+    except BaseException as exc:
+        return exc, cancellation_seen
+    return None, cancellation_seen
+
 
 # Maximum time (seconds) to wait for a per-room lock before giving up.
 # MUST be shorter than orphan_threshold_minutes (default 2 min = 120s) to
@@ -172,7 +207,6 @@ class RoomMessageCenter:
         a2a_transport: A2ATransportPort,
         remote_task_reader: RemoteTaskReaderPort,
         room_memory: RoomMemoryPort,
-        debate_prompt_injector,
         rate_limit_service: RateLimitPort | None = None,
         room_supervisor_service,
         hitl_coordinator: HITLCoordinator,
@@ -188,7 +222,6 @@ class RoomMessageCenter:
         build_turn_content_func=None,
         supervisor_planning_error_cls=RuntimeError,
         orphan_threshold_minutes: int | None = None,
-        debate_rounds: int = 2,
         orchestration_run_store=None,
         orchestration_planner=None,
         orchestration_resource_provider=None,
@@ -233,7 +266,6 @@ class RoomMessageCenter:
             if orphan_threshold_minutes is None
             else orphan_threshold_minutes
         )
-        self.debate_rounds = debate_rounds
         self.orchestration_run_store = (
             orchestration_run_store
             if orchestration_run_store is not None
@@ -320,7 +352,6 @@ class RoomMessageCenter:
             agent_lookup=self.agent_lookup,
             room_reader=self.room_reader,
             memory_reader=self.memory_reader,
-            debate_prompt_injector=debate_prompt_injector,
             rate_limit_service=rate_limit_service,
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
@@ -341,7 +372,6 @@ class RoomMessageCenter:
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
             hitl_coordinator=hitl_coordinator,
-            debate_rounds=self.debate_rounds,
             orchestration_run_store=self.orchestration_run_store,
             orchestration_planner=self.orchestration_planner,
             orchestration_resource_provider=orchestration_resource_provider,
@@ -358,6 +388,7 @@ class RoomMessageCenter:
         # intra-process fairness.  Without Redis the asyncio lock alone guards
         # the critical section (single-worker only).
         self._room_locks: dict[str, asyncio.Lock] = {}
+        self._room_lock_acquired_at_by_owner: dict[str, float] = {}
         self._room_distributed_lock: RoomDistributedLock | None = None
         self._room_facade = None
         self._room_bound = False
@@ -679,11 +710,48 @@ class RoomMessageCenter:
             poll_interval = 0.5
             redis_errors = 0
             while elapsed < timeout:
-                result = await self._acquire_distributed_lock(
-                    room_id, owner, ttl=ROOM_LOCK_HOLD_TTL_SECONDS
-                )
+                acquire_attempted_at = time.monotonic()
+                remaining_timeout = timeout - elapsed
+                try:
+                    result = await asyncio.wait_for(
+                        self._acquire_distributed_lock(
+                            room_id,
+                            owner,
+                            ttl=ROOM_LOCK_HOLD_TTL_SECONDS,
+                        ),
+                        timeout=remaining_timeout,
+                    )
+                except TimeoutError as exc:
+                    release_task = traced_create_task(
+                        self._release_distributed_lock(room_id, owner),
+                        name=f"room-lock-release:acquire-timeout:{room_id}",
+                    )
+                    release_error, cancellation_seen = await _await_cleanup_task(
+                        release_task
+                    )
+                    if cancellation_seen:
+                        raise asyncio.CancelledError from exc
+                    if release_error is not None:
+                        logger.warning(
+                            "Failed owner-safe room lock release after acquire timeout: %s",
+                            release_error,
+                        )
+                    raise RoomLockBackendUnavailable(
+                        "distributed room lock acquire timed out"
+                    ) from exc
                 if result is True:
+                    elapsed = loop.time() - t0
+                    if elapsed >= timeout:
+                        await self._release_distributed_lock(room_id, owner)
+                        return None
                     distributed_acquired = True
+                    acquired_times = getattr(
+                        self, "_room_lock_acquired_at_by_owner", None
+                    )
+                    if acquired_times is None:
+                        acquired_times = {}
+                        self._room_lock_acquired_at_by_owner = acquired_times
+                    acquired_times[owner] = acquire_attempted_at
                     if elapsed > 1.0:
                         logger.info(
                             "Distributed lock acquired for room %s (owner=%s, waited=%.1fs, ttl=%ds)",
@@ -702,18 +770,21 @@ class RoomMessageCenter:
                     break
                 if result is None:
                     redis_errors += 1
-                    if redis_errors >= 2:
-                        logger.warning(
-                            "Redis unhealthy (%d consecutive errors) while acquiring "
-                            "lock for room %s — falling back to local lock only",
-                            redis_errors,
-                            room_id,
-                        )
-                        use_distributed = False
-                        break
+                    logger.error(
+                        "Redis room lock unavailable for room %s; failing closed",
+                        room_id,
+                    )
+                    raise RoomLockBackendUnavailable(
+                        "distributed room lock backend is unavailable"
+                    )
                 else:
                     redis_errors = 0
-                await asyncio.sleep(poll_interval)
+                elapsed = loop.time() - t0
+                remaining_timeout = timeout - elapsed
+                if remaining_timeout <= 0:
+                    elapsed = timeout
+                    continue
+                await asyncio.sleep(min(poll_interval, remaining_timeout))
                 elapsed = loop.time() - t0
                 poll_interval = min(poll_interval * 1.5, 5.0)
             else:
@@ -728,18 +799,103 @@ class RoomMessageCenter:
         # --- Local asyncio lock (intra-process fairness) ------------------
         local_lock = self._get_local_lock(room_id)
         try:
-            remaining = max(0.1, timeout - elapsed)
+            elapsed = loop.time() - t0
+            remaining = timeout - elapsed
+            if remaining <= 0:
+                if distributed_acquired:
+                    await self._release_distributed_lock(room_id, owner)
+                getattr(self, "_room_lock_acquired_at_by_owner", {}).pop(owner, None)
+                return None
             await asyncio.wait_for(local_lock.acquire(), timeout=remaining)
         except TimeoutError:
             if distributed_acquired:
                 await self._release_distributed_lock(room_id, owner)
+            getattr(self, "_room_lock_acquired_at_by_owner", {}).pop(owner, None)
             return None
         except asyncio.CancelledError:
             if distributed_acquired:
                 await asyncio.shield(self._release_distributed_lock(room_id, owner))
+            getattr(self, "_room_lock_acquired_at_by_owner", {}).pop(owner, None)
             raise
 
+        acquired_times = getattr(self, "_room_lock_acquired_at_by_owner", None)
+        if acquired_times is None:
+            acquired_times = {}
+            self._room_lock_acquired_at_by_owner = acquired_times
+        acquired_times.setdefault(owner, time.monotonic())
         return owner
+
+    async def _renew_room_lock(
+        self,
+        room_id: str,
+        owner: str,
+        *,
+        acquired_at: float | None = None,
+    ) -> None:
+        lock = getattr(self, "_room_distributed_lock", None)
+        if lock is None:
+            await asyncio.Future()
+            return
+        interval = max(1.0, ROOM_LOCK_HOLD_TTL_SECONDS / 3)
+        retry_delay = 1.0
+        last_renewed_at = time.monotonic() if acquired_at is None else acquired_at
+        next_delay = max(0.0, interval - (time.monotonic() - last_renewed_at))
+        while True:
+            remaining = ROOM_LOCK_HOLD_TTL_SECONDS - (
+                time.monotonic() - last_renewed_at
+            )
+            if remaining <= 0:
+                raise RoomLockRenewalFailed(
+                    f"could not renew distributed room lock for room {room_id} "
+                    "before its TTL expired"
+                )
+            await asyncio.sleep(min(next_delay, remaining))
+            remaining = ROOM_LOCK_HOLD_TTL_SECONDS - (
+                time.monotonic() - last_renewed_at
+            )
+            if remaining <= 0:
+                raise RoomLockRenewalFailed(
+                    f"could not renew distributed room lock for room {room_id} "
+                    "before its TTL expired"
+                )
+            renew_attempted_at = time.monotonic()
+            try:
+                renewed = await asyncio.wait_for(
+                    lock.renew(
+                        room_id,
+                        owner,
+                        ROOM_LOCK_HOLD_TTL_SECONDS,
+                    ),
+                    timeout=remaining,
+                )
+            except TimeoutError as exc:
+                raise RoomLockRenewalFailed(
+                    f"distributed room lock renewal timed out for room {room_id} "
+                    "before its TTL expired"
+                ) from exc
+            if renewed is True:
+                last_renewed_at = renew_attempted_at
+                retry_delay = 1.0
+                next_delay = interval
+                continue
+            if renewed is False:
+                raise RoomLockRenewalFailed(
+                    f"lost distributed room lock for room {room_id}"
+                )
+            elapsed = time.monotonic() - last_renewed_at
+            remaining = ROOM_LOCK_HOLD_TTL_SECONDS - elapsed
+            if remaining <= 0:
+                raise RoomLockRenewalFailed(
+                    f"could not renew distributed room lock for room {room_id} "
+                    "before its TTL expired"
+                )
+            next_delay = min(retry_delay, remaining)
+            logger.warning(
+                "Redis room lock renewal unavailable for room %s; retrying in %.1fs",
+                room_id,
+                next_delay,
+            )
+            retry_delay = min(retry_delay * 2, 30.0)
 
     async def _release_room_lock(
         self,
@@ -769,7 +925,10 @@ class RoomMessageCenter:
         if local_lock is not None and local_lock.locked():
             local_lock.release()
         if owner is not None:
-            await self._release_distributed_lock(room_id, owner)
+            try:
+                await self._release_distributed_lock(room_id, owner)
+            finally:
+                getattr(self, "_room_lock_acquired_at_by_owner", {}).pop(owner, None)
             logger.debug(
                 "Distributed lock released for room %s (owner=%s)",
                 room_id,
@@ -896,10 +1055,32 @@ class RoomMessageCenter:
         # ----- Per-room lock: serialise all processing within a room -----
         try:
             lock_owner = await self._acquire_room_lock(room_id)
+        except RoomLockBackendUnavailable:
+            self._release_cancellation_token(room_user_message_id, owned_token)
+            details = (
+                "Room processing is temporarily unavailable — please retry shortly"
+            )
+            await self._emit_processing_status(
+                room_id=room_id,
+                status=SSEProcessingStatus.FAILED,
+                message_id=room_user_message_id,
+                lifecycle_message_id=room_user_message_id,
+                details=details,
+                system_message_id=f"sys-{room_user_message_id}",
+            )
+            await self.message_writer.unclaim_user_message(room_user_message_id)
+            return OrchestrationResponse(
+                room_id=room_id,
+                success=False,
+                error=details,
+                status_code=503,
+            )
         except BaseException:
             self._release_cancellation_token(room_user_message_id, owned_token)
             raise
-        lock_acquired_at = time.monotonic()
+        lock_acquired_at = getattr(self, "_room_lock_acquired_at_by_owner", {}).get(
+            lock_owner, time.monotonic()
+        )
         if lock_owner is None:
             logger.error(
                 "RoomMessageCenter: Timed out waiting for room lock on %s "
@@ -938,6 +1119,14 @@ class RoomMessageCenter:
                 self._heartbeat_processing_claim(room_user_message_id),
                 name=f"processing-claim-heartbeat:{room_user_message_id}",
             )
+            lock_renewal = traced_create_task(
+                self._renew_room_lock(
+                    room_id,
+                    lock_owner,
+                    acquired_at=lock_acquired_at,
+                ),
+                name=f"room-lock-renewal:{room_user_message_id}",
+            )
         except BaseException:
             self._release_cancellation_token(room_user_message_id, owned_token)
             try:
@@ -950,13 +1139,54 @@ class RoomMessageCenter:
 
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
+        lock_renewal_failure_handled = False
+        body_completion_won = False
         try:
-            return await self._process_room_user_message_locked(
-                request,
-                room_id,
-                room_user_message_id,
-                token=owned_token,
+            body_task = traced_create_task(
+                self._process_room_user_message_locked(
+                    request,
+                    room_id,
+                    room_user_message_id,
+                    token=owned_token,
+                ),
+                name=f"room-message-body:{room_user_message_id}",
             )
+            done, _ = await asyncio.wait(
+                {body_task, lock_renewal},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if body_task in done:
+                body_completion_won = True
+                return await body_task
+            if lock_renewal in done:
+                body_task.cancel()
+                try:
+                    await body_task
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await lock_renewal
+                except RoomLockRenewalFailed:
+                    lock_renewal_failure_handled = True
+                    self._release_cancellation_token(room_user_message_id, owned_token)
+                    details = "Room processing lost its distributed lock — please retry"
+                    await self._emit_processing_status(
+                        room_id=room_id,
+                        status=SSEProcessingStatus.FAILED,
+                        message_id=room_user_message_id,
+                        lifecycle_message_id=room_user_message_id,
+                        details=details,
+                        system_message_id=f"sys-{room_user_message_id}",
+                    )
+                    await self.message_writer.unclaim_user_message(room_user_message_id)
+                    return OrchestrationResponse(
+                        room_id=room_id,
+                        success=False,
+                        error=details,
+                        status_code=503,
+                    )
+                raise RuntimeError("distributed room lock renewal stopped")
+            return await body_task
         except asyncio.CancelledError as exc:
             self._release_cancellation_token(room_user_message_id, owned_token)
             if is_graceful_shutdown_cancellation(exc):
@@ -985,12 +1215,22 @@ class RoomMessageCenter:
             body_error = sys.exc_info()[1]
             cleanup_error: BaseException | None = None
             claim_heartbeat.cancel()
+            lock_renewal.cancel()
             try:
                 await claim_heartbeat
             except asyncio.CancelledError:
                 pass
             except BaseException as exc:
                 cleanup_error = exc
+            try:
+                await lock_renewal
+            except asyncio.CancelledError:
+                pass
+            except RoomLockRenewalFailed as exc:
+                if not lock_renewal_failure_handled and not body_completion_won:
+                    cleanup_error = cleanup_error or exc
+            except BaseException as exc:
+                cleanup_error = cleanup_error or exc
             try:
                 await self._release_room_lock(
                     room_id, lock_owner, acquired_at=lock_acquired_at
@@ -1248,15 +1488,7 @@ class RoomMessageCenter:
                 error="Processing cancelled by user",
                 status_code=200,
             )
-        room = await self.room_reader.get_room_by_room_id(room_id)
-        is_debate = bool(
-            room
-            and isinstance(room.extend_info, dict)
-            and room.extend_info.get("debateMode", False)
-        )
-        summary_coro = self._emit_unified_summary(
-            room_id, room_user_message_id, is_debate=is_debate
-        )
+        summary_coro = self._emit_unified_summary(room_id, room_user_message_id)
         try:
             turn_completion_kind, _ = await token.race(summary_coro)
         except CancellationError:
@@ -1494,12 +1726,6 @@ class RoomMessageCenter:
             profiles_by_id[agent_id] = profile
             agent_registry.append(profile)
 
-        room = await self.room_reader.get_room_by_room_id(room_id)
-        is_debate_mode = (
-            room is not None
-            and isinstance(room.extend_info, dict)
-            and room.extend_info.get("debateMode", False)
-        )
         mentioned_agent_ids = extend.get("mentioned_agent_ids")
         explicit_mentions: list[dict[str, str]] = []
         if isinstance(mentioned_agent_ids, list):
@@ -1519,7 +1745,6 @@ class RoomMessageCenter:
                 )
 
         room_config = RoomConfig(
-            is_debate_mode=bool(is_debate_mode),
             room_agent_set={
                 profile.agent_id: profile.agent_name for profile in agent_registry
             },
@@ -1823,89 +2048,18 @@ class RoomMessageCenter:
 
         match result.status:
             case RunStatus.COMPLETED:
-                trajectory_responses = (
-                    self._trajectory_responses_from_supervisor_result(result)
-                )
-                is_debate = (
-                    bool(
-                        room
-                        and isinstance(room.extend_info, dict)
-                        and room.extend_info.get("debateMode", False)
-                    )
-                    if room
-                    else False
-                )
-
                 if completion_cancellable and token is not None and token.is_cancelled:
                     await self._emit_completion_race_cancellation(
                         room_id, user_message_id, token
                     )
                     return
 
-                if result.synthesis_text is not None:
-                    summary_coro = self._emit_unified_summary(
-                        room_id,
-                        user_message_id,
-                        synthesis_text=result.synthesis_text,
-                        trajectory_responses=trajectory_responses,
-                        is_debate=is_debate,
-                        working_already_emitted=True,
-                    )
-                    try:
-                        turn_completion_kind, _ = (
-                            await token.race(summary_coro)
-                            if completion_cancellable and token is not None
-                            else await summary_coro
-                        )
-                    except CancellationError:
-                        await self._emit_completion_race_cancellation(
-                            room_id, user_message_id, token
-                        )
-                        return
-                    turn_completion_kind = turn_completion_kind or "deterministic"
-                elif is_debate and len(trajectory_responses) >= 2:
-                    summary_coro = self._emit_unified_summary(
-                        room_id,
-                        user_message_id,
-                        synthesis_text=None,
-                        trajectory_responses=trajectory_responses,
-                        is_debate=True,
-                        working_already_emitted=False,
-                        skip_db_write=True,
-                    )
-                    try:
-                        turn_completion_kind, generated_summary = (
-                            await token.race(summary_coro)
-                            if completion_cancellable and token is not None
-                            else await summary_coro
-                        )
-                    except CancellationError:
-                        await self._emit_completion_race_cancellation(
-                            room_id, user_message_id, token
-                        )
-                        return
-                    turn_completion_kind = turn_completion_kind or "deterministic"
-                    if generated_summary:
-                        result.synthesis_text = generated_summary
-                elif len(trajectory_responses) >= 2:
-                    digest_coro = self._emit_deterministic_digest(
-                        room_id,
-                        user_message_id,
-                        agent_count=len(trajectory_responses),
-                    )
-                    try:
-                        if completion_cancellable and token is not None:
-                            await token.race(digest_coro)
-                        else:
-                            await digest_coro
-                    except CancellationError:
-                        await self._emit_completion_race_cancellation(
-                            room_id, user_message_id, token
-                        )
-                        return
-                    turn_completion_kind = "deterministic"
-                else:
-                    turn_completion_kind = "deterministic"
+                # Supervisor owns finalization. Never write or emit a second summary.
+                turn_completion_kind = (
+                    "synthesis"
+                    if result.synthesis_text is not None
+                    else "deterministic"
+                )
 
                 if completion_cancellable and token is not None and token.is_cancelled:
                     await self._emit_completion_race_cancellation(
@@ -2157,8 +2311,19 @@ class RoomMessageCenter:
         room_id = continuation.get("room_id")
         lock_acquired_at: float | None = None
         if room_id:
-            lock_owner = await self._acquire_room_lock(room_id)
-            lock_acquired_at = time.monotonic()
+            try:
+                lock_owner = await self._acquire_room_lock(room_id)
+            except RoomLockBackendUnavailable:
+                logger.error(
+                    "RoomMessageCenter: distributed room lock backend unavailable "
+                    "during resume for room %s (message %s)",
+                    room_id,
+                    message_id,
+                )
+                return False
+            lock_acquired_at = getattr(self, "_room_lock_acquired_at_by_owner", {}).get(
+                lock_owner, time.monotonic()
+            )
             if lock_owner is None:
                 logger.error(
                     "RoomMessageCenter: Timed out waiting for room lock on %s "
@@ -2177,31 +2342,141 @@ class RoomMessageCenter:
                 message_id,
             )
 
-        try:
-            # Safely perform the destructive read *inside* the locked section.
-            # This prevents concurrent webhooks from reading stale trajectories.
-            locked_continuation = (
+        async def claim_continuation() -> dict | None:
+            claimed = (
                 await self.continuation_store.get_and_clear_continuation_on_message(
                     message_id
                 )
             )
-            if not locked_continuation:
-                locked_continuation = await self.continuation_store.get_and_clear_continuation_on_user_message(
+            if not claimed:
+                claimed = await self.continuation_store.get_and_clear_continuation_on_user_message(
                     message_id
                 )
+            return claimed
+
+        async def resume_under_lock() -> bool:
+            # Shield the destructive claim itself. If lock renewal cancels this
+            # task after Mongo clears the record but before the result arrives,
+            # finish the claim and restore its durable recovery intent.
+            claim_task = traced_create_task(
+                claim_continuation(),
+                name=f"room-continuation-claim:{message_id}",
+            )
+            try:
+                locked_continuation = await asyncio.shield(claim_task)
+            except asyncio.CancelledError:
+                locked_continuation = await claim_task
+                if locked_continuation:
+                    await asyncio.shield(
+                        self.queue_executor._restore_invalid_continuation(
+                            message_id,
+                            locked_continuation,
+                            reason=(
+                                "room lock renewal failed during continuation claim"
+                            ),
+                        )
+                    )
+                raise
 
             if not locked_continuation:
                 # E.g. another concurrent resume already processed it.
                 return False
 
-            return await self._resume_continuation_locked(
-                locked_continuation, message_id, task_result_text
-            )
-        finally:
-            if room_id is not None:
-                await self._release_room_lock(
-                    room_id, lock_owner, acquired_at=lock_acquired_at
+            try:
+                return await self._resume_continuation_locked(
+                    locked_continuation, message_id, task_result_text
                 )
+            except asyncio.CancelledError:
+                await asyncio.shield(
+                    self.queue_executor._restore_invalid_continuation(
+                        message_id,
+                        locked_continuation,
+                        reason="room lock renewal failed during continuation resume",
+                    )
+                )
+                raise
+
+        lock_renewal: asyncio.Task[None] | None = None
+        resume_task: asyncio.Task[bool] | None = None
+        try:
+            resume_task = traced_create_task(
+                resume_under_lock(),
+                name=f"room-continuation-resume:{message_id}",
+            )
+            if room_id is None or lock_owner is None:
+                return await resume_task
+
+            lock_renewal = traced_create_task(
+                self._renew_room_lock(
+                    room_id,
+                    lock_owner,
+                    acquired_at=lock_acquired_at,
+                ),
+                name=f"room-lock-renewal:resume:{message_id}",
+            )
+            done, _ = await asyncio.wait(
+                {resume_task, lock_renewal},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if resume_task in done:
+                return await resume_task
+            if lock_renewal in done:
+                resume_task.cancel()
+                resume_error, cancellation_seen = await _await_cleanup_task(resume_task)
+                if cancellation_seen:
+                    raise asyncio.CancelledError
+                if resume_error is not None:
+                    raise resume_error
+                try:
+                    await lock_renewal
+                except RoomLockRenewalFailed:
+                    logger.error(
+                        "RoomMessageCenter: room lock renewal failed during resume "
+                        "for room %s (message %s)",
+                        room_id,
+                        message_id,
+                    )
+                    return False
+                raise RuntimeError("distributed room lock renewal stopped")
+            return await resume_task
+        finally:
+            active_error = sys.exc_info()[1]
+            cleanup_error: BaseException | None = None
+            cancellation_seen = False
+            if resume_task is not None:
+                if not resume_task.done():
+                    resume_task.cancel()
+                resume_error, resume_cancelled = await _await_cleanup_task(resume_task)
+                cleanup_error = resume_error
+                cancellation_seen = cancellation_seen or resume_cancelled
+            if lock_renewal is not None:
+                if not lock_renewal.done():
+                    lock_renewal.cancel()
+                renewal_error, renewal_cancelled = await _await_cleanup_task(
+                    lock_renewal
+                )
+                cancellation_seen = cancellation_seen or renewal_cancelled
+                if not isinstance(renewal_error, RoomLockRenewalFailed):
+                    cleanup_error = cleanup_error or renewal_error
+            if room_id is not None:
+                release_task = traced_create_task(
+                    self._release_room_lock(
+                        room_id,
+                        lock_owner,
+                        acquired_at=lock_acquired_at,
+                    ),
+                    name=f"room-lock-release:resume:{message_id}",
+                )
+                release_error, release_cancelled = await _await_cleanup_task(
+                    release_task
+                )
+                cancellation_seen = cancellation_seen or release_cancelled
+                cleanup_error = cleanup_error or release_error
+            if active_error is None:
+                if cancellation_seen:
+                    raise asyncio.CancelledError
+                if cleanup_error is not None:
+                    raise cleanup_error
 
     async def _resume_durable_orchestration_from_agent_message(
         self,
@@ -2292,18 +2567,11 @@ class RoomMessageCenter:
                     )
                     return True
 
-                room = await self.room_reader.get_room_by_room_id(result.room_id)
-                is_debate = bool(
-                    room
-                    and isinstance(room.extend_info, dict)
-                    and room.extend_info.get("debateMode", False)
-                )
                 try:
                     summary_result = await completion_token.race(
                         self._emit_unified_summary(
                             result.room_id,
                             result.user_message_id,
-                            is_debate=is_debate,
                         )
                     )
                 except CancellationError:
@@ -2496,7 +2764,6 @@ class RoomMessageCenter:
         *,
         synthesis_text: str | None = None,
         trajectory_responses: list[dict] | None = None,
-        is_debate: bool = False,
         working_already_emitted: bool = False,
         skip_db_write: bool = False,
     ) -> tuple[str | None, str | None]:
@@ -2609,7 +2876,6 @@ class RoomMessageCenter:
                     summary_client_request_id,
                 )
 
-                mode = "debate" if is_debate else "non_debate"
                 if self.summary_service is None:
                     raise LLMServiceNotBoundError("SummaryLLMService is not bound")
                 content = await self._stream_summary_content(
@@ -2617,7 +2883,6 @@ class RoomMessageCenter:
                     summary_message_id,
                     self.summary_service.summarize_agent_responses_stream(
                         agent_responses,
-                        mode=mode,
                         user_question=user_question_text,
                     ),
                     summary_client_request_id,
@@ -2656,7 +2921,7 @@ class RoomMessageCenter:
                 extend_info={
                     "is_coordinator_summary": True,
                     "source_user_message_id": user_message_id,
-                    "summary_type": "debate" if is_debate else "non_debate",
+                    "summary_type": "synthesis",
                     "summary_origin": origin,
                 },
             )

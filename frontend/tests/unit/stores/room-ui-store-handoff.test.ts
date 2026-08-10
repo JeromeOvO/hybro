@@ -23,7 +23,7 @@ describe("PendingRoomData handoffMode", () => {
     const store = useRoomUiStore.getState()
     store.setPendingRoomData("room-2", {
       initialMessage: "Legacy message",
-      targetGroup: "all_agents",
+      mode: 'direct', agentScope: { source: 'all_agents' }, clientRequestId: 'request-1',
     })
 
     const data = useRoomUiStore.getState().consumePendingRoomData("room-2")

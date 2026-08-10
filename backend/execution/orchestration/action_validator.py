@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from execution.orchestration.completion_policy import (
+    CompletionPolicyError,
+    determine_finalization_mode,
+)
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.outcome_evaluator import effective_output_key
 from execution.orchestration.outcome_policy import (
@@ -63,12 +67,22 @@ class PlannerActionValidator:
     ) -> PlannerAction:
         """Return ``action`` unchanged when it is valid for the run state."""
 
+        candidate_output_modes: dict[str, tuple[str, ...]] = {}
         if run_state is not None:
             candidate_agent_ids = (
                 run_state.candidate_scope.agent_ids
                 if run_state.candidate_scope is not None
                 else run_state.candidate_agent_ids
             )
+            if run_state.candidate_scope is not None:
+                candidate_output_modes = {
+                    agent.agent_id: tuple(
+                        mode.strip().lower()
+                        for mode in agent.output_modes
+                        if isinstance(mode, str) and mode.strip()
+                    )
+                    for agent in run_state.candidate_scope.agents
+                }
             steps_used = run_state.steps_used
             step_budget = run_state.step_budget
             has_agent_output = bool(run_state.agent_outputs)
@@ -81,6 +95,7 @@ class PlannerActionValidator:
                 action,
                 candidate_agent_ids=candidate_agent_ids,
                 run_state=run_state,
+                candidate_output_modes=candidate_output_modes,
                 available_resource_refs=set((resource_fingerprints or {}).keys()),
             )
             PlannerActionValidator._validate_delegate_outcome_policy(
@@ -100,14 +115,7 @@ class PlannerActionValidator:
                 guardrails_enabled=guardrails_enabled,
             )
 
-        if (
-            action.action
-            in (
-                PlannerActionType.SYNTHESIZE,
-                PlannerActionType.COMPLETE,
-            )
-            and run_state is not None
-        ):
+        if action.action == PlannerActionType.COMPLETE and run_state is not None:
             PlannerActionValidator._validate_completion(
                 action,
                 run_state,
@@ -133,13 +141,35 @@ class PlannerActionValidator:
             evidence,
             guardrails_enabled=guardrails_enabled,
         )
-        if (
-            action.action != PlannerActionType.COMPLETE
-            or not guardrails_enabled
-            or evidence is None
-        ):
+        try:
+            determine_finalization_mode(
+                run_state,
+                action.action,
+                completion_evidence=evidence,
+            )
+        except CompletionPolicyError as exc:
+            raise PlannerActionValidationError(
+                str(exc), code="completion_gate_rejected"
+            ) from exc
+        has_required_scope = any(
+            progress.remaining_required_obligations
+            for progress in run_state.goal_progress
+        ) or any(
+            outcome.remaining_required_obligations or outcome.missing_output_keys
+            for outcome in run_state.delegation_outcomes
+        )
+        if evidence is None:
+            if has_required_scope:
+                raise PlannerActionValidationError(
+                    "complete action requires evidence for required outputs",
+                    code="completion_required_output_missing",
+                )
             return
         PlannerActionValidator._validate_completion_disposition_requests(evidence)
+        if has_required_scope:
+            PlannerActionValidator._validate_completion_scope(evidence, run_state)
+        if not guardrails_enabled:
+            return
         _validate_completion_references(run_state, evidence)
         if not evidence.satisfied_criteria or any(
             not criterion.strip() for criterion in evidence.satisfied_criteria
@@ -148,8 +178,7 @@ class PlannerActionValidator:
                 "complete action requires satisfied criteria",
                 code="completion_evidence_invalid",
             )
-        if guardrails_enabled:
-            PlannerActionValidator._validate_completion_scope(evidence, run_state)
+        PlannerActionValidator._validate_completion_scope(evidence, run_state)
 
     @staticmethod
     def _validate_delegate_outcome_policy(
@@ -162,13 +191,11 @@ class PlannerActionValidator:
         if run_state is None or not guardrails_enabled:
             return
         participant_snapshot = run_state.participant_snapshot
-        if participant_snapshot is not None and participant_snapshot.turn_policy in {
-            "debate_rounds",
-            "sequential_rounds",
-        }:
-            # The participant policy owns ordering and repeat eligibility for
-            # structured rounds. Treating the shared debate prompt as a
-            # fulfilled goal would incorrectly block the next participant.
+        if (
+            participant_snapshot is not None
+            and participant_snapshot.turn_policy == "sequential_rounds"
+        ):
+            # The participant policy owns ordering and repeat eligibility.
             return
 
         target_fingerprints = [
@@ -558,7 +585,6 @@ def _validate_step_budget(
 ) -> None:
     if steps_used >= step_budget and action.action not in (
         PlannerActionType.PLATFORM_ANSWER,
-        PlannerActionType.SYNTHESIZE,
         PlannerActionType.COMPLETE,
         PlannerActionType.ASK_USER,
         PlannerActionType.FAIL,
@@ -576,6 +602,7 @@ def _validate_delegate(
     *,
     candidate_agent_ids: Iterable[str],
     run_state: OrchestrationRunState | None,
+    candidate_output_modes: Mapping[str, tuple[str, ...]],
     available_resource_refs: set[str],
 ) -> None:
     if not action.targets:
@@ -583,20 +610,11 @@ def _validate_delegate(
             "delegate action requires at least one target",
             code="delegate_target_missing",
         )
-    if len(action.targets) > 1:
-        parallel_groups = {target.parallel_group for target in action.targets}
-        has_single_group = len(parallel_groups) == 1 and all(
-            isinstance(group, str) and bool(group.strip()) for group in parallel_groups
+    if len(action.targets) > 1 and any(target.depends_on for target in action.targets):
+        raise PlannerActionValidationError(
+            "multi-target delegate tasks must be independent",
+            code="parallel_dependency_unspecified",
         )
-        has_intra_action_dependency = any(
-            target.depends_on for target in action.targets
-        )
-        if not has_single_group or has_intra_action_dependency:
-            raise PlannerActionValidationError(
-                "multi-target delegate requires one explicit independent "
-                "parallel_group",
-                code="parallel_dependency_unspecified",
-            )
     candidate_ids = set(candidate_agent_ids)
     for target in action.targets:
         if target.agent_id not in candidate_ids:
@@ -609,6 +627,12 @@ def _validate_delegate(
                 f"delegate target {target.agent_id!r} requires a non-empty task",
                 code="delegate_task_empty",
             )
+        _validate_expected_output_modes(
+            target,
+            candidate_output_modes.get(target.agent_id, ()),
+        )
+        if run_state is not None:
+            _validate_agent_operational_retry_budget(target, run_state)
         selected_resource_refs = {
             *target.required_resource_refs,
             *(
@@ -636,19 +660,143 @@ def _validate_delegate(
             _validate_required_artifact_refs(target, run_state)
 
 
+def _output_family(kind: str) -> str:
+    normalized = kind.strip().lower()
+    if normalized in {"text", "markdown"} or normalized.startswith("text/"):
+        return "text"
+    if normalized in {"image", "audio", "video"}:
+        return normalized
+    if "/" in normalized:
+        return normalized.split("/", 1)[0]
+    return normalized
+
+
+def _validate_agent_operational_retry_budget(
+    target: PlannedDelegateTarget,
+    run_state: OrchestrationRunState,
+) -> None:
+    artifact_failures = [
+        failure
+        for failure in run_state.open_failures
+        if failure.status in {"open", "abandoned"}
+        and failure.error_code == "artifact_delivery_failed"
+    ]
+    target_families = {
+        _output_family(output.kind)
+        for output in target.expected_outputs
+        if output.required
+    }
+    for failure in artifact_failures:
+        failed_intent = next(
+            (
+                intent
+                for intent in run_state.dispatch_intents
+                if intent.dispatch_intent_id == failure.dispatch_intent_id
+            ),
+            None,
+        )
+        failed_families = (
+            {
+                _output_family(output.kind)
+                for output in failed_intent.expected_outputs
+                if output.required
+            }
+            if failed_intent is not None
+            else set()
+        )
+        same_untracked_agent = (
+            failed_intent is None and failure.agent_id == target.agent_id
+        )
+        if same_untracked_agent or target_families.intersection(failed_families):
+            raise PlannerActionValidationError(
+                "artifact delivery failed and cannot be repaired by regenerating output",
+                code="artifact_delivery_retry_forbidden",
+                recoverable=False,
+            )
+
+    generic_failures = [
+        failure
+        for failure in run_state.open_failures
+        if failure.agent_id == target.agent_id
+        and failure.status in {"open", "abandoned"}
+        and failure.error_code == "agent_execution_failed"
+    ]
+    if len(generic_failures) >= 2:
+        raise PlannerActionValidationError(
+            "agent operational retry budget exhausted",
+            code="recovery_retry_exhausted",
+            recoverable=False,
+        )
+
+
+def _validate_expected_output_modes(
+    target: PlannedDelegateTarget,
+    output_modes: tuple[str, ...],
+) -> None:
+    textual_modes = {"text", "text/plain", "markdown", "text/markdown"}
+    text_only = bool(output_modes) and all(
+        mode in textual_modes or mode.startswith("text/") for mode in output_modes
+    )
+    for expected in target.expected_outputs:
+        kind = expected.kind.strip().lower()
+        requests_artifact = (
+            kind == "artifact"
+            or kind in {"file", "image", "audio", "video"}
+            or ("/" in kind and kind not in textual_modes)
+            or bool(expected.artifact_name)
+        )
+        if text_only and requests_artifact:
+            raise PlannerActionValidationError(
+                f"delegate target {target.agent_id!r} advertises only text output "
+                "but the planner requested an artifact",
+                code="unsupported_expected_output_mode",
+            )
+        if (
+            requests_artifact
+            and output_modes
+            and not _supports_artifact_kind(kind, output_modes, textual_modes)
+        ):
+            raise PlannerActionValidationError(
+                f"delegate target {target.agent_id!r} does not advertise a "
+                f"compatible {kind!r} output mode",
+                code="unsupported_expected_output_mode",
+            )
+        if kind in textual_modes and (
+            expected.artifact_name or expected.required_fields
+        ):
+            raise PlannerActionValidationError(
+                "text expected outputs cannot require an artifact name or "
+                "structured artifact fields",
+                code="invalid_text_output_contract",
+            )
+
+
+def _supports_artifact_kind(
+    kind: str,
+    output_modes: tuple[str, ...],
+    textual_modes: set[str],
+) -> bool:
+    non_text_modes = [
+        mode
+        for mode in output_modes
+        if mode not in textual_modes and not mode.startswith("text/")
+    ]
+    if kind in {"artifact", "file"}:
+        return bool(non_text_modes)
+    if kind in {"image", "audio", "video"}:
+        return any(mode.startswith(f"{kind}/") for mode in non_text_modes)
+    if kind.endswith("/*"):
+        prefix = kind.removesuffix("*")
+        return any(mode.startswith(prefix) for mode in non_text_modes)
+    return kind in non_text_modes
+
+
 def _validate_terminal_output(
     action: PlannerAction,
     *,
     has_agent_output: bool,
 ) -> None:
-    if (
-        action.action
-        in (
-            PlannerActionType.SYNTHESIZE,
-            PlannerActionType.COMPLETE,
-        )
-        and not has_agent_output
-    ):
+    if action.action == PlannerActionType.COMPLETE and not has_agent_output:
         raise PlannerActionValidationError(
             f"planner action {action.action.value!r} requires agent output"
         )

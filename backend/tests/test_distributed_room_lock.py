@@ -10,6 +10,8 @@ Covers:
 """
 
 import asyncio
+import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,6 +19,8 @@ import pytest
 from dal.redis.lock import RoomRedisDistributedLock
 from execution.orchestration.room_message_center import (
     ROOM_LOCK_HOLD_TTL_SECONDS,
+    RoomLockBackendUnavailable,
+    RoomLockRenewalFailed,
     RoomMessageCenter,
 )
 
@@ -56,6 +60,27 @@ class TestDistributedLockPrimitives:
         )
 
     @pytest.mark.asyncio
+    async def test_acquire_records_attempt_start_as_conservative_lease_time(self):
+        redis = _make_redis()
+        original_sleep = asyncio.sleep
+
+        async def delayed_success(*_args, **_kwargs):
+            await original_sleep(0.01)
+            return True
+
+        redis._client.set = AsyncMock(side_effect=delayed_success)
+        rmc = _make_rmc(redis=redis)
+        before = time.monotonic()
+
+        owner = await rmc._acquire_room_lock("room-1", timeout=5)
+        after = time.monotonic()
+
+        assert owner is not None
+        acquired_at = rmc._room_lock_acquired_at_by_owner[owner]
+        assert before <= acquired_at < after - 0.005
+        await rmc._release_room_lock("room-1", owner)
+
+    @pytest.mark.asyncio
     async def test_acquire_returns_false_when_key_exists(self):
         redis = _make_redis(set_nx_return=False)
         rmc = _make_rmc(redis=redis)
@@ -77,6 +102,7 @@ class TestDistributedLockPrimitives:
         redis = _make_redis(connected=False)
 
         assert await redis.acquire("room-1", "owner-abc", ttl=60) is None
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is None
         await redis.release("room-1", "owner-abc")
 
         redis._client.set.assert_not_awaited()
@@ -87,6 +113,17 @@ class TestDistributedLockPrimitives:
         rmc = _make_rmc(redis=None)
         result = await rmc._acquire_distributed_lock("room-1", "owner-abc")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_renew_distinguishes_backend_error_from_ownership_loss(self):
+        redis = _make_redis()
+        redis._client.eval = AsyncMock(
+            side_effect=[ConnectionError("Redis unavailable"), 0, 1]
+        )
+
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is None
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is False
+        assert await redis.renew("room-1", "owner-abc", ttl=60) is True
 
     @pytest.mark.asyncio
     async def test_release_calls_eval_script_with_lua(self):
@@ -270,79 +307,149 @@ class TestDistributedConcurrency:
         await rmc._release_room_lock("room-1", owner2)
 
 
+class TestRoomLockRenewal:
+    @pytest.mark.asyncio
+    async def test_transient_backend_error_retries_until_confirmed_loss(
+        self, monkeypatch
+    ):
+        lock = SimpleNamespace(
+            renew=AsyncMock(side_effect=[None, True, False]),
+        )
+        rmc = _make_rmc(redis=lock)
+        sleep = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+
+        with pytest.raises(RuntimeError, match="lost distributed room lock"):
+            await rmc._renew_room_lock("room-1", "owner-abc")
+
+        assert lock.renew.await_count == 3
+        assert sleep.await_args_list[1].args == (1.0,)
+        assert sleep.await_args_list[2].args == (ROOM_LOCK_HOLD_TTL_SECONDS / 3,)
+
+    @pytest.mark.asyncio
+    async def test_initial_renewal_delay_respects_time_since_acquire(self, monkeypatch):
+        lock = SimpleNamespace(renew=AsyncMock(return_value=False))
+        rmc = _make_rmc(redis=lock)
+        sleep = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+        acquired_at = time.monotonic() - (ROOM_LOCK_HOLD_TTL_SECONDS - 50.0)
+
+        with pytest.raises(RoomLockRenewalFailed, match="lost distributed room lock"):
+            await rmc._renew_room_lock(
+                "room-1",
+                "owner-abc",
+                acquired_at=acquired_at,
+            )
+
+        assert 0 <= sleep.await_args_list[0].args[0] <= 50.0
+
+    @pytest.mark.asyncio
+    async def test_backend_outage_fails_closed_at_lock_ttl(self, monkeypatch):
+        lock = SimpleNamespace(renew=AsyncMock(return_value=None))
+        rmc = _make_rmc(redis=lock)
+        monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+        monkeypatch.setattr(
+            "execution.orchestration.room_message_center.ROOM_LOCK_HOLD_TTL_SECONDS",
+            0,
+        )
+
+        with pytest.raises(RoomLockRenewalFailed, match="TTL expired"):
+            await rmc._renew_room_lock("room-1", "owner-abc")
+
+        lock.renew.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_hung_renewal_is_bounded_by_lock_ttl(self, monkeypatch):
+        async def hang(*_args):
+            await asyncio.Future()
+
+        lock = SimpleNamespace(renew=AsyncMock(side_effect=hang))
+        rmc = _make_rmc(redis=lock)
+        monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+        monkeypatch.setattr(
+            "execution.orchestration.room_message_center.ROOM_LOCK_HOLD_TTL_SECONDS",
+            0.01,
+        )
+
+        with pytest.raises(RoomLockRenewalFailed, match="renewal timed out"):
+            await rmc._renew_room_lock(
+                "room-1",
+                "owner-abc",
+                acquired_at=time.monotonic(),
+            )
+
+        lock.renew.assert_awaited_once()
+
+
 class TestRedisDisconnectionMidAcquisition:
     @pytest.mark.asyncio
-    async def test_falls_back_to_local_when_redis_errors_mid_poll(self):
-        """If Redis starts erroring mid-acquisition, the lock degrades to
-        local-only after 2 consecutive errors and still succeeds."""
+    async def test_hung_redis_acquire_is_bounded_by_timeout(self):
+        async def hang(*_args, **_kwargs):
+            await asyncio.Future()
+
         redis = _make_redis(connected=True)
-
-        call_count = 0
-
-        async def flaky_client_set(key, value, nx=False, ex=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return None  # contended on first poll
-            raise ConnectionError("Redis went away")
-
-        redis._client.set = AsyncMock(side_effect=flaky_client_set)
+        redis._client.set = AsyncMock(side_effect=hang)
         rmc = _make_rmc(redis=redis)
 
-        owner = await rmc._acquire_room_lock("room-1", timeout=5)
-        # Should succeed via local-only fallback (not time out)
-        assert owner is not None
-        assert rmc._room_locks["room-1"].locked()
-        await rmc._release_room_lock("room-1", owner)
+        with pytest.raises(RoomLockBackendUnavailable, match="acquire timed out"):
+            await rmc._acquire_room_lock("room-1", timeout=0.01)
+
+        assert "room-1" not in rmc._room_locks
 
     @pytest.mark.asyncio
-    async def test_single_redis_error_retries_rather_than_falling_back(self):
-        """One transient error followed by success stays on the distributed path."""
+    async def test_delayed_redis_success_does_not_reset_local_acquire_timeout(self):
+        original_sleep = asyncio.sleep
+
+        async def delayed_success(*_args, **_kwargs):
+            await original_sleep(0.08)
+            return True
+
         redis = _make_redis(connected=True)
-
-        call_count = 0
-
-        async def transient_client_set(key, value, nx=False, ex=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ConnectionError("blip")
-            return True  # succeeds on retry
-
-        redis._client.set = AsyncMock(side_effect=transient_client_set)
+        redis._client.set = AsyncMock(side_effect=delayed_success)
         rmc = _make_rmc(redis=redis)
+        local_lock = rmc._get_local_lock("room-1")
+        await local_lock.acquire()
+        started_at = time.monotonic()
+        try:
+            owner = await rmc._acquire_room_lock("room-1", timeout=0.1)
+        finally:
+            local_lock.release()
 
-        owner = await rmc._acquire_room_lock("room-1", timeout=5)
-        assert owner is not None
-        # Distributed lock was acquired (eval_script will be called on release)
-        await rmc._release_room_lock("room-1", owner)
+        assert owner is None
+        assert time.monotonic() - started_at < 0.15
         redis._client.eval.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_non_consecutive_errors_dont_trigger_fallback(self):
-        """error → contention → error resets the counter, so no fallback."""
+    async def test_acquire_timeout_attempts_owner_safe_release_after_remote_mutation(
+        self,
+    ):
+        mutation_applied = asyncio.Event()
+
+        async def mutation_then_hang(*_args, **_kwargs):
+            mutation_applied.set()
+            await asyncio.Future()
+
         redis = _make_redis(connected=True)
-
-        call_count = 0
-
-        async def interleaved_client_set(key, value, nx=False, ex=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise ConnectionError("err1")
-            if call_count == 2:
-                return None  # contention (resets counter)
-            if call_count == 3:
-                raise ConnectionError("err2")
-            return True  # succeeds
-
-        redis._client.set = AsyncMock(side_effect=interleaved_client_set)
+        redis._client.set = AsyncMock(side_effect=mutation_then_hang)
         rmc = _make_rmc(redis=redis)
 
-        owner = await rmc._acquire_room_lock("room-1", timeout=5)
-        assert owner is not None
-        await rmc._release_room_lock("room-1", owner)
+        with pytest.raises(RoomLockBackendUnavailable, match="acquire timed out"):
+            await rmc._acquire_room_lock("room-1", timeout=0.01)
+
+        assert mutation_applied.is_set()
         redis._client.eval.assert_awaited_once()
+        assert redis._client.eval.await_args.args[3] != ""
+
+    @pytest.mark.asyncio
+    async def test_redis_errors_fail_closed(self):
+        redis = _make_redis(connected=True)
+        redis._client.set = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
+        rmc = _make_rmc(redis=redis)
+
+        with pytest.raises(RoomLockBackendUnavailable):
+            await rmc._acquire_room_lock("room-1", timeout=5)
+
+        assert "room-1" not in rmc._room_locks
 
     @pytest.mark.asyncio
     async def test_lock_reused_after_release(self):

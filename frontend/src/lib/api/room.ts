@@ -9,13 +9,10 @@ import type {
   RoomCenterRoomSettingRequest,
   RoomCenterRoomMessageRequest,
   SendMessagePayload,
+  AgentScopeInput,
+  ExecutionMode,
 } from '@/lib/types/request'
-import {
-  assertMessageDispatchInput,
-  isMentionDispatchInput,
-  type MessageDispatchInput,
-  type RoomMembershipWriteInput,
-} from '@/lib/types/agent-group'
+import { type RoomMembershipWriteInput } from '@/lib/types/agent-group'
 import type { RoomQuoteWire } from '@/lib/types/quote'
 
 import { getApiUrl } from '../utils'
@@ -234,7 +231,8 @@ export interface SendMessageParams {
   quotedText?: string | null
   quotedSenderName?: string | null
   attachments?: Array<{ file_id: string }>
-  dispatch: MessageDispatchInput
+  mode: ExecutionMode
+  agentScope: AgentScopeInput
   clientRequestId: string
   structuredQuote?: RoomQuoteWire | null
 }
@@ -258,11 +256,11 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
     quotedText,
     quotedSenderName,
     attachments,
-    dispatch,
+    mode,
+    agentScope,
     clientRequestId,
     structuredQuote,
   } = params
-  assertMessageDispatchInput(dispatch)
 
   const message: Record<string, unknown> = {
     room_id: roomId,
@@ -286,32 +284,15 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
     message.extend_info = { quoted_text: quotedText, quoted_sender_name: quotedSenderName || null }
   }
 
-  const baseRequestData = {
+  const requestData: SendMessageRequestBody = {
     room_id: roomId,
     user_id: userId || "",
     user_name: userName || "",
     user_input: userInput,
     message,
     client_request_id: clientRequestId,
-  }
-
-  let requestData: SendMessageRequestBody
-  if (isMentionDispatchInput(dispatch)) {
-    requestData = {
-      ...baseRequestData,
-      mentioned_agent_ids: dispatch.mentioned_agent_ids,
-    }
-  } else if (dispatch.message_target_mode === 'saved_group') {
-    requestData = {
-      ...baseRequestData,
-      message_target_mode: 'saved_group',
-      target_group_id: dispatch.target_group_id,
-    }
-  } else {
-    requestData = {
-      ...baseRequestData,
-      message_target_mode: dispatch.message_target_mode,
-    }
+    mode,
+    agent_scope: agentScope,
   }
 
   if (attachments && attachments.length > 0) {

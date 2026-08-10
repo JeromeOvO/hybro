@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 from aiohttp.abc import AbstractResolver
 
+from common.errors import FileStoragePlatformError, RetryableFileStoragePlatformError
 from common.types import DataPart, FileContent, Part
 from common.utils.artifact_delivery import (
     record_materialization_attempt,
@@ -30,6 +31,8 @@ MAX_FILE_RAW_BYTES = 50 * 1024 * 1024
 MAX_TOTAL_RAW_BYTES = 100 * 1024 * 1024
 MAX_TOTAL_ENCODED_BYTES = 139_810_136
 MAX_REDIRECTS = 3
+STORE_ATTEMPTS = 3
+STORE_RETRY_DELAYS = (0.05, 0.15)
 
 _room_files: Any | None = None
 
@@ -131,6 +134,23 @@ def _public_failure_reason(code: str) -> str:
     return "size_limit" if code == "size_limit" else "invalid_content"
 
 
+def _platform_failure_category(exc: Exception) -> str | None:
+    if not isinstance(exc, FileStoragePlatformError):
+        return None
+    message = str(exc).lower()
+    if "finaliz" in message:
+        return "finalization_conflict"
+    if "delet" in message or "unavailable" in message:
+        return "room_unavailable"
+    if "lease" in message:
+        return "lease_conflict"
+    if "origin" in message:
+        return "origin_conflict"
+    if "size" in message or exc.status_code == 413:
+        return "size_limit"
+    return "platform_conflict" if exc.status_code == 409 else "platform_error"
+
+
 def _record_failure(
     report: dict[str, Any] | None,
     *,
@@ -161,6 +181,8 @@ def _record_failure(
             "content_source": source,
             "failure_code": code,
             "exception_type": type(exc).__name__,
+            "platform_status": getattr(exc, "status_code", None),
+            "platform_failure_category": _platform_failure_category(exc),
         },
     )
 
@@ -280,6 +302,45 @@ async def _store(
         mime_type=mime_type,
         max_bytes=MAX_FILE_RAW_BYTES,
     )
+
+
+def _is_retryable_store_error(exc: Exception) -> bool:
+    if isinstance(exc, RetryableFileStoragePlatformError):
+        return True
+    if not isinstance(exc, FileStoragePlatformError):
+        return False
+    status_code = exc.status_code
+    if status_code == 409:
+        return _platform_failure_category(exc) in {
+            "finalization_conflict",
+            "lease_conflict",
+        }
+    return status_code == 429 or status_code >= 500
+
+
+async def _store_with_retry(**kwargs: Any) -> dict[str, Any]:
+    for attempt in range(1, STORE_ATTEMPTS + 1):
+        try:
+            return await _store(**kwargs)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if attempt >= STORE_ATTEMPTS or not _is_retryable_store_error(exc):
+                raise
+            logger.warning(
+                "artifact_materialization_store_retry",
+                extra={
+                    "room_id": kwargs.get("room_id"),
+                    "message_id": kwargs.get("message_id"),
+                    "attempt": attempt,
+                    "max_attempts": STORE_ATTEMPTS,
+                    "exception_type": type(exc).__name__,
+                    "platform_status": getattr(exc, "status_code", None),
+                    "platform_failure_category": _platform_failure_category(exc),
+                },
+            )
+            await asyncio.sleep(STORE_RETRY_DELAYS[attempt - 1])
+    raise RuntimeError("artifact store retry loop exited unexpectedly")
 
 
 async def _consume_precounted_reference(
@@ -459,7 +520,7 @@ async def materialize_inline_file_parts(
             if budget["raw"] > MAX_TOTAL_RAW_BYTES:
                 raise ArtifactSizeLimitError("aggregate raw limit exceeded")
             stage = "store"
-            stored = await _store(
+            stored = await _store_with_retry(
                 data=data,
                 room_id=room_id,
                 message_id=message_id,
@@ -635,7 +696,7 @@ async def materialize_artifacts(
                 if total_raw > MAX_TOTAL_RAW_BYTES:
                     raise ArtifactSizeLimitError("aggregate raw limit exceeded")
                 stage = "store"
-                stored = await _store(
+                stored = await _store_with_retry(
                     data=data,
                     room_id=room_id,
                     message_id=message_id,

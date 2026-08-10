@@ -3,7 +3,7 @@ import { SendMessage } from '@/lib/api/room'
 import { banner } from '@/components/ui/banner'
 import type { QuoteData } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
-import type { MessageDispatchInput } from '@/lib/types/agent-group'
+import type { AgentScopeInput, ExecutionMode } from '@/lib/types/request'
 import { useMessageStore } from '@/stores/message-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
@@ -18,7 +18,9 @@ export type SendUserMessageInput = {
   userInput: string
   quoteData?: QuoteData
   pendingAttachments?: PendingAttachment[]
-  dispatch: MessageDispatchInput
+  mode: ExecutionMode
+  agentScope: AgentScopeInput
+  clientRequestId?: string
 }
 
 export function useSendMessage(
@@ -39,7 +41,9 @@ export function useSendMessage(
     userInput,
     quoteData,
     pendingAttachments,
-    dispatch,
+    mode,
+    agentScope,
+    clientRequestId: existingClientRequestId,
   }: SendUserMessageInput) => {
     if (!userId || !userName || !room || sending || lifecycle.isSendGuardActive()) {
       console.warn('🚫 sendUserMessage blocked:', {
@@ -53,12 +57,7 @@ export function useSendMessage(
       return false
     }
 
-    if (!dispatch) {
-      console.debug('Blocked send without final MessageDispatchInput')
-      return false
-    }
-
-    const clientRequestId = crypto.randomUUID()
+    const clientRequestId = existingClientRequestId ?? crypto.randomUUID()
     const optimisticUserMessageId = `cr:${clientRequestId}`
     const currentTime = new Date().toISOString()
     useRoomUiStore.getState().setPendingTurnSkeleton(roomId, {
@@ -164,7 +163,8 @@ export function useSendMessage(
         quotedText: structuredQuote ? null : (quoteData?.content ?? null),
         quotedSenderName: structuredQuote ? null : (quoteData?.senderName ?? null),
         attachments: uploadedAttachments,
-        dispatch,
+        mode,
+        agentScope,
         clientRequestId,
         structuredQuote,
       })

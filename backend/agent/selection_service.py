@@ -65,7 +65,6 @@ class AgentSelectionService:
         top_k: int = 10,
         user_id: str | None = None,
         required_input_modes: list[str] | None = None,
-        is_debate_mode: bool = False,
         use_llm_rerank: bool = True,
     ) -> AgentSelectionResult:
         """
@@ -76,15 +75,13 @@ class AgentSelectionService:
             top_k: Maximum number of agents to return (caps matcher output)
             user_id: Optional sender ID for private agent visibility
             required_input_modes: If present (non-None), message has attachments
-            is_debate_mode: If True, returns 3-5 agents for debate diversity
 
         Returns:
             AgentSelectionResult with strategy, selected agents, and reasoning
         """
         logger.info(
-            "AgentSelectionService: Selecting agents for message (length: %d chars, debate=%s)",
+            "AgentSelectionService: Selecting agents for message (length: %d chars)",
             len(message_text),
-            is_debate_mode,
         )
 
         # Delegate to AgentMatcher — let exceptions propagate so callers
@@ -92,7 +89,6 @@ class AgentSelectionService:
         match_result = await self._matcher.match(
             message_text=message_text,
             user_id=user_id,
-            is_debate_mode=is_debate_mode,
             required_input_modes=required_input_modes,
         )
 

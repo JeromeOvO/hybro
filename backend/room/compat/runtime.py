@@ -196,7 +196,6 @@ class RoomMessagePreflightContext:
     user_message: RoomUserMessage
     client_request_id: str | None
     room: Room
-    is_debate_mode: bool
     use_supervisor: bool
     message_text: str
     pre_resolved_mentions: list[dict] | None
@@ -225,14 +224,13 @@ def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
 
 
 class RoomServices:
-    def __init__(self, debate_rounds: int = 2, *, room_store=None):
+    def __init__(self, *, room_store=None):
         if room_store is None:
             room_store = UNBOUND_RUNTIME_STORE
         self._store = room_store
         self.agent_service = UNBOUND_AGENT_SERVICE
         self.agent_selection_service = UNBOUND_AGENT_SELECTION_SERVICE
         self.message_parser_service = None
-        self.debate_rounds = debate_rounds
         self.a2a_service = UNBOUND_A2A_SERVICE
         self.delivery = UNBOUND_DELIVERY
         self.cancellation_control = UNBOUND_DELIVERY
@@ -319,9 +317,6 @@ class RoomServices:
 
     def bind_message_parser_service(self, service) -> None:
         self.message_parser_service = service
-
-    def bind_debate_rounds(self, debate_rounds: int) -> None:
-        self.debate_rounds = debate_rounds
 
     def bind_attachment_metadata_reader(self, reader) -> None:
         self._attachment_metadata_reader = reader
@@ -1818,11 +1813,7 @@ class RoomServices:
             # Clear it so the frontend shows a generic "Working on your request…" instead.
             # Also clear in multi-agent rooms when the LLM simply passed through the
             # user's message verbatim (no meaningful decomposition).
-            # Keep task_content in debate mode because the debate prompt injector reads it.
-            is_debate = parsed_result.get("message_type", "").startswith("DEBATE")
-            if not is_debate and (
-                is_direct_chat or task_content.strip() == original_text.strip()
-            ):
+            if is_direct_chat or task_content.strip() == original_text.strip():
                 agent_message.task_content = None
 
             agent_messages.append(agent_message)
@@ -1881,9 +1872,10 @@ class RoomServices:
         cls,
         request: RoomCenterUserMessageRequest,
     ) -> list[str] | None:
-        value = cls._orchestration_request_info(request).get("selected_agent_ids")
-        if value is None:
+        scope = cls._orchestration_request_info(request).get("agent_scope")
+        if not isinstance(scope, dict) or scope.get("source") != "mention":
             return None
+        value = scope.get("agent_ids")
         if not isinstance(value, list):
             return None
         selected_agent_ids: list[str] = []
@@ -1949,14 +1941,11 @@ class RoomServices:
         sender_user_id: str | None,
     ) -> RoomCenterUserMessageResponse | None:
         info = self._orchestration_request_info(request)
-        candidate_scope_mode = info.get("candidate_scope_mode")
-        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
-            candidate_scope_mode = "explicit_selection"
-
-        if candidate_scope_mode != "saved_group":
+        scope = info.get("agent_scope")
+        if not isinstance(scope, dict) or scope.get("source") != "saved_group":
             return None
 
-        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        candidate_scope_group_id = scope.get("group_id")
         if (
             not isinstance(candidate_scope_group_id, str)
             or not candidate_scope_group_id.strip()
@@ -2052,12 +2041,10 @@ class RoomServices:
         client_request_id: str | None,
     ) -> ParseResult:
         info = self._orchestration_request_info(request)
-        candidate_scope_mode = info.get("candidate_scope_mode")
-        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
-            candidate_scope_mode = "explicit_selection"
-        candidate_scope_mode = candidate_scope_mode.strip() or "explicit_selection"
-
-        candidate_scope_group_id = info.get("candidate_scope_group_id")
+        scope = info.get("agent_scope")
+        scope = scope if isinstance(scope, dict) else {"source": "room_default"}
+        candidate_scope_mode = str(scope.get("source") or "room_default")
+        candidate_scope_group_id = scope.get("group_id")
         sanitized_group_id = (
             candidate_scope_group_id.strip()
             if (
@@ -2088,6 +2075,7 @@ class RoomServices:
         envelope.update(
             {
                 "orchestration": True,
+                "execution_mode": "supervisor",
                 "orchestration_run_id": user_message.message_id,
                 "orchestration_status": "created",
                 "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
@@ -2129,7 +2117,6 @@ class RoomServices:
         message_text: str,
         selected_agent_set: dict,
         user_id: str | None = None,
-        is_debate_mode: bool = False,
         auto_assign_agents: bool = False,
         target_group: str | None = None,
         agents: list | None = None,
@@ -2147,7 +2134,6 @@ class RoomServices:
             user_message_id: The user message ID
             message_text: The message text to parse
             selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
-            is_debate_mode: Whether to use debate mode
             auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
             agents: Full Agent objects for detailed LLM context (optional)
             explicit_mentions: Canonical agent mentions to include as routing intent
@@ -2164,8 +2150,8 @@ class RoomServices:
             )
             return ParseResult(success=False, canceled=True)
 
-        # Direct chat: single agent + no debate = skip LLM parsing entirely
-        direct_chat = not is_debate_mode and len(selected_agent_set) == 1
+        # Direct chat: a single Agent does not require LLM decomposition.
+        direct_chat = len(selected_agent_set) == 1
 
         if direct_chat:
             agent_id, agent_name = next(iter(selected_agent_set.items()))
@@ -2192,7 +2178,6 @@ class RoomServices:
                 ParsedUserMessageRequest(
                     message_text=message_text,
                     selected_agents=selected_agent_set,
-                    is_debate_mode=is_debate_mode,
                     auto_assign_agents=auto_assign_agents,
                     agents=[_agent_to_routing_candidate(agent) for agent in agents],
                     conversation_context=conversation_context,
@@ -2204,7 +2189,6 @@ class RoomServices:
                         )
                         for mention in (explicit_mentions or [])
                     ],
-                    debate_rounds=self.debate_rounds,
                 )
             )
 
@@ -2417,12 +2401,20 @@ class RoomServices:
                 None,
             )
 
-        is_debate_mode = (
-            room.extend_info.get("debateMode", False) if room.extend_info else False
+        orchestration_info = self._orchestration_request_info(request)
+        execution_mode = orchestration_info.get("execution_mode")
+        if execution_mode not in {"direct", "supervisor"}:
+            execution_mode = "direct"
+        use_supervisor = execution_mode == "supervisor"
+        user_extend_info = (
+            user_message.extend_info
+            if isinstance(user_message.extend_info, dict)
+            else {}
         )
-        use_supervisor = (
-            room.extend_info.get("use_supervisor", False) if room.extend_info else False
-        )
+        user_message.extend_info = {
+            **user_extend_info,
+            "execution_mode": execution_mode,
+        }
         message_text = user_message.message_content.message_text
 
         # Validate deterministic scope BEFORE persistence so rejected messages
@@ -2437,22 +2429,9 @@ class RoomServices:
         required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
         orchestration_requested = use_supervisor
-        orchestration_info = self._orchestration_request_info(request)
-        candidate_scope_mode = orchestration_info.get("candidate_scope_mode")
-        if not isinstance(candidate_scope_mode, str) or not candidate_scope_mode:
-            if selected_agent_ids is not None:
-                candidate_scope_mode = "explicit_selection"
-            elif target_group == "all_agents":
-                candidate_scope_mode = "all_agents"
-            elif target_group == "room_team":
-                candidate_scope_mode = "room_default"
-            else:
-                candidate_scope_mode = "saved_group"
-            request.extend_info = {
-                **(request.extend_info or {}),
-                "candidate_scope_mode": candidate_scope_mode,
-            }
-        candidate_scope_mode = candidate_scope_mode.strip() or "explicit_selection"
+        scope = orchestration_info.get("agent_scope")
+        scope = scope if isinstance(scope, dict) else {"source": "room_default"}
+        candidate_scope_mode = str(scope.get("source") or "room_default")
 
         if (
             orchestration_requested
@@ -2479,7 +2458,7 @@ class RoomServices:
             )
         logger.info(
             "room_send_message_persist_started room_id=%s user_id=%s "
-            "client_request_id=%s target_group=%s supervisor=%s debate=%s "
+            "client_request_id=%s target_group=%s supervisor=%s "
             "orchestration_requested=%s candidate_scope_mode=%s "
             "selected_count=%d mentioned_count=%d message_len=%d",
             request.room_id,
@@ -2487,34 +2466,12 @@ class RoomServices:
             client_request_id,
             target_group,
             use_supervisor,
-            is_debate_mode,
             orchestration_requested,
             candidate_scope_mode,
             len(selected_agent_ids or []),
             len(mentioned_agent_ids or []),
             len(message_text or ""),
         )
-
-        if (
-            orchestration_requested
-            and candidate_scope_mode == "saved_group"
-            and not selected_agent_ids
-        ):
-            error_msg = "selected_agent_ids is required for saved_group candidate scope"
-            return (
-                RoomCenterUserMessageResponse(
-                    message_id=None,
-                    message=None,
-                    success=False,
-                    error=error_msg,
-                    scope_resolution_error=ScopeResolutionError(
-                        code="group_not_usable",
-                        message=error_msg,
-                    ),
-                    status_code=400,
-                ),
-                None,
-            )
 
         if orchestration_requested and selected_agent_ids is not None:
             metadata_error = await self._validate_candidate_scope_metadata(
@@ -2580,7 +2537,6 @@ class RoomServices:
                 room,
                 message_text,
                 target_group,
-                is_debate_mode,
                 sender_user_id=request.user_id,
                 required_input_modes=(None if use_supervisor else required_input_modes),
             )
@@ -2696,7 +2652,6 @@ class RoomServices:
                 user_message=user_message,
                 client_request_id=client_request_id,
                 room=room,
-                is_debate_mode=is_debate_mode,
                 use_supervisor=use_supervisor,
                 message_text=message_text,
                 pre_resolved_mentions=pre_resolved_mentions,
@@ -2735,7 +2690,6 @@ class RoomServices:
         user_message = context.user_message
         client_request_id = context.client_request_id
         room = context.room
-        is_debate_mode = context.is_debate_mode
         use_supervisor = context.use_supervisor
         message_text = context.message_text
         pre_resolved_mentions = context.pre_resolved_mentions
@@ -2838,7 +2792,6 @@ class RoomServices:
                 room,
                 message_text,
                 target_group,
-                is_debate_mode,
                 sender_user_id=request.user_id,
                 required_input_modes=None,
             )
@@ -2865,9 +2818,7 @@ class RoomServices:
 
         # Resolve dispatch strategy and annotate in-memory user_message for
         # downstream dispatch logic. NOT persisted back to DB (message already written).
-        dispatch_strategy = resolve_strategy(
-            use_supervisor, is_debate_mode, len(selected_agent_set)
-        )
+        dispatch_strategy = resolve_strategy(use_supervisor, len(selected_agent_set))
         user_message.extend_info = {
             **(user_message.extend_info or {}),
             "dispatch_strategy": dispatch_strategy.value,
@@ -2926,7 +2877,6 @@ class RoomServices:
                 message_text,
                 selected_agent_set,
                 user_message.user_id,
-                is_debate_mode,
                 auto_assign_agents=auto_assign,
                 target_group=target_group,
                 agents=agents,
@@ -3267,7 +3217,6 @@ class RoomServices:
         room: Room,
         message_text: str,
         target_group: str,
-        is_debate_mode: bool,
         sender_user_id: str | None = None,
         required_input_modes: list[str] | None = None,
     ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:

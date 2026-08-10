@@ -45,7 +45,6 @@ class AgentMessageMatcher(Protocol):
         filter_ids: list[str] | None = None,
         requesting_user_id: str | None = None,
         required_input_modes: list[str] | None = None,
-        is_debate_mode: bool = False,
     ) -> list[dict[str, Any]]: ...
 
 

@@ -146,7 +146,7 @@ describe('Room lifecycle characterization tests', () => {
       // Establish processing state through normal flow
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-nav-1' })
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -305,7 +305,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Backend active run lag', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Backend active run lag', mode: 'direct', agentScope: { source: 'room_default' } })
       })
 
       expect(useMessageStore.getState().entities['msg-active-run-lag'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
@@ -323,6 +323,71 @@ describe('Room lifecycle characterization tests', () => {
       expect(useMessageStore.getState().entities['msg-active-run-lag'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
         'Thinking...',
       ])
+    })
+
+    it('keeps polling until a later missed terminal SSE is recovered', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
+      vi.mocked(inquiryActiveRuns)
+        .mockResolvedValueOnce({
+          success: true,
+          active_runs: [{ state: 'processing', trigger_message_id: 'msg-late-terminal' }],
+        })
+        .mockResolvedValue({ success: true, active_runs: [] })
+
+      const { result } = await mountAndWaitForRoom()
+      mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-late-terminal' })
+      vi.mocked(inquiryRoomMessagesByRoomId).mockResolvedValue({
+        success: true,
+        message_list: [
+          {
+            room_id: 'room-1',
+            message_id: 'msg-late-terminal',
+            message_type: 'user',
+            user_id: 'u1',
+            message_created_at: '2026-06-04T01:00:00.000Z',
+            message_content: { message_text: 'Late terminal turn' },
+            extend_info: { orchestration_status: 'failed' },
+          },
+          {
+            room_id: 'room-1',
+            message_id: 'agent-late-terminal',
+            message_type: 'agent',
+            agent_id: 'agent-1',
+            related_message_id: 'msg-late-terminal',
+            message_created_at: '2026-06-04T01:00:01.000Z',
+            task_updated_at: '2026-06-04T01:00:01.000Z',
+            task_content: 'Answering',
+            message_content: {
+              message_text: 'Task failed',
+              message_task: {
+                status: { state: 'failed' },
+                metadata: { agent_id: 'agent-1' },
+              },
+            },
+          },
+        ] as any,
+      })
+
+      await act(async () => {
+        await result.current.sendUserMessage({ userInput: 'Late terminal turn', mode: 'supervisor', agentScope: { source: 'room_default' } })
+      })
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(flags('room-1').processing).toBe(true)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+
+      await waitFor(() => {
+        expect(flags('room-1').processing).toBe(false)
+      })
+      expect(vi.mocked(inquiryActiveRuns).mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(useMessageStore.getState().entities['msg-late-terminal'].turnTerminalStatus).toBe('failed')
     })
 
     it('preserves live processing logs when backend says active runs ended after a missed terminal SSE', async () => {
@@ -364,7 +429,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Missed terminal turn', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Missed terminal turn', mode: 'direct', agentScope: { source: 'room_default' } })
       })
 
       expect(useMessageStore.getState().entities['msg-missed-terminal'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
@@ -442,7 +507,7 @@ describe('Room lifecycle characterization tests', () => {
       })
 
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -463,7 +528,7 @@ describe('Room lifecycle characterization tests', () => {
       // Send a message first to establish processing state
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-cancel-1' })
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Hello', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Hello', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       expect(flags('room-1').processing).toBe(true)
 
@@ -498,7 +563,7 @@ describe('Room lifecycle characterization tests', () => {
       // Send + cancel
       mockSendMessage.mockResolvedValue({ success: true, message_id: 'msg-cancel-2' })
       await act(async () => {
-        await result.current.sendUserMessage({ userInput: 'Test', dispatch: { message_target_mode: 'room_default' } })
+        await result.current.sendUserMessage({ userInput: 'Test', mode: 'direct', agentScope: { source: 'room_default' } })
       })
       const clientRequestId = latestClientRequestId('room-1')
       expect(clientRequestId).toBeTruthy()

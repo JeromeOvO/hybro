@@ -15,7 +15,6 @@ from common.dto import (
     CompactionResult,
     ContextBlock,
     CreateRoomRequest,
-    DebateRoundEvent,
     DeliveryEnvelope,
     EmbeddingResult,
     ErrorEvent,
@@ -192,7 +191,6 @@ def test_common_dtos_can_be_instantiated():
         status="working",
         timestamp=now,
     )
-    DebateRoundEvent(room_id="r1", round_number=1, agent_id="a1", message_id="m1")
     NotificationPayload(room_id="r1", message="notice")
     HubConnectionInfo(hub_id="h1", owner_id="u1", is_online=True)
     HubAgentStatus(hub_id="h1", agent_id="a1", status="active")

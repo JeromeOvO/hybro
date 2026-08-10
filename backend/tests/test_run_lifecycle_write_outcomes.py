@@ -432,6 +432,27 @@ async def test_projection_recovery_query_only_selects_due_pending_facts():
 
 
 @pytest.mark.asyncio
+async def test_projection_claim_accepts_initial_pending_step_with_null_schedule():
+    events = AsyncMock()
+    events.find_one_and_update.return_value = None
+    handler = RunCommandHandler(
+        run_repository=AsyncMock(),
+        run_event_repository=events,
+    )
+
+    assert (
+        await handler.claim_terminal_projection_step("evt-1", "processing_sse") is None
+    )
+
+    query = events.find_one_and_update.await_args.args[0]
+    pending_branch = query["$or"][0]
+    due_conditions = pending_branch["$or"]
+    assert {
+        "terminal_projection.steps.processing_sse.next_attempt_at": None
+    } in due_conditions
+
+
+@pytest.mark.asyncio
 async def test_projection_schedule_skips_malformed_steps_without_raising():
     events = InMemoryRunEventRepository(
         [

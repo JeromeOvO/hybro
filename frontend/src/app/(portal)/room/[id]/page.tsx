@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser, useAuth } from '@/lib/auth'
 import { RequireAuth } from '@/components/require-auth'
-import { toast } from 'sonner'
 import { GroupManagementModal } from '@/components/group-management-modal'
 import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shell'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
@@ -14,20 +13,11 @@ import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import {
   BUILTIN_GROUP_ALL_AGENTS,
-  isBuiltinGroup,
-  isMentionDispatchInput,
+  dispatchToAgentScope,
 } from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
-import { updateRoomExtendInfo, inquiryRoomSetting, updateRoomAgentSet } from '@/lib/api/room'
 import type { ChatMode } from '@/lib/types/chat-mode'
-import { chatModeToFlags, flagsToChatMode } from '@/lib/types/chat-mode'
-
-function selectedGroupFromDispatch(dispatch: MessageDispatchInput | undefined): string | undefined {
-  if (!dispatch || isMentionDispatchInput(dispatch)) return undefined
-  if (dispatch.message_target_mode === 'room_default') return undefined
-  if (dispatch.message_target_mode === 'all_agents') return BUILTIN_GROUP_ALL_AGENTS
-  return dispatch.target_group_id
-}
+import { chatModeToExecutionMode, roomDefaultToChatMode } from '@/lib/types/chat-mode'
 
 export default function RoomChatPage() {
   const params = useParams()
@@ -48,7 +38,6 @@ export default function RoomChatPage() {
   // Local chat mode (synced from room, user can override before sending)
   const [localChatMode, setLocalChatMode] = useState<ChatMode | null>(null)
 
-  const confirmedChatModeRef = useRef<ChatMode | null>(null)
 
   const {
     room,
@@ -59,14 +48,6 @@ export default function RoomChatPage() {
     sendUserMessage,
     cancelProcessing,
     respondToHitlRequest,
-    refreshRoomSetting,
-    // SSE state
-    sseConnected,
-    sseConnecting,
-    sseEnabled,
-    toggleSSE,
-    // Debate mode
-    debateMode,
     // Supervisor mode (from room extend_info)
     supervisorMode: roomSupervisorMode,
   } = useRoomWebhook({
@@ -84,14 +65,12 @@ export default function RoomChatPage() {
   useEffect(() => {
     if (room && lastSyncedRoomRef.current !== roomId) {
       lastSyncedRoomRef.current = roomId
-      const synced = flagsToChatMode(roomSupervisorMode, debateMode)
-      setLocalChatMode(synced)
-      confirmedChatModeRef.current = synced
+      setLocalChatMode(roomDefaultToChatMode(roomSupervisorMode))
     }
-  }, [room, roomId, roomSupervisorMode, debateMode])
+  }, [room, roomId, roomSupervisorMode])
 
-  // Derived chat mode: local selection falls back to room's persisted value (anti-flicker)
-  const effectiveChatMode = localChatMode ?? flagsToChatMode(roomSupervisorMode, debateMode)
+  // Room setting is only the UI default; every send carries its own mode.
+  const effectiveChatMode = localChatMode ?? roomDefaultToChatMode(roomSupervisorMode)
 
   // A room seeded from a saved team follows that team while it still exists.
   const roomDefaultTeamId = room?.source_group_id
@@ -117,23 +96,13 @@ export default function RoomChatPage() {
     if (room && !initialGroupSetRef.current) {
       initialGroupSetRef.current = true
 
-      // Priority: localStorage (persistent override) > pending data from chat page > default
+      // A local selector override is independent from the immutable pending request.
       const localStorageKey = `room-${roomId}-override-group`
       const localStorageOverride = localStorage.getItem(localStorageKey)
       const localStorageOverrideName = localStorage.getItem(`${localStorageKey}-name`)
 
-      // Peek at pending room data for target group (don't consume yet)
-      const pendingData = useRoomUiStore.getState().pendingRoomData[roomId]
-      const pendingGroup = selectedGroupFromDispatch(pendingData?.dispatch)
-        ?? pendingData?.targetGroup
-
       if (localStorageOverride) {
         gm.handleGroupChange(localStorageOverride, localStorageOverrideName ?? undefined)
-      } else if (pendingGroup) {
-        const defaultGroup = roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS
-        if (pendingGroup !== defaultGroup) {
-          gm.handleGroupChange(pendingGroup)
-        }
       }
     }
   }, [room, roomId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -158,15 +127,17 @@ export default function RoomChatPage() {
 
     initialMessageSentRef.current = true
 
-    if (!pendingData.dispatch) {
-      console.debug('Blocked pending room autosend without final MessageDispatchInput')
+    if (!pendingData.mode || !pendingData.agentScope || !pendingData.clientRequestId) {
+      console.debug('Blocked pending room autosend without immutable execution contract')
       return
     }
 
     sendUserMessage({
       userInput: pendingData.initialMessage,
       pendingAttachments: pendingData.attachments,
-      dispatch: pendingData.dispatch,
+      mode: pendingData.mode,
+      agentScope: pendingData.agentScope,
+      clientRequestId: pendingData.clientRequestId,
     }).then((success) => {
       if (!success) {
         useRoomUiStore.getState().setPendingRoomData(roomId, pendingData)
@@ -177,78 +148,12 @@ export default function RoomChatPage() {
 
   // This function will be called when user clicks send button
   const handleSendMessage = async (userInput: string, dispatchInput: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => {
-    // Lazy-persist chat mode changes
-    const baseline = confirmedChatModeRef.current ?? effectiveChatMode
-    const modeChanged = room && effectiveChatMode !== baseline
-    if (modeChanged) {
-      let freshExtendInfo: object = {}
-      try {
-        const freshRoom = await inquiryRoomSetting(roomId, getToken)
-        if (freshRoom.success && freshRoom.room?.extend_info) {
-          freshExtendInfo = freshRoom.room.extend_info as object
-        }
-      } catch {
-        freshExtendInfo = (room?.extend_info as object) || {}
-      }
-      const modeFlags = chatModeToFlags(effectiveChatMode)
-      const updatedExtendInfo: Record<string, unknown> = {
-        ...freshExtendInfo,
-        use_supervisor: modeFlags.use_supervisor,
-        debateMode: modeFlags.debateMode,
-      }
-      try {
-        const result = await updateRoomExtendInfo(roomId, updatedExtendInfo, getToken)
-        if (result.success) {
-          confirmedChatModeRef.current = effectiveChatMode
-        } else {
-          setLocalChatMode(confirmedChatModeRef.current)
-          toast.warning('Failed to update mode settings — message sent with previous setting')
-        }
-      } catch {
-        setLocalChatMode(confirmedChatModeRef.current)
-        toast.warning('Failed to update mode settings — message sent with previous setting')
-      }
-    }
-
-    // Empty room + saved group override: pre-write room_agent_set before sending (Matrix B5)
-    const dispatchGroup = selectedGroupFromDispatch(dispatchInput)
-    const effectiveTarget = dispatchGroup || gm.selectedGroup || "all_agents"
-    if (
-      roomAgentCount === 0
-      && !isMentionDispatchInput(dispatchInput)
-      && dispatchInput.message_target_mode === 'saved_group'
-      && !isBuiltinGroup(effectiveTarget)
-    ) {
-      try {
-        const preWriteResult = await updateRoomAgentSet(
-          roomId, {}, getToken,
-          { membership_seed_input: "saved_group", seed_group_id: effectiveTarget },
-        )
-        if (!preWriteResult.success) {
-          toast.error(preWriteResult.error || 'Failed to set room agents from group')
-          return
-        }
-        // Refetch room so the selector reflects the updated membership provenance
-        await refreshRoomSetting()
-        gm.handleClearOverride()
-        await sendUserMessage({
-          userInput,
-          quoteData: quoteData ?? undefined,
-          pendingAttachments: attachments,
-          dispatch: { message_target_mode: "room_default" },
-        })
-        return
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to set room agents')
-        return
-      }
-    }
-
     await sendUserMessage({
       userInput,
       quoteData: quoteData ?? undefined,
       pendingAttachments: attachments,
-      dispatch: dispatchInput,
+      mode: chatModeToExecutionMode(effectiveChatMode),
+      agentScope: dispatchToAgentScope(dispatchInput),
     })
   }
 

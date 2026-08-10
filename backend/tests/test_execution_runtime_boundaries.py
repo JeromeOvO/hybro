@@ -41,7 +41,6 @@ def test_execution_runtime_ports_use_named_method_contracts() -> None:
             "cancel_remote_task",
             "has_push_notification_capability",
         ],
-        ports.DebateServicePort: ["inject_short_debate_for_agent_message"],
         ports.CoordinatorSynthesisPort: ["emit_synthesis_message"],
         ports.A2ATaskTrackingStorePort: [
             "check_task_limits",

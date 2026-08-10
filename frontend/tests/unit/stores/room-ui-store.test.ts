@@ -287,11 +287,18 @@ describe('RoomUiStore', () => {
     it('should store pending data for a room', () => {
       useRoomUiStore.getState().setPendingRoomData('room-1', {
         initialMessage: 'Hello',
-        targetGroup: 'room_team',
+        mode: 'direct',
+        agentScope: { source: 'room_default' },
+        clientRequestId: 'request-1',
       })
 
       const data = useRoomUiStore.getState().pendingRoomData['room-1']
-      expect(data).toEqual({ initialMessage: 'Hello', targetGroup: 'room_team' })
+      expect(data).toEqual({
+        initialMessage: 'Hello',
+        mode: 'direct',
+        agentScope: { source: 'room_default' },
+        clientRequestId: 'request-1',
+      })
     })
 
     it('should store data for multiple rooms independently', () => {
@@ -330,10 +337,10 @@ describe('RoomUiStore', () => {
     it('should overwrite pending data for same room', () => {
       const store = useRoomUiStore.getState()
       store.setPendingRoomData('room-1', { initialMessage: 'old' })
-      store.setPendingRoomData('room-1', { initialMessage: 'new', targetGroup: 'custom' })
+      store.setPendingRoomData('room-1', { initialMessage: 'new', mode: 'supervisor', agentScope: { source: 'saved_group', group_id: 'custom' }, clientRequestId: 'request-2' })
 
       const data = useRoomUiStore.getState().pendingRoomData['room-1']
-      expect(data).toEqual({ initialMessage: 'new', targetGroup: 'custom' })
+      expect(data).toEqual({ initialMessage: 'new', mode: 'supervisor', agentScope: { source: 'saved_group', group_id: 'custom' }, clientRequestId: 'request-2' })
     })
   })
 })

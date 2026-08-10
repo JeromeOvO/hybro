@@ -107,11 +107,9 @@ def rank_agent_docs(
 def select_top_matches(
     ranked: list[dict[str, Any]],
     *,
-    is_debate_mode: bool = False,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
-    effective_limit = min(max(0, limit), 5) if is_debate_mode else max(0, limit)
-    return ranked[:effective_limit]
+    return ranked[: max(0, limit)]
 
 
 def _field_match_score(query: str, field: str) -> float:

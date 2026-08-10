@@ -20,6 +20,11 @@ class ExecutionEngine(Protocol):
         request: ExecutionRequest,
         ack: ExecutionAck,
     ) -> None: ...
+    def schedule_orchestration(
+        self,
+        request: ExecutionRequest,
+        ack: ExecutionAck,
+    ) -> None: ...
     async def cancel(
         self,
         room_id: str,
@@ -77,6 +82,7 @@ class HubAgentResponseSink(Protocol):
 @runtime_checkable
 class RoomDistributedLock(Protocol):
     async def acquire(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
+    async def renew(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
     async def release(self, room_id: str, owner: str) -> None: ...
 
 

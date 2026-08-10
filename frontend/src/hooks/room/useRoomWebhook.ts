@@ -65,7 +65,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     room,
     roomQuery,
     loading,
-    getDebateMode,
     getSupervisorMode,
     getAgentList,
     getRoomFormData,
@@ -188,7 +187,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Room actions
   const { cancelProcessing, respondToHitlRequest, updateRoomSettings, refreshMessages, toggleSSE } = useRoomActions(
     roomId, room, getToken, lifecycle, hitlRequestIndex, roomQuery,
-    getDebateMode, reconcileWithDb, setCancelling, setUpdatingRoom,
+    reconcileWithDb, setCancelling, setUpdatingRoom,
     sseEnabled, setSseEnabled,
   )
 
@@ -206,9 +205,6 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     sseConnecting,
     sseError: sseErrorFromSSE,
     sseEnabled,
-
-    // Debate Mode
-    debateMode: getDebateMode(),
 
     // Supervisor Mode
     supervisorMode: getSupervisorMode(),

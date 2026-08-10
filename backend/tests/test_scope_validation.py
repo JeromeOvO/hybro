@@ -15,7 +15,6 @@ import pytest
 
 from common.dto import UserMessageInsertResult
 from models.agent import Agent, AgentStatus
-from models.request import RoomCenterUserMessageRequest
 from models.response import (
     RoomCenterUserMessageResponse,
     ScopeResolutionError,
@@ -153,7 +152,6 @@ class TestResolveExplicitTargetScope:
             room,
             "hello",
             "room_team",
-            False,
             sender_user_id="user-1",
         )
         assert isinstance(result, tuple)
@@ -177,7 +175,6 @@ class TestResolveExplicitTargetScope:
             room,
             "inspect this",
             "room_team",
-            False,
             sender_user_id="user-1",
             required_input_modes=["image/png"],
         )
@@ -205,7 +202,6 @@ class TestResolveExplicitTargetScope:
             room,
             "hello",
             "room_team",
-            False,
             sender_user_id="user-1",
         )
 
@@ -236,7 +232,6 @@ class TestResolveExplicitTargetScope:
             room,
             "summarize this",
             "group-1",
-            False,
             sender_user_id="user-1",
             required_input_modes=["application/pdf"],
         )
@@ -252,7 +247,6 @@ class TestResolveExplicitTargetScope:
             room,
             "hello",
             "room_team",
-            False,
             sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -268,7 +262,6 @@ class TestResolveExplicitTargetScope:
             room,
             "hello",
             "nonexistent-group-id",
-            False,
             sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -288,7 +281,6 @@ class TestResolveExplicitTargetScope:
             room,
             "hello",
             "group-1",
-            False,
             sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -309,7 +301,6 @@ class TestResolveExplicitTargetScope:
             room,
             "hello",
             "group-1",
-            False,
             sender_user_id="user-1",
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -420,44 +411,6 @@ class TestPrePersistScopeValidation:
         room_center._persist_user_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_supervisor_empty_explicit_selection_does_not_persist(
-        self,
-        room_center,
-    ):
-        room = _make_room(
-            agent_set={"a1": "Alpha"},
-            extend_info={"use_supervisor": True},
-        )
-        room_center.database_service.get_room_by_room_id.return_value = room
-        request = RoomCenterUserMessageRequest(
-            room_id="room-1",
-            user_id="user-1",
-            message=RoomUserMessage(
-                room_id="room-1",
-                message_id="message-1",
-                user_id="user-1",
-                message_content=MessageContent(message_text="hello"),
-            ),
-            extend_info={
-                "mode": "supervisor",
-                "selected_agent_ids": [],
-                "candidate_scope_mode": "explicit_selection",
-            },
-        )
-        room_center._validate_send_message_request = MagicMock(return_value=None)
-        room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
-        room_center._persist_user_message = AsyncMock(return_value=True)
-
-        result = await room_center.send_message_to_room(
-            request,
-            target_group="room_team",
-        )
-
-        assert result.success is False
-        assert result.scope_resolution_error.code == "empty_scope"
-        room_center._persist_user_message.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_missing_saved_group_does_not_persist(self, room_center):
         room = _make_room()
         room_center.database_service.get_room_by_room_id.return_value = room
@@ -516,7 +469,6 @@ class TestInlineMentionBehavior:
             room,
             "<@unknown|Ghost> hello",
             "room_team",
-            False,
         )
         assert isinstance(scope, tuple)
         assert "a1" in scope[0]
@@ -540,6 +492,10 @@ class TestInlineMentionBehavior:
         request.room_id = "room-1"
         request.user_id = "user-1"
         request.client_request_id = None
+        request.extend_info = {
+            "execution_mode": "supervisor",
+            "agent_scope": {"source": "room_default"},
+        }
         request.message = RoomUserMessage(
             room_id="room-1",
             message_id="msg-inline-1",
@@ -818,7 +774,6 @@ class TestClientRequestIdPropagation:
             message_text="hello",
             selected_agent_set={"a1": "Alpha"},
             user_id="user-1",
-            is_debate_mode=False,
             auto_assign_agents=False,
             target_group="room_team",
             agents=None,

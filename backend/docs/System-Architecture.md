@@ -261,8 +261,8 @@ without importing domain models:
   embedding consumers; future features must opt in explicitly.
 - `DiscoveryLLMService`: discovery query expansion.
 - `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
-- `AgentSelectionLLMService`, `MessageParserLLMService`, `RoomMemoryLLMService`,
-  and `DebateLLMService`: DTO-backed workflows used directly by runtime modules
+- `AgentSelectionLLMService`, `MessageParserLLMService`, and
+  `RoomMemoryLLMService`: DTO-backed workflows used directly by runtime modules
   or tested as focused LLM capabilities.
 
 `container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
@@ -470,8 +470,12 @@ and disclose that operational failure. An empty candidate scope is therefore a
 valid Supervisor input, not a pending synthetic A2A task.
 
 The planner action schema and pure action validator enforce candidate
-membership, step-budget, required-target, and prior-output rules. Every
-Supervisor room request creates a lightweight durable orchestration envelope;
+membership, step-budget, required-target, and prior-output rules. At the
+structured-provider boundary, text expected outputs are canonicalized to remove
+contradictory artifact names and structured-field obligations before stable
+output keys are derived; an actual artifact request for a text-only Agent remains
+a deterministic validation error. Every Supervisor room request creates a
+lightweight durable orchestration envelope;
 there is no rollout selector or alternate supervisor execution path. The client
 selects scope and mode but does not select an orchestration schema version.
 
@@ -532,8 +536,13 @@ Durable run-store queries and the stale-task checker can claim and resume stale
 runs after process interruption. The checker also recovers old unclaimed or
 stale claimed Supervisor envelopes that were interrupted before durable run
 creation; terminal envelopes are excluded before the bounded query limit, and
-terminal projection clears the processing claim. The canonical entry point then
-claims or reclaims the message and creates the run normally. A processing-claim
+terminal projection clears the processing claim. Newly created projection steps
+with a null per-step retry timestamp are immediately claimable; this guarantees
+that terminal processing SSE and the HYBRO system-task terminal state are emitted
+inline instead of waiting for stale recovery. Same-terminal Agent response
+backfill may fill previously empty public text/artifacts, but it cannot replace
+an opposing terminal winner or overwrite an existing task snapshot. The canonical
+entry point then claims or reclaims the message and creates the run normally. A processing-claim
 heartbeat prevents recovery
 from preempting live turns, optimistic write conflicts exit cleanly for the
 winning writer to continue, and deterministic supervisor HITL artifacts can
@@ -1092,6 +1101,14 @@ because the bytes may still exist on another instance. Recovery deletes local
 content that has no metadata, but it does not tombstone ready metadata solely
 because the current process cannot see the corresponding local file.
 
+Agent artifact writes acquire an atomic room-scoped write lease before content
+is stored. Lease acquisition and release mutate only the `write_leases` field;
+general room snapshots explicitly exclude lease, lifecycle, and deletion-fencing
+fields so stale room updates cannot erase active ownership. A lease conflict is
+surfaced as a retryable persistence failure; there is no lease-free artifact
+write path. Finalization verifies that the same lease is still valid before
+promoting file metadata to `ready`, so durable deletion fencing always wins.
+
 Agent artifact replacement is also owned by this boundary. After an
 `append=false` journal replacement commits, superseded file IDs are claimed and
 deleted only after the complete committed journal confirms that no artifact
@@ -1505,11 +1522,23 @@ messages for other roles or states, failure details, interactive prompts,
 noncompleted artifact/message content, and inline `file.bytes` are not persisted
 or emitted; file artifacts must be converted to
 addressable URIs or a safe `file_unavailable` marker before public projection.
-Materialization records payload-free failure categories for observability. A remote
-`completed` task whose advertised files all fail delivery and which has no other
-usable output is projected as a local `artifact_delivery_failed` result; the
-original remote state is retained in task metadata. Valid completed responses with
-no advertised files remain completed, and partial useful output remains usable.
+Materialization records payload-free failure categories for observability.
+Transient platform storage failures retry persistence of the original decoded
+bytes with the same deterministic origin key; they never re-dispatch the remote
+agent or regenerate paid media. Only lease/finalization conflicts, rate limits,
+and server failures are retried; deterministic 409 conflicts and client errors
+are not. A
+remote `completed` task whose advertised files all fail delivery and which has
+no other usable output is projected as a local `artifact_delivery_failed` result;
+the original remote state is retained in task metadata. That failure identity is
+stable across dispatch intents and the planner cannot repair it by asking the
+same agent to regenerate output. Generic repeated operational failures also have
+an agent-level retry ceiling. Valid completed responses with no advertised files
+remain completed, and partial useful output remains usable.
+
+Streaming text producers must expose one logical artifact identity. Bundled
+Story and Travel agents aggregate provider deltas and emit one final text
+artifact rather than treating token chunks as hundreds of durable artifacts.
 List/section markdown repair runs only in the
 frontend remark plugin pipeline
 (`frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
@@ -1837,3 +1866,53 @@ Focused tests are organized by module and workflow:
 
 For architecture-sensitive changes, run the closest focused tests first, then
 the full suite before merging.
+
+## Unified per-message execution contract
+
+`POST /roomCenter/sendMessage` now requires a request-scoped execution contract:
+
+```json
+{
+  "mode": "direct | supervisor",
+  "agent_scope": { "source": "room_default | all_agents" }
+}
+```
+
+`agent_scope` is a discriminated union. `mention` carries a non-empty `agent_ids`
+array and `saved_group` carries only `group_id`. The gateway rejects the former
+public targeting fields (`selected_agent_ids`, `candidate_scope_*`,
+`message_target_mode`, `target_group*`, `target_agent_ids`, and
+`mentioned_agent_ids`). Room, all-Agent, and saved-group membership are expanded
+and authorized by Room Services; clients never send expanded group members.
+Mention IDs define the Supervisor candidate scope, not mandatory dispatch targets.
+
+The resolved `execution_mode` is persisted in the user-message orchestration
+envelope. `mode=supervisor` is the only Supervisor gate; `room.use_supervisor` is
+retained only as a frontend default for newly composed messages. The v2 request
+fingerprint hashes `mode + agent_scope`, so retries with the same
+`client_request_id` must reuse exactly the same contract.
+
+Supervisor planner actions are `DELEGATE`, `ASK_USER`, `PLATFORM_ANSWER`,
+`COMPLETE`, and `FAIL`. Provider aliases are normalized only at the provider
+boundary. Candidate Agent IDs are constrained in the per-call JSON schema;
+Execution creates dispatch IDs and parallel groups. Planner prompts and schemas
+live in `execution/orchestration/planner_prompt.py`.
+
+Completion is governed by `completion_policy.py`. A single successful Agent result
+is published directly without another synthesis or duplicate response. Results
+from two or more unique successful Agents are synthesized once. Platform answers
+and completions that must disclose a non-recoverable failure use a HYBRO final.
+Pending dispatches/continuations, recoverable failures, validated blockers, and
+required gaps deterministically reject `COMPLETE`. Final response work persists
+`FINALIZING`, `finalization_mode`, `final_source_message_id`, and stable summary
+identity before terminal completion. Cancellation may win from every non-terminal
+state, including `FINALIZING`; a recovered finalizing run never returns to planning
+or dispatch.
+
+HTTP handling no longer uses FastAPI `BackgroundTasks` for orchestration. It hands
+the acknowledged message to the Execution-owned tracked-task registry. The Redis
+room lock fails closed when configured but unavailable, renews with the owner token,
+and cancels the local body if lease ownership is lost.
+
+Debate is not an execution mode. Legacy room `debateMode` metadata is ignored, and
+legacy active Debate orchestration is failed during recovery rather than resumed.

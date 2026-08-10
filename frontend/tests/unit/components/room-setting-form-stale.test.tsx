@@ -76,7 +76,6 @@ describe('RoomSettingForm – stale member preservation', () => {
             'agent-active-1': 'Active Bot',
             'agent-stale-xyz': 'Stale Bot',
           },
-          debateMode: false,
         }}
       />
     )
@@ -111,7 +110,6 @@ describe('RoomSettingForm – stale member preservation', () => {
             'agent-deleted-1': 'Deleted Bot',
             'agent-private-2': 'Private Bot',
           },
-          debateMode: false,
         }}
       />
     )
@@ -142,7 +140,6 @@ describe('RoomSettingForm – stale member preservation', () => {
             'agent-active-1': 'Active Bot',
             'agent-stale-abc': 'Stale Member',
           },
-          debateMode: false,
         }}
       />
     )
@@ -204,7 +201,6 @@ describe('RoomSettingForm – stale member preservation', () => {
             'agent-gone-1': 'Departed Bot',
             'agent-gone-2': 'Lost Bot',
           },
-          debateMode: true,
         }}
       />
     )
@@ -235,7 +231,6 @@ describe('RoomSettingForm – stale member preservation', () => {
             'agent-deleted-1': 'Deleted Bot',
             'agent-private-1': 'Private Bot',
           },
-          debateMode: false,
         }}
       />
     )
@@ -279,7 +274,6 @@ describe('RoomSettingForm – stale member preservation', () => {
         initialData={{
           roomName: 'Empty Catalog Room',
           selectedAgents: { 'agent-x': 'Ghost Agent' },
-          debateMode: false,
         }}
       />
     )
@@ -314,7 +308,6 @@ describe('RoomSettingForm – stale member preservation', () => {
             'agent-inact': 'Inactive Agent',
             'agent-priv': 'Private Agent',
           },
-          debateMode: false,
           resolvedAgents: [
             { id: 'agent-active-1', name: 'Active Bot', availability: 'available' },
             { id: 'agent-del', name: 'Deleted Agent', availability: 'deleted' },
@@ -347,7 +340,6 @@ describe('RoomSettingForm – stale member preservation', () => {
           selectedAgents: {
             'agent-unknown': 'Unknown Agent',
           },
-          debateMode: false,
         }}
       />
     )
@@ -372,7 +364,6 @@ describe('RoomSettingForm – stale member preservation', () => {
           selectedAgents: {
             'agent-renamed': 'Old Name',
           },
-          debateMode: false,
           resolvedAgents: [
             { id: 'agent-renamed', name: 'Correct Name From Backend', availability: 'inactive' },
           ],

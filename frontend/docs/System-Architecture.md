@@ -464,7 +464,9 @@ Room DB synchronization lives under `src/lib/room-sync/`:
 - Mirrors SSE connection state into `room-ui-store`.
 - Rehydrates pending HITL requests on reconnect.
 - Reconciles with DB after reconnect gaps.
-- Uses a 15-second safety net to clear stuck processing state when the backend reports no active run.
+- While a turn is processing, polls backend run truth every five seconds until a
+  terminal state is observed. A transient poll/reconcile failure does not stop
+  later checks, so a missed terminal SSE cannot leave the turn spinning until refresh.
 
 ## 11. Timeline And View Models
 
@@ -545,13 +547,20 @@ Other library modules:
 
 ### Send Message Routing
 
-`src/lib/api/room.ts` sends room messages with a required `client_request_id` and one canonical dispatch shape:
+`src/lib/api/room.ts` sends every room message with a required
+`client_request_id`, request-scoped `mode: 'direct' | 'supervisor'`, and one
+canonical `agent_scope` discriminated union:
 
-- Mention dispatch: `mentioned_agent_ids` as a non-empty string tuple.
-- Room default or all agents: `message_target_mode` as `room_default` or `all_agents`.
-- Saved group: `message_target_mode: 'saved_group'` plus `target_group_id`.
+- Mention scope: `{ source: 'mention', agent_ids: [...] }` with a non-empty ID tuple.
+- Room default: `{ source: 'room_default' }`.
+- All visible active Agents: `{ source: 'all_agents' }`.
+- Saved group: `{ source: 'saved_group', group_id }`; the Backend expands and
+  authorizes membership, so the Frontend never sends group member IDs.
 
-The frontend no longer emits the legacy `target_group` field. `src/lib/types/agent-group.ts` validates that mention routing and target-mode routing are mutually exclusive before the request is sent.
+The Frontend does not emit legacy `mentioned_agent_ids`, `message_target_mode`,
+`target_group_id`, `target_group`, or candidate-scope fields. Fast maps to
+`direct`, Ultimate maps to `supervisor`, and room settings only provide the UI
+default.
 
 ## 13. Unified Portal
 
@@ -632,3 +641,28 @@ Important generated/local-only files:
 - Add room realtime behavior through `src/hooks/room/sse-handlers/` and preserve correlation buffering rules.
 - Add turn/timeline display logic under `src/lib/room-timeline/` or `src/lib/selectors/` instead of inside rendering components.
 - Do not document files from deleted or historical docs as current source structure.
+
+## Request-scoped execution mode and Agent scope
+
+Every message send carries two immutable fields alongside `client_request_id`:
+
+```ts
+type ExecutionMode = 'direct' | 'supervisor'
+type AgentScopeInput =
+  | { source: 'mention'; agent_ids: [string, ...string[]] }
+  | { source: 'room_default' }
+  | { source: 'all_agents' }
+  | { source: 'saved_group'; group_id: string }
+```
+
+Fast maps to `direct`; Ultimate maps to `supervisor`. The room's historical
+`use_supervisor` value only selects the initial UI mode. Changing the selector does
+not update Room settings and cannot race the subsequent send. `SendMessage` emits
+only `mode` and `agent_scope`; saved-team member IDs are expanded and authorized by
+the backend. Existing `client_request_id` optimistic-message replacement and early
+SSE buffering remain unchanged.
+
+Debate is not a `ChatMode`, Room setting, request flag, or handled SSE event. The
+ModeSelector retains one disabled `Debate (Coming Soon)` row as display-only UI;
+it has no selection handler and can never create a Debate request. Historical room
+`debateMode` metadata is ignored when selecting the Fast/Ultimate UI default.

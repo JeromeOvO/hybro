@@ -328,28 +328,20 @@ export interface RoomCenterUserMessageRequest {
   client_request_id?: string | null;
 }
 
-type SendMessageBasePayload = {
+export type ExecutionMode = 'direct' | 'supervisor'
+
+export type AgentScopeInput =
+  | { source: 'mention'; agent_ids: [string, ...string[]] }
+  | { source: 'room_default' }
+  | { source: 'all_agents' }
+  | { source: 'saved_group'; group_id: string }
+
+export type SendMessagePayload = {
   message: unknown
   client_request_id: string
+  mode: ExecutionMode
+  agent_scope: AgentScopeInput
 }
-
-export type SendMessagePayload = SendMessageBasePayload & (
-  | {
-      mentioned_agent_ids: [string, ...string[]]
-      message_target_mode?: never
-      target_group_id?: never
-    }
-  | {
-      message_target_mode: 'room_default' | 'all_agents'
-      mentioned_agent_ids?: never
-      target_group_id?: never
-    }
-  | {
-      message_target_mode: 'saved_group'
-      target_group_id: string
-      mentioned_agent_ids?: never
-    }
-)
 
 export interface RoomUserMessage {
   room_id: string;

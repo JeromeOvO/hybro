@@ -163,7 +163,7 @@ Output ONLY valid JSON matching the schema below.
 
 ## Output Schema
 {{
-  "action": "delegate" | "platform_answer" | "synthesize" | "clarify" | "done",
+  "action": "delegate" | "platform_answer" | "clarify" | "done",
   "reasoning": "Brief explanation",
   "targets": [
     {{"agent_id": "uuid", "agent_name": "Name", "task": "What to do"}}
@@ -174,9 +174,7 @@ Output ONLY valid JSON matching the schema below.
   ] | null
 }}"""
 
-SUPERVISOR_USER_PROMPT = """{debate_mode_note}
-
-## User Message
+SUPERVISOR_USER_PROMPT = """## User Message
 {message_text}
 {quoted_section}
 
@@ -332,15 +330,6 @@ class RoomSupervisorService:
                 explicit_mentions=explicit_mentions,
             )
 
-            debate_note = ""
-            if room_config.is_debate_mode:
-                debate_note = (
-                    "## Room Mode\n"
-                    "DEBATE MODE is enabled. Agents are dispatched sequentially, each "
-                    "building on prior responses. Do NOT synthesize — use DONE after "
-                    "all agents have responded."
-                )
-
             trajectory_summary = self._format_trajectory(trajectory)
             steps_completed = len(trajectory.entries)
             steps_remaining = max_steps - steps_completed
@@ -367,7 +356,6 @@ class RoomSupervisorService:
                 )
 
             user_prompt = SUPERVISOR_USER_PROMPT.format(
-                debate_mode_note=debate_note,
                 message_text=message_text,
                 quoted_section=quoted_section,
                 trajectory_summary=trajectory_summary,
@@ -424,9 +412,9 @@ class RoomSupervisorService:
             ]
             if len(completed_results) >= 2:
                 return SupervisorAction(
-                    action=ActionType.SYNTHESIZE,
-                    reasoning=f"Supervisor failed ({e}), synthesizing available results",
-                    synthesis_instruction="The supervisor encountered an error. Synthesize the available agent results into a coherent response.",
+                    action=ActionType.DONE,
+                    reasoning=f"Supervisor failed ({e}), finalizing available results",
+                    synthesis_instruction="Combine the available agent results into a coherent response.",
                 )
             return SupervisorAction(
                 action=ActionType.DONE,
@@ -587,8 +575,6 @@ class RoomSupervisorService:
                         lines.append(f"  Question {qi}: {q.prompt}")
                 elif entry.action.clarification_question:
                     lines.append(f"  Asked user: {entry.action.clarification_question}")
-            elif entry.action.action == ActionType.SYNTHESIZE:
-                lines.append(f"  Instruction: {entry.action.synthesis_instruction}")
             elif entry.action.action == ActionType.DONE:
                 lines.append(f"  Reasoning: {entry.action.reasoning}")
 
@@ -931,20 +917,43 @@ class RoomSupervisorService:
             target_payload.setdefault("attachment_policy", "explicit_refs_only")
             raw_expected_outputs = target_payload.get("expected_outputs")
             if isinstance(raw_expected_outputs, list):
-                target_payload["expected_outputs"] = [
-                    {
-                        "output_key": output.get("output_key"),
-                        "kind": output.get("kind"),
-                        "required": output.get("required", True),
-                        "description": output.get("description"),
-                        "artifact_name": output.get("artifact_name"),
-                        "required_fields": output.get("required_fields", []),
-                        "allow_partial": output.get("allow_partial", True),
-                    }
-                    if isinstance(output, dict)
-                    else output
-                    for output in raw_expected_outputs
-                ]
+                normalized_outputs = []
+                textual_kinds = {"text", "text/plain", "markdown", "text/markdown"}
+                for output in raw_expected_outputs:
+                    if not isinstance(output, dict):
+                        normalized_outputs.append(output)
+                        continue
+                    kind = output.get("kind")
+                    normalized_kind = (
+                        kind.strip().lower() if isinstance(kind, str) else ""
+                    )
+                    is_text = normalized_kind in textual_kinds
+                    is_binary_media = normalized_kind.startswith(
+                        ("image/", "audio/", "video/")
+                    )
+                    normalized_outputs.append(
+                        {
+                            "output_key": output.get("output_key"),
+                            "kind": kind,
+                            "required": output.get("required", True),
+                            "description": output.get("description"),
+                            # Structured-output providers require these schema
+                            # fields even for text and binary-media contracts and
+                            # may populate them despite the prompt. Those outputs
+                            # have no structured field obligations, so canonicalize
+                            # contradictory metadata before stable keys are derived.
+                            "artifact_name": (
+                                None if is_text else output.get("artifact_name")
+                            ),
+                            "required_fields": (
+                                []
+                                if is_text or is_binary_media
+                                else output.get("required_fields", [])
+                            ),
+                            "allow_partial": output.get("allow_partial", True),
+                        }
+                    )
+                target_payload["expected_outputs"] = normalized_outputs
             for field_name in (
                 "parallel_group",
                 "depends_on",
@@ -988,9 +997,15 @@ class RoomSupervisorService:
                 }
             )
 
+        decision_summary = response_json.get(
+            "decision_summary", response_json.get("reasoning", "")
+        )
+        if not isinstance(decision_summary, str):
+            decision_summary = ""
+
         return PlannerAction(
             action=planner_action_type,
-            reasoning=response_json.get("reasoning", ""),
+            decision_summary=decision_summary[:500],
             targets=targets,
             questions=questions,
             synthesis_instruction=response_json.get("synthesis_instruction"),

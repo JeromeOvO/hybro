@@ -91,6 +91,175 @@ def _validate(
     )
 
 
+def test_text_only_candidate_rejects_artifact_expected_output():
+    state = _state_for_validation()
+    state.candidate_scope = CandidateScopeSnapshot(
+        snapshot_id="scope-text",
+        source="mention",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Text Agent",
+                output_modes=["text"],
+            )
+        ],
+    )
+    target = _target()
+    target.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="answer",
+            kind="image/png",
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[target]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "unsupported_expected_output_mode"
+
+
+def test_candidate_accepts_compatible_media_expected_output():
+    state = _state_for_validation()
+    state.candidate_scope = CandidateScopeSnapshot(
+        snapshot_id="scope-image",
+        source="mention",
+        room_id="room-1",
+        agent_ids=["agent-1"],
+        agents=[
+            CandidateAgentSnapshot(
+                agent_id="agent-1",
+                name="Image Agent",
+                output_modes=["text", "image/png"],
+            )
+        ],
+    )
+    target = _target()
+    target.expected_outputs = [
+        DispatchExpectedOutput(output_key="image", kind="image/png")
+    ]
+    action = _action(PlannerActionType.DELEGATE, targets=[target])
+
+    assert PlannerActionValidator.validate(action, run_state=state) is action
+
+
+def test_text_expected_output_rejects_artifact_fields():
+    state = _state_for_validation()
+    target = _target()
+    target.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="answer",
+            kind="text",
+            required_fields=["summary"],
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[target]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "invalid_text_output_contract"
+
+
+def test_artifact_delivery_failure_forbids_regenerating_with_same_agent():
+    state = _state_for_validation()
+    state.open_failures = [
+        OpenFailureRecord(
+            failure_id="failure-artifact",
+            fingerprint="artifact-family",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            agent_message_id="agent-msg-1",
+            error_code="artifact_delivery_failed",
+            error_message="Agent output could not be processed.",
+            recoverable=False,
+            status="open",
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[_target()]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "artifact_delivery_retry_forbidden"
+    assert exc_info.value.recoverable is False
+
+
+def test_artifact_delivery_failure_forbids_same_output_family_on_replacement_agent():
+    state = _state_for_validation()
+    state.candidate_agent_ids.append("agent-2")
+    intent = _completed_quote_intent()
+    intent.dispatch_intent_id = "failed-image-intent"
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="generated_image", kind="image/png", required=True
+        )
+    ]
+    state.dispatch_intents = [intent]
+    state.open_failures = [
+        OpenFailureRecord(
+            failure_id="failure-artifact",
+            fingerprint="artifact-family",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            dispatch_intent_id=intent.dispatch_intent_id,
+            error_code="artifact_delivery_failed",
+            error_message="Agent output could not be processed.",
+            recoverable=False,
+            status="open",
+        )
+    ]
+    target = _target("agent-2")
+    target.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="replacement_image", kind="image/jpeg", required=True
+        )
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[target]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "artifact_delivery_retry_forbidden"
+
+
+def test_repeated_generic_agent_failures_exhaust_operational_retry_budget():
+    state = _state_for_validation()
+    state.open_failures = [
+        OpenFailureRecord(
+            failure_id=f"failure-{index}",
+            fingerprint=f"generic-{index}",
+            source="a2a_adapter",
+            agent_id="agent-1",
+            agent_message_id=f"agent-msg-{index}",
+            error_code="agent_execution_failed",
+            error_message="Agent processing failed",
+            recoverable=True,
+            status="open",
+        )
+        for index in range(2)
+    ]
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            _action(PlannerActionType.DELEGATE, targets=[_target()]),
+            run_state=state,
+        )
+
+    assert exc_info.value.code == "recovery_retry_exhausted"
+    assert exc_info.value.recoverable is False
+
+
 def test_valid_delegate_returns_action_unchanged():
     action = _action(PlannerActionType.DELEGATE, targets=[_target()])
 
@@ -129,7 +298,7 @@ def test_out_of_scope_delegate_target_is_rejected():
 
 
 def test_terminal_synthesis_allowed_after_agent_output():
-    action = _action(PlannerActionType.SYNTHESIZE)
+    action = _action(PlannerActionType.COMPLETE)
 
     result = _validate(action, has_agent_output=True)
 
@@ -160,7 +329,7 @@ def test_budget_exhaustion_rejects_delegate_but_allows_complete():
 
 
 def test_budget_exhaustion_allows_synthesize_ask_user_and_fail():
-    synthesize = _action(PlannerActionType.SYNTHESIZE)
+    synthesize = _action(PlannerActionType.COMPLETE)
     ask_user = PlannerAction(
         action=PlannerActionType.ASK_USER,
         reasoning="Need a user-only value",
@@ -192,45 +361,13 @@ def test_delegate_rejects_empty_targets():
         _validate(action)
 
 
-def test_multi_target_delegate_without_parallel_group_is_rejected():
+def test_multi_target_delegate_without_parallel_group_is_host_normalized():
     action = _action(
         PlannerActionType.DELEGATE,
-        targets=[
-            _target(agent_id="agent-1"),
-            _target(agent_id="agent-2"),
-        ],
+        targets=[_target(agent_id="agent-1"), _target(agent_id="agent-2")],
     )
 
-    with pytest.raises(PlannerActionValidationError) as exc_info:
-        _validate(action, candidate_agent_ids=["agent-1", "agent-2"])
-
-    assert exc_info.value.code == "parallel_dependency_unspecified"
-
-
-@pytest.mark.parametrize("parallel_group", ["", "  "])
-def test_multi_target_delegate_with_blank_parallel_group_is_rejected(
-    parallel_group,
-):
-    action = _action(
-        PlannerActionType.DELEGATE,
-        targets=[
-            PlannedDelegateTarget(
-                agent_id="agent-1",
-                task="Summarize section A.",
-                parallel_group=parallel_group,
-            ),
-            PlannedDelegateTarget(
-                agent_id="agent-2",
-                task="Summarize section B.",
-                parallel_group=parallel_group,
-            ),
-        ],
-    )
-
-    with pytest.raises(PlannerActionValidationError) as exc_info:
-        _validate(action, candidate_agent_ids=["agent-1", "agent-2"])
-
-    assert exc_info.value.code == "parallel_dependency_unspecified"
+    assert _validate(action, candidate_agent_ids=["agent-1", "agent-2"]) is action
 
 
 def test_multi_target_delegate_with_shared_parallel_group_is_allowed():
@@ -1075,7 +1212,7 @@ def test_planner_schema_and_parser_accept_completion_output_evidence_fields():
     )
 
 
-def test_completion_validator_does_not_treat_dispositions_as_terminal_authority():
+def test_completion_validator_rejects_disposition_without_reason():
     action = _complete_action()
     action.completion_evidence.requested_goal_family_dispositions.append(
         GoalFamilyDispositionRequest.model_construct(
@@ -1087,16 +1224,16 @@ def test_completion_validator_does_not_treat_dispositions_as_terminal_authority(
         )
     )
 
-    assert (
+    with pytest.raises(PlannerActionValidationError) as exc:
         PlannerActionValidator.validate(
             action,
             run_state=_complete_run_state(),
         )
-        is action
-    )
+
+    assert exc.value.code == "completion_disposition_request_invalid"
 
 
-def test_completion_validator_ignores_unknown_disposition_revision_metadata():
+def test_completion_validator_rejects_unknown_disposition_revision_metadata():
     action = _complete_action(
         abandoned_goal_disposition_event_ids=["dispose-1"],
         requested_goal_family_dispositions=[
@@ -1115,7 +1252,10 @@ def test_completion_validator_ignores_unknown_disposition_revision_metadata():
         ]
     )
 
-    assert PlannerActionValidator.validate(action, run_state=state) is action
+    with pytest.raises(PlannerActionValidationError) as exc:
+        PlannerActionValidator.validate(action, run_state=state)
+
+    assert exc.value.code == "completion_disposition_unreferenced"
 
 
 def test_provider_planner_parser_defaults_absent_outcome_policy_fields():
@@ -1232,25 +1372,15 @@ async def test_planner_adapter_requests_strict_planner_action_schema():
     await adapter.plan(context)
 
     assert supervisor_service.schema is not None
-    target_schema = supervisor_service.schema["properties"]["targets"]["items"]
-    expected_outputs_schema = target_schema["properties"]["expected_outputs"]
-    assert expected_outputs_schema["items"]["type"] == "object"
-    assert "kind" in expected_outputs_schema["items"]["required"]
-    dependency_fields = {
-        "parallel_group",
-        "depends_on",
-        "required_resource_refs",
-    }
-    assert dependency_fields <= target_schema["properties"].keys()
-    assert dependency_fields <= set(target_schema["required"])
-    assert "shared non-null parallel_group" in supervisor_service.system_prompt
-    assert (
-        "Execution will decide the compatible representation"
-        in supervisor_service.system_prompt
-    )
-    assert "synthesize" not in supervisor_service.schema["properties"]["action"]["enum"]
-    assert "state_context.run.goal" in supervisor_service.system_prompt
-    assert "Execution will then synthesize" in supervisor_service.system_prompt
+    schema = supervisor_service.schema
+    target_schema = schema["properties"]["targets"]["items"]
+    assert target_schema["properties"]["agent_id"]["enum"] == ["agent-1"]
+    assert "parallel_group" not in target_schema["properties"]
+    assert "depends_on" not in target_schema["properties"]
+    assert "decision_summary" in schema["required"]
+    assert "reasoning" not in schema["properties"]
+    assert "synthesize" not in schema["properties"]["action"]["enum"]
+    assert "Execution generates" in supervisor_service.system_prompt
 
 
 def test_delegate_rejects_unknown_required_artifact_ref():
@@ -1282,7 +1412,7 @@ def test_delegate_rejects_unknown_required_artifact_ref():
 
 @pytest.mark.parametrize(
     "action_type",
-    [PlannerActionType.COMPLETE, PlannerActionType.SYNTHESIZE],
+    [PlannerActionType.COMPLETE, PlannerActionType.COMPLETE],
 )
 def test_complete_and_synthesize_before_agent_output_are_rejected(action_type):
     action = _action(action_type)
@@ -1333,6 +1463,65 @@ def test_platform_answer_is_part_of_planner_response_schema():
     parsed = RoomSupervisorService.parse_planner_action(payload)
 
     assert parsed.action == PlannerActionType.PLATFORM_ANSWER
+
+
+def test_planner_parser_canonicalizes_contradictory_text_output_metadata():
+    action = RoomSupervisorService.parse_planner_action(
+        {
+            "action": "delegate",
+            "decision_summary": "Check the weather.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "task": "Return the forecast as text.",
+                    "expected_outputs": [
+                        {
+                            "output_key": "forecast",
+                            "kind": "text",
+                            "required": True,
+                            "description": "Written forecast.",
+                            "artifact_name": "weather_report",
+                            "required_fields": ["temperature", "conditions"],
+                            "allow_partial": False,
+                        }
+                    ],
+                }
+            ],
+            "questions": [],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        }
+    )
+
+    output = action.targets[0].expected_outputs[0]
+    assert output.kind == "text"
+    assert output.artifact_name is None
+    assert output.required_fields == []
+    assert output.output_key == "forecast"
+
+
+def test_planner_schema_requires_listed_outputs_and_disallows_invented_names():
+    output_schema = PLANNER_ACTION_RESPONSE_SCHEMA["properties"]["targets"]["items"][
+        "properties"
+    ]["expected_outputs"]["items"]["properties"]
+
+    assert output_schema["required"]["const"] is True
+    assert output_schema["artifact_name"] == {"type": "null"}
+
+
+def test_planner_prompt_is_compact_and_execution_owned():
+    from execution.orchestration.planner_prompt import PLANNER_SYSTEM_PROMPT
+
+    prompt = PLANNER_SYSTEM_PROMPT.lower()
+    assert "there is no synthesize action" in prompt
+    assert "execution generates all ids and parallel groups" in prompt
+    assert "never repeat an identical request without new evidence" in prompt
+    assert "use text expected outputs for text-only agents" in prompt
+    assert "never invent a caption, filename" in prompt
+    assert "never relabel an ordinary written answer" in prompt
+    assert "decision_summary under 500 characters" in prompt
+    assert "private chain-of-thought" in prompt
 
 
 def test_parse_planner_action_preserves_multi_target_parallel_group_fields():
@@ -1442,7 +1631,7 @@ async def test_planner_adapter_normalizes_blank_independent_parallel_group():
 
 
 @pytest.mark.asyncio
-async def test_planner_adapter_strips_prose_expected_outputs():
+async def test_planner_adapter_keeps_enforceable_text_expected_output():
     adapter = RoomSupervisorPlannerAdapter(
         raw_action_provider=lambda _context: {
             "action": "delegate",
@@ -1492,7 +1681,7 @@ async def test_planner_adapter_strips_prose_expected_outputs():
     action = await adapter.plan(context)
 
     assert action.action == PlannerActionType.DELEGATE
-    assert action.targets[0].expected_outputs == []
+    assert [output.kind for output in action.targets[0].expected_outputs] == ["text"]
 
 
 def test_planner_prompt_requires_domain_supported_agent_suitability():
@@ -1507,12 +1696,12 @@ def test_planner_prompt_requires_domain_supported_agent_suitability():
 
 
 @pytest.mark.asyncio
-async def test_planner_platform_answer_prompt_forbids_agent_specific_routing_copy():
+async def test_planner_schema_limits_agent_ids_to_candidate_scope():
     supervisor_service = SimpleNamespace(
         call_planner_json=AsyncMock(
             return_value={
                 "action": "platform_answer",
-                "reasoning": "Answer the greeting directly.",
+                "decision_summary": "Answer directly.",
                 "targets": [],
                 "questions": [],
                 "synthesis_instruction": "Reply naturally.",
@@ -1525,116 +1714,15 @@ async def test_planner_platform_answer_prompt_forbids_agent_specific_routing_cop
         candidate_scope=["agent-1"],
         message_text="hi",
     )
-    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
 
-    await adapter.plan(context)
-
-    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
-        "system_prompt"
-    ]
-    assert "do not mention routing decisions" in system_prompt.lower()
-
-
-@pytest.mark.asyncio
-async def test_planner_prompt_keeps_hybro_primary_for_readable_attachments():
-    supervisor_service = SimpleNamespace(
-        call_planner_json=AsyncMock(
-            return_value={
-                "action": "platform_answer",
-                "reasoning": "The platform can answer from the PDF projection.",
-                "targets": [],
-                "questions": [],
-                "synthesis_instruction": "Read and summarize the PDF.",
-            }
-        ),
-        parse_planner_action=RoomSupervisorService.parse_planner_action,
+    await RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service).plan(
+        context
     )
-    context = build_orchestration_planner_context(
-        run_state=_state_for_validation(),
-        candidate_scope=["agent-1"],
-        message_text="Can you read this PDF?",
-    )
-    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
 
-    await adapter.plan(context)
-
-    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
-        "system_prompt"
-    ].lower()
-    assert "you are hybro, the primary user-facing assistant" in system_prompt
-    assert "speak in the first person as hybro" in system_prompt
-    assert "never refer to yourself as 'the supervisor'" in system_prompt
-    assert "read, explain, or summarize an attachment" in system_prompt
-    assert "should offer exactly one concrete opt-in agent action" in system_prompt
-    assert "treat that as approval" in system_prompt
-    assert "you own the user's goal from beginning to end" in system_prompt
-    assert "an explicit request is already authorization" in system_prompt
-    assert "do not ask the user to confirm the same action again" in system_prompt
-    assert "takes precedence over the attachment direct-answer rule" in system_prompt
-    assert "delegate the first agent whose output is required" in system_prompt
-    assert "can completely satisfy every current requested outcome" in system_prompt
-    assert "do not name connected agents" in system_prompt.lower()
-    assert "do not suggest domain-specific next steps" in system_prompt.lower()
-    assert "limited capabilities" not in system_prompt.lower()
-
-
-@pytest.mark.asyncio
-async def test_planner_prompt_keeps_agent_dispatch_payloads_concise():
-    supervisor_service = SimpleNamespace(
-        call_planner_json=AsyncMock(
-            return_value={
-                "action": "delegate",
-                "reasoning": "A specialist workflow materially advances the goal.",
-                "targets": [
-                    {
-                        "agent_id": "agent-1",
-                        "task": "Produce the requested structured artifact.",
-                        "parallel_group": None,
-                        "depends_on": [],
-                        "required_resource_refs": [],
-                    }
-                ],
-                "questions": [],
-            }
-        ),
-        parse_planner_action=RoomSupervisorService.parse_planner_action,
-    )
-    context = build_orchestration_planner_context(
-        run_state=_state_for_validation(),
-        candidate_scope=["agent-1"],
-        message_text="Create the specialist artifact.",
-    )
-    adapter = RoomSupervisorPlannerAdapter(supervisor_service=supervisor_service)
-
-    await adapter.plan(context)
-
-    system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
-        "system_prompt"
-    ].lower()
-    assert "private execution payloads" in system_prompt
-    assert "keep each target.task concise and operational" in system_prompt
-    assert "do not include planner reasoning" in system_prompt
-    assert "do not duplicate expected_outputs in task" in system_prompt
-    assert "never mention a resource id in task unless that exact id is selected" in (
-        system_prompt
-    )
-    assert "select the smallest sufficient resource set" in system_prompt
-    assert "prefer a structured artifact over copied prose" in system_prompt
-    assert "inspect planner_feedback before choosing the next action" in system_prompt
-    assert "do not repeat an action rejected by the validator" in system_prompt
-    assert "prefer one target per delegate action" in system_prompt
-    assert "delegate sequentially across planner steps" in system_prompt
-    assert (
-        "limit each target to that agent's own advertised capability" in system_prompt
-    )
-    assert "treat advertised capabilities as a closed-world execution boundary" in (
-        system_prompt
-    )
-    assert "never infer actions from an agent's name" in system_prompt
-    assert (
-        "do not assign downstream work that belongs to another agent" in system_prompt
-    )
-    assert "native attachment intake or document-processing capability" in system_prompt
+    schema = supervisor_service.call_planner_json.await_args.kwargs["schema"]
+    assert schema["properties"]["targets"]["items"]["properties"]["agent_id"][
+        "enum"
+    ] == ["agent-1"]
 
 
 def test_complete_allowed_after_agent_output_before_budget_exhaustion():
@@ -1697,7 +1785,7 @@ def _complete_action(**evidence_overrides):
 
 def _synthesize_action():
     return PlannerAction(
-        action=PlannerActionType.SYNTHESIZE,
+        action=PlannerActionType.COMPLETE,
         reasoning="Summarize the completed work.",
         synthesis_instruction="Write the final answer.",
     )
@@ -1820,29 +1908,18 @@ def test_completion_scope_rejections(case, expected_code):
     assert _validation_code(action, state) == expected_code
 
 
-@pytest.mark.parametrize(
-    ("action", "expected_code"),
-    [
-        (_synthesize_action(), "completion_open_failure"),
-        (_complete_action(), "completion_open_failure"),
-    ],
-)
-def test_open_runtime_failures_only_block_terminal_actions_when_guardrails_enabled(
-    action,
-    expected_code,
-):
+def test_open_runtime_failures_block_complete_without_feature_guardrails():
     _, state = _completion_case("open_runtime_failure")
 
-    assert (
+    with pytest.raises(PlannerActionValidationError) as exc_info:
         PlannerActionValidator.validate(
-            action,
+            _complete_action(),
             run_state=state,
             guardrails_enabled=False,
             resource_fingerprints={},
         )
-        is action
-    )
-    assert _validation_code(action, state) == expected_code
+
+    assert exc_info.value.code == "completion_gate_rejected"
 
 
 def test_completion_accepts_satisfied_latest_active_revision_obligations():
@@ -2020,7 +2097,7 @@ def test_complete_rejected_when_recoverable_failure_is_open():
         )
 
 
-def test_synthesize_allows_open_planner_validation_failure():
+def test_complete_rejects_open_planner_validation_failure():
     state = _complete_run_state(
         open_failures=[
             OpenFailureRecord(
@@ -2035,9 +2112,11 @@ def test_synthesize_allows_open_planner_validation_failure():
             )
         ]
     )
-    action = _synthesize_action()
+    action = _complete_action()
 
-    assert PlannerActionValidator.validate(action, run_state=state) is action
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(action, run_state=state)
+    assert exc_info.value.code == "completion_gate_rejected"
 
 
 def test_complete_allows_abandoned_recoverable_failure():
@@ -2220,9 +2299,9 @@ async def test_planner_adapter_accepts_completion_with_facts_only():
 
 
 @pytest.mark.asyncio
-async def test_planner_adapter_rejects_synthesis_with_facts_only():
+async def test_planner_adapter_accepts_complete_with_facts_only():
     action = PlannerAction(
-        action=PlannerActionType.SYNTHESIZE,
+        action=PlannerActionType.COMPLETE,
         reasoning="Synthesize the collected facts.",
     )
     state = _complete_run_state(agent_outputs=[])
@@ -2233,8 +2312,7 @@ async def test_planner_adapter_rejects_synthesis_with_facts_only():
     )
     adapter = RoomSupervisorPlannerAdapter(raw_action_provider=lambda _context: action)
 
-    with pytest.raises(PlannerActionValidationError, match="requires agent output"):
-        await adapter.plan(context)
+    assert await adapter.plan(context) is action
 
 
 @pytest.mark.asyncio
@@ -2483,7 +2561,7 @@ def test_delegate_structural_errors_precede_outcome_policy_when_guardrails_enabl
     action = _guardrail_action([_guardrail_target(), _guardrail_target()])
 
     assert _validation_code(action, _guardrail_state()) == (
-        "parallel_dependency_unspecified"
+        "duplicate_delegate_goal_target"
     )
 
 

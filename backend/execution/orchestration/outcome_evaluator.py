@@ -187,6 +187,74 @@ def _artifact_data(artifact: object) -> list[object]:
     ]
 
 
+def _is_text_output(output: DispatchExpectedOutput) -> bool:
+    kind = output.kind.strip().lower()
+    return kind in {
+        "text",
+        "text/plain",
+        "markdown",
+        "text/markdown",
+    } or kind.startswith("text/")
+
+
+def _is_artifact_output(output: DispatchExpectedOutput) -> bool:
+    kind = output.kind.strip().lower()
+    if _is_text_output(output):
+        return False
+    return (
+        kind == "artifact"
+        or "/" in kind
+        or kind
+        in {
+            "image",
+            "audio",
+            "video",
+            "file",
+        }
+    )
+
+
+def _artifact_mime_types(artifact: dict[str, Any]) -> set[str]:
+    mime_types: set[str] = set()
+    artifact_mime = artifact.get("mime_type") or artifact.get("mimeType")
+    if isinstance(artifact_mime, str) and artifact_mime.strip():
+        mime_types.add(artifact_mime.strip().lower())
+    for part in artifact.get("parts", []):
+        if not isinstance(part, dict):
+            continue
+        file_info = part.get("file")
+        if isinstance(file_info, dict):
+            mime_type = file_info.get("mimeType") or file_info.get("mime_type")
+            if isinstance(mime_type, str) and mime_type.strip():
+                mime_types.add(mime_type.strip().lower())
+        metadata = part.get("metadata")
+        if isinstance(metadata, dict):
+            mime_type = metadata.get("mime_type") or metadata.get("mimeType")
+            if isinstance(mime_type, str) and mime_type.strip():
+                mime_types.add(mime_type.strip().lower())
+        if part.get("data") not in (None, {}, [], ""):
+            mime_types.add("application/json")
+    return mime_types
+
+
+def _artifact_matches_output(
+    artifact: dict[str, Any], expected_output: DispatchExpectedOutput
+) -> bool:
+    kind = expected_output.kind.strip().lower()
+    if kind in {"artifact", "file"}:
+        return True
+    mime_types = _artifact_mime_types(artifact)
+    if not mime_types:
+        return False
+    if kind in {"image", "audio", "video"}:
+        return any(mime_type.startswith(f"{kind}/") for mime_type in mime_types)
+    if kind.endswith("/*"):
+        return any(
+            mime_type.startswith(kind.removesuffix("*")) for mime_type in mime_types
+        )
+    return kind in mime_types
+
+
 def _output_artifacts(
     state: OrchestrationRunState,
     expected_output: DispatchExpectedOutput,
@@ -194,13 +262,15 @@ def _output_artifacts(
     *,
     allow_name_fallback: bool,
 ) -> list[dict[str, Any]]:
-    if expected_output.kind != "artifact":
+    if not _is_artifact_output(expected_output):
         return []
     artifact_keys = set(agent_output.artifact_keys)
     owned_artifacts = [
         artifact
         for artifact in state.artifacts
-        if isinstance(artifact, dict) and artifact.get("artifact_key") in artifact_keys
+        if isinstance(artifact, dict)
+        and artifact.get("artifact_key") in artifact_keys
+        and _artifact_matches_output(artifact, expected_output)
     ]
     if not expected_output.artifact_name or allow_name_fallback:
         return owned_artifacts
@@ -212,7 +282,7 @@ def _output_artifacts(
 
 
 def _allow_artifact_name_fallback(outputs: list[DispatchExpectedOutput]) -> bool:
-    return sum(output.kind == "artifact" for output in outputs) == 1
+    return sum(_is_artifact_output(output) for output in outputs) == 1
 
 
 def _output_fact_map(
@@ -242,6 +312,9 @@ def _freshly_satisfied_obligations(
         if not output.required:
             continue
         key = effective_output_key(output)
+        if _is_text_output(output) and agent_output.text and agent_output.text.strip():
+            satisfied.add(f"{key}:$present")
+            continue
         before_artifact_fingerprints = {
             canonical_content_fingerprint(artifact)
             for artifact in _output_artifacts(
@@ -290,6 +363,9 @@ def _satisfied_obligations(
         if not output.required:
             continue
         key = effective_output_key(output)
+        if _is_text_output(output) and agent_output.text and agent_output.text.strip():
+            satisfied.add(f"{key}:$present")
+            continue
         artifacts = _output_artifacts(
             state,
             output,
@@ -334,7 +410,9 @@ def _has_matching_output_evidence(
             agent_output,
             allow_name_fallback=allow_name_fallback,
         )
-        if output.kind == "artifact"
+        if _is_artifact_output(output)
+        else bool(agent_output.text and agent_output.text.strip())
+        if _is_text_output(output)
         else effective_output_key(output) in facts
         for output in outputs
     )
@@ -541,6 +619,14 @@ class DelegationOutcomeEvaluator:
                         _stable_value(artifact) for artifact in output_artifacts
                     ],
                     "facts": after_facts,
+                    "text": (
+                        output.text
+                        if any(
+                            _is_text_output(expected)
+                            for expected in intent.expected_outputs
+                        )
+                        else None
+                    ),
                 }
             )
         )

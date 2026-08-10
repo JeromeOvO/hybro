@@ -14,8 +14,13 @@ class FileStoragePlatformError(PlatformRouteError):
     pass
 
 
+class RetryableFileStoragePlatformError(FileStoragePlatformError):
+    """A transient file backend failure safe to retry with identical bytes."""
+
+
 __all__ = [
     "FileStoragePlatformError",
     "GatewayPlatformError",
+    "RetryableFileStoragePlatformError",
     "PlatformRouteError",
 ]

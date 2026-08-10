@@ -322,7 +322,7 @@ def _simple_namespace_keywords(tree: ast.AST, assignment_name: str) -> set[str]:
     return set()
 
 
-def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
+def test_container_binds_coordinator_to_focused_message_adapter():
     tree = ast.parse(Path("container.py").read_text())
     bound_adapters: dict[str, str] = {}
 
@@ -330,23 +330,14 @@ def test_container_binds_debate_and_coordinator_to_focused_message_adapters():
         if not isinstance(node, ast.Call):
             continue
         call_name = _dotted_name(node.func)
-        if call_name not in {
-            "debate_prompt_injector.bind_store",
-            "synthesis_coordinator.bind_store",
-        }:
+        if call_name != "synthesis_coordinator.bind_store":
             continue
         assert len(node.args) == 1
         assert isinstance(node.args[0], ast.Name)
         bound_adapters[call_name] = node.args[0].id
 
     assert bound_adapters == {
-        "debate_prompt_injector.bind_store": "debate_message_store",
         "synthesis_coordinator.bind_store": "room_coordinator_message_store",
-    }
-    assert _simple_namespace_keywords(tree, "debate_message_store") == {
-        "get_agent_name_by_agent_id",
-        "get_room_agent_message_by_message_id",
-        "update_room_agent_message_with_new_message_content_by_message_id",
     }
     assert _simple_namespace_keywords(tree, "room_coordinator_message_store") == {
         "add_room_agent_message",

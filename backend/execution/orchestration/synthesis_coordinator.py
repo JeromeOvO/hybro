@@ -41,8 +41,8 @@ class SynthesisCoordinator:
     Local coordinator for room-level orchestration after agent messages complete.
 
     Initial responsibility:
-    - When debate mode is enabled for a room and multiple agent answers exist for a
-      given user message, generate a debate summary using the bound summary LLM
+    - When multiple agent answers exist for a
+      given user message, generate a summary using the bound summary LLM
       service and emit it as an additional agent message in the room.
 
     This service is intentionally backend-local (not an A2A agent) so it can:
@@ -88,11 +88,11 @@ class SynthesisCoordinator:
         Current behavior:
         - If there are at least two non-empty agent responses in the dependency
           chain for this user message, generate a coordinator summary.
-        - In debate mode: Uses debate-style summary (comparing viewpoints)
-        - In normal mode: Uses non_debate-style summary (combining contributions)
+        - For multiple views: compare useful perspectives
+        - For complementary results: combine contributions
 
         ``trajectory_responses`` is an optional fast-path for the supervisor
-        execution path.  When the supervisor executor completes (debate fast-path
+        execution path.  When the supervisor executor completes (supervisor fast-path
         returns synthesis_text=None), the trajectory already holds every agent's
         response text in memory.  Passing those responses directly here avoids a
         DB re-read that would race against relay agents whose
@@ -107,8 +107,8 @@ class SynthesisCoordinator:
           (for example via TaskStatus or structured message patterns).
         - When a new user message arrives, decide whether it should be routed
           directly to a specific agent (as a follow-up) or handled via normal
-          parsing/decomposition/debate.
-        - Apply per-room policies such as limiting debate rounds or selecting a
+          parsing/decomposition.
+        - Apply per-room policies such as selecting a
           single "final" agent answer in addition to the summary.
         """
         summary_message_id: str | None = None
@@ -123,11 +123,6 @@ class SynthesisCoordinator:
                     room_id,
                 )
                 return
-
-            # Check debate mode flag from room.extend_info
-            is_debate_mode = False
-            if room.extend_info and isinstance(room.extend_info, dict):
-                is_debate_mode = bool(room.extend_info.get("debateMode", False))
 
             if trajectory_responses:
                 # Fast path: caller already has agent response texts from the
@@ -193,8 +188,6 @@ class SynthesisCoordinator:
             if len(agent_responses) < 2:
                 return
 
-            # Use different summary approach based on mode
-            summary_mode = "debate" if is_debate_mode else "non_debate"
             coordinator_agent_id = CoordinatorAgentId.SYSTEM_HYBRO
 
             # Pre-generate message_id and emit a "working" indicator so the
@@ -216,7 +209,7 @@ class SynthesisCoordinator:
                 and isinstance(root_user_message.message_content.message_text, str)
                 else None
             )
-            agent_name = "Debate Coordinator" if is_debate_mode else "Summary Agent"
+            agent_name = "Summary Agent"
             await self._require_delivery().send_task_submitted(
                 room_id=room_id,
                 message_id=summary_message_id,
@@ -240,7 +233,6 @@ class SynthesisCoordinator:
                 chunk
                 async for chunk in summary_service.summarize_agent_responses_stream(
                     summary_inputs,
-                    mode=summary_mode,
                     user_question=user_question_text,
                 )
             ]
@@ -292,7 +284,7 @@ class SynthesisCoordinator:
         root_user_message_id: str,
     ) -> list[RoomAgentMessage]:
         """
-        Collect all RoomAgentMessage instances that are part of the debate chain
+        Collect all RoomAgentMessage instances that are part of the response chain
         for a given user message.
 
         This performs a BFS over the related_message_id graph, starting from the
@@ -380,7 +372,7 @@ class SynthesisCoordinator:
             room_user_message_id: The user message ID this summary relates to
             summary_text: The summary text content
             coordinator_agent_id: The agent ID to use for the summary message
-                                  (e.g., "debate_summary" or "non_debate_summary")
+                                  (for example, a historical summary identifier)
             message_id: Optional pre-generated message ID (reuses existing
                         task_submitted bubble instead of creating a new one)
         """
@@ -426,9 +418,7 @@ class SynthesisCoordinator:
             extend_info={
                 "is_coordinator_summary": True,
                 "source_user_message_id": room_user_message_id,
-                "summary_type": "debate"
-                if coordinator_agent_id == CoordinatorAgentId.SYSTEM_HYBRO
-                else "non_debate",
+                "summary_type": "synthesis",
             },
         )
 

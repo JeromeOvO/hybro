@@ -590,7 +590,6 @@ class TestPromptCacheOptimization:
 
         assert "{message_text}" in SUPERVISOR_USER_PROMPT
         assert "{trajectory_summary}" in SUPERVISOR_USER_PROMPT
-        assert "{debate_mode_note}" in SUPERVISOR_USER_PROMPT
         assert "{steps_completed}" in SUPERVISOR_USER_PROMPT
         assert "{max_steps}" in SUPERVISOR_USER_PROMPT
         assert "{steps_remaining}" in SUPERVISOR_USER_PROMPT
@@ -615,7 +614,7 @@ class TestPromptCacheOptimization:
                 is_healthy=True,
             )
         ]
-        room_config = RoomConfig(is_debate_mode=False)
+        room_config = RoomConfig()
         trajectory = SupervisorTrajectory()
 
         with patch.object(
@@ -666,7 +665,7 @@ class TestPromptCacheOptimization:
                 is_healthy=True,
             )
         ]
-        room_config = RoomConfig(is_debate_mode=False)
+        room_config = RoomConfig()
         trajectory = SupervisorTrajectory()
 
         with patch.object(
@@ -798,8 +797,6 @@ class TestParseProviderActionCaseInsensitive:
             ("delegate", "delegate"),
             ("DELEGATE", "delegate"),
             ("Delegate", "delegate"),
-            ("synthesize", "synthesize"),
-            ("SYNTHESIZE", "synthesize"),
             ("clarify", "clarify"),
             ("CLARIFY", "clarify"),
             ("done", "done"),
@@ -1060,8 +1057,7 @@ class TestTrajectoryStatusSerialization:
 
 
 class TestHandleRunResultUnifiedSummary:
-    """Verify that _handle_supervisor_run_result routes to _emit_unified_summary
-    with correct arguments for both synthesis and non-synthesis paths."""
+    """Verify room result handling does not duplicate execution finalization."""
 
     @pytest.fixture
     def rmc(self):
@@ -1084,7 +1080,6 @@ class TestHandleRunResultUnifiedSummary:
                 "execution.orchestration.room_message_center.room_supervisor_service"
             ),
             patch("execution.orchestration.room_message_center.rate_limit_service"),
-            patch("execution.orchestration.room_message_center.debate_prompt_injector"),
         ):
             mock_db.get_room_user_message_by_message_id = AsyncMock(return_value=None)
             mock_db.update_room_user_message_by_message_id = AsyncMock()
@@ -1094,7 +1089,6 @@ class TestHandleRunResultUnifiedSummary:
             from execution.orchestration.factory import create_room_message_center
 
             rmc = create_room_message_center(
-                debate_rounds=2,
                 cancellation_control=mock_delivery,
                 internal_event_publisher=RecordingEventPublisher(),
             )
@@ -1102,6 +1096,7 @@ class TestHandleRunResultUnifiedSummary:
                 return_value=("synthesis", "Final synthesis.")
             )
             rmc._emit_deterministic_digest = AsyncMock()
+            rmc._run_supervisor_terminal_post_loop_integration = AsyncMock()
             rmc._trigger_compaction_safe = AsyncMock()
             rmc._processing_status_emitter = _noop_processing_status_emitter
             yield rmc
@@ -1126,22 +1121,23 @@ class TestHandleRunResultUnifiedSummary:
     async def test_synthesis_text_passed_to_unified_summary(
         self, rmc, completed_result_with_synthesis
     ):
-        """When supervisor produces synthesis, it is passed directly."""
+        """A committed supervisor synthesis is not emitted a second time."""
         await rmc._handle_supervisor_run_result(
             result=completed_result_with_synthesis,
             room_id="room-1",
             user_message_id="msg-1",
         )
-        rmc._emit_unified_summary.assert_awaited_once()
-        call_kwargs = rmc._emit_unified_summary.call_args
-        assert call_kwargs[0] == ("room-1", "msg-1")
-        assert call_kwargs[1]["synthesis_text"] == "Final synthesis."
+        rmc._emit_unified_summary.assert_not_awaited()
+        rmc._run_supervisor_terminal_post_loop_integration.assert_awaited_once_with(
+            completed_result_with_synthesis,
+            "room-1",
+        )
 
     @pytest.mark.asyncio
     async def test_no_synthesis_emits_deterministic_digest_for_multi_agent_done(
         self, rmc, completed_result_without_synthesis
     ):
-        """When supervisor chose DONE with 2+ agents, emit deterministic digest (not LLM summary)."""
+        """Execution owns multi-Agent finalization, including fallback output."""
         from datetime import datetime
 
         from models.supervisor import (
@@ -1185,11 +1181,7 @@ class TestHandleRunResultUnifiedSummary:
             user_message_id="msg-1",
         )
         rmc._emit_unified_summary.assert_not_awaited()
-        rmc._emit_deterministic_digest.assert_awaited_once_with(
-            "room-1",
-            "msg-1",
-            agent_count=2,
-        )
+        rmc._emit_deterministic_digest.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_no_synthesis_skips_digest_for_single_agent_done(
@@ -1205,9 +1197,8 @@ class TestHandleRunResultUnifiedSummary:
         rmc._emit_deterministic_digest.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_trajectory_responses_extracted_and_passed(self, rmc):
-        """Trajectory responses are extracted from DELEGATE entries and
-        forwarded to _emit_unified_summary."""
+    async def test_trajectory_responses_are_not_summarized_again(self, rmc):
+        """Completed trajectory responses remain owned by Execution."""
         from datetime import datetime
 
         delegate_action = SupervisorAction(
@@ -1247,20 +1238,11 @@ class TestHandleRunResultUnifiedSummary:
             room_id="room-1",
             user_message_id="msg-1",
         )
-        rmc._emit_unified_summary.assert_awaited_once()
-        call_kwargs = rmc._emit_unified_summary.call_args
-        assert call_kwargs[1]["trajectory_responses"] == [
-            {
-                "agent_id": "agent-1",
-                "agent_name": "Agent Alpha",
-                "message": "Alpha's answer here.",
-            },
-            {
-                "agent_id": "agent-2",
-                "agent_name": "Agent Beta",
-                "message": "Beta's answer here.",
-            },
-        ]
+        rmc._emit_unified_summary.assert_not_awaited()
+        rmc._run_supervisor_terminal_post_loop_integration.assert_awaited_once_with(
+            result,
+            "room-1",
+        )
 
 
 class _Phase5StubPlanner:
@@ -1511,7 +1493,6 @@ class _FakePhase5App:
             agent_dispatcher=self.agent_dispatcher,
             agent_message_processor=self.agent_message_processor,
             hitl_coordinator=self.hitl_coordinator,
-            debate_rounds=2,
             orchestration_run_store=self.run_store,
             orchestration_planner=self.planner,
         )
@@ -1542,7 +1523,6 @@ class _FakePhase5App:
         self.room_center.supervisor_planning_error_cls = RuntimeError
         self.room_center.a2a_transport = None
         self.room_center.remote_task_reader = AsyncMock()
-        self.room_center.debate_prompt_injector = None
         self.room_center.rate_limit_service = None
         self.room_center.context_assembly = None
         self.room_center.memory_search = None
@@ -1802,7 +1782,7 @@ async def test_push_notification_terminal_result_reenters_and_completes_durable_
                 ],
             },
             {
-                "action": "synthesize",
+                "action": "complete",
                 "reasoning": "The callback result is ready.",
                 "synthesis_instruction": "Summarize the result.",
             },

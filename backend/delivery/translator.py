@@ -6,7 +6,6 @@ from common.dto import (
     AgentMessagePartial,
     ArtifactUpdateEvent,
     CancellationEvent,
-    DebateRoundEvent,
     DeliveryEvent,
     ErrorEvent,
     HITLRequestEvent,
@@ -183,15 +182,6 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "partial", event.partial)
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "hub_agent_event", data, frame_timestamp)
-
-    if isinstance(event, DebateRoundEvent):
-        data = {
-            "round_number": event.round_number,
-            "agent_id": event.agent_id,
-            "message_id": event.message_id,
-        }
-        _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "debate_round", data, frame_timestamp)
 
     raise TypeError(f"Unsupported delivery event: {type(event)!r}")
 

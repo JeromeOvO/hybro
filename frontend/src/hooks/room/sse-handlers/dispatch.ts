@@ -12,7 +12,6 @@ import { handleProcessingStatus } from './handlers/processing-status'
 import {
   handleCancellation,
   handleConnected,
-  handleDebateRound,
   handleError,
   handleHeartbeat,
   handleHubAgentEvent,
@@ -38,7 +37,6 @@ export const HANDLED_ROOM_SSE_TYPES = {
   hitl_response: true,
   cancellation: true,
   hub_agent_event: true,
-  debate_round: true,
 } satisfies Record<RoomSSEType, true>
 
 function needsCorrelationBuffer(type: RoomSSEType): boolean {
@@ -120,9 +118,6 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
         break
       case 'hub_agent_event':
         handleHubAgentEvent(roomMessage)
-        break
-      case 'debate_round':
-        handleDebateRound(roomMessage)
         break
       default:
         roomMessage satisfies never

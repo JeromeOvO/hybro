@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from copy import deepcopy
+from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -17,6 +19,7 @@ from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
 )
+from execution.orchestration.completion_policy import FinalizationMode
 from execution.orchestration.dispatch_payload import (
     ResolvedDispatchPayload,
     ResolvedResourcePayload,
@@ -86,6 +89,7 @@ from models.supervisor import (
     RunStatus,
     StepResult,
     StepStatus,
+    SupervisorRunResult,
     SupervisorTrajectory,
 )
 
@@ -345,7 +349,7 @@ async def test_terminal_system_task_does_not_emit_sse_when_db_retries_fail():
 
 
 @pytest.mark.asyncio
-async def test_loaded_debate_run_reconciles_missing_participant_snapshot():
+async def test_legacy_room_debate_flag_does_not_create_participant_snapshot():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -389,13 +393,9 @@ async def test_loaded_debate_run_reconciles_missing_participant_snapshot():
         user_message=user_message,
     )
 
-    assert loaded.participant_snapshot is not None
-    assert loaded.participant_snapshot.ordered_agent_ids == [
-        "agent-1",
-        "agent-2",
-    ]
-    assert loaded.step_budget >= 3
-    assert loaded.state_version == state.state_version + 1
+    assert loaded.participant_snapshot is None
+    assert loaded.step_budget == state.step_budget
+    assert loaded.state_version == state.state_version
 
 
 @pytest.mark.asyncio
@@ -639,6 +639,7 @@ def _agent_message(message_id: str) -> SimpleNamespace:
         message_id=message_id,
         turn_id=None,
         client_request_id="client-1",
+        last_notified_state=None,
         extend_info={},
         message_content=SimpleNamespace(message_text="", message_task=None),
     )
@@ -719,6 +720,31 @@ def _executor(
         created_message_ids.append(message_id)
         return _agent_message(message_id)
 
+    persisted_messages: dict[str, SimpleNamespace] = {}
+
+    async def get_agent_message(message_id: str):
+        return persisted_messages.get(message_id)
+
+    async def persist_agent_message(message):
+        persisted_messages[message.message_id] = deepcopy(message)
+        return message
+
+    async def update_agent_message(message_id: str, message_content):
+        message = persisted_messages.get(message_id)
+        if message is None:
+            return False
+        message.message_content = message_content
+        return True
+
+    async def process_agent_message(message, *_args, **_kwargs):
+        persisted_messages[
+            message.message_id
+        ].message_content.message_text = "Agent One response"
+        return ProcessingResult(
+            ProcessingStatus.SUCCESS,
+            response_text="Agent One response",
+        )
+
     executor = SupervisorExecutor(
         supervisor_service=SimpleNamespace(),
         room_runtime=SimpleNamespace(
@@ -732,15 +758,19 @@ def _executor(
         ),
         message_reader=SimpleNamespace(
             get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
-            get_room_agent_message_by_message_id=AsyncMock(return_value=None),
+            get_room_agent_message_by_message_id=AsyncMock(
+                side_effect=get_agent_message
+            ),
         ),
         message_writer=SimpleNamespace(
-            add_room_agent_message=AsyncMock(),
-            upsert_room_agent_message=AsyncMock(),
+            add_room_agent_message=AsyncMock(side_effect=persist_agent_message),
+            upsert_room_agent_message=AsyncMock(side_effect=persist_agent_message),
             delete_room_agent_message_by_message_id=AsyncMock(return_value=True),
             update_room_user_message_by_message_id=AsyncMock(return_value=True),
             update_room_agent_message_by_message_id=AsyncMock(return_value=True),
-            update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(),
+            update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(
+                side_effect=update_agent_message
+            ),
         ),
         task_state_store=SimpleNamespace(
             resolve_client_request_id_for_message_id=AsyncMock(return_value="client-1")
@@ -760,12 +790,7 @@ def _executor(
             )
         ),
         agent_message_processor=SimpleNamespace(
-            process_single_message=AsyncMock(
-                return_value=ProcessingResult(
-                    ProcessingStatus.SUCCESS,
-                    response_text="Agent One response",
-                )
-            )
+            process_single_message=AsyncMock(side_effect=process_agent_message)
         ),
         orchestration_run_store=store,
         orchestration_planner=planner,
@@ -1370,7 +1395,7 @@ def test_generic_user_only_blocker_allows_one_hitl_and_rejects_fulfilled_repeat(
     assert error.value.code == "delegate_goal_already_fulfilled"
 
 
-def test_completion_open_blocker_is_enforced_only_when_guardrails_enabled():
+def test_completion_open_blocker_is_always_enforced():
     blocker = BlockerRecord(
         key="generic:missing-user-value",
         description="Only the user can provide the missing value.",
@@ -1405,14 +1430,13 @@ def test_completion_open_blocker_is_enforced_only_when_guardrails_enabled():
         ],
     )
 
-    assert (
+    with pytest.raises(PlannerActionValidationError) as baseline_error:
         PlannerActionValidator.validate(
             action,
             run_state=state,
             guardrails_enabled=False,
         )
-        is action
-    )
+    assert baseline_error.value.code == "completion_gate_rejected"
     with pytest.raises(PlannerActionValidationError) as error:
         PlannerActionValidator.validate(
             action,
@@ -1966,7 +1990,13 @@ async def test_supervisor_records_dispatch_status_through_run_reducer():
     )
     executor = _executor(store=store, planner=planner, user_message=user_message)
 
-    async def process_single_message(*_args, **_kwargs):
+    async def process_single_message(message, *_args, **_kwargs):
+        persisted_message = (
+            await executor.message_reader.get_room_agent_message_by_message_id(
+                message.message_id
+            )
+        )
+        persisted_message.message_content.message_text = "Reviewed"
         dispatching = await store.get_run("run-1")
         assert dispatching is not None
         assert dispatching.last_planner_action is not None
@@ -2352,7 +2382,7 @@ def test_orchestration_supervisor_action_preserves_dependency_metadata():
 
 
 @pytest.mark.asyncio
-async def test_run_allows_final_synthesis_after_step_budget_is_consumed():
+async def test_run_allows_direct_finalization_after_step_budget_is_consumed():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -2378,7 +2408,7 @@ async def test_run_allows_final_synthesis_after_step_budget_is_consumed():
             ],
         ),
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="Summarize after budget is consumed",
             synthesis_instruction="Summarize the answer",
         ),
@@ -2397,14 +2427,101 @@ async def test_run_allows_final_synthesis_after_step_budget_is_consumed():
         user_message=user_message,
     )
 
-    assert result.status == RunStatus.COMPLETED
-    assert result.synthesis_text == "Final summary"
+    assert result.status == RunStatus.COMPLETED, result.run_state.terminal_reason
+    assert result.synthesis_text is None
+    executor._stream_supervisor_synthesis.assert_not_awaited()
+    assert result.run_state.finalization_mode == "direct_agent"
     assert len(planner.contexts) == 2
     assert planner.contexts[1].state_context.current_step.steps_used == 1
 
 
 @pytest.mark.asyncio
-async def test_run_complete_without_evidence_synthesizes_after_dispatch():
+async def test_run_direct_finalization_accepts_durable_artifact_without_text():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Generate an image"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Generate the image",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Image Agent",
+                    task="Generate an image",
+                    expected_outputs=[
+                        DispatchExpectedOutput(
+                            output_key="image",
+                            kind="image/png",
+                            required=True,
+                        )
+                    ],
+                )
+            ],
+        ),
+        PlannerAction(
+            action=PlannerActionType.COMPLETE,
+            reasoning="Image generated",
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    async def process_artifact_only(message, *_args, **_kwargs):
+        persisted = await executor.message_reader.get_room_agent_message_by_message_id(
+            message.message_id
+        )
+        persisted.message_content.message_text = ""
+        persisted.message_content.message_task = {
+            "status": {"state": "completed"},
+            "artifacts": [
+                {
+                    "artifact_id": "image-1",
+                    "name": "generated-image",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "uri": "/api/v1/files/image-1/content",
+                                "mimeType": "image/png",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        return ProcessingResult(ProcessingStatus.SUCCESS, response_text="")
+
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        side_effect=process_artifact_only
+    )
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Generate an image",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Image Agent")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED, result.run_state.terminal_reason
+    assert result.run_state.finalization_mode == FinalizationMode.DIRECT_AGENT.value
+    assert result.synthesis_text is None
+
+
+@pytest.mark.asyncio
+async def test_run_complete_without_evidence_passes_through_single_agent():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -2448,8 +2565,8 @@ async def test_run_complete_without_evidence_synthesizes_after_dispatch():
     )
 
     assert result.status == RunStatus.COMPLETED
-    assert result.synthesis_text == "Final summary"
-    executor._stream_supervisor_synthesis.assert_awaited_once()
+    assert result.synthesis_text is None
+    executor._stream_supervisor_synthesis.assert_not_awaited()
     state = await store.get_latest_by_user_message_id("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.COMPLETED
@@ -2545,6 +2662,20 @@ async def test_run_replans_after_recoverable_agent_failure_before_complete():
     executor = _executor(store=store, planner=planner, user_message=user_message)
     executor._orchestration_dispatch_intent = MagicMock(
         side_effect=_explicit_dispatch_intent
+    )
+    read_persisted_message = (
+        executor.message_reader.get_room_agent_message_by_message_id
+    )
+
+    async def read_recovered_message(message_id: str):
+        if message_id == "agent-msg-2":
+            message = _agent_message(message_id)
+            message.message_content.message_text = "Recovered answer."
+            return message
+        return await read_persisted_message(message_id)
+
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=read_recovered_message
     )
     executor._dispatch_targets = AsyncMock(
         side_effect=[
@@ -4041,7 +4172,7 @@ async def test_run_pending_hitl_without_reply_returns_awaiting_without_planning(
     await store.create_run(state)
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="should not plan before user reply",
             synthesis_instruction="Summarize",
         )
@@ -4131,7 +4262,7 @@ async def test_run_stale_awaiting_user_pending_hitl_does_not_block_recovering_aw
     )
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="should not plan",
             synthesis_instruction="ignored",
         )
@@ -6604,6 +6735,18 @@ async def test_run_complete_treats_goal_family_disposition_as_non_authoritative_
         ),
         user_message=user_message,
     )
+    persisted_reader = executor.message_reader.get_room_agent_message_by_message_id
+
+    async def read_completed_agent_message(message_id: str):
+        if message_id == "agent-msg-1":
+            message = _agent_message(message_id)
+            message.message_content.message_text = "The answer is ready."
+            return message
+        return await persisted_reader(message_id)
+
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=read_completed_agent_message
+    )
     monkeypatch.setattr(
         supervisor_executor_module._settings,
         "orchestration_outcome_guardrails",
@@ -6683,6 +6826,18 @@ async def test_run_complete_ignores_unknown_disposition_when_guardrails_disabled
             )
         ),
         user_message=user_message,
+    )
+    persisted_reader = executor.message_reader.get_room_agent_message_by_message_id
+
+    async def read_completed_agent_message(message_id: str):
+        if message_id == "agent-msg-1":
+            message = _agent_message(message_id)
+            message.message_content.message_text = "The answer is ready."
+            return message
+        return await persisted_reader(message_id)
+
+    executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+        side_effect=read_completed_agent_message
     )
     monkeypatch.setattr(
         supervisor_executor_module._settings,
@@ -6944,7 +7099,7 @@ async def test_run_paused_result_reconciles_terminal_agent_before_waiting():
             ],
         ),
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="terminal result already visible",
             synthesis_instruction="Summarize",
         ),
@@ -7249,7 +7404,7 @@ async def test_run_reentry_reconciles_inflight_dispatch_before_planning():
     await store.create_run(state)
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="summarize recovered output",
             synthesis_instruction="Summarize",
         )
@@ -7333,7 +7488,7 @@ async def test_blocking_agent_hitl_terminal_message_replaces_stale_awaiting_outp
     await store.create_run(state)
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="summarize completed HITL task",
             synthesis_instruction="Summarize",
         )
@@ -7414,15 +7569,24 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
             context_refs=refs["context_refs"],
             artifact_refs=refs["artifact_refs"],
             attachment_refs=refs["attachment_refs"],
-            expected_outputs=refs["expected_outputs"],
+            expected_outputs=[],
         )
     )
     await store.create_run(state)
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="summarize replayed output",
             synthesis_instruction="Summarize",
+            completion_evidence=CompletionEvidence(
+                satisfied_criteria=["The requested summary was produced."],
+                referenced_fact_ids=[],
+                referenced_artifact_keys=[],
+                unresolved_questions=[],
+                final_answer_intent="Return the summary.",
+                confidence=1.0,
+                satisfied_output_keys=["summary"],
+            ),
         )
     )
     executor = _executor(store=store, planner=planner, user_message=user_message)
@@ -7500,7 +7664,7 @@ async def test_run_replay_waits_when_planned_message_already_exists():
     await store.create_run(state)
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="should not be reached while existing dispatch is pending",
             synthesis_instruction="Summarize",
         )
@@ -7597,9 +7761,7 @@ async def test_run_dispatch_failure_without_message_id_is_visible_to_planner():
 
 
 @pytest.mark.asyncio
-async def test_run_synthesis_persists_system_message_content():
-    from common.types import TaskState
-
+async def test_single_agent_completion_does_not_persist_system_summary():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -7625,7 +7787,7 @@ async def test_run_synthesis_persists_system_message_content():
             ],
         ),
         PlannerAction(
-            action=PlannerActionType.SYNTHESIZE,
+            action=PlannerActionType.COMPLETE,
             reasoning="summarize",
             synthesis_instruction="Summarize",
         ),
@@ -7633,11 +7795,15 @@ async def test_run_synthesis_persists_system_message_content():
     store = InMemoryOrchestrationRunStore()
     executor = _executor(store=store, planner=planner, user_message=user_message)
     system_db_msg = _agent_message("sys-message-1")
-    system_db_msg.message_content.message_task = SimpleNamespace(
-        status=SimpleNamespace(state=TaskState.submitted)
-    )
+    persisted_reader = executor.message_reader.get_room_agent_message_by_message_id
+
+    async def read_summary_or_agent_message(message_id: str):
+        if message_id == "sys-message-1":
+            return system_db_msg
+        return await persisted_reader(message_id)
+
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
-        return_value=system_db_msg
+        side_effect=read_summary_or_agent_message
     )
 
     result = await executor.run(
@@ -7651,18 +7817,9 @@ async def test_run_synthesis_persists_system_message_content():
     )
 
     assert result.status == RunStatus.COMPLETED
-    executor.message_writer.update_room_agent_message_by_message_id.assert_awaited()
-    assert system_db_msg.message_content.message_text == "Final summary"
-    assert (
-        system_db_msg.message_content.message_task.status.state == TaskState.completed
-    )
-    assert system_db_msg.extend_info["summary_origin"] == "llm"
-    executor.delivery.send_task_update.assert_any_await(
-        room_id="room-1",
-        message_id="sys-message-1",
-        status="completed",
-    )
-    executor.delivery.send_agent_response.assert_awaited()
+    assert result.run_state.finalization_mode == "direct_agent"
+    executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id.assert_not_awaited()
+    assert system_db_msg.message_content.message_text != "Final summary"
 
 
 @pytest.mark.core
@@ -7966,7 +8123,7 @@ async def test_adapter_rejection_replans_and_resolves_failure_after_valid_action
                     ],
                 ),
                 PlannerAction(
-                    action=PlannerActionType.SYNTHESIZE,
+                    action=PlannerActionType.COMPLETE,
                     reasoning="The agent output supports a final response.",
                     synthesis_instruction="Summarize the agent output.",
                 ),
@@ -10918,8 +11075,12 @@ async def test_pdf_capable_upstream_gets_projection_and_source_attachment_before
         ]
     }
 
+    persisted_reader = executor.message_reader.get_room_agent_message_by_message_id
+
     async def get_agent_message(message_id: str):
-        return broker_message if message_id == "broker-msg" else None
+        if message_id == "broker-msg":
+            return broker_message
+        return await persisted_reader(message_id)
 
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
         side_effect=get_agent_message
@@ -11131,8 +11292,15 @@ async def test_completion_cas_loser_projects_only_durable_terminal_winner(
         )
         assert kwargs["status"] == expected_child_status
 
+    async def read_terminal_race_message(message_id: str):
+        if message_id == "agent-message-1":
+            message = _agent_message(message_id)
+            message.message_content.message_text = "Work completed."
+            return message
+        return system_message
+
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
-        return_value=system_message
+        side_effect=read_terminal_race_message
     )
     executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock(
         side_effect=persist_child
@@ -11218,7 +11386,7 @@ async def test_mark_orchestration_terminal_omits_failure_summary_for_completed_s
         message_content=MessageContent(message_text="Finish orchestration."),
         extend_info={},
     )
-    state = _run_state()
+    state = _run_state(status=OrchestrationStatus.FINALIZING)
     await store.create_run(state)
     executor = _executor(
         store=store,
@@ -11242,7 +11410,7 @@ async def test_mark_orchestration_terminal_omits_failure_summary_for_completed_s
 @pytest.mark.asyncio
 async def test_mark_orchestration_terminal_retains_summary_for_budget_exhaustion():
     store = InMemoryOrchestrationRunStore()
-    state = _run_state()
+    state = _run_state(status=OrchestrationStatus.RUNNING)
     await store.create_run(state)
     executor = _executor(
         store=store,
@@ -11356,6 +11524,160 @@ async def test_interrupt_checkpoint_does_not_serialize_supervisor_continuation()
 
     assert checkpointed is True
     assert not hasattr(executor, "continuation_store")
+
+
+async def _recover_finalizing_state(
+    *,
+    committed: bool,
+    persisted_text: str | None,
+    finalization_mode: FinalizationMode = FinalizationMode.SYNTHESIS,
+    persisted_artifacts: bool = False,
+) -> tuple[SupervisorRunResult, SupervisorExecutor]:
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Finish."),
+        extend_info={},
+    )
+    state = _run_state(
+        status=OrchestrationStatus.FINALIZING,
+        finalization_mode=finalization_mode.value,
+        final_source_message_id=(
+            "sys-message-1"
+            if finalization_mode == FinalizationMode.DIRECT_AGENT
+            else None
+        ),
+        summary_message_id="sys-message-1",
+        system_agent_message_id="sys-message-1",
+        finalization_committed_at=(datetime.now(UTC) if committed else None),
+    )
+    state = await store.create_run(state)
+    executor = _executor(
+        store=store, planner=RecordingPlanner(), user_message=user_message
+    )
+    if persisted_text is not None or persisted_artifacts:
+        persisted = _agent_message("sys-message-1")
+        persisted.message_content.message_text = persisted_text or ""
+        if persisted_artifacts:
+            persisted.message_content.message_task = {
+                "artifacts": [
+                    {
+                        "artifact_id": "image-1",
+                        "parts": [
+                            {
+                                "kind": "file",
+                                "file": {
+                                    "uri": "/api/v1/files/image-1/content",
+                                    "mimeType": "image/png",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=persisted
+        )
+
+    result = await executor._execute_orchestration_loop(
+        state=state,
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Finish.",
+        agent_registry=[],
+        room_config=RoomConfig(),
+        user_message=user_message,
+    )
+    return result, executor
+
+
+@pytest.mark.asyncio
+async def test_finalizing_recovery_before_final_persistence_fails_closed():
+    result, executor = await _recover_finalizing_state(
+        committed=False,
+        persisted_text=None,
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.run_state.finalization_committed_at is None
+    executor.delivery.send_agent_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_finalizing_recovery_after_persistence_replays_and_commits():
+    result, executor = await _recover_finalizing_state(
+        committed=False,
+        persisted_text="Durable synthesis.",
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.run_state.finalization_committed_at is not None
+    executor.delivery.send_agent_response.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalizing_recovery_commits_direct_artifact_without_text():
+    result, executor = await _recover_finalizing_state(
+        committed=False,
+        persisted_text=None,
+        finalization_mode=FinalizationMode.DIRECT_AGENT,
+        persisted_artifacts=True,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.run_state.finalization_committed_at is not None
+    executor.delivery.send_agent_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_finalizing_recovery_after_commit_does_not_duplicate_delivery():
+    result, executor = await _recover_finalizing_state(
+        committed=True,
+        persisted_text=None,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    executor.message_reader.get_room_agent_message_by_message_id.assert_not_awaited()
+    executor.delivery.send_agent_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_phase_durations_are_accumulated_in_durable_run_state():
+    store = InMemoryOrchestrationRunStore()
+    state = await store.create_run(_run_state())
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=RoomUserMessage(
+            room_id="room-1",
+            message_id="message-1",
+            user_id="user-1",
+            message_content=MessageContent(message_text="Measure."),
+            extend_info={},
+        ),
+    )
+    action = PlannerAction(
+        action=PlannerActionType.FAIL,
+        reasoning="Measured planner action.",
+        failure_reason="test-only",
+    )
+
+    state = await executor._record_orchestration_planner_action(
+        state,
+        action,
+        duration_ms=37,
+    )
+    state = await executor._record_orchestration_planner_action(
+        state,
+        action,
+        duration_ms=5,
+    )
+
+    durable = await store.get_run(state.run_id)
+    assert durable is not None
+    assert durable.phase_durations_ms["planner"] == 42
 
 
 def test_extract_response_text_from_message_with_artifact_parts():

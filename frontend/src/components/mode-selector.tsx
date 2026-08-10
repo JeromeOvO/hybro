@@ -37,9 +37,7 @@ const SELECTABLE_MODE_CONFIG = {
 type SelectableChatMode = keyof typeof SELECTABLE_MODE_CONFIG
 
 function toSelectableMode(mode: ChatMode): SelectableChatMode {
-  return mode === CHAT_MODE.FAST || mode === CHAT_MODE.FAST_DEBATE
-    ? CHAT_MODE.FAST
-    : CHAT_MODE.ULTIMATE
+  return mode
 }
 
 interface ModeSelectorProps {

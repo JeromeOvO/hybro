@@ -14,7 +14,7 @@ from common.idempotency import (
     normalize_client_request_id,
 )
 
-IDEMPOTENCY_FINGERPRINT_VERSION = 1
+IDEMPOTENCY_FINGERPRINT_VERSION = 2
 
 _QUOTE_FIELDS = (
     "text",
@@ -67,7 +67,11 @@ def execution_request_fingerprint_payload(
         if quote is None
         else {}
     )
-    candidate_scope_mode = _effective_candidate_scope_mode(request)
+    agent_scope = request.agent_scope.model_dump(mode="json")
+    if agent_scope.get("source") == "mention":
+        agent_scope["agent_ids"] = _normalized_id_set(
+            agent_scope.get("agent_ids"), empty_as_none=False
+        )
 
     return {
         "room_id": request.room_id,
@@ -80,37 +84,8 @@ def execution_request_fingerprint_payload(
         "quote": quote,
         "legacy_quote": legacy_quote or None,
         "mode": request.mode,
-        "message_target_mode": request.message_target_mode,
-        "target_group": request.target_group,
-        "target_group_id": request.target_group_id,
-        "mentioned_agent_ids": _normalized_id_set(
-            request.mentioned_agent_ids,
-            empty_as_none=True,
-        ),
-        "selected_agent_ids": _normalized_id_set(
-            request.selected_agent_ids,
-            empty_as_none=False,
-        ),
-        "candidate_scope_mode": candidate_scope_mode,
-        "candidate_scope_group_id": (
-            _normalized_optional_id(request.candidate_scope_group_id)
-            if candidate_scope_mode == "saved_group"
-            else None
-        ),
+        "agent_scope": agent_scope,
     }
-
-
-def _effective_candidate_scope_mode(request: ExecutionRequest) -> str:
-    explicit = request.candidate_scope_mode
-    if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip()
-    if request.selected_agent_ids is not None:
-        return "explicit_selection"
-    if request.target_group == "all_agents":
-        return "all_agents"
-    if request.target_group == "room_team":
-        return "room_default"
-    return "saved_group"
 
 
 def _semantic_quote(value: Any) -> dict[str, Any] | None:

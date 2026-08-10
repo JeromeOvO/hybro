@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from execution.dispatch.response_handler import AgentResponseHandler
     from execution.ports import (
         CancellationControlPort,
-        DebateServicePort,
         ExecutionDeliveryPort,
         HITLCoordinator,
         RateLimitPort,
@@ -116,7 +115,6 @@ class QueueExecutor:
         agent_lookup: RoomReader,
         room_reader: RoomReader,
         memory_reader: RoomMemoryReader,
-        debate_prompt_injector: DebateServicePort,
         rate_limit_service: RateLimitPort | None = None,
         agent_dispatcher: AgentDispatcher,
         agent_message_processor: AgentMessageProcessor,
@@ -143,7 +141,6 @@ class QueueExecutor:
         self.agent_lookup = agent_lookup
         self.room_reader = room_reader
         self.memory_reader = memory_reader
-        self.debate_prompt_injector = debate_prompt_injector
         self.rate_limit_service = rate_limit_service
         self.agent_dispatcher = agent_dispatcher
         self._agent_message_processor = agent_message_processor
@@ -1108,11 +1105,6 @@ class QueueExecutor:
             current_message.message_id,
         )
 
-        is_debate_mode = False
-        room = await self.room_reader.get_room_by_room_id(room_id)
-        if room and room.extend_info and isinstance(room.extend_info, dict):
-            is_debate_mode = bool(room.extend_info.get("debateMode", False))
-
         for next_message in next_messages:
             logger.info(
                 "QueueExecutor: Queueing next message %s (step %s/%s, task_content: %s)",
@@ -1125,16 +1117,4 @@ class QueueExecutor:
                 else "None",
             )
 
-            if is_debate_mode:
-                new_agent_message = await self.debate_prompt_injector.inject_short_debate_for_agent_message(
-                    next_message
-                )
-                if new_agent_message is None:
-                    logger.warning(
-                        "QueueExecutor: inject_short_debate returned None for message %s",
-                        next_message.message_id,
-                    )
-                    continue
-                message_queue.append(new_agent_message)
-            else:
-                message_queue.append(next_message)
+            message_queue.append(next_message)

@@ -195,13 +195,6 @@ class HubAgentEvent(DeliveryEventBase):
     partial: str | None = None
 
 
-class DebateRoundEvent(DeliveryEventBase):
-    event_type: Literal["debate_round"] = "debate_round"
-    round_number: int
-    agent_id: str
-    message_id: str
-
-
 DeliveryEvent = Annotated[
     ProcessingStatusEvent
     | RunEventNotification
@@ -214,8 +207,7 @@ DeliveryEvent = Annotated[
     | CancellationEvent
     | HITLRequestEvent
     | HITLResolvedEvent
-    | HubAgentEvent
-    | DebateRoundEvent,
+    | HubAgentEvent,
     Field(discriminator="event_type"),
 ]
 
@@ -225,7 +217,6 @@ __all__ = [
     "AgentMessagePartial",
     "ArtifactUpdateEvent",
     "CancellationEvent",
-    "DebateRoundEvent",
     "DeliveryEnvelope",
     "DeliveryEvent",
     "DeliveryEventBase",

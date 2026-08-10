@@ -1024,8 +1024,8 @@ async def test_planner_adapter_supervisor_prompt_requires_delegate_target_task()
     system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
         "system_prompt"
     ]
-    assert '"task"' in system_prompt
-    assert "required" in system_prompt.lower()
+    assert "concise operational task" in system_prompt
+    assert "expected outputs" in system_prompt.lower()
 
 
 @pytest.mark.asyncio
@@ -1058,9 +1058,9 @@ async def test_planner_adapter_supervisor_prompt_guides_attachment_ref_selection
     system_prompt = supervisor_service.call_planner_json.await_args.kwargs[
         "system_prompt"
     ]
-    assert "Select resources by business relevance" in system_prompt
-    assert "Execution will decide the compatible representation" in system_prompt
-    assert "Do not invent blocker keys, repair lineage, retry policy" in system_prompt
+    assert "selected refs" in system_prompt
+    assert "Execution generates all IDs" in system_prompt
+    assert "Execution generates all IDs and parallel groups" in system_prompt
 
 
 @pytest.mark.asyncio
