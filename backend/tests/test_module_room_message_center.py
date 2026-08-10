@@ -11,6 +11,7 @@ Tests cover:
 import ast
 import asyncio
 import inspect
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -29,6 +30,7 @@ from execution.orchestration.queue_executor import (
 )
 from execution.orchestration.room_message_center import (
     RoomLockBackendUnavailable,
+    RoomLockRenewalFailed,
     RoomMessageCenter,
 )
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
@@ -933,6 +935,309 @@ async def test_unavailable_room_lock_backend_returns_service_unavailable():
     assert "temporarily unavailable" in result.error
     rmc.message_writer.unclaim_user_message.assert_awaited_once_with("umsg-1")
     emit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_room_lock_renewal_unclaims_and_returns_service_unavailable():
+    async def wait_forever(*_args, **_kwargs):
+        await asyncio.Future()
+
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="umsg-1",
+        is_recovery=False,
+    )
+    rmc.message_writer = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        refresh_processing_claim=AsyncMock(return_value=True),
+        unclaim_user_message=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
+    rmc._release_room_lock = AsyncMock()
+    rmc._heartbeat_processing_claim = AsyncMock(side_effect=wait_forever)
+    rmc._renew_room_lock = AsyncMock(
+        side_effect=RoomLockRenewalFailed("lock TTL expired")
+    )
+    rmc._process_room_user_message_locked = AsyncMock(side_effect=wait_forever)
+    emit = AsyncMock()
+    rmc._processing_status_emitter = emit
+
+    result = await rmc.process_room_user_message(request)
+
+    assert result.status_code == 503
+    assert "lost its distributed lock" in result.error
+    rmc.message_writer.unclaim_user_message.assert_awaited_once_with("umsg-1")
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["status"] == SSEProcessingStatus.FAILED
+    rmc._release_room_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_stops_when_room_lock_renewal_fails():
+    resume_started = asyncio.Event()
+
+    async def wait_forever(*_args, **_kwargs):
+        resume_started.set()
+        await asyncio.Future()
+
+    async def fail_after_resume_starts(*_args, **_kwargs):
+        await resume_started.wait()
+        raise RoomLockRenewalFailed("lock TTL expired")
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._acquire_room_lock = AsyncMock(return_value="owner-1")
+    center._room_lock_acquired_at_by_owner = {"owner-1": time.monotonic()}
+    center._renew_room_lock = AsyncMock(side_effect=fail_after_resume_starts)
+    center._resume_continuation_locked = AsyncMock(side_effect=wait_forever)
+    center._release_room_lock = AsyncMock()
+    center.queue_executor = SimpleNamespace(
+        _restore_invalid_continuation=AsyncMock(),
+    )
+
+    resumed = await center.resume_queue_from_continuation("agent-msg-1")
+
+    assert resumed is False
+    center._renew_room_lock.assert_awaited_once()
+    center._resume_continuation_locked.assert_awaited_once()
+    center.queue_executor._restore_invalid_continuation.assert_awaited_once_with(
+        "agent-msg-1",
+        {"room_id": "room-1"},
+        reason="room lock renewal failed during continuation resume",
+    )
+    center._release_room_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_restores_continuation_when_cancelled_during_destructive_claim():
+    claim_mutated = asyncio.Event()
+    allow_claim_result = asyncio.Event()
+
+    async def destructive_claim(*_args):
+        claim_mutated.set()
+        await allow_claim_result.wait()
+        return {"room_id": "room-1"}
+
+    async def fail_renewal(*_args, **_kwargs):
+        await claim_mutated.wait()
+        allow_claim_result.set()
+        raise RoomLockRenewalFailed("lock TTL expired")
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(side_effect=destructive_claim),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._acquire_room_lock = AsyncMock(return_value="owner-1")
+    center._room_lock_acquired_at_by_owner = {"owner-1": time.monotonic()}
+    center._renew_room_lock = AsyncMock(side_effect=fail_renewal)
+    center._resume_continuation_locked = AsyncMock()
+    center._release_room_lock = AsyncMock()
+    center.queue_executor = SimpleNamespace(
+        _restore_invalid_continuation=AsyncMock(),
+    )
+
+    resumed = await center.resume_queue_from_continuation("agent-msg-1")
+
+    assert resumed is False
+    center.queue_executor._restore_invalid_continuation.assert_awaited_once_with(
+        "agent-msg-1",
+        {"room_id": "room-1"},
+        reason="room lock renewal failed during continuation claim",
+    )
+    center._resume_continuation_locked.assert_not_awaited()
+    center._release_room_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_external_resume_cancellation_restores_claim_before_releasing_lock():
+    claim_mutated = asyncio.Event()
+    allow_claim_result = asyncio.Event()
+    restore_started = asyncio.Event()
+    allow_restore = asyncio.Event()
+    cleanup_order: list[str] = []
+
+    async def destructive_claim(*_args):
+        claim_mutated.set()
+        await allow_claim_result.wait()
+        return {"room_id": "room-1"}
+
+    async def renew_forever(*_args, **_kwargs):
+        await asyncio.Future()
+
+    async def restore(*_args, **_kwargs):
+        restore_started.set()
+        await allow_restore.wait()
+        cleanup_order.append("restore")
+
+    async def release(*_args, **_kwargs):
+        cleanup_order.append("release")
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(side_effect=destructive_claim),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._acquire_room_lock = AsyncMock(return_value="owner-1")
+    center._room_lock_acquired_at_by_owner = {"owner-1": time.monotonic()}
+    center._renew_room_lock = AsyncMock(side_effect=renew_forever)
+    center._resume_continuation_locked = AsyncMock()
+    center._release_room_lock = AsyncMock(side_effect=release)
+    center.queue_executor = SimpleNamespace(
+        _restore_invalid_continuation=AsyncMock(side_effect=restore),
+    )
+
+    resume = asyncio.create_task(center.resume_queue_from_continuation("agent-msg-1"))
+    await claim_mutated.wait()
+    resume.cancel()
+    allow_claim_result.set()
+    await restore_started.wait()
+    resume.cancel()
+    allow_restore.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await resume
+
+    assert cleanup_order == ["restore", "release"]
+    center._resume_continuation_locked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_resume_lock_release_is_preserved():
+    release_started = asyncio.Event()
+    allow_release = asyncio.Event()
+
+    async def renew_forever(*_args, **_kwargs):
+        await asyncio.Future()
+
+    async def delayed_release(*_args, **_kwargs):
+        release_started.set()
+        await allow_release.wait()
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._acquire_room_lock = AsyncMock(return_value="owner-1")
+    center._room_lock_acquired_at_by_owner = {"owner-1": time.monotonic()}
+    center._renew_room_lock = AsyncMock(side_effect=renew_forever)
+    center._resume_continuation_locked = AsyncMock(return_value=True)
+    center._release_room_lock = AsyncMock(side_effect=delayed_release)
+
+    resume = asyncio.create_task(center.resume_queue_from_continuation("agent-msg-1"))
+    await release_started.wait()
+    resume.cancel()
+    allow_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await resume
+
+    center._release_room_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lockless_resume_waits_for_restore_through_repeated_cancellation():
+    resume_started = asyncio.Event()
+    restore_started = asyncio.Event()
+    allow_restore = asyncio.Event()
+
+    async def destructive_claim(*_args):
+        return {"user_message_id": "user-msg-1"}
+
+    async def resume_forever(*_args, **_kwargs):
+        resume_started.set()
+        await asyncio.Future()
+
+    async def delayed_restore(*_args, **_kwargs):
+        restore_started.set()
+        await allow_restore.wait()
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"user_message_id": "user-msg-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(side_effect=destructive_claim),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._resume_continuation_locked = AsyncMock(side_effect=resume_forever)
+    center.queue_executor = SimpleNamespace(
+        _restore_invalid_continuation=AsyncMock(side_effect=delayed_restore),
+    )
+
+    resume = asyncio.create_task(center.resume_queue_from_continuation("agent-msg-1"))
+    await resume_started.wait()
+    resume.cancel()
+    await restore_started.wait()
+    resume.cancel()
+    assert not resume.done()
+    allow_restore.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await resume
+
+    center.queue_executor._restore_invalid_continuation.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_restoration_error_still_releases_room_lock():
+    resume_started = asyncio.Event()
+
+    async def wait_forever(*_args, **_kwargs):
+        resume_started.set()
+        await asyncio.Future()
+
+    async def fail_after_resume_starts(*_args, **_kwargs):
+        await resume_started.wait()
+        raise RoomLockRenewalFailed("lock TTL expired")
+
+    center = RoomMessageCenter.__new__(RoomMessageCenter)
+    center.continuation_store = SimpleNamespace(
+        get_pending_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_message=AsyncMock(
+            return_value={"room_id": "room-1"}
+        ),
+        get_and_clear_continuation_on_user_message=AsyncMock(),
+    )
+    center._acquire_room_lock = AsyncMock(return_value="owner-1")
+    center._room_lock_acquired_at_by_owner = {"owner-1": time.monotonic()}
+    center._renew_room_lock = AsyncMock(side_effect=fail_after_resume_starts)
+    center._resume_continuation_locked = AsyncMock(side_effect=wait_forever)
+    center._release_room_lock = AsyncMock()
+    center.queue_executor = SimpleNamespace(
+        _restore_invalid_continuation=AsyncMock(
+            side_effect=RuntimeError("restore failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="restore failed"):
+        await center.resume_queue_from_continuation("agent-msg-1")
+
+    center._release_room_lock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
