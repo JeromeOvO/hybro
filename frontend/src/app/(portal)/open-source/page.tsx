@@ -25,23 +25,31 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { FRAMEWORKS } from "@/components/framework-badges"
 import { TypingTerminal } from "@/components/open-source/typing-terminal"
 
-// Steps mirror README "Quick Start" and install.sh. Ports come from
-// docker-compose.yml; the env file names come from install.sh.
+// Delegates to install.sh rather than restating its steps: the script also
+// generates the shared registrar token and regenerates the default-agent
+// Compose services, both of which are easy to miss and break registration.
+// Ports come from docker-compose.yml.
 const AI_SETUP_PROMPT = `Set up Hybro AI on my machine and get it running locally.
 
 Repo: https://github.com/hybroai/hybro
 Requires: git, Docker, Docker Compose.
 
-1. Clone the repo and cd into it.
-2. Create the env files from their examples:
-   backend/.env.example        -> backend/.env
-   frontend/.env.example       -> frontend/.env.local
-   default_agents/.env.example -> default_agents/.env
-3. Ask me for my OPENAI_API_KEY, then set the same value in
-   both backend/.env and default_agents/.env. The default agents
-   register without it, but their calls fail until a valid key is set.
-4. Run: docker compose up -d --build
-5. Wait for the containers to come up, then verify:
+1. Run the official installer, which clones the repo, creates the
+   .env files, generates the shared registrar token and starts everything:
+
+   curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh
+
+   Do not hand-roll these steps. Copying the .env.example files yourself
+   leaves the registrar token empty and default agents fail to register
+   with HTTP 401.
+
+2. Ask me for my OPENAI_API_KEY, then set the same value in both
+   backend/.env and default_agents/.env. The agents register without it,
+   but their calls fail until a valid key is set.
+
+3. Restart so the key is picked up: docker compose up -d --build
+
+4. Verify:
    App  http://localhost:3000
    API  http://localhost:8000
 
@@ -53,8 +61,9 @@ const QUICK_START_COMMANDS = {
   ai: AI_SETUP_PROMPT,
 }
 
+// Labels are stored in natural casing; the tab styling uppercases them.
 const QUICK_START_TABS = [
-  { key: "script", label: "CURL" },
+  { key: "script", label: "curl" },
   { key: "ai", label: "Agentic" },
   { key: "docker", label: "Docker" },
 ] as const
@@ -261,7 +270,7 @@ export default function OpenSourcePage() {
                   <button
                     key={tab.key}
                     onClick={() => setActiveTab(tab.key)}
-                    className={`px-3 py-1.5 rounded-md transition-all ${
+                    className={`px-3 py-1.5 rounded-md uppercase tracking-wider transition-all ${
                       activeTab === tab.key
                         ? "bg-[hsl(var(--color-hybro-hy))]/15 text-[hsl(var(--color-hybro-hy))] font-semibold shadow-sm ring-1 ring-[hsl(var(--color-hybro-hy))]/30"
                         : "text-muted-foreground hover:text-foreground"
