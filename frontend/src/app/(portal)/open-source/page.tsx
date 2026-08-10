@@ -43,6 +43,8 @@ Requires: git, Docker, Docker Compose.
    leaves the registrar token empty and default agents fail to register
    with HTTP 401.
 
+   It installs into ~/hybro. cd there for the remaining steps.
+
 2. Ask me for my OPENAI_API_KEY, then set the same value in both
    backend/.env and default_agents/.env. The agents register without it,
    but their calls fail until a valid key is set.
