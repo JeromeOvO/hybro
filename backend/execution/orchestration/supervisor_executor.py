@@ -2205,20 +2205,26 @@ class SupervisorExecutor:
 
         Open ``planner_validator`` failures block COMPLETE via the completion gate.
         Recovery actions are chosen specifically to supersede those failures, so
-        resolve them before validation.
+        validate against a copy with them cleared and only resolve the live state
+        after validation succeeds.
         """
 
+        validation_state = state
         if recovery_action.action in {
             PlannerActionType.COMPLETE,
             PlannerActionType.PLATFORM_ANSWER,
         }:
-            resolve_open_planner_validation_failures(state)
-        return PlannerActionValidator.validate(
+            validation_state = copy.deepcopy(state)
+            resolve_open_planner_validation_failures(validation_state)
+        validated = PlannerActionValidator.validate(
             recovery_action,
-            run_state=state,
+            run_state=validation_state,
             resource_fingerprints=resource_fingerprints,
             guardrails_enabled=self.guardrails_enabled,
         )
+        if validation_state is not state:
+            resolve_open_planner_validation_failures(state)
+        return validated
 
     async def _record_orchestration_planner_rejection(
         self,

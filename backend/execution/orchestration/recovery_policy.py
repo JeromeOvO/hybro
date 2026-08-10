@@ -7,6 +7,7 @@ from execution.orchestration.blocker_matching import (
     match_tokens,
     normalize_match_text,
 )
+from execution.orchestration.completion_policy import required_missing_output_keys
 from execution.orchestration.context_ref_resolution import (
     rewrite_context_refs_with_available_facts,
 )
@@ -115,6 +116,8 @@ def _ask_user_action_for_validated_blockers(
 def _has_completable_agent_progress(state: OrchestrationRunState) -> bool:
     """True when fulfilled Agent work remains and no required gaps are open."""
     if not any(outcome.status == "fulfilled" for outcome in state.delegation_outcomes):
+        return False
+    if required_missing_output_keys(state):
         return False
     if state.goal_progress:
         return not any(

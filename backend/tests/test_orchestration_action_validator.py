@@ -2878,6 +2878,71 @@ def test_fail_rejected_when_goal_already_satisfied():
     assert exc_info.value.code == "fail_goal_already_satisfied"
 
 
+def test_fail_allowed_when_required_output_key_still_missing():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="story and summary",
+        candidate_agent_ids=["story", "summarizer"],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="msg-story",
+                agent_id="story",
+                status="completed",
+                text="Once upon a time...",
+            )
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="story-intent",
+                planned_agent_message_id="msg-story",
+                agent_id="story",
+                task="Write a story",
+                task_hash="hash-story",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="story_text",
+                        kind="text",
+                        required=True,
+                    ),
+                    DispatchExpectedOutput(
+                        output_key="summary",
+                        kind="text",
+                        required=True,
+                    ),
+                ],
+                status="success",
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="o1",
+                dispatch_intent_id="story-intent",
+                agent_id="story",
+                goal_family_fingerprint="f1",
+                goal_revision_fingerprint="r1",
+                attempt_fingerprint="a1",
+                status="fulfilled",
+                satisfied_output_keys=["story_text"],
+                missing_output_keys=["summary"],
+            )
+        ],
+        goal_progress=[],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.FAIL,
+        reasoning="summary unavailable",
+        failure_reason="Summarizer could not produce required summary output",
+    )
+
+    validated = PlannerActionValidator.validate(action, run_state=state)
+
+    assert validated.action == PlannerActionType.FAIL
+
+
 def test_parallel_delegate_rejects_same_step_context_dependency():
     state = OrchestrationRunState(
         run_id="run-1",

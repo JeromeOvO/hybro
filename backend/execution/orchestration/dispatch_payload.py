@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
 from execution.orchestration.context_ref_resolution import (
     context_ref_text_payload,
+    resolve_context_ref_to_artifact_key,
     resolve_context_ref_to_fact_id,
 )
 from models.orchestration import (
@@ -85,12 +86,19 @@ async def resolve_dispatch_payload_refs(
     context_refs_to_resolve: list[DispatchContentRef] = []
     artifact_ref_ids = {ref.ref_id for ref in effective_artifact_refs}
     for ref in effective_context_refs:
-        if ref.ref_id in artifact_keys:
-            if ref.ref_id not in artifact_ref_ids:
+        resolved_artifact_key = resolve_context_ref_to_artifact_key(run_state, ref)
+        artifact_ref_id = resolved_artifact_key or ref.ref_id
+        if artifact_ref_id in artifact_keys:
+            if artifact_ref_id not in artifact_ref_ids:
                 effective_artifact_refs.append(
-                    ref.model_copy(update={"kind": DispatchRefKind.ARTIFACT})
+                    ref.model_copy(
+                        update={
+                            "kind": DispatchRefKind.ARTIFACT,
+                            "ref_id": artifact_ref_id,
+                        }
+                    )
                 )
-                artifact_ref_ids.add(ref.ref_id)
+                artifact_ref_ids.add(artifact_ref_id)
             continue
         context_refs_to_resolve.append(ref)
 

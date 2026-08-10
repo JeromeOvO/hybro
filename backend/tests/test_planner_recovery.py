@@ -1,3 +1,6 @@
+import pytest
+
+from execution.orchestration.action_validator import PlannerActionValidationError
 from execution.orchestration.planner_recovery import (
     planner_validation_fingerprint,
     record_recoverable_planner_rejection,
@@ -97,3 +100,52 @@ def test_valid_action_resolves_open_planner_validation_failures():
     resolve_open_planner_validation_failures(state)
 
     assert failure.status == "resolved"
+
+
+def test_recovery_validation_keeps_open_failures_when_complete_rejected():
+    from types import SimpleNamespace
+
+    from execution.orchestration.supervisor_executor import SupervisorExecutor
+    from models.orchestration import ActiveDispatchRef, PlannerAction, PlannerActionType
+
+    state = _state()
+    failure, _ = record_recoverable_planner_rejection(
+        state,
+        error_code="planner_output_invalid",
+        error_message="bad output",
+        planner_action=None,
+        stage="adapter",
+    )
+    state.active_dispatches = [
+        ActiveDispatchRef(
+            agent_message_id="msg-active",
+            agent_id="agent-1",
+            status="working",
+        )
+    ]
+    recovery = PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="Recover to complete",
+    )
+    executor = SupervisorExecutor(
+        supervisor_service=SimpleNamespace(),
+        room_runtime=SimpleNamespace(),
+        tsm=SimpleNamespace(),
+        delivery=SimpleNamespace(),
+        message_reader=SimpleNamespace(),
+        message_writer=SimpleNamespace(),
+        task_state_store=SimpleNamespace(),
+        continuation_store=SimpleNamespace(),
+        internal_event_publisher=SimpleNamespace(),
+        agent_dispatcher=SimpleNamespace(),
+        agent_message_processor=SimpleNamespace(),
+    )
+
+    with pytest.raises(PlannerActionValidationError):
+        executor._validate_recovery_planner_action(
+            state,
+            recovery,
+            resource_fingerprints={},
+        )
+
+    assert failure.status == "open"

@@ -8,6 +8,7 @@ from typing import Any
 from execution.orchestration.completion_policy import (
     CompletionPolicyError,
     determine_finalization_mode,
+    required_missing_output_keys,
     successful_agent_outputs,
 )
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
@@ -897,6 +898,8 @@ def _goal_already_satisfied(run_state: OrchestrationRunState) -> bool:
     if not any(
         outcome.status == "fulfilled" for outcome in run_state.delegation_outcomes
     ):
+        return False
+    if required_missing_output_keys(run_state):
         return False
     if run_state.goal_progress:
         return not any(
