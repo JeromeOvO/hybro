@@ -179,6 +179,13 @@ Important route groups:
 - `webhook_routes.py`: A2A task webhook callbacks.
 - `a2a_task_routes.py`: long-running A2A task inspection.
 
+Saved Team creation accepts an optional owner-scoped `preset_key`. The gateway
+maps it to a deterministic `group_id`, returns an existing Team for repeated
+requests, and recovers the winning row when concurrent inserts race. A critical
+unique Mongo index on `agent_groups.group_id` makes this idempotency guarantee
+atomic across processes and browser tabs; ordinary Team creation without a
+preset key keeps random IDs.
+
 Most frontend-facing routes use Clerk auth. Relay routes use API-key auth from
 `common.api_key_auth`.
 

@@ -581,11 +581,22 @@ probing. Local agents are shown only while `source === "hub"`, status is active,
 and the hub is online; stale Local agents are hidden. Agent-detail chat actions
 write a one-shot mention draft to `room-ui-store` and navigate to `/chat`; the
 composer consumes the draft, renders the Agent mention, and focuses the input
-without URL query parameters or creating a saved Team. The shared shell is
-implemented by `src/components/portal/` and exposes only New Chat and Agents as
-primary navigation before chat history. Legacy `/manage/agents*` routes are
-redirect-only compatibility paths. `src/lib/routes.ts` is the canonical route
-vocabulary for application links.
+without URL query parameters or creating a saved Team.
+
+Featured use-case cards on `/chat` stay on the page. A card resolves its declared
+Agents against the live catalog, finds the authenticated user's saved preset Team
+by a stable use-case marker, and creates that Team through `/agentGroups` only
+when it is absent. Creation includes an owner-scoped `preset_key`, so the Backend
+also guarantees idempotency across concurrent tabs. Existing preset membership
+is reconciled to the template's current Agent IDs before selection. The card then
+selects the saved Team in the group selector and prefills the composer; room creation and
+navigation do not occur until the user sends the message. Failed creates perform
+one catalog refresh as a compatibility fallback.
+
+The shared shell is implemented by `src/components/portal/` and exposes only New
+Chat and Agents as primary navigation before chat history. Legacy
+`/manage/agents*` routes are redirect-only compatibility paths.
+`src/lib/routes.ts` is the canonical route vocabulary for application links.
 
 ## 14. Testing Layout
 

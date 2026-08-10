@@ -7,6 +7,7 @@ Provides CRUD operations for user-created agent groups.
 from __future__ import annotations
 
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -35,6 +36,33 @@ def _owns_group(group: AgentGroup, user_id: str | None) -> bool:
     return user_id is None or group.owner_id == user_id
 
 
+async def _prepare_preset_group(
+    db: AgentGroupStoreCompatibility,
+    owner_id: str,
+    preset_key: Any,
+) -> tuple[str | None, dict[str, Any] | None]:
+    if preset_key is None:
+        return None, None
+    if not isinstance(preset_key, str) or not preset_key.strip():
+        return None, {
+            "success": False,
+            "error": "Preset key must be a non-empty string",
+            "status_code": 400,
+        }
+
+    group_id = uuid5(NAMESPACE_URL, f"hybro-agent-group:{owner_id}:{preset_key}").hex
+    existing_group = await db.get_agent_group_by_id(group_id)
+    if existing_group is None:
+        return group_id, None
+    if existing_group.owner_id != owner_id:
+        return group_id, _forbidden("Cannot access another owner's agent group")
+    return group_id, {
+        "success": True,
+        "group": existing_group.model_dump(mode="json"),
+        "status_code": 200,
+    }
+
+
 @router.post("/agentGroups")
 async def create_agent_group(
     request: Request,
@@ -51,6 +79,7 @@ async def create_agent_group(
     user_id = _current_user_id(user)
     owner_id = user_id or requested_owner_id
     agents = request_data.get("agents", [])
+    preset_key = request_data.get("preset_key")
 
     if not name:
         return {"success": False, "error": "Group name is required", "status_code": 400}
@@ -59,8 +88,12 @@ async def create_agent_group(
         return {"success": False, "error": "Owner ID is required", "status_code": 400}
     if user_id and requested_owner_id and requested_owner_id != user_id:
         return _forbidden("Cannot create an agent group for another owner")
+    group_id, preset_response = await _prepare_preset_group(db, owner_id, preset_key)
+    if preset_response is not None:
+        return preset_response
 
     agent_group = AgentGroup(
+        **({"group_id": group_id} if group_id else {}),
         name=name,
         description=description,
         type="user",
@@ -76,12 +109,24 @@ async def create_agent_group(
             "group": agent_group.model_dump(mode="json"),
             "status_code": 200,
         }
-    else:
-        return {
-            "success": False,
-            "error": "Failed to create agent group",
-            "status_code": 500,
-        }
+
+    # A concurrent request with the same preset key may have won the unique
+    # group_id insert. Return that owner-scoped group instead of surfacing an
+    # error or creating another team.
+    if group_id:
+        existing_group = await db.get_agent_group_by_id(group_id)
+        if existing_group is not None and existing_group.owner_id == owner_id:
+            return {
+                "success": True,
+                "group": existing_group.model_dump(mode="json"),
+                "status_code": 200,
+            }
+
+    return {
+        "success": False,
+        "error": "Failed to create agent group",
+        "status_code": 500,
+    }
 
 
 @router.get("/agentGroups")

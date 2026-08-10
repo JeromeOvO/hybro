@@ -170,6 +170,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
 
     assert set(collections) >= {
         "agent_capability_issues",
+        "agent_groups",
         "agents",
         "conversation_content",
         "cancelled_messages",
@@ -209,6 +210,12 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             "agent_card.description": 3,
             "agent_card.skills.description": 3,
         },
+    )
+    assert _has_create_index(
+        collections["agent_groups"],
+        [("group_id", 1)],
+        unique=True,
+        name="agent_group_id_unique",
     )
     assert _has_create_index(
         collections["conversation_content"],
