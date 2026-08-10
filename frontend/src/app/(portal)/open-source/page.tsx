@@ -25,25 +25,27 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { FRAMEWORKS } from "@/components/framework-badges"
 import { TypingTerminal } from "@/components/open-source/typing-terminal"
 
-// Delegates to install.sh rather than restating its steps: the script also
-// generates the shared registrar token, which the .env.example files leave
-// empty and which default-agent registration fails without (HTTP 401).
-// Ports come from docker-compose.yml; the install path from install.sh.
+// Mirrors install.sh, including the secret-generating steps it runs between
+// copying the env files and starting Compose. Skipping step 3 leaves the
+// registrar token blank, which fails default-agent registration with 401
+// (documented in backend/.env.example). Ports come from docker-compose.yml.
 const AI_SETUP_PROMPT = `Set up Hybro AI on my machine and get it running locally.
-Repo: https://github.com/hybroai/hybro
-Requires: git, Docker, Docker Compose.
-1. Run the official installer, which clones the repo, creates the
-   .env files, generates the shared registrar token and starts everything:
-   curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh
-   Do not hand-roll these steps. Copying the .env.example files yourself
-   leaves the registrar token empty and default agents fail to register
-   with HTTP 401.
-   It installs into ~/hybro. cd there for the remaining steps.
-2. Ask me for my OPENAI_API_KEY, then set the same value in both
-   backend/.env and default_agents/.env. The agents register without it,
-   but their calls fail until a valid key is set.
-3. Restart so the key is picked up: docker compose up -d --build
-4. Verify:
+Requires: git, Docker, Docker Compose. Run every step from the repo root.
+1. git clone https://github.com/hybroai/hybro.git && cd hybro
+2. Create the env files from their examples:
+   backend/.env.example        -> backend/.env
+   frontend/.env.example       -> frontend/.env.local
+   default_agents/.env.example -> default_agents/.env
+3. Generate the secrets those examples leave blank. Skipping this leaves
+   the shared registrar token empty and the default agents then fail to
+   register with HTTP 401:
+   sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
+   sh backend/scripts/ensure_webhook_signing_key.sh backend/.env
+4. Ask me for my OPENAI_API_KEY, then set the same value in both
+   backend/.env and default_agents/.env. The default agents register
+   without it, but their calls fail until a valid key is set.
+5. Run: docker compose up -d --build
+6. Wait for the containers to come up, then verify:
    App  http://localhost:3000
    API  http://localhost:8000
 If a container fails, show me its \`docker compose logs\` output and fix it.`
