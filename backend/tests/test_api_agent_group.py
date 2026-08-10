@@ -109,9 +109,7 @@ class TestCreateAgentGroup:
             owner_id=mock_user.user_id,
             agents=["weather", "travel"],
         )
-        mock_db_service.get_agent_group_by_id = AsyncMock(
-            side_effect=[None, created]
-        )
+        mock_db_service.get_agent_group_by_id = AsyncMock(side_effect=[None, created])
         mock_db_service.add_agent_group = AsyncMock(return_value=False)
         mock_request = MagicMock()
         mock_request.json = AsyncMock(

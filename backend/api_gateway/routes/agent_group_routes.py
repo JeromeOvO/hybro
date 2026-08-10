@@ -50,9 +50,7 @@ async def _prepare_preset_group(
             "status_code": 400,
         }
 
-    group_id = uuid5(
-        NAMESPACE_URL, f"hybro-agent-group:{owner_id}:{preset_key}"
-    ).hex
+    group_id = uuid5(NAMESPACE_URL, f"hybro-agent-group:{owner_id}:{preset_key}").hex
     existing_group = await db.get_agent_group_by_id(group_id)
     if existing_group is None:
         return group_id, None
@@ -90,9 +88,7 @@ async def create_agent_group(
         return {"success": False, "error": "Owner ID is required", "status_code": 400}
     if user_id and requested_owner_id and requested_owner_id != user_id:
         return _forbidden("Cannot create an agent group for another owner")
-    group_id, preset_response = await _prepare_preset_group(
-        db, owner_id, preset_key
-    )
+    group_id, preset_response = await _prepare_preset_group(db, owner_id, preset_key)
     if preset_response is not None:
         return preset_response
 
