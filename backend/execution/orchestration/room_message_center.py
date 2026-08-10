@@ -1140,6 +1140,7 @@ class RoomMessageCenter:
         # Busy / cancel targeting use `runs` + `active_runs` (not rooms.processing_message_id).
 
         lock_renewal_failure_handled = False
+        body_completion_won = False
         try:
             body_task = traced_create_task(
                 self._process_room_user_message_locked(
@@ -1154,6 +1155,9 @@ class RoomMessageCenter:
                 {body_task, lock_renewal},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if body_task in done:
+                body_completion_won = True
+                return await body_task
             if lock_renewal in done:
                 body_task.cancel()
                 try:
@@ -1223,7 +1227,7 @@ class RoomMessageCenter:
             except asyncio.CancelledError:
                 pass
             except RoomLockRenewalFailed as exc:
-                if not lock_renewal_failure_handled:
+                if not lock_renewal_failure_handled and not body_completion_won:
                     cleanup_error = cleanup_error or exc
             except BaseException as exc:
                 cleanup_error = cleanup_error or exc

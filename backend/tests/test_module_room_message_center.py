@@ -975,6 +975,42 @@ async def test_failed_room_lock_renewal_unclaims_and_returns_service_unavailable
 
 
 @pytest.mark.asyncio
+async def test_completed_body_wins_simultaneous_room_lock_renewal_failure():
+    async def wait_forever(*_args, **_kwargs):
+        await asyncio.Future()
+
+    rmc = RoomMessageCenter.__new__(RoomMessageCenter)
+    rmc.cancellation_control = make_cancellation_control()
+    request = SimpleNamespace(
+        room_id="room-1",
+        room_user_message_id="umsg-1",
+        is_recovery=False,
+    )
+    rmc.message_writer = SimpleNamespace(
+        claim_user_message_for_processing=AsyncMock(return_value=True),
+        refresh_processing_claim=AsyncMock(return_value=True),
+        unclaim_user_message=AsyncMock(),
+    )
+    rmc._acquire_room_lock = AsyncMock(return_value="owner-1")
+    rmc._release_room_lock = AsyncMock()
+    rmc._heartbeat_processing_claim = AsyncMock(side_effect=wait_forever)
+    rmc._renew_room_lock = AsyncMock(
+        side_effect=RoomLockRenewalFailed("lock TTL expired")
+    )
+    completed = OrchestrationResponse(room_id="room-1", success=True)
+    rmc._process_room_user_message_locked = AsyncMock(return_value=completed)
+    emit = AsyncMock()
+    rmc._processing_status_emitter = emit
+
+    result = await rmc.process_room_user_message(request)
+
+    assert result is completed
+    rmc.message_writer.unclaim_user_message.assert_not_awaited()
+    emit.assert_not_awaited()
+    rmc._release_room_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_resume_stops_when_room_lock_renewal_fails():
     resume_started = asyncio.Event()
 
