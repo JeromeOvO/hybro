@@ -1117,14 +1117,18 @@ async def test_injected_outcome_guardrails_atomically_control_duplicate_delegate
         user_message=user_message,
     )
 
-    assert result.status == RunStatus.FAILED
-    assert len(result.run_state.dispatch_intents) == expected_dispatch_count
     if guardrails_enabled:
+        assert result.status == RunStatus.FAILED
         assert not result.run_state.delegation_outcomes
         assert "orchestration_delegate_retry_rejected" in caplog.text
     else:
+        assert result.status == RunStatus.COMPLETED
         assert len(result.run_state.delegation_outcomes) == 2
         assert "orchestration_delegate_outcome_evaluated" in caplog.text
+        assert "orchestration_recovery_fallback_selected" in caplog.text
+        assert "fail_goal_already_satisfied" in caplog.text
+
+    assert len(result.run_state.dispatch_intents) == expected_dispatch_count
 
 
 def test_generic_agents_cover_conditional_no_progress_and_failed_retry_contracts():

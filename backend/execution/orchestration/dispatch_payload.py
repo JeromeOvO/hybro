@@ -386,7 +386,9 @@ async def _resolve_one_context_ref(
     )
     if payload is not None:
         resolved_payload = ResolvedResourcePayload.model_validate(
-            payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+            payload.model_dump(mode="json")
+            if hasattr(payload, "model_dump")
+            else payload
         )
         invalid_code = _context_payload_invalid_code(resolved_payload)
         if invalid_code is not None:
