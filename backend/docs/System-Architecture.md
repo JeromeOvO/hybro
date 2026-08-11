@@ -1375,9 +1375,11 @@ persisting a complete pinned order, and `DELETE /api/v1/roomCenter/history/{room
 to the existing room-owned-data deletion workflow. User and newly saved agent
 messages advance `last_activity_at` with a monotonic Mongo `$max` update; streaming
 agent-message status, task, and artifact updates do not rewrite the room document.
-New rooms initialize activity from creation time. The history read uses a projected,
-index-ordered repository query capped at 100 rows rather than loading every owner
-room. History status is aggregated in one bulk active-runs query with priority
+New rooms initialize activity from creation time. The history read uses a projected
+repository aggregation capped at 100 rows rather than loading every owner room;
+its effective activity sort falls back to `room_created_at` for legacy rows missing
+`last_activity_at`. Runtime room records preserve activity and pin metadata across
+the compatibility-store boundary. History status is aggregated in one bulk active-runs query with priority
 `awaiting_input`, `processing`, then `queued`; rooms without an active run remain
 unbadged, including completed, canceled, and failed runs. The rooms collection uses
 the `owner_history_order` compound index and the existing

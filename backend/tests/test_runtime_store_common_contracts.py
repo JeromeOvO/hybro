@@ -196,6 +196,9 @@ def test_room_and_message_conversion_preserves_runtime_fields():
         room_owner_id="owner-1",
         room_owner_name="Owner",
         room_agent_set={"agent-1": "Agent One"},
+        last_activity_at=created_at,
+        is_pinned=True,
+        pin_order=2.0,
         processing_message_id="u1",
     )
     message_content = MessageContent(message_text="hello")
@@ -216,11 +219,18 @@ def test_room_and_message_conversion_preserves_runtime_fields():
     runtime_message = room_agent_message_to_runtime(agent_message)
 
     assert runtime_room.room_agent_set == {"agent-1": "Agent One"}
+    assert runtime_room.last_activity_at == created_at
+    assert runtime_room.is_pinned is True
+    assert runtime_room.pin_order == 2.0
     assert runtime_content.message_text == "hello"
     assert runtime_message.has_task_tracking is True
     assert runtime_message.webhook_token_hash == "hash"
     assert runtime_message.turn_id == "u1"
-    assert runtime_to_room(runtime_room).room_id == "r1"
+    restored_room = runtime_to_room(runtime_room)
+    assert restored_room.room_id == "r1"
+    assert restored_room.last_activity_at == created_at
+    assert restored_room.is_pinned is True
+    assert restored_room.pin_order == 2.0
     assert runtime_to_message_content(runtime_content).message_text == "hello"
     assert runtime_to_room_agent_message(runtime_message).message_id == "a1"
 

@@ -77,37 +77,52 @@ async def test_room_activity_touch_is_monotonic():
 
 
 @pytest.mark.asyncio
-async def test_history_repository_projects_sorts_and_limits_with_history_index_order():
-    collection = SimpleNamespace(find=AsyncMock(return_value=[]))
+async def test_history_repository_projects_sorts_and_limits_by_effective_activity():
+    collection = SimpleNamespace(aggregate=AsyncMock(return_value=[]))
     mongo = SimpleNamespace(collection=lambda _name: collection)
     repository = RoomMongoRepository(mongo)
 
     assert await repository.get_history_by_owner("owner", limit=250) == []
-    collection.find.assert_awaited_once_with(
-        {
-            "room_owner_id": "owner",
-            "$or": [
-                {"lifecycle_state": "active"},
-                {"lifecycle_state": {"$exists": False}},
-            ],
-        },
-        projection={
-            "_id": 0,
-            "room_id": 1,
-            "room_name": 1,
-            "room_owner_id": 1,
-            "room_owner_name": 1,
-            "room_created_at": 1,
-            "last_activity_at": 1,
-            "is_pinned": 1,
-            "pin_order": 1,
-        },
-        sort=[
-            ("is_pinned", -1),
-            ("pin_order", 1),
-            ("last_activity_at", -1),
-        ],
-        limit=100,
+    collection.aggregate.assert_awaited_once_with(
+        [
+            {
+                "$match": {
+                    "room_owner_id": "owner",
+                    "$or": [
+                        {"lifecycle_state": "active"},
+                        {"lifecycle_state": {"$exists": False}},
+                    ],
+                }
+            },
+            {
+                "$set": {
+                    "_history_activity_at": {
+                        "$ifNull": ["$last_activity_at", "$room_created_at"]
+                    }
+                }
+            },
+            {
+                "$sort": {
+                    "is_pinned": -1,
+                    "pin_order": 1,
+                    "_history_activity_at": -1,
+                }
+            },
+            {"$limit": 100},
+            {
+                "$project": {
+                    "_id": 0,
+                    "room_id": 1,
+                    "room_name": 1,
+                    "room_owner_id": 1,
+                    "room_owner_name": 1,
+                    "room_created_at": 1,
+                    "last_activity_at": 1,
+                    "is_pinned": 1,
+                    "pin_order": 1,
+                }
+            },
+        ]
     )
 
 
