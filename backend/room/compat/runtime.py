@@ -981,6 +981,29 @@ class RoomServices:
             status_code=200,
         )
 
+    async def inquiry_room_history_by_owner_id(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
+        if request.room_owner_id is None:
+            return RoomCenterRoomSettingResponse(
+                room_list=None,
+                success=False,
+                error="Room owner id is required",
+                status_code=400,
+            )
+
+        infos = await facade.list_room_history_for_owner(
+            request.room_owner_id,
+            limit=100,
+        )
+        return RoomCenterRoomSettingResponse(
+            room_list=[self._legacy_room_from_info(info) for info in infos],
+            success=True,
+            error=None,
+            status_code=200,
+        )
+
     async def update_room_agent_set(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:

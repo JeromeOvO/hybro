@@ -77,6 +77,41 @@ async def test_room_activity_touch_is_monotonic():
 
 
 @pytest.mark.asyncio
+async def test_history_repository_projects_sorts_and_limits_with_history_index_order():
+    collection = SimpleNamespace(find=AsyncMock(return_value=[]))
+    mongo = SimpleNamespace(collection=lambda _name: collection)
+    repository = RoomMongoRepository(mongo)
+
+    assert await repository.get_history_by_owner("owner", limit=250) == []
+    collection.find.assert_awaited_once_with(
+        {
+            "room_owner_id": "owner",
+            "$or": [
+                {"lifecycle_state": "active"},
+                {"lifecycle_state": {"$exists": False}},
+            ],
+        },
+        projection={
+            "_id": 0,
+            "room_id": 1,
+            "room_name": 1,
+            "room_owner_id": 1,
+            "room_owner_name": 1,
+            "room_created_at": 1,
+            "last_activity_at": 1,
+            "is_pinned": 1,
+            "pin_order": 1,
+        },
+        sort=[
+            ("is_pinned", -1),
+            ("pin_order", 1),
+            ("last_activity_at", -1),
+        ],
+        limit=100,
+    )
+
+
+@pytest.mark.asyncio
 async def test_saving_messages_touches_durable_room_activity():
     now = datetime(2026, 8, 10, tzinfo=UTC)
     room_repository = SimpleNamespace(
@@ -116,6 +151,33 @@ async def test_saving_messages_touches_durable_room_activity():
     )
 
 
+@pytest.mark.asyncio
+async def test_streaming_agent_message_updates_do_not_touch_room_activity():
+    room_repository = SimpleNamespace(touch_activity=AsyncMock(return_value=True))
+    message_repository = SimpleNamespace(
+        update_agent_message=AsyncMock(return_value=True)
+    )
+    facade = RoomFacade(
+        repository=room_repository,
+        message_repository=message_repository,
+        agent_registry=AsyncMock(),
+        membership_source=AsyncMock(),
+        id_factory=lambda: "m1",
+        now=lambda: datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    message = SimpleNamespace(
+        room_id="r1",
+        model_dump=lambda **_kwargs: {"room_id": "r1", "message_content": {}},
+    )
+
+    assert await facade.update_agent_message("m1", message) is True
+
+    message_repository.update_agent_message.assert_awaited_once_with(
+        "m1", {"room_id": "r1", "message_content": {}}
+    )
+    room_repository.touch_activity.assert_not_awaited()
+
+
 def _user(user_id: str = "owner") -> ClerkUser:
     return ClerkUser(user_id=user_id, session_id="session", claims={})
 
@@ -141,15 +203,15 @@ def _room(
 
 
 @pytest.mark.asyncio
-async def test_history_orders_pinned_manually_then_recent_by_activity_and_bulk_status():
+async def test_history_uses_repository_order_and_bulk_status():
     rooms = [
-        _room("recent-old", activity_day=1),
+        _room("pinned-one", pinned=True, pin_order=1, activity_day=1),
         _room("pinned-two", pinned=True, pin_order=2, activity_day=2),
         _room("recent-new", activity_day=3),
-        _room("pinned-one", pinned=True, pin_order=1, activity_day=1),
+        _room("recent-old", activity_day=1),
     ]
     center = SimpleNamespace(
-        inquiry_rooms_by_room_owner_id=AsyncMock(
+        inquiry_room_history_by_owner_id=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         )
     )
@@ -180,7 +242,7 @@ async def test_history_orders_pinned_manually_then_recent_by_activity_and_bulk_s
     engine.get_latest_runs_for_rooms.assert_awaited_once_with(
         ["pinned-one", "pinned-two", "recent-new", "recent-old"]
     )
-    request = center.inquiry_rooms_by_room_owner_id.await_args.args[0]
+    request = center.inquiry_room_history_by_owner_id.await_args.args[0]
     assert request.room_owner_id == "owner"
     assert request.requesting_user_id == "owner"
 

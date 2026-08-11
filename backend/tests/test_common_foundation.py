@@ -1053,6 +1053,7 @@ def test_protocol_methods_match_design_doc():
         protocols.RoomRepository: {
             "get_by_id",
             "get_by_owner",
+            "get_history_by_owner",
             "create",
             "update",
             "update_fields",

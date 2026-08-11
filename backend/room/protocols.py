@@ -39,6 +39,9 @@ class RoomCenterCompatibility(Protocol):
     async def inquiry_rooms_by_room_owner_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
+    async def inquiry_room_history_by_owner_id(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
     async def inquiry_room_messages_by_room_id(
         self, request: RoomCenterRoomMessageRequest
     ) -> RoomCenterRoomMessageResponse: ...

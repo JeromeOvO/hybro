@@ -1372,10 +1372,12 @@ rooms are ordered by persisted `pin_order`; unpinned rooms are ordered by durabl
 `last_activity_at`. `PATCH /api/v1/roomCenter/history/{room_id}` updates the title or pinned
 state, `PUT /api/v1/roomCenter/history/pinned-order` validates ownership before
 persisting a complete pinned order, and `DELETE /api/v1/roomCenter/history/{room_id}` delegates
-to the existing room-owned-data deletion workflow. Message persistence advances
-`last_activity_at` with a monotonic Mongo `$max` update, and new rooms initialize
-it from creation time. History
-status is aggregated in one bulk active-runs query with priority
+to the existing room-owned-data deletion workflow. User and newly saved agent
+messages advance `last_activity_at` with a monotonic Mongo `$max` update; streaming
+agent-message status, task, and artifact updates do not rewrite the room document.
+New rooms initialize activity from creation time. The history read uses a projected,
+index-ordered repository query capped at 100 rows rather than loading every owner
+room. History status is aggregated in one bulk active-runs query with priority
 `awaiting_input`, `processing`, then `queued`; rooms without an active run remain
 unbadged, including completed, canceled, and failed runs. The rooms collection uses
 the `owner_history_order` compound index and the existing

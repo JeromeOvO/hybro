@@ -93,6 +93,38 @@ class RoomMongoRepository:
             }
         )
 
+    async def get_history_by_owner(
+        self, owner_id: str, *, limit: int = 100
+    ) -> list[dict]:
+        if limit <= 0:
+            return []
+        return await self._rooms.find(
+            {
+                "room_owner_id": owner_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
+            projection={
+                "_id": 0,
+                "room_id": 1,
+                "room_name": 1,
+                "room_owner_id": 1,
+                "room_owner_name": 1,
+                "room_created_at": 1,
+                "last_activity_at": 1,
+                "is_pinned": 1,
+                "pin_order": 1,
+            },
+            sort=[
+                ("is_pinned", -1),
+                ("pin_order", 1),
+                ("last_activity_at", -1),
+            ],
+            limit=min(limit, 100),
+        )
+
     async def create(self, room: dict) -> str:
         inserted_id = await self._rooms.insert_one(dict(room))
         return str(room.get("room_id") or inserted_id)

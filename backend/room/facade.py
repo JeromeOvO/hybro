@@ -188,6 +188,16 @@ class RoomFacade:
             for doc in await self._repository.get_by_owner(owner_id)
         ]
 
+    async def list_room_history_for_owner(
+        self, owner_id: str, *, limit: int = 100
+    ) -> list[RoomInfo]:
+        return [
+            room_info_from_doc(doc)
+            for doc in await self._repository.get_history_by_owner(
+                owner_id, limit=limit
+            )
+        ]
+
     async def replace_membership(
         self,
         room_id: str,
@@ -346,15 +356,12 @@ class RoomFacade:
             update_data = _strip_unset_task_tracking_fields(
                 message.model_dump(exclude_unset=True, mode="json")
             )
-            updated = bool(
+            return bool(
                 await self._message_repository.update_agent_message(
                     message_id,
                     update_data,
                 )
             )
-            if updated:
-                await self._touch_room_activity(message.room_id)
-            return updated
         except Exception:
             logger.error("Failed to update room agent message", exc_info=True)
             return False

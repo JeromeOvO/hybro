@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
-import { SendMessage, type RoomHistoryResponse } from '@/lib/api/room'
+import { SendMessage } from '@/lib/api/room'
 import { getActiveQueryClient } from '@/components/providers/query-provider'
-import { roomHistoryQueryKey } from '@/lib/room-history-query'
+import { optimisticallyMarkRoomProcessing } from '@/lib/room-history-query'
 import { banner } from '@/components/ui/banner'
 import type { QuoteData } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
@@ -104,11 +104,10 @@ export function useSendMessage(
     lifecycle.startProcessing(optimisticUserMessageId)
 
     useRoomUiStore.getState().markLocalSend(roomId)
-    getActiveQueryClient()?.setQueryData<RoomHistoryResponse>(roomHistoryQueryKey(userId), (history) => history ? {
-      items: history.items.map((item) => item.room_id === roomId
-        ? { ...item, last_activity_at: currentTime, status: 'processing' }
-        : item),
-    } : history)
+    const queryClient = getActiveQueryClient()
+    const rollbackRoomHistory = queryClient
+      ? optimisticallyMarkRoomProcessing(queryClient, userId, roomId, currentTime)
+      : () => undefined
 
     try {
       setSending(true)  // Show spinner during message creation & parsing
@@ -144,6 +143,7 @@ export function useSendMessage(
         msgStoreTooLong.removeMessage(optimisticUserMessageId)
         msgStoreTooLong.removeMessage(lifecycle.placeholderId(roomId))
         clearPendingSseForClientRequest(clientRequestId)
+        rollbackRoomHistory()
         setSending(false)
         lifecycle.setSendGuard(false)
         return false
@@ -191,6 +191,7 @@ export function useSendMessage(
         msgStoreNoId.removeMessage(optimisticUserMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
         clearPendingSseForClientRequest(clientRequestId)
+        rollbackRoomHistory()
 
         banner.error('Message sent but server returned no ID. Please try again.')
 
@@ -286,6 +287,7 @@ export function useSendMessage(
       msgStoreErr.removeMessage(optimisticUserMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
       clearPendingSseForClientRequest(clientRequestId)
+      rollbackRoomHistory()
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
 

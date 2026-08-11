@@ -183,6 +183,7 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     )
     facade.get_room.return_value = facade.create_room.return_value
     facade.list_rooms_for_owner.return_value = [facade.create_room.return_value]
+    facade.list_room_history_for_owner.return_value = [facade.create_room.return_value]
     facade.replace_membership.return_value = facade.create_room.return_value
     facade.update_room.return_value = facade.create_room.return_value
     facade.get_room_owner.return_value = "owner"
@@ -212,6 +213,9 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     list_response = await svc.inquiry_rooms_by_room_owner_id(
         RoomCenterRoomSettingRequest(room_owner_id="owner")
     )
+    history_response = await svc.inquiry_room_history_by_owner_id(
+        RoomCenterRoomSettingRequest(room_owner_id="owner")
+    )
     replace_response = await svc.update_room_agent_set(
         RoomCenterRoomSettingRequest(
             room_id="r1",
@@ -233,6 +237,7 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     assert create_response.room.room_id == "r1"
     assert inquiry_response.room.room_agent_set == {"a1": "Agent One"}
     assert list_response.room_list[0].room_id == "r1"
+    assert history_response.room_list[0].room_id == "r1"
     assert replace_response.success is True
     assert rename_response.success is True
     assert extend_response.success is True
@@ -242,6 +247,7 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     assert create_request.extend_info == {"debateMode": True, "use_supervisor": True}
     facade.get_room.assert_awaited()
     facade.list_rooms_for_owner.assert_awaited_once_with("owner")
+    facade.list_room_history_for_owner.assert_awaited_once_with("owner", limit=100)
     facade.replace_membership.assert_awaited_once()
     facade.update_room.assert_any_await("r1", {"room_name": "Renamed"})
     facade.update_room.assert_any_await("r1", {"extend_info": {"x": 1}})
@@ -328,6 +334,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
             "get_room_user_message_by_message_id",
         },
         "inquiry_rooms_by_room_owner_id": {"get_rooms_by_room_owner_id"},
+        "inquiry_room_history_by_owner_id": {"get_rooms_by_room_owner_id"},
         "update_room_agent_set": {"get_room_by_room_id", "update_room_by_room_id"},
         "update_room_name": {"get_room_by_room_id", "update_room_by_room_id"},
         "update_room_extend_info": {"get_room_by_room_id", "update_room_by_room_id"},

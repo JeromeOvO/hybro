@@ -293,7 +293,7 @@ async def get_room_history(
     engine: ExecutionEngine = Depends(get_execution_engine),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
-    response = await center.inquiry_rooms_by_room_owner_id(
+    response = await center.inquiry_room_history_by_owner_id(
         RoomCenterRoomSettingRequest(
             room_owner_id=user.user_id,
             requesting_user_id=user.user_id,
@@ -301,23 +301,6 @@ async def get_room_history(
     )
     _raise_room_center_error(response)
     rooms = list(response.room_list or [])
-    rooms.sort(
-        key=lambda room: (
-            0 if room.is_pinned else 1,
-            (
-                room.pin_order
-                if room.is_pinned and room.pin_order is not None
-                else float("inf")
-            ),
-            (
-                0
-                if room.is_pinned
-                else -(room.last_activity_at or room.room_created_at).timestamp()
-            ),
-            room.room_id or "",
-        )
-    )
-    rooms = rooms[:100]
     latest_runs = await engine.get_latest_runs_for_rooms(
         [room.room_id for room in rooms if room.room_id]
     )
