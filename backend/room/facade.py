@@ -282,8 +282,8 @@ class RoomFacade:
                     raise ValueError("Idempotency fingerprint version is required")
                 doc["idempotency_fingerprint"] = idempotency_fingerprint
                 doc["idempotency_fingerprint_version"] = idempotency_fingerprint_version
-                result = await self._message_repository.insert_user_message_idempotently(
-                    doc
+                result = (
+                    await self._message_repository.insert_user_message_idempotently(doc)
                 )
                 if result.created:
                     await self._touch_room_activity(user_message.room_id)

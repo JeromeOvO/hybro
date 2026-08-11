@@ -327,7 +327,9 @@ async def get_room_history(
         if not room.room_id:
             continue
         run = latest_runs.get(room.room_id)
-        state = str(getattr(getattr(run, "state", None), "value", getattr(run, "state", "")))
+        state = str(
+            getattr(getattr(run, "state", None), "value", getattr(run, "state", ""))
+        )
         status = state if state in allowed_statuses else "idle"
         items.append(
             RoomHistoryItem(
@@ -382,9 +384,7 @@ async def update_room_history_item(
                     status_code=409,
                     detail="At most 100 conversations can be pinned",
                 )
-            pin_order = float(
-                1 + max([r.pin_order or 0 for r in pinned_rooms] or [0])
-            )
+            pin_order = float(1 + max([r.pin_order or 0 for r in pinned_rooms] or [0]))
         response = await center.update_room_history_fields(
             RoomCenterRoomSettingRequest(
                 room_id=room_id,
@@ -413,7 +413,9 @@ async def reorder_pinned_rooms(
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     if len(payload.room_ids) != len(set(payload.room_ids)):
-        raise HTTPException(status_code=400, detail="Duplicate room ids are not allowed")
+        raise HTTPException(
+            status_code=400, detail="Duplicate room ids are not allowed"
+        )
 
     listed = await center.inquiry_rooms_by_room_owner_id(
         RoomCenterRoomSettingRequest(
@@ -423,7 +425,9 @@ async def reorder_pinned_rooms(
     )
     _raise_room_center_error(listed)
     pinned_room_ids = {
-        room.room_id for room in listed.room_list or [] if room.is_pinned and room.room_id
+        room.room_id
+        for room in listed.room_list or []
+        if room.is_pinned and room.room_id
     }
     if set(payload.room_ids) != pinned_room_ids:
         raise HTTPException(
@@ -434,7 +438,9 @@ async def reorder_pinned_rooms(
     for room_id in payload.room_ids:
         room = await _get_verified_room(room_id, user, store)
         if not room.is_pinned:
-            raise HTTPException(status_code=409, detail="Only pinned rooms can be reordered")
+            raise HTTPException(
+                status_code=409, detail="Only pinned rooms can be reordered"
+            )
     for index, room_id in enumerate(payload.room_ids):
         response = await center.update_room_history_fields(
             RoomCenterRoomSettingRequest(

@@ -238,7 +238,9 @@ async def test_reorder_persists_complete_manual_order_after_ownership_checks():
     )
 
     assert result == {"success": True}
-    requests = [call.args[0] for call in center.update_room_history_fields.await_args_list]
+    requests = [
+        call.args[0] for call in center.update_room_history_fields.await_args_list
+    ]
     assert [(request.room_id, request.pin_order) for request in requests] == [
         ("p2", 1.0),
         ("p1", 2.0),
@@ -251,9 +253,7 @@ async def test_delete_history_checks_ownership_and_delegates_to_deletion_service
     room = _room("r1")
     store = SimpleNamespace(get_room_by_room_id=AsyncMock(return_value=room))
     center = SimpleNamespace(
-        delete_room_by_room_id=AsyncMock(
-            return_value=SimpleNamespace(success=True)
-        )
+        delete_room_by_room_id=AsyncMock(return_value=SimpleNamespace(success=True))
     )
 
     result = await delete_room_history_item(
