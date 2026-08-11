@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from inspect import isawaitable
 from typing import Any
 
 from common.a2a_constants import is_terminal_state
@@ -57,6 +58,9 @@ _ALLOWED_ROOM_UPDATE_KEYS = frozenset(
         "room_name",
         "extend_info",
         "processing_message_id",
+        "last_activity_at",
+        "is_pinned",
+        "pin_order",
     }
 )
 
@@ -184,6 +188,16 @@ class RoomFacade:
             for doc in await self._repository.get_by_owner(owner_id)
         ]
 
+    async def list_room_history_for_owner(
+        self, owner_id: str, *, limit: int = 100
+    ) -> list[RoomInfo]:
+        return [
+            room_info_from_doc(doc)
+            for doc in await self._repository.get_history_by_owner(
+                owner_id, limit=limit
+            )
+        ]
+
     async def replace_membership(
         self,
         room_id: str,
@@ -254,6 +268,7 @@ class RoomFacade:
             created_at=self._now(),
         )
         await self._message_repository.save_user_message(doc)
+        await self._touch_room_activity(room_id)
         return saved_user_message_from_doc(doc)
 
     def ensure_user_message_id(self, user_message: RoomUserMessage) -> str:
@@ -277,11 +292,15 @@ class RoomFacade:
                     raise ValueError("Idempotency fingerprint version is required")
                 doc["idempotency_fingerprint"] = idempotency_fingerprint
                 doc["idempotency_fingerprint_version"] = idempotency_fingerprint_version
-                return await self._message_repository.insert_user_message_idempotently(
-                    doc
+                result = (
+                    await self._message_repository.insert_user_message_idempotently(doc)
                 )
+                if result.created:
+                    await self._touch_room_activity(user_message.room_id)
+                return result
 
             message_id = await self._message_repository.save_user_message(doc)
+            await self._touch_room_activity(user_message.room_id)
             return UserMessageInsertResult(
                 message_id=message_id,
                 created=True,
@@ -306,7 +325,29 @@ class RoomFacade:
             message=message,
             created_at=self._now(),
         )
-        return await self._message_repository.save_agent_message(doc)
+        saved_id = await self._message_repository.save_agent_message(doc)
+        await self._touch_room_activity(room_id)
+        return saved_id
+
+    async def _touch_room_activity(self, room_id: str) -> None:
+        try:
+            activity_at = self._now()
+            touch_activity = getattr(self._repository, "touch_activity", None)
+            if touch_activity is not None:
+                result = touch_activity(room_id, activity_at)
+            else:
+                result = self._repository.update_fields(
+                    room_id,
+                    {"last_activity_at": activity_at},
+                )
+            if isawaitable(result):
+                await result
+        except Exception:
+            logger.warning(
+                "Failed to update room activity timestamp for room_id=%s",
+                room_id,
+                exc_info=True,
+            )
 
     async def update_agent_message(
         self, message_id: str, message: RoomAgentMessage

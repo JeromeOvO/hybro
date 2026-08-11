@@ -262,6 +262,10 @@ class RoomCenterRoomSettingRequest(BaseModel):
     # Active-runs query: optional trigger message for turn_completion_kind lookup
     trigger_message_id: str | None = None
 
+    # Chat history presentation metadata
+    is_pinned: bool | None = None
+    pin_order: float | None = None
+
 
 class UserAttachmentRequest(BaseModel):
     """Wire format from frontend. Only file_id is used server-side; all metadata

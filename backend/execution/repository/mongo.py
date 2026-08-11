@@ -50,6 +50,53 @@ class RunMongoRepository:
             limit=0,
         )
 
+    async def get_latest_for_rooms(self, room_ids: list[str]) -> list[dict]:
+        if not room_ids:
+            return []
+        return await self._runs.aggregate(
+            [
+                {
+                    "$match": {
+                        "room_id": {"$in": room_ids},
+                        "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
+                    }
+                },
+                {
+                    "$addFields": {
+                        "_history_status_priority": {
+                            "$switch": {
+                                "branches": [
+                                    {
+                                        "case": {"$eq": ["$state", "awaiting_input"]},
+                                        "then": 3,
+                                    },
+                                    {
+                                        "case": {"$eq": ["$state", "processing"]},
+                                        "then": 2,
+                                    },
+                                    {
+                                        "case": {"$eq": ["$state", "queued"]},
+                                        "then": 1,
+                                    },
+                                ],
+                                "default": 0,
+                            }
+                        }
+                    }
+                },
+                {
+                    "$sort": {
+                        "room_id": 1,
+                        "_history_status_priority": -1,
+                        "updated_at": -1,
+                    }
+                },
+                {"$group": {"_id": "$room_id", "run": {"$first": "$$ROOT"}}},
+                {"$replaceRoot": {"newRoot": "$run"}},
+                {"$unset": "_history_status_priority"},
+            ]
+        )
+
     async def update_state(self, run_id: str, state: str, **fields) -> bool:
         payload = {"$set": {"state": state, **fields}}
         return await self._runs.update_one({"run_id": run_id}, payload)

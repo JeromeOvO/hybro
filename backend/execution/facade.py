@@ -923,6 +923,11 @@ class ExecutionFacade:
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
         return await self._run_reader.get_runs_for_room(room_id)
 
+    async def get_latest_runs_for_rooms(
+        self, room_ids: list[str]
+    ) -> dict[str, RunInfo]:
+        return await self._run_reader.get_latest_runs_for_rooms(room_ids)
+
     async def cancel_inflight_tasks(self) -> int:
         """Interrupt local execution without terminalizing durable runs.
 

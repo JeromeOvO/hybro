@@ -1365,6 +1365,26 @@ request-time display name are not fingerprinted. Structured quote display/source
 fields remain part of the quote semantics. These private fields are not part of
 room API or SSE models.
 
+The authenticated chat-history resource is separate from the full room-setting
+compatibility payload. `GET /api/v1/roomCenter/history` derives ownership from the
+current principal and returns at most 100 lightweight room summaries. Pinned
+rooms are ordered by persisted `pin_order`; unpinned rooms are ordered by durable
+`last_activity_at`. `PATCH /api/v1/roomCenter/history/{room_id}` updates the title or pinned
+state, `PUT /api/v1/roomCenter/history/pinned-order` validates ownership before
+persisting a complete pinned order, and `DELETE /api/v1/roomCenter/history/{room_id}` delegates
+to the existing room-owned-data deletion workflow. User and newly saved agent
+messages advance `last_activity_at` with a monotonic Mongo `$max` update; streaming
+agent-message status, task, and artifact updates do not rewrite the room document.
+New rooms initialize activity from creation time. The history read uses a projected
+repository aggregation capped at 100 rows rather than loading every owner room;
+its effective activity sort falls back to `room_created_at` for legacy rows missing
+`last_activity_at`. Runtime room records preserve activity and pin metadata across
+the compatibility-store boundary. History status is aggregated in one bulk active-runs query with priority
+`awaiting_input`, `processing`, then `queued`; rooms without an active run remain
+unbadged, including completed, canceled, and failed runs. The rooms collection uses
+the `owner_history_order` compound index and the existing
+`room_state_updated_at` runs index supports status aggregation.
+
 `room_user_messages` has two correctness-critical unique indexes:
 
 - `room_user_message_id_unique` on `message_id`;

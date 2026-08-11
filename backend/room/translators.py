@@ -29,6 +29,13 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
         source_group_id=doc.get("source_group_id") or doc.get("applied_from_group"),
         source_group_name=doc.get("source_group_name"),
         created_at=doc.get("room_created_at") or doc.get("created_at"),
+        last_activity_at=(
+            doc.get("last_activity_at")
+            or doc.get("room_created_at")
+            or doc.get("created_at")
+        ),
+        is_pinned=bool(doc.get("is_pinned", False)),
+        pin_order=doc.get("pin_order"),
         processing_message_id=doc.get("processing_message_id"),
         extend_info=doc.get("extend_info"),
     )
@@ -56,6 +63,9 @@ def create_room_doc(
         "room_owner_name": owner_name,
         "room_agent_set": dict(agent_set),
         "room_created_at": created_at,
+        "last_activity_at": created_at,
+        "is_pinned": False,
+        "pin_order": None,
         "membership_origin": membership_origin,
         "membership_origin_status": membership_origin_status,
         "source_group_id": source_group_id,

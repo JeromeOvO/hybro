@@ -38,6 +38,27 @@ Python code targets 3.12+, uses 4-space indentation, public type hints, snake_ca
 
 Add focused tests near the code they cover. Backend tests use Pytest naming (`test_*.py`, `Test*`, and `test_*`). Frontend unit tests use Vitest and browser flows use Playwright. Mock network, LLM, database, wallet, and webhook calls unless testing integration behavior.
 
+## Pre-Commit CI Parity
+
+CI failures in this repository frequently come from backend formatting drift or protocol contract inventories that were not updated with an interface change. Before every commit or push, run the same backend gates CI runs:
+
+```bash
+cd backend
+uv run ruff format --check .
+uv run ruff check .
+```
+
+If the format check reports files, run `uv run ruff format .`, then repeat both checks before committing. Do not treat `ruff check` success as proof that `ruff format --check` will pass; they are separate gates.
+
+When adding, removing, or renaming a public method on a `Protocol`, repository port, facade port, or other compatibility interface, search for exact method inventories and architecture contract tests. In particular, update the relevant expected method set in `backend/tests/test_common_foundation.py` and run:
+
+```bash
+cd backend
+uv run pytest tests/test_common_foundation.py::test_protocol_methods_match_design_doc
+```
+
+Also run focused tests for the changed module. For frontend changes, run `npm run lint`, the affected Vitest projects, and `npm run build` before push. Re-check `git diff --check` and the working tree immediately before committing.
+
 ## Commit & Pull Request Guidelines
 
 Commit from this repository root. Use short imperative subjects with prefixes such as `feat:`, `fix:`, `test:`, `docs:`, `chore:`, or scoped forms like `fix(ui):`. Pull requests should summarize behavior changes, list tests run, note environment or migration changes, and include screenshots or sample prompts/responses for visible UI or agent changes.

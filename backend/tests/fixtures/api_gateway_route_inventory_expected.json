@@ -791,6 +791,94 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/roomCenter/history",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_room_history",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_center"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/history/pinned-order",
+    "methods": [
+      "PUT"
+    ],
+    "name": "reorder_pinned_rooms",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/history/{room_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_room_history_item",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/roomCenter/history/{room_id}",
+    "methods": [
+      "PATCH"
+    ],
+    "name": "update_room_history_item",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "methods": [
       "POST"

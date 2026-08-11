@@ -73,6 +73,13 @@ class RoomRouteAdapter:
             request
         )
 
+    async def inquiry_room_history_by_owner_id(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse:
+        return await self._require_room_services().inquiry_room_history_by_owner_id(
+            request
+        )
+
     async def update_room_agent_set(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
@@ -82,6 +89,11 @@ class RoomRouteAdapter:
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
         return await self._require_room_services().update_room_name(request)
+
+    async def update_room_history_fields(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse:
+        return await self._require_room_services().update_room_history_fields(request)
 
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest

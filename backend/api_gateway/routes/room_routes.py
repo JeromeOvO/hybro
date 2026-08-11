@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, Field
 
 from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
 from api_gateway.dependencies import (
@@ -26,11 +27,22 @@ from models.response import (
     ActiveRunRef,
     RoomCenterActiveRunsResponse,
     RoomCenterUserMessageResponse,
+    RoomHistoryItem,
+    RoomHistoryResponse,
 )
 from room.protocols import RoomCenterCompatibility
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+class RoomHistoryUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    is_pinned: bool | None = None
+
+
+class PinnedRoomOrderUpdate(BaseModel):
+    room_ids: list[str] = Field(max_length=100)
 
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
@@ -51,6 +63,15 @@ def _message_text_len(message: dict | None) -> int:
     else:
         text = message.get("message_text")
     return len(text) if isinstance(text, str) else 0
+
+
+def _raise_room_center_error(response) -> None:
+    if response.success:
+        return
+    raise HTTPException(
+        status_code=response.status_code or 500,
+        detail=response.error or "Room operation failed",
+    )
 
 
 async def _active_run_refs_for_room(
@@ -264,6 +285,174 @@ async def inquiry_rooms_by_room_owner_id(
         room_center_request
     )
     return room_center_response
+
+
+@router.get("/roomCenter/history", response_model=RoomHistoryResponse)
+async def get_room_history(
+    user: ClerkUser = Depends(get_current_user),
+    engine: ExecutionEngine = Depends(get_execution_engine),
+    center: RoomCenterCompatibility = Depends(get_room_center),
+):
+    response = await center.inquiry_room_history_by_owner_id(
+        RoomCenterRoomSettingRequest(
+            room_owner_id=user.user_id,
+            requesting_user_id=user.user_id,
+        )
+    )
+    _raise_room_center_error(response)
+    rooms = list(response.room_list or [])
+    latest_runs = await engine.get_latest_runs_for_rooms(
+        [room.room_id for room in rooms if room.room_id]
+    )
+    allowed_statuses = {"queued", "processing", "awaiting_input"}
+    items = []
+    for room in rooms:
+        if not room.room_id:
+            continue
+        run = latest_runs.get(room.room_id)
+        state = str(
+            getattr(getattr(run, "state", None), "value", getattr(run, "state", ""))
+        )
+        status = state if state in allowed_statuses else "idle"
+        items.append(
+            RoomHistoryItem(
+                room_id=room.room_id,
+                title=room.room_name or "Unnamed Room",
+                last_activity_at=room.last_activity_at or room.room_created_at,
+                is_pinned=room.is_pinned,
+                pin_order=room.pin_order,
+                status=status,
+            )
+        )
+    return RoomHistoryResponse(items=items)
+
+
+@router.patch("/roomCenter/history/{room_id}", response_model=RoomHistoryItem)
+async def update_room_history_item(
+    room_id: str,
+    payload: RoomHistoryUpdate,
+    user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
+    center: RoomCenterCompatibility = Depends(get_room_center),
+):
+    room = await _get_verified_room(room_id, user, store)
+    if payload.title is None and payload.is_pinned is None:
+        raise HTTPException(status_code=400, detail="No history fields supplied")
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Room title cannot be empty")
+        response = await center.update_room_name(
+            RoomCenterRoomSettingRequest(
+                room_id=room_id,
+                room_name=title,
+                requesting_user_id=user.user_id,
+            )
+        )
+        _raise_room_center_error(response)
+        room = response.room or room
+    if payload.is_pinned is not None:
+        pin_order = None
+        if payload.is_pinned:
+            listed = await center.inquiry_rooms_by_room_owner_id(
+                RoomCenterRoomSettingRequest(
+                    room_owner_id=user.user_id,
+                    requesting_user_id=user.user_id,
+                )
+            )
+            _raise_room_center_error(listed)
+            pinned_rooms = [r for r in listed.room_list or [] if r.is_pinned]
+            if len(pinned_rooms) >= 100:
+                raise HTTPException(
+                    status_code=409,
+                    detail="At most 100 conversations can be pinned",
+                )
+            pin_order = float(1 + max([r.pin_order or 0 for r in pinned_rooms] or [0]))
+        response = await center.update_room_history_fields(
+            RoomCenterRoomSettingRequest(
+                room_id=room_id,
+                is_pinned=payload.is_pinned,
+                pin_order=pin_order,
+                requesting_user_id=user.user_id,
+            )
+        )
+        _raise_room_center_error(response)
+        room = response.room or room
+    return RoomHistoryItem(
+        room_id=room_id,
+        title=room.room_name or "Unnamed Room",
+        last_activity_at=room.last_activity_at or room.room_created_at,
+        is_pinned=room.is_pinned,
+        pin_order=room.pin_order,
+        status="idle",
+    )
+
+
+@router.put("/roomCenter/history/pinned-order")
+async def reorder_pinned_rooms(
+    payload: PinnedRoomOrderUpdate,
+    user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
+    center: RoomCenterCompatibility = Depends(get_room_center),
+):
+    if len(payload.room_ids) != len(set(payload.room_ids)):
+        raise HTTPException(
+            status_code=400, detail="Duplicate room ids are not allowed"
+        )
+
+    listed = await center.inquiry_rooms_by_room_owner_id(
+        RoomCenterRoomSettingRequest(
+            room_owner_id=user.user_id,
+            requesting_user_id=user.user_id,
+        )
+    )
+    _raise_room_center_error(listed)
+    pinned_room_ids = {
+        room.room_id
+        for room in listed.room_list or []
+        if room.is_pinned and room.room_id
+    }
+    if set(payload.room_ids) != pinned_room_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="Pinned order must include every pinned room exactly once",
+        )
+
+    for room_id in payload.room_ids:
+        room = await _get_verified_room(room_id, user, store)
+        if not room.is_pinned:
+            raise HTTPException(
+                status_code=409, detail="Only pinned rooms can be reordered"
+            )
+    for index, room_id in enumerate(payload.room_ids):
+        response = await center.update_room_history_fields(
+            RoomCenterRoomSettingRequest(
+                room_id=room_id,
+                is_pinned=True,
+                pin_order=float(index + 1),
+                requesting_user_id=user.user_id,
+            )
+        )
+        _raise_room_center_error(response)
+    return {"success": True}
+
+
+@router.delete("/roomCenter/history/{room_id}")
+async def delete_room_history_item(
+    room_id: str,
+    user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
+    center: RoomCenterCompatibility = Depends(get_room_center),
+):
+    await _get_verified_room(room_id, user, store)
+    response = await center.delete_room_by_room_id(
+        RoomCenterRoomSettingRequest(
+            room_id=room_id,
+            requesting_user_id=user.user_id,
+        )
+    )
+    _raise_room_center_error(response)
+    return {"success": True}
 
 
 @router.post("/roomCenter/updateRoomAgentSet")

@@ -67,6 +67,9 @@ class RoomInfo(FrozenDTO):
     source_group_id: str | None = None
     source_group_name: str | None = None
     created_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    is_pinned: bool = False
+    pin_order: float | None = None
     processing_message_id: str | None = None
     extend_info: dict[str, Any] | None = None
 

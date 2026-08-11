@@ -192,6 +192,19 @@ class RoomCenterRoomSettingResponse(BaseModel):
     status_code: int = 200
 
 
+class RoomHistoryItem(BaseModel):
+    room_id: str
+    title: str
+    last_activity_at: datetime
+    is_pinned: bool = False
+    pin_order: float | None = None
+    status: str = "idle"
+
+
+class RoomHistoryResponse(BaseModel):
+    items: list[RoomHistoryItem]
+
+
 class RoomCenterActiveRunsResponse(BaseModel):
     """Lightweight payload for reconnect / reconcile without full room settings."""
 

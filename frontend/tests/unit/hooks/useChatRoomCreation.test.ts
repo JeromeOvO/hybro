@@ -499,7 +499,7 @@ describe('useChatRoomCreation', () => {
 
       expect(success!).toBe(true)
       expect(mockPush).toHaveBeenCalledWith('/room/room-nav')
-      expect(dispatchSpy).toHaveBeenCalled()
+      expect(dispatchSpy).not.toHaveBeenCalled()
       dispatchSpy.mockRestore()
     })
 

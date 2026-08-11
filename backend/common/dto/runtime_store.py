@@ -47,6 +47,9 @@ class RuntimeRoomRecord(FrozenDTO):
     room_owner_name: str
     room_agent_set: dict[str, str] = Field(default_factory=dict)
     room_created_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    is_pinned: bool = False
+    pin_order: float | None = None
     applied_from_group: str | None = None
     membership_origin: str | None = None
     membership_origin_status: str | None = None
