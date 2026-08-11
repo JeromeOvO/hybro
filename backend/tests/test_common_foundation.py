@@ -1056,6 +1056,7 @@ def test_protocol_methods_match_design_doc():
             "create",
             "update",
             "update_fields",
+            "touch_activity",
             "set_membership",
             "delete",
         },
