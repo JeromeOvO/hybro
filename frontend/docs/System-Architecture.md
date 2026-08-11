@@ -203,7 +203,6 @@ src/hooks/
 |-- useTurnViewModels.ts       # turn view model builder
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
-|-- useHubStatus.ts            # hub availability
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
