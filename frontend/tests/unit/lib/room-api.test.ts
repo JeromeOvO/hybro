@@ -13,6 +13,10 @@ import {
   updateRoomAgentSet,
   updateRoomName,
   suggestAgents,
+  listRoomHistory,
+  updateRoomHistoryItem,
+  reorderPinnedRooms,
+  deleteRoomHistoryItem,
 } from '@/lib/api/room'
 
 const roomCenter = getApiUrl('roomCenter')
@@ -133,6 +137,57 @@ describe('Room API', () => {
       expect(result.success).toBe(true)
       expect(result.room_list).toHaveLength(1)
       expect(capturedBody).toMatchObject({ room_owner_id: 'user-1' })
+    })
+  })
+
+  describe('room history', () => {
+    it('lists lightweight history items', async () => {
+      server.use(
+        http.get(getApiUrl('roomCenter/history'), () => HttpResponse.json({
+          items: [{
+            room_id: 'room-1',
+            title: 'Room 1',
+            last_activity_at: '2026-08-10T00:00:00Z',
+            is_pinned: false,
+            pin_order: null,
+            status: 'processing',
+          }],
+        }))
+      )
+
+      const result = await listRoomHistory()
+      expect(result.items[0]).toMatchObject({ room_id: 'room-1', status: 'processing' })
+    })
+
+    it('updates, reorders, and deletes history items with REST methods', async () => {
+      const requests: Array<{ method: string; body?: unknown }> = []
+      server.use(
+        http.patch(getApiUrl('roomCenter/history/room-1'), async ({ request }) => {
+          requests.push({ method: request.method, body: await request.json() })
+          return HttpResponse.json({
+            room_id: 'room-1', title: 'Renamed', last_activity_at: '2026-08-10T00:00:00Z',
+            is_pinned: true, pin_order: 1, status: 'idle',
+          })
+        }),
+        http.put(getApiUrl('roomCenter/history/pinned-order'), async ({ request }) => {
+          requests.push({ method: request.method, body: await request.json() })
+          return HttpResponse.json({ success: true })
+        }),
+        http.delete(getApiUrl('roomCenter/history/room-1'), ({ request }) => {
+          requests.push({ method: request.method })
+          return HttpResponse.json({ success: true })
+        }),
+      )
+
+      await updateRoomHistoryItem('room-1', { title: 'Renamed', is_pinned: true })
+      await reorderPinnedRooms(['room-1', 'room-2'])
+      await deleteRoomHistoryItem('room-1')
+
+      expect(requests).toEqual([
+        { method: 'PATCH', body: { title: 'Renamed', is_pinned: true } },
+        { method: 'PUT', body: { room_ids: ['room-1', 'room-2'] } },
+        { method: 'DELETE' },
+      ])
     })
   })
 

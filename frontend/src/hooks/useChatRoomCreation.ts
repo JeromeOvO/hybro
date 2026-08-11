@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createNewRoom, suggestAgents, SuggestAgentsResponse } from '@/lib/api/room'
+import { getActiveQueryClient } from '@/components/providers/query-provider'
+import { roomHistoryQueryKey } from '@/lib/room-history-query'
 import { getAllActiveAgents } from '@/lib/api/agent'
 import { banner } from "@/components/ui/banner"
 import { useRoomUiStore } from '@/stores/room-ui-store'
@@ -206,15 +208,17 @@ export function useChatRoomCreation({ userId, userName, getToken }: UseChatRoomC
     const roomId = await createRoomWithMessage(userMessage, options)
     
     if (roomId) {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('rooms:refresh'))
+      if (userId) {
+        void getActiveQueryClient()?.invalidateQueries({
+          queryKey: roomHistoryQueryKey(userId),
+        })
       }
       router.push(`/room/${roomId}`)
       return true
     }
     
     return false
-  }, [createRoomWithMessage, router])
+  }, [createRoomWithMessage, router, userId])
 
   // Create room with specific agents and navigate
   const createWithAgentsAndNavigate = useCallback(async (

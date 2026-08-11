@@ -594,9 +594,22 @@ navigation do not occur until the user sends the message. Failed creates perform
 one catalog refresh as a compatibility fallback.
 
 The shared shell is implemented by `src/components/portal/` and exposes only New
-Chat and Agents as primary navigation before chat history. Legacy
-`/manage/agents*` routes are redirect-only compatibility paths.
-`src/lib/routes.ts` is the canonical route vocabulary for application links.
+Chat and Agents as primary navigation before chat history. Chat history uses the
+lightweight authenticated `GET /roomCenter/history` resource through TanStack Query.
+Pinned rooms render above Recent rooms; desktop drag handles persist pinned order
+through the reorder mutation while Recent is derived from descending
+`last_activity_at`. The section header can collapse or expand the history list.
+Rename, pin/unpin, reorder, and delete mutations update the query cache
+optimistically and roll back on failure. Active room states (`queued`,
+`processing`, and `awaiting_input`) are returned in the list payload, so rooms
+without active work remain unbadged and the sidebar does not issue per-room
+requests. The query refreshes on focus and
+polls every ten seconds only while an active state is present. Room creation
+invalidates the authenticated user-scoped query under the shared
+`ROOM_HISTORY_QUERY_KEY` prefix; the former global `rooms:refresh` browser event
+is no longer used. Legacy `/manage/agents*` routes
+are redirect-only compatibility paths. `src/lib/routes.ts` is the canonical
+route vocabulary for application links.
 
 ## 14. Testing Layout
 

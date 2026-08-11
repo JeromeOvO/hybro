@@ -3,11 +3,11 @@
 import * as React from "react"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
-import { History, PanelLeftIcon } from "lucide-react"
+import { PanelLeftIcon } from "lucide-react"
 import { useUser } from "@/lib/auth"
 
 import { NavAgent } from "@/components/nav-agent"
-import { NavMain } from "@/components/nav-main"
+import { ChatHistory } from '@/components/portal/chat-history'
 import { NavUser } from "@/components/nav-user"
 import { Logo } from "@/components/logo"
 import { DiscordButton } from "@/components/nav-discord-button"
@@ -22,8 +22,6 @@ import {
   SidebarHeader,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { inquiryRoomsByRoomOwnerId } from "@/lib/api/room"
-import type { Room } from "@/lib/types/room"
 
 const MARKETING_PAGES: string[] = [routes.home, routes.about, routes.pricing, routes.agents]
 
@@ -31,70 +29,6 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
   const { user, isLoaded, isSignedIn } = useUser()
   const { state, toggleSidebar } = useSidebar()
   const pathname = usePathname()
-  const [rooms, setRooms] = React.useState<Room[]>([])
-  const [isLoadingRooms, setIsLoadingRooms] = React.useState(false)
-
-  const loadRooms = React.useCallback(async () => {
-    if (!isLoaded || !isSignedIn || !user?.id) return
-
-    try {
-      setIsLoadingRooms(true)
-      const response = await inquiryRoomsByRoomOwnerId(user.id)
-
-      if (response.success && response.room_list) {
-        setRooms(response.room_list)
-      } else {
-        console.error('Failed to load rooms:', response.error)
-        setRooms([])
-      }
-    } catch (error) {
-      console.error('Error loading rooms:', error)
-      setRooms([])
-    } finally {
-      setIsLoadingRooms(false)
-    }
-  }, [isLoaded, isSignedIn, user?.id])
-
-  React.useEffect(() => {
-    if (isLoaded && isSignedIn && user?.id) {
-      loadRooms()
-    }
-  }, [isLoaded, isSignedIn, user?.id, loadRooms])
-
-  React.useEffect(() => {
-    const handleRefresh = () => loadRooms()
-    window.addEventListener("rooms:refresh", handleRefresh)
-    return () => window.removeEventListener("rooms:refresh", handleRefresh)
-  }, [loadRooms])
-
-  const navMainData = React.useMemo(() => {
-    const roomItems = [...rooms]
-      .reverse()
-      .filter((room): room is Room & { room_id: string } => Boolean(room.room_id))
-      .map(room => ({
-        title: room.room_name || 'Unnamed Room',
-        url: routes.room(room.room_id),
-        id: room.room_id,
-      }))
-
-    return [
-      {
-        title: "Chat History",
-        url: "#",
-        icon: History,
-        isActive: true,
-        items: roomItems.length > 0 ? roomItems : [
-          {
-            title: isLoadingRooms ? "Loading..." : "No history yet",
-            url: "#",
-            id: "no-history",
-          }
-        ],
-        isLoading: isLoadingRooms,
-      },
-    ]
-  }, [rooms, isLoadingRooms])
-
   const isMarketingPage = MARKETING_PAGES.includes(pathname)
   const hideSidebar = isMarketingPage && (!isLoaded || !isSignedIn)
 
@@ -136,7 +70,12 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
       <SidebarContent>
         <NavAgent navAgents={CONSUMER_NAV} />
         <div className="mx-3 border-t border-sidebar-border" />
-        <NavMain items={navMainData} />
+        {state !== 'collapsed' ? (
+          <ChatHistory
+            enabled={Boolean(isLoaded && isSignedIn && user?.id)}
+            userId={user?.id ?? ''}
+          />
+        ) : null}
       </SidebarContent>
       <SidebarFooter>
         <div className="border-t border-sidebar-border mx-2 mb-1" />

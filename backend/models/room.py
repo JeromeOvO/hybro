@@ -44,6 +44,9 @@ class Room(BaseModel):
         default_factory=dict
     )  # key: agent_id, value: agent_name
     room_created_at: datetime = Field(default_factory=utcnow)
+    last_activity_at: datetime = Field(default_factory=utcnow)
+    is_pinned: bool = False
+    pin_order: float | None = None
 
     # Legacy provenance field — kept for backward compatibility during rollout.
     # Canonical fields below take precedence when present.

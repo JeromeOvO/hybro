@@ -57,6 +57,9 @@ class RoomCenterCompatibility(Protocol):
     async def update_room_name(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
+    async def update_room_history_fields(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse: ...
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...

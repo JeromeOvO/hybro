@@ -50,3 +50,17 @@ class RunQueryAdapter:
                 "active-run lookup failed for room_id=%s", room_id, exc_info=True
             )
             return []
+
+    async def get_latest_runs_for_rooms(
+        self, room_ids: list[str]
+    ) -> dict[str, RunInfo]:
+        try:
+            docs = await self._run_repository.get_latest_for_rooms(room_ids)
+        except Exception:
+            logger.warning("bulk latest-run lookup failed", exc_info=True)
+            return {}
+        return {
+            info.room_id: info
+            for doc in docs
+            if (info := run_doc_to_run_info(doc)).room_id
+        }

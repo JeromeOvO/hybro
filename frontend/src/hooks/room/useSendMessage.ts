@@ -1,5 +1,7 @@
 import { useCallback } from 'react'
-import { SendMessage } from '@/lib/api/room'
+import { SendMessage, type RoomHistoryResponse } from '@/lib/api/room'
+import { getActiveQueryClient } from '@/components/providers/query-provider'
+import { roomHistoryQueryKey } from '@/lib/room-history-query'
 import { banner } from '@/components/ui/banner'
 import type { QuoteData } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
@@ -102,6 +104,11 @@ export function useSendMessage(
     lifecycle.startProcessing(optimisticUserMessageId)
 
     useRoomUiStore.getState().markLocalSend(roomId)
+    getActiveQueryClient()?.setQueryData<RoomHistoryResponse>(roomHistoryQueryKey(userId), (history) => history ? {
+      items: history.items.map((item) => item.room_id === roomId
+        ? { ...item, last_activity_at: currentTime, status: 'processing' }
+        : item),
+    } : history)
 
     try {
       setSending(true)  // Show spinner during message creation & parsing

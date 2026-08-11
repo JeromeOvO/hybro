@@ -122,6 +122,18 @@ class RoomMongoRepository:
             return_document=True,
         )
 
+    async def touch_activity(self, room_id: str, activity_at: datetime) -> bool:
+        return await self._rooms.update_one(
+            {
+                "room_id": room_id,
+                "$or": [
+                    {"lifecycle_state": "active"},
+                    {"lifecycle_state": {"$exists": False}},
+                ],
+            },
+            {"$max": {"last_activity_at": activity_at}},
+        )
+
     async def set_membership(
         self,
         room_id: str,

@@ -16,9 +16,67 @@ import { type RoomMembershipWriteInput } from '@/lib/types/agent-group'
 import type { RoomQuoteWire } from '@/lib/types/quote'
 
 import { getApiUrl } from '../utils'
-import { apiPost } from '../api-client'
+import { apiClient, apiPost } from '../api-client'
 
 const API_BASE_URL = getApiUrl('roomCenter')
+
+export type RoomHistoryStatus = 'idle' | 'queued' | 'processing' | 'awaiting_input'
+
+export interface RoomHistoryItem {
+  room_id: string
+  title: string
+  last_activity_at: string
+  is_pinned: boolean
+  pin_order: number | null
+  status: RoomHistoryStatus
+}
+
+export interface RoomHistoryResponse {
+  items: RoomHistoryItem[]
+}
+
+export function listRoomHistory(
+  getToken?: () => Promise<string | null>,
+  signal?: AbortSignal,
+): Promise<RoomHistoryResponse> {
+  return apiClient<RoomHistoryResponse>(getApiUrl('roomCenter/history'), {
+    getToken,
+    signal,
+  })
+}
+
+export function updateRoomHistoryItem(
+  roomId: string,
+  update: { title?: string; is_pinned?: boolean },
+  getToken?: () => Promise<string | null>,
+): Promise<RoomHistoryItem> {
+  return apiClient<RoomHistoryItem>(getApiUrl(`roomCenter/history/${roomId}`), {
+    method: 'PATCH',
+    body: update,
+    getToken,
+  })
+}
+
+export function reorderPinnedRooms(
+  roomIds: string[],
+  getToken?: () => Promise<string | null>,
+): Promise<{ success: boolean }> {
+  return apiClient<{ success: boolean }>(getApiUrl('roomCenter/history/pinned-order'), {
+    method: 'PUT',
+    body: { room_ids: roomIds },
+    getToken,
+  })
+}
+
+export function deleteRoomHistoryItem(
+  roomId: string,
+  getToken?: () => Promise<string | null>,
+): Promise<{ success: boolean }> {
+  return apiClient<{ success: boolean }>(getApiUrl(`roomCenter/history/${roomId}`), {
+    method: 'DELETE',
+    getToken,
+  })
+}
 
 export interface CreateRoomParams {
   room_name: string

@@ -496,6 +496,9 @@ class RoomServices:
             if info.agent_set
             else {agent_id: agent_id for agent_id in info.agent_ids},
             room_created_at=info.created_at or utcnow(),
+            last_activity_at=info.last_activity_at or info.created_at or utcnow(),
+            is_pinned=info.is_pinned,
+            pin_order=info.pin_order,
             membership_origin=info.membership_origin,
             membership_origin_status=RoomServices._legacy_membership_origin_status(
                 info.membership_origin_status
@@ -1047,6 +1050,37 @@ class RoomServices:
                 room_id=None,
                 error="Room not found",
                 status_code=404,
+            )
+        return self._room_setting_response_from_info(info)
+
+    async def update_room_history_fields(
+        self, request: RoomCenterRoomSettingRequest
+    ) -> RoomCenterRoomSettingResponse:
+        facade = self._require_facade()
+        if request.room_id is None:
+            return self._room_error_response(
+                room_id=None, error="Room id is required", status_code=400
+            )
+        updates: dict = {}
+        if request.is_pinned is not None:
+            updates["is_pinned"] = request.is_pinned
+            if not request.is_pinned:
+                updates["pin_order"] = None
+        if request.pin_order is not None:
+            updates["pin_order"] = request.pin_order
+        if not updates:
+            return self._room_error_response(
+                room_id=request.room_id,
+                error="No history fields supplied",
+                status_code=400,
+            )
+        try:
+            info = await facade.update_room(request.room_id, updates)
+        except ValueError as exc:
+            return self._room_error_response(room_id=request.room_id, error=str(exc))
+        if info is None:
+            return self._room_error_response(
+                room_id=request.room_id, error="Room not found", status_code=404
             )
         return self._room_setting_response_from_info(info)
 

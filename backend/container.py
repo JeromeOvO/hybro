@@ -1987,6 +1987,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestration_run_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
+    await _ensure_room_history_indexes(mongo)
     await _ensure_user_message_indexes(mongo)
     await _ensure_room_timeline_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
@@ -2311,6 +2312,21 @@ async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
         "room_quotes",
         [("room_id", 1)],
         name="room_id_lookup",
+    )
+
+
+async def _ensure_room_history_indexes(mongo: MongoDAL) -> None:
+    await _create_index(
+        mongo,
+        "rooms",
+        [
+            ("room_owner_id", 1),
+            ("lifecycle_state", 1),
+            ("is_pinned", -1),
+            ("pin_order", 1),
+            ("last_activity_at", -1),
+        ],
+        name="owner_history_order",
     )
 
 
