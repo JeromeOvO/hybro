@@ -843,3 +843,96 @@ def test_normalize_prose_expected_outputs_canonicalizes_text_constraints():
     assert output.kind == "text"
     assert output.artifact_name is None
     assert output.required_fields == []
+
+
+def test_fail_goal_already_satisfied_recovers_to_complete():
+    state = _state(status="fulfilled")
+    state.goal_progress = []
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="msg-travel",
+            agent_id="agent-1",
+            status="completed",
+            text="7-day Hawaii itinerary...",
+        ),
+        AgentOutputRecord(
+            agent_message_id="msg-weather",
+            agent_id="agent-2",
+            status="completed",
+            text="I can only provide current weather, not historical data.",
+        ),
+    ]
+    state.delegation_outcomes.append(
+        DelegationOutcomeRecord(
+            outcome_id="outcome-2",
+            dispatch_intent_id="intent-2",
+            agent_id="agent-2",
+            goal_family_fingerprint="family-weather",
+            goal_revision_fingerprint="revision-weather",
+            attempt_fingerprint="attempt-2",
+            status="fulfilled",
+        )
+    )
+    state.blockers = []
+
+    action = action_for_fulfilled_goal_recovery(
+        state,
+        error_code="fail_goal_already_satisfied",
+    )
+
+    assert action is not None
+    assert action.action == PlannerActionType.COMPLETE
+    assert action.completion_evidence is None
+
+
+def test_normalize_context_refs_rewrites_output_key_to_fact_id():
+    from execution.orchestration.recovery_policy import (
+        normalize_context_refs_with_available_facts,
+    )
+    from models.orchestration import DispatchContentRef, DispatchRefKind
+
+    state = _state(status="fulfilled")
+    state.facts = [
+        {
+            "fact_id": "agent-msg-1:text_evidence",
+            "kind": "agent_text_evidence",
+            "value": "Story text",
+            "source_agent_message_id": "agent-msg-1",
+        }
+    ]
+    state.agent_outputs = [
+        AgentOutputRecord(
+            agent_message_id="agent-msg-1",
+            agent_id="agent-1",
+            status="completed",
+            text="Story text",
+        )
+    ]
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="generate image from story",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="agent-2",
+                task="Generate an image based on the story.",
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id="story_text",
+                        source_agent_message_id="agent-msg-1",
+                    )
+                ],
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="image",
+                        kind="image/png",
+                        required=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    normalized = normalize_context_refs_with_available_facts(action, state)
+
+    assert normalized.targets[0].context_refs[0].ref_id == "agent-msg-1:text_evidence"

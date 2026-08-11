@@ -559,7 +559,13 @@ The orchestration planner receives a bounded resource catalog for user attachmen
 generated projections. Resource references are explicit: planner targets select
 context, artifact, or attachment refs, dispatch validates those refs against the
 run state and Agent Card input modes, and only selected payloads are materialized
-for the target Agent. When the current turn has no attachment, the catalog also
+for the target Agent. Context refs may also alias a fulfilled expected-output key
+(for example `story_text`) or an explicit `source_agent_message_id` onto the
+producer's durable `{message_id}:text_evidence` fact; Execution rewrites those
+aliases before validation when possible and resolves them again at dispatch.
+Multi-target parallel delegates cannot reference another target's expected-output
+key in the same step—dependent work must wait for a later sequential plan.
+When the current turn has no attachment, the catalog also
 includes a bounded set of the room's most recent user attachments with their
 original source-message lineage, allowing follow-up phrases such as “this
 information” to select the earlier projection by reference. A current-turn
@@ -592,6 +598,13 @@ that exact ID through dispatch refs, allowing the next planner attempt to repair
 the omission before any external Agent is called. The resource provider and
 projection service are assembled in `container.py`; failure recovery and retry
 policy remain separate orchestration concerns.
+
+When Agent results already satisfy remaining required obligations, Execution
+rejects a planner `fail` (`fail_goal_already_satisfied`) and recovers to
+`complete` so synthesis can deliver the useful Agent outputs. Illegal
+post-dispatch `ask_user` actions follow the same fulfilled-goal recovery path;
+open planner-schema failures are cleared before validating that recovery action
+so the completion gate does not block the superseding terminal decision.
 
 For a direct `platform_answer`, Execution resolves readable PDF projections into
 a separate bounded, untrusted attachment-content section of the synthesis

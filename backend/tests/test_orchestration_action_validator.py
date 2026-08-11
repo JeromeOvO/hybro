@@ -2822,3 +2822,264 @@ def test_normalized_semantic_repair_passes_delegate_lineage_guardrail():
         )
         is action
     )
+
+
+def test_fail_rejected_when_goal_already_satisfied():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="travel and weather",
+        candidate_agent_ids=["agent-1", "agent-2"],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="msg-travel",
+                agent_id="agent-1",
+                status="completed",
+                text="Hawaii itinerary",
+            ),
+            AgentOutputRecord(
+                agent_message_id="msg-weather",
+                agent_id="agent-2",
+                status="completed",
+                text="Current weather only",
+            ),
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="o1",
+                dispatch_intent_id="i1",
+                agent_id="agent-1",
+                goal_family_fingerprint="f1",
+                goal_revision_fingerprint="r1",
+                attempt_fingerprint="a1",
+                status="fulfilled",
+            ),
+            DelegationOutcomeRecord(
+                outcome_id="o2",
+                dispatch_intent_id="i2",
+                agent_id="agent-2",
+                goal_family_fingerprint="f2",
+                goal_revision_fingerprint="r2",
+                attempt_fingerprint="a2",
+                status="fulfilled",
+            ),
+        ],
+        goal_progress=[],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.FAIL,
+        reasoning="weather history unavailable",
+        failure_reason="Weather Agent cannot provide historical data",
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(action, run_state=state)
+    assert exc_info.value.code == "fail_goal_already_satisfied"
+
+
+def test_fail_allowed_when_required_output_key_still_missing():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="story and summary",
+        candidate_agent_ids=["story", "summarizer"],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="msg-story",
+                agent_id="story",
+                status="completed",
+                text="Once upon a time...",
+            )
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="story-intent",
+                planned_agent_message_id="msg-story",
+                agent_id="story",
+                task="Write a story",
+                task_hash="hash-story",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="story_text",
+                        kind="text",
+                        required=True,
+                    ),
+                    DispatchExpectedOutput(
+                        output_key="summary",
+                        kind="text",
+                        required=True,
+                    ),
+                ],
+                status="success",
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="o1",
+                dispatch_intent_id="story-intent",
+                agent_id="story",
+                goal_family_fingerprint="f1",
+                goal_revision_fingerprint="r1",
+                attempt_fingerprint="a1",
+                status="fulfilled",
+                satisfied_output_keys=["story_text"],
+                missing_output_keys=["summary"],
+            )
+        ],
+        goal_progress=[],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.FAIL,
+        reasoning="summary unavailable",
+        failure_reason="Summarizer could not produce required summary output",
+    )
+
+    validated = PlannerActionValidator.validate(action, run_state=state)
+
+    assert validated.action == PlannerActionType.FAIL
+
+
+def test_parallel_delegate_rejects_same_step_context_dependency():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="story and image",
+        candidate_agent_ids=["story", "image"],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="fanout",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="story",
+                task="Write a story",
+                parallel_group="fanout-1",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="story_text",
+                        kind="text",
+                        required=True,
+                    )
+                ],
+            ),
+            PlannedDelegateTarget(
+                agent_id="image",
+                task="Generate an image from the story",
+                parallel_group="fanout-1",
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id="story_text",
+                    )
+                ],
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="image",
+                        kind="image/png",
+                        required=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    with pytest.raises(PlannerActionValidationError) as exc_info:
+        PlannerActionValidator.validate(
+            action,
+            run_state=state,
+            candidate_agent_ids=["story", "image"],
+        )
+    assert exc_info.value.code == "parallel_context_dependency"
+
+
+def test_delegate_accepts_rewritten_story_context_ref():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="msg-1",
+        goal="story and image",
+        candidate_agent_ids=["story", "image"],
+        facts=[
+            {
+                "fact_id": "story-msg:text_evidence",
+                "kind": "agent_text_evidence",
+                "value": "Once upon a time",
+                "source_agent_message_id": "story-msg",
+            }
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="story-msg",
+                agent_id="story",
+                status="completed",
+                text="Once upon a time",
+            )
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:t1",
+                dispatch_intent_id="story-intent",
+                planned_agent_message_id="story-msg",
+                agent_id="story",
+                task="Write a story",
+                task_hash="hash",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="story_text",
+                        kind="text",
+                        required=True,
+                    )
+                ],
+                status="success",
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="o1",
+                dispatch_intent_id="story-intent",
+                agent_id="story",
+                goal_family_fingerprint="f1",
+                goal_revision_fingerprint="r1",
+                attempt_fingerprint="a1",
+                status="fulfilled",
+                satisfied_output_keys=["story_text"],
+            )
+        ],
+    )
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="image from story",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="image",
+                task="Generate an image based on the story",
+                context_refs=[
+                    DispatchContentRef(
+                        kind=DispatchRefKind.CONTEXT,
+                        ref_id="story_text",
+                        source_agent_message_id="story-msg",
+                    )
+                ],
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="image",
+                        kind="image/png",
+                        required=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    validated = PlannerActionValidator.validate(
+        action,
+        run_state=state,
+        candidate_agent_ids=["story", "image"],
+    )
+    assert validated is action

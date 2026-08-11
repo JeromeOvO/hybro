@@ -9,7 +9,11 @@ from execution.orchestration.dispatch_payload import (
 )
 from execution.orchestration.resources import ResourcePayload, ResourceProjectionRef
 from models.orchestration import (
+    AgentOutputRecord,
+    DelegationOutcomeRecord,
     DispatchContentRef,
+    DispatchExpectedOutput,
+    DispatchIntent,
     DispatchRefKind,
     OrchestrationRunState,
 )
@@ -956,3 +960,163 @@ async def test_attachment_aliases_select_a_compatible_raw_file_once():
     )
 
     assert payload.selected_attachment_refs == ["file-1"]
+
+
+@pytest.mark.asyncio
+async def test_resolver_aliases_output_key_context_ref_to_text_evidence():
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="story and image",
+        candidate_agent_ids=["story", "image"],
+        facts=[
+            {
+                "fact_id": "story-msg:text_evidence",
+                "kind": "agent_text_evidence",
+                "value": "Once upon a time in Technopolis...",
+                "source_agent_message_id": "story-msg",
+            }
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="story-intent",
+                planned_agent_message_id="story-msg",
+                agent_id="story",
+                task="Write a story",
+                task_hash="hash-story",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="story_text",
+                        kind="text",
+                        required=True,
+                    )
+                ],
+                status="success",
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-story",
+                dispatch_intent_id="story-intent",
+                agent_id="story",
+                goal_family_fingerprint="family-story",
+                goal_revision_fingerprint="revision-story",
+                attempt_fingerprint="attempt-story",
+                status="fulfilled",
+                satisfied_output_keys=["story_text"],
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="story-msg",
+                agent_id="story",
+                status="completed",
+                text="Once upon a time in Technopolis...",
+            )
+        ],
+    )
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=state,
+        target_agent_card=SimpleNamespace(default_input_modes=["text"]),
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="story_text",
+                source_agent_message_id="story-msg",
+                mime_type="text/plain",
+            )
+        ],
+        artifact_refs=[],
+        attachment_refs=[],
+        original_attachments=[],
+    )
+
+    assert payload.selected_context_refs == ["story-msg:text_evidence"]
+    assert payload.resource_payloads[0].text.startswith("Once upon a time")
+
+
+@pytest.mark.asyncio
+async def test_resolver_aliases_image_output_key_to_artifact_not_text():
+    artifact_key = "image-msg:artifact_id:scene-1"
+    state = OrchestrationRunState(
+        run_id="run-1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        goal="generate image",
+        candidate_agent_ids=["image"],
+        artifacts=[
+            {
+                "artifact_key": artifact_key,
+                "name": "Generated scene",
+                "mime_type": "image/png",
+                "parts": [{"file": {"mimeType": "image/png", "uri": "s3://bucket/x"}}],
+            }
+        ],
+        dispatch_intents=[
+            DispatchIntent(
+                step_id="step-1",
+                step_target_id="step-1:target-1",
+                dispatch_intent_id="image-intent",
+                planned_agent_message_id="image-msg",
+                agent_id="image",
+                task="Generate an image",
+                task_hash="hash-image",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="image",
+                        kind="image/png",
+                        required=True,
+                    )
+                ],
+                status="success",
+            )
+        ],
+        delegation_outcomes=[
+            DelegationOutcomeRecord(
+                outcome_id="outcome-image",
+                dispatch_intent_id="image-intent",
+                agent_id="image",
+                goal_family_fingerprint="family-image",
+                goal_revision_fingerprint="revision-image",
+                attempt_fingerprint="attempt-image",
+                status="fulfilled",
+                satisfied_output_keys=["image"],
+            )
+        ],
+        agent_outputs=[
+            AgentOutputRecord(
+                agent_message_id="image-msg",
+                agent_id="image",
+                status="completed",
+                text="Generated a scenic PNG image.",
+                artifact_keys=[artifact_key],
+            )
+        ],
+    )
+
+    payload = await resolve_dispatch_payload_refs(
+        run_state=state,
+        target_agent_card=SimpleNamespace(default_input_modes=["image/png"]),
+        context_refs=[
+            DispatchContentRef(
+                kind=DispatchRefKind.CONTEXT,
+                ref_id="image",
+                source_agent_message_id="image-msg",
+            )
+        ],
+        artifact_refs=[],
+        attachment_refs=[],
+        original_attachments=[],
+    )
+
+    assert payload.selected_context_refs == []
+    assert payload.selected_artifact_refs == [artifact_key]
+    assert not any(
+        payload.text and payload.text.startswith("Generated")
+        for payload in payload.resource_payloads
+        if payload.text
+    )
