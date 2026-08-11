@@ -18,7 +18,7 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ getToken: vi.fn(async () => 'test-token') }),
 }))
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api/agent', () => ({
   discoverLocalAgents: mockDiscoverLocalAgents,
   getAllAgents: mockGetAllAgents,
   getAgentsByProviderId: mockGetAgentsByProviderId,

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { banner } from '@/components/ui/banner'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/lib/auth'
-import { discoverLocalAgents, getAgentsByProviderId, getAllAgents } from '@/lib/api'
+import { discoverLocalAgents, getAgentsByProviderId, getAllAgents } from '@/lib/api/agent'
 import { routes } from '@/lib/routes'
 import type { Agent, AgentCenterResponse } from '@/lib/types'
 

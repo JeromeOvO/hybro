@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { useMessageStore } from '@/stores/message-store'
-import { selectComposerState } from '@/lib/selectors'
+import { selectComposerState } from '@/lib/selectors/select-composer-state'
 import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
 import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
 import {

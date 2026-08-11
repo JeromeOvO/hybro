@@ -20,7 +20,7 @@ import { useSidebar } from '@/components/ui/sidebar'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
-import { selectAgentResponseDetail } from '@/lib/selectors'
+import { selectAgentResponseDetail } from '@/lib/selectors/select-agent-response-detail'
 import type { MessageEntity } from '@/stores/message-store/types'
 
 const EMPTY_ENTITIES: Record<string, MessageEntity> = {}

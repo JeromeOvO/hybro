@@ -39,7 +39,7 @@ vi.mock('@/lib/auth', () => ({
 
 const mockGetAgent = vi.fn<() => Promise<AgentCenterResponse>>()
 const mockDeleteAgent = vi.fn()
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api/agent', () => ({
   getAgent: mockGetAgent,
   deleteAgent: mockDeleteAgent,
 }))

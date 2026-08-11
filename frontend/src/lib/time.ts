@@ -14,7 +14,7 @@
  * @param fallbackToNow - If true, returns current time for invalid/missing input (default: true)
  * @returns ISO 8601 string in UTC, or null if invalid and fallbackToNow is false
  */
-export function normalizeTimestamp(
+function normalizeTimestamp(
   value?: string | null,
   fallbackToNow: boolean = true
 ): string | null {
@@ -60,44 +60,9 @@ export function normalizeTimestampOrNow(value?: string | null): string {
  * @param value - The timestamp string to parse
  * @returns Date object, or null if invalid
  */
-export function parseTimestamp(value?: string | null): Date | null {
+function parseTimestamp(value?: string | null): Date | null {
   const normalized = normalizeTimestamp(value, false)
   return normalized ? new Date(normalized) : null
-}
-
-/**
- * Get the current UTC time as an ISO 8601 string.
- * Equivalent to backend's utcnow().isoformat()
- */
-export function utcNow(): string {
-  return new Date().toISOString()
-}
-
-/**
- * Calculate elapsed time in seconds from a timestamp to now.
- * Returns 0 if timestamp is invalid or in the future.
- *
- * @param timestamp - The start timestamp
- * @returns Elapsed seconds, or 0 if invalid
- */
-export function elapsedSeconds(timestamp?: string | null): number {
-  const parsed = parseTimestamp(timestamp)
-  if (!parsed) return 0
-
-  const elapsed = Math.floor((Date.now() - parsed.getTime()) / 1000)
-  return Math.max(0, elapsed) // Don't return negative for future timestamps
-}
-
-/**
- * Format elapsed time as human-readable string.
- *
- * @param seconds - Elapsed time in seconds
- * @returns Formatted string like "5s", "2m 30s", "1h 15m"
- */
-export function formatElapsedTime(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
 }
 
 /**

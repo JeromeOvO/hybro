@@ -4,7 +4,6 @@ import type { MessageEntity } from '@/stores/message-store/types'
 import type {
   TurnViewModel,
   TurnStatus,
-  TurnDisplayMode,
   TurnPhase,
   AgentResultViewModel,
   TurnSummaryViewModel,
@@ -12,7 +11,6 @@ import type {
   RawTimelineEvent,
 } from './types'
 import { isTerminalState, isFailureState, isInteractiveState } from '@/lib/types/sse'
-import type { TaskState } from '@/lib/types/sse'
 import { isSystemAgent, isSupervisorSystemAgent, isSummarySystemAgent, isSupervisorClarifyAgent } from '@/lib/system-agents'
 import {
   deriveDisplayModeFromFinalAnswer,

@@ -11,7 +11,8 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { banner } from "@/components/ui/banner"
-import { getAgentCardFromUrl, registerAgent, inspectAgentCard, inspectA2AConnection } from "@/lib/api"
+import { getAgentCardFromUrl, registerAgent } from "@/lib/api/agent"
+import { inspectA2AConnection, inspectAgentCard } from "@/lib/api/inspection"
 import { ApiError } from "@/lib/api-client"
 import type {
   AgentCenterResponse,

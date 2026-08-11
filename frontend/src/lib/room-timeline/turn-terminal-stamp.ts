@@ -1,10 +1,9 @@
 import { buildTurns } from './build-turns'
-import { isCanceledMultiAgentTurn, isFailedMultiAgentTurn } from './derive-final-answer'
+import { isCanceledMultiAgentTurn } from './derive-final-answer'
 import {
   hasActiveSupervisorPlanningEphemeral,
   hasActiveSynthesisGap,
   isBackendRunConfirmedNonSynthesisCompletion,
-  isMixedTerminalMultiAgentTurn,
   turnHasSubstantiveLlmSynthesis,
 } from './multi-agent-turn-complete'
 import type { TaskState } from '@/lib/types/sse'

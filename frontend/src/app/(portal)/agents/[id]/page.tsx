@@ -71,7 +71,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { banner } from "@/components/ui/banner"
-import { deleteAgent, getAgent } from "@/lib/api"
+import { deleteAgent, getAgent } from "@/lib/api/agent"
 import { cn } from "@/lib/utils"
 import type { Agent, AgentCenterResponse, AgentCapabilities } from "@/lib/types"
 import type { AgentSkill } from "@/lib/types"

@@ -496,30 +496,28 @@ Selectors under `src/lib/selectors/` adapt store state into UI-specific slices:
 - Wraps HTTP failures in `ApiError`.
 - Logs client errors as warnings and server/unexpected errors as errors.
 
-API modules live in `src/lib/api/`:
+API modules live in `src/lib/api/`. Consumers import the specific module they
+need rather than a shared barrel, keeping client bundles scoped to the active
+feature:
 
 ```text
 src/lib/api/
-|-- index.ts
 |-- agent.ts
 |-- agent-group.ts
 |-- room.ts
 |-- sse.ts
 |-- task.ts
 |-- inspection.ts
-|-- health.ts
 |-- a2a-tasks.ts
-|-- discovery-api-keys.ts
 |-- files.ts
-|-- hitl.ts
-`-- hub.ts
+`-- hitl.ts
 ```
 
 Type definitions live in `src/lib/types/`:
 
 ```text
-agent.ts, agent-group.ts, attachments.ts, chat-mode.ts, error.ts,
-health.ts, memory.ts, quote.ts, request.ts, response.ts, room.ts, sse.ts
+agent.ts, agent-group.ts, attachments.ts, chat-mode.ts, error.ts, index.ts,
+quote.ts, request.ts, response.ts, sse.ts
 ```
 
 Other library modules:
