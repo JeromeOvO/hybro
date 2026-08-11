@@ -153,10 +153,8 @@ src/components/
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
 |-- room-chat-input.tsx       # composer input, mentions, uploads
-|-- room-setting-form.tsx     # room settings and room agent defaults
 |-- group-selector.tsx
 |-- group-management-modal.tsx
-|-- agent-selector.tsx
 |-- consumer-agent-card.tsx
 |-- artifact-list.tsx
 |-- artifact-renderer.tsx
