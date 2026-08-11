@@ -167,7 +167,6 @@ src/components/
 |-- markdown-content.tsx
 |-- part-renderer.tsx
 |-- mode-selector.tsx
-|-- nav-main.tsx
 |-- nav-agent.tsx
 |-- nav-user.tsx
 |-- nav-docs-button.tsx
