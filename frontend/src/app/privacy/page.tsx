@@ -27,8 +27,8 @@ export default function PrivacyPage() {
         <p>We collect the following categories of information:</p>
         <ul className="mt-3 list-disc pl-5 space-y-2">
           <li>
-            <strong>Account information</strong> — name, email address, and authentication credentials managed through
-            Clerk (our authentication provider).
+            <strong>Local identity metadata</strong> — the self-hosted frontend uses a fixed local identity and does not
+            send authentication credentials to a third-party identity provider.
           </li>
           <li>
             <strong>Usage data</strong> — pages visited, features used, and interactions with the platform, collected
@@ -44,8 +44,8 @@ export default function PrivacyPage() {
         <p>We use the following types of cookies:</p>
         <ul className="mt-3 list-disc pl-5 space-y-2">
           <li>
-            <strong>Strictly necessary cookies</strong> — required for authentication and session management (set by
-            Clerk). These are always active and cannot be declined.
+            <strong>Essential local storage</strong> — used for interface preferences and cookie-consent state. This
+            data remains in your browser.
           </li>
           <li>
             <strong>Analytics cookies</strong> — set by Google Analytics to help us understand how visitors use the
@@ -78,25 +78,17 @@ export default function PrivacyPage() {
         </p>
       </Section>
 
-      <Section title="5. Authentication (Clerk)">
+      <Section title="5. Local Identity">
         <p>
-          Account creation and login are handled by Clerk. Clerk stores your authentication data securely. See{" "}
-          <a
-            href="https://clerk.com/privacy"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground transition-colors"
-          >
-            Clerk's Privacy Policy
-          </a>{" "}
-          for details on how your account data is handled.
+          The current self-hosted frontend operates with a local development identity. It does not create external
+          user accounts or send authentication credentials to a third-party identity service.
         </p>
       </Section>
 
       <Section title="6. Data Retention">
         <p>
-          We retain your account and conversation data for as long as your account is active. You can request deletion
-          of your account and associated data by contacting us.
+          We retain conversation and agent data for as long as needed to operate the service. You can request deletion
+          of associated data by contacting us.
         </p>
       </Section>
 

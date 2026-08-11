@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { UserPlus, LogOut, Settings, Sun, Moon, Monitor } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { useUser, useClerk } from "@/lib/auth"
+import { useUser, useAuthClient } from "@/lib/auth"
 import { useTheme } from "next-themes"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
@@ -84,7 +84,7 @@ function UserDropdownContent({ children }: { children: React.ReactNode }) {
 export function NavUser() {
   const router = useRouter()
   const { user, isLoaded } = useUser()
-  const { signOut } = useClerk()
+  const { signOut } = useAuthClient()
   const { setOpenMobile } = useSidebar()
   const { openSettings } = useSettingsDialog()
   const { theme, setTheme } = useTheme()

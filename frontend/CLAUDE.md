@@ -57,15 +57,15 @@ The core user experience flows through:
 
 ### API Layer
 
-- `src/lib/api-client.ts` — centralized fetch wrapper with `ApiError` class, auto-attaches Clerk auth headers
+- `src/lib/api-client.ts` — centralized fetch wrapper with `ApiError` class and local identity auth headers
 - `src/lib/api/` — domain-specific API modules (room, agent, hub, hitl, files, sse)
 - Backend URL configured via `NEXT_PUBLIC_API_BASE_URL` + `NEXT_PUBLIC_API_PREFIX` (default: `http://localhost:8000/api/v1`)
 
 ### Authentication
 
-The repository intentionally uses the local auth mock in `src/lib/auth.tsx`.
-The Clerk-shaped client API is retained so existing pages and API calls keep
-their authentication interface.
+The repository uses the self-hosted local identity adapter in `src/lib/auth.tsx`.
+It supplies the fixed development identity and token interface consumed by pages
+and API calls; no external identity provider is configured.
 
 ### UI System
 
@@ -107,5 +107,7 @@ Do not add or commit `superpowers/` or related planning artifacts.
 ## Environment
 
 Copy `.env.example` → `.env.local`. Key vars:
-- `NEXT_PUBLIC_API_BASE_URL` — backend URL
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — auth
+- `BACKEND_URL` — server-side backend target used by Next.js rewrites
+- `NEXT_PUBLIC_API_BASE_URL` / `NEXT_PUBLIC_API_PREFIX` — browser API endpoint
+- `NEXT_PUBLIC_INSPECTION_TIMEOUT_MS` — inspection request timeout
+- `NEXT_PUBLIC_MAX_MESSAGE_LENGTH` — composer message limit

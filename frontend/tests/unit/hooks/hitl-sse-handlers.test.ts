@@ -31,12 +31,6 @@ vi.mock('@/hooks/useRoomSSE', () => ({
   }),
 }))
 
-vi.mock('@clerk/nextjs', () => ({
-  useUser: () => ({ user: { id: 'u1', firstName: 'Test' }, isLoaded: true }),
-  useAuth: () => ({ getToken: async () => 'token' }),
-  useClerk: () => ({ signOut: vi.fn() }),
-}))
-
 vi.mock('@/lib/api/room', () => ({
   inquiryRoomSetting: vi.fn().mockResolvedValue({ success: true, room: { room_id: 'room-1', room_name: 'Test', room_agent_set: {} } }),
   SendMessage: vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' }),

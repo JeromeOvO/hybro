@@ -35,7 +35,7 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 | Component system | shadcn/ui with Radix primitives, `components.json`, New York style |
 | Icons | Lucide React |
 | Forms | React Hook Form + Zod |
-| Auth | Clerk (`@clerk/nextjs`) |
+| Auth | Local self-hosted identity adapter (`src/lib/auth.tsx`) |
 | Server state | TanStack React Query |
 | Client state | Zustand |
 | Real-time transport | SSE over `fetch()` streaming |
@@ -130,12 +130,10 @@ badge as Hub agents; Hub availability additionally depends on Hub liveness.
 
 `src/app/layout.tsx` wraps the app with:
 
-1. `ClerkProvider`
-2. `ClerkAuthProvider`
-3. `ThemeProvider`
-4. `QueryProvider`
-5. `Toaster`
-6. `CookieBanner`
+1. `ThemeProvider`
+2. `QueryProvider`
+3. `Toaster`
+4. `CookieBanner`
 
 The portal layout adds `BannerHost`, `SidebarProvider`,
 `SettingsDialogProvider`, `PortalSidebar`, and `PortalHeader`.
@@ -149,7 +147,7 @@ src/components/
 |-- composer/                 # chat composer shell and HITL response bar
 |-- portal/                   # unified sidebar/header/footer and Manage navigation
 |-- open-source/              # open-source landing page interactions
-|-- providers/                # Clerk auth bridge and React Query provider
+|-- providers/                # React Query provider
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
 |-- room-chat-input.tsx       # composer input, mentions, uploads
@@ -244,7 +242,7 @@ src/hooks/room/
 `src/app/(portal)/room/[id]/page.tsx` is the room page. It is a client component that:
 
 - Reads `roomId` from the route.
-- Reads user/auth state from Clerk.
+- Reads user/auth state from the local identity adapter.
 - Calls `useRoomWebhook`.
 - Manages local chat mode, quote state, and prefilled input handoff.
 - Uses `useGroupManagement` for saved groups and room-team defaults.
@@ -490,7 +488,7 @@ Selectors under `src/lib/selectors/` adapt store state into UI-specific slices:
 
 `src/lib/api-client.ts` is the shared fetch wrapper. It:
 
-- Injects Clerk auth headers through `getClientAuthHeaders`.
+- Injects local identity auth headers through `getClientAuthHeaders`.
 - Supports abort signals and a default timeout.
 - Wraps HTTP failures in `ApiError`.
 - Logs client errors as warnings and server/unexpected errors as errors.
@@ -520,7 +518,7 @@ quote.ts, request.ts, response.ts, sse.ts
 
 Other library modules:
 
-- `auth.ts`: intentional local auth adapter with a Clerk-shaped interface.
+- `auth.ts`: local self-hosted identity and authentication-header adapter.
 - `routes.ts`: canonical public and management route vocabulary.
 - `utils.ts`: `cn`, `getApiUrl`, and formatting helpers.
 - `consumer-nav.ts`, `nav-items.ts`: top-level navigation configuration.

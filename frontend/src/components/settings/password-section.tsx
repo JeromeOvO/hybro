@@ -1,9 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import type { ClerkUser as UserResource } from "@/lib/auth"
+import type { AuthUser as UserResource } from "@/lib/auth"
 import { toast } from "sonner"
-import { getClerkErrorMessage } from "@/lib/clerk-error"
+import { getAuthErrorMessage } from "@/lib/auth-error"
 
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -50,7 +50,7 @@ export function PasswordSection({ user }: { user: UserResource }) {
       setConfirmPassword("")
       toast.success(hasPassword ? "Password changed" : "Password set successfully")
     } catch (err: unknown) {
-      toast.error(getClerkErrorMessage(err, "Failed to update password"))
+      toast.error(getAuthErrorMessage(err, "Failed to update password"))
     } finally {
       setSaving(false)
     }

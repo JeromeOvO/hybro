@@ -10,7 +10,6 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report' }],
     ['list']
   ],
-  globalSetup: './tests/e2e/global-setup.ts',
   use: {
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',

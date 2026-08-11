@@ -2,10 +2,10 @@
 
 import { useState } from "react"
 import { AlertTriangle } from "lucide-react"
-import type { ClerkUser as UserResource } from "@/lib/auth"
-import { useClerk } from "@/lib/auth"
+import type { AuthUser as UserResource } from "@/lib/auth"
+import { useAuthClient } from "@/lib/auth"
 import { toast } from "sonner"
-import { getClerkErrorMessage } from "@/lib/clerk-error"
+import { getAuthErrorMessage } from "@/lib/auth-error"
 
 import { Input } from "@/components/ui/input"
 import {
@@ -24,12 +24,12 @@ import { LoadingButton } from "@/components/settings/loading-button"
 import { FormGroup } from "@/components/settings/form-group"
 
 export function DangerZoneSection({ user }: { user: UserResource }) {
-  const { signOut } = useClerk()
+  const { signOut } = useAuthClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [confirmEmail, setConfirmEmail] = useState("")
   const [deleting, setDeleting] = useState(false)
 
-  // Only render if self-deletion is enabled in Clerk Dashboard
+  // Only render when the active identity provider supports self-deletion.
   if (!user.deleteSelfEnabled) return null
 
   const userEmail = user.primaryEmailAddress?.emailAddress ?? ""
@@ -45,7 +45,7 @@ export function DangerZoneSection({ user }: { user: UserResource }) {
       // Sign out and redirect after deletion
       await signOut({ redirectUrl: "/" })
     } catch (err: unknown) {
-      toast.error(getClerkErrorMessage(err, "Failed to delete account"))
+      toast.error(getAuthErrorMessage(err, "Failed to delete account"))
       setDeleting(false)
     }
   }
