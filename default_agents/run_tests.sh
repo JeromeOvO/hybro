@@ -7,15 +7,17 @@
 #     checks are skipped.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
-# Load OPENAI_API_KEY from default_agents/.env if not already in the environment.
+# Load OPENAI_API_KEY from repo-root .env if not already in the environment.
 if [ -z "${OPENAI_API_KEY:-}" ] && [ -f .env ]; then
     set -a
     # shellcheck disable=SC1091
     . ./.env
     set +a
 fi
+
+cd default_agents
 
 echo "Running default agent verification tests..."
 echo "  BACKEND_URL=${BACKEND_URL:-http://localhost:8000}"

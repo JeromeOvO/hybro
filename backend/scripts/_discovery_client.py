@@ -43,13 +43,16 @@ class DiscoveryConfig:
 
 
 def load_env_file() -> None:
-    """Load repo-root .env if python-dotenv is available."""
+    """Load repo-root .env (then backend/.env) if python-dotenv is available."""
     if load_dotenv is None:
         return
-    repo_root = Path(__file__).resolve().parent.parent
-    env_path = repo_root / ".env"
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=False)
+    # backend/scripts/_discovery_client.py -> backend/ -> repo root
+    backend_dir = Path(__file__).resolve().parents[1]
+    repo_root = backend_dir.parent
+    for env_path in (repo_root / ".env", backend_dir / ".env"):
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=False)
+            return
 
 
 @functools.lru_cache(maxsize=1)

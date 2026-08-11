@@ -1,16 +1,15 @@
 #!/bin/sh
 set -eu
 
+# Ensure DEFAULT_AGENT_REGISTRAR_TOKEN and AGENT_REGISTRAR_TOKEN are set to the
+# same non-empty value in a single env file (repo-root .env).
 
-backend_env=${1:-}
-agents_env=${2:-}
+env_file=${1:-}
 
-for env_file in "$backend_env" "$agents_env"; do
-    if [ -z "$env_file" ] || [ ! -f "$env_file" ]; then
-        echo "Error: pass two existing environment files" >&2
-        exit 1
-    fi
-done
+if [ -z "$env_file" ] || [ ! -f "$env_file" ]; then
+    echo "Error: pass an existing environment file" >&2
+    exit 1
+fi
 
 # Read the current value of a variable from an env file ("" when unset/blank).
 read_var() {
@@ -26,11 +25,11 @@ read_var() {
 
 # Set (or append) a variable in an env file, preserving everything else.
 write_var() {
-    env_file=$1
+    target=$1
     key=$2
     value=$3
 
-    temp_file="${env_file}.tmp.$$"
+    temp_file="${target}.tmp.$$"
     trap 'rm -f "$temp_file"' 0 1 2 15
 
     awk -v key="$key" -v value="$value" '
@@ -49,15 +48,15 @@ write_var() {
                 print key "=" value
             }
         }
-    ' "$env_file" > "$temp_file"
+    ' "$target" > "$temp_file"
 
     chmod 600 "$temp_file"
-    mv "$temp_file" "$env_file"
+    mv "$temp_file" "$target"
     trap - 0 1 2 15
 }
 
-backend_token=$(read_var "$backend_env" DEFAULT_AGENT_REGISTRAR_TOKEN)
-agents_token=$(read_var "$agents_env" AGENT_REGISTRAR_TOKEN)
+backend_token=$(read_var "$env_file" DEFAULT_AGENT_REGISTRAR_TOKEN)
+agents_token=$(read_var "$env_file" AGENT_REGISTRAR_TOKEN)
 
 # Already configured and consistent - leave the existing secret alone.
 if [ -n "$backend_token" ] && [ "$backend_token" = "$agents_token" ]; then
@@ -79,7 +78,7 @@ else
     exit 1
 fi
 
-write_var "$backend_env" DEFAULT_AGENT_REGISTRAR_TOKEN "$token"
-write_var "$agents_env" AGENT_REGISTRAR_TOKEN "$token"
+write_var "$env_file" DEFAULT_AGENT_REGISTRAR_TOKEN "$token"
+write_var "$env_file" AGENT_REGISTRAR_TOKEN "$token"
 
-echo "Configured a shared default-agent registrar token in $backend_env and $agents_env"
+echo "Configured a shared default-agent registrar token in $env_file"

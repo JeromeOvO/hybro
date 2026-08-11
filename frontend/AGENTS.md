@@ -52,4 +52,4 @@ In handoff summaries, include changed behavior, tests run, documentation updates
 
 ## Security & Configuration Tips
 
-Copy required environment keys from `.env.example` into `.env.local`; do not commit local secrets. Keep generated output such as `.next`, `coverage`, and `playwright-report` out of commits.
+Copy required environment keys from the repo-root `.env.example` into repo-root `.env`; `install.sh` writes a filtered `frontend/.env.local` for non-Docker `npm run dev`. Do not commit local secrets. Keep generated output such as `.next`, `coverage`, and `playwright-report` out of commits.

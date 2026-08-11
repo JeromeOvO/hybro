@@ -24,7 +24,7 @@ MongoDB aggregation update pipelines; Docker Compose currently provides MongoDB
 
 ```sh
 cd backend
-cp .env.example .env
+# From the monorepo root: cp .env.example .env  (if not already created)
 uv sync --extra dev
 uv run uvicorn main:app --reload
 ```

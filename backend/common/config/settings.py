@@ -246,10 +246,24 @@ class Settings(BaseSettings):
 
     class Config:
         extra = "ignore"
+        # backend/ when running from the monorepo or /app in the backend image.
         base_dir = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        env_file = os.path.join(base_dir, ".env")
+        # Prefer repo-root .env on the host (parent contains docker-compose.yml).
+        # Inside Docker that parent check fails, so we only try backend/.env
+        # (usually absent; Compose injects process env instead). Missing files
+        # are ignored by pydantic-settings.
+        env_file = (
+            *(
+                (os.path.join(os.path.dirname(base_dir), ".env"),)
+                if os.path.isfile(
+                    os.path.join(os.path.dirname(base_dir), "docker-compose.yml")
+                )
+                else ()
+            ),
+            os.path.join(base_dir, ".env"),
+        )
 
     @field_validator("frontend_origins", mode="before")
     @classmethod

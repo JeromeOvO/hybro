@@ -55,6 +55,10 @@ Alternatively, you can manually clone and run:
 ```bash
 git clone https://github.com/hybroai/hybro.git
 cd hybro
+cp .env.example .env
+# Set OPENAI_API_KEY in .env, then generate secrets:
+sh backend/scripts/ensure_webhook_signing_key.sh .env
+sh backend/scripts/ensure_registrar_token.sh .env
 docker compose up -d --build
 ```
 
@@ -72,7 +76,7 @@ The repository is split into these primary components:
 - `default_agents/`: A collection of ready-to-use A2A agents, each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
 
 ## API key
-The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it in both `backend/.env` and `default_agents/.env`. Agents register regardless, but calls will fail until a valid key is provided.
+The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it once in the repo-root `.env` (copy from `.env.example`). Agents register regardless, but calls will fail until a valid key is provided.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.

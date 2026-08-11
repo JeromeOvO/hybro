@@ -34,38 +34,49 @@ else
 fi
 
 echo "Setting up environment variables..."
-if [ ! -f backend/.env ]; then
-    if [ -f backend/.env.example ]; then
-        cp backend/.env.example backend/.env
-        echo "Created backend/.env from example"
+
+# Promote a legacy backend/.env to the new repo-root .env when needed.
+if [ ! -f .env ] && [ -f backend/.env ]; then
+    cp backend/.env .env
+    echo "Migrated backend/.env to repo-root .env"
+    if [ -f default_agents/.env ]; then
+        agent_token=$(
+            awk -F= '/^[[:space:]]*AGENT_REGISTRAR_TOKEN[[:space:]]*=/ {
+                sub(/^[^=]*=/, "")
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+                print
+                exit
+            }' default_agents/.env
+        )
+        if [ -n "$agent_token" ]; then
+            backend_token=$(
+                awk -F= '/^[[:space:]]*DEFAULT_AGENT_REGISTRAR_TOKEN[[:space:]]*=/ {
+                    sub(/^[^=]*=/, "")
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+                    print
+                    exit
+                }' .env
+            )
+            if [ -z "$backend_token" ]; then
+                printf '\nAGENT_REGISTRAR_TOKEN=%s\nDEFAULT_AGENT_REGISTRAR_TOKEN=%s\n' \
+                    "$agent_token" "$agent_token" >> .env
+            fi
+        fi
     fi
 fi
 
-if [ -f backend/.env ]; then
-    sh backend/scripts/ensure_webhook_signing_key.sh backend/.env
-fi
-
-if [ ! -f frontend/.env.local ]; then
-    if [ -f frontend/.env.example ]; then
-        cp frontend/.env.example frontend/.env.local
-        echo "Created frontend/.env.local from example"
+if [ ! -f .env ]; then
+    if [ -f .env.example ]; then
+        cp .env.example .env
+        echo "Created .env from .env.example"
+        echo "NOTE: set OPENAI_API_KEY in .env so the backend and default agents can respond."
     fi
 fi
 
-if [ ! -f default_agents/.env ]; then
-    if [ -f default_agents/.env.example ]; then
-        cp default_agents/.env.example default_agents/.env
-        echo "Created default_agents/.env from example"
-        echo "NOTE: set OPENAI_API_KEY in default_agents/.env so the default agents can respond."
-    fi
-fi
-
-# /agent/registerAgent is protected. The one-shot registrar authenticates with a
-# shared service token instead of a Clerk session, so both sides need the same
-# secret or every registration fails with 401. Generate it once, after both .env
-# files exist. Idempotent: an already-configured token is left untouched.
-if [ -f backend/.env ] && [ -f default_agents/.env ]; then
-    sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
+if [ -f .env ]; then
+    sh backend/scripts/ensure_webhook_signing_key.sh .env
+    sh backend/scripts/ensure_registrar_token.sh .env
+    sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
 fi
 
 # The default-agent services in docker-compose.yml are generated from

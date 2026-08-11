@@ -88,7 +88,7 @@ def render_region(agents: dict[str, dict]) -> str:
         "      context: ./default_agents",
         "      dockerfile: Dockerfile.registrar",
         "    env_file:",
-        "      - ./default_agents/.env",
+        "      - ./.env",
         "    environment:",
         f"      - BACKEND_URL={BACKEND_URL}",
         f"      - API_PREFIX={API_PREFIX}",

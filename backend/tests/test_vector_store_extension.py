@@ -117,7 +117,7 @@ def test_removed_vector_provider_is_absent_from_runtime_config_and_dependencies(
     for path in (
         Path("pyproject.toml"),
         Path("uv.lock"),
-        Path(".env.example"),
+        Path("..") / ".env.example",
     ):
         assert provider_name not in path.read_text().casefold()
 

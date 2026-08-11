@@ -65,4 +65,4 @@ Commit from this repository root. Use short imperative subjects with prefixes su
 
 ## Security & Configuration Tips
 
-Never commit secrets. Start from `backend/.env.example`, `frontend/.env.example`, or `default_agents/.env.example` as applicable, keep local values in ignored environment files, and document newly required variables.
+Never commit secrets. Start from the repo-root `.env.example`, keep local values in ignored `.env` / `frontend/.env.local`, and document newly required variables.

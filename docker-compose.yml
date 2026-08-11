@@ -4,7 +4,7 @@ x-agent: &agent
     context: ./default_agents
     dockerfile: Dockerfile
   env_file:
-    - ./default_agents/.env
+    - ./.env
   restart: always
   depends_on:
     backend:
@@ -67,7 +67,7 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       - MONGODB_URL=mongodb://mongo:27017/hybro
       - REDIS_URL=redis://redis:6379/0
@@ -97,8 +97,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
-    env_file:
-      - ./frontend/.env.local
+    # Intentionally no env_file: do not inject backend secrets into Next.js.
+    # Local Docker uses code defaults for NEXT_PUBLIC_* plus BACKEND_URL rewrites.
     environment:
       - BACKEND_URL=http://backend:8000
     depends_on:
@@ -166,7 +166,7 @@ services:
       context: ./default_agents
       dockerfile: Dockerfile.registrar
     env_file:
-      - ./default_agents/.env
+      - ./.env
     environment:
       - BACKEND_URL=http://backend:8000
       - API_PREFIX=/api/v1
