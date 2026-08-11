@@ -2,10 +2,9 @@
 
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
-import { useUser, useClerk } from "@/lib/auth"
+import { useUser } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { ArrowRight, Rocket, SquareArrowOutUpRight, Sparkles } from "lucide-react"
-import { isWaitlistEnabled } from "@/lib/utils"
 import { VideoEmbed } from "@/components/video-embed"
 import Link from 'next/link'
 import { PortalFooter } from '@/components/portal/portal-footer'
@@ -15,7 +14,6 @@ import { FadeInSection } from "@/components/fade-in-section"
 export default function ConsumerLandingPage() {
   const router = useRouter()
   const { isLoaded, isSignedIn } = useUser()
-  const { openWaitlist } = useClerk()
 
   // Redirect authenticated users to chat
   useEffect(() => {
@@ -34,11 +32,7 @@ export default function ConsumerLandingPage() {
   }
 
   const handleGetStarted = () => {
-    if (isWaitlistEnabled()) {
-      openWaitlist()
-    } else {
-      router.push("/sign-up")
-    }
+    router.push("/sign-up")
   }
 
   return (
@@ -92,7 +86,7 @@ export default function ConsumerLandingPage() {
                 Work with AI agents that collaborate to solve complex tasks together.
               </p>
               <Button size="lg" onClick={handleGetStarted} className="btn-brand-gradient w-full max-w-[220px]">
-                {isWaitlistEnabled() ? "Join Waitlist" : "Start Chatting"}
+                Start Chatting
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>

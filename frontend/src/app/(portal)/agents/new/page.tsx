@@ -20,8 +20,7 @@ import type {
   InspectionCenterResponse,
   InsepectionCenterConnectionValidationResponse
 } from "@/lib/types"
-import { useUser, useClerk} from "@/lib/auth"
-import { isWaitlistEnabled } from "@/lib/utils"
+import { useUser } from "@/lib/auth"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
 export default function RegisterAgentPage() {
@@ -42,7 +41,6 @@ export default function RegisterAgentPage() {
   const [cardInspectionData, setCardInspectionData] = useState<InspectionCenterResponse | null>(null)
   const [inspectionData, setInspectionData] = useState<InsepectionCenterConnectionValidationResponse | null>(null)
   const [urlError, setUrlError] = useState("")
-  const { openWaitlist } = useClerk()
   const [inspectionOpen, setInspectionOpen] = useState(true)
   const validateUrl = (inputUrl: string): boolean => {
     try {
@@ -213,24 +211,19 @@ export default function RegisterAgentPage() {
       return
     }
 
-    // Do nothing while Clerk is still loading to avoid unexpected waitlist popup
-    if(!isLoaded){
+    // Do nothing while the auth adapter is still loading.
+    if (!isLoaded) {
       return
     }
 
     if (!user?.id) {
-      if (isWaitlistEnabled()) {
-        openWaitlist()
-      } else {
-        router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`)
-      }
+      router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`)
       return
     }
 
     setRegistering(true)
 
-    // get provider id from clerk
-    const providerId = user!.id
+    const providerId = user.id
 
     try {
       const registerRequest: AgentCenterRequest = {

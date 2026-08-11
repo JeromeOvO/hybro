@@ -110,7 +110,6 @@ export function useClerk() {
       window.location.href = "/";
     },
     openUserProfile: () => console.log("Mock open user profile"),
-    openWaitlist: () => console.log("Mock open waitlist"),
     openSignIn: () => console.log("Mock open sign in"),
     openSignUp: () => console.log("Mock open sign up"),
   };
@@ -126,10 +125,6 @@ export function SignIn(_props: Record<string, unknown>) {
 
 export function SignUp(_props: Record<string, unknown>) {
   return <div>Sign up disabled in Local Developer Mode</div>;
-}
-
-export function Waitlist(_props: Record<string, unknown>) {
-  return <div>Waitlist disabled in Local Developer Mode</div>;
 }
 
 export function SignedIn({ children }: { children: React.ReactNode }) {

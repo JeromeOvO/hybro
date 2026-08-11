@@ -44,11 +44,6 @@ export function getApiUrl(endpoint: string): string {
   return `${baseUrl}${apiPrefix}/${endpoint}`;
 }
 
-// Waitlist configuration
-export function isWaitlistEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_ENABLE_WAITLIST === 'true';
-}
-
 export function getInspectionTimeoutMs(): number {
   return parseInt(process.env.NEXT_PUBLIC_INSPECTION_TIMEOUT_MS || '300000');
 }
