@@ -158,9 +158,6 @@ src/components/
 |-- group-management-modal.tsx
 |-- agent-selector.tsx
 |-- consumer-agent-card.tsx
-|-- hitl-compact-card.tsx
-|-- hitl-inline-reply-form.tsx
-|-- hitl-question-card.tsx
 |-- artifact-list.tsx
 |-- artifact-renderer.tsx
 |-- attachment-preview.tsx
@@ -209,7 +206,6 @@ src/hooks/
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
 |-- useHubStatus.ts            # hub availability
-|-- useMessageScrollAnchoring.ts  # legacy scroll anchoring
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
