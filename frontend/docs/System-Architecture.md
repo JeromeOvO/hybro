@@ -148,7 +148,7 @@ src/components/
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
 |-- portal/                   # unified sidebar/header/footer and Manage navigation
-|-- developer/                # agent-management settings form
+|-- open-source/              # open-source landing page interactions
 |-- providers/                # Clerk auth bridge and React Query provider
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
@@ -167,7 +167,6 @@ src/components/
 |-- nav-docs-button.tsx
 |-- nav-discord-button.tsx
 |-- require-auth.tsx
-|-- hub-page-content.tsx
 |-- use-case-card.tsx
 |-- cookie-banner.tsx
 |-- theme-provider.tsx
@@ -506,7 +505,6 @@ src/lib/api/
 |-- agent-group.ts
 |-- room.ts
 |-- sse.ts
-|-- task.ts
 |-- inspection.ts
 |-- a2a-tasks.ts
 |-- files.ts
