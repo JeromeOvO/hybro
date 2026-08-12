@@ -47,8 +47,9 @@ Zero-config demo:
         cp .env.example .env
         # edit .env; at minimum set OPENAI_API_KEY
 
-    Then re-run `./scripts/hybro start`. The frontend env file
-    (frontend/.env.local) is generated - do not hand-edit it.
+    Then re-run `./scripts/hybro start --recreate` so running containers
+    pick up the new values. The frontend env file (frontend/.env.local)
+    is generated - do not hand-edit it.
 
 First-time setup:
     From scratch, run `sh install.sh` (also available via the one-liner in

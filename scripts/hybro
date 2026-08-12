@@ -88,12 +88,17 @@ render_compose() {
 # syntax used in docker-compose.yml (so a missing repo-root .env is treated as
 # non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
 # that syntax, so we deliberately do not fall back to it.
-compose() {
-    if ! docker compose version >/dev/null 2>&1; then
+require_compose() {
+    compose_version=$(docker compose version --short 2>/dev/null || true)
+    if [ -z "$compose_version" ] || ! echo "$compose_version" | awk -F. '{if ($1 > 2 || ($1 == 2 && $2 >= 24)) exit 0; else exit 1}'; then
         echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)." >&2
         echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run." >&2
         exit 1
     fi
+}
+
+compose() {
+    require_compose
     docker compose "$@"
 }
 
@@ -119,10 +124,16 @@ cmd_start() {
         esac
     done
 
-    retire_legacy_env backend/.env
-    retire_legacy_env default_agents/.env
+    # Match install.sh: promote a leftover backend/.env before retiring anything,
+    # and never rename legacy files when there is still no root .env to own them.
+    if [ ! -f .env ] && [ -f backend/.env ]; then
+        cp backend/.env .env
+        echo "Migrated backend/.env to repo-root .env"
+    fi
 
     if [ -f .env ]; then
+        retire_legacy_env backend/.env
+        retire_legacy_env default_agents/.env
         sh backend/scripts/ensure_webhook_signing_key.sh .env
         sh backend/scripts/ensure_registrar_token.sh .env
         sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
@@ -132,7 +143,8 @@ cmd_start() {
     else
         echo "No .env found - starting in zero-config demo mode."
         echo "  Auth will use mock mode; agents will error until OPENAI_API_KEY is set."
-        echo "  Run 'cp .env.example .env' then re-run to configure."
+        echo "  Run 'cp .env.example .env', set OPENAI_API_KEY, then:"
+        echo "  ./scripts/hybro start --recreate"
     fi
 
     render_compose
@@ -178,6 +190,6 @@ case "$sub" in
     status|ps)    cmd_status  "$@" ;;
     logs)         cmd_logs    "$@" ;;
     restart)      cmd_restart "$@" ;;
-    ""|-h|--help) usage ;;
+    help|-h|--help|"") usage ;;
     *) echo "hybro: unknown subcommand: $sub" >&2; usage; exit 2 ;;
 esac
