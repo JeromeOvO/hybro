@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13](https://github.com/hybroai/hybro/compare/v0.2.12...v0.2.13) (2026-08-12)
+
+
+### Features
+
+* improve chat history management ([6091e48](https://github.com/hybroai/hybro/commit/6091e489b359b7f62da7bff19459fc4953a7a88c))
+* improve chat history management ([ef97200](https://github.com/hybroai/hybro/commit/ef97200e3e2cde3f3667a1dee98c4d2d2443e7f7))
+* prepare use case teams before chat ([30c1968](https://github.com/hybroai/hybro/commit/30c19687c7a3073258d2c8c462ca07d374861f91))
+* prepare use case teams before chat ([3d8ca31](https://github.com/hybroai/hybro/commit/3d8ca3170ff0ff018aa4d8a31a62905aea1090f6))
+* **scripts:** add hybro lifecycle CLI; install.sh delegates to it ([4437647](https://github.com/hybroai/hybro/commit/4437647067d7f95a266c1a7c8bbdeaa127436076))
+* **scripts:** add hybro lifecycle CLI; install.sh delegates to it ([0e76020](https://github.com/hybroai/hybro/commit/0e7602062b9969a70e4ccdcf686c61d65b4b9e8a))
+
+
+### Bug Fixes
+
+* address chat history review feedback ([ff21bf2](https://github.com/hybroai/hybro/commit/ff21bf2fb17260456b6098371dfadfe0e38fe848))
+* address orchestration review feedback ([e9e0c43](https://github.com/hybroai/hybro/commit/e9e0c43be4cc978d716bcf2a513be36e9490f488))
+* **env:** address PR [#135](https://github.com/hybroai/hybro/issues/135) review on secret scoping and build-time config ([c8b29e3](https://github.com/hybroai/hybro/commit/c8b29e335be6a7f746ba91eccb976d94dc0a1b88))
+* **env:** harden env consolidation and single-source repo-root .env ([49ccdea](https://github.com/hybroai/hybro/commit/49ccdeafb96de4a8667af4b0953916229d2f7f9c))
+* **env:** ignore .env.local.legacy backup in .gitignore ([1c0c8bc](https://github.com/hybroai/hybro/commit/1c0c8bc4732caf6b9c230281f376d4f982ffeabd))
+* fence room lock renewal failures ([edc712d](https://github.com/hybroai/hybro/commit/edc712de4d3ba3a01d19194efaac5d064d3a77d7))
+* **frontend:** keep env files out of images ([b291c26](https://github.com/hybroai/hybro/commit/b291c26718ee5fd4aadcd5f964a878d944d6ff45))
+* **frontend:** resolve dependency vulnerabilities ([3f58731](https://github.com/hybroai/hybro/commit/3f5873103c001ff64ab525a53d6e23f7e262c9b6))
+* harden artifact delivery orchestration ([f8768ab](https://github.com/hybroai/hybro/commit/f8768ab39225550c6b4fec248a3f2061a0fb53f3))
+* harden supervisor lifecycle and artifact delivery ([5e74767](https://github.com/hybroai/hybro/commit/5e74767331b74619389c39d9d5931561cf6504e3))
+* **install:** address PR [#135](https://github.com/hybroai/hybro/issues/135) review comments ([9680ed8](https://github.com/hybroai/hybro/commit/9680ed8d33cd3f72c5ff7da8f520c798f33eda66))
+* **orchestration:** address PR review feedback on ref resolution and recovery ([1f268bb](https://github.com/hybroai/hybro/commit/1f268bb78439a666e83decebb2821c64fe514d0b))
+* **orchestration:** recover fulfilled runs and resolve symbolic context refs ([3b8f489](https://github.com/hybroai/hybro/commit/3b8f48961dc3f777ecab2e5e2e6e82006b966dab))
+* **orchestration:** recover fulfilled runs and resolve symbolic context refs ([9345cfa](https://github.com/hybroai/hybro/commit/9345cfa5668a3943242a7830d0406fe25c8f2398))
+* **orchestration:** satisfy CI format and update fail recovery test ([6f06b32](https://github.com/hybroai/hybro/commit/6f06b3224298c4b055080ba65e161f4893777ba9))
+* prefer completed room processing body ([05817eb](https://github.com/hybroai/hybro/commit/05817ebc63ff8d3a80769522d38ed4cd37a517f0))
+* preserve legacy room history metadata ([7fd7576](https://github.com/hybroai/hybro/commit/7fd7576b2d0b6c7b43530bb7aac15687546d3057))
+* retry transient room lock renewal ([b1db9b7](https://github.com/hybroai/hybro/commit/b1db9b79400f0e42ebf08dd825d14d24cafdbaa2))
+* **scripts:** address PR [#136](https://github.com/hybroai/hybro/issues/136) review on hybro CLI ([e7ac4e6](https://github.com/hybroai/hybro/commit/e7ac4e66619dd45c7232ae373fe8d3423dac715f))
+* **scripts:** complete hybro env migration and tighten parsers ([73f5f70](https://github.com/hybroai/hybro/commit/73f5f70783cdfe40a3e90198f5f106c5f278395f))
+* **scripts:** harden hybro CLI env migration and compose gate ([983e44d](https://github.com/hybroai/hybro/commit/983e44dc9d5044a9b85f4f3e3853773f7cd8435c))
+* tolerate concurrent preset team reconciliation ([847f99c](https://github.com/hybroai/hybro/commit/847f99c541db5e72221f4669e668acb1125d2eb1))
+
 ## [0.2.12](https://github.com/hybroai/hybro/compare/v0.2.11...v0.2.12) (2026-08-09)
 
 
