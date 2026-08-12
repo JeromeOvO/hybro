@@ -1,0 +1,62 @@
+hybro - lifecycle CLI for the local Hybro stack.
+
+Usage:
+    ./scripts/hybro <subcommand> [args...]
+
+Subcommands:
+    start [--build] [--recreate] [--check-key]
+        Bring the stack up in the background (docker compose up -d
+        --remove-orphans). Default is fast: no image rebuild, no forced
+        recreation. Runs the ensure_* scripts against ./.env when it exists,
+        regenerates the default-agent services in docker-compose.yml from
+        default_agents/agents.yaml before starting, and removes containers
+        for services dropped from that generated region.
+
+        --build       Rebuild images. Use after code or dependency changes,
+                      and whenever NEXT_PUBLIC_* values change (they are
+                      baked into the frontend image at build time).
+        --recreate    Force container recreation. Use after docker-compose.yml
+                      or runtime environment changes so containers pick them
+                      up. Pair with --build for frontend-facing env changes.
+        --check-key   Fail fast if .env is missing, or OPENAI_API_KEY is
+                      empty / still the placeholder from .env.example.
+
+    stop
+        Stop containers but keep them (docker compose stop). State is
+        preserved; `hybro start` will bring them back quickly.
+
+    down [args...]
+        Stop and remove containers and the default network
+        (docker compose down). Pass `-v` to also remove named volumes.
+
+    status
+        Show container status including stopped ones
+        (docker compose ps --all). Alias: `ps`.
+
+    logs [service...]
+        Stream logs (docker compose logs -f). With no arguments streams
+        every service; pass one or more service names to focus, e.g.
+        `./scripts/hybro logs backend`.
+
+    restart [service...]
+        Restart one or all services (docker compose restart).
+
+    help, -h, --help
+        Show this message.
+
+Zero-config demo:
+    Running `./scripts/hybro start` on a fresh clone (no ./.env) brings the
+    stack up in mock-auth mode. Agents will error until OPENAI_API_KEY is
+    set. To configure, run:
+
+        cp .env.example .env
+        # edit .env; at minimum set OPENAI_API_KEY
+
+    Then re-run `./scripts/hybro start --recreate` so running containers
+    pick up runtime values. Use `--build --recreate` if you also changed
+    NEXT_PUBLIC_* keys. The frontend env file (frontend/.env.local) is
+    generated - do not hand-edit it.
+
+First-time setup:
+    From scratch, run `sh install.sh` (also available via the one-liner in
+    the README). See README.md for details.

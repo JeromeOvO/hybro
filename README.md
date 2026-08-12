@@ -55,23 +55,56 @@ Alternatively, you can manually clone and run:
 ```bash
 git clone https://github.com/hybroai/hybro.git
 cd hybro
-docker compose up -d --build
-```
-
-Compose starts without a `.env` (mock auth, empty API keys). For working
-default agents and LLM calls, create the env file and secrets first:
-
-```bash
-cp .env.example .env
-# Set OPENAI_API_KEY in .env, then:
-sh backend/scripts/ensure_webhook_signing_key.sh .env
-sh backend/scripts/ensure_registrar_token.sh .env
-sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
-docker compose up -d --build --force-recreate
+./scripts/hybro start
 ```
 
 - **Hybro App**: http://localhost:3000
 - **API Server**: http://localhost:8000
+
+With no `.env`, `hybro start` runs in zero-config demo mode (mock auth,
+agents error until `OPENAI_API_KEY` is set). See **Configuration** below to
+enable working default agents and LLM calls.
+
+## Configuration
+
+The repo-root `.env` is the single source of truth for the backend, default
+agents, and the frontend build. To bring it up manually:
+
+```bash
+cp .env.example .env
+# Edit .env; at minimum set OPENAI_API_KEY
+sh backend/scripts/ensure_webhook_signing_key.sh .env
+sh backend/scripts/ensure_registrar_token.sh .env
+sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+```
+
+`./scripts/hybro start` runs the three `ensure_*` steps for you whenever
+`.env` exists, so after the initial `cp .env.example .env` (plus setting
+`OPENAI_API_KEY`) you can just run `./scripts/hybro start --recreate` to
+pick up runtime values. If you also change frontend-facing `NEXT_PUBLIC_*`
+keys, use `./scripts/hybro start --build --recreate` - those values are
+Docker build args baked into the Next.js bundle, so recreate alone keeps
+the old browser config. `frontend/.env.local` is generated from `.env` -
+do not hand-edit it.
+
+## Running
+
+`./scripts/hybro` is the day-2 lifecycle CLI. Common commands:
+
+```bash
+./scripts/hybro start                    # up -d, no rebuild (fast daily loop)
+./scripts/hybro start --build            # rebuild images (after code/deps change)
+./scripts/hybro start --recreate         # recreate containers (runtime .env changes)
+./scripts/hybro start --build --recreate # rebuild+recreate (NEXT_PUBLIC_* / image changes)
+./scripts/hybro start --check-key        # fail fast if OPENAI_API_KEY is unset
+./scripts/hybro logs backend             # stream one service (or all if no arg)
+./scripts/hybro status                   # docker compose ps --all
+./scripts/hybro stop                     # stop but keep containers
+./scripts/hybro down                     # remove containers + default network
+```
+
+Run `./scripts/hybro --help` for the full subcommand reference. Power users
+can still invoke `docker compose` directly.
 
 ## Architecture
 This repository is the source of truth for the product. Its frontend and backend

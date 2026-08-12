@@ -1,0 +1,320 @@
+#!/bin/sh
+# hybro - lifecycle CLI for the local Hybro stack.
+#
+# Run from an hybro clone: `./scripts/hybro <subcommand>`. Symlinking into a
+# global PATH is intentionally not supported - dirname "$0"/.. does not resolve
+# through symlinks on all platforms; run from the clone or wrap in a shell
+# function that cd's here.
+set -e
+
+cd "$(dirname "$0")/.."
+
+REPO_ROOT=$(pwd)
+HELP_FILE="$REPO_ROOT/scripts/hybro-help.txt"
+
+usage() {
+    if [ -f "$HELP_FILE" ]; then
+        cat "$HELP_FILE"
+    else
+        echo "hybro: help file missing at $HELP_FILE" >&2
+        return 1
+    fi
+}
+
+# Read the effective KEY=value from an env file (empty when unset/blank).
+# Last assignment wins. Trailing unquoted ` # ...` comments are removed first,
+# then surrounding quotes are stripped. Does not evaluate the file as shell.
+read_env_var() {
+    env_path=$1
+    key=$2
+    if [ ! -f "$env_path" ]; then
+        return 0
+    fi
+    awk -v key="$key" '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            sub(/^[^=]*=/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            if ($0 ~ /^"/) {
+                if (match($0, /^"[^"]*"/)) {
+                    value = substr($0, 2, RLENGTH - 2)
+                }
+            } else if ($0 ~ /^'\''/) {
+                if (match($0, /^'\''[^'\'']*'\''/)) {
+                    value = substr($0, 2, RLENGTH - 2)
+                }
+            } else {
+                if (match($0, /[[:space:]]+#/)) {
+                    $0 = substr($0, 1, RSTART - 1)
+                    gsub(/[[:space:]]+$/, "")
+                }
+                value = $0
+            }
+        }
+        END { print value }
+    ' "$env_path"
+}
+
+# Append KEY=value to root .env when the root value is currently empty.
+fill_root_var_from() {
+    key=$1
+    source_file=$2
+    root_value=$(read_env_var .env "$key")
+    if [ -n "$root_value" ]; then
+        return 0
+    fi
+    source_value=$(read_env_var "$source_file" "$key")
+    if [ -z "$source_value" ]; then
+        return 0
+    fi
+    printf '\n%s=%s\n' "$key" "$source_value" >> .env
+    echo "Merged $key from $source_file into .env"
+}
+
+# Retire legacy per-service env files so they cannot shadow the root .env when
+# a developer runs backend or agents on the host (outside Compose). Never
+# overwrite an existing .legacy backup - use a timestamped suffix instead.
+retire_legacy_env() {
+    legacy=$1
+    if [ ! -f "$legacy" ]; then
+        return 0
+    fi
+    dest="${legacy}.legacy"
+    if [ -e "$dest" ]; then
+        dest="${legacy}.legacy.$(date +%Y%m%d%H%M%S)"
+    fi
+    mv "$legacy" "$dest"
+    echo "Renamed $legacy -> $dest (repo-root .env is the source of truth)"
+}
+
+# Fail if OPENAI_API_KEY is missing or still the placeholder from .env.example.
+require_openai_key() {
+    if [ ! -f .env ]; then
+        echo "Error: OPENAI_API_KEY check failed - no .env file." >&2
+        echo "       Run 'cp .env.example .env', set a real key, or omit --check-key." >&2
+        exit 1
+    fi
+    value=$(read_env_var .env OPENAI_API_KEY)
+    case "$value" in
+        ""|"your-openai-api-key-here"|"sk-your-key-here")
+            echo "Error: OPENAI_API_KEY is not set in .env." >&2
+            echo "       Set a real key or omit --check-key to run in degraded mode." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Mirror install.sh: promote/merge leftover per-service env files into the
+# repo-root .env before any retire or ensure_* step. Zero-config (no root .env
+# and no legacy sources) is left alone.
+migrate_legacy_env() {
+    if [ ! -f .env ] && [ -f backend/.env ]; then
+        cp backend/.env .env
+        echo "Migrated backend/.env to repo-root .env"
+    fi
+
+    # Agent-only or frontend-only upgrades still need a root file to merge into.
+    if [ ! -f .env ] && { [ -f default_agents/.env ] || [ -f frontend/.env.local ]; }; then
+        if [ -f .env.example ]; then
+            cp .env.example .env
+            echo "Created .env from .env.example to receive legacy env values"
+        else
+            touch .env
+            echo "Created empty .env to receive legacy env values"
+        fi
+    fi
+
+    if [ ! -f .env ]; then
+        return 0
+    fi
+
+    if [ -f default_agents/.env ]; then
+        fill_root_var_from OPENAI_API_KEY default_agents/.env
+        fill_root_var_from AGENT_REGISTRAR_TOKEN default_agents/.env
+        fill_root_var_from DEFAULT_AGENT_REGISTRAR_TOKEN default_agents/.env
+        fill_root_var_from OPENAI_MODEL default_agents/.env
+        fill_root_var_from IMAGE_MODEL default_agents/.env
+        fill_root_var_from IMAGE_SIZE default_agents/.env
+        backend_token=$(read_env_var .env DEFAULT_AGENT_REGISTRAR_TOKEN)
+        agents_token=$(read_env_var .env AGENT_REGISTRAR_TOKEN)
+        if [ -z "$backend_token" ] && [ -n "$agents_token" ]; then
+            printf '\nDEFAULT_AGENT_REGISTRAR_TOKEN=%s\n' "$agents_token" >> .env
+        fi
+        if [ -z "$agents_token" ] && [ -n "$backend_token" ]; then
+            printf '\nAGENT_REGISTRAR_TOKEN=%s\n' "$backend_token" >> .env
+        fi
+    fi
+
+    if [ -f frontend/.env.local ]; then
+        fill_root_var_from NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY frontend/.env.local
+        fill_root_var_from CLERK_SECRET_KEY frontend/.env.local
+        fill_root_var_from CLERK_WEBHOOK_SECRET frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_IN_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_UP_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_API_BASE_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_API_PREFIX frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_SERVER_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_ENABLE_WAITLIST frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_MAX_MESSAGE_LENGTH frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_INSPECTION_TIMEOUT_MS frontend/.env.local
+        fill_root_var_from E2E_CLERK_USER_EMAIL frontend/.env.local
+        fill_root_var_from E2E_CLERK_USER_PASSWORD frontend/.env.local
+        fill_root_var_from E2E_TEST_ROOM_PATH frontend/.env.local
+        # Back up before ensure_frontend_env.sh overwrites; never clobber an
+        # existing backup (match install.sh).
+        if [ ! -f frontend/.env.local.legacy ]; then
+            cp frontend/.env.local frontend/.env.local.legacy
+            echo "Backed up frontend/.env.local -> frontend/.env.local.legacy"
+        fi
+    fi
+}
+
+# The default-agent services in docker-compose.yml are generated from
+# default_agents/agents.yaml. Regenerate before starting so an edited manifest
+# is reflected in the current run (including for the one-shot registrar). Only
+# git and docker are guaranteed present, so fall back to a container when the
+# host has no python3 + PyYAML.
+render_compose() {
+    echo "Generating default-agent services from default_agents/agents.yaml..."
+    if python3 -c "import yaml" >/dev/null 2>&1; then
+        python3 default_agents/render_compose.py
+    elif command -v uv >/dev/null 2>&1; then
+        uv run --with pyyaml python default_agents/render_compose.py
+    else
+        echo "  (no host python3 + PyYAML; generating via Docker)"
+        docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD:/repo" \
+            -w /repo \
+            python:3.12-slim \
+            sh -c "pip install --quiet --disable-pip-version-check pyyaml \
+                   && python default_agents/render_compose.py"
+    fi
+}
+
+# Compose v2.24+ is required for the `env_file: [{path, required}]` long-form
+# syntax used in docker-compose.yml (so a missing repo-root .env is treated as
+# non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
+# that syntax, so we deliberately do not fall back to it.
+require_compose() {
+    compose_version=$(docker compose version --short 2>/dev/null || true)
+    # Strip an optional leading v, require numeric major.minor, then compare.
+    if [ -z "$compose_version" ] || ! echo "$compose_version" | awk '
+        {
+            ver = $0
+            sub(/^v/, "", ver)
+            n = split(ver, parts, /[.]/)
+            if (n < 2 || parts[1] !~ /^[0-9]+$/ || parts[2] !~ /^[0-9]+$/) exit 1
+            major = parts[1] + 0
+            minor = parts[2] + 0
+            if (major > 2 || (major == 2 && minor >= 24)) exit 0
+            exit 1
+        }
+    '; then
+        echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)." >&2
+        echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run." >&2
+        exit 1
+    fi
+}
+
+compose() {
+    require_compose
+    docker compose "$@"
+}
+
+print_urls() {
+    echo "========================================"
+    echo "Hybro AI is now running!"
+    echo "Hybro App:  http://localhost:3000"
+    echo "API Server: http://localhost:8000"
+    echo "========================================"
+}
+
+cmd_start() {
+    build=0
+    recreate=0
+    check_key=0
+    for a in "$@"; do
+        case "$a" in
+            --build) build=1 ;;
+            --recreate) recreate=1 ;;
+            --check-key) check_key=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) echo "hybro start: unknown flag: $a" >&2; usage; exit 2 ;;
+        esac
+    done
+
+    migrate_legacy_env
+
+    if [ -f .env ]; then
+        retire_legacy_env backend/.env
+        retire_legacy_env default_agents/.env
+        sh backend/scripts/ensure_webhook_signing_key.sh .env
+        sh backend/scripts/ensure_registrar_token.sh .env
+        sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+    else
+        echo "No .env found - starting in zero-config demo mode."
+        echo "  Auth will use mock mode; agents will error until OPENAI_API_KEY is set."
+        echo "  Run 'cp .env.example .env', set OPENAI_API_KEY, then:"
+        echo "  ./scripts/hybro start --recreate"
+        echo "  (use --build --recreate if you also changed NEXT_PUBLIC_* values)"
+    fi
+
+    # Fail-fast regardless of whether .env exists (missing file is also a miss).
+    if [ "$check_key" -eq 1 ]; then
+        require_openai_key
+    fi
+
+    render_compose
+
+    echo "Starting Docker containers..."
+    # --remove-orphans drops containers for services removed from the generated
+    # default-agent region after agents.yaml disable/rename.
+    set -- up -d --remove-orphans
+    [ "$build" -eq 1 ] && set -- "$@" --build
+    [ "$recreate" -eq 1 ] && set -- "$@" --force-recreate
+    compose "$@"
+
+    print_urls
+}
+
+cmd_stop() {
+    compose stop "$@"
+}
+
+cmd_down() {
+    compose down "$@"
+}
+
+cmd_status() {
+    # Include stopped containers so `hybro stop` then `hybro status` still shows
+    # the preserved stack (plain `ps` hides exited containers).
+    compose ps --all "$@"
+}
+
+cmd_logs() {
+    compose logs -f "$@"
+}
+
+cmd_restart() {
+    compose restart "$@"
+}
+
+sub=${1:-}
+if [ $# -gt 0 ]; then
+    shift
+fi
+
+case "$sub" in
+    start|up)     cmd_start   "$@" ;;
+    stop)         cmd_stop    "$@" ;;
+    down)         cmd_down    "$@" ;;
+    status|ps)    cmd_status  "$@" ;;
+    logs)         cmd_logs    "$@" ;;
+    restart)      cmd_restart "$@" ;;
+    help|-h|--help|"") usage ;;
+    *) echo "hybro: unknown subcommand: $sub" >&2; usage; exit 2 ;;
+esac

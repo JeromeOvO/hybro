@@ -129,63 +129,9 @@ if [ -f .env ]; then
     fi
 fi
 
-# Retire legacy env files so they cannot shadow the root .env on host runs.
-retire_legacy_env() {
-    legacy=$1
-    if [ -f "$legacy" ]; then
-        mv "$legacy" "${legacy}.legacy"
-        echo "Renamed $legacy -> ${legacy}.legacy (repo-root .env is the source of truth)"
-    fi
-}
-
-if [ -f .env ]; then
-    retire_legacy_env backend/.env
-    retire_legacy_env default_agents/.env
-    sh backend/scripts/ensure_webhook_signing_key.sh .env
-    sh backend/scripts/ensure_registrar_token.sh .env
-    sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
-fi
-
-# The default-agent services in docker-compose.yml are generated from
-# default_agents/agents.yaml, which is the single source of truth. Regenerate
-# before starting anything so an edited manifest is reflected in this run -
-# including for the one-shot registrar, which registers whatever Compose
-# brought up. Only git and docker are guaranteed present, so fall back to a
-# container when the host has no python3 + PyYAML.
-echo "Generating default-agent services from default_agents/agents.yaml..."
-if python3 -c "import yaml" >/dev/null 2>&1; then
-    python3 default_agents/render_compose.py
-elif command -v uv >/dev/null 2>&1; then
-    uv run --with pyyaml python default_agents/render_compose.py
-else
-    echo "  (no host python3 + PyYAML; generating via Docker)"
-    # --user keeps the rewritten file owned by the caller rather than root;
-    # HOME must then point somewhere writable or pip's user install fails.
-    docker run --rm \
-        --user "$(id -u):$(id -g)" \
-        -e HOME=/tmp \
-        -v "$PWD:/repo" \
-        -w /repo \
-        python:3.12-slim \
-        sh -c "pip install --quiet --disable-pip-version-check pyyaml \
-               && python default_agents/render_compose.py"
-fi
-
-echo "Starting Docker containers..."
-# Compose v2.24+ is required for the `env_file: [{path, required}]` long-form
-# syntax used in docker-compose.yml (so a missing repo-root .env is treated as
-# non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
-# that syntax, so we deliberately do not fall back to it.
-compose_version=$(docker compose version --short 2>/dev/null || true)
-if [ -z "$compose_version" ] || ! echo "$compose_version" | awk -F. '{if ($1 > 2 || ($1 == 2 && $2 >= 24)) exit 0; else exit 1}'; then
-    echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)."
-    echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run this script."
-    exit 1
-fi
-docker compose up -d --build
-
-echo "========================================"
-echo "Hybro AI is now running!"
-echo "Hybro App: http://localhost:3000"
-echo "API Server: http://localhost:8000"
-echo "========================================"
+# Bootstrap complete. Hand off to the lifecycle CLI for the actual run.
+# scripts/hybro owns retire_legacy_env, ensure_*, render_compose, and the
+# banner - so day-2 `./scripts/hybro start` behaves the same as install.sh's
+# initial run, except we force --build --recreate here to build fresh images
+# and pick up the just-written .env.
+exec sh scripts/hybro start --build --recreate
