@@ -4,7 +4,8 @@ x-agent: &agent
     context: ./default_agents
     dockerfile: Dockerfile
   env_file:
-    - ./.env
+    - path: ./.env
+      required: false
   restart: always
   depends_on:
     backend:
@@ -67,7 +68,8 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
       - MONGODB_URL=mongodb://mongo:27017/hybro
       - REDIS_URL=redis://redis:6379/0
@@ -97,10 +99,24 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
-    # Intentionally no env_file: do not inject backend secrets into Next.js.
-    # Local Docker uses code defaults for NEXT_PUBLIC_* plus BACKEND_URL rewrites.
+    # Intentionally no full env_file: do not inject backend/agent secrets into
+    # Next.js. Pass only frontend-relevant keys via Compose interpolation from
+    # the project .env (Clerk + public config). NEXT_PUBLIC_* are still
+    # build-time for production client bundles; runtime covers server reads.
     environment:
       - BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+      - CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-}
+      - CLERK_WEBHOOK_SECRET=${CLERK_WEBHOOK_SECRET:-}
+      - NEXT_PUBLIC_CLERK_SIGN_IN_URL=${NEXT_PUBLIC_CLERK_SIGN_IN_URL:-/sign-in}
+      - NEXT_PUBLIC_CLERK_SIGN_UP_URL=${NEXT_PUBLIC_CLERK_SIGN_UP_URL:-/sign-up}
+      - NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=${NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL:-/}
+      - NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=${NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL:-/}
+      - NEXT_PUBLIC_SERVER_URL=${NEXT_PUBLIC_SERVER_URL:-http://localhost:3000}
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_API_PREFIX=${NEXT_PUBLIC_API_PREFIX:-/api/v1}
+      - NEXT_PUBLIC_ENABLE_WAITLIST=${NEXT_PUBLIC_ENABLE_WAITLIST:-true}
+      - NEXT_PUBLIC_MAX_MESSAGE_LENGTH=${NEXT_PUBLIC_MAX_MESSAGE_LENGTH:-10000}
     depends_on:
       - backend
     restart: always
@@ -166,7 +182,8 @@ services:
       context: ./default_agents
       dockerfile: Dockerfile.registrar
     env_file:
-      - ./.env
+      - path: ./.env
+        required: false
     environment:
       - BACKEND_URL=http://backend:8000
       - API_PREFIX=/api/v1

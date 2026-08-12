@@ -222,9 +222,11 @@ concrete runtime singletons.
 
 Runtime application code reads environment-backed configuration through
 `common/config/settings.py`. On the host, Settings loads the monorepo-root
-`.env` when present (falling back to `backend/.env`). Under Docker Compose,
-process environment from the root `.env` `env_file` (plus Compose overrides)
-is authoritative. Raw `os.getenv()`, `os.environ.get()`, and
+`.env` when that file exists (never together with a leftover `backend/.env`,
+which would otherwise override root values). If the root file is absent,
+Settings falls back to `backend/.env`. Under Docker Compose, process
+environment from the root `.env` `env_file` (plus Compose overrides) is
+authoritative. Raw `os.getenv()`, `os.environ.get()`, and
 `os.environ[...]` reads are reserved for the canonical settings module; the
 config unification gate in `tests/test_config_unification_gate.py` scans tracked
 production Python files and fails on new raw env reads outside that file.

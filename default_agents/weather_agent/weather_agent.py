@@ -10,17 +10,24 @@ The agent accepts a city name and returns weather information.
 
 import os
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import requests
-from dotenv import load_dotenv
-
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableSerializable
 
-load_dotenv()
+try:
+    from load_repo_env import load_repo_env
+except ImportError:  # Host run: module lives in default_agents/
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from load_repo_env import load_repo_env
+
+load_repo_env(start=Path(__file__))
 
 
 # ============ Real weather provider (Open-Meteo) ============

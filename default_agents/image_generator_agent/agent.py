@@ -9,15 +9,23 @@ import io
 import logging
 import os
 import re
+from pathlib import Path
 
 from uuid import uuid4
 
-from dotenv import load_dotenv
 from in_memory_cache import InMemoryCache
 from openai import OpenAI
 from pydantic import BaseModel
 
-load_dotenv()
+try:
+    from load_repo_env import load_repo_env
+except ImportError:  # Host run: module lives in default_agents/
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from load_repo_env import load_repo_env
+
+load_repo_env(start=Path(__file__))
 
 logger = logging.getLogger(__name__)
 

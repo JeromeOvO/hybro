@@ -55,11 +55,19 @@ Alternatively, you can manually clone and run:
 ```bash
 git clone https://github.com/hybroai/hybro.git
 cd hybro
+docker compose up -d --build
+```
+
+Compose starts without a `.env` (mock auth, empty API keys). For working
+default agents and LLM calls, create the env file and secrets first:
+
+```bash
 cp .env.example .env
-# Set OPENAI_API_KEY in .env, then generate secrets:
+# Set OPENAI_API_KEY in .env, then:
 sh backend/scripts/ensure_webhook_signing_key.sh .env
 sh backend/scripts/ensure_registrar_token.sh .env
-docker compose up -d --build
+sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+docker compose up -d --build --force-recreate
 ```
 
 - **Hybro App**: http://localhost:3000
