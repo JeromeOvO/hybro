@@ -122,8 +122,10 @@ if [ -f .env ]; then
         fill_root_var_from E2E_TEST_ROOM_PATH frontend/.env.local
         # Back the legacy file up before ensure_frontend_env.sh overwrites it
         # so an operator can recover any custom keys we didn't know to migrate.
-        cp frontend/.env.local frontend/.env.local.legacy
-        echo "Backed up frontend/.env.local -> frontend/.env.local.legacy"
+        if [ ! -f frontend/.env.local.legacy ]; then
+            cp frontend/.env.local frontend/.env.local.legacy
+            echo "Backed up frontend/.env.local -> frontend/.env.local.legacy"
+        fi
     fi
 fi
 
@@ -174,7 +176,8 @@ echo "Starting Docker containers..."
 # syntax used in docker-compose.yml (so a missing repo-root .env is treated as
 # non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
 # that syntax, so we deliberately do not fall back to it.
-if ! docker compose version >/dev/null 2>&1; then
+compose_version=$(docker compose version --short 2>/dev/null || true)
+if [ -z "$compose_version" ] || ! echo "$compose_version" | awk -F. '{if ($1 > 2 || ($1 == 2 && $2 >= 24)) exit 0; else exit 1}'; then
     echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)."
     echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run this script."
     exit 1

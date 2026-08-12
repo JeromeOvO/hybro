@@ -15,16 +15,11 @@ cd "$(dirname "$0")/.."
 # execute ($, backticks, command substitutions, ...). We only need this one
 # key, so parse just that one line.
 if [ -z "${OPENAI_API_KEY:-}" ] && [ -f .env ]; then
-    parsed_key=$(
-        awk '
-            /^[[:space:]]*OPENAI_API_KEY[[:space:]]*=/ {
-                sub(/^[^=]*=/, "")
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-                print
-                exit
-            }
-        ' .env
-    )
+    if command -v uv >/dev/null 2>&1; then
+        parsed_key=$(uv run --with python-dotenv python -c 'from dotenv import dotenv_values; print(dotenv_values(".env").get("OPENAI_API_KEY", ""))' 2>/dev/null || true)
+    else
+        parsed_key=$(python -c 'from dotenv import dotenv_values; print(dotenv_values(".env").get("OPENAI_API_KEY", ""))' 2>/dev/null || true)
+    fi
     if [ -n "$parsed_key" ]; then
         OPENAI_API_KEY=$parsed_key
         export OPENAI_API_KEY
@@ -43,7 +38,7 @@ echo "  AGENT_HOST=${AGENT_HOST:-localhost}"
 # console script does NOT add cwd to sys.path and fails with ModuleNotFoundError
 # on this layout.
 if command -v uv >/dev/null 2>&1; then
-    uv run --with pytest --with requests --with pyyaml python -m pytest -v tests
+    uv run --with pytest --with requests --with pyyaml --with python-dotenv python -m pytest -v tests
 else
     python -m pytest -v tests
 fi
