@@ -25,15 +25,17 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { FRAMEWORKS } from "@/components/framework-badges"
 import { TypingTerminal } from "@/components/open-source/typing-terminal"
 
-// Mirrors install.sh, including the secret-generating steps it runs between
-// copying the env file and starting Compose. Skipping step 3 leaves the
-// registrar token blank, which fails default-agent registration with 401
-// (documented in .env.example). Ports come from docker-compose.yml.
+// Mirrors install.sh + ./scripts/hybro. The ensure_* scripts generate the
+// secrets that .env.example leaves blank; skipping them leaves the shared
+// registrar token empty and default-agent registration fails with HTTP 401
+// (documented in .env.example). ./scripts/hybro start also runs the ensure_*
+// steps when .env exists, so this sequence keeps the AI agent explicit
+// about the ordering. Ports come from docker-compose.yml.
 const AI_SETUP_PROMPT = `Set up Hybro AI on my machine and get it running locally.
 Requires: git, Docker, Docker Compose. Run every step from the repo root.
 1. git clone https://github.com/hybroai/hybro.git && cd hybro
 2. Create the env file from the example:
-   .env.example -> .env
+   cp .env.example .env
 3. Generate the secrets that example leaves blank. Skipping this leaves
    the shared registrar token empty and the default agents then fail to
    register with HTTP 401:
@@ -42,15 +44,15 @@ Requires: git, Docker, Docker Compose. Run every step from the repo root.
    sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
 4. Ask me for my OPENAI_API_KEY, then set it once in .env. The default
    agents register without it, but their calls fail until a valid key is set.
-5. Run: docker compose up -d --build
+5. Run: ./scripts/hybro start --build
 6. Wait for the containers to come up, then verify:
    App  http://localhost:3000
    API  http://localhost:8000
-If a container fails, show me its \`docker compose logs\` output and fix it.`
+If a container fails, show me its \`./scripts/hybro logs\` output and fix it.`
 
 const QUICK_START_COMMANDS = {
   script: "curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh",
-  docker: "git clone https://github.com/hybroai/hybro.git && cd hybro && docker compose up -d --build",
+  docker: "git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro start",
   ai: AI_SETUP_PROMPT,
 }
 
@@ -443,8 +445,8 @@ export default function OpenSourcePage() {
             {[
               {
                 title: "Spin Up Engine",
-                body: "Run the 1-liner script or Docker Compose to start the local backend and frontend services.",
-                example: "docker compose up -d --build",
+                body: "Run the 1-liner script or ./scripts/hybro start to bring the local backend and frontend services up.",
+                example: "./scripts/hybro start",
               },
               {
                 title: "Register Agents",

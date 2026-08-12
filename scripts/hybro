@@ -1,0 +1,183 @@
+#!/bin/sh
+# hybro - lifecycle CLI for the local Hybro stack.
+#
+# Run from an hybro clone: `./scripts/hybro <subcommand>`. Symlinking into a
+# global PATH is intentionally not supported - dirname "$0"/.. does not resolve
+# through symlinks on all platforms; run from the clone or wrap in a shell
+# function that cd's here.
+set -e
+
+cd "$(dirname "$0")/.."
+
+REPO_ROOT=$(pwd)
+HELP_FILE="$REPO_ROOT/scripts/hybro-help.txt"
+
+usage() {
+    if [ -f "$HELP_FILE" ]; then
+        cat "$HELP_FILE"
+    else
+        echo "hybro: help file missing at $HELP_FILE" >&2
+        return 1
+    fi
+}
+
+# Read KEY=value from an env file (empty when unset/blank).
+read_env_var() {
+    env_path=$1
+    key=$2
+    if [ ! -f "$env_path" ]; then
+        return 0
+    fi
+    awk -v key="$key" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            sub(/^[^=]*=/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            print
+            exit
+        }
+    ' "$env_path"
+}
+
+# Retire legacy per-service env files so they cannot shadow the root .env when
+# a developer runs backend or agents on the host (outside Compose).
+retire_legacy_env() {
+    legacy=$1
+    if [ -f "$legacy" ]; then
+        mv "$legacy" "${legacy}.legacy"
+        echo "Renamed $legacy -> ${legacy}.legacy (repo-root .env is the source of truth)"
+    fi
+}
+
+# Fail if OPENAI_API_KEY is missing or still the placeholder from .env.example.
+require_openai_key() {
+    value=$(read_env_var .env OPENAI_API_KEY)
+    case "$value" in
+        ""|"your-openai-api-key-here"|"sk-your-key-here")
+            echo "Error: OPENAI_API_KEY is not set in .env." >&2
+            echo "       Set a real key or omit --check-key to run in degraded mode." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# The default-agent services in docker-compose.yml are generated from
+# default_agents/agents.yaml. Regenerate before starting so an edited manifest
+# is reflected in the current run (including for the one-shot registrar). Only
+# git and docker are guaranteed present, so fall back to a container when the
+# host has no python3 + PyYAML.
+render_compose() {
+    echo "Generating default-agent services from default_agents/agents.yaml..."
+    if python3 -c "import yaml" >/dev/null 2>&1; then
+        python3 default_agents/render_compose.py
+    elif command -v uv >/dev/null 2>&1; then
+        uv run --with pyyaml python default_agents/render_compose.py
+    else
+        echo "  (no host python3 + PyYAML; generating via Docker)"
+        docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$PWD:/repo" \
+            -w /repo \
+            python:3.12-slim \
+            sh -c "pip install --quiet --disable-pip-version-check pyyaml \
+                   && python default_agents/render_compose.py"
+    fi
+}
+
+# Compose v2.24+ is required for the `env_file: [{path, required}]` long-form
+# syntax used in docker-compose.yml (so a missing repo-root .env is treated as
+# non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
+# that syntax, so we deliberately do not fall back to it.
+compose() {
+    if ! docker compose version >/dev/null 2>&1; then
+        echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)." >&2
+        echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run." >&2
+        exit 1
+    fi
+    docker compose "$@"
+}
+
+print_urls() {
+    echo "========================================"
+    echo "Hybro AI is now running!"
+    echo "Hybro App:  http://localhost:3000"
+    echo "API Server: http://localhost:8000"
+    echo "========================================"
+}
+
+cmd_start() {
+    build=0
+    recreate=0
+    check_key=0
+    for a in "$@"; do
+        case "$a" in
+            --build) build=1 ;;
+            --recreate) recreate=1 ;;
+            --check-key) check_key=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) echo "hybro start: unknown flag: $a" >&2; usage; exit 2 ;;
+        esac
+    done
+
+    retire_legacy_env backend/.env
+    retire_legacy_env default_agents/.env
+
+    if [ -f .env ]; then
+        sh backend/scripts/ensure_webhook_signing_key.sh .env
+        sh backend/scripts/ensure_registrar_token.sh .env
+        sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+        if [ "$check_key" -eq 1 ]; then
+            require_openai_key
+        fi
+    else
+        echo "No .env found - starting in zero-config demo mode."
+        echo "  Auth will use mock mode; agents will error until OPENAI_API_KEY is set."
+        echo "  Run 'cp .env.example .env' then re-run to configure."
+    fi
+
+    render_compose
+
+    echo "Starting Docker containers..."
+    set -- up -d
+    [ "$build" -eq 1 ] && set -- "$@" --build
+    [ "$recreate" -eq 1 ] && set -- "$@" --force-recreate
+    compose "$@"
+
+    print_urls
+}
+
+cmd_stop() {
+    compose stop "$@"
+}
+
+cmd_down() {
+    compose down "$@"
+}
+
+cmd_status() {
+    compose ps "$@"
+}
+
+cmd_logs() {
+    compose logs -f "$@"
+}
+
+cmd_restart() {
+    compose restart "$@"
+}
+
+sub=${1:-}
+if [ $# -gt 0 ]; then
+    shift
+fi
+
+case "$sub" in
+    start|up)     cmd_start   "$@" ;;
+    stop)         cmd_stop    "$@" ;;
+    down)         cmd_down    "$@" ;;
+    status|ps)    cmd_status  "$@" ;;
+    logs)         cmd_logs    "$@" ;;
+    restart)      cmd_restart "$@" ;;
+    ""|-h|--help) usage ;;
+    *) echo "hybro: unknown subcommand: $sub" >&2; usage; exit 2 ;;
+esac

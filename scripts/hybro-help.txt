@@ -1,0 +1,55 @@
+hybro - lifecycle CLI for the local Hybro stack.
+
+Usage:
+    ./scripts/hybro <subcommand> [args...]
+
+Subcommands:
+    start [--build] [--recreate] [--check-key]
+        Bring the stack up in the background (docker compose up -d).
+        Default is fast: no image rebuild, no forced recreation.
+        Runs the ensure_* scripts against ./.env when it exists, and
+        regenerates the default-agent services in docker-compose.yml from
+        default_agents/agents.yaml before starting.
+
+        --build       Rebuild images. Use after code or dependency changes.
+        --recreate    Force container recreation. Use after docker-compose.yml
+                      or environment changes so containers pick them up.
+        --check-key   Fail fast if OPENAI_API_KEY is missing or is still the
+                      placeholder from .env.example.
+
+    stop
+        Stop containers but keep them (docker compose stop). State is
+        preserved; `hybro start` will bring them back quickly.
+
+    down [args...]
+        Stop and remove containers and the default network
+        (docker compose down). Pass `-v` to also remove named volumes.
+
+    status
+        Show container status (docker compose ps). Alias: `ps`.
+
+    logs [service...]
+        Stream logs (docker compose logs -f). With no arguments streams
+        every service; pass one or more service names to focus, e.g.
+        `./scripts/hybro logs backend`.
+
+    restart [service...]
+        Restart one or all services (docker compose restart).
+
+    help, -h, --help
+        Show this message.
+
+Zero-config demo:
+    Running `./scripts/hybro start` on a fresh clone (no ./.env) brings the
+    stack up in mock-auth mode. Agents will error until OPENAI_API_KEY is
+    set. To configure, run:
+
+        cp .env.example .env
+        # edit .env; at minimum set OPENAI_API_KEY
+
+    Then re-run `./scripts/hybro start`. The frontend env file
+    (frontend/.env.local) is generated - do not hand-edit it.
+
+First-time setup:
+    From scratch, run `sh install.sh` (also available via the one-liner in
+    the README). See README.md for details.
