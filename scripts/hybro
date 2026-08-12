@@ -21,7 +21,10 @@ usage() {
     fi
 }
 
-# Read KEY=value from an env file (empty when unset/blank).
+# Read the effective KEY=value from an env file (empty when unset/blank).
+# Last assignment wins; surrounding quotes are stripped; full-line comments and
+# unquoted trailing ` # ...` comments are ignored. Does not evaluate the file
+# as shell.
 read_env_var() {
     env_path=$1
     key=$2
@@ -29,12 +32,21 @@ read_env_var() {
         return 0
     fi
     awk -v key="$key" '
+        /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
         $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
             sub(/^[^=]*=/, "")
             gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-            print
-            exit
+            if ($0 ~ /^".*"$/) {
+                $0 = substr($0, 2, length($0) - 2)
+            } else if ($0 ~ /^'\''.*'\''$/) {
+                $0 = substr($0, 2, length($0) - 2)
+            } else if (match($0, /[[:space:]]+#/)) {
+                $0 = substr($0, 1, RSTART - 1)
+                gsub(/[[:space:]]+$/, "")
+            }
+            value = $0
         }
+        END { print value }
     ' "$env_path"
 }
 
@@ -50,6 +62,11 @@ retire_legacy_env() {
 
 # Fail if OPENAI_API_KEY is missing or still the placeholder from .env.example.
 require_openai_key() {
+    if [ ! -f .env ]; then
+        echo "Error: OPENAI_API_KEY check failed - no .env file." >&2
+        echo "       Run 'cp .env.example .env', set a real key, or omit --check-key." >&2
+        exit 1
+    fi
     value=$(read_env_var .env OPENAI_API_KEY)
     case "$value" in
         ""|"your-openai-api-key-here"|"sk-your-key-here")
@@ -137,20 +154,25 @@ cmd_start() {
         sh backend/scripts/ensure_webhook_signing_key.sh .env
         sh backend/scripts/ensure_registrar_token.sh .env
         sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
-        if [ "$check_key" -eq 1 ]; then
-            require_openai_key
-        fi
     else
         echo "No .env found - starting in zero-config demo mode."
         echo "  Auth will use mock mode; agents will error until OPENAI_API_KEY is set."
         echo "  Run 'cp .env.example .env', set OPENAI_API_KEY, then:"
         echo "  ./scripts/hybro start --recreate"
+        echo "  (use --build --recreate if you also changed NEXT_PUBLIC_* values)"
+    fi
+
+    # Fail-fast regardless of whether .env exists (missing file is also a miss).
+    if [ "$check_key" -eq 1 ]; then
+        require_openai_key
     fi
 
     render_compose
 
     echo "Starting Docker containers..."
-    set -- up -d
+    # --remove-orphans drops containers for services removed from the generated
+    # default-agent region after agents.yaml disable/rename.
+    set -- up -d --remove-orphans
     [ "$build" -eq 1 ] && set -- "$@" --build
     [ "$recreate" -eq 1 ] && set -- "$@" --force-recreate
     compose "$@"
@@ -167,7 +189,9 @@ cmd_down() {
 }
 
 cmd_status() {
-    compose ps "$@"
+    # Include stopped containers so `hybro stop` then `hybro status` still shows
+    # the preserved stack (plain `ps` hides exited containers).
+    compose ps --all "$@"
 }
 
 cmd_logs() {

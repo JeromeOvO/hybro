@@ -81,7 +81,10 @@ sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
 `./scripts/hybro start` runs the three `ensure_*` steps for you whenever
 `.env` exists, so after the initial `cp .env.example .env` (plus setting
 `OPENAI_API_KEY`) you can just run `./scripts/hybro start --recreate` to
-pick up the new values. `frontend/.env.local` is generated from `.env` -
+pick up runtime values. If you also change frontend-facing `NEXT_PUBLIC_*`
+keys, use `./scripts/hybro start --build --recreate` - those values are
+Docker build args baked into the Next.js bundle, so recreate alone keeps
+the old browser config. `frontend/.env.local` is generated from `.env` -
 do not hand-edit it.
 
 ## Running
@@ -89,14 +92,15 @@ do not hand-edit it.
 `./scripts/hybro` is the day-2 lifecycle CLI. Common commands:
 
 ```bash
-./scripts/hybro start              # up -d, no rebuild (fast daily loop)
-./scripts/hybro start --build      # rebuild images (after code/deps change)
-./scripts/hybro start --recreate   # force container recreate (after .env changes)
-./scripts/hybro start --check-key  # fail fast if OPENAI_API_KEY is unset
-./scripts/hybro logs backend       # stream one service (or all if no arg)
-./scripts/hybro status             # docker compose ps
-./scripts/hybro stop               # stop but keep containers
-./scripts/hybro down               # remove containers + default network
+./scripts/hybro start                    # up -d, no rebuild (fast daily loop)
+./scripts/hybro start --build            # rebuild images (after code/deps change)
+./scripts/hybro start --recreate         # recreate containers (runtime .env changes)
+./scripts/hybro start --build --recreate # rebuild+recreate (NEXT_PUBLIC_* / image changes)
+./scripts/hybro start --check-key        # fail fast if OPENAI_API_KEY is unset
+./scripts/hybro logs backend             # stream one service (or all if no arg)
+./scripts/hybro status                   # docker compose ps --all
+./scripts/hybro stop                     # stop but keep containers
+./scripts/hybro down                     # remove containers + default network
 ```
 
 Run `./scripts/hybro --help` for the full subcommand reference. Power users
