@@ -1,11 +1,13 @@
 # Shared config for every default agent (see default_agents/agents.yaml).
+# NOTE: no env_file here — the root .env carries backend/frontend secrets
+# (Mongo credentials, WEBHOOK_SIGNING_KEY, CLERK_SECRET_KEY, HYBRO_API_KEY,
+# etc.) that default agents must not receive. Each generated agent service
+# instead pulls the specific keys it needs via ${VAR:-default} interpolation
+# so only agent-relevant values reach the container.
 x-agent: &agent
   build:
     context: ./default_agents
     dockerfile: Dockerfile
-  env_file:
-    - path: ./.env
-      required: false
   restart: always
   depends_on:
     backend:
@@ -97,26 +99,33 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # NEXT_PUBLIC_* values must be provided at BUILD time or Next.js compiles
+      # its code defaults into the browser bundle (routes-manifest.json, client
+      # bundles). We forward them here as build args and also re-inject the
+      # server-only Clerk secrets at runtime below.
+      args:
+        BACKEND_URL: http://backend:8000
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_API_PREFIX: ${NEXT_PUBLIC_API_PREFIX:-/api/v1}
+        NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL:-http://localhost:3000}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
+        NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_URL:-/sign-in}
+        NEXT_PUBLIC_CLERK_SIGN_UP_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_URL:-/sign-up}
+        NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL:-/}
+        NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL:-/}
+        NEXT_PUBLIC_ENABLE_WAITLIST: ${NEXT_PUBLIC_ENABLE_WAITLIST:-true}
+        NEXT_PUBLIC_MAX_MESSAGE_LENGTH: ${NEXT_PUBLIC_MAX_MESSAGE_LENGTH:-10000}
+        NEXT_PUBLIC_INSPECTION_TIMEOUT_MS: ${NEXT_PUBLIC_INSPECTION_TIMEOUT_MS:-300000}
     ports:
       - "3000:3000"
     # Intentionally no full env_file: do not inject backend/agent secrets into
-    # Next.js. Pass only frontend-relevant keys via Compose interpolation from
-    # the project .env (Clerk + public config). NEXT_PUBLIC_* are still
-    # build-time for production client bundles; runtime covers server reads.
+    # Next.js. Runtime only needs BACKEND_URL for the API rewrite and the two
+    # server-side Clerk secrets. NEXT_PUBLIC_* values are already baked into
+    # the image via build args above.
     environment:
       - BACKEND_URL=http://backend:8000
-      - NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-}
       - CLERK_WEBHOOK_SECRET=${CLERK_WEBHOOK_SECRET:-}
-      - NEXT_PUBLIC_CLERK_SIGN_IN_URL=${NEXT_PUBLIC_CLERK_SIGN_IN_URL:-/sign-in}
-      - NEXT_PUBLIC_CLERK_SIGN_UP_URL=${NEXT_PUBLIC_CLERK_SIGN_UP_URL:-/sign-up}
-      - NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=${NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL:-/}
-      - NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=${NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL:-/}
-      - NEXT_PUBLIC_SERVER_URL=${NEXT_PUBLIC_SERVER_URL:-http://localhost:3000}
-      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
-      - NEXT_PUBLIC_API_PREFIX=${NEXT_PUBLIC_API_PREFIX:-/api/v1}
-      - NEXT_PUBLIC_ENABLE_WAITLIST=${NEXT_PUBLIC_ENABLE_WAITLIST:-true}
-      - NEXT_PUBLIC_MAX_MESSAGE_LENGTH=${NEXT_PUBLIC_MAX_MESSAGE_LENGTH:-10000}
     depends_on:
       - backend
     restart: always
@@ -134,6 +143,10 @@ services:
     environment:
       - SERVER_PORT=7001
       - SERVER_DOMAIN=weather-agent
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
+      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
     ports:
       - "7001:7001"
 
@@ -147,6 +160,10 @@ services:
     environment:
       - SERVER_PORT=6002
       - SERVER_DOMAIN=image-generator-agent
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
+      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
     ports:
       - "6002:6002"
 
@@ -160,6 +177,10 @@ services:
     environment:
       - SERVER_PORT=7002
       - SERVER_DOMAIN=travel-planner-agent
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
+      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
     ports:
       - "7002:7002"
 
@@ -173,20 +194,24 @@ services:
     environment:
       - SERVER_PORT=7003
       - SERVER_DOMAIN=story-agent
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
+      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
     ports:
       - "7003:7003"
 
   # One-shot: registers every enabled agent with the backend, then exits.
+  # Uses filtered interpolation instead of env_file so backend secrets
+  # (Mongo, Clerk, webhook signing key, ...) never reach this container.
   registrar:
     build:
       context: ./default_agents
       dockerfile: Dockerfile.registrar
-    env_file:
-      - path: ./.env
-        required: false
     environment:
       - BACKEND_URL=http://backend:8000
       - API_PREFIX=/api/v1
+      - AGENT_REGISTRAR_TOKEN=${AGENT_REGISTRAR_TOKEN:-}
     restart: "no"
     depends_on:
       backend:

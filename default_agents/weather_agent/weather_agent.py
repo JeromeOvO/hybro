@@ -21,11 +21,23 @@ from langchain_core.runnables import RunnableSerializable
 
 try:
     from load_repo_env import load_repo_env
-except ImportError:  # Host run: module lives in default_agents/
+except ImportError:  # Host run: helper lives in default_agents/
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from load_repo_env import load_repo_env
+    try:
+        from load_repo_env import load_repo_env
+    except ImportError:  # Wheel install: helper is not packaged with the agent.
+        # The monorepo helper only ships with the repo checkout. When the agent
+        # is installed as a standalone wheel (e.g. `pip install weather-agent`),
+        # fall back to the standard python-dotenv discovery so we still honour
+        # any .env python-dotenv finds walking up from cwd (or no-op otherwise).
+        # Docker Compose already injects process env, so this branch matters
+        # only for third-party pip installs.
+        from dotenv import load_dotenv
+
+        def load_repo_env(*, start=None):
+            load_dotenv()
 
 load_repo_env(start=Path(__file__))
 

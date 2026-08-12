@@ -102,11 +102,28 @@ if [ -f .env ]; then
         fi
     fi
     if [ -f frontend/.env.local ]; then
+        # Migrate every documented frontend key so `ensure_frontend_env.sh` does
+        # not silently drop values that used to live in `frontend/.env.local`.
         fill_root_var_from NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY frontend/.env.local
         fill_root_var_from CLERK_SECRET_KEY frontend/.env.local
         fill_root_var_from CLERK_WEBHOOK_SECRET frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_IN_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_UP_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL frontend/.env.local
         fill_root_var_from NEXT_PUBLIC_API_BASE_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_API_PREFIX frontend/.env.local
         fill_root_var_from NEXT_PUBLIC_SERVER_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_ENABLE_WAITLIST frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_MAX_MESSAGE_LENGTH frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_INSPECTION_TIMEOUT_MS frontend/.env.local
+        fill_root_var_from E2E_CLERK_USER_EMAIL frontend/.env.local
+        fill_root_var_from E2E_CLERK_USER_PASSWORD frontend/.env.local
+        fill_root_var_from E2E_TEST_ROOM_PATH frontend/.env.local
+        # Back the legacy file up before ensure_frontend_env.sh overwrites it
+        # so an operator can recover any custom keys we didn't know to migrate.
+        cp frontend/.env.local frontend/.env.local.legacy
+        echo "Backed up frontend/.env.local -> frontend/.env.local.legacy"
     fi
 fi
 
@@ -153,14 +170,16 @@ else
 fi
 
 echo "Starting Docker containers..."
-if docker compose version >/dev/null 2>&1; then
-    docker compose up -d --build
-elif docker-compose version >/dev/null 2>&1; then
-    docker-compose up -d --build
-else
-    echo "Error: docker compose is not available."
+# Compose v2.24+ is required for the `env_file: [{path, required}]` long-form
+# syntax used in docker-compose.yml (so a missing repo-root .env is treated as
+# non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
+# that syntax, so we deliberately do not fall back to it.
+if ! docker compose version >/dev/null 2>&1; then
+    echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)."
+    echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run this script."
     exit 1
 fi
+docker compose up -d --build
 
 echo "========================================"
 echo "Hybro AI is now running!"

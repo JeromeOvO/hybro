@@ -226,7 +226,12 @@ Runtime application code reads environment-backed configuration through
 which would otherwise override root values). If the root file is absent,
 Settings falls back to `backend/.env`. Under Docker Compose, process
 environment from the root `.env` `env_file` (plus Compose overrides) is
-authoritative. Raw `os.getenv()`, `os.environ.get()`, and
+authoritative. Default-agent and registrar containers do **not** receive the
+full root env; Compose interpolates only an allowlisted subset
+(`OPENAI_API_KEY`, `OPENAI_MODEL`, `IMAGE_MODEL`, `IMAGE_SIZE` for agents;
+`AGENT_REGISTRAR_TOKEN` for the registrar). The frontend image receives
+`NEXT_PUBLIC_*` values as Docker build args (baked into the client bundle)
+and only `BACKEND_URL` plus server-side Clerk secrets at runtime. Raw `os.getenv()`, `os.environ.get()`, and
 `os.environ[...]` reads are reserved for the canonical settings module; the
 config unification gate in `tests/test_config_unification_gate.py` scans tracked
 production Python files and fails on new raw env reads outside that file.

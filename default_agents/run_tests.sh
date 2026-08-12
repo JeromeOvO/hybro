@@ -9,12 +9,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Load OPENAI_API_KEY from repo-root .env if not already in the environment.
+# Extract OPENAI_API_KEY from the repo-root .env WITHOUT sourcing the file as
+# shell code. The consolidated .env holds backend and frontend secrets whose
+# values may legitimately contain characters that shell would try to expand or
+# execute ($, backticks, command substitutions, ...). We only need this one
+# key, so parse just that one line.
 if [ -z "${OPENAI_API_KEY:-}" ] && [ -f .env ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . ./.env
-    set +a
+    parsed_key=$(
+        awk '
+            /^[[:space:]]*OPENAI_API_KEY[[:space:]]*=/ {
+                sub(/^[^=]*=/, "")
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+                print
+                exit
+            }
+        ' .env
+    )
+    if [ -n "$parsed_key" ]; then
+        OPENAI_API_KEY=$parsed_key
+        export OPENAI_API_KEY
+    fi
+    unset parsed_key
 fi
 
 cd default_agents
@@ -23,11 +38,12 @@ echo "Running default agent verification tests..."
 echo "  BACKEND_URL=${BACKEND_URL:-http://localhost:8000}"
 echo "  AGENT_HOST=${AGENT_HOST:-localhost}"
 
-# Prefer uv if available, otherwise fall back to pytest / python -m pytest.
+# `python -m pytest` puts the current directory (default_agents/) on sys.path,
+# so tests/ can import sibling modules such as load_repo_env. The bare `pytest`
+# console script does NOT add cwd to sys.path and fails with ModuleNotFoundError
+# on this layout.
 if command -v uv >/dev/null 2>&1; then
-    uv run --with pytest --with requests --with pyyaml pytest -v tests
-elif command -v pytest >/dev/null 2>&1; then
-    pytest -v tests
+    uv run --with pytest --with requests --with pyyaml python -m pytest -v tests
 else
     python -m pytest -v tests
 fi

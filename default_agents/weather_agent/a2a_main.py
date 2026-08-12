@@ -33,11 +33,17 @@ except ImportError:
 
 try:
     from load_repo_env import load_repo_env
-except ImportError:  # Host run: module lives in default_agents/
+except ImportError:  # Host run: helper lives in default_agents/
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from load_repo_env import load_repo_env
+    try:
+        from load_repo_env import load_repo_env
+    except ImportError:  # Wheel install: helper is not packaged with the agent.
+        from dotenv import load_dotenv
+
+        def load_repo_env(*, start=None):
+            load_dotenv()
 
 load_repo_env(start=Path(__file__))
 
