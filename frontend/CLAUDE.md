@@ -106,8 +106,10 @@ Do not add or commit `superpowers/` or related planning artifacts.
 
 ## Environment
 
-Copy `.env.example` → `.env.local`. Key vars:
-- `BACKEND_URL` — server-side backend target used by Next.js rewrites
+Copy repo-root `.env.example` → `.env`. Key vars:
 - `NEXT_PUBLIC_API_BASE_URL` / `NEXT_PUBLIC_API_PREFIX` — browser API endpoint
 - `NEXT_PUBLIC_INSPECTION_TIMEOUT_MS` — inspection request timeout
 - `NEXT_PUBLIC_MAX_MESSAGE_LENGTH` — composer message limit
+- `BACKEND_URL` — server-side backend target used by Next.js rewrites (Compose sets this; local default is `http://127.0.0.1:8000`)
+- `OPENAI_API_KEY` — shared by backend and default agents
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — auth (optional when `AUTH_MODE=mock`)

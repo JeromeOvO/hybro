@@ -6,6 +6,7 @@ and starts the server to handle incoming requests.
 
 import logging
 import os
+from pathlib import Path
 
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -17,9 +18,22 @@ from a2a.types import (
 )
 from agent import ImageGenerationAgent
 from agent_executor import ImageGenerationAgentExecutor
-from dotenv import load_dotenv
 
-load_dotenv()
+try:
+    from load_repo_env import load_repo_env
+except ImportError:  # Host run: helper lives in default_agents/
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from load_repo_env import load_repo_env
+    except ImportError:  # Wheel install: helper is not packaged with the agent.
+        from dotenv import load_dotenv
+
+        def load_repo_env(*, start=None):
+            load_dotenv()
+
+load_repo_env(start=Path(__file__))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

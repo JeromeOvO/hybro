@@ -39,7 +39,7 @@ Hybro AI allows developers and teams to deploy, coordinate, and inspect clusters
 ## Getting Started
 
 ### Prerequisites
-- Docker and Docker Compose
+- Docker with Compose v2.24+ (`docker compose`; the v1 `docker-compose` binary is not supported)
 - Node.js 20.19+ (if running the frontend outside of Docker)
 - Python 3.12+ and MongoDB 4.2+ (if running the backend outside of Docker; Docker Compose uses MongoDB 7.0)
 
@@ -58,6 +58,18 @@ cd hybro
 docker compose up -d --build
 ```
 
+Compose starts without a `.env` (mock auth, empty API keys). For working
+default agents and LLM calls, create the env file and secrets first:
+
+```bash
+cp .env.example .env
+# Set OPENAI_API_KEY in .env, then:
+sh backend/scripts/ensure_webhook_signing_key.sh .env
+sh backend/scripts/ensure_registrar_token.sh .env
+sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+docker compose up -d --build --force-recreate
+```
+
 - **Hybro App**: http://localhost:3000
 - **API Server**: http://localhost:8000
 
@@ -72,7 +84,7 @@ The repository is split into these primary components:
 - `default_agents/`: A collection of ready-to-use A2A agents, each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
 
 ## API key
-The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it in both `backend/.env` and `default_agents/.env`. Agents register regardless, but calls will fail until a valid key is provided.
+The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it once in the repo-root `.env` (copy from `.env.example`). Agents register regardless, but calls will fail until a valid key is provided.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.

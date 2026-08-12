@@ -10,17 +10,36 @@ The agent accepts a city name and returns weather information.
 
 import os
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import requests
-from dotenv import load_dotenv
-
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableSerializable
 
-load_dotenv()
+try:
+    from load_repo_env import load_repo_env
+except ImportError:  # Host run: helper lives in default_agents/
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from load_repo_env import load_repo_env
+    except ImportError:  # Wheel install: helper is not packaged with the agent.
+        # The monorepo helper only ships with the repo checkout. When the agent
+        # is installed as a standalone wheel (e.g. `pip install weather-agent`),
+        # fall back to the standard python-dotenv discovery so we still honour
+        # any .env python-dotenv finds walking up from cwd (or no-op otherwise).
+        # Docker Compose already injects process env, so this branch matters
+        # only for third-party pip installs.
+        from dotenv import load_dotenv
+
+        def load_repo_env(*, start=None):
+            load_dotenv()
+
+load_repo_env(start=Path(__file__))
 
 
 # ============ Real weather provider (Open-Meteo) ============

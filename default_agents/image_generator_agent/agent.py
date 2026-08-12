@@ -9,15 +9,29 @@ import io
 import logging
 import os
 import re
+from pathlib import Path
 
 from uuid import uuid4
 
-from dotenv import load_dotenv
 from in_memory_cache import InMemoryCache
 from openai import OpenAI
 from pydantic import BaseModel
 
-load_dotenv()
+try:
+    from load_repo_env import load_repo_env
+except ImportError:  # Host run: helper lives in default_agents/
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from load_repo_env import load_repo_env
+    except ImportError:  # Wheel install: helper is not packaged with the agent.
+        from dotenv import load_dotenv
+
+        def load_repo_env(*, start=None):
+            load_dotenv()
+
+load_repo_env(start=Path(__file__))
 
 logger = logging.getLogger(__name__)
 

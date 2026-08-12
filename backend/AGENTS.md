@@ -34,4 +34,4 @@ Recent history uses short imperative commits plus prefixes such as `docs:`, `cho
 
 ## Security & Configuration Tips
 
-Copy `.env.example` to `.env` for local configuration and never commit secrets; `.env*` is ignored except `.env.example`. Keep generated logs, caches, coverage output, and virtual environments out of commits.
+Copy the repo-root `.env.example` to `.env` for local configuration and never commit secrets; `.env*` is ignored except `.env.example`. Keep generated logs, caches, coverage output, and virtual environments out of commits.

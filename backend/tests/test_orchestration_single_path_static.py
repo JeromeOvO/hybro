@@ -31,7 +31,7 @@ def repository_text_index() -> dict[Path, str]:
     paths.update(
         {
             BACKEND_ROOT / "container.py",
-            BACKEND_ROOT / ".env.example",
+            REPO_ROOT / ".env.example",
             BACKEND_ROOT / "docs" / "System-Architecture.md",
         }
     )

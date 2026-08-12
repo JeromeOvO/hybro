@@ -1,15 +1,28 @@
 import json
 import os
+from pathlib import Path
 
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+try:
+    from load_repo_env import load_repo_env
+except ImportError:  # Host run: helper lives in default_agents/
+    import sys
 
-load_dotenv()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from load_repo_env import load_repo_env
+    except ImportError:  # Wheel install: helper is not packaged with the agent.
+        from dotenv import load_dotenv
+
+        def load_repo_env(*, start=None):
+            load_dotenv()
+
+load_repo_env(start=Path(__file__))
 
 # Resolve config.json relative to this file so it is found regardless of the
 # process working directory.

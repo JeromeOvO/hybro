@@ -5,6 +5,23 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
+def resolve_settings_env_file(base_dir: str) -> str:
+    """Return the single env file path Settings should load.
+
+    Prefer the monorepo-root ``.env`` when both ``docker-compose.yml`` and
+    that file exist. Never load root and ``backend/.env`` together — a stale
+    backend file would override root values. Fall back to ``backend/.env``.
+    """
+    repo_root = os.path.dirname(base_dir)
+    root_env = os.path.join(repo_root, ".env")
+    backend_env = os.path.join(base_dir, ".env")
+    if os.path.isfile(os.path.join(repo_root, "docker-compose.yml")) and os.path.isfile(
+        root_env
+    ):
+        return root_env
+    return backend_env
+
+
 class Settings(BaseSettings):
     app_env: str = "development"  # development, staging, production
 
@@ -246,10 +263,13 @@ class Settings(BaseSettings):
 
     class Config:
         extra = "ignore"
+        # backend/ when running from the monorepo or /app in the backend image.
         base_dir = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        env_file = os.path.join(base_dir, ".env")
+        # See resolve_settings_env_file(). Missing files are ignored by
+        # pydantic-settings. Under Docker Compose, process env is primary.
+        env_file = resolve_settings_env_file(base_dir)
 
     @field_validator("frontend_origins", mode="before")
     @classmethod
@@ -372,5 +392,6 @@ settings = Settings()
 
 __all__ = [
     "Settings",
+    "resolve_settings_env_file",
     "settings",
 ]

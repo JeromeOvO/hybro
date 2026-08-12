@@ -34,38 +34,116 @@ else
 fi
 
 echo "Setting up environment variables..."
-if [ ! -f backend/.env ]; then
-    if [ -f backend/.env.example ]; then
-        cp backend/.env.example backend/.env
-        echo "Created backend/.env from example"
+
+# Read KEY=value from an env file (empty when unset/blank).
+read_env_var() {
+    env_path=$1
+    key=$2
+    if [ ! -f "$env_path" ]; then
+        return 0
+    fi
+    awk -v key="$key" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            sub(/^[^=]*=/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            print
+            exit
+        }
+    ' "$env_path"
+}
+
+# Append KEY=value to root .env when the root value is currently empty.
+fill_root_var_from() {
+    key=$1
+    source_file=$2
+    root_value=$(read_env_var .env "$key")
+    if [ -n "$root_value" ]; then
+        return 0
+    fi
+    source_value=$(read_env_var "$source_file" "$key")
+    if [ -z "$source_value" ]; then
+        return 0
+    fi
+    printf '\n%s=%s\n' "$key" "$source_value" >> .env
+    echo "Merged $key from $source_file into .env"
+}
+
+# Promote a legacy backend/.env to the new repo-root .env when needed.
+if [ ! -f .env ] && [ -f backend/.env ]; then
+    cp backend/.env .env
+    echo "Migrated backend/.env to repo-root .env"
+fi
+
+if [ ! -f .env ]; then
+    if [ -f .env.example ]; then
+        cp .env.example .env
+        echo "Created .env from .env.example"
+        echo "NOTE: set OPENAI_API_KEY in .env so the backend and default agents can respond."
     fi
 fi
 
-if [ -f backend/.env ]; then
-    sh backend/scripts/ensure_webhook_signing_key.sh backend/.env
-fi
-
-if [ ! -f frontend/.env.local ]; then
-    if [ -f frontend/.env.example ]; then
-        cp frontend/.env.example frontend/.env.local
-        echo "Created frontend/.env.local from example"
+# Pull any still-missing secrets from legacy per-service env files.
+if [ -f .env ]; then
+    if [ -f default_agents/.env ]; then
+        fill_root_var_from OPENAI_API_KEY default_agents/.env
+        fill_root_var_from AGENT_REGISTRAR_TOKEN default_agents/.env
+        fill_root_var_from DEFAULT_AGENT_REGISTRAR_TOKEN default_agents/.env
+        fill_root_var_from OPENAI_MODEL default_agents/.env
+        fill_root_var_from IMAGE_MODEL default_agents/.env
+        fill_root_var_from IMAGE_SIZE default_agents/.env
+        # If only AGENT_REGISTRAR_TOKEN was merged, mirror it for the backend name.
+        backend_token=$(read_env_var .env DEFAULT_AGENT_REGISTRAR_TOKEN)
+        agents_token=$(read_env_var .env AGENT_REGISTRAR_TOKEN)
+        if [ -z "$backend_token" ] && [ -n "$agents_token" ]; then
+            printf '\nDEFAULT_AGENT_REGISTRAR_TOKEN=%s\n' "$agents_token" >> .env
+        fi
+        if [ -z "$agents_token" ] && [ -n "$backend_token" ]; then
+            printf '\nAGENT_REGISTRAR_TOKEN=%s\n' "$backend_token" >> .env
+        fi
+    fi
+    if [ -f frontend/.env.local ]; then
+        # Migrate every documented frontend key so `ensure_frontend_env.sh` does
+        # not silently drop values that used to live in `frontend/.env.local`.
+        fill_root_var_from NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY frontend/.env.local
+        fill_root_var_from CLERK_SECRET_KEY frontend/.env.local
+        fill_root_var_from CLERK_WEBHOOK_SECRET frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_IN_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_UP_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_API_BASE_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_API_PREFIX frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_SERVER_URL frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_ENABLE_WAITLIST frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_MAX_MESSAGE_LENGTH frontend/.env.local
+        fill_root_var_from NEXT_PUBLIC_INSPECTION_TIMEOUT_MS frontend/.env.local
+        fill_root_var_from E2E_CLERK_USER_EMAIL frontend/.env.local
+        fill_root_var_from E2E_CLERK_USER_PASSWORD frontend/.env.local
+        fill_root_var_from E2E_TEST_ROOM_PATH frontend/.env.local
+        # Back the legacy file up before ensure_frontend_env.sh overwrites it
+        # so an operator can recover any custom keys we didn't know to migrate.
+        if [ ! -f frontend/.env.local.legacy ]; then
+            cp frontend/.env.local frontend/.env.local.legacy
+            echo "Backed up frontend/.env.local -> frontend/.env.local.legacy"
+        fi
     fi
 fi
 
-if [ ! -f default_agents/.env ]; then
-    if [ -f default_agents/.env.example ]; then
-        cp default_agents/.env.example default_agents/.env
-        echo "Created default_agents/.env from example"
-        echo "NOTE: set OPENAI_API_KEY in default_agents/.env so the default agents can respond."
+# Retire legacy env files so they cannot shadow the root .env on host runs.
+retire_legacy_env() {
+    legacy=$1
+    if [ -f "$legacy" ]; then
+        mv "$legacy" "${legacy}.legacy"
+        echo "Renamed $legacy -> ${legacy}.legacy (repo-root .env is the source of truth)"
     fi
-fi
+}
 
-# /agent/registerAgent is protected. The one-shot registrar authenticates with a
-# shared service token instead of a Clerk session, so both sides need the same
-# secret or every registration fails with 401. Generate it once, after both .env
-# files exist. Idempotent: an already-configured token is left untouched.
-if [ -f backend/.env ] && [ -f default_agents/.env ]; then
-    sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
+if [ -f .env ]; then
+    retire_legacy_env backend/.env
+    retire_legacy_env default_agents/.env
+    sh backend/scripts/ensure_webhook_signing_key.sh .env
+    sh backend/scripts/ensure_registrar_token.sh .env
+    sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
 fi
 
 # The default-agent services in docker-compose.yml are generated from
@@ -94,14 +172,17 @@ else
 fi
 
 echo "Starting Docker containers..."
-if docker compose version >/dev/null 2>&1; then
-    docker compose up -d --build
-elif docker-compose version >/dev/null 2>&1; then
-    docker-compose up -d --build
-else
-    echo "Error: docker compose is not available."
+# Compose v2.24+ is required for the `env_file: [{path, required}]` long-form
+# syntax used in docker-compose.yml (so a missing repo-root .env is treated as
+# non-fatal in the zero-config path). The v1 `docker-compose` binary rejects
+# that syntax, so we deliberately do not fall back to it.
+compose_version=$(docker compose version --short 2>/dev/null || true)
+if [ -z "$compose_version" ] || ! echo "$compose_version" | awk -F. '{if ($1 > 2 || ($1 == 2 && $2 >= 24)) exit 0; else exit 1}'; then
+    echo "Error: docker compose v2.24+ is required (docker-compose v1 is not supported)."
+    echo "Install Docker Desktop, or upgrade the Compose plugin, then re-run this script."
     exit 1
 fi
+docker compose up -d --build
 
 echo "========================================"
 echo "Hybro AI is now running!"

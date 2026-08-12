@@ -9,7 +9,7 @@ type Line = { kind: "cmd" | "ok" | "info"; text: string }
 const LINES: Line[] = [
   { kind: "cmd", text: "curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh" },
   { kind: "ok", text: "cloning hybroai/hybro" },
-  { kind: "ok", text: "backend/.env created" },
+  { kind: "ok", text: ".env created" },
   { kind: "ok", text: "docker compose up -d --build" },
   { kind: "info", text: "Hybro App    http://localhost:3000" },
   { kind: "info", text: "API Server   http://localhost:8000" },

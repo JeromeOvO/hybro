@@ -37,6 +37,28 @@ END_MARKER = "  # <<< END default agents <<<"
 BACKEND_URL = "http://backend:8000"
 API_PREFIX = "/api/v1"
 
+# Only these keys are forwarded from the host / repo-root .env into default-agent
+# containers. Backend/frontend secrets (Mongo creds, WEBHOOK_SIGNING_KEY,
+# CLERK_SECRET_KEY, HYBRO_API_KEY, etc.) MUST NOT be exposed here — see the
+# comment on the x-agent anchor in docker-compose.yml.
+AGENT_ENV_INTERPOLATIONS: tuple[tuple[str, str], ...] = (
+    ("OPENAI_API_KEY", ""),
+    ("OPENAI_MODEL", "gpt-4o-mini"),
+    ("IMAGE_MODEL", "gpt-image-1"),
+    ("IMAGE_SIZE", "1024x1024"),
+)
+
+# The registrar only needs the shared service token; every other value is set
+# statically below.
+REGISTRAR_ENV_INTERPOLATIONS: tuple[tuple[str, str], ...] = (
+    ("AGENT_REGISTRAR_TOKEN", ""),
+)
+
+
+def _env_line(key: str, default: str) -> str:
+    """Render an `environment:` list entry with a Compose-safe default."""
+    return f"      - {key}=${{{key}:-{default}}}"
+
 
 def load_enabled_agents() -> dict[str, dict]:
     """Return enabled agents from the manifest, preserving file order."""
@@ -76,6 +98,10 @@ def render_region(agents: dict[str, dict]) -> str:
             "    environment:",
             f"      - SERVER_PORT={port}",
             f"      - SERVER_DOMAIN={service}",
+        ]
+        # Filtered agent-only interpolations from the shell / repo-root .env.
+        lines += [_env_line(key, default) for key, default in AGENT_ENV_INTERPOLATIONS]
+        lines += [
             "    ports:",
             f'      - "{port}:{port}"',
         ]
@@ -83,15 +109,18 @@ def render_region(agents: dict[str, dict]) -> str:
     lines += [
         "",
         "  # One-shot: registers every enabled agent with the backend, then exits.",
+        "  # Uses filtered interpolation instead of env_file so backend secrets",
+        "  # (Mongo, Clerk, webhook signing key, ...) never reach this container.",
         "  registrar:",
         "    build:",
         "      context: ./default_agents",
         "      dockerfile: Dockerfile.registrar",
-        "    env_file:",
-        "      - ./default_agents/.env",
         "    environment:",
         f"      - BACKEND_URL={BACKEND_URL}",
         f"      - API_PREFIX={API_PREFIX}",
+    ]
+    lines += [_env_line(key, default) for key, default in REGISTRAR_ENV_INTERPOLATIONS]
+    lines += [
         '    restart: "no"',
         "    depends_on:",
         "      backend:",

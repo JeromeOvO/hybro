@@ -26,24 +26,22 @@ import { FRAMEWORKS } from "@/components/framework-badges"
 import { TypingTerminal } from "@/components/open-source/typing-terminal"
 
 // Mirrors install.sh, including the secret-generating steps it runs between
-// copying the env files and starting Compose. Skipping step 3 leaves the
+// copying the env file and starting Compose. Skipping step 3 leaves the
 // registrar token blank, which fails default-agent registration with 401
-// (documented in backend/.env.example). Ports come from docker-compose.yml.
+// (documented in .env.example). Ports come from docker-compose.yml.
 const AI_SETUP_PROMPT = `Set up Hybro AI on my machine and get it running locally.
 Requires: git, Docker, Docker Compose. Run every step from the repo root.
 1. git clone https://github.com/hybroai/hybro.git && cd hybro
-2. Create the env files from their examples:
-   backend/.env.example        -> backend/.env
-   frontend/.env.example       -> frontend/.env.local
-   default_agents/.env.example -> default_agents/.env
-3. Generate the secrets those examples leave blank. Skipping this leaves
+2. Create the env file from the example:
+   .env.example -> .env
+3. Generate the secrets that example leaves blank. Skipping this leaves
    the shared registrar token empty and the default agents then fail to
    register with HTTP 401:
-   sh backend/scripts/ensure_registrar_token.sh backend/.env default_agents/.env
-   sh backend/scripts/ensure_webhook_signing_key.sh backend/.env
-4. Ask me for my OPENAI_API_KEY, then set the same value in both
-   backend/.env and default_agents/.env. The default agents register
-   without it, but their calls fail until a valid key is set.
+   sh backend/scripts/ensure_webhook_signing_key.sh .env
+   sh backend/scripts/ensure_registrar_token.sh .env
+   sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+4. Ask me for my OPENAI_API_KEY, then set it once in .env. The default
+   agents register without it, but their calls fail until a valid key is set.
 5. Run: docker compose up -d --build
 6. Wait for the containers to come up, then verify:
    App  http://localhost:3000

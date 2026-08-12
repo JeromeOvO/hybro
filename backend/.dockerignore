@@ -7,3 +7,6 @@ tests
 docs
 logs
 *.pyc
+.env
+.env.*
+!.env.example
