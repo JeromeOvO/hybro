@@ -1,8 +1,7 @@
 import { test, expect } from './fixtures/auth'
 
 test.describe('Authenticated flows', () => {
-  test('send message and see agent response', async ({ roomPath, clerkAuth, page }) => {
-    void clerkAuth
+  test('send message and see agent response', async ({ roomPath, page }) => {
     await page.goto(roomPath)
 
     const input = page.locator('[data-testid="chat-input"]')
@@ -18,8 +17,7 @@ test.describe('Authenticated flows', () => {
     })
   })
 
-  test('cancel in-flight message', async ({ roomPath, clerkAuth, page }) => {
-    void clerkAuth
+  test('cancel in-flight message', async ({ roomPath, page }) => {
     await page.goto(roomPath)
 
     const input = page.locator('[data-testid="chat-input"]')
@@ -40,8 +38,7 @@ test.describe('Authenticated flows', () => {
     })
   })
 
-  test('HITL reply flow', async ({ roomPath, clerkAuth, page }) => {
-    void clerkAuth
+  test('HITL reply flow', async ({ roomPath, page }) => {
     test.skip(true, 'Requires backend agent that triggers input_required — run manually')
     await page.goto(roomPath)
 
@@ -60,8 +57,7 @@ test.describe('Authenticated flows', () => {
     })
   })
 
-  test('file attachment upload and send', async ({ roomPath, clerkAuth, page }) => {
-    void clerkAuth
+  test('file attachment upload and send', async ({ roomPath, page }) => {
     await page.goto(roomPath)
 
     const fileName = `test-upload-${Date.now()}.txt`

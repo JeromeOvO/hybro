@@ -7,12 +7,6 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
 const mockSendUserMessage = vi.fn().mockResolvedValue(true)
 const mockUseGroupManagement = vi.fn()
 
-// Mock Clerk
-vi.mock("@clerk/nextjs", () => ({
-  useUser: () => ({ user: { id: "user-1", firstName: "Test" }, isLoaded: true }),
-  useAuth: () => ({ getToken: vi.fn() }),
-}))
-
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "room-abc" }),

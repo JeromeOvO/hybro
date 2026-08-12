@@ -3,7 +3,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RoomHistoryResponse } from '@/lib/api/room'
 import { roomHistoryQueryKey } from '@/lib/room-history-query'
-import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
+import { MAX_QUOTE_TEXT_LENGTH, type QuoteData } from '@/lib/types/quote'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
@@ -91,7 +91,7 @@ describe('useSendMessage room-history rollback', () => {
     activeQueryClient.clear()
   })
 
-  async function send(overrides: { quoteData?: { content: string; messageId: string } } = {}) {
+  async function send(overrides: { quoteData?: QuoteData } = {}) {
     const lifecycle = createLifecycle()
     const { result } = renderHook(() => useSendMessage(
       'room-1',
@@ -138,6 +138,7 @@ describe('useSendMessage room-history rollback', () => {
       quoteData: {
         content: 'x'.repeat(MAX_QUOTE_TEXT_LENGTH + 1),
         messageId: 'quoted-message',
+        senderName: 'Agent',
       },
     })).toBe(false)
     expect(sendMessageMock).not.toHaveBeenCalled()

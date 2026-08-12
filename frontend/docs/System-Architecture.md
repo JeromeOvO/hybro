@@ -35,7 +35,7 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 | Component system | shadcn/ui with Radix primitives, `components.json`, New York style |
 | Icons | Lucide React |
 | Forms | React Hook Form + Zod |
-| Auth | Clerk (`@clerk/nextjs`) |
+| Auth | Local self-hosted identity adapter (`src/lib/auth.tsx`) |
 | Server state | TanStack React Query |
 | Client state | Zustand |
 | Real-time transport | SSE over `fetch()` streaming |
@@ -130,12 +130,10 @@ badge as Hub agents; Hub availability additionally depends on Hub liveness.
 
 `src/app/layout.tsx` wraps the app with:
 
-1. `ClerkProvider`
-2. `ClerkAuthProvider`
-3. `ThemeProvider`
-4. `QueryProvider`
-5. `Toaster`
-6. `CookieBanner`
+1. `ThemeProvider`
+2. `QueryProvider`
+3. `Toaster`
+4. `CookieBanner`
 
 The portal layout adds `BannerHost`, `SidebarProvider`,
 `SettingsDialogProvider`, `PortalSidebar`, and `PortalHeader`.
@@ -148,32 +146,25 @@ src/components/
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
 |-- portal/                   # unified sidebar/header/footer and Manage navigation
-|-- developer/                # agent-management settings form
-|-- providers/                # Clerk auth bridge and React Query provider
+|-- open-source/              # open-source landing page interactions
+|-- providers/                # React Query provider
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
 |-- room-chat-input.tsx       # composer input, mentions, uploads
-|-- room-setting-form.tsx     # room settings and room agent defaults
 |-- group-selector.tsx
 |-- group-management-modal.tsx
-|-- agent-selector.tsx
 |-- consumer-agent-card.tsx
-|-- hitl-compact-card.tsx
-|-- hitl-inline-reply-form.tsx
-|-- hitl-question-card.tsx
 |-- artifact-list.tsx
 |-- artifact-renderer.tsx
 |-- attachment-preview.tsx
 |-- markdown-content.tsx
 |-- part-renderer.tsx
 |-- mode-selector.tsx
-|-- nav-main.tsx
 |-- nav-agent.tsx
 |-- nav-user.tsx
 |-- nav-docs-button.tsx
 |-- nav-discord-button.tsx
 |-- require-auth.tsx
-|-- hub-page-content.tsx
 |-- use-case-card.tsx
 |-- cookie-banner.tsx
 |-- theme-provider.tsx
@@ -209,8 +200,6 @@ src/hooks/
 |-- useTurnViewModels.ts       # turn view model builder
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
-|-- useHubStatus.ts            # hub availability
-|-- useMessageScrollAnchoring.ts  # legacy scroll anchoring
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
@@ -253,7 +242,7 @@ src/hooks/room/
 `src/app/(portal)/room/[id]/page.tsx` is the room page. It is a client component that:
 
 - Reads `roomId` from the route.
-- Reads user/auth state from Clerk.
+- Reads user/auth state from the local identity adapter.
 - Calls `useRoomWebhook`.
 - Manages local chat mode, quote state, and prefilled input handoff.
 - Uses `useGroupManagement` for saved groups and room-team defaults.
@@ -499,40 +488,37 @@ Selectors under `src/lib/selectors/` adapt store state into UI-specific slices:
 
 `src/lib/api-client.ts` is the shared fetch wrapper. It:
 
-- Injects Clerk auth headers through `getClientAuthHeaders`.
+- Injects local identity auth headers through `getClientAuthHeaders`.
 - Supports abort signals and a default timeout.
 - Wraps HTTP failures in `ApiError`.
 - Logs client errors as warnings and server/unexpected errors as errors.
 
-API modules live in `src/lib/api/`:
+API modules live in `src/lib/api/`. Consumers import the specific module they
+need rather than a shared barrel, keeping client bundles scoped to the active
+feature:
 
 ```text
 src/lib/api/
-|-- index.ts
 |-- agent.ts
 |-- agent-group.ts
 |-- room.ts
 |-- sse.ts
-|-- task.ts
 |-- inspection.ts
-|-- health.ts
 |-- a2a-tasks.ts
-|-- discovery-api-keys.ts
 |-- files.ts
-|-- hitl.ts
-`-- hub.ts
+`-- hitl.ts
 ```
 
 Type definitions live in `src/lib/types/`:
 
 ```text
-agent.ts, agent-group.ts, attachments.ts, chat-mode.ts, error.ts,
-health.ts, memory.ts, quote.ts, request.ts, response.ts, room.ts, sse.ts
+agent.ts, agent-group.ts, attachments.ts, chat-mode.ts, error.ts, index.ts,
+quote.ts, request.ts, response.ts, sse.ts
 ```
 
 Other library modules:
 
-- `auth.ts`: intentional local auth adapter with a Clerk-shaped interface.
+- `auth.ts`: local self-hosted identity and authentication-header adapter.
 - `routes.ts`: canonical public and management route vocabulary.
 - `utils.ts`: `cn`, `getApiUrl`, and formatting helpers.
 - `consumer-nav.ts`, `nav-items.ts`: top-level navigation configuration.

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { Loader2, Monitor, Smartphone, Globe, Shield } from "lucide-react"
-import type { ClerkUser as UserResource } from "@/lib/auth"
+import type { AuthUser as UserResource } from "@/lib/auth"
 type SessionWithActivitiesResource = {
   id: string
   status?: string
@@ -59,7 +59,7 @@ export function SessionsSection({ user }: { user: UserResource }) {
   const isInitialLoad = useRef(true)
 
   // Keep a ref so loadSessions always has the latest user without being a dependency.
-  // If user were a direct dependency, Clerk emitting a new UserResource object after
+  // If user were a direct dependency, an auth adapter emitting a new user object after
   // user.reload() would create a new loadSessions reference → retrigger the effect →
   // call reload() again → infinite blink loop.
   const userRef = useRef(user)

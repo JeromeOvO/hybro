@@ -32,7 +32,6 @@ interface GroupSelectorProps {
   groups: AgentGroup[]
   loadingGroups?: boolean
   mentionedAgents?: MentionedAgent[]
-  onClearMentions?: () => void
   onCreateGroup?: () => void
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
@@ -48,7 +47,6 @@ export function GroupSelector({
   groups,
   loadingGroups = false,
   mentionedAgents = [],
-  onClearMentions,
   onCreateGroup,
   onEditGroup,
   onDeleteGroup,

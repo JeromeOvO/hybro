@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
 import { useMessageStore } from '@/stores/message-store'
-import { hydrateRoomFromDb } from '@/lib/room-sync'
+import { hydrateRoomFromDb } from '@/lib/room-sync/hydrate-room'
 
 export function useRoomHydration(
   roomId: string,

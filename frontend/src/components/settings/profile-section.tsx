@@ -2,9 +2,9 @@
 
 import { useState, useRef } from "react"
 import { Camera, Loader2 } from "lucide-react"
-import type { ClerkUser as UserResource } from "@/lib/auth"
+import type { AuthUser as UserResource } from "@/lib/auth"
 import { toast } from "sonner"
-import { getClerkErrorMessage } from "@/lib/clerk-error"
+import { getAuthErrorMessage } from "@/lib/auth-error"
 
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { Input } from "@/components/ui/input"
@@ -14,7 +14,7 @@ import { LoadingButton } from "@/components/settings/loading-button"
 import { FormGroup } from "@/components/settings/form-group"
 
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"]
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB (Clerk limit)
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
 export function ProfileSection({ user }: { user: UserResource }) {
   const [firstName, setFirstName] = useState(user.firstName ?? "")
@@ -52,7 +52,7 @@ export function ProfileSection({ user }: { user: UserResource }) {
       await user.reload()
       toast.success("Avatar updated")
     } catch (err: unknown) {
-      toast.error(getClerkErrorMessage(err, "Failed to upload avatar"))
+      toast.error(getAuthErrorMessage(err, "Failed to upload avatar"))
     } finally {
       setUploadingAvatar(false)
       // Reset input so re-selecting the same file triggers onChange
@@ -69,7 +69,7 @@ export function ProfileSection({ user }: { user: UserResource }) {
       await user.reload()
       toast.success("Profile updated")
     } catch (err: unknown) {
-      toast.error(getClerkErrorMessage(err, "Failed to update profile"))
+      toast.error(getAuthErrorMessage(err, "Failed to update profile"))
     } finally {
       setSaving(false)
     }

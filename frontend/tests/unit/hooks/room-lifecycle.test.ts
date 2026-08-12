@@ -27,12 +27,6 @@ vi.mock('@/hooks/useRoomSSE', () => ({
   }),
 }))
 
-vi.mock('@clerk/nextjs', () => ({
-  useUser: () => ({ user: { id: 'u1', firstName: 'Test' }, isLoaded: true }),
-  useAuth: () => ({ getToken: async () => 'token' }),
-  useClerk: () => ({ openWaitlist: vi.fn() }),
-}))
-
 const mockInquiryRoomSetting = vi.fn()
 const mockSendMessage = vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' })
 const mockCancelMessage = vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1', message: 'Cancelled' })

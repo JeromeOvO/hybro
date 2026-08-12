@@ -18,7 +18,7 @@ test.describe('Room with local identity', () => {
 
     await expect(page).toHaveURL(/\/room\/test-room-id$/)
     await expect(page).not.toHaveURL(/sign-in/)
-    await expect(page.getByText('Room not found')).toBeVisible()
+    await expect(page.getByText('Room not found', { exact: true })).toBeVisible()
   })
 
   test('room page should not throw JS errors', async ({ page }) => {

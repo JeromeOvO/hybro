@@ -54,7 +54,6 @@ export type {
 } from './response'
 
 export * from './error'
-export * from './health'
 
 // Room message type discriminator (user message, agent response, or A2A task)
 export type MessageType = "user" | "agent" | "task"

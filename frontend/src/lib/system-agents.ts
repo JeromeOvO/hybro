@@ -38,7 +38,3 @@ export function isSummarySystemAgent(agentId: string | undefined): boolean {
 export function isSupervisorClarifyAgent(agentId: string | undefined): boolean {
   return agentId === 'system:clarifier'
 }
-
-export function getSystemAgentName(agentId: string): string | undefined {
-  return SYSTEM_AGENTS[agentId]?.name
-}

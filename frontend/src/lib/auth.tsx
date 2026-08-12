@@ -1,24 +1,7 @@
-import React from "react";
+import type { ReactNode } from "react";
 
-// --- Original auth.ts contents ---
-
-/**
- * Client-side authentication utilities for Clerk integration
- * Safe to import in client components
- */
-
-/**
- * Default token getter for client-side API calls
- * Set by ClerkAuthProvider wrapper
- */
-let defaultGetToken: (() => Promise<string | null>) | null = null
-
-/**
- * Set the default token getter (called automatically by ClerkAuthProvider)
- */
-export function setDefaultGetToken(getToken: () => Promise<string | null>) {
-  defaultGetToken = getToken
-}
+/** Local identity adapter used by the self-hosted frontend. */
+const localGetToken = async () => "mock-jwt-token";
 
 /**
  * Get authorization headers for client-side API requests
@@ -29,12 +12,7 @@ export async function getClientAuthHeaders(
 ): Promise<Record<string, string>> {
   const baseHeaders = { 'Content-Type': 'application/json' }
   
-  const tokenGetter = getToken || defaultGetToken
-  
-  if (!tokenGetter) {
-    console.warn('No token getter available - API call will be made without authentication')
-    return baseHeaders
-  }
+  const tokenGetter = getToken || localGetToken
 
   try {
     const token = await tokenGetter()
@@ -55,9 +33,7 @@ export async function getClientAuthHeaders(
 }
 
 
-// --- Mock Clerk Exports ---
-
-// Mock User Object
+// Local auth adapter exports
 const mockUser = {
   id: "user_local_developer",
   firstName: "Developer",
@@ -91,33 +67,26 @@ export function useUser() {
   };
 }
 
-const mockGetToken = async () => "mock-jwt-token";
-
 export function useAuth() {
   return {
     isLoaded: true,
     isSignedIn: true,
     userId: mockUser.id,
     sessionId: "sess_local_dev",
-    getToken: mockGetToken,
+    getToken: localGetToken,
   };
 }
 
-export function useClerk() {
+export function useAuthClient() {
   return {
     signOut: (_opts?: unknown) => {
       console.log("Mock sign out");
       window.location.href = "/";
     },
     openUserProfile: () => console.log("Mock open user profile"),
-    openWaitlist: () => console.log("Mock open waitlist"),
     openSignIn: () => console.log("Mock open sign in"),
     openSignUp: () => console.log("Mock open sign up"),
   };
-}
-
-export function ClerkProvider({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
 }
 
 export function SignIn(_props: Record<string, unknown>) {
@@ -128,15 +97,11 @@ export function SignUp(_props: Record<string, unknown>) {
   return <div>Sign up disabled in Local Developer Mode</div>;
 }
 
-export function Waitlist(_props: Record<string, unknown>) {
-  return <div>Waitlist disabled in Local Developer Mode</div>;
-}
-
-export function SignedIn({ children }: { children: React.ReactNode }) {
+export function SignedIn({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-export function SignedOut({ children }: { children: React.ReactNode }) {
+export function SignedOut({ children }: { children: ReactNode }) {
   return null;
 }
 
@@ -159,5 +124,4 @@ export function useSession() {
   };
 }
 
-// Ensure the mock user represents the expected properties
-export type ClerkUser = typeof mockUser;
+export type AuthUser = typeof mockUser;

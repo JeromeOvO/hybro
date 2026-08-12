@@ -3,7 +3,6 @@ import { Activity, ChevronRight } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { deduplicateIcons } from "@/lib/agent-icon-utils"
 import { AgentSourceBadge } from "@/components/agent-source-badge"
@@ -136,23 +135,5 @@ export function ConsumerAgentCard({ agent }: ConsumerAgentCardProps) {
 
       </Card>
     </Link>
-  )
-}
-
-export function ConsumerAgentCardSkeleton() {
-  return (
-    <Card className="h-full p-5 flex flex-col items-center gap-3">
-      <Skeleton className="h-[62px] w-[62px] rounded-lg" />
-      <Skeleton className="h-5 w-2/3" />
-      <Skeleton className="h-3 w-1/3" />
-      <div className="w-full space-y-1.5 mt-1">
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-4/5 mx-auto" />
-      </div>
-      <div className="flex gap-2 mt-1">
-        <Skeleton className="h-5 w-16 rounded-md" />
-        <Skeleton className="h-5 w-20 rounded-md" />
-      </div>
-    </Card>
   )
 }

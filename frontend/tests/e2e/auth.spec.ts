@@ -44,7 +44,7 @@ test.describe('Navigation', () => {
     // The sidebar only exists on /* routes — the root is a marketing landing page.
     await page.goto('/chat')
 
-    // Wait for Clerk to finish loading so the sidebar fully renders.
+    // Wait for the local identity adapter so the sidebar fully renders.
     await page.waitForFunction(
       () => {
         const sidebar = document.querySelector('[data-slot="sidebar"]')

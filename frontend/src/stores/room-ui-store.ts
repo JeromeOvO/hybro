@@ -13,8 +13,9 @@ function touchDetailScrollSnapshot(
   messageId: string,
   snapshot: ConversationScrollSnapshot,
 ): Record<string, ConversationScrollSnapshot> {
-  const { [messageId]: _removed, ...rest } = map
-  const next: Record<string, ConversationScrollSnapshot> = { ...rest, [messageId]: snapshot }
+  const next: Record<string, ConversationScrollSnapshot> = { ...map }
+  delete next[messageId]
+  next[messageId] = snapshot
   const keys = Object.keys(next)
   if (keys.length <= MAX_DETAIL_SCROLL_SNAPSHOTS) return next
 
@@ -111,11 +112,6 @@ interface RoomUiState {
   getDetailPaneScroll: (messageId: string) => ConversationScrollSnapshot | undefined
   openAgentDetail: (roomId: RoomId, messageId: string) => void
   closeAgentDetail: (roomId: RoomId) => void
-}
-
-function readLocalStorageBool(key: string, fallback: boolean): boolean {
-  if (typeof window === 'undefined') return fallback
-  try { return localStorage.getItem(key) === 'true' } catch { return fallback }
 }
 
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({

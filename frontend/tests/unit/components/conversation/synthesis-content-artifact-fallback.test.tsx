@@ -36,7 +36,7 @@ function textArtifact(id: string): ArtifactData {
 function fileArtifact(id: string): ArtifactData {
   return {
     artifactId: id,
-    parts: [{ kind: 'file', file: { fileId: 'file-1', mimeType: 'image/png' } }],
+    parts: [{ kind: 'file', file: { fileId: 'file-1', mime_type: 'image/png' } }],
   }
 }
 

@@ -9,7 +9,7 @@ import { Loader2 } from 'lucide-react'
  * Redirects unauthenticated users to /sign-in, preserving the current path
  * as redirect_url so they land back here after signing in.
  *
- * Renders a loading spinner while Clerk is initializing, then either
+ * Renders a loading spinner while the auth adapter initializes, then either
  * renders children (authenticated) or redirects (unauthenticated).
  */
 export function RequireAuth({ children }: { children: React.ReactNode }) {

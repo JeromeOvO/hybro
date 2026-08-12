@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from "react"
 import { UserPlus, LogOut, Settings, Sun, Moon, Monitor } from "lucide-react"
-import { useUser, useClerk } from "@/lib/auth"
+import { useRouter } from "next/navigation"
+import { useUser, useAuthClient } from "@/lib/auth"
 import { useTheme } from "next-themes"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { isWaitlistEnabled } from "@/lib/utils"
 import { SIDEBAR_ICON_BUTTON, SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { useSettingsDialog } from "@/components/settings/settings-dialog-provider"
@@ -82,8 +82,9 @@ function UserDropdownContent({ children }: { children: React.ReactNode }) {
 }
 
 export function NavUser() {
+  const router = useRouter()
   const { user, isLoaded } = useUser()
-  const { openWaitlist, signOut } = useClerk()
+  const { signOut } = useAuthClient()
   const { setOpenMobile } = useSidebar()
   const { openSettings } = useSettingsDialog()
   const { theme, setTheme } = useTheme()
@@ -112,16 +113,12 @@ export function NavUser() {
     )
   }
 
-  // Show sign in / waitlist entry if user is not logged in
+  // Show the sign-in entry if the user is not logged in.
   if (!user) {
-    const guestActionLabel = isWaitlistEnabled() ? "Join Waitlist" : "Sign in"
+    const guestActionLabel = "Sign in"
 
     const handleGuestAction = () => {
-      if (isWaitlistEnabled()) {
-        openWaitlist()
-      } else {
-        window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`
-      }
+      router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.pathname + window.location.search)}`)
     }
 
     return (

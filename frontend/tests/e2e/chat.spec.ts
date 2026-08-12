@@ -87,8 +87,8 @@ test.describe('Theme Toggle', () => {
     // ThemeToggle renders in two places depending on auth state:
     //   - Unauthenticated: small button in the sidebar footer (always visible)
     //   - Authenticated: inside the user dropdown menu (must be opened first)
-    // Wait for Clerk to finish loading either way.
-    const clerkLoaded = await page.waitForFunction(
+    // Wait for the local identity adapter to finish rendering the sidebar.
+    const authReady = await page.waitForFunction(
       () => {
         const sidebar = document.querySelector('[data-slot="sidebar"]')
         if (!sidebar) return false
@@ -98,8 +98,8 @@ test.describe('Theme Toggle', () => {
       { timeout: 15000 },
     ).then(() => true).catch(() => false)
 
-    if (!clerkLoaded) {
-      test.fail(true, 'Clerk did not hydrate within 15s — theme toggle requires Clerk test keys to be configured')
+    if (!authReady) {
+      test.fail(true, 'Local identity did not render within 15s')
       return
     }
 
