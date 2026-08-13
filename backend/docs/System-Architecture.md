@@ -126,7 +126,10 @@ Examples:
   It receives already-queried timeline pages and uses narrow, room-scoped file
   metadata and HITL readers to produce safe public messages without mutating
   repository models; request validation, cursor handling, and queries remain in
-  the compatibility runtime.
+  the compatibility runtime. Room deletion orchestration is owned by
+  `room.deletion.RoomDeletionService`, which preserves the compatibility response
+  contract while coordinating owner validation, file write draining, phased
+  cleanup, Context Memory cleanup, and final deletion through narrow ports.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -143,7 +146,7 @@ Examples:
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, `room.agent_message_preparation`,
+`room.compat.runtime`, `room.agent_message_preparation`, `room.deletion`,
 `room.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
 and
 `dal.runtime_store` objects into focused execution ports. Files under
@@ -1129,7 +1132,9 @@ module-scoped repositories built from `MongoDAL`. Adapters:
 - `dal.index_registry`: startup index registration across modules.
 
 `room_files` owns file metadata, content, references, download authorization,
-artifact materialization, recovery, and room-deletion coordination. MongoDB
+artifact materialization, file-deletion fencing, storage lifecycle, and recovery.
+Room-level deletion coordination belongs to `room.deletion`; it drives the
+`room_files` deletion lifecycle through a narrow port. MongoDB
 stores metadata while `LocalFileContentStore` stores bytes beneath
 `HYBRO_FILE_DIR` (or the platform user-data directory). Other modules consume
 the `FileContentStore`/`FileStorage` contracts and do not construct filesystem

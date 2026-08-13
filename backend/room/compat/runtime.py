@@ -100,6 +100,7 @@ from room.compat.unbound import (
     UNBOUND_RUNTIME_STORE,
     UNBOUND_TASK_SERVICE,
 )
+from room.deletion import RoomDeletionService
 from room.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
@@ -185,6 +186,7 @@ class RoomServices:
         self._capability_issue_reader = None
         self._agent_message_preparation = None
         self._timeline_projector: RoomTimelineProjector | None = None
+        self._room_deletion: RoomDeletionService | None = None
 
     @property
     def _cancellation(self):
@@ -297,6 +299,15 @@ class RoomServices:
 
     def bind_timeline_projector(self, projector: RoomTimelineProjector) -> None:
         self._timeline_projector = projector
+
+    def bind_room_deletion(self, service: RoomDeletionService) -> None:
+        self._room_deletion = service
+
+    def _require_room_deletion(self) -> RoomDeletionService:
+        service = getattr(self, "_room_deletion", None)
+        if service is None:
+            raise RuntimeError("RoomServices room deletion service has not been bound")
+        return service
 
     def _require_timeline_projector(self) -> RoomTimelineProjector:
         projector = getattr(self, "_timeline_projector", None)
@@ -1087,146 +1098,7 @@ class RoomServices:
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
-        facade = self._require_facade()
-        if request.room_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        actual_owner_id = await facade.get_room_owner(room_id)
-        if actual_owner_id is None:
-            return self._room_error_response(
-                room_id=room_id,
-                error="Room not found",
-                status_code=404,
-            )
-        requested_owner_id = (
-            request.requesting_user_id or request.room_owner_id or actual_owner_id
-        )
-        if requested_owner_id != actual_owner_id:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Forbidden",
-                status_code=403,
-            )
-        if getattr(self, "_room_files", None) is None:
-            success = await facade.delete_room(room_id, actual_owner_id)
-            if success:
-                await self._cleanup_context_memory_for_room(room_id)
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=bool(success),
-                error=None if success else "Failed to delete room",
-                status_code=200 if success else 500,
-            )
-        deletion_id = await self.room_files.begin_room_deletion(
-            room_id, actual_owner_id
-        )
-        if deletion_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Room deletion could not be started",
-                status_code=409,
-            )
-        if not await self.room_files.wait_for_room_writes(room_id):
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Room still has active writes",
-                status_code=409,
-            )
-        await self.room_files.set_deletion_phase(room_id, deletion_id, "cleaning")
-        cleanup_ok = await self._cleanup_context_memory_for_room(room_id)
-        owned_cleanup_ok = await self._delete_room_owned_data(
-            room_id, deletion_id=deletion_id
-        )
-        if not cleanup_ok or not owned_cleanup_ok:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Room cleanup is incomplete and will be retried",
-                status_code=500,
-            )
-        await self.room_files.set_deletion_phase(room_id, deletion_id, "finalizing")
-        success = await facade.delete_room(room_id, actual_owner_id)
-        if not success:
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=False,
-                error="Failed to finalize room deletion",
-                status_code=500,
-            )
-        return RoomCenterRoomSettingResponse(
-            room_id=room_id, room=None, success=True, error=None, status_code=200
-        )
-
-    async def _cleanup_context_memory_for_room(self, room_id: str) -> bool:
-        # Accepted room-deletion cleanup; startup binds the ContextMemory
-        # protocol surface and this compatibility owner never imports the
-        # concrete facade.
-        if self._room_memory_cleanup is None:
-            logger.warning(
-                "Context & Memory cleanup skipped for room %s; manager not bound",
-                room_id,
-            )
-            return False
-        try:
-            ok = await self._room_memory_cleanup.delete_room_memory(room_id)
-            if not ok:
-                logger.warning(
-                    "Context & Memory cleanup reported failure for room %s",
-                    room_id,
-                )
-            return bool(ok)
-        except Exception:
-            logger.warning(
-                "Context & Memory cleanup failed for room %s",
-                room_id,
-                exc_info=True,
-            )
-            return False
-
-    async def _delete_room_owned_data(self, room_id: str, *, deletion_id: str) -> bool:
-        ok = True
-        try:
-            await self.room_files.delete_for_room(room_id, deletion_id=deletion_id)
-            if not await self.room_files.delete_room_state(room_id):
-                ok = False
-        except Exception:
-            ok = False
-            logger.warning(
-                "Room file cleanup failed for room %s; recovery will retry",
-                room_id,
-                exc_info=True,
-            )
-
-        try:
-            facade = self._facade
-            if facade is not None and hasattr(facade, "cleanup_room_owned_data"):
-                await facade.cleanup_room_owned_data(room_id)
-            elif facade is not None and hasattr(facade, "delete_room_owned_messages"):
-                await facade.delete_room_owned_messages(room_id)
-        except Exception:
-            ok = False
-            logger.warning(
-                "Room quotes cleanup failed for room %s",
-                room_id,
-                exc_info=True,
-            )
-        return ok
+        return await self._require_room_deletion().delete_room_by_room_id(request)
 
     # --- Attachment resolution helpers ---
 

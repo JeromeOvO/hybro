@@ -26,6 +26,7 @@ from common.dto import (
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from room.compat.runtime import RoomServices
+from room.deletion import RoomDeletionService
 from room.idempotency import IdempotencyConflictError, UserMessagePersistenceError
 
 
@@ -190,9 +191,12 @@ async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
     facade.delete_room.return_value = True
 
     svc.bind_facade(facade)
-    svc.bind_context_memory(
-        room_memory_cleanup=SimpleNamespace(
-            delete_room_memory=AsyncMock(return_value=True)
+    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
+    svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
+    svc.bind_room_deletion(
+        RoomDeletionService(
+            room_lifecycle=facade,
+            memory_cleanup=memory_cleanup,
         )
     )
     svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
@@ -1084,6 +1088,12 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     svc.bind_facade(facade)
     memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
     svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
+    svc.bind_room_deletion(
+        RoomDeletionService(
+            room_lifecycle=facade,
+            memory_cleanup=memory_cleanup,
+        )
+    )
 
     response = await svc.delete_room_by_room_id(
         RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="intruder")
@@ -1108,9 +1118,12 @@ async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails
     facade.get_room_owner.return_value = "owner"
     facade.delete_room.return_value = True
     svc.bind_facade(facade)
-    svc.bind_context_memory(
-        room_memory_cleanup=SimpleNamespace(
-            delete_room_memory=AsyncMock(return_value=False)
+    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=False))
+    svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
+    svc.bind_room_deletion(
+        RoomDeletionService(
+            room_lifecycle=facade,
+            memory_cleanup=memory_cleanup,
         )
     )
 

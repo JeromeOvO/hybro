@@ -417,6 +417,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_runtime,
                 room_services,
             )
+            from room.deletion import RoomDeletionService
             from room.route_adapter import RoomRouteAdapter
             from room.timeline_projection import RoomTimelineProjector
 
@@ -1220,6 +1221,22 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     summary_model="context_memory_json_model",
                 ),
             )
+            room_deletion = RoomDeletionService(
+                room_lifecycle=SimpleNamespace(
+                    get_room_owner=_room_facade.get_room_owner,
+                    cleanup_room_owned_data=_room_facade.cleanup_room_owned_data,
+                    delete_room=_room_facade.delete_room,
+                ),
+                file_lifecycle=SimpleNamespace(
+                    begin_room_deletion=file_storage.begin_room_deletion,
+                    wait_for_room_writes=file_storage.wait_for_room_writes,
+                    set_deletion_phase=file_storage.set_deletion_phase,
+                    delete_for_room=file_storage.delete_for_room,
+                    delete_room_state=file_storage.delete_room_state,
+                ),
+                memory_cleanup=context_memory_facade,
+            )
+            room_runtime.bind_room_deletion(room_deletion)
             agent_message_preparation = AgentMessagePreparationService(
                 agent_url_reader=SimpleNamespace(
                     get_agent_url_by_agent_id=(
