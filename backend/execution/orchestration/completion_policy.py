@@ -131,21 +131,6 @@ def _validate_completion_gate(
         and failure.recoverable
         and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
     ]
-    if blocking_failures:
-        import logging
-
-        _logger = logging.getLogger(__name__)
-        for bf in blocking_failures:
-            _logger.warning(
-                "completion_gate_blocking_failure run_id=%s failure_id=%s "
-                "source=%s error_code=%s fingerprint=%s agent_message_id=%s",
-                state.run_id,
-                bf.failure_id,
-                bf.source,
-                bf.error_code,
-                bf.fingerprint,
-                getattr(bf, "agent_message_id", None),
-            )
     checks = (
         (
             any(
