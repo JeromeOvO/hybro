@@ -31,28 +31,38 @@ def _build_history_from_task(context: RequestContext) -> list[dict[str, str]]:
     """Build conversation history from the task's message history.
 
     Excludes the latest user message since that's passed separately as the
-    current query.
+    current query.  Places the agent's last status message (e.g. a
+    clarification question) chronologically after prior user messages but
+    before the current query.
     """
     history: list[dict[str, str]] = []
     task = context.current_task
     if task is None:
         return history
 
-    messages_to_process = list(task.history) if task.history else []
-    if task.status and task.status.message is not None:
-        messages_to_process.append(task.status.message)
+    messages = list(task.history) if task.history else []
 
     # The SDK appends the current user message to history before calling
-    # execute, so drop the trailing user message to avoid duplication.
-    if messages_to_process and messages_to_process[-1].role == Role.user:
-        messages_to_process = messages_to_process[:-1]
+    # execute, so drop the trailing user message to avoid duplication
+    # (it's passed separately as the current query).
+    if messages and messages[-1].role == Role.user:
+        messages = messages[:-1]
 
-    for msg in messages_to_process:
+    for msg in messages:
         text = _extract_text_from_message(msg)
         if not text.strip():
             continue
         role = "user" if msg.role == Role.user else "agent"
         history.append({"role": role, "text": text})
+
+    # Append the agent's last status message (the clarification question
+    # from the previous turn) — chronologically it came after the messages
+    # above and before the current user query.
+    if task.status and task.status.message is not None:
+        text = _extract_text_from_message(task.status.message)
+        if text.strip():
+            role = "user" if task.status.message.role == Role.user else "agent"
+            history.append({"role": role, "text": text})
 
     return history
 
