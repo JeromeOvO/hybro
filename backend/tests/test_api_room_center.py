@@ -54,14 +54,32 @@ from models.response import (
 from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 from room.compat.runtime import RoomServices
 from room.route_adapter import RoomRouteAdapter as RoomCenter
+from room.timeline_projection import RoomTimelineProjector
 
 # =============================================================================
 # Room Ownership Verification Tests
 # =============================================================================
 
 
+def _bind_timeline_projector(
+    runtime: RoomServices,
+    *,
+    hitl_reader=None,
+) -> None:
+    if hitl_reader is None:
+        hitl_reader = SimpleNamespace(get_hitl_request=AsyncMock(return_value=None))
+    attachment_reader = SimpleNamespace(get_for_room_file=AsyncMock(return_value=None))
+    runtime.bind_timeline_projector(
+        RoomTimelineProjector(
+            hitl_reader=hitl_reader,
+            attachment_metadata_reader=attachment_reader,
+        )
+    )
+
+
 def _legacy_runtime_with_update_spy() -> RoomServices:
     runtime = RoomServices()
+    _bind_timeline_projector(runtime)
     runtime.update_agent_message_by_message_id = AsyncMock(
         return_value=SimpleNamespace(success=True, error=None)
     )
@@ -1383,6 +1401,7 @@ class TestInquiryRoomMessages:
         )
         runtime = RoomServices()
         runtime.bind_facade(facade)
+        _bind_timeline_projector(runtime)
         center = RoomCenter(room_services=runtime)
 
         response = await inquiry_room_messages(
@@ -1542,47 +1561,46 @@ class TestInquiryRoomMessages:
         )
         runtime = RoomServices()
         runtime.bind_facade(facade)
-        runtime.bind_store(
-            SimpleNamespace(
-                get_hitl_request=AsyncMock(
-                    side_effect=lambda request_id: (
+        hitl_reader = SimpleNamespace(
+            get_hitl_request=AsyncMock(
+                side_effect=lambda request_id: (
+                    {
+                        "request_id": "local-hitl-request",
+                        "room_id": sample_room.room_id,
+                        "source": "agent",
+                        "agent_id": "insurer-agent",
+                        "display_message_id": local_message.message_id,
+                        "continuation_message_id": local_message.message_id,
+                        "prompt": "Choose the approved option",
+                        "prompt_type": "choice",
+                        "choices": ["Approve", "Reject"],
+                        "a2a_task_id": "local-hitl-task",
+                        "a2a_context_id": "local-hitl-context",
+                        "status": "responded",
+                        "user_input": "Approve",
+                    }
+                    if request_id == "local-hitl-request"
+                    else (
                         {
-                            "request_id": "local-hitl-request",
+                            "request_id": "local-supervisor-hitl-request",
                             "room_id": sample_room.room_id,
-                            "source": "agent",
-                            "agent_id": "insurer-agent",
-                            "display_message_id": local_message.message_id,
-                            "continuation_message_id": local_message.message_id,
-                            "prompt": "Choose the approved option",
-                            "prompt_type": "choice",
-                            "choices": ["Approve", "Reject"],
-                            "a2a_task_id": "local-hitl-task",
-                            "a2a_context_id": "local-hitl-context",
+                            "source": "supervisor",
+                            "display_message_id": supervisor_message.message_id,
+                            "prompt": "Which market should be prioritized?",
+                            "prompt_type": "text",
+                            "group_id": "supervisor-group-1",
+                            "group_total": 2,
+                            "group_index": 0,
                             "status": "responded",
-                            "user_input": "Approve",
+                            "user_input": "California",
                         }
-                        if request_id == "local-hitl-request"
-                        else (
-                            {
-                                "request_id": "local-supervisor-hitl-request",
-                                "room_id": sample_room.room_id,
-                                "source": "supervisor",
-                                "display_message_id": supervisor_message.message_id,
-                                "prompt": "Which market should be prioritized?",
-                                "prompt_type": "text",
-                                "group_id": "supervisor-group-1",
-                                "group_total": 2,
-                                "group_index": 0,
-                                "status": "responded",
-                                "user_input": "California",
-                            }
-                            if request_id == "local-supervisor-hitl-request"
-                            else None
-                        )
+                        if request_id == "local-supervisor-hitl-request"
+                        else None
                     )
                 )
             )
         )
+        _bind_timeline_projector(runtime, hitl_reader=hitl_reader)
         center = RoomCenter(room_services=runtime)
 
         response = await inquiry_room_messages(
@@ -1650,25 +1668,24 @@ class TestInquiryRoomMessages:
     ):
         private_sentinel = "PRIVATE_SENTINEL_mismatched_hitl_request"
         runtime = RoomServices()
-        runtime.bind_store(
-            SimpleNamespace(
-                get_hitl_request=AsyncMock(
-                    return_value={
-                        "request_id": "local-hitl-request",
-                        "room_id": "room-1",
-                        "source": "agent",
-                        "agent_id": "agent-1",
-                        "display_message_id": "agent-message-1",
-                        "a2a_task_id": "remote-task",
-                        "a2a_context_id": "remote-context",
-                        "prompt": private_sentinel,
-                        "prompt_type": "choice",
-                        "choices": [private_sentinel],
-                        **request_overrides,
-                    }
-                )
+        hitl_reader = SimpleNamespace(
+            get_hitl_request=AsyncMock(
+                return_value={
+                    "request_id": "local-hitl-request",
+                    "room_id": "room-1",
+                    "source": "agent",
+                    "agent_id": "agent-1",
+                    "display_message_id": "agent-message-1",
+                    "a2a_task_id": "remote-task",
+                    "a2a_context_id": "remote-context",
+                    "prompt": private_sentinel,
+                    "prompt_type": "choice",
+                    "choices": [private_sentinel],
+                    **request_overrides,
+                }
             )
         )
+        _bind_timeline_projector(runtime, hitl_reader=hitl_reader)
         task = Task(
             id="remote-task",
             contextId="remote-context",

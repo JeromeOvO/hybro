@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,6 +21,21 @@ from common.types import (
 from models.request import RoomCenterRoomMessageRequest
 from models.room import MessageContent, RoomAgentMessage
 from room.compat.runtime import RoomServices
+from room.timeline_projection import RoomTimelineProjector
+
+
+def _bind_projector(runtime: RoomServices) -> None:
+    hitl_reader = MagicMock()
+    hitl_reader.get_hitl_request = AsyncMock(return_value=None)
+    attachment_reader = MagicMock()
+    attachment_reader.get_for_room_file = AsyncMock(return_value=None)
+    runtime.bind_timeline_projector(
+        RoomTimelineProjector(
+            hitl_reader=hitl_reader,
+            attachment_metadata_reader=attachment_reader,
+        )
+    )
+
 
 NOW = datetime(2026, 7, 3, tzinfo=UTC)
 
@@ -70,6 +85,7 @@ async def test_room_message_projection_backfills_legacy_terminal_text_as_artifac
         next_position=None,
     )
     runtime.bind_facade(facade)
+    _bind_projector(runtime)
 
     response = await runtime.inquiry_room_messages_by_room_id(
         RoomCenterRoomMessageRequest(room_id="room-1")
@@ -127,6 +143,7 @@ async def test_room_message_projection_drops_inline_file_without_uri() -> None:
         next_position=None,
     )
     runtime.bind_facade(facade)
+    _bind_projector(runtime)
 
     response = await runtime.inquiry_room_messages_by_room_id(
         RoomCenterRoomMessageRequest(room_id="room-1")
