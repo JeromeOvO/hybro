@@ -97,7 +97,7 @@ class TestA2AServiceRecordCall:
         svc = A2AService()
         mock_db = MagicMock()
         mock_db.increment_agent_call_count = AsyncMock()
-        svc.bind_task_db(None, call_counter=mock_db)
+        svc.bind_call_counter(mock_db)
 
         await svc._record_call("agent-001", success=True)
 
@@ -111,7 +111,7 @@ class TestA2AServiceRecordCall:
         svc = A2AService()
         mock_db = MagicMock()
         mock_db.increment_agent_call_count = AsyncMock()
-        svc.bind_task_db(None, call_counter=mock_db)
+        svc.bind_call_counter(mock_db)
 
         await svc._record_call("agent-001", success=False)
 
@@ -125,7 +125,7 @@ class TestA2AServiceRecordCall:
         svc = A2AService()
         mock_db = MagicMock()
         mock_db.increment_agent_call_count = AsyncMock()
-        svc.bind_task_db(None, call_counter=mock_db)
+        svc.bind_call_counter(mock_db)
 
         await svc._record_call(None, success=True)
 
@@ -136,7 +136,7 @@ class TestA2AServiceRecordCall:
         svc = A2AService()
         mock_db = MagicMock()
         mock_db.increment_agent_call_count = AsyncMock()
-        svc.bind_task_db(None, call_counter=mock_db)
+        svc.bind_call_counter(mock_db)
 
         await svc._record_call("", success=True)
 
@@ -149,7 +149,7 @@ class TestA2AServiceRecordCall:
         mock_db.increment_agent_call_count = AsyncMock(
             side_effect=RuntimeError("DB down"),
         )
-        svc.bind_task_db(None, call_counter=mock_db)
+        svc.bind_call_counter(mock_db)
 
         await svc._record_call("agent-001", success=True)
 

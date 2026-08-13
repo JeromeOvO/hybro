@@ -29,11 +29,16 @@ from a2a.types import (
     TextPart,
 )
 
-from a2a_adapter.runtime_service import A2ARuntimeConfig
+from a2a_adapter.runtime_service import A2ARuntimeConfig, A2AService
+from execution.task_tracking import A2ATaskTrackingService
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _bind_task_tracking(service: A2AService, store) -> None:
+    service.bind_task_tracking(A2ATaskTrackingService(store))
 
 
 def _make_agent_card(push_capable: bool = True) -> AgentCard:
@@ -250,7 +255,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
 
         with (
             patch.object(
@@ -293,7 +298,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
 
         with (
             patch.object(
@@ -332,7 +337,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
 
         with (
             patch.object(
@@ -375,7 +380,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
 
         with (
             patch.object(
@@ -414,7 +419,7 @@ class TestSendMessageTrackedAgentWebhookFallback:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
 
         with (
             patch.object(
@@ -489,7 +494,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=True)
         )
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "https://api.example.com")
 
         with (
@@ -537,7 +542,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=True)
         )
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
@@ -583,7 +588,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=False)
         )
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "https://api.example.com")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
@@ -627,7 +632,7 @@ class TestReplyToTaskWebhookFallback:
         mock_db.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
         mock_db.get_agent_by_agent_id = AsyncMock(return_value=None)
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "https://api.example.com")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
@@ -673,7 +678,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=False)
         )
         mock_db.update_task_on_message = AsyncMock()
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
@@ -717,7 +722,7 @@ class TestReplyToTaskWebhookFallback:
             return_value=_make_agent_record(push_capable=False)
         )
         mock_db.update_task_on_message = AsyncMock(return_value=True)
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
@@ -781,7 +786,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=True)
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         with (
@@ -813,7 +818,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=False)
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         with (
@@ -844,7 +849,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=True)
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         converter = AsyncMock(side_effect=RuntimeError("conversion failed"))
@@ -883,7 +888,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=True)
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         converter = AsyncMock(side_effect=RuntimeError("conversion failed"))
@@ -923,7 +928,7 @@ class TestSendMessageTrackedAgentPersistedFlag:
         service = A2AService.__new__(A2AService)
         mock_db = MagicMock()
         mock_db.update_task_on_message = AsyncMock(return_value=True)
-        service.bind_task_db(mock_db)
+        _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
         with (

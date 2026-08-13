@@ -128,7 +128,10 @@ Examples:
   adapters.
 - A2A compatibility-shaped runtime behavior lives in
   `a2a_adapter.runtime_service`. A2A SDK transport/coercion work stays in
-  `a2a_adapter`, while task-tracking persistence lives in Execution ports.
+  `a2a_adapter`, while task-tracking behavior and persistence remain
+  Execution-owned. `container.py` constructs `A2ATaskTrackingService` and injects
+  it through the adapter-owned `A2ATaskTrackingPort`; `a2a_adapter` does not
+  import `execution`, so the package dependency remains one-way.
 
 Execution is intentionally independent from removed-package compatibility
 objects.

@@ -571,6 +571,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.run_queries import RunQueryAdapter
+            from execution.task_tracking import A2ATaskTrackingService
             from models.quote import QuotedSnippet
 
             _execution_repos = create_execution_repositories(mongo=mongo_dal)
@@ -1116,10 +1117,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             a2a_service.bind_runtime_config(
                 A2ARuntimeConfig(webhook_base_url=runtime.settings.webhook_base_url)
             )
-            a2a_service.bind_task_db(
-                a2a_task_tracking_store,
-                call_counter=agent_room_store,
+            a2a_service.bind_task_tracking(
+                A2ATaskTrackingService(a2a_task_tracking_store)
             )
+            a2a_service.bind_call_counter(agent_room_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=task_store,
             )

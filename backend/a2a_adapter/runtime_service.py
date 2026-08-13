@@ -1,7 +1,7 @@
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from a2a_adapter.client_facade import (
@@ -44,7 +44,6 @@ from common.types import (
     MessageRole as Role,
 )
 from common.utils.logger import get_logger
-from execution.task_tracking import A2ATaskTrackingService
 from models.error import A2AServiceError, IllgalParameterError
 from models.response import InsepectionCenterConnectionValidationResponse
 from models.room import RoomAgentMessage
@@ -60,34 +59,76 @@ class A2ARuntimeConfig:
     push_notification_timeout: float = 60.0
 
 
+RecordCall = Callable[[str | None], Awaitable[None]]
+AdapterCall = Callable[..., Awaitable[dict[str, Any]]]
+
+
+class A2ATaskTrackingPort(Protocol):
+    async def create_task_for_tracking(
+        self,
+        current_message: RoomAgentMessage,
+        agent_card: AgentCard,
+        message: Message,
+        *,
+        step_number: int | None = None,
+        total_steps: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def send_message_to_tracked_agent(
+        self,
+        *,
+        agent_card: AgentCard,
+        message: Message,
+        message_id: str,
+        webhook_token: str,
+        context_id: str,
+        room_id: str | None,
+        agent_id: str | None,
+        webhook_base_url: str,
+        push_notification_timeout: float,
+        default_request_timeout: float,
+        accepted_output_modes: Sequence[str] | None,
+        record_success: RecordCall,
+        record_failure: RecordCall,
+        send_message: AdapterCall,
+    ) -> dict[str, Any]: ...
+
+    async def reply_to_task(
+        self,
+        *,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        user_input: str,
+        webhook_base_url: str,
+        push_notification_timeout: float,
+        default_request_timeout: float,
+        send_hitl_reply: AdapterCall,
+    ) -> dict[str, Any]: ...
+
+
 class A2AService:
     def __init__(self):
-        self._task_db = None
-        self._task_tracking = None
-        self._call_counter = None
+        self._task_tracking: A2ATaskTrackingPort | None = None
+        self._call_counter: Any | None = None
         self._runtime_config = A2ARuntimeConfig()
 
     def bind_runtime_config(self, config: A2ARuntimeConfig) -> None:
         self._runtime_config = config
 
-    def bind_task_db(self, task_db: Any, *, call_counter: Any | None = None) -> None:
-        self._task_db = task_db
-        self._task_tracking = A2ATaskTrackingService(task_db)
-        if call_counter is not None:
-            self._call_counter = call_counter
-        elif hasattr(task_db, "increment_agent_call_count"):
-            self._call_counter = task_db
+    def bind_task_tracking(self, task_tracking: A2ATaskTrackingPort) -> None:
+        self._task_tracking = task_tracking
 
-    def _get_task_db(self) -> Any | None:
-        return getattr(self, "_task_db", None)
+    def bind_call_counter(self, call_counter: Any) -> None:
+        self._call_counter = call_counter
 
-    def _require_task_db(self) -> Any:
-        task_db = self._get_task_db()
-        if task_db is None:
+    def _require_task_tracking(self) -> A2ATaskTrackingPort:
+        task_tracking = getattr(self, "_task_tracking", None)
+        if task_tracking is None:
             raise RuntimeError(
-                "A2AService.bind_task_db() not called - startup incomplete"
+                "A2AService.bind_task_tracking() not called - startup incomplete"
             )
-        return task_db
+        return task_tracking
 
     def _get_call_counter(self) -> Any | None:
         return getattr(self, "_call_counter", None)
@@ -212,12 +253,7 @@ class A2AService:
         Returns:
             Dict with message_id, created_at, context_id, webhook_token, step_number, total_steps
         """
-        self._require_task_db()
-        task_tracking = self._task_tracking
-        if task_tracking is None:
-            raise RuntimeError(
-                "A2AService.bind_task_db() not called - startup incomplete"
-            )
+        task_tracking = self._require_task_tracking()
         return await task_tracking.create_task_for_tracking(
             current_message,
             agent_card,
@@ -281,12 +317,8 @@ class A2AService:
             For Task response: {"type": "task", "message_id": "...", "status": "..."}
             For Interactive states: {"type": "task", "status": "input_required", ...}
         """
-        self._require_task_db()
-        if self._task_tracking is None:
-            raise RuntimeError(
-                "A2AService.bind_task_db() not called - startup incomplete"
-            )
-        return await self._task_tracking.send_message_to_tracked_agent(
+        task_tracking = self._require_task_tracking()
+        return await task_tracking.send_message_to_tracked_agent(
             agent_card=agent_card,
             message=message,
             message_id=message_id,
@@ -650,12 +682,8 @@ class A2AService:
         Uses the same task_id and context_id to continue the conversation
         rather than starting a new task.
         """
-        self._require_task_db()
-        if self._task_tracking is None:
-            raise RuntimeError(
-                "A2AService.bind_task_db() not called - startup incomplete"
-            )
-        return await self._task_tracking.reply_to_task(
+        task_tracking = self._require_task_tracking()
+        return await task_tracking.reply_to_task(
             message_id=message_id,
             task_id=task_id,
             context_id=context_id,
