@@ -117,9 +117,11 @@ route -> protocol/facade -> repository/DAL -> external service
 
 Examples:
 
-- Room CRUD, membership, message persistence helpers, and route-shaped room
-  behavior live in `room.compat.runtime`, `room.route_adapter`, and
-  `room.membership_source`.
+- Room CRUD, membership, user-message persistence/preflight, and route-shaped
+  room behavior remain in `room.compat.runtime`, `room.route_adapter`, and
+  `room.membership_source`. Outbound agent-message preparation is owned by
+  `room.agent_message_preparation.AgentMessagePreparationService`; the
+  compatibility runtime keeps only a signature-preserving delegate.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -136,7 +138,8 @@ Examples:
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, Delivery/SSE, room memory, Delivery task notifier, and
+`room.compat.runtime`, `room.agent_message_preparation`, Delivery/SSE, room
+memory, Delivery task notifier, and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not accept broad compatibility-store aggregates. Queue,
 supervisor, dispatch, HITL, cancellation, and webhook resume paths receive only
