@@ -418,6 +418,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_services,
             )
             from room.route_adapter import RoomRouteAdapter
+            from room.timeline_projection import RoomTimelineProjector
 
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
@@ -1182,6 +1183,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             room_runtime.bind_room_files(file_storage)
             room_runtime.bind_attachment_metadata_reader(file_storage)
             room_runtime.bind_attachment_content_reader(file_storage)
+            room_runtime.bind_timeline_projector(
+                RoomTimelineProjector(
+                    hitl_reader=SimpleNamespace(
+                        get_hitl_request=hitl_store.get_hitl_request,
+                    ),
+                    attachment_metadata_reader=SimpleNamespace(
+                        get_for_room_file=file_storage.get_for_room_file,
+                    ),
+                )
+            )
             room_runtime.bind_a2a_inline_file_limits(
                 max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
                 max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,

@@ -121,7 +121,12 @@ Examples:
   room behavior remain in `room.compat.runtime`, `room.route_adapter`, and
   `room.membership_source`. Outbound agent-message preparation is owned by
   `room.agent_message_preparation.AgentMessagePreparationService`; the
-  compatibility runtime keeps only a signature-preserving delegate.
+  compatibility runtime keeps only a signature-preserving delegate. Public room
+  timeline projection is owned by `room.timeline_projection.RoomTimelineProjector`.
+  It receives already-queried timeline pages and uses narrow, room-scoped file
+  metadata and HITL readers to produce safe public messages without mutating
+  repository models; request validation, cursor handling, and queries remain in
+  the compatibility runtime.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -138,8 +143,9 @@ Examples:
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, `room.agent_message_preparation`, Delivery/SSE, room
-memory, Delivery task notifier, and
+`room.compat.runtime`, `room.agent_message_preparation`,
+`room.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
+and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not accept broad compatibility-store aggregates. Queue,
 supervisor, dispatch, HITL, cancellation, and webhook resume paths receive only

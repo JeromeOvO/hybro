@@ -23,6 +23,7 @@ from models.room import (
     UserAttachment,
 )
 from room.compat.runtime import RoomServices
+from room.timeline_projection import RoomTimelineProjector
 
 
 @pytest.fixture
@@ -30,6 +31,23 @@ def room_runtime():
     svc = RoomServices()
     svc._store = MagicMock()
     svc.delivery = MagicMock()
+    attachment_reader = MagicMock()
+    attachment_reader.get_for_room_file = AsyncMock(
+        side_effect=lambda room_id, file_id: {
+            "room_id": room_id,
+            "file_id": file_id,
+            "status": "ready",
+            "content_url": f"/api/v1/files/{file_id}/content",
+        }
+    )
+    hitl_reader = MagicMock()
+    hitl_reader.get_hitl_request = AsyncMock(return_value=None)
+    svc.bind_timeline_projector(
+        RoomTimelineProjector(
+            hitl_reader=hitl_reader,
+            attachment_metadata_reader=attachment_reader,
+        )
+    )
     return svc
 
 
