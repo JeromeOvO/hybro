@@ -369,6 +369,21 @@ class DirectTransport(AgentTransport):
                     status_value = (
                         state_str(task.status.state) if task and task.status else None
                     )
+                    if status_value == CommonTaskState.AUTH_REQUIRED.value:
+                        status_msg = "Authentication required"
+                    else:
+                        status_msg = interactive_status_context.get(
+                            "status_message"
+                        ) or (
+                            self._public_interactive_status_message(
+                                ProcessingContext(
+                                    room_id=room_id,
+                                    current_message=message,
+                                    agent_card=agent.agent_card,
+                                    user_message_id=user_message_id,
+                                )
+                            )
+                        )
                     return ProcessingResult(
                         ProcessingStatus.AWAITING_INPUT,
                         response_text="",
@@ -382,7 +397,7 @@ class DirectTransport(AgentTransport):
                             if task and hasattr(task, "context_id")
                             else task_data.get("contextId")
                         ),
-                        status_message=interactive_status_context.get("status_message"),
+                        status_message=status_msg,
                         interactive_state=status_value,
                         requires_auth=(
                             status_value == CommonTaskState.AUTH_REQUIRED.value
@@ -391,8 +406,8 @@ class DirectTransport(AgentTransport):
                         ),
                         requires_policy=bool(
                             status_value == CommonTaskState.POLICY_REQUIRED.value
-                            if status_value
-                            else False
+                            or (task_data.get("metadata") or {}).get("requires_policy")
+                            or (task_data.get("metadata") or {}).get("policy_required")
                         ),
                     )
                 return ProcessingResult(status, full_response_text)

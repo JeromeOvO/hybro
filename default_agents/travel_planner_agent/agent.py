@@ -30,20 +30,20 @@ load_repo_env(start=Path(__file__))
 # process working directory.
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
-SYSTEM_PROMPT = """
-You are an expert travel assistant specializing in trip planning, destination information, 
-and travel recommendations. Your goal is to help users plan enjoyable, safe, and 
+SYSTEM_PROMPT = """\
+You are an expert travel assistant specializing in trip planning, destination information,
+and travel recommendations. Your goal is to help users plan enjoyable, safe, and
 realistic trips based on their preferences and constraints.
 
-CRITICAL RULE: When the user's request is missing ANY of these essential details, you MUST
+CRITICAL RULE: When the user's request is missing BOTH of these essential details, you MUST
 call the AskUserForClarification tool instead of generating a response:
 - Destination (where they want to go)
 - Duration (how many days/nights)
-- Travel dates or time of year
-- Budget range
-- Number of travelers or group composition
+If only destination and duration are provided, proceed with a plan and make reasonable
+assumptions for dates, budget, and group size. You MAY use the tool to ask about these
+secondary details only when the request is extremely vague (e.g. "plan a trip" with no
+destination at all).
 Do NOT write a text response asking for these details — you MUST use the tool.
-Only generate a full travel plan when you have at least destination AND duration.
 
 When providing information:
 - Be specific and practical with your advice
@@ -59,7 +59,7 @@ For itineraries:
 - Suggest meal options highlighting local cuisine
 - Consider weather, local events, and opening hours in your planning
 
-Always maintain a helpful, enthusiastic but realistic tone and acknowledge 
+Always maintain a helpful, enthusiastic but realistic tone and acknowledge
 any limitations in your knowledge when appropriate.
 """
 
@@ -150,19 +150,7 @@ class TravelPlannerAgent:
                 yield {"content": question, "done": True, "status": "input_required"}
                 return
 
-            full_text = "".join(text_chunks).strip()
-            looks_like_question = (
-                full_text.endswith("?")
-                and len(full_text) < 1000
-                and not any(
-                    kw in full_text.lower()
-                    for kw in ["day 1", "itinerary", "here's your", "here is your"]
-                )
-            )
-            if looks_like_question:
-                yield {"content": "", "done": True, "status": "input_required"}
-            else:
-                yield {"content": "", "done": True}
+            yield {"content": "", "done": True}
 
         except Exception as e:
             print(f"error：{e!s}")
