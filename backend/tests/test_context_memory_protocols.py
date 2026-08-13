@@ -468,21 +468,21 @@ def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
-    from room.compat.runtime import RoomServices
+    from room.deletion import RoomDeletionService
 
-    source = inspect.getsource(RoomServices.delete_room_by_room_id)
+    source = inspect.getsource(RoomDeletionService.delete_room_by_room_id)
 
     assert "room_memories_collection" not in source
     assert "conversation_content_collection" not in source
 
 
 def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
-    from room.compat.runtime import RoomServices
+    from room.deletion import RoomDeletionService
 
-    source = inspect.getsource(RoomServices._cleanup_context_memory_for_room)
+    source = inspect.getsource(RoomDeletionService._cleanup_context_memory_for_room)
 
     assert "Context & Memory cleanup skipped" in source
-    assert "_room_memory_cleanup is None" in source
+    assert "_memory_cleanup is None" in source
 
 
 def test_message_write_flows_do_not_call_context_memory_write_shims():
