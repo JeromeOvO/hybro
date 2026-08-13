@@ -1,9 +1,12 @@
 import ast
+import inspect
 import sys
 import tomllib
 from pathlib import Path
 from typing import get_type_hints
 from unittest.mock import MagicMock
+
+import pytest
 
 from common.protocols import (
     AgentCardResolver,
@@ -102,12 +105,42 @@ def test_a2a_adapter_import_boundary():
     )
 
 
+def test_a2a_task_tracking_port_matches_execution_implementation():
+    from a2a_adapter.runtime_service import A2ATaskTrackingPort
+    from execution.task_tracking import A2ATaskTrackingService
+
+    for method_name in (
+        "create_task_for_tracking",
+        "send_message_to_tracked_agent",
+        "reply_to_task",
+    ):
+        port_signature = inspect.signature(getattr(A2ATaskTrackingPort, method_name))
+        implementation_signature = inspect.signature(
+            getattr(A2ATaskTrackingService, method_name)
+        )
+        port_parameters = [
+            (name, parameter.kind, parameter.default)
+            for name, parameter in port_signature.parameters.items()
+        ]
+        implementation_parameters = [
+            (name, parameter.kind, parameter.default)
+            for name, parameter in implementation_signature.parameters.items()
+        ]
+        assert port_parameters == implementation_parameters
+
+
+def test_a2a_service_requires_injected_task_tracking():
+    from a2a_adapter.runtime_service import A2AService
+
+    with pytest.raises(RuntimeError, match="bind_task_tracking"):
+        A2AService()._require_task_tracking()
+
+
 def test_a2a_runtime_service_import_boundary():
     allowed_roots = set(sys.stdlib_module_names) | {
         "__future__",
         "a2a_adapter",
         "common",
-        "execution",
         "models",
     }
     forbidden_roots = {
@@ -115,6 +148,7 @@ def test_a2a_runtime_service_import_boundary():
         "config",
         "container",
         "database",
+        "execution",
         "infrastructure",
         "main",
         "modules",
