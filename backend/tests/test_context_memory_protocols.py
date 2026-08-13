@@ -424,7 +424,7 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
 
 def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
     from models.memory import ConversationTurn, RoomMemory, TurnRole
-    from room.compat.runtime import RoomServices
+    from room.agent_message_preparation import AgentMessagePreparationService
 
     class FailingAssembly:
         received_memory = None
@@ -436,7 +436,7 @@ def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
             raise RuntimeError("canonical assembly failed")
 
     assembly = FailingAssembly()
-    services = object.__new__(RoomServices)
+    services = object.__new__(AgentMessagePreparationService)
     services._context_assembly = assembly
     room_memory = RoomMemory(
         room_id="room-1",
@@ -462,7 +462,7 @@ def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
         )
 
     assert assembly.received_memory is room_memory
-    source = inspect.getsource(RoomServices.process_agent_message)
+    source = inspect.getsource(AgentMessagePreparationService.process_agent_message)
     assert "build_context_for_agent" not in source
     assert "room_memory_content" not in source
 

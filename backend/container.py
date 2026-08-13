@@ -411,6 +411,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 LocalAgentDiscoveryConfig,
                 LocalAgentService,
             )
+            from room.agent_message_preparation import AgentMessagePreparationService
             from room.compat.runtime import (
                 build_turn_content,
                 room_runtime,
@@ -1208,6 +1209,40 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     summary_model="context_memory_json_model",
                 ),
             )
+            agent_message_preparation = AgentMessagePreparationService(
+                agent_url_reader=SimpleNamespace(
+                    get_agent_url_by_agent_id=(
+                        agent_compat_service.get_agent_url_by_agent_id
+                    ),
+                ),
+                agent_room_reader=SimpleNamespace(
+                    get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
+                    get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                ),
+                user_message_reader=SimpleNamespace(
+                    get_room_user_message_by_message_id=(
+                        message_store.get_room_user_message_by_message_id
+                    ),
+                    get_room_user_messages_by_room_id=(
+                        message_store.get_room_user_messages_by_room_id
+                    ),
+                ),
+                quote_reader=SimpleNamespace(
+                    get_quoted_snippet_by_id=get_quoted_snippet_by_id,
+                ),
+                message_lineage_reader=SimpleNamespace(
+                    get_message=_room_facade.get_message,
+                ),
+                attachment_content_reader=SimpleNamespace(
+                    get_bytes=file_storage.get_bytes,
+                ),
+                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
+                max_encoded_bytes=(
+                    runtime.settings.a2a_inline_message_max_encoded_bytes
+                ),
+                context_assembly=context_memory_facade,
+            )
+            room_runtime.bind_agent_message_preparation(agent_message_preparation)
             execution_room_memory = SimpleNamespace(
                 add_synthesis_to_history=context_memory_facade.add_synthesis_to_history,
                 update_room_summary=context_memory_facade.update_room_summary,

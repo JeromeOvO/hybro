@@ -22,6 +22,7 @@ from common.utils.cancellation import CancellationToken
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
 from models.memory import RoomMemory
+from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
 from models.room import (
     MessageContent,
@@ -29,6 +30,7 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
+from room.agent_message_preparation import AgentMessagePreparationService
 from room.compat.runtime import RoomServices
 
 
@@ -271,7 +273,11 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc._store = SimpleNamespace(
             get_agent_by_agent_id=AsyncMock(
                 return_value=SimpleNamespace(agent_card=agent_card)
-            )
+            ),
+            get_room_by_room_id=AsyncMock(return_value=None),
+            get_room_user_message_by_message_id=AsyncMock(return_value=None),
+            get_room_user_messages_by_room_id=AsyncMock(return_value=[]),
+            get_quoted_snippet_by_id=AsyncMock(return_value=None),
         )
         svc._facade = SimpleNamespace(
             get_message=AsyncMock(return_value=self._user_message_info(attachment))
@@ -280,6 +286,18 @@ class TestProcessAgentMessageAttachmentPreflight:
         content_reader.get_bytes = AsyncMock(return_value=content)
         svc.bind_attachment_content_reader(content_reader)
         svc.bind_a2a_inline_file_limits(max_raw_bytes=1024, max_encoded_bytes=4096)
+        svc.bind_agent_message_preparation(
+            AgentMessagePreparationService(
+                agent_url_reader=svc.agent_service,
+                agent_room_reader=svc._store,
+                user_message_reader=svc._store,
+                quote_reader=svc._store,
+                message_lineage_reader=svc._facade,
+                attachment_content_reader=content_reader,
+                max_raw_bytes=1024,
+                max_encoded_bytes=4096,
+            )
+        )
         return content_reader
 
     async def test_processor_forwards_dispatch_task_into_request(self):
@@ -363,11 +381,15 @@ class TestProcessAgentMessageAttachmentPreflight:
             ),
             content=b"%PDF",
         )
-        svc._build_room_awareness = AsyncMock(return_value=None)
-        svc._build_agent_execution_context_from_memory = MagicMock(
-            side_effect=lambda **kwargs: (
-                f"[Current request]\nUser: {kwargs['current_task']}"
-                "\n\nAGENT_SUFFIX_SENTINEL"
+        svc._agent_message_preparation._build_room_awareness = AsyncMock(
+            return_value=None
+        )
+        svc._agent_message_preparation._build_agent_execution_context_from_memory = (
+            MagicMock(
+                side_effect=lambda **kwargs: (
+                    f"[Current request]\nUser: {kwargs['current_task']}"
+                    "\n\nAGENT_SUFFIX_SENTINEL"
+                )
             )
         )
         message = RoomAgentMessage(
@@ -467,7 +489,7 @@ class TestProcessAgentMessageAttachmentPreflight:
             in text_parts[1].text
         )
         assert all("legacy resource text" not in part.text for part in text_parts)
-        called = svc._build_agent_execution_context_from_memory.call_args.kwargs
+        called = svc._agent_message_preparation._build_agent_execution_context_from_memory.call_args.kwargs
         assert called["current_task"] == dispatch_task
         assert any(
             getattr(part.root, "file", None) is not None
@@ -492,7 +514,9 @@ class TestProcessAgentMessageAttachmentPreflight:
             agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
         )
         svc._facade.get_message = AsyncMock(return_value=None)
-        svc._build_room_awareness = AsyncMock(return_value=None)
+        svc._agent_message_preparation._build_room_awareness = AsyncMock(
+            return_value=None
+        )
         budget = TokenBudgetConfig(
             model_context_window=4000,
             system_prompt=0,
@@ -587,9 +611,11 @@ class TestProcessAgentMessageAttachmentPreflight:
             agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
         )
         svc._facade.get_message = AsyncMock(return_value=None)
-        svc._build_room_awareness = AsyncMock(return_value=None)
-        svc._build_agent_execution_context_from_memory = MagicMock(
-            side_effect=RuntimeError("canonical assembly failed")
+        svc._agent_message_preparation._build_room_awareness = AsyncMock(
+            return_value=None
+        )
+        svc._agent_message_preparation._build_agent_execution_context_from_memory = (
+            MagicMock(side_effect=RuntimeError("canonical assembly failed"))
         )
         dispatch_task = (
             "dispatch task text sentinel\n"
@@ -655,7 +681,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert combined_text.count(dispatch_task) == 1
         for _, resource_text in resources:
             assert combined_text.count(resource_text) == 1
-        called = svc._build_agent_execution_context_from_memory.call_args.kwargs
+        called = svc._agent_message_preparation._build_agent_execution_context_from_memory.call_args.kwargs
         assert called["current_task"] == dispatch_task
 
     async def test_json_artifact_resource_is_compiled_to_data_part(self):
@@ -675,7 +701,9 @@ class TestProcessAgentMessageAttachmentPreflight:
                 default_input_modes=["text/plain", "application/json"],
             ),
         )
-        svc._build_room_awareness = AsyncMock(return_value=None)
+        svc._agent_message_preparation._build_room_awareness = AsyncMock(
+            return_value=None
+        )
         message = RoomAgentMessage(
             room_id="room-1",
             message_id="agent-msg-json",
@@ -718,6 +746,56 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert len(data_parts) == 1
         assert data_parts[0].data["requested_coverage"]["currency"] == "GBP"
         assert data_parts[0].metadata["ref_id"] == ("broker-msg:artifact_id:submission")
+
+    async def test_quote_id_uses_explicit_quote_reader(self):
+        svc = RoomServices()
+        attachment = UserAttachment(
+            file_id="unused",
+            s3_key="uploads/r/unused/file.txt",
+            mime_type="text/plain",
+            file_name="file.txt",
+            size_bytes=1,
+        )
+        self._bind_runtime_dependencies(
+            svc,
+            attachment=attachment,
+            agent_card=SimpleNamespace(default_input_modes=["text/plain"]),
+        )
+        user_message = RoomUserMessage(
+            room_id="room-1",
+            message_id="user-quote",
+            message_content=MessageContent(message_text="follow up"),
+            quote_id="quote-1",
+        )
+        snippet = QuotedSnippet(
+            quote_id="quote-1",
+            room_id="room-1",
+            created_by_user_id="user-1",
+            text="persisted quote text",
+            source_message_id="agent-source",
+            source_kind="agent",
+            sender_display_name="Source Agent",
+        )
+        user_message_reader = SimpleNamespace(
+            get_room_user_message_by_message_id=AsyncMock(return_value=user_message),
+            get_room_user_messages_by_room_id=AsyncMock(return_value=[]),
+        )
+        quote_reader = SimpleNamespace(
+            get_quoted_snippet_by_id=AsyncMock(return_value=snippet),
+        )
+        svc._agent_message_preparation._user_message_reader = user_message_reader
+        svc._agent_message_preparation._quote_reader = quote_reader
+        message = self._message(related_message_id="user-quote")
+
+        result = await svc.process_agent_message(
+            self._request(message),
+            orchestration_user_message_id="user-quote",
+        )
+
+        assert result.success is True
+        assert "persisted quote text" in result.a2a_message.parts[0].root.text
+        quote_reader.get_quoted_snippet_by_id.assert_awaited_once_with("quote-1")
+        assert not hasattr(user_message_reader, "get_quoted_snippet_by_id")
 
     async def test_compatible_pdf_attachment_appends_inline_bytes(self):
         svc = RoomServices()
