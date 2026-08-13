@@ -124,6 +124,28 @@ def _validate_completion_gate(
     state: OrchestrationRunState,
     evidence: CompletionEvidence | None,
 ) -> None:
+    blocking_failures = [
+        failure
+        for failure in state.open_failures
+        if failure.status == "open"
+        and failure.recoverable
+        and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
+    ]
+    if blocking_failures:
+        import logging
+
+        _logger = logging.getLogger(__name__)
+        for bf in blocking_failures:
+            _logger.warning(
+                "completion_gate_blocking_failure run_id=%s failure_id=%s "
+                "source=%s error_code=%s fingerprint=%s agent_message_id=%s",
+                state.run_id,
+                bf.failure_id,
+                bf.source,
+                bf.error_code,
+                bf.fingerprint,
+                getattr(bf, "agent_message_id", None),
+            )
     checks = (
         (
             any(
@@ -147,12 +169,7 @@ def _validate_completion_gate(
             "complete rejected by validated blocker",
         ),
         (
-            any(
-                failure.status == "open"
-                and failure.recoverable
-                and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
-                for failure in state.open_failures
-            ),
+            bool(blocking_failures),
             "complete rejected by recoverable failure",
         ),
     )

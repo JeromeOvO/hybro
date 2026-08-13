@@ -190,6 +190,32 @@ def _input_required_failure(result: AgentResultRead) -> OpenFailureRecord:
     )
 
 
+def _resolve_agent_input_required_observations(
+    state: OrchestrationRunState,
+    agent_message_id: str,
+) -> None:
+    """Resolve blockers and unknowns tied to an agent_input_required that has completed."""
+    evidence_refs = {
+        agent_message_id,
+        f"{agent_message_id}:awaiting_input",
+    }
+    for blocker in state.blockers:
+        if (
+            blocker.status == "open"
+            and blocker.key.endswith(":agent_input_required")
+            and evidence_refs & set(blocker.evidence_refs)
+        ):
+            blocker.status = "resolved"
+    state.unknowns = [
+        u
+        for u in state.unknowns
+        if not (
+            u.key.endswith(":agent_input_required")
+            and u.source_agent_message_id == agent_message_id
+        )
+    ]
+
+
 def canonical_artifact_key(
     agent_message_id: str,
     index: int,
@@ -603,29 +629,43 @@ class AgentResultIngestor:
                 existing_failure.updated_at = utcnow()
             return True
         elif result.status == "completed":
-            changed = False
-            for failure in _matching_open_failures_for_completed_result(
-                state.open_failures,
-                result,
-                matched_intent,
-                state.dispatch_intents,
-            ):
-                failure.status = "resolved"
-                failure.resolved_by_agent_message_id = result.agent_message_id
-                failure.updated_at = utcnow()
-                changed = True
-                logger.info(
-                    "orchestration_recovery_resolved",
-                    extra={
-                        "run_id": state.run_id,
-                        "failure_id": failure.failure_id,
-                        "dispatch_intent_id": failure.dispatch_intent_id,
-                        "resolved_by_agent_message_id": result.agent_message_id,
-                        "error_code": failure.error_code,
-                    },
-                )
-            return changed
+            return AgentResultIngestor._resolve_completed_failures(
+                state, result, matched_intent
+            )
         return False
+
+    @staticmethod
+    def _resolve_completed_failures(
+        state: OrchestrationRunState,
+        result: AgentResultRead,
+        matched_intent: DispatchIntent | None,
+    ) -> bool:
+        changed = False
+        resolved_error_codes: set[str] = set()
+        for failure in _matching_open_failures_for_completed_result(
+            state.open_failures,
+            result,
+            matched_intent,
+            state.dispatch_intents,
+        ):
+            failure.status = "resolved"
+            failure.resolved_by_agent_message_id = result.agent_message_id
+            failure.updated_at = utcnow()
+            changed = True
+            resolved_error_codes.add(failure.error_code)
+            logger.info(
+                "orchestration_recovery_resolved",
+                extra={
+                    "run_id": state.run_id,
+                    "failure_id": failure.failure_id,
+                    "dispatch_intent_id": failure.dispatch_intent_id,
+                    "resolved_by_agent_message_id": result.agent_message_id,
+                    "error_code": failure.error_code,
+                },
+            )
+        if "agent_input_required" in resolved_error_codes:
+            _resolve_agent_input_required_observations(state, result.agent_message_id)
+        return changed
 
     @staticmethod
     def _merge_fact(
