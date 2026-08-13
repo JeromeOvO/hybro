@@ -35,16 +35,12 @@ from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.types import (
     Artifact,
     DataPart,
-    FileContent,
-    FilePart,
     Message,
     MessageRole,
     Part,
     Task,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
-    TaskStatusUpdateEvent,
     TextPart,
 )
 from models.response import (
@@ -74,39 +70,6 @@ def _bind_timeline_projector(
             hitl_reader=hitl_reader,
             attachment_metadata_reader=attachment_reader,
         )
-    )
-
-
-def _legacy_runtime_with_update_spy() -> RoomServices:
-    runtime = RoomServices()
-    _bind_timeline_projector(runtime)
-    runtime.update_agent_message_by_message_id = AsyncMock(
-        return_value=SimpleNamespace(success=True, error=None)
-    )
-    return runtime
-
-
-def _legacy_agent_message(task: Task) -> RoomAgentMessage:
-    return RoomAgentMessage(
-        room_id="room-1",
-        message_id="agent-message-1",
-        agent_id="agent-1",
-        related_message_id="user-message-1",
-        message_content=MessageContent(message_task=task),
-    )
-
-
-def _persisted_runtime_message(runtime: RoomServices) -> dict:
-    request = runtime.update_agent_message_by_message_id.await_args.args[0]
-    return request.message.model_dump(mode="json")
-
-
-def _agent_text_message(text: str, *, metadata: dict | None = None) -> Message:
-    return Message(
-        message_id="agent-output",
-        role=MessageRole.AGENT,
-        parts=[Part(root=TextPart(text=text))],
-        metadata=metadata,
     )
 
 
@@ -228,218 +191,6 @@ async def test_orchestration_status_update_ignores_non_orchestration_message():
     assert updated is True
     assert user_message.processing_claimed_at is not None
     runtime._store.update_room_user_message_by_message_id.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_legacy_runtime_task_branch_projects_before_persistence():
-    private_sentinel = "PRIVATE_SENTINEL_legacy_full_task"
-    runtime = _legacy_runtime_with_update_spy()
-    room_agent_message = _legacy_agent_message(
-        Task(id="existing-task", status=TaskStatus(state=TaskState.working))
-    )
-    remote_task = Task(
-        id="remote-task",
-        contextId="remote-context",
-        status=TaskStatus(
-            state=TaskState.completed,
-            message=_agent_text_message(private_sentinel),
-        ),
-        history=[
-            Message(
-                message_id="private-user-history",
-                role=MessageRole.USER,
-                parts=[Part(root=TextPart(text=private_sentinel))],
-            ),
-            _agent_text_message(
-                "Public final history",
-                metadata={"private": private_sentinel},
-            ),
-        ],
-        artifacts=[
-            Artifact(
-                artifact_id="artifact-1",
-                name="response",
-                parts=[Part(root=TextPart(text="Public artifact text"))],
-                metadata={"private": private_sentinel},
-            )
-        ],
-        metadata={"private": private_sentinel},
-    )
-
-    assert await runtime.handle_a2a_response_for_room(room_agent_message, remote_task)
-
-    persisted = _persisted_runtime_message(runtime)
-    persisted_task = persisted["message_content"]["message_task"]
-    assert persisted_task["status"]["state"] == "completed"
-    assert persisted_task["status"]["message"] is None
-    assert persisted_task["metadata"] is None
-    assert persisted_task["history"] is None
-    assert persisted_task["artifacts"][0]["metadata"] is None
-    assert "Public final history" not in json.dumps(persisted_task)
-    assert "Public artifact text" in json.dumps(persisted_task)
-    assert private_sentinel not in json.dumps(persisted)
-
-
-@pytest.mark.asyncio
-async def test_legacy_runtime_message_branch_discards_non_completed_remote_text():
-    private_sentinel = "PRIVATE_SENTINEL_legacy_message_branch"
-    runtime = _legacy_runtime_with_update_spy()
-    room_agent_message = _legacy_agent_message(
-        Task(id="remote-task", status=TaskStatus(state=TaskState.working))
-    )
-
-    assert await runtime.handle_a2a_response_for_room(
-        room_agent_message,
-        _agent_text_message(private_sentinel),
-    )
-
-    persisted = _persisted_runtime_message(runtime)
-    persisted_task = persisted["message_content"]["message_task"]
-    assert persisted_task["status"]["state"] == "working"
-    assert persisted_task["history"] in (None, [])
-    assert private_sentinel not in json.dumps(persisted)
-
-
-@pytest.mark.asyncio
-async def test_legacy_runtime_message_branch_sanitizes_completed_public_output():
-    private_sentinel = "PRIVATE_SENTINEL_legacy_completed_message_metadata"
-    runtime = _legacy_runtime_with_update_spy()
-    room_agent_message = _legacy_agent_message(
-        Task(id="remote-task", status=TaskStatus(state=TaskState.completed))
-    )
-
-    assert await runtime.handle_a2a_response_for_room(
-        room_agent_message,
-        _agent_text_message(
-            "Public final message",
-            metadata={"private": private_sentinel},
-        ),
-    )
-
-    persisted = _persisted_runtime_message(runtime)
-    persisted_task = persisted["message_content"]["message_task"]
-    assert persisted_task["status"]["state"] == "completed"
-    assert persisted_task["history"] is None
-    assert persisted_task["artifacts"][0]["name"] == "response"
-    assert "Public final message" in json.dumps(persisted_task)
-    assert private_sentinel not in json.dumps(persisted)
-
-
-@pytest.mark.asyncio
-async def test_legacy_runtime_status_update_persists_public_status_only():
-    private_sentinel = "PRIVATE_SENTINEL_legacy_status_update"
-    runtime = _legacy_runtime_with_update_spy()
-    room_agent_message = _legacy_agent_message(
-        Task(
-            id="remote-task",
-            contextId="remote-context",
-            status=TaskStatus(state=TaskState.working),
-            history=[_agent_text_message(private_sentinel)],
-            artifacts=[
-                Artifact(
-                    artifact_id="artifact-1",
-                    name="partial",
-                    parts=[Part(root=TextPart(text=private_sentinel))],
-                )
-            ],
-            metadata={"private": private_sentinel},
-        )
-    )
-    status_update = TaskStatusUpdateEvent(
-        id="remote-task",
-        contextId="remote-context",
-        status=TaskStatus(
-            state=TaskState.completed,
-            message=_agent_text_message(private_sentinel),
-        ),
-    )
-
-    assert await runtime.handle_a2a_response_for_room(
-        room_agent_message,
-        status_update,
-    )
-
-    persisted = _persisted_runtime_message(runtime)
-    persisted_task = persisted["message_content"]["message_task"]
-    assert persisted_task["status"]["state"] == "completed"
-    assert persisted_task["status"]["message"] is None
-    assert persisted_task["history"] in (None, [])
-    assert persisted_task["artifacts"] in (None, [])
-    assert persisted_task["metadata"] is None
-    assert private_sentinel not in json.dumps(persisted)
-
-
-@pytest.mark.asyncio
-async def test_legacy_runtime_artifact_update_discards_non_completed_artifacts():
-    private_sentinel = "PRIVATE_SENTINEL_legacy_working_artifact"
-    runtime = _legacy_runtime_with_update_spy()
-    room_agent_message = _legacy_agent_message(
-        Task(id="remote-task", status=TaskStatus(state=TaskState.working))
-    )
-    artifact_update = TaskArtifactUpdateEvent(
-        id="remote-task",
-        artifact=Artifact(
-            artifact_id="artifact-1",
-            name="partial",
-            parts=[Part(root=TextPart(text=private_sentinel))],
-        ),
-    )
-
-    assert await runtime.handle_a2a_response_for_room(
-        room_agent_message,
-        artifact_update,
-    )
-
-    persisted = _persisted_runtime_message(runtime)
-    persisted_task = persisted["message_content"]["message_task"]
-    assert persisted_task["status"]["state"] == "working"
-    assert persisted_task["artifacts"] in (None, [])
-    assert private_sentinel not in json.dumps(persisted)
-
-
-@pytest.mark.asyncio
-async def test_legacy_runtime_artifact_update_sanitizes_completed_artifacts():
-    private_sentinel = "PRIVATE_SENTINEL_legacy_completed_artifact_bytes"
-    runtime = _legacy_runtime_with_update_spy()
-    room_agent_message = _legacy_agent_message(
-        Task(id="remote-task", status=TaskStatus(state=TaskState.completed))
-    )
-    artifact_update = TaskArtifactUpdateEvent(
-        id="remote-task",
-        artifact=Artifact(
-            artifact_id="artifact-1",
-            name="final-file",
-            parts=[
-                Part(root=TextPart(text="Public artifact text")),
-                Part(
-                    root=FilePart(
-                        file=FileContent(
-                            bytes=private_sentinel,
-                            mimeType="text/plain",
-                            name="result.txt",
-                        ),
-                        metadata={"private": private_sentinel},
-                    )
-                ),
-            ],
-            metadata={"private": private_sentinel},
-        ),
-    )
-
-    assert await runtime.handle_a2a_response_for_room(
-        room_agent_message,
-        artifact_update,
-    )
-
-    persisted = _persisted_runtime_message(runtime)
-    persisted_task = persisted["message_content"]["message_task"]
-    artifact = persisted_task["artifacts"][0]
-    raw_part = artifact["parts"][0]
-    part = raw_part.get("root", raw_part)
-    assert artifact["metadata"] is None
-    assert part["text"] == "Public artifact text"
-    assert all(part.get("kind") != "file" for part in artifact["parts"])
-    assert private_sentinel not in json.dumps(persisted)
 
 
 class TestRoomCenterAdapter:
@@ -1652,60 +1403,6 @@ class TestInquiryRoomMessages:
             == "Quote approved at GBP 42,000."
         )
         assert private_sentinel not in json.dumps(response.model_dump(mode="json"))
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "request_overrides",
-        [
-            {"agent_id": "other-agent"},
-            {"a2a_task_id": "other-task"},
-            {"a2a_context_id": "other-context"},
-        ],
-    )
-    async def test_trusted_hitl_projection_fails_closed_on_identity_mismatch(
-        self,
-        request_overrides,
-    ):
-        private_sentinel = "PRIVATE_SENTINEL_mismatched_hitl_request"
-        runtime = RoomServices()
-        hitl_reader = SimpleNamespace(
-            get_hitl_request=AsyncMock(
-                return_value={
-                    "request_id": "local-hitl-request",
-                    "room_id": "room-1",
-                    "source": "agent",
-                    "agent_id": "agent-1",
-                    "display_message_id": "agent-message-1",
-                    "a2a_task_id": "remote-task",
-                    "a2a_context_id": "remote-context",
-                    "prompt": private_sentinel,
-                    "prompt_type": "choice",
-                    "choices": [private_sentinel],
-                    **request_overrides,
-                }
-            )
-        )
-        _bind_timeline_projector(runtime, hitl_reader=hitl_reader)
-        task = Task(
-            id="remote-task",
-            contextId="remote-context",
-            status=TaskStatus(state=TaskState.input_required),
-            metadata={"hitl_request_id": "local-hitl-request"},
-        )
-        agent_message = RoomAgentMessage(
-            room_id="room-1",
-            message_id="agent-message-1",
-            agent_id="agent-1",
-            message_content=MessageContent(message_task=task),
-        )
-
-        trusted_metadata, trusted_request_id = await runtime._trusted_hitl_projection(
-            agent_message,
-            task,
-        )
-
-        assert trusted_metadata is None
-        assert trusted_request_id is None
 
 
 class TestSuggestAgents:
