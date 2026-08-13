@@ -52,7 +52,7 @@ If a container fails, show me its \`./scripts/hybro logs\` output and fix it.`
 
 const QUICK_START_COMMANDS = {
   script: "curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh",
-  docker: "git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro start",
+  cli: "git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro start",
   ai: AI_SETUP_PROMPT,
 }
 
@@ -60,7 +60,7 @@ const QUICK_START_COMMANDS = {
 const QUICK_START_TABS = [
   { key: "script", label: "curl" },
   { key: "ai", label: "Agentic" },
-  { key: "docker", label: "Docker" },
+  { key: "cli", label: "CLI" },
 ] as const
 
 type QuickStartTab = (typeof QUICK_START_TABS)[number]["key"]
