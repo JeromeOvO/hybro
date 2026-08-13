@@ -359,6 +359,46 @@ class DirectTransport(AgentTransport):
                         failure_message,
                         status_message=failure_code,
                     )
+                if status == ProcessingStatus.AWAITING_INPUT:
+                    task = get_task(message)
+                    task_data = (
+                        public_persisted_task_data(Task.model_validate(task))
+                        if task and hasattr(task, "model_dump")
+                        else {}
+                    )
+                    status_value = (
+                        state_str(task.status.state)
+                        if task and task.status
+                        else None
+                    )
+                    return ProcessingResult(
+                        ProcessingStatus.AWAITING_INPUT,
+                        response_text="",
+                        message_id=message.message_id,
+                        a2a_task_id=(
+                            task_data.get("id")
+                            or (task.id if task and hasattr(task, "id") else None)
+                        ),
+                        a2a_context_id=(
+                            task.context_id
+                            if task and hasattr(task, "context_id")
+                            else task_data.get("contextId")
+                        ),
+                        status_message=interactive_status_context.get(
+                            "status_message"
+                        ),
+                        interactive_state=status_value,
+                        requires_auth=(
+                            status_value == CommonTaskState.AUTH_REQUIRED.value
+                            if status_value
+                            else False
+                        ),
+                        requires_policy=bool(
+                            status_value == CommonTaskState.POLICY_REQUIRED.value
+                            if status_value
+                            else False
+                        ),
+                    )
                 return ProcessingResult(status, full_response_text)
         else:
             (
@@ -1410,7 +1450,7 @@ class DirectTransport(AgentTransport):
                         ctx.current_message, final_st, persist=True
                     )
                     await self._emit_terminal(ctx, final_st)
-                    return ProcessingStatus.SUCCESS, streaming_state.full_response_text
+                    return ProcessingStatus.AWAITING_INPUT, streaming_state.full_response_text
                 else:
                     public_stream_text = self._resolved_public_stream_text(
                         streaming_state

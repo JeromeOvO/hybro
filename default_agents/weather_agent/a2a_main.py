@@ -45,6 +45,7 @@ except ImportError:  # Host run: helper lives in default_agents/
         def load_repo_env(*, start=None):
             load_dotenv()
 
+
 load_repo_env(start=Path(__file__))
 
 # Configuration from environment
@@ -59,39 +60,41 @@ def main():
     weather_agent = create_weather_agent(temperature=0)
 
     # Load the LangChain adapter using a2a-adapter SDK
-    adapter = load_adapter({
-        "adapter": "langchain",
-        "runnable": weather_agent,
-        "input_key": "input",
-        "output_key": "output",
-        "name": "Weather Agent",
-        "description": (
-            "LangChain-powered weather assistant. Ask about current weather "
-            "conditions or forecasts for any city."
-        ),
-        "skills": [
-            {
-                "id": "current_weather",
-                "name": "Get Current Weather",
-                "description": "Get the current weather conditions for any city.",
-                "tags": ["weather", "current", "temperature"],
-                "examples": [
-                    "What's the weather in New York?",
-                    "How's the weather in London?",
-                ],
-            },
-            {
-                "id": "weather_forecast",
-                "name": "Get Weather Forecast",
-                "description": "Get weather forecast for the next few days.",
-                "tags": ["weather", "forecast", "prediction"],
-                "examples": [
-                    "Give me the forecast for Tokyo",
-                    "What's the 5-day forecast for Paris?",
-                ],
-            },
-        ],
-    })
+    adapter = load_adapter(
+        {
+            "adapter": "langchain",
+            "runnable": weather_agent,
+            "input_key": "input",
+            "output_key": "output",
+            "name": "Weather Agent",
+            "description": (
+                "LangChain-powered weather assistant. Ask about current weather "
+                "conditions or forecasts for any city."
+            ),
+            "skills": [
+                {
+                    "id": "current_weather",
+                    "name": "Get Current Weather",
+                    "description": "Get the current weather conditions for any city.",
+                    "tags": ["weather", "current", "temperature"],
+                    "examples": [
+                        "What's the weather in New York?",
+                        "How's the weather in London?",
+                    ],
+                },
+                {
+                    "id": "weather_forecast",
+                    "name": "Get Weather Forecast",
+                    "description": "Get weather forecast for the next few days.",
+                    "tags": ["weather", "forecast", "prediction"],
+                    "examples": [
+                        "Give me the forecast for Tokyo",
+                        "What's the 5-day forecast for Paris?",
+                    ],
+                },
+            ],
+        }
+    )
 
     agent_url = f"http://{SERVER_DOMAIN}:{SERVER_PORT}"
     agent_card = build_agent_card(adapter, url=agent_url)

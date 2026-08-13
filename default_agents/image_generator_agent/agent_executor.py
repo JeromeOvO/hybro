@@ -6,7 +6,6 @@ from a2a.types import (
     FilePart,
     FileWithBytes,
     InternalError,
-    InvalidParamsError,
     Part,
     Task,
     TextPart,
@@ -37,11 +36,11 @@ class ImageGenerationAgentExecutor(AgentExecutor):
             image_key = await loop.run_in_executor(
                 None, self.agent.invoke, query, context.context_id
             )
-            print(f'Generated image key: {image_key}')
+            print(f"Generated image key: {image_key}")
         except Exception as e:
-            print(f'Error invoking agent: {e}')
+            print(f"Error invoking agent: {e}")
             raise ServerError(
-                error=InternalError(message=f'Error invoking agent: {e}')
+                error=InternalError(message=f"Error invoking agent: {e}")
             ) from e
 
         data = self.agent.get_image_data(
@@ -61,7 +60,7 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                 )
             ]
         else:
-            error_msg = (data.error if data else None) or 'Failed to generate image'
+            error_msg = (data.error if data else None) or "Failed to generate image"
             parts = [
                 Part(
                     root=TextPart(text=error_msg),
@@ -71,7 +70,7 @@ class ImageGenerationAgentExecutor(AgentExecutor):
             completed_task(
                 context.task_id,
                 context.context_id,
-                [new_artifact(parts, f'image_{context.task_id}')],
+                [new_artifact(parts, f"image_{context.task_id}")],
                 [context.message],
             )
         )

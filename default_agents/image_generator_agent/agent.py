@@ -31,6 +31,7 @@ except ImportError:  # Host run: helper lives in default_agents/
         def load_repo_env(*, start=None):
             load_dotenv()
 
+
 load_repo_env(start=Path(__file__))
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 # The backend wraps prompts in conversation context like:
 #   [Current request]\nUser: <actual prompt>\n\nYou are Image Generator Agent...
 _CURRENT_REQUEST_PATTERN = re.compile(
-    r'\[Current request\]\s*User:\s*(.+?)(?:\n\nYou are|\Z)',
+    r"\[Current request\]\s*User:\s*(.+?)(?:\n\nYou are|\Z)",
     re.DOTALL,
 )
 
@@ -93,7 +94,7 @@ class Imagedata(BaseModel):
 class ImageGenerationAgent:
     """Agent that generates images based on user prompts."""
 
-    SUPPORTED_CONTENT_TYPES = ['text', 'text/plain', 'image/png']
+    SUPPORTED_CONTENT_TYPES = ["text", "text/plain", "image/png"]
 
     def _extract_clean_prompt(self, query: str) -> str:
         """Extract the actual image request from a backend-wrapped message."""
@@ -101,20 +102,22 @@ class ImageGenerationAgent:
         if match:
             return match.group(1).strip()
         # Fallback: truncate at system instructions if present
-        you_are_idx = query.find('You are')
+        you_are_idx = query.find("You are")
         if you_are_idx > 0:
             cleaned = query[:you_are_idx].strip()
             if cleaned:
-                logger.info('Prompt extracted via fallback (truncated at system instructions)')
+                logger.info(
+                    "Prompt extracted via fallback (truncated at system instructions)"
+                )
                 return cleaned
         # Strip leading "User:" prefix if present
-        if query.lstrip().startswith('User:'):
-            return query.lstrip().removeprefix('User:').strip()
+        if query.lstrip().startswith("User:"):
+            return query.lstrip().removeprefix("User:").strip()
         return query
 
     def extract_artifact_file_id(self, query):
         try:
-            pattern = r'(?:id|artifact-file-id)\s+([0-9a-f]{32})'
+            pattern = r"(?:id|artifact-file-id)\s+([0-9a-f]{32})"
             match = re.search(pattern, query)
 
             if match:
@@ -134,15 +137,15 @@ class ImageGenerationAgent:
             ref_image_data = session_image_data.get(artifact_file_id)
             if ref_image_data is None:
                 logger.warning(
-                    'Reference image %s not found in session %s',
+                    "Reference image %s not found in session %s",
                     artifact_file_id,
                     session_id,
                 )
                 return None
-            logger.info('Found reference image %s in session', artifact_file_id)
+            logger.info("Found reference image %s in session", artifact_file_id)
             return base64.b64decode(ref_image_data.bytes)
         except Exception:
-            logger.exception('Error retrieving reference image')
+            logger.exception("Error retrieving reference image")
             return None
 
     def invoke(self, query, session_id) -> str:
@@ -150,20 +153,18 @@ class ImageGenerationAgent:
         artifact_file_id = self.extract_artifact_file_id(query)
         clean_prompt = self._extract_clean_prompt(query)
 
-        logger.info(f'Generating image for prompt: {clean_prompt[:100]}')
-        print(f'Generating image for prompt: {clean_prompt[:100]}')
+        logger.info(f"Generating image for prompt: {clean_prompt[:100]}")
+        print(f"Generating image for prompt: {clean_prompt[:100]}")
 
         cache = InMemoryCache()
-        ref_image_bytes = self._get_ref_image_bytes(
-            cache, session_id, artifact_file_id
-        )
+        ref_image_bytes = self._get_ref_image_bytes(cache, session_id, artifact_file_id)
 
         image_bytes = _generate_image_bytes(clean_prompt, ref_image_bytes)
 
         data = Imagedata(
-            bytes=base64.b64encode(image_bytes).decode('utf-8'),
-            mime_type='image/png',
-            name='generated_image.png',
+            bytes=base64.b64encode(image_bytes).decode("utf-8"),
+            mime_type="image/png",
+            name="generated_image.png",
             id=uuid4().hex,
         )
         session_data = cache.get(session_id)
@@ -180,8 +181,8 @@ class ImageGenerationAgent:
         session_data = cache.get(session_id)
         try:
             if session_data is None:
-                raise KeyError(f'No session data for {session_id}')
+                raise KeyError(f"No session data for {session_id}")
             return session_data[image_key]
         except (KeyError, TypeError):
-            logger.error('Error generating image')
-            return Imagedata(error='Error generating image, please try again.')
+            logger.error("Error generating image")
+            return Imagedata(error="Error generating image, please try again.")

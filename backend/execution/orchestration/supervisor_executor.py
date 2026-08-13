@@ -490,6 +490,20 @@ class SupervisorExecutor:
         )
 
     @staticmethod
+    def _is_plain_a2a_input_result(result: StepResult) -> bool:
+        """True when an agent returned input-required with valid A2A continuation IDs."""
+        interactive_state = (
+            (result.interactive_state or "").strip().lower().replace("_", "-")
+        )
+        return (
+            interactive_state == "input-required"
+            and bool(result.a2a_task_id)
+            and bool(result.a2a_context_id)
+            and not result.requires_auth
+            and not result.requires_policy
+        )
+
+    @staticmethod
     def _state_run_result(
         *,
         status: RunStatus,
@@ -2506,6 +2520,7 @@ class SupervisorExecutor:
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
                 or result.agent_message_id in follow_up_hitl_message_ids
+                or self._is_plain_a2a_input_result(result)
             ]
             if not self.guardrails_enabled:
                 # Preserve live-dispatch behavior while keeping recovery
@@ -2766,6 +2781,7 @@ class SupervisorExecutor:
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
                 or result.agent_message_id in follow_up_hitl_message_ids
+                or self._is_plain_a2a_input_result(result)
             ]
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT

@@ -39,6 +39,7 @@ except ImportError:  # Host run: helper lives in default_agents/
         def load_repo_env(*, start=None):
             load_dotenv()
 
+
 load_repo_env(start=Path(__file__))
 
 
@@ -97,8 +98,22 @@ def _describe_code(code: Any) -> str:
 
 # 16-point compass, 22.5° per sector starting at north.
 _COMPASS = (
-    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    "N",
+    "NNE",
+    "NE",
+    "ENE",
+    "E",
+    "ESE",
+    "SE",
+    "SSE",
+    "S",
+    "SSW",
+    "SW",
+    "WSW",
+    "W",
+    "WNW",
+    "NW",
+    "NNW",
 )
 
 
@@ -123,12 +138,15 @@ def _geocode(city: str) -> tuple[float, float, str] | None:
         return None
     top = results[0]
     label = ", ".join(
-        part for part in (top.get("name"), top.get("admin1"), top.get("country")) if part
+        part
+        for part in (top.get("name"), top.get("admin1"), top.get("country"))
+        if part
     )
     return top["latitude"], top["longitude"], label or city
 
 
 # ============ Tools ============
+
 
 @tool
 def get_weather(city: str) -> str:
@@ -258,11 +276,11 @@ def get_forecast(city: str, days: int = 3) -> str:
     lows = daily.get("temperature_2m_min") or []
 
     lines = []
-    for i, date in enumerate(dates[:days]):
+    for i, d in enumerate(dates[:days]):
         desc = _describe_code(codes[i] if i < len(codes) else None)
         hi = highs[i] if i < len(highs) else "?"
         lo = lows[i] if i < len(lows) else "?"
-        lines.append(f"{date}: {desc}, high {hi}°C, low {lo}°C")
+        lines.append(f"{d}: {desc}, high {hi}°C, low {lo}°C")
 
     return (
         f"Weather forecast for {label} over the next {len(lines)} day(s):\n"
@@ -291,9 +309,7 @@ def execute_tools(ai_message: AIMessage) -> list[ToolMessage]:
 
         if tool_name in TOOL_MAP:
             result = TOOL_MAP[tool_name].invoke(tool_args)
-            tool_messages.append(
-                ToolMessage(content=str(result), tool_call_id=tool_id)
-            )
+            tool_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id))
         else:
             tool_messages.append(
                 ToolMessage(content=f"Tool {tool_name} not found", tool_call_id=tool_id)
@@ -316,11 +332,14 @@ _LLM_CACHE: dict[tuple[str, float], Any] = {}
 def _get_llm(model: str, temperature: float):
     key = (model, temperature)
     if key not in _LLM_CACHE:
-        _LLM_CACHE[key] = ChatOpenAI(model=model, temperature=temperature).bind_tools(TOOLS)
+        _LLM_CACHE[key] = ChatOpenAI(model=model, temperature=temperature).bind_tools(
+            TOOLS
+        )
     return _LLM_CACHE[key]
 
 
 # ============ System Prompt ============
+
 
 def _system_prompt() -> str:
     """Build the system prompt, grounding the model in today's date."""
@@ -343,6 +362,7 @@ tool returned:
 
 
 # ============ Agent Chain ============
+
 
 class WeatherAgentChain(RunnableSerializable[dict, dict]):
     """
@@ -385,7 +405,11 @@ class WeatherAgentChain(RunnableSerializable[dict, dict]):
             tool_messages = execute_tools(response)
             current_messages.extend(tool_messages)
 
-        return current_messages[-1].content if current_messages else "Unable to process request."
+        return (
+            current_messages[-1].content
+            if current_messages
+            else "Unable to process request."
+        )
 
     async def _arun_agent_loop(self, user_input: str) -> str:
         """Async run the agent loop and return the response content."""
@@ -404,7 +428,11 @@ class WeatherAgentChain(RunnableSerializable[dict, dict]):
             tool_messages = execute_tools(response)
             current_messages.extend(tool_messages)
 
-        return current_messages[-1].content if current_messages else "Unable to process request."
+        return (
+            current_messages[-1].content
+            if current_messages
+            else "Unable to process request."
+        )
 
     def invoke(self, input: dict, config=None) -> dict:
         """Invoke the agent with input. Returns dict with 'output' key."""
@@ -420,6 +448,7 @@ class WeatherAgentChain(RunnableSerializable[dict, dict]):
 
 
 # ============ Agent Creation ============
+
 
 def create_weather_agent(
     temperature: float = 0,
