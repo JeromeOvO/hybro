@@ -22,11 +22,12 @@ except ImportError:  # Host run: helper lives in default_agents/
         def load_repo_env(*, start=None):
             load_dotenv()
 
+
 load_repo_env(start=Path(__file__))
 
 # Resolve config.json relative to this file so it is found regardless of the
 # process working directory.
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 
 class StoryAgent:
@@ -34,7 +35,7 @@ class StoryAgent:
 
     def __init__(self):
         """Construct the agent WITHOUT validating credentials."""
-        
+
         self._model: ChatOpenAI | None = None
 
     def _ensure_model(self) -> ChatOpenAI:
@@ -45,16 +46,16 @@ class StoryAgent:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
 
-        api_key_var = config.get('api_key') or 'OPENAI_API_KEY'
+        api_key_var = config.get("api_key") or "OPENAI_API_KEY"
         api_key = os.getenv(api_key_var)
         if not api_key:
-            raise RuntimeError(f'{api_key_var} environment variable not set.')
+            raise RuntimeError(f"{api_key_var} environment variable not set.")
 
         self._model = ChatOpenAI(
-            model=config.get('model_name') or 'gpt-4o',
-            base_url=config.get('base_url') or None,
-            api_key=api_key,  
-            temperature=0.9, 
+            model=config.get("model_name") or "gpt-4o",
+            base_url=config.get("base_url") or None,
+            api_key=api_key,
+            temperature=0.9,
         )
         return self._model
 
@@ -103,13 +104,13 @@ class StoryAgent:
             # Invoke the model in streaming mode to generate a response.
             async for chunk in model.astream(messages):
                 # Return the text content block.
-                if hasattr(chunk, 'content') and chunk.content:
-                    yield {'content': chunk.content, 'done': False}
-            yield {'content': '', 'done': True}
+                if hasattr(chunk, "content") and chunk.content:
+                    yield {"content": chunk.content, "done": False}
+            yield {"content": "", "done": True}
 
         except Exception as e:
-            print(f'error: {e!s}')
+            print(f"error: {e!s}")
             yield {
-                'content': 'Sorry, an error occurred while processing your request.',
-                'done': True,
+                "content": "Sorry, an error occurred while processing your request.",
+                "done": True,
             }

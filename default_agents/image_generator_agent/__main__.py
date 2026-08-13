@@ -33,6 +33,7 @@ except ImportError:  # Host run: helper lives in default_agents/
         def load_repo_env(*, start=None):
             load_dotenv()
 
+
 load_repo_env(start=Path(__file__))
 
 logging.basicConfig(level=logging.INFO)
@@ -41,34 +42,34 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Entry point for the A2A + OpenAI Image generation agent."""
-    host = os.getenv('SERVER_HOST', '0.0.0.0')
-    port = int(os.getenv('SERVER_PORT', '6002'))
-    server_domain = os.getenv('SERVER_DOMAIN', 'localhost')
+    host = os.getenv("SERVER_HOST", "0.0.0.0")
+    port = int(os.getenv("SERVER_PORT", "6002"))
+    server_domain = os.getenv("SERVER_DOMAIN", "localhost")
 
     try:
         capabilities = AgentCapabilities(streaming=False)
         skill = AgentSkill(
-            id='image_generator',
-            name='Image Generator',
+            id="image_generator",
+            name="Image Generator",
             description=(
-                'Generate stunning, high-quality images on demand and leverage'
-                ' powerful editing capabilities to modify, enhance, or completely'
-                ' transform visuals.'
+                "Generate stunning, high-quality images on demand and leverage"
+                " powerful editing capabilities to modify, enhance, or completely"
+                " transform visuals."
             ),
-            tags=['generate image', 'edit image'],
-            examples=['Generate a photorealistic image of raspberry lemonade'],
+            tags=["generate image", "edit image"],
+            examples=["Generate a photorealistic image of raspberry lemonade"],
         )
 
-        agent_host_url = f'http://{server_domain}:{port}'
+        agent_host_url = f"http://{server_domain}:{port}"
         agent_card = AgentCard(
-            name='Image Generator Agent',
+            name="Image Generator Agent",
             description=(
-                'Generate stunning, high-quality images on demand and leverage'
-                ' powerful editing capabilities to modify, enhance, or completely'
-                ' transform visuals.'
+                "Generate stunning, high-quality images on demand and leverage"
+                " powerful editing capabilities to modify, enhance, or completely"
+                " transform visuals."
             ),
             url=agent_host_url,
-            version='1.0.0',
+            version="1.0.0",
             default_input_modes=ImageGenerationAgent.SUPPORTED_CONTENT_TYPES,
             default_output_modes=ImageGenerationAgent.SUPPORTED_CONTENT_TYPES,
             capabilities=capabilities,
@@ -87,9 +88,9 @@ def main():
         uvicorn.run(server.build(), host=host, port=port)
 
     except Exception as e:
-        logger.error(f'An error occurred during server startup: {e}')
+        logger.error(f"An error occurred during server startup: {e}")
         exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

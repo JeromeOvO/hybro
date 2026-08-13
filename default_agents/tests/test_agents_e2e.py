@@ -55,7 +55,9 @@ def _require_backend() -> None:
         _fail_missing_stack(f"backend not reachable at {BACKEND_URL}: {exc}")
         return
     if resp.status_code != 200:
-        _fail_missing_stack(f"backend unhealthy at {BACKEND_URL}: HTTP {resp.status_code}")
+        _fail_missing_stack(
+            f"backend unhealthy at {BACKEND_URL}: HTTP {resp.status_code}"
+        )
 
 
 def _require_openai() -> None:
@@ -123,7 +125,9 @@ def test_agent_card_available(agent_id: str) -> None:
     agent_url = _agent_url(spec)
     card = _get_card(agent_url)
     if card is None:
-        _fail_missing_stack(f"{agent_id} not reachable at {agent_url}; is the stack running?")
+        _fail_missing_stack(
+            f"{agent_id} not reachable at {agent_url}; is the stack running?"
+        )
     assert card.get("name"), f"{agent_id} card missing name: {card}"
     assert card.get("skills"), f"{agent_id} card missing skills: {card}"
 
@@ -173,13 +177,29 @@ def test_weather_agent_functional() -> None:
         f"weather agent did not complete (state={state!r}): {result}"
     )
 
-    text = " ".join(
-        str(p.get("text", "")) for p in _collect_parts(result) if p.get("kind") == "text"
-    ).strip().lower()
-    assert text, f"weather agent returned no text: {result}"
-    assert any(k in text for k in ("weather", "tokyo", "temperature", "°", "forecast", "rain", "sunny", "cloud")), (
-        f"weather response looks unrelated: {text[:200]}"
+    text = (
+        " ".join(
+            str(p.get("text", ""))
+            for p in _collect_parts(result)
+            if p.get("kind") == "text"
+        )
+        .strip()
+        .lower()
     )
+    assert text, f"weather agent returned no text: {result}"
+    assert any(
+        k in text
+        for k in (
+            "weather",
+            "tokyo",
+            "temperature",
+            "°",
+            "forecast",
+            "rain",
+            "sunny",
+            "cloud",
+        )
+    ), f"weather response looks unrelated: {text[:200]}"
 
 
 def test_image_generator_functional() -> None:
@@ -188,7 +208,9 @@ def test_image_generator_functional() -> None:
     _require_openai()
     agent_url = _agent_url(AGENTS["image_generator_agent"])
     if _get_card(agent_url) is None:
-        _fail_missing_stack("image_generator_agent not reachable; is the stack running?")
+        _fail_missing_stack(
+            "image_generator_agent not reachable; is the stack running?"
+        )
 
     result = _send_message(agent_url, "Generate an image of a red apple", timeout=180)
     file_parts = [p for p in _collect_parts(result) if p.get("kind") == "file"]
@@ -209,7 +231,9 @@ def _assert_completed_text(result: dict, label: str) -> None:
     state = (result.get("status") or {}).get("state")
     assert state == "completed", f"{label} did not complete (state={state!r}): {result}"
     text = " ".join(
-        str(p.get("text", "")) for p in _collect_parts(result) if p.get("kind") == "text"
+        str(p.get("text", ""))
+        for p in _collect_parts(result)
+        if p.get("kind") == "text"
     ).strip()
     assert text, f"{label} returned no text: {result}"
 
@@ -234,5 +258,7 @@ def test_story_functional() -> None:
     if _get_card(agent_url) is None:
         _fail_missing_stack("story_agent not reachable; is the stack running?")
 
-    result = _send_message(agent_url, "Tell me a very short story about a brave little robot.")
+    result = _send_message(
+        agent_url, "Tell me a very short story about a brave little robot."
+    )
     _assert_completed_text(result, "story")

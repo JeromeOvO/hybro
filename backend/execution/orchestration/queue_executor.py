@@ -24,6 +24,7 @@ from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
+from execution.hitl.public_prompt import public_agent_input_prompt
 from execution.state.task_state_manager import TaskStateManager
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.processing import ProcessingResult, ProcessingStatus
@@ -47,7 +48,6 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
-_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
 
 
 # ------------------------------------------------------------------
@@ -485,7 +485,7 @@ class QueueExecutor:
                             room_id=room_id,
                             user_message_id=user_message_id,
                             source="agent",
-                            prompt=_GENERIC_AGENT_INPUT_PROMPT,
+                            prompt=public_agent_input_prompt(result.status_message),
                             agent_id=current_message.agent_id,
                             agent_name=(agent.agent_card.name if agent else None),
                             a2a_task_id=result.a2a_task_id,

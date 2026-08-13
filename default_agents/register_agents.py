@@ -49,11 +49,7 @@ def _log(msg: str) -> None:
 def load_agents() -> dict[str, dict]:
     data = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8")) or {}
     agents = data.get("agents", {}) or {}
-    return {
-        name: spec
-        for name, spec in agents.items()
-        if spec.get("enabled", True)
-    }
+    return {name: spec for name, spec in agents.items() if spec.get("enabled", True)}
 
 
 def wait_for_backend() -> bool:
@@ -106,7 +102,9 @@ def register(agent_url: str) -> bool:
         return True
 
     body = resp.text.lower()
-    if resp.status_code == 400 and ("already" in body or "exist" in body or "duplicate" in body):
+    if resp.status_code == 400 and (
+        "already" in body or "exist" in body or "duplicate" in body
+    ):
         _log(f"already registered {agent_url} (ok)")
         return True
 

@@ -124,6 +124,13 @@ def _validate_completion_gate(
     state: OrchestrationRunState,
     evidence: CompletionEvidence | None,
 ) -> None:
+    blocking_failures = [
+        failure
+        for failure in state.open_failures
+        if failure.status == "open"
+        and failure.recoverable
+        and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
+    ]
     checks = (
         (
             any(
@@ -147,12 +154,7 @@ def _validate_completion_gate(
             "complete rejected by validated blocker",
         ),
         (
-            any(
-                failure.status == "open"
-                and failure.recoverable
-                and failure.error_code not in _NON_BLOCKING_REFERENCE_FAILURE_CODES
-                for failure in state.open_failures
-            ),
+            bool(blocking_failures),
             "complete rejected by recoverable failure",
         ),
     )
