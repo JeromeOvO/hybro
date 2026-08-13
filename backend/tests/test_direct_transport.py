@@ -2892,6 +2892,43 @@ class TestFinalizePolledTaskPrivacy:
         assert persisted_message.message_content.message_task.history is None
 
     @pytest.mark.asyncio
+    async def test_stale_nonterminal_task_preserves_terminal_status(self):
+        proc = _make_processor()
+        proc.tsm.persist_message = AsyncMock(return_value=True)
+        message = _make_room_agent_message(
+            message_content=MessageContent(
+                message_text="",
+                message_task=Task(
+                    id="task-001",
+                    contextId="ctx-001",
+                    status=TaskStatus(state=TaskState.completed),
+                    kind="task",
+                ),
+            )
+        )
+        stale_task = Task(
+            id="task-001",
+            contextId="ctx-001",
+            status=TaskStatus(state=TaskState.working),
+            artifacts=[
+                Artifact(
+                    artifact_id="artifact-late",
+                    name="response",
+                    parts=[TextPart(kind="text", text="Late public artifact")],
+                )
+            ],
+        )
+
+        result = await proc._handle_a2a_response_for_room(message, stale_task)
+
+        assert result is True
+        persisted_message = proc.tsm.persist_message.await_args.args[0]
+        persisted_task = persisted_message.message_content.message_task
+        assert persisted_task.status.state == TaskState.completed
+        # Non-terminal remote artifacts are not public terminal output.
+        assert persisted_task.artifacts is None
+
+    @pytest.mark.asyncio
     async def test_room_message_response_for_noncompleted_task_is_discarded(self):
         private_text = "PRIVATE_SENTINEL_noncompleted_message_response"
         proc = _make_processor()

@@ -377,6 +377,13 @@ Key components:
 - `TaskStateManager`: owns task state transitions and persistence for agent
   messages.
 
+A2A response ingestion and finalization are Execution-owned. Direct transport
+normalizes terminal results and persists them through `TaskStateManager`; relay
+and webhook events flow through `AgentResponseHandler`, which uses the injected
+message/task writers. `room.compat.runtime` does not own a second A2A response
+handler; its room responsibilities begin at the explicit ports invoked by
+Execution.
+
 The main orchestration invariant is that `RoomMessageCenter` serializes
 processing per room. It uses a process-local `asyncio.Lock`, and in multi-worker
 mode this is supplemented by a Redis distributed lock configured at startup.
