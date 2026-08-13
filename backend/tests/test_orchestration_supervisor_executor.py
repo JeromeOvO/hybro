@@ -4927,8 +4927,6 @@ async def test_recover_orchestration_inflight_dispatch_ingests_plain_a2a_input_r
         user_message=user_message,
         guardrails_enabled=True,
     )
-    executor._run_agent_awaiting_input_action = AsyncMock()
-
     state = _run_state(
         run_id="message-1",
         user_message_id="message-1",
@@ -4962,6 +4960,12 @@ async def test_recover_orchestration_inflight_dispatch_ingests_plain_a2a_input_r
     ]
     await store.create_run(state)
 
+    awaiting_state = deepcopy(state)
+    awaiting_state.status = OrchestrationStatus.AWAITING_USER
+    executor._run_agent_awaiting_input_action = AsyncMock(
+        return_value=(awaiting_state, RunStatus.AWAITING_INPUT)
+    )
+
     (
         recovered_state,
         run_status,
@@ -4979,11 +4983,9 @@ async def test_recover_orchestration_inflight_dispatch_ingests_plain_a2a_input_r
         user_message=user_message,
     )
 
-    executor._run_agent_awaiting_input_action.assert_not_awaited()
-    assert run_status is None
-    assert recovered_state.status == OrchestrationStatus.RUNNING
-    assert recovered_state.agent_outputs[0].status == StepStatus.AWAITING_INPUT.value
-    assert recovered_state.open_failures[0].error_code == "agent_input_required"
+    executor._run_agent_awaiting_input_action.assert_awaited_once()
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
 
 
 @pytest.mark.asyncio
@@ -5069,10 +5071,10 @@ async def test_inflight_recovery_persists_outcome_for_interactive_message_withou
         user_message=user_message,
     )
 
-    assert run_status is None
-    assert recovered_state.status == OrchestrationStatus.RUNNING
-    assert recovered_state.pending_hitl_request_ids == []
-    executor.hitl_coordinator.request_input.assert_not_awaited()
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert recovered_state.status == OrchestrationStatus.AWAITING_USER
+    assert recovered_state.pending_hitl_request_ids == ["hitl-agent-1"]
+    executor.hitl_coordinator.request_input.assert_awaited_once()
     assert recovered_state.agent_outputs
     recovered_output = recovered_state.agent_outputs[0]
     assert recovered_output.a2a_task_id == "task-1"
