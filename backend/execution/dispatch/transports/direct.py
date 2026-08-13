@@ -367,9 +367,7 @@ class DirectTransport(AgentTransport):
                         else {}
                     )
                     status_value = (
-                        state_str(task.status.state)
-                        if task and task.status
-                        else None
+                        state_str(task.status.state) if task and task.status else None
                     )
                     return ProcessingResult(
                         ProcessingStatus.AWAITING_INPUT,
@@ -384,9 +382,7 @@ class DirectTransport(AgentTransport):
                             if task and hasattr(task, "context_id")
                             else task_data.get("contextId")
                         ),
-                        status_message=interactive_status_context.get(
-                            "status_message"
-                        ),
+                        status_message=interactive_status_context.get("status_message"),
                         interactive_state=status_value,
                         requires_auth=(
                             status_value == CommonTaskState.AUTH_REQUIRED.value
@@ -1450,7 +1446,10 @@ class DirectTransport(AgentTransport):
                         ctx.current_message, final_st, persist=True
                     )
                     await self._emit_terminal(ctx, final_st)
-                    return ProcessingStatus.AWAITING_INPUT, streaming_state.full_response_text
+                    return (
+                        ProcessingStatus.AWAITING_INPUT,
+                        streaming_state.full_response_text,
+                    )
                 else:
                     public_stream_text = self._resolved_public_stream_text(
                         streaming_state
