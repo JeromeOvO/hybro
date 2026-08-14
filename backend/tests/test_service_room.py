@@ -11,6 +11,7 @@ Tests cover:
 
 import ast
 import asyncio
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -18,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.dto import (
-    MemorySearchResult,
     MessageCommitted,
     RoomInfo,
     UserMessageInsertResult,
@@ -104,39 +104,39 @@ async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(fa
     svc.cancellation_control.release_token.assert_called_once_with("msg-1", token)
 
 
-@pytest.mark.asyncio
-async def test_room_services_passes_typed_search_results_to_context_assembly():
-    svc = object.__new__(RoomServices)
-    result = MemorySearchResult(
-        room_id="r1",
-        content="Typed memory",
-        keyword_score=1.0,
-        relevance_score=1.0,
-        temporal_decay_factor=1.0,
-    )
-    memory_search = SimpleNamespace(search_memory=AsyncMock(return_value=[result]))
-    context_assembly = SimpleNamespace(
-        assemble_supervisor_context_from_memory=MagicMock(
-            return_value=SimpleNamespace(metadata={"context": "assembled"})
-        )
-    )
-    svc.bind_context_memory(
-        context_assembly=context_assembly,
-        memory_search=memory_search,
+def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
+    dead_helpers = {
+        "_build_supervisor_conversation_context",
+        "_active_run_payloads_from_raw",
+        "_resolve_membership_input",
+        "_validate_agents_access",
+        "_fetch_agents_from_set",
+        "_require_memory_search",
+        "_search_context_memory_results",
+        "_require_context_assembly",
+    }
+
+    assert dead_helpers.isdisjoint(RoomServices.__dict__)
+    assert (
+        "memory_search"
+        not in inspect.signature(RoomServices.bind_context_memory).parameters
     )
 
-    context = await svc._build_supervisor_conversation_context(
-        room=SimpleNamespace(room_id="r1"),
-        room_memory=SimpleNamespace(),
-        message_text="question",
-        agent_registry=[],
-        log_context="",
+    container_tree = ast.parse(
+        (Path(__file__).resolve().parents[1] / "container.py").read_text()
     )
-
-    assert context == "assembled"
-    assert context_assembly.assemble_supervisor_context_from_memory.call_args.kwargs[
-        "memory_search_results"
-    ] == [result]
+    context_memory_binding = next(
+        node
+        for node in ast.walk(container_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "room_runtime"
+        and node.func.attr == "bind_context_memory"
+    )
+    assert "memory_search" not in {
+        keyword.arg for keyword in context_memory_binding.keywords
+    }
 
 
 def test_room_services_bind_store_sets_runtime_store():

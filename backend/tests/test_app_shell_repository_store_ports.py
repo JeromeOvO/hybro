@@ -380,12 +380,10 @@ def test_container_binds_room_runtime_to_focused_room_store_adapter():
         "add_room_agent_message",
         "get_agent_by_agent_id",
         "get_agent_group_by_id",
-        "get_agents_with_conditions",
         "get_all_active_agents",
         "get_room_by_room_id",
         "get_room_memory_by_room_id",
         "get_room_user_message_by_message_id",
-        "update_room_by_room_id",
         "update_room_user_message_by_message_id",
     }
 

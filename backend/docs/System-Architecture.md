@@ -822,8 +822,9 @@ calling the LLM. Merge semantics are incremental:
 Search returns `list[common.dto.MemorySearchResult]` through `MemorySearchPort`.
 Mongo keyword search ranks at most `MEMORY_SEARCH_MAX_CANDIDATES` lightweight
 records using explicit keyword/relevance/temporal-decay scores, then hydrates
-content in bounded batches. Room and Execution consume the DTOs without parsing
-legacy dictionaries.
+content in bounded batches. Execution consumes the search DTOs without parsing
+legacy dictionaries; Room receives only context assembly and memory cleanup
+capabilities.
 
 The facade satisfies caller-specific leaf protocols from `common.protocols`:
 `ContextAssemblyPort`, `MemorySearchPort`, `ProjectionPort`, `CompactionPort`, and
