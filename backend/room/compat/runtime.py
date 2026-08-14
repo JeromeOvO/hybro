@@ -10,7 +10,6 @@ from common.dto import (
     CreateRoomRequest,
     ExplicitAgentMention,
     MembershipSeed,
-    MemorySearchResult,
     ParsedUserMessageRequest,
     RoomInfo,
     UserMessageInsertResult,
@@ -18,7 +17,6 @@ from common.dto import (
 from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import (
     ContextAssemblyPort,
-    MemorySearchPort,
     RoomMemoryCleanupPort,
 )
 from common.types import (
@@ -64,7 +62,6 @@ from models.response import (
 from models.room import (
     MAX_MESSAGE_LENGTH,
     CoordinatorAgentId,
-    MembershipOrigin,
     MembershipOriginStatus,
     MessageContent,
     Room,
@@ -157,7 +154,6 @@ class RoomServices:
         self._facade = None
         self._bound = False
         self._context_assembly: ContextAssemblyPort | None = None
-        self._memory_search: MemorySearchPort | None = None
         self._room_memory_cleanup: RoomMemoryCleanupPort | None = None
         self._internal_event_publisher = None
         self._attachment_metadata_reader = None
@@ -208,11 +204,9 @@ class RoomServices:
         self,
         *,
         context_assembly: ContextAssemblyPort | None = None,
-        memory_search: MemorySearchPort | None = None,
         room_memory_cleanup: RoomMemoryCleanupPort | None = None,
     ) -> None:
         self._context_assembly = context_assembly
-        self._memory_search = memory_search
         self._room_memory_cleanup = room_memory_cleanup
         preparation = getattr(self, "_agent_message_preparation", None)
         if preparation is not None and context_assembly is not None:
@@ -313,64 +307,10 @@ class RoomServices:
             raise RuntimeError("RoomServices context assembly port has not been bound")
         return self._context_assembly
 
-    def _require_memory_search(self) -> MemorySearchPort:
-        if self._memory_search is None:
-            raise RuntimeError("RoomServices memory search port has not been bound")
-        return self._memory_search
-
     @staticmethod
     def _assembled_context_text(assembled) -> str:
         metadata = getattr(assembled, "metadata", {}) or {}
         return metadata.get("context", "")
-
-    async def _search_context_memory_results(
-        self,
-        *,
-        query: str,
-        room_id: str,
-    ) -> list[MemorySearchResult]:
-        return await self._require_memory_search().search_memory(
-            room_id=room_id,
-            query=query,
-        )
-
-    async def _build_supervisor_conversation_context(
-        self,
-        *,
-        room,
-        room_memory,
-        message_text: str,
-        agent_registry: list[dict],
-        log_context: str,
-    ) -> str | None:
-        if not room_memory:
-            return None
-        memory_search_results = None
-        try:
-            results = await self._search_context_memory_results(
-                query=message_text,
-                room_id=room.room_id,
-            )
-            if results:
-                memory_search_results = results
-        except Exception as e:
-            logger.debug("RoomServices: MemorySearch skipped%s: %s", log_context, e)
-        try:
-            assembled = self._require_context_assembly().assemble_supervisor_context_from_memory(
-                room_memory,
-                message_text,
-                agent_registry=agent_registry,
-                max_turns=5,
-                memory_search_results=memory_search_results,
-            )
-            return self._assembled_context_text(assembled)
-        except Exception as e:
-            logger.warning(
-                "RoomServices: context assembly failed%s: %s",
-                log_context,
-                e,
-            )
-            return None
 
     def _build_routing_context_from_memory(
         self,
@@ -569,197 +509,6 @@ class RoomServices:
             normalized[agent_id] = str(agent_name)
 
         return normalized
-
-    @staticmethod
-    def _active_run_payloads_from_raw(active_runs_raw: list) -> list[dict]:
-        """Normalize Mongo run documents to ActiveRunRef-compatible dicts."""
-        return [
-            {
-                "run_id": r.get("run_id"),
-                "state": r.get("state"),
-                "trigger_message_id": r.get("trigger_message_id"),
-                "agent_id": r.get("agent_id"),
-                "seq": r.get("seq", 0),
-                "updated_at": r.get("updated_at"),
-            }
-            for r in active_runs_raw
-            if isinstance(r, dict) and r.get("run_id") and r.get("state")
-        ]
-
-    async def _resolve_membership_input(
-        self,
-        request: RoomCenterRoomSettingRequest,
-        existing_room: Room | None = None,
-    ) -> (
-        tuple[
-            dict[str, str],
-            MembershipOrigin,
-            MembershipOriginStatus,
-            str | None,
-            str | None,
-        ]
-        | RoomCenterRoomSettingResponse
-    ):
-        """Resolve canonical or legacy membership input into a concrete agent set + provenance.
-
-        Returns either a 5-tuple (agent_set, origin, origin_status, source_group_id, source_group_name)
-        or a RoomCenterRoomSettingResponse error to return early.
-
-        Precedence: canonical fields win over legacy fields.
-        """
-        has_canonical = request.membership_seed_input is not None
-        has_legacy = request.room_agent_set is not None
-        requesting_user = request.requesting_user_id
-
-        # Canonical path
-        if has_canonical:
-            seed = request.membership_seed_input
-
-            if seed == "manual":
-                agent_ids = request.room_agent_ids or []
-                agent_set: dict[str, str] = {}
-                unknown_ids: list[str] = []
-                for aid in agent_ids:
-                    agent = await self._store.get_agent_by_agent_id(aid)
-                    if not agent:
-                        unknown_ids.append(aid)
-                        continue
-                    agent_set[aid] = agent.agent_card.name
-                if unknown_ids:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=None,
-                        room=None,
-                        success=False,
-                        error=f"Unknown or deleted agent IDs: {', '.join(unknown_ids)}",
-                        status_code=400,
-                    )
-                return (
-                    agent_set,
-                    MembershipOrigin.MANUAL,
-                    MembershipOriginStatus.MANUAL,
-                    None,
-                    None,
-                )
-
-            if seed == "saved_group":
-                if not request.seed_group_id:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=None,
-                        room=None,
-                        success=False,
-                        error="seed_group_id is required for saved_group seed input",
-                        status_code=400,
-                    )
-                group = await self._store.get_agent_group_by_id(request.seed_group_id)
-                if not group:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=None,
-                        room=None,
-                        success=False,
-                        error=f"Saved group {request.seed_group_id} not found",
-                        status_code=404,
-                    )
-                if group.type != "builtin" and group.owner_id != requesting_user:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=None,
-                        room=None,
-                        success=False,
-                        error="You do not have permission to use this saved group",
-                        status_code=403,
-                    )
-                agent_set = {}
-                for aid in group.agents:
-                    agent = await self._store.get_agent_by_agent_id(aid)
-                    if agent and agent.agent_status == AgentStatus.active:
-                        agent_set[aid] = agent.agent_card.name
-                return (
-                    agent_set,
-                    MembershipOrigin.SAVED_GROUP,
-                    MembershipOriginStatus.SEEDED_NEVER_EDITED,
-                    group.group_id,
-                    group.name,
-                )
-
-            if seed == "all_current_agents":
-                all_agents = await self._store.get_all_active_agents(
-                    user_id=requesting_user,
-                )
-                agent_set = {a.agent_id: a.agent_card.name for a in (all_agents or [])}
-                return (
-                    agent_set,
-                    MembershipOrigin.ALL_CURRENT_AGENTS,
-                    MembershipOriginStatus.SEEDED_NEVER_EDITED,
-                    None,
-                    None,
-                )
-
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error=f"Invalid membership_seed_input: {seed}",
-                status_code=400,
-            )
-
-        # Legacy path
-        if has_legacy:
-            normalized = self._normalize_room_agent_set(request.room_agent_set)
-            if request.applied_from_group:
-                group = await self._store.get_agent_group_by_id(
-                    request.applied_from_group
-                )
-                group_name = group.name if group else None
-                return (
-                    normalized,
-                    MembershipOrigin.SAVED_GROUP,
-                    MembershipOriginStatus.SEEDED_NEVER_EDITED,
-                    request.applied_from_group,
-                    group_name,
-                )
-            return (
-                normalized,
-                MembershipOrigin.MANUAL,
-                MembershipOriginStatus.MANUAL,
-                None,
-                None,
-            )
-
-        # No membership input at all
-        if existing_room is not None:
-            return (
-                existing_room.room_agent_set or {},
-                existing_room.membership_origin or MembershipOrigin.MANUAL,
-                existing_room.membership_origin_status or MembershipOriginStatus.MANUAL,
-                existing_room.source_group_id,
-                existing_room.source_group_name,
-            )
-
-        # New room with no membership input: empty snapshot
-        return ({}, MembershipOrigin.MANUAL, MembershipOriginStatus.MANUAL, None, None)
-
-    async def _validate_agents_access(
-        self, agent_ids: list[str], user_id: str
-    ) -> list[str]:
-        """
-        Validate that the user has access to all specified agents.
-        Private agents can only be added by their owner.
-
-        Returns:
-            List of inaccessible agent IDs (empty if all accessible)
-        """
-        if not agent_ids:
-            return []
-
-        # Fetch all agents in one query
-        agents = await self._store.get_agents_with_conditions(
-            {"agent_id": {"$in": agent_ids}}
-        )
-
-        return [
-            agent.agent_id
-            for agent in agents
-            if not agent.is_public and agent.provider_id != user_id
-        ]
 
     # room setting management
     async def create_new_room(
@@ -3209,18 +2958,6 @@ class RoomServices:
             ),
             status_code=400,
         )
-
-    async def _fetch_agents_from_set(self, agent_set: dict | None) -> list:
-        """Fetch full Agent objects from an agent_set dict {agent_id: agent_name}."""
-        if not agent_set:
-            return []
-
-        agents = []
-        for agent_id in agent_set.keys():
-            agent = await self._store.get_agent_by_agent_id(agent_id)
-            if agent:
-                agents.append(agent)
-        return agents
 
     async def _resolve_room_agent_refs(
         self, agent_set: dict | None, viewer_user_id: str | None = None

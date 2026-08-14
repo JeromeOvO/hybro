@@ -896,16 +896,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 add_room_agent_message=message_store.add_room_agent_message,
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
                 get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
-                get_agents_with_conditions=(
-                    agent_room_store.get_agents_with_conditions
-                ),
                 get_all_active_agents=agent_room_store.get_all_active_agents,
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
                 get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
-                update_room_by_room_id=agent_room_store.update_room_by_room_id,
                 update_room_user_message_by_message_id=(
                     message_store.update_room_user_message_by_message_id
                 ),
@@ -1440,7 +1436,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
             room_runtime.bind_context_memory(
                 context_assembly=context_memory_facade,
-                memory_search=context_memory_facade,
                 room_memory_cleanup=context_memory_facade,
             )
         else:
