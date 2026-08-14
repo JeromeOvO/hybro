@@ -303,9 +303,13 @@ def validate_runtime_bindings(
     from execution.orchestration.room_message_center import (
         room_message_center as execution_room_message_center,
     )
+    from room.compat.runtime import room_runtime
 
     if getattr(execution_room_message_center, "_runtime", None) is None:
         errors.append("execution.room_message_center")
+
+    for missing in room_runtime.missing_required_bindings():
+        errors.append(f"room.{missing}")
 
     if getattr(app.state, "delivery_facade", None) is None:
         errors.append("app.state.delivery_facade")
@@ -421,6 +425,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from room.route_adapter import RoomRouteAdapter
             from room.timeline_projection import RoomTimelineProjector
             from room.user_message_persistence import UserMessageCommitService
+
+            # The compatibility runtime is process-global. Clear bindings from a
+            # previous failed or completed lifespan before composing this one.
+            room_runtime.reset_bindings()
 
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(

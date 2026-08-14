@@ -83,7 +83,13 @@ Startup has three practical phases:
    - Start background jobs after the guard passes.
 
 3. Serving and normal shutdown:
-   - Verify all required bindings in `validate_runtime_bindings`.
+   - Verify all required bindings in `validate_runtime_bindings`. The final
+     composition-root check aggregates Execution, API gateway, and Room core
+     readiness; each lifespan first resets the process-global Room runtime, then
+     Room reports missing store, facade, cancellation, parser, user-message
+     commit, timeline, deletion, and agent-preparation bindings before traffic
+     is served. Explicitly degradable attachment/context
+     capabilities do not fail startup.
    - Serve `/health` and `/api/v1/*`.
    - On shutdown, stop Relay ingress before jobs and in-flight execution, then
      stop internal eventing before Delivery/SSE, cancellation, Redis, and MongoDB.
