@@ -20,7 +20,7 @@ from models.response import (
     ScopeResolutionError,
 )
 from models.room import MessageContent, Room, RoomUserMessage
-from models.room_services_models import ParseResult
+from models.room_services_models import ParseResult, ResolvedRoutingScope
 from room.compat.runtime import RoomServices
 
 
@@ -140,7 +140,7 @@ class TestValidateCanonicalMentions:
 
 class TestResolveExplicitTargetScope:
     @pytest.mark.asyncio
-    async def test_room_team_with_agents_returns_tuple(self, room_center):
+    async def test_room_team_with_agents_returns_named_scope(self, room_center):
         room = _make_room(agent_set={"a1": "Alpha"})
         agent = _make_agent("a1", "Alpha")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
@@ -151,8 +151,10 @@ class TestResolveExplicitTargetScope:
             "room_team",
             sender_user_id="user-1",
         )
-        assert isinstance(result, tuple)
-        assert len(result) == 3
+        assert isinstance(result, ResolvedRoutingScope)
+        assert result.selected_agent_set == {"a1": "Alpha"}
+        assert result.auto_assign_agents is True
+        assert result.agents == [agent]
 
     @pytest.mark.asyncio
     async def test_room_team_filters_agents_that_cannot_accept_attachment(
@@ -168,7 +170,7 @@ class TestResolveExplicitTargetScope:
             "image": image_agent,
         }.get
 
-        selected, _, agents = await room_center._resolve_explicit_target_scope(
+        result = await room_center._resolve_explicit_target_scope(
             room,
             "inspect this",
             "room_team",
@@ -176,8 +178,9 @@ class TestResolveExplicitTargetScope:
             required_input_modes=["image/png"],
         )
 
-        assert selected == {"image": "Image"}
-        assert agents == [image_agent]
+        assert isinstance(result, ResolvedRoutingScope)
+        assert result.selected_agent_set == {"image": "Image"}
+        assert result.agents == [image_agent]
 
     @pytest.mark.asyncio
     async def test_room_team_filters_open_capability_issues_before_llm_exposure(
@@ -195,15 +198,16 @@ class TestResolveExplicitTargetScope:
             "broken"
         }
 
-        selected, _, agents = await room_center._resolve_explicit_target_scope(
+        result = await room_center._resolve_explicit_target_scope(
             room,
             "hello",
             "room_team",
             sender_user_id="user-1",
         )
 
-        assert selected == {"safe": "Safe"}
-        assert agents == [safe_agent]
+        assert isinstance(result, ResolvedRoutingScope)
+        assert result.selected_agent_set == {"safe": "Safe"}
+        assert result.agents == [safe_agent]
 
     @pytest.mark.asyncio
     async def test_saved_group_filters_agents_that_cannot_accept_attachment(
@@ -225,7 +229,7 @@ class TestResolveExplicitTargetScope:
             "pdf": pdf_agent,
         }.get
 
-        selected, _, agents = await room_center._resolve_explicit_target_scope(
+        result = await room_center._resolve_explicit_target_scope(
             room,
             "summarize this",
             "group-1",
@@ -233,8 +237,9 @@ class TestResolveExplicitTargetScope:
             required_input_modes=["application/pdf"],
         )
 
-        assert selected == {"pdf": "PDF"}
-        assert agents == [pdf_agent]
+        assert isinstance(result, ResolvedRoutingScope)
+        assert result.selected_agent_set == {"pdf": "PDF"}
+        assert result.agents == [pdf_agent]
 
     @pytest.mark.asyncio
     async def test_room_team_empty_returns_scope_error(self, room_center):
@@ -303,6 +308,22 @@ class TestResolveExplicitTargetScope:
         assert isinstance(result, RoomCenterUserMessageResponse)
         assert result.success is False
         assert result.scope_resolution_error.code == "empty_scope"
+
+
+@pytest.mark.asyncio
+async def test_workflow_candidate_scope_returns_named_locked_scope(room_center):
+    agent = _make_agent("agent-1", "Agent One")
+    room_center.database_service.get_agent_by_agent_id.return_value = agent
+
+    result = await room_center._resolve_selected_candidate_scope(
+        ["agent-1"],
+        sender_user_id="user-1",
+    )
+
+    assert isinstance(result, ResolvedRoutingScope)
+    assert result.selected_agent_set == {"agent-1": "Agent One"}
+    assert result.auto_assign_agents is False
+    assert result.agents == [agent]
 
 
 @pytest.mark.asyncio
@@ -467,8 +488,8 @@ class TestInlineMentionBehavior:
             "<@unknown|Ghost> hello",
             "room_team",
         )
-        assert isinstance(scope, tuple)
-        assert "a1" in scope[0]
+        assert isinstance(scope, ResolvedRoutingScope)
+        assert "a1" in scope.selected_agent_set
 
     @pytest.mark.asyncio
     async def test_supervisor_inline_mention_is_planner_intent_not_hard_route(

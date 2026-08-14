@@ -1305,7 +1305,10 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
 5. `RoomServices.send_message_to_room`:
    - validates the request and message size,
    - resolves and validates attachments,
-   - loads the room and target scope,
+   - loads the room and target scope; successful deterministic scope resolution
+     crosses the persist/preflight boundary as a named `ResolvedRoutingScope`
+     (`selected_agent_set`, `auto_assign_agents`, and `agents`) rather than a
+     positional tuple,
    - materializes a quote before durable user-message commit,
    - delegates the write lease, attachment claims, atomic insert, winner/loser
      file-reference effects, and synchronous `message_committed` publication to

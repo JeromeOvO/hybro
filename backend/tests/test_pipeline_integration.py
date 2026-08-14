@@ -25,6 +25,7 @@ from agent.selection_service import AgentSelectionService, RoutingStrategy
 from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
+from models.room_services_models import ResolvedRoutingScope
 from room.compat.runtime import RoomServices
 
 # ---- Test Helpers ----
@@ -130,11 +131,13 @@ async def test_room_team_bypasses_matcher():
         sender_user_id="user123",
     )
 
-    assert isinstance(result, tuple)
-    selected_agent_set, auto_assign, agents = result
-    assert selected_agent_set == {"agent1": "Agent One", "agent2": "Agent Two"}
-    assert auto_assign is True
-    assert len(agents) == 2
+    assert isinstance(result, ResolvedRoutingScope)
+    assert result.selected_agent_set == {
+        "agent1": "Agent One",
+        "agent2": "Agent Two",
+    }
+    assert result.auto_assign_agents is True
+    assert len(result.agents) == 2
 
 
 @pytest.mark.asyncio
@@ -164,14 +167,13 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         sender_user_id="user123",
     )
 
-    assert isinstance(result, tuple)
-    selected_agent_set, auto_assign, resolved_agents = result
-    assert selected_agent_set == {
+    assert isinstance(result, ResolvedRoutingScope)
+    assert result.selected_agent_set == {
         "agent1": "Agent One",
         "agent2": "Agent Two",
     }
-    assert auto_assign is True
-    assert resolved_agents == agents
+    assert result.auto_assign_agents is True
+    assert result.agents == agents
     room_runtime._store.get_all_active_agents.assert_awaited_once_with(
         user_id="user123"
     )

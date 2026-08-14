@@ -7,7 +7,7 @@ from context_memory import assembly
 from models.memory import ConversationTurn, RoomMemory, TurnRole
 from models.request import RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
-from models.room_services_models import ParseResult
+from models.room_services_models import ParseResult, ResolvedRoutingScope
 from room.compat.runtime import RoomMessagePreflightContext, RoomServices
 
 
@@ -44,7 +44,11 @@ def _preflight_context(agent_count: int) -> RoomMessagePreflightContext:
         use_supervisor=False,
         message_text="Route this request",
         pre_resolved_mentions=None,
-        pre_resolved_scope=(agent_set, False, []),
+        pre_resolved_scope=ResolvedRoutingScope(
+            selected_agent_set=agent_set,
+            auto_assign_agents=False,
+            agents=[],
+        ),
         pre_resolved_selected_scope=None,
         token=SimpleNamespace(is_cancelled=False),
     )
