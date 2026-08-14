@@ -2,6 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from models.agent import Agent
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRoutingScope:
+    selected_agent_set: dict[str, str]
+    auto_assign_agents: bool
+    agents: list[Agent]
+
 
 @dataclass
 class ParseResult:

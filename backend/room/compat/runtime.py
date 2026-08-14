@@ -67,7 +67,7 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from models.room_services_models import ParseResult
+from models.room_services_models import ParseResult, ResolvedRoutingScope
 from room.a2a_file_parts import AttachmentDispatchContext, AttachmentPreflightFailure
 from room.attachments import (
     ResolvedAttachments as _ResolvedAttachments,
@@ -121,8 +121,8 @@ class RoomMessagePreflightContext:
     use_supervisor: bool
     message_text: str
     pre_resolved_mentions: list[dict] | None
-    pre_resolved_scope: tuple[dict, bool, list] | None
-    pre_resolved_selected_scope: tuple[dict, bool, list] | None
+    pre_resolved_scope: ResolvedRoutingScope | None
+    pre_resolved_selected_scope: ResolvedRoutingScope | None
     token: CancellationToken
 
 
@@ -1478,7 +1478,7 @@ class RoomServices:
         selected_agent_ids: list[str],
         sender_user_id: str | None,
         required_input_modes: list[str] | None = None,
-    ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
+    ) -> ResolvedRoutingScope | RoomCenterUserMessageResponse:
         agents, invalid_ids = await self._sanitize_routing_scope(
             selected_agent_ids,
             sender_user_id=sender_user_id,
@@ -1521,7 +1521,11 @@ class RoomServices:
                 status_code=400,
             )
 
-        return selected_agent_set, False, agents
+        return ResolvedRoutingScope(
+            selected_agent_set=selected_agent_set,
+            auto_assign_agents=False,
+            agents=agents,
+        )
 
     async def _validate_candidate_scope_metadata(
         self,
@@ -2013,8 +2017,8 @@ class RoomServices:
         # - all_agents: LLM-driven, cannot pre-validate (persists first)
         # - inline text mentions: best-effort, not covered (persists first)
         pre_resolved_mentions: list[dict] | None = None
-        pre_resolved_scope: tuple[dict, bool, list] | None = None
-        pre_resolved_selected_scope: tuple[dict, bool, list] | None = None
+        pre_resolved_scope: ResolvedRoutingScope | None = None
+        pre_resolved_selected_scope: ResolvedRoutingScope | None = None
         required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
         orchestration_requested = use_supervisor
@@ -2087,7 +2091,7 @@ class RoomServices:
                 if isinstance(mention_result, RoomCenterUserMessageResponse):
                     return mention_result, None
                 pre_resolved_mentions = mention_result
-                candidate_ids = set(pre_resolved_selected_scope[0])
+                candidate_ids = set(pre_resolved_selected_scope.selected_agent_set)
                 out_of_scope_mentions = [
                     mention["agent_id"]
                     for mention in pre_resolved_mentions
@@ -2294,7 +2298,9 @@ class RoomServices:
         # In non-supervisor rooms, explicit mentions are hard routing. In
         # supervisor rooms, mentions are strong intent signals for the planner.
         if selected_scope_locked:
-            selected_agent_set, auto_assign, agents = pre_resolved_selected_scope
+            selected_agent_set = pre_resolved_selected_scope.selected_agent_set
+            auto_assign = pre_resolved_selected_scope.auto_assign_agents
+            agents = pre_resolved_selected_scope.agents
         elif pre_resolved_mentions:
             if use_supervisor:
                 selected_agent_set = {
@@ -2394,11 +2400,17 @@ class RoomServices:
                     selection_result.error or "Agent selection failed"
                 )
                 return selection_result
-            selected_agent_set, auto_assign, agents = selection_result
+            selected_agent_set = selection_result.selected_agent_set
+            auto_assign = selection_result.auto_assign_agents
+            agents = selection_result.agents
         elif pre_resolved_scope is not None:
-            selected_agent_set, auto_assign, agents = pre_resolved_scope
+            selected_agent_set = pre_resolved_scope.selected_agent_set
+            auto_assign = pre_resolved_scope.auto_assign_agents
+            agents = pre_resolved_scope.agents
         else:
-            selected_agent_set, auto_assign, agents = {}, True, []
+            selected_agent_set = {}
+            auto_assign = True
+            agents = []
 
         if not selected_agent_set and not use_supervisor:
             return await self._handle_no_agents_fallback(
@@ -2688,19 +2700,19 @@ class RoomServices:
         target_group: str,
         sender_user_id: str | None = None,
         required_input_modes: list[str] | None = None,
-    ) -> tuple[dict, bool, list] | RoomCenterUserMessageResponse:
-        """Resolve selected agents and auto-assign flag based on target_group.
+    ) -> ResolvedRoutingScope | RoomCenterUserMessageResponse:
+        """Resolve selected agents and auto-assign behavior for a target group.
 
         Returns:
-            A 3-tuple (selected_agent_set, auto_assign, agents) on success,
-            or a RoomCenterUserMessageResponse on scope-resolution failure.
+            A named routing scope on success, or a RoomCenterUserMessageResponse
+            on scope-resolution failure.
 
         Deterministic failures (room_team empty, saved_group missing/unauthorized/empty)
         always return structured error responses — never empty tuples.
         """
 
         async def select_agents_all_agents_mode() -> (
-            tuple[dict, bool, list] | RoomCenterUserMessageResponse
+            ResolvedRoutingScope | RoomCenterUserMessageResponse
         ):
             try:
                 active_agents = await self._store.get_all_active_agents(
@@ -2719,7 +2731,11 @@ class RoomServices:
                     "All Agents mode: Providing all %s active agents to Supervisor",
                     len(full_agents),
                 )
-                return selected, True, full_agents
+                return ResolvedRoutingScope(
+                    selected_agent_set=selected,
+                    auto_assign_agents=True,
+                    agents=full_agents,
+                )
             except Exception as e:
                 error_msg = "Agent selection failed. Please try again."
                 logger.error(
@@ -2757,7 +2773,11 @@ class RoomServices:
                     )
                     for agent in room_agents
                 }
-                return selected_agent_set, True, room_agents
+                return ResolvedRoutingScope(
+                    selected_agent_set=selected_agent_set,
+                    auto_assign_agents=True,
+                    agents=room_agents,
+                )
 
             error_msg = "This room has no agents. Add agents before sending a message."
             logger.warning(
@@ -2825,7 +2845,11 @@ class RoomServices:
                 group.name,
                 len(selected_agent_set),
             )
-            return selected_agent_set, True, agents
+            return ResolvedRoutingScope(
+                selected_agent_set=selected_agent_set,
+                auto_assign_agents=True,
+                agents=agents,
+            )
 
         error_msg = f"The selected agent group '{group.name}' has no members."
         logger.warning(
