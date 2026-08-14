@@ -47,7 +47,6 @@ LLM_SETTINGS_FIELDS = {
     "deepseek_api_key",
     "deepseek_base_url",
     "deepseek_model_name",
-    "llm_gateway_generation_provider",
     "use_bedrock_supervisor",
     "bedrock_supervisor_model",
     "openai_api_key",

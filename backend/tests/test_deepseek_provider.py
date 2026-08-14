@@ -185,7 +185,6 @@ async def test_deepseek_provider_rejects_embeddings():
 async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_openai():
     settings = Settings(
         _env_file=None,
-        llm_gateway_generation_provider="deepseek",
         deepseek_api_key="test-deepseek-key",
         deepseek_model_name="deepseek-v4-pro",
     )

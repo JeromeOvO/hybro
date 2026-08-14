@@ -83,10 +83,12 @@ sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
 `OPENAI_API_KEY`) you can just run `./scripts/hybro start --recreate` to
 pick up runtime values. To run the backend's classifier, supervisor, context
 memory, and synthesis generation through DeepSeek instead, set
-`LLM_GATEWAY_GENERATION_PROVIDER=deepseek`, `DEEPSEEK_API_KEY`, and optionally
-`DEEPSEEK_MODEL_NAME`. This selector does not change `default_agents/`, which
-still require `OPENAI_API_KEY`; the optional embedding route also remains
-OpenAI-backed. If you also change frontend-facing `NEXT_PUBLIC_*`
+`DEEPSEEK_API_KEY` and optionally `DEEPSEEK_MODEL_NAME`. Backend generation
+selects the first configured provider in this order: DeepSeek, OpenAI, Gemini.
+This does not change `default_agents/`, which are separate containers receiving
+only an allow-listed subset of the root `.env` and still require
+`OPENAI_API_KEY`; the optional embedding route also remains OpenAI-backed. If
+you also change frontend-facing `NEXT_PUBLIC_*`
 keys, use `./scripts/hybro start --build --recreate` - those values are
 Docker build args baked into the Next.js bundle, so recreate alone keeps
 the old browser config. `frontend/.env.local` is generated from `.env` -
@@ -122,11 +124,13 @@ The repository is split into these primary components:
 - `default_agents/`: A collection of ready-to-use A2A agents, each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
 
 ## API keys
-By default, the backend and default agents share `OPENAI_API_KEY`. The backend can
-instead use DeepSeek generation through `LLM_GATEWAY_GENERATION_PROVIDER=deepseek`
-and `DEEPSEEK_API_KEY`. This does not reconfigure the separately deployed default
-agents: they still require `OPENAI_API_KEY`. Agents register regardless, but their
-calls fail until their provider key is available.
+By default, the backend and default agents share `OPENAI_API_KEY`. If
+`DEEPSEEK_API_KEY` is configured, the backend automatically gives DeepSeek
+priority over OpenAI and Gemini for generation. This does not reconfigure the
+separately deployed default agents: one root `.env` is the source of truth, but
+Compose deliberately forwards only `OPENAI_API_KEY`, `OPENAI_MODEL`, and image
+settings to those containers. Agents register regardless, but their calls fail
+until their provider key is available.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.

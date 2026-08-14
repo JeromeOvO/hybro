@@ -1168,7 +1168,6 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
 
     settings = Settings(
         _env_file=None,
-        llm_gateway_generation_provider="deepseek",
         deepseek_api_key="test-deepseek-key",
         deepseek_model_name="deepseek-v4-pro",
         embedding_model="embed-openai",
@@ -1191,6 +1190,33 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
     assert embedding.model_id == "embed-openai"
     assert embedding.capabilities == ["embedding"]
     assert registry.get_model("gemini_model_name").provider == "gemini"
+
+
+def test_model_registry_uses_gemini_when_it_is_the_only_configured_provider():
+    from common.config.settings import Settings
+    from llm_gateway.model_registry import ModelRegistryImpl
+
+    settings = Settings(
+        _env_file=None,
+        deepseek_api_key="",
+        openai_api_key="",
+        google_api_key="google-key",
+        gemini_api_key="",
+        gemini_model_name="gemini-generation",
+    )
+    registry = ModelRegistryImpl(settings)
+
+    for logical_name in (
+        "lead_ai_model",
+        "classifier_ai_model",
+        "context_memory_json_model",
+        "supervisor_model",
+    ):
+        model = registry.get_model(logical_name)
+        assert model.provider == "gemini"
+        assert model.model_id == "gemini-generation"
+
+    assert registry.get_model("embedding_model").provider == "openai"
 
 
 @pytest.mark.asyncio

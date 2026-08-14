@@ -2,6 +2,7 @@ from typing import Any
 
 from common.config.settings import settings
 from common.dto import ModelInfo
+from llm_gateway.config import resolve_generation_provider
 
 
 class ModelRegistryImpl:
@@ -12,8 +13,8 @@ class ModelRegistryImpl:
         generation_provider: str | None = None,
     ) -> None:
         self._settings = settings_obj or settings
-        self._generation_provider = (
-            generation_provider or self._settings.llm_gateway_generation_provider
+        self._generation_provider = generation_provider or resolve_generation_provider(
+            self._settings
         )
         self._models: dict[str, ModelInfo] = {}
         self._register_defaults()
@@ -40,10 +41,16 @@ class ModelRegistryImpl:
     def _register_defaults(self) -> None:
         generation_provider = self._generation_provider
         uses_deepseek = generation_provider == "deepseek"
-        generation_capabilities = (
-            ["json_schema"] if uses_deepseek else ["json_schema", "tool_use", "vision"]
-        )
-        generation_model = self._settings.deepseek_model_name if uses_deepseek else None
+        uses_gemini = generation_provider == "gemini"
+        if uses_deepseek:
+            generation_capabilities = ["json_schema"]
+            generation_model = self._settings.deepseek_model_name
+        elif uses_gemini:
+            generation_capabilities = ["json_schema", "vision"]
+            generation_model = self._settings.gemini_model_name
+        else:
+            generation_capabilities = ["json_schema", "tool_use", "vision"]
+            generation_model = None
 
         self._register(
             logical_name="lead_ai_model",
@@ -82,7 +89,9 @@ class ModelRegistryImpl:
             ),
             provider=generation_provider,
             capabilities=(
-                ["json_schema"] if uses_deepseek else ["json_schema", "tool_use"]
+                ["json_schema"]
+                if uses_deepseek or uses_gemini
+                else ["json_schema", "tool_use"]
             ),
             max_context_tokens=128000,
         )
