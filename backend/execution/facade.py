@@ -722,7 +722,13 @@ class ExecutionFacade:
                 )
             return ack
         except BaseException:
-            self._room_center.discard_message_preflight(preflight_context)
+            try:
+                self._room_center.discard_message_preflight(preflight_context)
+            except BaseException:
+                logger.warning(
+                    "room preflight cleanup failed while preserving original error",
+                    exc_info=True,
+                )
             raise
 
     async def start_orchestration(

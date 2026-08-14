@@ -168,6 +168,9 @@ class RoomRouteAdapter:
             context
         )
 
+    def discard_message_preflight(self, context) -> None:
+        self._require_room_services().discard_message_preflight(context)
+
     async def update_user_message_orchestration_status(
         self,
         message_id: str,

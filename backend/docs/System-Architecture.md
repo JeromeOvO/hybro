@@ -1016,7 +1016,11 @@ KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
 `cancelled:` key compatibility. Execution starts this runtime before Delivery and
 stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
 state immediately after token creation and identity-releases that token for every
-outcome, including ready. Admitted orchestration independently creates and
+outcome, including ready. If Execution is canceled or fails after persistence,
+`ExecutionFacade` chooses the cleanup point, `RoomRouteAdapter` synchronously
+forwards `discard_message_preflight`, and the room runtime performs the
+identity-fenced token release. Cleanup failure is logged without replacing the
+original cancellation or execution error. Admitted orchestration independently creates and
 hydrates its own token after winning the processing claim. Execution and continuation owners release their exact token on terminal and
 paused/awaiting-input paths. Resume creates a fresh owner and hydrates Redis, so
 a cancellation tombstone pre-signals it without accumulating dormant active

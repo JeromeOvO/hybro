@@ -36,6 +36,7 @@ from models.orchestration import (
 )
 from models.response import RoomCenterUserMessageResponse
 from models.run import RunState
+from room.route_adapter import RoomRouteAdapter
 
 
 class RecordingTaskFactory:
@@ -681,6 +682,73 @@ async def test_execute_cancellation_during_preflight_processing_status_discards_
         preflight_context
     )
     deps["room_center"].run_message_preflight_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_real_room_adapter_preserves_processing_cancellation_and_discards_token():
+    preflight_context = object()
+    runtime = SimpleNamespace(
+        _bound=True,
+        get_idempotent_user_message=AsyncMock(return_value=None),
+        persist_message_to_room=AsyncMock(
+            return_value=(
+                RoomCenterUserMessageResponse(
+                    room_id="room-1",
+                    message_id="msg-1",
+                    dispatch_root_message_id="msg-1",
+                    success=True,
+                ),
+                preflight_context,
+            )
+        ),
+        run_message_preflight_to_room=AsyncMock(),
+        discard_message_preflight=MagicMock(),
+    )
+    adapter = RoomRouteAdapter(bound_room_runtime=runtime)
+    facade, _ = _make_facade(room_center=adapter)
+    facade._emit_room_preflight_processing_status = AsyncMock(
+        side_effect=asyncio.CancelledError
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+
+    assert not inspect.iscoroutinefunction(RoomRouteAdapter.discard_message_preflight)
+    runtime.discard_message_preflight.assert_called_once_with(preflight_context)
+    runtime.run_message_preflight_to_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_mask_original_processing_cancellation(caplog):
+    preflight_context = object()
+    runtime = SimpleNamespace(
+        _bound=True,
+        get_idempotent_user_message=AsyncMock(return_value=None),
+        persist_message_to_room=AsyncMock(
+            return_value=(
+                RoomCenterUserMessageResponse(
+                    room_id="room-1",
+                    message_id="msg-1",
+                    dispatch_root_message_id="msg-1",
+                    success=True,
+                ),
+                preflight_context,
+            )
+        ),
+        run_message_preflight_to_room=AsyncMock(),
+        discard_message_preflight=MagicMock(side_effect=RuntimeError("cleanup failed")),
+    )
+    adapter = RoomRouteAdapter(bound_room_runtime=runtime)
+    facade, _ = _make_facade(room_center=adapter)
+    facade._emit_room_preflight_processing_status = AsyncMock(
+        side_effect=asyncio.CancelledError("original cancellation")
+    )
+
+    with pytest.raises(asyncio.CancelledError, match="original cancellation"):
+        await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
+
+    runtime.discard_message_preflight.assert_called_once_with(preflight_context)
+    assert "room preflight cleanup failed" in caplog.text
 
 
 @pytest.mark.asyncio
