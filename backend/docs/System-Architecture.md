@@ -1319,7 +1319,9 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - creates a cancellation token,
    - initializes context memory if needed,
    - chooses a dispatch strategy:
-     - explicit mentions,
+     - explicit mentions; deterministic mention fan-out reports failed rather
+       than ready when no agent message is persisted, while a partial durable
+       fan-out remains executable and is logged with failure counts,
      - room default/saved group,
      - all-agent matching,
      - supervisor if `room.extend_info.use_supervisor` is true,
