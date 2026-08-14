@@ -2958,11 +2958,7 @@ class RoomServices:
         message: RoomUserMessage,
         mentions: list[dict],
     ) -> RoomCenterUserMessageResponse:
-        """
-        Deterministically handle messages that contain @mentions by creating one task per mention.
-
-        This bypasses LLM routing/assignment to guarantee every mentioned agent receives a task.
-        """
+        """Create deterministic tasks for inline mentions without LLM routing."""
         room_id = room.room_id
 
         # Group mentions by context and detect consecutive patterns
@@ -2971,6 +2967,8 @@ class RoomServices:
         )
 
         created_agent_messages = []
+        failed_message_count = 0
+        failed_context_count = 0
         for context_text, group_info in context_groups.items():
             mentions_in_context = group_info["mentions"]
             is_consecutive = group_info["is_consecutive"]
@@ -3013,6 +3011,8 @@ class RoomServices:
                         if agent_message_success:
                             created_agent_messages.append(agent_message)
                             previous_message_id = agent_message.message_id
+                        else:
+                            failed_message_count += 1
                 else:
                     # Non-consecutive: relate all to the user message
                     for task_info in tasks_group:
@@ -3035,11 +3035,48 @@ class RoomServices:
                         )
                         if agent_message_success:
                             created_agent_messages.append(agent_message)
+                        else:
+                            failed_message_count += 1
 
-            except Exception as e:
-                print(
-                    f"Error creating agent messages for context '{context_text}': {e}"
+            except Exception:
+                failed_context_count += 1
+                logger.warning(
+                    "Mention fan-out context failed room_id=%s message_id=%s",
+                    room_id,
+                    message.message_id,
+                    exc_info=True,
                 )
+
+        if not created_agent_messages:
+            error = "Failed to create agent messages for mentioned agents"
+            logger.error(
+                "Mention fan-out created no agent messages room_id=%s message_id=%s "
+                "failed_messages=%d failed_contexts=%d",
+                room_id,
+                message.message_id,
+                failed_message_count,
+                failed_context_count,
+            )
+            return RoomCenterUserMessageResponse(
+                message_id=message.message_id,
+                message=message,
+                success=False,
+                error=error,
+                status_code=500,
+                preflight_outcome="failed",
+                preflight_details=error,
+            )
+
+        if failed_message_count or failed_context_count:
+            logger.warning(
+                "Mention fan-out partially persisted room_id=%s message_id=%s "
+                "created=%d failed_messages=%d failed_contexts=%d",
+                room_id,
+                message.message_id,
+                len(created_agent_messages),
+                failed_message_count,
+                failed_context_count,
+            )
 
         return RoomCenterUserMessageResponse(
             message_id=message.message_id,
