@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14](https://github.com/hybroai/hybro/compare/v0.2.13...v0.2.14) (2026-08-14)
+
+
+### Bug Fixes
+
+* **execution:** address PR review feedback for HITL flow ([cbbeeb1](https://github.com/hybroai/hybro/commit/cbbeeb158cd276d6ab8a73451f1cf5daed5e31e6))
+* **execution:** resolve agent_input_required blockers/unknowns after HITL completion ([f445e64](https://github.com/hybroai/hybro/commit/f445e640dd68a6574cd8931e7bdafaeda1ae83fc))
+* **execution:** unblock HITL for text-only agents and add travel planner clarification flow ([f457cac](https://github.com/hybroai/hybro/commit/f457cac8d49d733c1e7fcb291ac102265d3a768a))
+* **execution:** unblock HITL for text-only agents and add travel planner clarification flow ([8fcaf03](https://github.com/hybroai/hybro/commit/8fcaf032efc2c868f62884fa20e69d281b464d4b))
+* **room:** complete preflight cleanup adapter ([b1dc1c5](https://github.com/hybroai/hybro/commit/b1dc1c5afc61c36d045267dd41353837507e3336))
+* **room:** complete preflight cleanup adapter ([07b3d9f](https://github.com/hybroai/hybro/commit/07b3d9f75b5f68db6c211868b36eeac52ea22bd3))
+* **room:** reject empty mention fanout ([8c8a0d2](https://github.com/hybroai/hybro/commit/8c8a0d284b39cedd927cf78c70fda879b33bfc44))
+* **room:** reject empty mention fanout ([79ff17c](https://github.com/hybroai/hybro/commit/79ff17c8cd472cbb66c72c20fdeaf2d95422c31c))
+* **travel-planner:** correct conversation history ordering for HITL rounds ([608e8ff](https://github.com/hybroai/hybro/commit/608e8ffeadba37c7fd9b77eb818a4b947bd999c5))
+
 ## [0.2.13](https://github.com/hybroai/hybro/compare/v0.2.12...v0.2.13) (2026-08-12)
 
 
