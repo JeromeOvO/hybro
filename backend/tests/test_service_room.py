@@ -113,6 +113,7 @@ def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
         "_fetch_agents_from_set",
         "_require_memory_search",
         "_search_context_memory_results",
+        "_require_context_assembly",
     }
 
     assert dead_helpers.isdisjoint(RoomServices.__dict__)

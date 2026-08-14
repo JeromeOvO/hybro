@@ -302,11 +302,6 @@ class RoomServices:
             )
         return self._facade
 
-    def _require_context_assembly(self) -> ContextAssemblyPort:
-        if self._context_assembly is None:
-            raise RuntimeError("RoomServices context assembly port has not been bound")
-        return self._context_assembly
-
     @staticmethod
     def _assembled_context_text(assembled) -> str:
         metadata = getattr(assembled, "metadata", {}) or {}
