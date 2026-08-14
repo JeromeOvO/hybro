@@ -1169,12 +1169,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             room_runtime.bind_store(room_runtime_store)
-            room_runtime.bind_legacy_dependencies(
-                agent_service=agent_compat_service,
-                agent_selection_service=agent_selection_service,
-                a2a_service=a2a_service,
-                delivery=execution_delivery,
-                remote_task_reader=remote_task_reader,
+            room_runtime.bind_cancellation_control(
                 cancellation_control=_cancellation_runtime,
             )
             room_runtime.bind_facade(_room_facade)

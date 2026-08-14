@@ -30,7 +30,6 @@ from room.timeline_projection import RoomTimelineProjector
 def room_runtime():
     svc = RoomServices()
     svc._store = MagicMock()
-    svc.delivery = MagicMock()
     attachment_reader = MagicMock()
     attachment_reader.get_for_room_file = AsyncMock(
         side_effect=lambda room_id, file_id: {

@@ -38,7 +38,6 @@ from room.compat.runtime import RoomServices
 def room_svc():
     svc = RoomServices()
     svc.database_service = MagicMock()
-    svc.delivery = MagicMock()
     svc._s3_service = SimpleNamespace(
         get_presigned_url=AsyncMock(return_value="https://s3/presigned")
     )
@@ -263,7 +262,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         agent_card,
         content: bytes = b"%PDF",
     ):
-        svc.agent_service = SimpleNamespace(
+        agent_url_reader = SimpleNamespace(
             get_agent_url_by_agent_id=AsyncMock(
                 return_value=SimpleNamespace(agent_url="https://agent.example")
             )
@@ -288,7 +287,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         svc.bind_a2a_inline_file_limits(max_raw_bytes=1024, max_encoded_bytes=4096)
         svc.bind_agent_message_preparation(
             AgentMessagePreparationService(
-                agent_url_reader=svc.agent_service,
+                agent_url_reader=agent_url_reader,
                 agent_room_reader=svc._store,
                 user_message_reader=svc._store,
                 quote_reader=svc._store,

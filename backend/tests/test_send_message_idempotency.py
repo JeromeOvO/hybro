@@ -177,7 +177,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             )
         )
     )
-    room_services.delivery = SimpleNamespace()
     room_services.cancellation_control = SimpleNamespace(
         create_token=MagicMock(return_value=object()),
         release_token=MagicMock(return_value=True),

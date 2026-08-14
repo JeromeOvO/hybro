@@ -19,11 +19,5 @@ class UnboundRoomRuntimeDependency:
         self._raise()
 
 
-UNBOUND_A2A_SERVICE = UnboundRoomRuntimeDependency("A2A service")
-UNBOUND_AGENT_SELECTION_SERVICE = UnboundRoomRuntimeDependency(
-    "agent selection service"
-)
-UNBOUND_AGENT_SERVICE = UnboundRoomRuntimeDependency("agent service")
-UNBOUND_DELIVERY = UnboundRoomRuntimeDependency("delivery")
-UNBOUND_TASK_SERVICE = UnboundRoomRuntimeDependency("task service")
+UNBOUND_CANCELLATION_CONTROL = UnboundRoomRuntimeDependency("cancellation control")
 UNBOUND_RUNTIME_STORE = UnboundRoomRuntimeDependency("runtime store")

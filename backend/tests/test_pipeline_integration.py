@@ -3,7 +3,7 @@ Integration tests for Agent Matching & Dispatch Pipeline
 
 End-to-end tests verifying data flow across:
 - AgentMatcher → AgentSelectionService
-- RoomServices → AgentSelectionService → AgentMatcher
+- RoomServices explicit routing scopes
 - DispatchStrategy resolution
 - required_input_modes threading
 
@@ -120,32 +120,21 @@ async def test_room_team_bypasses_matcher():
         side_effect=lambda aid: _make_agent(aid, f"Agent {aid}", f"Test agent {aid}")
     )
 
-    # Mock agent_selection_service to track if it's called
-    with patch(
-        "agent.selection_service.AgentSelectionService.select_agents_for_message"
-    ) as mock_select:
-        mock_select.return_value = None  # Should not be called
+    room_runtime = RoomServices()
+    room_runtime._store = mock_db
 
-        # Create RoomServices and call _resolve_explicit_target_scope
-        room_runtime = RoomServices()
-        room_runtime._store = mock_db
+    result = await room_runtime._resolve_explicit_target_scope(
+        room=room,
+        message_text="Test message",
+        target_group="room_team",
+        sender_user_id="user123",
+    )
 
-        result = await room_runtime._resolve_explicit_target_scope(
-            room=room,
-            message_text="Test message",
-            target_group="room_team",
-            sender_user_id="user123",
-        )
-
-        # Verify matcher was NOT called
-        mock_select.assert_not_called()
-
-        # Verify result is tuple (selected_agent_set, auto_assign, agents)
-        assert isinstance(result, tuple)
-        selected_agent_set, auto_assign, agents = result
-        assert selected_agent_set == {"agent1": "Agent One", "agent2": "Agent Two"}
-        assert auto_assign is True
-        assert len(agents) == 2
+    assert isinstance(result, tuple)
+    selected_agent_set, auto_assign, agents = result
+    assert selected_agent_set == {"agent1": "Agent One", "agent2": "Agent Two"}
+    assert auto_assign is True
+    assert len(agents) == 2
 
 
 @pytest.mark.asyncio
@@ -167,8 +156,6 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
     room_runtime._store = MagicMock()
     room_runtime._store.get_all_active_agents = AsyncMock(return_value=agents)
     room_runtime._sanitize_routing_scope = AsyncMock(return_value=(agents, []))
-    room_runtime.agent_selection_service = MagicMock()
-    room_runtime.agent_selection_service.select_agents_for_message = AsyncMock()
 
     result = await room_runtime._resolve_explicit_target_scope(
         room=room,
@@ -193,7 +180,6 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         sender_user_id="user123",
         required_input_modes=None,
     )
-    room_runtime.agent_selection_service.select_agents_for_message.assert_not_awaited()
 
 
 def test_dispatch_strategy_resolution_all_cases():
