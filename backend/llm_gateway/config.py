@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
 class LLMGatewayConfig:
+    generation_provider: Literal["openai", "deepseek"] = "openai"
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.2
     request_timeout_seconds: float = 60.0
@@ -19,6 +20,11 @@ class LLMGatewayConfig:
     def from_settings(cls, settings_obj: Any) -> "LLMGatewayConfig":
         defaults = cls()
         return cls(
+            generation_provider=_string_setting(
+                settings_obj,
+                "llm_gateway_generation_provider",
+                defaults.generation_provider,
+            ),
             max_attempts=_setting(
                 settings_obj, "llm_gateway_max_attempts", defaults.max_attempts
             ),

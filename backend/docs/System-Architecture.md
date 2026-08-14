@@ -285,13 +285,21 @@ relay transport.
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
 adapters under `llm_gateway/providers/` are the only LLM code that imports
-OpenAI or Google GenAI SDKs. The public gateway layer resolves
-logical model names through `ModelRegistryImpl`, applies centralized retry and
+OpenAI or Google GenAI SDKs. `DeepSeekProvider` uses DeepSeek's
+OpenAI-compatible Chat Completions endpoint while keeping its credentials and
+base URL separate from OpenAI. The public gateway layer resolves logical model
+names through `ModelRegistryImpl`, applies centralized retry and
 timeout policy through `LLMGatewayConfig`, and exposes text, structured JSON,
 embedding, and streaming operations through protocols in `common.protocols`.
 `LLMGatewayConfig.from_settings()` reads typed `LLM_GATEWAY_*` policy fields;
 `ModelRegistryImpl` remains responsible for mapping logical routes to concrete
-provider model IDs.
+provider model IDs. `LLM_GATEWAY_GENERATION_PROVIDER` defaults to `openai`; when
+set to `deepseek`, the existing `lead_ai_model`, `classifier_ai_model`,
+`context_memory_json_model`, and `supervisor_model` routes all resolve to
+`DEEPSEEK_MODEL_NAME`, so consumers remain provider-agnostic. DeepSeek schema
+calls use a schema-bearing prompt plus its `json_object` response mode rather
+than claiming server-enforced strict JSON Schema. The `embedding_model` route
+remains OpenAI-backed because DeepSeek does not expose an embeddings API.
 
 Focused workflow services under `llm_gateway/services/` wrap prompt workflows
 without importing domain models:

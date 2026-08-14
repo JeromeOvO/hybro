@@ -1162,6 +1162,37 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     assert registry.supports_capability("context_memory_json_model", "json_schema")
 
 
+def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
+    from common.config.settings import Settings
+    from llm_gateway.model_registry import ModelRegistryImpl
+
+    settings = Settings(
+        _env_file=None,
+        llm_gateway_generation_provider="deepseek",
+        deepseek_api_key="test-deepseek-key",
+        deepseek_model_name="deepseek-v4-pro",
+        embedding_model="embed-openai",
+    )
+    registry = ModelRegistryImpl(settings)
+
+    for logical_name in (
+        "lead_ai_model",
+        "classifier_ai_model",
+        "context_memory_json_model",
+        "supervisor_model",
+    ):
+        model = registry.get_model(logical_name)
+        assert model.provider == "deepseek"
+        assert model.model_id == "deepseek-v4-pro"
+        assert model.capabilities == ["json_schema"]
+
+    embedding = registry.get_model("embedding_model")
+    assert embedding.provider == "openai"
+    assert embedding.model_id == "embed-openai"
+    assert embedding.capabilities == ["embedding"]
+    assert registry.get_model("gemini_model_name").provider == "gemini"
+
+
 @pytest.mark.asyncio
 async def test_openai_provider_generates_structured_responses_and_embeddings():
     from llm_gateway.providers.openai_provider import OpenAIProvider

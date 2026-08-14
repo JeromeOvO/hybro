@@ -1,5 +1,6 @@
 import math
 import os
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -44,12 +45,17 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     supervisor_model: str | None = None
 
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model_name: str = "deepseek-v4-flash"
+
     google_api_key: str = ""
     gemini_api_key: str = ""
     gemini_model_name: str = "gemini-2.0-flash"
     gemini_embedding_model_name: str = "gemini-embedding-exp-03-07"
 
     # LLM gateway routing and runtime policy
+    llm_gateway_generation_provider: Literal["openai", "deepseek"] = "openai"
     llm_gateway_max_attempts: int = 2
     llm_gateway_retry_backoff_seconds: float = 0.2
     llm_gateway_request_timeout_seconds: float = 60.0
@@ -279,6 +285,16 @@ class Settings(BaseSettings):
             return [url.strip() for url in v.split(",") if url.strip()]
         return v
 
+    @field_validator("llm_gateway_generation_provider", mode="before")
+    @classmethod
+    def validate_llm_gateway_generation_provider(cls, value):
+        normalized = str(value or "openai").strip().lower()
+        if normalized not in {"openai", "deepseek"}:
+            raise ValueError(
+                "LLM_GATEWAY_GENERATION_PROVIDER must be openai or deepseek"
+            )
+        return normalized
+
     @field_validator("log_level", mode="before")
     @classmethod
     def validate_log_level(cls, value):
@@ -372,6 +388,25 @@ class Settings(BaseSettings):
         if self.a2a_inline_message_max_encoded_bytes <= 0:
             self.a2a_inline_message_max_encoded_bytes = 4 * math.ceil(
                 self.a2a_inline_file_max_raw_bytes / 3
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_deepseek_generation_config(self):
+        if self.llm_gateway_generation_provider != "deepseek":
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("DEEPSEEK_API_KEY", self.deepseek_api_key),
+                ("DEEPSEEK_BASE_URL", self.deepseek_base_url),
+                ("DEEPSEEK_MODEL_NAME", self.deepseek_model_name),
+            )
+            if not str(value or "").strip()
+        ]
+        if missing:
+            raise ValueError(
+                "DeepSeek generation requires non-empty " + ", ".join(missing)
             )
         return self
 

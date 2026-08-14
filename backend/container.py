@@ -605,11 +605,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             app.state.execution_run_lifecycle = run_lifecycle
 
-            model_registry = ModelRegistryImpl()
             llm_gateway_config = LLMGatewayConfig.from_settings(runtime.settings)
+            model_registry = ModelRegistryImpl(
+                runtime.settings,
+                generation_provider=llm_gateway_config.generation_provider,
+            )
             llm_provider = LLMGatewayImpl(
                 model_registry=model_registry,
                 config=llm_gateway_config,
+                settings_obj=runtime.settings,
             )
             supervisor_llm_service = SupervisorLLMService(
                 llm_provider=llm_provider,

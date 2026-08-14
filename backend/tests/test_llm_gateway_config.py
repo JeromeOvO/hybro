@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from common.config.settings import Settings
 from llm_gateway.config import LLMGatewayConfig
 
@@ -5,6 +8,8 @@ from llm_gateway.config import LLMGatewayConfig
 def test_from_settings_wires_gateway_settings_fields():
     settings = Settings(
         _env_file=None,
+        llm_gateway_generation_provider="deepseek",
+        deepseek_api_key="test-deepseek-key",
         llm_gateway_max_attempts=4,
         llm_gateway_retry_backoff_seconds=1.25,
         llm_gateway_request_timeout_seconds=31.0,
@@ -20,6 +25,7 @@ def test_from_settings_wires_gateway_settings_fields():
     config = LLMGatewayConfig.from_settings(settings)
 
     assert config == LLMGatewayConfig(
+        generation_provider="deepseek",
         max_attempts=4,
         retry_backoff_seconds=1.25,
         request_timeout_seconds=31.0,
@@ -31,3 +37,23 @@ def test_from_settings_wires_gateway_settings_fields():
         default_embedding_model="custom_embedding_route",
         default_supervisor_model="custom_supervisor_route",
     )
+
+
+def test_settings_rejects_unknown_generation_provider():
+    with pytest.raises(
+        ValidationError,
+        match="LLM_GATEWAY_GENERATION_PROVIDER must be openai or deepseek",
+    ):
+        Settings(_env_file=None, llm_gateway_generation_provider="other")
+
+
+def test_settings_requires_deepseek_credentials_when_selected():
+    with pytest.raises(
+        ValidationError,
+        match="DeepSeek generation requires non-empty DEEPSEEK_API_KEY",
+    ):
+        Settings(
+            _env_file=None,
+            llm_gateway_generation_provider="deepseek",
+            deepseek_api_key="",
+        )
