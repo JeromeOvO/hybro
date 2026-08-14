@@ -16,7 +16,6 @@ from room.compat.runtime import RoomServices
 def room_svc():
     svc = RoomServices()
     svc.database_service = MagicMock()
-    svc.delivery = MagicMock()
     reader = MagicMock()
     reader.get_for_room_file = AsyncMock(
         side_effect=lambda room_id, file_id: (

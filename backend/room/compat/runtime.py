@@ -85,12 +85,8 @@ from room.attachments import (
     resolve_room_attachments,
 )
 from room.compat.unbound import (
-    UNBOUND_A2A_SERVICE,
-    UNBOUND_AGENT_SELECTION_SERVICE,
-    UNBOUND_AGENT_SERVICE,
-    UNBOUND_DELIVERY,
+    UNBOUND_CANCELLATION_CONTROL,
     UNBOUND_RUNTIME_STORE,
-    UNBOUND_TASK_SERVICE,
 )
 from room.deletion import RoomDeletionService
 from room.idempotency import (
@@ -155,13 +151,8 @@ class RoomServices:
         if room_store is None:
             room_store = UNBOUND_RUNTIME_STORE
         self._store = room_store
-        self.agent_service = UNBOUND_AGENT_SERVICE
-        self.agent_selection_service = UNBOUND_AGENT_SELECTION_SERVICE
         self.message_parser_service = None
-        self.a2a_service = UNBOUND_A2A_SERVICE
-        self.delivery = UNBOUND_DELIVERY
-        self.cancellation_control = UNBOUND_DELIVERY
-        self.remote_task_reader = UNBOUND_TASK_SERVICE
+        self.cancellation_control = UNBOUND_CANCELLATION_CONTROL
         self._room_files = None
         self._facade = None
         self._bound = False
@@ -180,17 +171,13 @@ class RoomServices:
         self._timeline_projector: RoomTimelineProjector | None = None
         self._room_deletion: RoomDeletionService | None = None
 
-    @property
-    def _cancellation(self):
-        return self.cancellation_control
-
     def _release_cancellation_token(
         self,
         message_id: str,
         token: CancellationToken | None,
     ) -> None:
         if token is not None:
-            self._cancellation.release_token(message_id, token)
+            self.cancellation_control.release_token(message_id, token)
 
     def bind_room_files(self, room_files) -> None:
         self._room_files = room_files
@@ -199,24 +186,10 @@ class RoomServices:
         """Inject the room runtime persistence store explicitly at startup."""
         self._store = store
 
-    def bind_legacy_dependencies(
-        self,
-        *,
-        agent_service,
-        agent_selection_service,
-        a2a_service,
-        delivery,
-        remote_task_reader,
-        cancellation_control,
-    ) -> None:
-        self.agent_service = agent_service
-        self.agent_selection_service = agent_selection_service
-        self.a2a_service = a2a_service
-        self.delivery = delivery
+    def bind_cancellation_control(self, *, cancellation_control) -> None:
         if cancellation_control is None:
             raise RuntimeError("RoomServices cancellation_control is required")
         self.cancellation_control = cancellation_control
-        self.remote_task_reader = remote_task_reader
 
     @property
     def room_files(self):
@@ -2479,11 +2452,11 @@ class RoomServices:
         # (and later the queue step in RoomMessageCenter) can detect cancels
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
-        token = self._cancellation.create_token(user_message.message_id)
+        token = self.cancellation_control.create_token(user_message.message_id)
         try:
             # Hydrate an L1 miss before the long post-persistence parse begins.
             # check_cancelled signals the newly owned token when Redis has a tombstone.
-            await self._cancellation.check_cancelled(user_message.message_id)
+            await self.cancellation_control.check_cancelled(user_message.message_id)
         except BaseException:
             self._release_cancellation_token(user_message.message_id, token)
             raise

@@ -119,7 +119,11 @@ Examples:
 
 - Room CRUD, membership, user-message persistence/preflight, and route-shaped
   room behavior remain in `room.compat.runtime`, `room.route_adapter`, and
-  `room.membership_source`. Outbound agent-message preparation is owned by
+  `room.membership_source`. From the former compatibility execution-service
+  bundle, the runtime retains only the narrow cancellation-control port for
+  message token lifecycle; it does not own Delivery, A2A, agent selection, agent
+  compatibility, or remote-task-reader dependencies. Outbound agent-message
+  preparation is owned by
   `room.agent_message_preparation.AgentMessagePreparationService`; the
   compatibility runtime keeps only a signature-preserving delegate. Public room
   timeline projection is owned by `room.timeline_projection.RoomTimelineProjector`.
