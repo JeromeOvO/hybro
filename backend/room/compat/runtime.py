@@ -1,6 +1,5 @@
 import re
 import uuid
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -14,7 +13,6 @@ from common.dto import (
     RoomInfo,
     UserMessageInsertResult,
 )
-from common.message_commit_events import publish_message_committed
 from common.protocols.context_memory_protocols import (
     ContextAssemblyPort,
     RoomMemoryCleanupPort,
@@ -98,6 +96,10 @@ from room.timeline import (
     encode_timeline_cursor,
 )
 from room.timeline_projection import RoomTimelineProjector
+from room.user_message_persistence import (
+    UserMessageCommitCommand,
+    UserMessageCommitService,
+)
 
 logger = get_logger(__name__)
 
@@ -155,7 +157,6 @@ class RoomServices:
         self._bound = False
         self._context_assembly: ContextAssemblyPort | None = None
         self._room_memory_cleanup: RoomMemoryCleanupPort | None = None
-        self._internal_event_publisher = None
         self._attachment_metadata_reader = None
         self._attachment_content_reader = None
         self._a2a_inline_file_max_raw_bytes = 5 * 1024 * 1024
@@ -166,6 +167,7 @@ class RoomServices:
         self._agent_message_preparation = None
         self._timeline_projector: RoomTimelineProjector | None = None
         self._room_deletion: RoomDeletionService | None = None
+        self._user_message_commit: UserMessageCommitService | None = None
 
     def _release_cancellation_token(
         self,
@@ -211,9 +213,6 @@ class RoomServices:
         preparation = getattr(self, "_agent_message_preparation", None)
         if preparation is not None and context_assembly is not None:
             preparation.bind_context_assembly(context_assembly)
-
-    def bind_internal_event_publisher(self, internal_event_publisher) -> None:
-        self._internal_event_publisher = internal_event_publisher
 
     def bind_message_parser_service(self, service) -> None:
         self.message_parser_service = service
@@ -261,6 +260,17 @@ class RoomServices:
 
     def bind_room_deletion(self, service: RoomDeletionService) -> None:
         self._room_deletion = service
+
+    def bind_user_message_commit(self, service: UserMessageCommitService) -> None:
+        self._user_message_commit = service
+
+    def _require_user_message_commit(self) -> UserMessageCommitService:
+        service = getattr(self, "_user_message_commit", None)
+        if service is None:
+            raise RuntimeError(
+                "RoomServices user-message commit service has not been bound"
+            )
+        return service
 
     def _require_room_deletion(self) -> RoomDeletionService:
         service = getattr(self, "_room_deletion", None)
@@ -2595,134 +2605,14 @@ class RoomServices:
         idempotency_fingerprint: str | None = None,
         idempotency_fingerprint_version: int | None = None,
     ) -> UserMessageInsertResult:
-        async with self._hold_room_write(user_message.room_id, "user-message"):
-            return await self._persist_user_message_with_lease(
-                user_message,
-                room_agent_set=room_agent_set,
+        return await self._require_user_message_commit().commit(
+            UserMessageCommitCommand(
+                message=user_message,
+                room_agent_set=room_agent_set or {},
                 idempotency_fingerprint=idempotency_fingerprint,
                 idempotency_fingerprint_version=idempotency_fingerprint_version,
             )
-
-    @asynccontextmanager
-    async def _hold_room_write(self, room_id: str, owner: str):
-        files = getattr(self, "_room_files", None)
-        if files is None:
-            yield None
-            return
-        async with files.write_lease(room_id, owner) as lease_id:
-            yield lease_id
-
-    async def _persist_user_message_with_lease(
-        self,
-        user_message: RoomUserMessage,
-        *,
-        room_agent_set: dict[str, str] | None = None,
-        idempotency_fingerprint: str | None = None,
-        idempotency_fingerprint_version: int | None = None,
-    ) -> UserMessageInsertResult:
-        """Persist once; only the winning insert commits downstream side effects."""
-        attachments = (
-            user_message.message_content.attachments
-            if user_message.message_content
-            else None
         )
-        file_ids = [attachment.file_id for attachment in attachments or []]
-        facade = self._require_facade()
-        if file_ids:
-            facade.ensure_user_message_id(user_message)
-            try:
-                await self.room_files.claim_references(
-                    room_id=user_message.room_id,
-                    owner_id=user_message.user_id or "",
-                    message_id=user_message.message_id,
-                    file_ids=file_ids,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Could not claim room file references for message %s",
-                    user_message.message_id,
-                    exc_info=True,
-                )
-                try:
-                    await self.room_files.release_references(
-                        message_id=user_message.message_id,
-                        file_ids=file_ids,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Could not release partial room file claims for message %s",
-                        user_message.message_id,
-                        exc_info=True,
-                    )
-                raise UserMessagePersistenceError(
-                    "Could not claim room file references"
-                ) from exc
-
-        try:
-            persistence = await facade.persist_user_message(
-                user_message,
-                idempotency_fingerprint=idempotency_fingerprint,
-                idempotency_fingerprint_version=idempotency_fingerprint_version,
-            )
-        except Exception:
-            if file_ids:
-                try:
-                    await self.room_files.release_references(
-                        message_id=user_message.message_id,
-                        file_ids=file_ids,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Could not release pending room file references for %s; "
-                        "preserving persistence error and awaiting durable recovery",
-                        user_message.message_id,
-                        exc_info=True,
-                    )
-            raise
-
-        if not persistence.created:
-            if file_ids:
-                try:
-                    await self.room_files.release_references(
-                        message_id=user_message.message_id,
-                        file_ids=file_ids,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Could not release losing room file references for %s; "
-                        "returning replay and awaiting durable recovery",
-                        user_message.message_id,
-                        exc_info=True,
-                    )
-            return persistence
-
-        if file_ids:
-            try:
-                await self.room_files.commit_references(
-                    message_id=user_message.message_id,
-                    file_ids=file_ids,
-                )
-            except Exception:
-                logger.warning(
-                    "Room file references remain pending for recovery: %s",
-                    user_message.message_id,
-                    exc_info=True,
-                )
-        internal_event_publisher = getattr(self, "_internal_event_publisher", None)
-        if internal_event_publisher is None:
-            raise RuntimeError(
-                "RoomServices.bind_internal_event_publisher() not called - startup incomplete"
-            )
-        # Wait for local projection before preflight can process agent messages.
-        await publish_message_committed(
-            internal_event_publisher,
-            room_id=user_message.room_id,
-            message_id=user_message.message_id,
-            message_type="user",
-            room_agent_set=room_agent_set or {},
-            wait_for_handlers=True,
-        )
-        return persistence
 
     async def _handle_mentions_flow(
         self,
