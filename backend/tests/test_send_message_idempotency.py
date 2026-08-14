@@ -17,6 +17,7 @@ from models.room import Room
 from room import RoomFacade
 from room.compat.runtime import RoomServices
 from room.repository import MessageMongoRepository
+from room.user_message_persistence import UserMessageCommitService
 
 
 class _RacingUniqueCollection:
@@ -202,7 +203,13 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     )
     internal_publisher = _InternalEventPublisher()
     delivery_publisher = _DeliveryEventPublisher()
-    room_services.bind_internal_event_publisher(internal_publisher)
+    room_services.bind_user_message_commit(
+        UserMessageCommitService(
+            writer=room_facade,
+            files=room_files,
+            internal_event_publisher=internal_publisher,
+        )
+    )
     preflight_count = 0
 
     async def preflight(context):

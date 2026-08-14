@@ -28,6 +28,10 @@ from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 from room.compat.runtime import RoomServices
 from room.deletion import RoomDeletionService
 from room.idempotency import IdempotencyConflictError, UserMessagePersistenceError
+from room.user_message_persistence import (
+    UserMessageCommitCommand,
+    UserMessageCommitService,
+)
 
 
 @pytest.fixture
@@ -58,6 +62,22 @@ class RecordingEventPublisher:
     ) -> None:
         self.internal_events.append(event)
         self.wait_flags.append(wait_for_handlers)
+
+
+def _bind_user_message_commit(
+    svc: RoomServices,
+    *,
+    facade,
+    publisher,
+    room_files=None,
+) -> UserMessageCommitService:
+    service = UserMessageCommitService(
+        writer=facade,
+        files=room_files,
+        internal_event_publisher=publisher,
+    )
+    svc.bind_user_message_commit(service)
+    return service
 
 
 @pytest.mark.asyncio
@@ -375,7 +395,7 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
         document={},
     )
     svc.bind_facade(facade)
-    svc.bind_internal_event_publisher(publisher)
+    _bind_user_message_commit(svc, facade=facade, publisher=publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -417,7 +437,7 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
         "insert failed"
     )
     svc.bind_facade(facade)
-    svc.bind_internal_event_publisher(publisher)
+    _bind_user_message_commit(svc, facade=facade, publisher=publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -461,7 +481,12 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
     room_files.release_references = AsyncMock()
     svc.bind_facade(facade)
     svc.bind_room_files(room_files)
-    svc.bind_internal_event_publisher(publisher)
+    commit_service = _bind_user_message_commit(
+        svc,
+        facade=facade,
+        publisher=publisher,
+        room_files=room_files,
+    )
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="",
@@ -479,9 +504,8 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
         ),
     )
 
-    result = await svc._persist_user_message_with_lease(
-        user_message,
-        room_agent_set={},
+    result = await commit_service.commit(
+        UserMessageCommitCommand(message=user_message, room_agent_set={})
     )
 
     assert result.created is True
@@ -530,7 +554,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
         document={},
     )
     svc.bind_facade(facade)
-    svc.bind_internal_event_publisher(publisher)
+    _bind_user_message_commit(svc, facade=facade, publisher=publisher)
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -691,7 +715,6 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
         side_effect=AssertionError("replay must not create quote")
     )
     publisher = RecordingEventPublisher()
-    svc.bind_internal_event_publisher(publisher)
 
     response, context = await svc.persist_message_to_room(
         RoomCenterUserMessageRequest(
@@ -807,7 +830,12 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
     room_files.commit_references = AsyncMock()
     svc.bind_room_files(room_files)
     publisher = RecordingEventPublisher()
-    svc.bind_internal_event_publisher(publisher)
+    _bind_user_message_commit(
+        svc,
+        facade=facade,
+        publisher=publisher,
+        room_files=room_files,
+    )
 
     async def resolve_attachments(_request, user_message):
         user_message.message_content.attachments = [
@@ -886,7 +914,12 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
     svc.bind_facade(facade)
     svc.bind_room_files(room_files)
     publisher = RecordingEventPublisher()
-    svc.bind_internal_event_publisher(publisher)
+    commit_service = _bind_user_message_commit(
+        svc,
+        facade=facade,
+        publisher=publisher,
+        room_files=room_files,
+    )
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="loser-message",
@@ -904,10 +937,13 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
         ),
     )
 
-    result = await svc._persist_user_message_with_lease(
-        user_message,
-        idempotency_fingerprint="fingerprint-1",
-        idempotency_fingerprint_version=1,
+    result = await commit_service.commit(
+        UserMessageCommitCommand(
+            message=user_message,
+            room_agent_set={},
+            idempotency_fingerprint="fingerprint-1",
+            idempotency_fingerprint_version=1,
+        )
     )
 
     assert result.created is False

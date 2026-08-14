@@ -420,6 +420,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from room.deletion import RoomDeletionService
             from room.route_adapter import RoomRouteAdapter
             from room.timeline_projection import RoomTimelineProjector
+            from room.user_message_persistence import UserMessageCommitService
 
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
@@ -1169,10 +1170,22 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 cancellation_control=_cancellation_runtime,
             )
             room_runtime.bind_facade(_room_facade)
-            room_runtime.bind_internal_event_publisher(
-                _eventing_deps.internal_event_publisher
-            )
             room_runtime.bind_room_files(file_storage)
+            room_runtime.bind_user_message_commit(
+                UserMessageCommitService(
+                    writer=SimpleNamespace(
+                        ensure_user_message_id=_room_facade.ensure_user_message_id,
+                        persist_user_message=_room_facade.persist_user_message,
+                    ),
+                    files=SimpleNamespace(
+                        write_lease=file_storage.write_lease,
+                        claim_references=file_storage.claim_references,
+                        commit_references=file_storage.commit_references,
+                        release_references=file_storage.release_references,
+                    ),
+                    internal_event_publisher=(_eventing_deps.internal_event_publisher),
+                )
+            )
             room_runtime.bind_attachment_metadata_reader(file_storage)
             room_runtime.bind_attachment_content_reader(file_storage)
             room_runtime.bind_timeline_projector(

@@ -1306,13 +1306,14 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - validates the request and message size,
    - resolves and validates attachments,
    - loads the room and target scope,
-   - materializes a quote and pending attachment claims before attempting the
-     atomic user-message insert,
-   - treats only `created=True` as permission to commit attachment references,
-     publish `message_committed`, create a cancellation token, and continue to
-     preflight,
-   - compensates a concurrent losing insert by releasing only the loser's
-     message-scoped pending claims and deleting only its newly created quote,
+   - materializes a quote before durable user-message commit,
+   - delegates the write lease, attachment claims, atomic insert, winner/loser
+     file-reference effects, and synchronous `message_committed` publication to
+     `UserMessageCommitService`,
+   - treats only the service's `created=True` result as permission to create a
+     cancellation token and continue to preflight,
+   - compensates a concurrent losing insert by deleting only its newly created
+     quote; the commit service releases only the loser's message-scoped claims,
    - returns preflight outcome metadata for Execution-owned processing-status
      emission,
    - creates a cancellation token,
@@ -1324,6 +1325,13 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      - supervisor if `room.extend_info.use_supervisor` is true,
    - either creates initial agent messages or marks the user message with
      supervisor preparation data.
+
+`MessageMongoRepository` remains the authority for unique-index arbitration,
+and `RoomFacade` remains the canonical serializer/writer. The commit service owns
+only durable effect ordering and compensation around that writer. Event
+publication still follows the database insert and is not a transactional outbox;
+a publisher failure propagates without rolling back the inserted message or
+committed file references.
 
 6. `ExecutionFacade.start_orchestration` builds an `OrchestrationRequest` and
    calls `RoomMessageCenter.process_room_user_message`.
