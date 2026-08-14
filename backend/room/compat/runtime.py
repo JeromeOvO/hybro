@@ -169,6 +169,10 @@ class RoomServices:
         self._room_deletion: RoomDeletionService | None = None
         self._user_message_commit: UserMessageCommitService | None = None
 
+    def reset_bindings(self) -> None:
+        """Clear process-global composition state before a new lifespan starts."""
+        self.__init__()
+
     def _release_cancellation_token(
         self,
         message_id: str,
@@ -260,6 +264,43 @@ class RoomServices:
 
     def bind_room_deletion(self, service: RoomDeletionService) -> None:
         self._room_deletion = service
+
+    def missing_required_bindings(self) -> list[str]:
+        checks = (
+            (
+                "runtime_store",
+                getattr(self, "_store", None) is not None
+                and getattr(self, "_store", None) is not UNBOUND_RUNTIME_STORE,
+            ),
+            ("facade", getattr(self, "_facade", None) is not None),
+            (
+                "cancellation_control",
+                getattr(self, "cancellation_control", None) is not None
+                and getattr(self, "cancellation_control", None)
+                is not UNBOUND_CANCELLATION_CONTROL,
+            ),
+            (
+                "message_parser_service",
+                getattr(self, "message_parser_service", None) is not None,
+            ),
+            (
+                "user_message_commit",
+                getattr(self, "_user_message_commit", None) is not None,
+            ),
+            (
+                "timeline_projector",
+                getattr(self, "_timeline_projector", None) is not None,
+            ),
+            (
+                "room_deletion",
+                getattr(self, "_room_deletion", None) is not None,
+            ),
+            (
+                "agent_message_preparation",
+                getattr(self, "_agent_message_preparation", None) is not None,
+            ),
+        )
+        return [name for name, is_bound in checks if not is_bound]
 
     def bind_user_message_commit(self, service: UserMessageCommitService) -> None:
         self._user_message_commit = service
