@@ -44,6 +44,9 @@ LLM_SETTINGS_FIELDS = {
     "gemini_model_name",
     "gemini_embedding_model_name",
     "supervisor_model",
+    "deepseek_api_key",
+    "deepseek_base_url",
+    "deepseek_model_name",
     "use_bedrock_supervisor",
     "bedrock_supervisor_model",
     "openai_api_key",
@@ -77,6 +80,7 @@ def test_llm_gateway_services_import_boundary():
     forbidden_provider_names = {
         "OpenAIProvider",
         "GeminiProvider",
+        "DeepSeekProvider",
         "BedrockProvider",
     }
     for path in services_path.rglob("*.py"):
@@ -135,6 +139,8 @@ def test_container_binds_focused_llm_services_to_production_consumers():
     source = Path("container.py").read_text()
     main_source = Path("main.py").read_text()
     expected_snippets = [
+        "generation_provider=llm_gateway_config.generation_provider,",
+        "settings_obj=runtime.settings,",
         "supervisor_llm_service = SupervisorLLMService(",
         "summary_llm_service = SummaryLLMService(llm_provider=llm_provider)",
         "agent_selection_llm_service = AgentSelectionLLMService(",

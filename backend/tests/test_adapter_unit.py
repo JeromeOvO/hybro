@@ -1162,6 +1162,63 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     assert registry.supports_capability("context_memory_json_model", "json_schema")
 
 
+def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
+    from common.config.settings import Settings
+    from llm_gateway.model_registry import ModelRegistryImpl
+
+    settings = Settings(
+        _env_file=None,
+        deepseek_api_key="test-deepseek-key",
+        deepseek_model_name="deepseek-v4-pro",
+        embedding_model="embed-openai",
+    )
+    registry = ModelRegistryImpl(settings)
+
+    for logical_name in (
+        "lead_ai_model",
+        "classifier_ai_model",
+        "context_memory_json_model",
+        "supervisor_model",
+    ):
+        model = registry.get_model(logical_name)
+        assert model.provider == "deepseek"
+        assert model.model_id == "deepseek-v4-pro"
+        assert model.capabilities == ["json_schema"]
+
+    embedding = registry.get_model("embedding_model")
+    assert embedding.provider == "openai"
+    assert embedding.model_id == "embed-openai"
+    assert embedding.capabilities == ["embedding"]
+    assert registry.get_model("gemini_model_name").provider == "gemini"
+
+
+def test_model_registry_uses_gemini_when_it_is_the_only_configured_provider():
+    from common.config.settings import Settings
+    from llm_gateway.model_registry import ModelRegistryImpl
+
+    settings = Settings(
+        _env_file=None,
+        deepseek_api_key="",
+        openai_api_key="",
+        google_api_key="google-key",
+        gemini_api_key="",
+        gemini_model_name="gemini-generation",
+    )
+    registry = ModelRegistryImpl(settings)
+
+    for logical_name in (
+        "lead_ai_model",
+        "classifier_ai_model",
+        "context_memory_json_model",
+        "supervisor_model",
+    ):
+        model = registry.get_model(logical_name)
+        assert model.provider == "gemini"
+        assert model.model_id == "gemini-generation"
+
+    assert registry.get_model("embedding_model").provider == "openai"
+
+
 @pytest.mark.asyncio
 async def test_openai_provider_generates_structured_responses_and_embeddings():
     from llm_gateway.providers.openai_provider import OpenAIProvider

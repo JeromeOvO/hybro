@@ -4,15 +4,16 @@ from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import aclosing
 from typing import Any, Literal, TypeVar
 
+from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
 from common.observability import get_logger, safe_exception_metadata
 from common.protocols import LLMProviderAdapter
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMModelRoutingError, LLMStreamingUnsupportedError
 from llm_gateway.model_registry import ModelRegistryImpl
-from llm_gateway.providers import GeminiProvider, OpenAIProvider
+from llm_gateway.providers import DeepSeekProvider, GeminiProvider, OpenAIProvider
 
-ProviderHint = Literal["openai", "gemini"]
+ProviderHint = Literal["openai", "deepseek", "gemini"]
 T = TypeVar("T")
 logger = get_logger(__name__)
 
@@ -23,13 +24,30 @@ class LLMGatewayImpl:
         model_registry: ModelRegistryImpl | None = None,
         providers: dict[str, LLMProviderAdapter] | None = None,
         config: LLMGatewayConfig | None = None,
+        settings_obj: Any = None,
     ) -> None:
-        self._model_registry = model_registry or ModelRegistryImpl()
-        self.config = config or LLMGatewayConfig()
+        settings_obj = settings_obj or settings
+        self.config = config or LLMGatewayConfig.from_settings(settings_obj)
+        self._model_registry = model_registry or ModelRegistryImpl(
+            settings_obj,
+            generation_provider=self.config.generation_provider,
+        )
         if providers is None:
             providers = {
-                "openai": OpenAIProvider(),
-                "gemini": GeminiProvider(),
+                "openai": OpenAIProvider(
+                    api_key=getattr(settings_obj, "openai_api_key", "")
+                ),
+                "deepseek": DeepSeekProvider(
+                    api_key=getattr(settings_obj, "deepseek_api_key", ""),
+                    base_url=getattr(
+                        settings_obj,
+                        "deepseek_base_url",
+                        "https://api.deepseek.com",
+                    ),
+                ),
+                "gemini": GeminiProvider(
+                    api_key=getattr(settings_obj, "google_api_key", "")
+                ),
             }
         self._providers: dict[str, LLMProviderAdapter] = providers
 
@@ -460,7 +478,11 @@ class LLMGatewayImpl:
                 model_id=model,
                 logical_name=model,
                 provider=provider_hint,
-                capabilities=["json_schema", "tool_use", "vision"],
+                capabilities=(
+                    ["json_schema"]
+                    if provider_hint == "deepseek"
+                    else ["json_schema", "tool_use", "vision"]
+                ),
                 max_context_tokens=0,
             )
         if provider_hint is not None and model_info.provider != provider_hint:

@@ -81,7 +81,14 @@ sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
 `./scripts/hybro start` runs the three `ensure_*` steps for you whenever
 `.env` exists, so after the initial `cp .env.example .env` (plus setting
 `OPENAI_API_KEY`) you can just run `./scripts/hybro start --recreate` to
-pick up runtime values. If you also change frontend-facing `NEXT_PUBLIC_*`
+pick up runtime values. To run the backend's classifier, supervisor, context
+memory, and synthesis generation through DeepSeek instead, set
+`DEEPSEEK_API_KEY` and optionally `DEEPSEEK_MODEL_NAME`. Backend generation
+selects the first configured provider in this order: DeepSeek, OpenAI, Gemini.
+This does not change `default_agents/`, which are separate containers receiving
+only an allow-listed subset of the root `.env` and still require
+`OPENAI_API_KEY`; the optional embedding route also remains OpenAI-backed. If
+you also change frontend-facing `NEXT_PUBLIC_*`
 keys, use `./scripts/hybro start --build --recreate` - those values are
 Docker build args baked into the Next.js bundle, so recreate alone keeps
 the old browser config. `frontend/.env.local` is generated from `.env` -
@@ -96,7 +103,7 @@ do not hand-edit it.
 ./scripts/hybro start --build            # rebuild images (after code/deps change)
 ./scripts/hybro start --recreate         # recreate containers (runtime .env changes)
 ./scripts/hybro start --build --recreate # rebuild+recreate (NEXT_PUBLIC_* / image changes)
-./scripts/hybro start --check-key        # fail fast if OPENAI_API_KEY is unset
+./scripts/hybro start --check-key        # validate the OpenAI key used by default agents
 ./scripts/hybro logs backend             # stream one service (or all if no arg)
 ./scripts/hybro status                   # docker compose ps --all
 ./scripts/hybro stop                     # stop but keep containers
@@ -116,8 +123,14 @@ The repository is split into these primary components:
 - `frontend/`: A Next.js 16 (Turbopack) application for chat, agent discovery, agent management, Hub status, and inspection.
 - `default_agents/`: A collection of ready-to-use A2A agents, each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
 
-## API key
-The default agents use the **same** `OPENAI_API_KEY` as the backend. Set it once in the repo-root `.env` (copy from `.env.example`). Agents register regardless, but calls will fail until a valid key is provided.
+## API keys
+By default, the backend and default agents share `OPENAI_API_KEY`. If
+`DEEPSEEK_API_KEY` is configured, the backend automatically gives DeepSeek
+priority over OpenAI and Gemini for generation. This does not reconfigure the
+separately deployed default agents: one root `.env` is the source of truth, but
+Compose deliberately forwards only `OPENAI_API_KEY`, `OPENAI_MODEL`, and image
+settings to those containers. Agents register regardless, but their calls fail
+until their provider key is available.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.

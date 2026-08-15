@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     supervisor_model: str | None = None
 
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model_name: str = "deepseek-v4-flash"
+
     google_api_key: str = ""
     gemini_api_key: str = ""
     gemini_model_name: str = "gemini-2.0-flash"
