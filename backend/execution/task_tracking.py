@@ -805,7 +805,13 @@ def _drop_unaddressable_public_file_parts(task_data: dict[str, Any]) -> dict[str
 
 
 def _extract_status_message(task: Task) -> str | None:
-    if task.status.message and task.status.message.parts:
+    if not task.status or not task.status.message:
+        return None
+    role = getattr(task.status.message, "role", None)
+    role_value = getattr(role, "value", role)
+    if role_value not in ("agent", Role.AGENT):
+        return None
+    if task.status.message.parts:
         for part in task.status.message.parts:
             if hasattr(part, "text") and part.text:
                 return part.text

@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import pytest
 from unittest.mock import MagicMock
 from langchain_core.messages import AIMessageChunk
 
-from agent import TravelPlannerAgent
+from travel_planner_agent.agent import TravelPlannerAgent
 
 
 @pytest.mark.asyncio
@@ -129,6 +131,41 @@ async def test_tool_call_missing_question_arg_falls_back_safely():
                     "name": "AskUserForClarification",
                     "args": "{}",
                     "id": "call-3",
+                    "index": 0,
+                }
+            ],
+        )
+
+    mock_with_tools.astream = fake_astream
+    agent._model = mock_model
+
+    events = []
+    async for event in agent.stream("Plan a trip"):
+        events.append(event)
+
+    assert len(events) == 1
+    assert events[0] == {
+        "content": "Could you provide more details?",
+        "done": True,
+        "status": "input_required",
+    }
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_call_malformed_json_args_falls_back_safely():
+    agent = TravelPlannerAgent()
+    mock_model = MagicMock()
+    mock_with_tools = MagicMock()
+    mock_model.bind_tools.return_value = mock_with_tools
+
+    async def fake_astream(messages):
+        yield AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "name": "AskUserForClarification",
+                    "args": "not-valid-json",
+                    "id": "call-4",
                     "index": 0,
                 }
             ],

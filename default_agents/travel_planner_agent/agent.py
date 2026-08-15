@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
@@ -138,8 +140,9 @@ class TravelPlannerAgent:
                 if hasattr(chunk, "content") and chunk.content:
                     yield {"content": chunk.content, "done": False}
 
-            if full_response and getattr(full_response, "tool_calls", None):
-                for tc in full_response.tool_calls:
+            if full_response:
+                tool_calls = getattr(full_response, "tool_calls", None) or []
+                for tc in tool_calls:
                     if tc.get("name") == "AskUserForClarification":
                         args = tc.get("args") or {}
                         question = (
@@ -151,6 +154,18 @@ class TravelPlannerAgent:
                             question = "Could you provide more details?"
                         yield {
                             "content": question.strip(),
+                            "done": True,
+                            "status": "input_required",
+                        }
+                        return
+
+                invalid_tool_calls = (
+                    getattr(full_response, "invalid_tool_calls", None) or []
+                )
+                for itc in invalid_tool_calls:
+                    if itc.get("name") == "AskUserForClarification":
+                        yield {
+                            "content": "Could you provide more details?",
                             "done": True,
                             "status": "input_required",
                         }

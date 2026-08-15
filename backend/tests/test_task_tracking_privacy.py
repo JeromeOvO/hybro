@@ -867,6 +867,84 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
 
 
 @pytest.mark.asyncio
+async def test_blocking_hitl_reply_with_user_role_status_message_does_not_leak_in_response_text():
+    user_private_answer = "USER PRIVATE ANSWER"
+    existing_task = Task(
+        id="remote-task",
+        context_id="remote-context",
+        status=TaskStatus(state=TaskState.input_required),
+        metadata={"hitl_request_id": "local-hitl-request"},
+    )
+    message = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-message-1",
+        agent_id="agent-1",
+        agent_url="https://agent.example",
+        message_content=MessageContent(message_task=existing_task),
+    )
+    store = MagicMock()
+    store.get_room_agent_message_by_message_id = AsyncMock(return_value=message)
+    store.generate_webhook_token.return_value = "webhook-token"
+    store.hash_webhook_token.return_value = "webhook-token-hash"
+    store.update_webhook_token_hash_on_message = AsyncMock(return_value=True)
+    store.update_task_on_message = AsyncMock(return_value=True)
+    store.get_hitl_request = AsyncMock(
+        return_value={
+            "request_id": "local-hitl-request",
+            "room_id": "room-1",
+            "source": "agent",
+            "agent_id": "agent-1",
+            "display_message_id": "agent-message-1",
+            "a2a_task_id": "remote-task",
+            "a2a_context_id": "remote-context",
+            "prompt": "Where do you want to go?",
+            "prompt_type": "text",
+        }
+    )
+    service = A2ATaskTrackingService(store)
+    remote_response = {
+        "kind": "task",
+        "result": {
+            "kind": "task",
+            "id": "remote-task",
+            "contextId": "remote-context",
+            "status": {
+                "state": "input-required",
+                "message": {
+                    "kind": "message",
+                    "messageId": "user-status",
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": user_private_answer}],
+                },
+            },
+        },
+        "error": None,
+    }
+    send_hitl_reply = AsyncMock(return_value=remote_response)
+
+    result = await service.reply_to_task(
+        message_id=message.message_id,
+        task_id="remote-task",
+        context_id="remote-context",
+        user_input="Tokyo for 5 days",
+        webhook_base_url="",
+        push_notification_timeout=5.0,
+        default_request_timeout=30.0,
+        send_hitl_reply=send_hitl_reply,
+    )
+
+    persisted = store.update_task_on_message.await_args.args[1]
+    assert persisted["status"]["state"] == "input-required"
+    assert persisted["status"]["message"] is None
+    assert result == {
+        "status": "sent",
+        "blocking": True,
+        "task_state": "input-required",
+        "response_text": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_immediate_message_result_persists_public_projection_after_artifact_conversion():
     private_sentinel = "PRIVATE_SENTINEL_immediate_message_metadata"
     public_text = "Visible immediate answer"
