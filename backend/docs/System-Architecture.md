@@ -301,7 +301,10 @@ routes all resolve to `DEEPSEEK_MODEL_NAME`, so consumers remain
 provider-agnostic. With no configured key, the historical OpenAI degraded mode
 is retained so zero-config startup still succeeds. DeepSeek schema calls use a
 schema-bearing prompt plus its `json_object` response mode rather than claiming
-server-enforced strict JSON Schema. The `embedding_model` route remains
+server-enforced strict JSON Schema. DeepSeek thinking is disabled by default for
+text, structured, and streaming calls so control-plane JSON and first visible
+stream content remain within the existing gateway timeouts; an explicit caller
+`extra_body.thinking` setting is preserved. The `embedding_model` route remains
 OpenAI-backed because DeepSeek does not expose an embeddings API.
 
 Focused workflow services under `llm_gateway/services/` wrap prompt workflows

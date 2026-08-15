@@ -75,7 +75,32 @@ async def test_deepseek_provider_generates_text_and_preserves_tool_arguments():
         messages=[{"role": "user", "content": "hello"}],
         tools=tools,
         tool_choice="auto",
+        extra_body={"thinking": {"type": "disabled"}},
     )
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_preserves_explicit_thinking_mode():
+    create = AsyncMock(return_value=_completion("answer"))
+    provider = DeepSeekProvider(
+        client=SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+    )
+
+    await provider.generate(
+        [{"role": "user", "content": "hello"}],
+        model="deepseek-v4-flash",
+        extra_body={
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "low",
+        },
+    )
+
+    assert create.await_args.kwargs["extra_body"] == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "low",
+    }
 
 
 @pytest.mark.asyncio
@@ -111,6 +136,7 @@ async def test_deepseek_structured_generation_uses_json_object_and_schema_prompt
     )
     call = create.await_args.kwargs
     assert call["response_format"] == {"type": "json_object"}
+    assert call["extra_body"] == {"thinking": {"type": "disabled"}}
     assert (
         "The JSON object must conform to this schema" in call["messages"][0]["content"]
     )
@@ -169,6 +195,7 @@ async def test_deepseek_provider_streams_content_deltas():
 
     assert chunks == ["hello", " world"]
     assert create.await_args.kwargs["stream"] is True
+    assert create.await_args.kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 @pytest.mark.asyncio
