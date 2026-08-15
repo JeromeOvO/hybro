@@ -739,9 +739,9 @@ attachment refs and no new payload resolves the request, Execution promotes the
 existing A2A continuation to HITL instead of dispatching the same task again.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
-HITL status messages pass through a bounded public-text sanitizer; safe concrete
-questions may be projected to the HITL request, while internal markers,
-oversized text, and control content fall back to a generic public prompt.
+HITL status messages pass through a bounded public-text sanitizer across both initial
+dispatch and follow-up replies; safe concrete questions are projected to the HITL request,
+while internal markers, oversized text, and control content fall back to a generic public prompt.
 
 ### `context_memory`
 
@@ -1791,8 +1791,10 @@ required-output evidence is not sufficient to mark a legacy delegation
 fulfilled.
 
 For orchestration-linked agent HITL, an unchanged `input-required` prompt after
-the user's reply is a no-progress signal rather than a new HITL round. The reply
-is recorded as a canonical run fact, the repeated prompt is recorded in the
+the user's reply is a no-progress signal rather than a new HITL round. Follow-up
+interactive turns never fall back to the previous concrete question; missing or unsafe
+prompts default to the generic prompt, and repeated safe prompts trigger `agent_no_progress`.
+The reply is recorded as a canonical run fact, the repeated prompt is recorded in the
 decision log, and control returns to Execution for re-planning. A genuinely new
 agent question may still create a follow-up HITL request. This prevents an
 external agent from producing an unbounded chain of identical pending requests

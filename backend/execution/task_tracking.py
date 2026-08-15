@@ -10,6 +10,7 @@ from common.a2a_constants import (
     INTERACTIVE_STATES,
     NON_TERMINAL_STATES,
     SyntheticTaskId,
+    is_interactive_state,
     is_terminal_state,
 )
 from common.a2a_task_projection import (
@@ -32,6 +33,7 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.hitl.public_prompt import safe_agent_input_prompt
 from models.error import A2AServiceError
 
 logger = get_logger(__name__)
@@ -224,28 +226,9 @@ class A2ATaskTrackingService:
         if not msg:
             raise ValueError(f"Agent message {message_id} not found")
 
-        agent_url = msg.agent_url
-        agent_card = None
-        if msg.agent_id and (webhook_base_url or not agent_url):
-            agent_record = await self._tracking_store.get_agent_by_agent_id(
-                msg.agent_id
-            )
-            agent_card = getattr(agent_record, "agent_card", None)
-            if agent_card is None and webhook_base_url:
-                logger.warning(
-                    "hitl: could not load agent card for agent %s - disabling push notifications",
-                    msg.agent_id,
-                )
-
-        if not agent_url:
-            agent_url = _agent_card_url(agent_card)
-            if agent_url:
-                logger.warning(
-                    "hitl: agent message %s had no agent_url; using agent card URL",
-                    message_id,
-                )
-        if not agent_url:
-            raise ValueError(f"Agent message {message_id} has no agent_url")
+        agent_url, agent_card = await self._resolve_reply_agent_target(
+            msg, webhook_base_url=webhook_base_url
+        )
 
         webhook_token = self._tracking_store.generate_webhook_token()
         webhook_token_hash = self._tracking_store.hash_webhook_token(webhook_token)
@@ -289,7 +272,12 @@ class A2ATaskTrackingService:
             else None
         )
         task_obj = task_result if getattr(task_result, "kind", None) == "task" else None
+        raw_status_text = (
+            _extract_status_message(task_obj) if task_obj and task_obj.status else None
+        )
         response_text = _extract_reply_response_text(task_result)
+        projected_response_text: str | None = None
+        public_status_text: str | None = None
 
         if task_obj:
             public_status_text = extract_public_completed_status_text(task_obj)
@@ -309,7 +297,6 @@ class A2ATaskTrackingService:
             projected_response_text = _extract_reply_response_text(
                 _task_model_for_internal_projection(projected_task_data)
             )
-            response_text = projected_response_text or public_status_text
             await self._tracking_store.update_task_on_message(
                 message_id,
                 projected_task_data,
@@ -329,12 +316,47 @@ class A2ATaskTrackingService:
         if task_obj and task_obj.status:
             task_state = _state_value(task_obj.status.state)
 
+        if is_interactive_state(task_state):
+            response_text = safe_agent_input_prompt(raw_status_text)
+        elif task_obj:
+            response_text = projected_response_text or public_status_text
+
         return {
             "status": "sent",
             "blocking": hitl_blocking,
             "task_state": task_state,
             "response_text": response_text,
         }
+
+    async def _resolve_reply_agent_target(
+        self,
+        msg,
+        *,
+        webhook_base_url: str,
+    ) -> tuple[str, Any]:
+        agent_url = msg.agent_url
+        agent_card = None
+        if msg.agent_id and (webhook_base_url or not agent_url):
+            agent_record = await self._tracking_store.get_agent_by_agent_id(
+                msg.agent_id
+            )
+            agent_card = getattr(agent_record, "agent_card", None)
+            if agent_card is None and webhook_base_url:
+                logger.warning(
+                    "hitl: could not load agent card for agent %s - disabling push notifications",
+                    msg.agent_id,
+                )
+
+        if not agent_url:
+            agent_url = _agent_card_url(agent_card)
+            if agent_url:
+                logger.warning(
+                    "hitl: agent message %s had no agent_url; using agent card URL",
+                    msg.message_id,
+                )
+        if not agent_url:
+            raise ValueError(f"Agent message {msg.message_id} has no agent_url")
+        return agent_url, agent_card
 
     async def _trusted_local_hitl_metadata(
         self,
