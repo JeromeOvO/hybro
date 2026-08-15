@@ -1323,9 +1323,7 @@ class HITLService:
         # answer.  Without this, multi-round blocking HITL conversations get
         # stuck after the second prompt.
         if task_state in ("input-required", "auth-required", "policy-required"):
-            public_response_text = public_agent_input_prompt(
-                response_text or request.prompt
-            )
+            public_response_text = public_agent_input_prompt(response_text)
             response_prompt_hash = _prompt_hash(response_text)
             same_raw_agent_prompt = bool(
                 request.agent_prompt_hash

@@ -38,7 +38,7 @@ echo "  AGENT_HOST=${AGENT_HOST:-localhost}"
 # console script does NOT add cwd to sys.path and fails with ModuleNotFoundError
 # on this layout.
 if command -v uv >/dev/null 2>&1; then
-    uv run --with pytest --with requests --with pyyaml --with python-dotenv python -m pytest -v tests
+    uv run --with pytest --with pytest-asyncio --with langchain --with langchain-core --with langchain-openai --with requests --with pyyaml --with python-dotenv python -m pytest -v tests
 else
     python -m pytest -v tests
 fi

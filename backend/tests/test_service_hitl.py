@@ -1754,8 +1754,51 @@ class TestRequestInput:
         hitl_service.request_input.assert_awaited_once()
         assert (
             hitl_service.request_input.await_args.kwargs["prompt"]
-            == "Need the complete broker submission."
+            == "The agent needs additional information."
         )
+
+    @pytest.mark.asyncio
+    async def test_followup_with_new_safe_question_creates_hitl_with_new_prompt(
+        self,
+        hitl_service,
+        mock_hitl_db_service,
+    ):
+        request = HITLRequest(
+            request_id="hitl-old",
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt="Where do you want to go?",
+            prompt_type=HITLPromptType.TEXT,
+            agent_id="travel-planner",
+            agent_name="Travel Planner Agent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+            status=HITLStatus.PENDING,
+        )
+        hitl_service._persistence = mock_hitl_db_service
+        new_question = "What is your budget for this trip?"
+        hitl_service._agent_reply = SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": new_question,
+                }
+            )
+        )
+        followup = request.model_copy(update={"request_id": "hitl-next"})
+        hitl_service.request_input = AsyncMock(return_value=followup)
+
+        result = await hitl_service._handle_agent_response(request, "Paris")
+
+        assert result["resume_execution"] is False
+        assert result["task_state"] == "input-required"
+        assert result["followup_hitl_request_id"] == "hitl-next"
+        hitl_service.request_input.assert_awaited_once()
+        assert hitl_service.request_input.await_args.kwargs["prompt"] == new_question
 
     @pytest.mark.asyncio
     async def test_unchanged_agent_prompt_returns_control_to_orchestrator(

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
@@ -35,15 +37,19 @@ You are an expert travel assistant specializing in trip planning, destination in
 and travel recommendations. Your goal is to help users plan enjoyable, safe, and
 realistic trips based on their preferences and constraints.
 
-CRITICAL RULE: When the user's request is missing BOTH of these essential details, you MUST
-call the AskUserForClarification tool instead of generating a response:
+CRITICAL RULE: When the user's request is missing either Destination (where they want to go)
+or Duration (how many days/nights), you MUST call the AskUserForClarification tool instead
+of generating a response:
 - Destination (where they want to go)
 - Duration (how many days/nights)
-If only destination and duration are provided, proceed with a plan and make reasonable
-assumptions for dates, budget, and group size. You MAY use the tool to ask about these
-secondary details only when the request is extremely vague (e.g. "plan a trip" with no
-destination at all).
-Do NOT write a text response asking for these details — you MUST use the tool.
+
+If BOTH destination and duration are provided (either in the initial query or across prior
+turns in the conversation history), you MUST NOT call the AskUserForClarification tool.
+Proceed immediately to create a detailed day-by-day itinerary with reasonable assumptions
+for dates, budget, and group size.
+
+Do NOT call the AskUserForClarification tool for secondary details (budget, dates, preferences)
+if destination and duration are already known.
 
 When providing information:
 - Be specific and practical with your advice
@@ -126,29 +132,44 @@ class TravelPlannerAgent:
 
             messages.append(HumanMessage(content=query))
 
-            tool_call_started = False
-            tool_call_args = ""
-            text_chunks: list[str] = []
+            full_response = None
             async for chunk in model_with_tools.astream(messages):
-                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                    for tc in chunk.tool_call_chunks:
-                        if tc.get("name") == "AskUserForClarification":
-                            tool_call_started = True
-                        if tool_call_started and tc.get("args"):
-                            tool_call_args += tc["args"]
-
+                full_response = (
+                    chunk if full_response is None else full_response + chunk
+                )
                 if hasattr(chunk, "content") and chunk.content:
-                    text_chunks.append(chunk.content)
                     yield {"content": chunk.content, "done": False}
 
-            if tool_call_started:
-                try:
-                    args = json.loads(tool_call_args)
-                    question = args.get("question", "Could you provide more details?")
-                except Exception:
-                    question = "Could you provide more details?"
-                yield {"content": question, "done": True, "status": "input_required"}
-                return
+            if full_response:
+                tool_calls = getattr(full_response, "tool_calls", None) or []
+                for tc in tool_calls:
+                    if tc.get("name") == "AskUserForClarification":
+                        args = tc.get("args") or {}
+                        question = (
+                            args.get("question")
+                            if isinstance(args, dict)
+                            else None
+                        )
+                        if not isinstance(question, str) or not question.strip():
+                            question = "Could you provide more details?"
+                        yield {
+                            "content": question.strip(),
+                            "done": True,
+                            "status": "input_required",
+                        }
+                        return
+
+                invalid_tool_calls = (
+                    getattr(full_response, "invalid_tool_calls", None) or []
+                )
+                for itc in invalid_tool_calls:
+                    if itc.get("name") == "AskUserForClarification":
+                        yield {
+                            "content": "Could you provide more details?",
+                            "done": True,
+                            "status": "input_required",
+                        }
+                        return
 
             yield {"content": "", "done": True}
 
