@@ -211,7 +211,10 @@ unique Mongo index on `agent_groups.group_id` makes this idempotency guarantee
 atomic across processes and browser tabs; ordinary Team creation without a
 preset key keeps random IDs.
 
-Most frontend-facing routes use Clerk auth. Relay routes use API-key auth from
+Frontend-facing routes use Clerk auth when `AUTH_MODE=clerk`. In the default
+self-hosted `AUTH_MODE=mock` mode, `main.py` overrides every user-auth dependency,
+including the dual user/service dependency used by agent registration, with the
+stable local developer identity. Relay routes use API-key auth from
 `common.api_key_auth`.
 
 ### `common`
