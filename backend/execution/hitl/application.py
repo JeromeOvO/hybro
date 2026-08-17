@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +33,15 @@ from models.hitl import (
 )
 
 logger = get_logger(__name__)
+
+
+def _as_utc_datetime(value: Any) -> datetime:
+    """Parse legacy ISO timestamps while new records use BSON datetimes."""
+    if isinstance(value, datetime):
+        return ensure_utc(value)
+    if isinstance(value, str):
+        return ensure_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    raise TypeError(f"unsupported HITL datetime value: {type(value).__name__}")
 
 
 def _digest(value: str) -> str:
@@ -362,7 +372,7 @@ class HITLApplicationCoordinator:
         if doc.get("room_id") != room_id:
             raise HITLRoomMismatchError("Room mismatch")
         expires_at = doc.get("expires_at")
-        if expires_at is not None and ensure_utc(expires_at) <= utcnow():
+        if expires_at is not None and _as_utc_datetime(expires_at) <= utcnow():
             interaction = await self._interaction_for_request(service, doc)
             await self.expire_interaction(service, interaction)
             raise HITLExpiredError("HITL request has expired")
@@ -379,7 +389,7 @@ class HITLApplicationCoordinator:
             if (
                 current_status != HITLStatus.RESPONDED.value
                 and aggregate_expiry is not None
-                and ensure_utc(aggregate_expiry) <= utcnow()
+                and _as_utc_datetime(aggregate_expiry) <= utcnow()
             ):
                 await self.expire_interaction(service, interaction)
                 raise HITLExpiredError("HITL interaction has expired")
@@ -403,7 +413,7 @@ class HITLApplicationCoordinator:
         if not claimed:
             latest = await service.persistence.get_hitl_request(request_id)
             if latest and latest.get("expires_at") is not None:
-                if ensure_utc(latest["expires_at"]) <= utcnow():
+                if _as_utc_datetime(latest["expires_at"]) <= utcnow():
                     interaction = await self._interaction_for_request(service, latest)
                     await self.expire_interaction(service, interaction)
                     raise HITLExpiredError("HITL request has expired")
@@ -445,7 +455,7 @@ class HITLApplicationCoordinator:
             aggregate_expiry = (latest_interaction or interaction).get("expires_at")
             if (
                 aggregate_expiry is not None
-                and ensure_utc(aggregate_expiry) <= utcnow()
+                and _as_utc_datetime(aggregate_expiry) <= utcnow()
             ):
                 await self.expire_interaction(
                     service, latest_interaction or interaction
@@ -523,7 +533,7 @@ class HITLApplicationCoordinator:
             raise HITLConflictError("client_request_id does not match interaction")
 
         expires_at = interaction.get("expires_at")
-        if expires_at is not None and ensure_utc(expires_at) <= utcnow():
+        if expires_at is not None and _as_utc_datetime(expires_at) <= utcnow():
             await self.expire_interaction(service, interaction)
             raise HITLExpiredError("HITL interaction has expired")
         if interaction.get("status") in {
@@ -601,7 +611,7 @@ class HITLApplicationCoordinator:
                     aggregate_expiry = (current or interaction).get("expires_at")
                     if (
                         aggregate_expiry is not None
-                        and ensure_utc(aggregate_expiry) <= utcnow()
+                        and _as_utc_datetime(aggregate_expiry) <= utcnow()
                     ):
                         await self.expire_interaction(service, current or interaction)
                         raise HITLExpiredError("HITL interaction has expired")
@@ -815,7 +825,7 @@ class HITLApplicationCoordinator:
             orchestration_run_id=request.orchestration_run_id or "",
             answer_request_ids=[row["request_id"] for row in rows],
             answer_digest=answer_digest,
-        ).model_dump(mode="json")
+        ).model_dump(mode="python")
         durable_command = await self._lifecycle.create_resume_command(command)
         status = durable_command.get("status")
         if status in {
@@ -934,7 +944,7 @@ class HITLApplicationCoordinator:
             outbound_message_id=outbound_message_id,
             answer_request_ids=[row["request_id"] for row in rows],
             answer_digest=answer_digest,
-        ).model_dump(mode="json")
+        ).model_dump(mode="python")
         durable_command = await self._lifecycle.create_resume_command(command)
         command_status = durable_command.get("status")
         if command_status in {

@@ -51,6 +51,32 @@ describe('buildPendingHitlIncomingMessage', () => {
     })
   })
 
+  it('does not expose opaque internal agent ids as display names', () => {
+    const incoming = buildPendingHitlIncomingMessage({
+      roomId: 'room-1',
+      messageId: 'agent-msg-1',
+      requestId: 'hitl-1',
+      source: 'agent',
+      prompt: 'Provide the requested details',
+      promptType: 'text',
+      choices: null,
+      timestamp: undefined,
+      agentId: 'cf663d9b8352b904763a410cde6786c4',
+      agentName: 'cf663d9b8352b904763a410cde6786c4',
+      agentSource: 'local',
+      expiresAt: undefined,
+      groupId: undefined,
+      groupTotal: undefined,
+      groupIndex: undefined,
+      stepNumber: undefined,
+      totalSteps: undefined,
+      relatedMessageId: undefined,
+      clientRequestId: undefined,
+    })
+
+    expect(incoming.senderName).toBe('Agent')
+  })
+
   it('uses stable defaults for missing optional fields', () => {
     const incoming = buildPendingHitlIncomingMessage({
       roomId: 'room-1',

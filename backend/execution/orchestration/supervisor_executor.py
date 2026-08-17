@@ -3582,6 +3582,29 @@ class SupervisorExecutor:
         return None
 
     @staticmethod
+    def _find_user_message_answer_for_input_required(
+        user_message,
+        prompt: str,
+    ) -> str | None:
+        """Reuse substantive intake already present in the original user request.
+
+        This is deliberately conservative: auth/policy interruptions are filtered
+        before this helper, and short or weakly related messages still require HITL.
+        """
+        message_content = getattr(user_message, "message_content", None)
+        text = getattr(message_content, "message_text", None)
+        if not isinstance(text, str) or len(text.strip()) < 80:
+            return None
+        prompt_tokens = SupervisorExecutor._input_required_prompt_tokens(prompt)
+        message_tokens = SupervisorExecutor._input_required_prompt_tokens(text)
+        if len(prompt_tokens & message_tokens) < 2:
+            return None
+        return (
+            "The requested information is already included in the original user "
+            f"request:\n\n{text.strip()}"
+        )
+
+    @staticmethod
     def _input_required_prompt_tokens(prompt: str) -> set[str]:
         stop_words = {
             "the",
@@ -3872,6 +3895,25 @@ class SupervisorExecutor:
         answer: str,
         user_message,
     ) -> StepResult:
+        agent_name = continuation.agent_id
+        candidate_scope = getattr(state, "candidate_scope", None)
+        for candidate in getattr(candidate_scope, "agents", []) or []:
+            candidate_id = (
+                candidate.get("agent_id")
+                if isinstance(candidate, Mapping)
+                else getattr(candidate, "agent_id", None)
+            )
+            if candidate_id != continuation.agent_id:
+                continue
+            resolved_name = (
+                candidate.get("name")
+                if isinstance(candidate, Mapping)
+                else getattr(candidate, "name", None)
+            )
+            if isinstance(resolved_name, str) and resolved_name.strip():
+                agent_name = resolved_name.strip()
+            break
+
         reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
             message_id=continuation.source_agent_message_id,
             task_id=continuation.a2a_task_id,
@@ -3882,7 +3924,7 @@ class SupervisorExecutor:
             return StepResult(
                 step_number=0,
                 agent_id=continuation.agent_id,
-                agent_name=continuation.agent_id,
+                agent_name=agent_name,
                 task=answer,
                 response_text="",
                 success=False,
@@ -3906,7 +3948,7 @@ class SupervisorExecutor:
             return StepResult(
                 step_number=0,
                 agent_id=continuation.agent_id,
-                agent_name=continuation.agent_id,
+                agent_name=agent_name,
                 task=answer,
                 response_text="",
                 success=False,
@@ -3925,7 +3967,7 @@ class SupervisorExecutor:
         return StepResult(
             step_number=0,
             agent_id=continuation.agent_id,
-            agent_name=continuation.agent_id,
+            agent_name=agent_name,
             task=answer,
             response_text=response_text,
             success=not failed,
@@ -3948,6 +3990,11 @@ class SupervisorExecutor:
         if self._awaiting_result_requires_hitl(result):
             return result
         answer = self._find_fact_answer_for_input_required(state, prompt)
+        if answer is None:
+            answer = self._find_user_message_answer_for_input_required(
+                user_message,
+                prompt,
+            )
         if answer and continuation is not None:
             return await self._resume_agent_continuation_after_hitl_answer(
                 state=state,

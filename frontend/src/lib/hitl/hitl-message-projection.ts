@@ -30,6 +30,14 @@ export type PendingHitlProjectionInput = {
   clientRequestId: string | null | undefined
 }
 
+const OPAQUE_INTERNAL_ID = /^(?:[a-f0-9]{32}|[a-f0-9-]{36})$/i
+
+function publicAgentName(value: string | null | undefined): string {
+  const name = value?.trim()
+  if (!name || OPAQUE_INTERNAL_ID.test(name)) return 'Agent'
+  return name
+}
+
 const KNOWN_PROMPT_TYPES = new Set([
   'text',
   'textarea',
@@ -59,7 +67,7 @@ export function buildPendingHitlIncomingMessage(
     roomId: input.roomId,
     messageType: 'agent',
     content: input.prompt || '',
-    senderName: input.agentName || 'Agent',
+    senderName: publicAgentName(input.agentName),
     timestamp: normalizeTimestampOrNow(input.timestamp || undefined),
     agentId: input.agentId ?? undefined,
     agentSource: input.agentSource,

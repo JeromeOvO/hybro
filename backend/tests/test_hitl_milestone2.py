@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,7 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 from common.utils.time import utcnow
-from dal.runtime_store.parts.hitl_lifecycle_store import _validate_legacy_group
+from dal.runtime_store.parts.hitl_lifecycle_store import (
+    HITLLifecycleRuntimeStorePart,
+    _validate_legacy_group,
+)
 from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
 from execution.hitl.application import HITLApplicationCoordinator
 from execution.hitl.exceptions import HITLRoutingFailedError
@@ -147,6 +150,41 @@ def test_lazy_legacy_group_rejects_duplicate_indices_and_overfull_members():
 
     with pytest.raises(ValueError, match="duplicate group indices"):
         _validate_legacy_group(rows[1:], "group-1", 2)
+
+
+@pytest.mark.asyncio
+async def test_legacy_string_deadline_is_normalized_when_attaching_request():
+    interactions = MagicMock()
+    interactions.find_one_and_update = AsyncMock(
+        return_value={"interaction_id": "interaction-1", "status": "open"}
+    )
+    part = HITLLifecycleRuntimeStorePart(
+        interactions=interactions,
+        resume_commands=MagicMock(),
+        hitl_requests=MagicMock(),
+    )
+    part.get_interaction_strict = AsyncMock(
+        return_value={
+            "interaction_id": "interaction-1",
+            "request_ids": [],
+            "required_request_ids": [],
+            "expected_request_count": 1,
+            "status": "materializing",
+            "version": 1,
+            "expires_at": "2026-08-18T03:37:16.815409Z",
+        }
+    )
+
+    result = await part.attach_interaction_request(
+        "interaction-1",
+        request_id="request-1",
+        required=True,
+        expires_at=utcnow() + timedelta(hours=2),
+    )
+
+    assert result is not None
+    update = interactions.find_one_and_update.await_args.args[1]["$set"]
+    assert isinstance(update["expires_at"], datetime)
 
 
 @pytest.mark.asyncio
@@ -509,6 +547,8 @@ async def test_remote_command_uses_stable_message_id_and_timeout_is_uncertain():
         )
 
     command = lifecycle.create_resume_command.await_args.args[0]
+    assert isinstance(command["created_at"], datetime)
+    assert isinstance(command["updated_at"], datetime)
     outbound_id = command["outbound_message_id"]
     assert outbound_id.startswith("hitl-message-")
     assert (
@@ -596,5 +636,12 @@ async def test_materializing_group_is_not_emitted():
     )
 
     assert result is not None
+    request_doc = persistence.create_hitl_request.await_args.args[0]
+    interaction_doc = lifecycle.materialize_interaction.await_args.args[0]
+    assert isinstance(request_doc["expires_at"], datetime)
+    assert isinstance(request_doc["created_at"], datetime)
+    assert isinstance(interaction_doc["expires_at"], datetime)
+    assert isinstance(interaction_doc["created_at"], datetime)
+    assert isinstance(interaction_doc["updated_at"], datetime)
     lifecycle.attach_interaction_request.assert_awaited_once()
     delivery.emit.assert_not_awaited()

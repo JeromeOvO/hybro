@@ -8508,6 +8508,89 @@ async def test_agent_input_required_uses_existing_fact_without_creating_hitl():
 
 
 @pytest.mark.asyncio
+async def test_agent_input_required_reuses_substantive_original_intake():
+    store = InMemoryOrchestrationRunStore()
+    intake = """Prepare a cyber insurance submission for Acme SaaS Inc.
+
+Customer intake:
+Industry: SaaS
+Annual Revenue: 25000000
+Coverage limit: 5000000
+Retention: 50000
+MFA: yes
+Backups: yes
+Prior Claims: no
+"""
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text=intake),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.DISPATCHING,
+            pending_agent_continuations=[
+                PendingAgentContinuation(
+                    continuation_id="cont-1",
+                    source_intent_id="intent-1",
+                    source_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    goal_family_fingerprint="family-1",
+                    goal_revision_fingerprint="revision-1",
+                    a2a_task_id="task-1",
+                    a2a_context_id="ctx-1",
+                )
+            ],
+        )
+    )
+    state.candidate_scope = SimpleNamespace(
+        agents=[SimpleNamespace(agent_id="agent-1", name="Cyber Broker Agent")]
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    reply_to_task = AsyncMock(
+        return_value={
+            "blocking": True,
+            "task_state": "completed",
+            "response_text": "Submission prepared from the intake.",
+        }
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(),
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task),
+    )
+
+    result = await executor._handle_agent_input_required(
+        state=state,
+        result=StepResult(
+            step_number=1,
+            agent_id="agent-1",
+            agent_name="Agent One",
+            task="Prepare underwriting submission",
+            response_text="Please provide the customer intake details and coverage information.",
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="agent-msg-1",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+        ),
+        user_message=user_message,
+    )
+
+    assert result.status == StepStatus.SUCCESS
+    assert result.agent_name == "Cyber Broker Agent"
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    reply_to_task.assert_awaited_once()
+    answer = reply_to_task.await_args.kwargs["user_input"]
+    assert "original user request" in answer
+    assert "Annual Revenue: 25000000" in answer
+
+
+@pytest.mark.asyncio
 async def test_auth_required_does_not_auto_continue_with_existing_fact():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(

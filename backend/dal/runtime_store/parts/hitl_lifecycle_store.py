@@ -9,7 +9,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from common.utils.logger import get_logger
-from common.utils.time import utcnow
+from common.utils.time import ensure_utc, utcnow
 from models.hitl import HITLInteractionStatus, HITLResumeCommandStatus
 
 logger = get_logger(__name__)
@@ -24,6 +24,15 @@ _COMMAND_CLAIMABLE = {
     HITLResumeCommandStatus.PENDING.value,
     HITLResumeCommandStatus.RETRYABLE_ERROR.value,
 }
+
+
+def _coerce_bson_datetime(value: Any) -> datetime:
+    """Accept legacy ISO strings while keeping new lifecycle dates BSON-native."""
+    if isinstance(value, datetime):
+        return ensure_utc(value)
+    if isinstance(value, str):
+        return ensure_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    raise TypeError(f"unsupported HITL datetime value: {type(value).__name__}")
 
 
 def _legacy_answer_digest(row: dict[str, Any]) -> str:
@@ -138,13 +147,12 @@ class HITLLifecycleRuntimeStorePart:
             if required and request_id not in required_ids:
                 required_ids.append(request_id)
             current_expiry = current.get("expires_at")
-            shared_expiry = (
-                min(
-                    value for value in (current_expiry, expires_at) if value is not None
-                )
-                if current_expiry is not None or expires_at is not None
-                else None
-            )
+            expiry_candidates = [
+                _coerce_bson_datetime(value)
+                for value in (current_expiry, expires_at)
+                if value is not None
+            ]
+            shared_expiry = min(expiry_candidates) if expiry_candidates else None
             expected = int(current["expected_request_count"])
             status = current.get("status")
             if status == HITLInteractionStatus.MATERIALIZING.value:

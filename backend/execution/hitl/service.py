@@ -384,7 +384,10 @@ class HITLService:
         request = HITLRequest(**request_data)
 
         # 1. Persist FIRST (so it survives SSE drops)
-        doc = request.model_dump(mode="json", exclude_none=True)
+        # Keep datetimes as BSON datetimes. JSON-mode dumps turn deadlines into
+        # strings, which breaks Mongo deadline queries and mixed-type comparisons
+        # while attaching the request to its interaction.
+        doc = request.model_dump(mode="python", exclude_none=True)
         hitl_request_created = False
         if source == "agent":
             persisted = await self.persistence.create_or_reuse_pending_hitl_request(doc)
@@ -499,7 +502,7 @@ class HITLService:
                 source=request.source,
                 expected_request_count=request.group_total or 1,
                 expires_at=request.expires_at,
-            ).model_dump(mode="json")
+            ).model_dump(mode="python")
             await self._lifecycle.materialize_interaction(interaction)
             materialized = await self._lifecycle.attach_interaction_request(
                 interaction_id,
