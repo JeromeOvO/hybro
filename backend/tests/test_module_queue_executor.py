@@ -959,14 +959,12 @@ class TestProcessQueue:
         qe.hitl_coordinator = hitl_service
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
-        assert result.result == QueueResult.PAUSED
-        hitl_service.request_input.assert_awaited_once()
-        prompt = hitl_service.request_input.await_args.kwargs["prompt"]
-        assert prompt == "The agent needs additional information."
-        assert private_prompt not in repr(hitl_service.request_input.await_args.kwargs)
-        emit.assert_awaited_once()
+        assert result.result == QueueResult.FAILED
+        hitl_service.request_input.assert_not_awaited()
+        assert private_prompt not in repr(hitl_service.request_input.await_args_list)
+        emit.assert_not_awaited()
         qe.delivery.send_processing_status.assert_not_called()
-        assert order == ["emit"]
+        assert order == []
 
     @pytest.mark.asyncio
     async def test_queue_cancellation_leaves_tombstone_for_finalizer(self):

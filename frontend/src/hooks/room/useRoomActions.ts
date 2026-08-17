@@ -216,9 +216,10 @@ export function useRoomActions(
       const { respondToHitl } = await import('@/lib/api/hitl')
       await respondToHitl(roomId, requestId, userInput, getToken)
     } catch (err) {
-      // 409 Conflict = request already responded/processing — treat as success.
+      // A conflict can mean a different answer, expiry, cancellation, or an
+      // in-flight claimant. Reconcile, then surface it; never assume success.
       if (err instanceof ApiError && err.status === 409) {
-        return
+        await reconcileWithDb(roomId)
       }
 
       // AbortError (timeout) — the backend is still processing the supervisor
@@ -259,7 +260,109 @@ export function useRoomActions(
 
       throw err
     }
-  }, [roomId, getToken, lifecycle, hitlRequestIndex])
+  }, [roomId, getToken, lifecycle, hitlRequestIndex, reconcileWithDb])
+
+  const respondToHitlBatch = useCallback(async (
+    interactionId: string,
+    answers: Array<{ requestId: string; answer: string }>,
+    clientRequestId?: string,
+  ) => {
+    const answerById = new Map(answers.map(answer => [answer.requestId, answer.answer]))
+    const store = useMessageStore.getState()
+    const entities = Object.values(store.entities).filter(entity =>
+      entity.roomId === roomId
+      && entity.hitlRequestId
+      && answerById.has(entity.hitlRequestId)
+      && (entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId) === interactionId
+    )
+
+    const { respondToHitlBatch: submitBatch } = await import('@/lib/api/hitl')
+    let response
+    try {
+      response = await submitBatch(
+        roomId,
+        interactionId,
+        answers,
+        clientRequestId,
+        getToken,
+      )
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 409 || error.status === 410)) {
+        await reconcileWithDb(roomId)
+      }
+      throw error
+    }
+
+    const applied = response.status === 'applied' || response.status === 'responded'
+    for (const entity of entities) {
+      const requestId = entity.hitlRequestId
+      if (!requestId) continue
+      store.upsertMessage({
+        id: entity.id,
+        roomId,
+        messageType: 'agent',
+        content: entity.content,
+        senderName: entity.senderName,
+        timestamp: entity.timestamp,
+        hitlResolved: applied,
+        hitlUserAnswer: answerById.get(requestId),
+        hitlInteractionStatus: applied ? 'applied' : 'applying',
+        hitlApplicationStatus: applied ? 'applied' : 'applying',
+      }, 'optimistic')
+      if (applied) hitlRequestIndex.current.delete(requestId)
+    }
+
+    if (applied) {
+      const first = entities[0]
+      lifecycle.resetPlaceholder()
+      lifecycle.resetProcessingResolved()
+      lifecycle.setPendingRunEventAck(clientRequestId ?? first?.clientRequestId ?? null)
+      const processingUserEntity = findProcessingStatusUserEntity(roomId, {
+        relatedMessageId: first?.relatedMessageId,
+        clientRequestId: clientRequestId ?? first?.clientRequestId,
+        beforeTimestamp: first?.timestamp,
+      })
+      store.removeMessage(lifecycle.placeholderId(roomId))
+      ensureInitialProcessingStatusLog(roomId, processingUserEntity)
+      appendProcessingStatusLog(
+        roomId,
+        processingUserEntity,
+        'Applying your answers…',
+        new Date(Date.now() + 1).toISOString(),
+      )
+      lifecycle.startProcessing(processingUserEntity?.id)
+    }
+  }, [getToken, hitlRequestIndex, lifecycle, reconcileWithDb, roomId])
+
+  const cancelHitlRequest = useCallback(async (requestId: string) => {
+    const store = useMessageStore.getState()
+    const target = Object.values(store.entities).find(entity =>
+      entity.roomId === roomId && entity.hitlRequestId === requestId
+    )
+    const interactionId = target
+      ? (target.hitlInteractionId ?? target.hitlGroupId ?? target.hitlRequestId)
+      : undefined
+    const { cancelHitl } = await import('@/lib/api/hitl')
+    await cancelHitl(roomId, requestId, getToken)
+
+    for (const entity of Object.values(store.entities)) {
+      const entityInteractionId = entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId
+      if (entity.roomId !== roomId || entityInteractionId !== interactionId) continue
+      store.upsertMessage({
+        id: entity.id,
+        roomId,
+        messageType: 'agent',
+        content: entity.content,
+        senderName: entity.senderName,
+        timestamp: entity.timestamp,
+        hitlResolved: true,
+        hitlInteractionStatus: 'canceled',
+        taskStatus: 'canceled',
+        taskError: 'Input request canceled',
+      }, 'optimistic')
+      if (entity.hitlRequestId) hitlRequestIndex.current.delete(entity.hitlRequestId)
+    }
+  }, [getToken, hitlRequestIndex, roomId])
 
   // Manually refresh messages — delegates to reconcileWithDb (Gap 14)
   const refreshMessages = useCallback(async () => {
@@ -271,5 +374,13 @@ export function useRoomActions(
     setSseEnabled(!sseEnabled)
   }, [setSseEnabled, sseEnabled])
 
-  return { updateRoomSettings, cancelProcessing, respondToHitlRequest, refreshMessages, toggleSSE }
+  return {
+    updateRoomSettings,
+    cancelProcessing,
+    respondToHitlRequest,
+    respondToHitlBatch,
+    cancelHitlRequest,
+    refreshMessages,
+    toggleSSE,
+  }
 }

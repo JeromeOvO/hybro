@@ -31,6 +31,7 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
+from execution.hitl.public_prompt import concrete_agent_input_prompt
 from execution.orchestration.result_ingestor import AgentResultRead
 from execution.task_tracking import resolve_public_task_label
 
@@ -106,7 +107,6 @@ _PUBLIC_TERMINAL_ERRORS = {
     "canceled": "Task was canceled",
     "expired": "Task expired",
 }
-_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
 
 
 def _safe_terminal_error(status: str | None) -> str:
@@ -1376,8 +1376,26 @@ class AgentResponseHandler:
 
     async def _on_interactive(self, e: AgentEvent) -> None:
         state = e.state or "input-required"
-        prompt = _GENERIC_AGENT_INPUT_PROMPT
-        e.text = ""
+        prompt = concrete_agent_input_prompt(e.text)
+        has_remote_ids = bool(
+            e.task_id
+            and not str(e.task_id).startswith(("pending-", "relay-pending-"))
+            and e.context_id
+        )
+        if prompt is None or not has_remote_ids:
+            e.kind = "error"
+            e.state = "failed"
+            e.details = {
+                "error_code": (
+                    "invalid_interactive_prompt"
+                    if prompt is None
+                    else "invalid_a2a_continuation"
+                )
+            }
+            await self._on_error(e)
+            return
+
+        e.text = prompt
         e.details = None
         e.parts = None
         e.artifacts = None
@@ -1385,7 +1403,7 @@ class AgentResponseHandler:
             await self._task_writer.update_task_state_on_message(
                 e.message_id,
                 state,
-                message_text=None,
+                message_text=prompt,
                 task_id=e.task_id,
                 context_id=e.context_id,
             )
@@ -1455,7 +1473,12 @@ class AgentResponseHandler:
             room_id=e.room_id,
             user_message_id=user_message_id,
             source="agent",
-            prompt=prompt or _GENERIC_AGENT_INPUT_PROMPT,
+            prompt=prompt,
+            **(
+                {"prompt_type": "authentication"}
+                if str(e.state or "").replace("_", "-") == "auth-required"
+                else {}
+            ),
             agent_id=e.agent_id,
             agent_name=agent_name,
             a2a_task_id=e.task_id,

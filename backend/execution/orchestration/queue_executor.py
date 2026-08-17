@@ -24,7 +24,7 @@ from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
-from execution.hitl.public_prompt import public_agent_input_prompt
+from execution.hitl.public_prompt import concrete_agent_input_prompt
 from execution.state.task_state_manager import TaskStateManager
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.processing import ProcessingResult, ProcessingStatus
@@ -463,6 +463,13 @@ class QueueExecutor:
                     break
 
                 elif result.status == ProcessingStatus.AWAITING_INPUT:
+                    agent_hitl_prompt = concrete_agent_input_prompt(
+                        result.status_message
+                    )
+                    if agent_hitl_prompt is None:
+                        queue_result = QueueResult.FAILED
+                        failure_error = "invalid_interactive_prompt"
+                        break
                     # Agent returned input_required — create HITL request
                     # so the frontend shows an input form, then pause the
                     # queue exactly like PAUSED.
@@ -485,7 +492,13 @@ class QueueExecutor:
                             room_id=room_id,
                             user_message_id=user_message_id,
                             source="agent",
-                            prompt=public_agent_input_prompt(result.status_message),
+                            prompt=agent_hitl_prompt,
+                            **(
+                                {"prompt_type": "authentication"}
+                                if result.requires_auth
+                                or result.interactive_state == "auth-required"
+                                else {}
+                            ),
                             agent_id=current_message.agent_id,
                             agent_name=(agent.agent_card.name if agent else None),
                             a2a_task_id=result.a2a_task_id,

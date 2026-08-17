@@ -39,6 +39,7 @@ from dal.runtime_store.contracts import (
 )
 from dal.runtime_store.parts import (
     AgentRoomRuntimeStorePart,
+    HITLLifecycleRuntimeStorePart,
     HITLRuntimeStorePart,
     MemoryRuntimeStorePart,
     MessageRuntimeStorePart,
@@ -104,6 +105,8 @@ class RuntimeRepositoryStore:
         self._room_user_messages = mongo.collection("room_user_messages")
         self._cancelled_messages = mongo.collection("cancelled_messages")
         self._hitl_requests = mongo.collection("hitl_requests")
+        self._hitl_interactions = mongo.collection("hitl_interactions")
+        self._hitl_resume_commands = mongo.collection("hitl_resume_commands")
         self._runs = mongo.collection("runs")
         self._room_repository = room_repository
         self._message_repository = message_repository
@@ -132,6 +135,11 @@ class RuntimeRepositoryStore:
             room_agent_messages=self._room_agent_messages,
             room_user_messages=self._room_user_messages,
         )
+        self._hitl_lifecycle_part = HITLLifecycleRuntimeStorePart(
+            interactions=self._hitl_interactions,
+            resume_commands=self._hitl_resume_commands,
+            hitl_requests=self._hitl_requests,
+        )
         self._memory_part = MemoryRuntimeStorePart(
             room_memories=self._room_memories,
             room_repository=self._room_repository,
@@ -152,6 +160,10 @@ class RuntimeRepositoryStore:
     @property
     def hitl(self) -> HITLRuntimeStorePart:
         return self._hitl_part
+
+    @property
+    def hitl_lifecycle(self) -> HITLLifecycleRuntimeStorePart:
+        return self._hitl_lifecycle_part
 
     @property
     def memory(self) -> MemoryRuntimeStorePart:
@@ -188,6 +200,16 @@ class RuntimeRepositoryStore:
             hitl_requests=getattr(self, "_hitl_requests", None),
             room_agent_messages=getattr(self, "_room_agent_messages", None),
             room_user_messages=getattr(self, "_room_user_messages", None),
+        )
+
+    def _hitl_lifecycle_delegate(self) -> HITLLifecycleRuntimeStorePart:
+        part = getattr(self, "_hitl_lifecycle_part", None)
+        if part is not None:
+            return part
+        return HITLLifecycleRuntimeStorePart(
+            interactions=getattr(self, "_hitl_interactions", None),
+            resume_commands=getattr(self, "_hitl_resume_commands", None),
+            hitl_requests=getattr(self, "_hitl_requests", None),
         )
 
     def _memory_delegate(self) -> MemoryRuntimeStorePart:
@@ -645,6 +667,9 @@ class RuntimeRepositoryStore:
     async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
         return await self._hitl_delegate().get_pending_hitl_requests(room_id)
 
+    async def get_pending_hitl_requests_strict(self, room_id: str) -> list[dict]:
+        return await self._hitl_delegate().get_pending_hitl_requests_strict(room_id)
+
     async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
         return await self._hitl_delegate().get_hitl_group_requests(group_id)
 
@@ -736,6 +761,27 @@ class RuntimeRepositoryStore:
     ) -> tuple[dict[str, Any], bool] | None:
         return await self._hitl_delegate().create_or_reuse_pending_hitl_request(
             request_data
+        )
+
+    async def claim_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> dict[str, Any] | None:
+        return await self._hitl_delegate().claim_hitl_open_projection(
+            request_id, claim_id
+        )
+
+    async def complete_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> bool:
+        return await self._hitl_delegate().complete_hitl_open_projection(
+            request_id, claim_id
+        )
+
+    async def release_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> bool:
+        return await self._hitl_delegate().release_hitl_open_projection(
+            request_id, claim_id
         )
 
     async def persist_pending_hitl_on_agent_message(

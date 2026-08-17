@@ -130,14 +130,30 @@ class HITLRequest(FrozenDTO):
     display_message_id: str | None = None
     client_request_id: str | None = None
     orchestration_run_id: str | None = None
-    prompt_type: Literal["text", "choice", "confirmation"] = "text"
+    prompt_type: Literal[
+        "text",
+        "textarea",
+        "choice",
+        "single_choice",
+        "multi_choice",
+        "confirmation",
+        "approval",
+        "authentication",
+        "date",
+        "file",
+    ] = "text"
     choices: list[str] | None = None
+    interaction_id: str | None = None
+    interaction_status: str | None = None
+    application_status: str | None = None
+    application_error: str | None = None
     group_id: str | None = None
     group_total: int | None = None
     group_index: int | None = None
     status: Literal[
         "pending",
         "processing",
+        "answer_recorded",
         "responded",
         "resolved",
         "expired",
@@ -170,6 +186,7 @@ class HITLResponse(FrozenDTO):
     resolved_at: datetime | None = None
     reclaimed: bool | None = None
     error: str | None = None
+    client_request_id: str | None = None
 
 
 class AgentEvent(FrozenDTO):

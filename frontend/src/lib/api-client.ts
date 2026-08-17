@@ -11,11 +11,13 @@ import { getClientAuthHeaders } from './auth'
  */
 export class ApiError extends Error {
   public readonly status: number
+  public readonly details?: unknown
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, details?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.details = details
   }
 
   /** True for 4xx status codes (client/validation errors) */
@@ -91,7 +93,17 @@ export async function apiClient<T = unknown>(
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new ApiError(response.status, `HTTP error! status: ${response.status}, message: ${errorText}`)
+      let details: unknown
+      try {
+        details = JSON.parse(errorText)
+      } catch {
+        details = undefined
+      }
+      throw new ApiError(
+        response.status,
+        `HTTP error! status: ${response.status}, message: ${errorText}`,
+        details,
+      )
     }
 
     return await response.json()

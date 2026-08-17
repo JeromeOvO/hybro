@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import Any
 
 from pymongo import ReturnDocument
@@ -15,6 +16,39 @@ _TERMINAL_TASK_STATES = sorted(state.value for state in TERMINAL_STATES)
 
 _PENDING_HITL_DISPLAY_INDEX = "uq_pending_hitl_display_message"
 _PENDING_HITL_CONTINUATION_INDEX = "uq_pending_hitl_continuation_message"
+
+
+def _actionable_deadline_clause(now=None) -> dict[str, Any]:
+    current = now or utcnow()
+    return {
+        "$or": [
+            {"expires_at": {"$gt": current}},
+            {"expires_at": None},
+            {"expires_at": {"$exists": False}},
+        ]
+    }
+
+
+def _pending_actionable_query(**identity: Any) -> dict[str, Any]:
+    return {
+        "$and": [
+            {**identity, "status": "pending"},
+            _actionable_deadline_clause(),
+        ]
+    }
+
+
+def _user_visible_interaction_query(**identity: Any) -> dict[str, Any]:
+    """Rows needed to restore every nonterminal user-visible interaction."""
+    return {
+        "$or": [
+            _pending_actionable_query(**identity),
+            {
+                **identity,
+                "status": {"$in": ["answer_recorded", "processing"]},
+            },
+        ]
+    }
 
 
 def _duplicate_key_mentions_index(error: DuplicateKeyError, index_name: str) -> bool:
@@ -37,17 +71,8 @@ class HITLRuntimeStorePart:
     ) -> list[dict]:
         try:
             return await self._hitl_requests.find(
-                {
-                    "user_message_id": user_message_id,
-                    "$or": [
-                        {"status": "pending"},
-                        {
-                            "status": "canceled",
-                            "cancellation_reconciled": {"$ne": True},
-                        },
-                    ],
-                },
-                limit=50,
+                _pending_actionable_query(user_message_id=user_message_id),
+                exhaust=True,
             )
         except Exception:
             logger.error("Failed to get pending HITL requests", exc_info=True)
@@ -59,16 +84,16 @@ class HITLRuntimeStorePart:
     ) -> list[dict]:
         return await self._hitl_requests.find(
             {
-                "user_message_id": user_message_id,
                 "$or": [
-                    {"status": "pending"},
+                    _pending_actionable_query(user_message_id=user_message_id),
                     {
-                        "status": "canceled",
+                        "user_message_id": user_message_id,
+                        "status": {"$in": ["canceled", "expired"]},
                         "cancellation_reconciled": {"$ne": True},
                     },
-                ],
+                ]
             },
-            limit=50,
+            exhaust=True,
         )
 
     async def create_hitl_request(self, request_data: dict) -> bool:
@@ -142,7 +167,7 @@ class HITLRuntimeStorePart:
     async def claim_hitl_request(self, request_id: str, **updates) -> dict | None:
         try:
             return await self._hitl_requests.find_one_and_update(
-                {"request_id": request_id, "status": "pending"},
+                _pending_actionable_query(request_id=request_id),
                 {"$set": dict(updates)},
             )
         except Exception:
@@ -152,12 +177,21 @@ class HITLRuntimeStorePart:
     async def get_pending_hitl_requests(self, room_id: str) -> list[dict]:
         try:
             return await self._hitl_requests.find(
-                {"room_id": room_id, "status": "pending"},
-                limit=50,
+                _user_visible_interaction_query(room_id=room_id),
+                sort=[("created_at", 1), ("request_id", 1)],
+                exhaust=True,
             )
         except Exception:
             logger.error("Failed to get room HITL requests", exc_info=True)
             return []
+
+    async def get_pending_hitl_requests_strict(self, room_id: str) -> list[dict]:
+        """Authoritative room read; failures must propagate to the API client."""
+        return await self._hitl_requests.find(
+            _user_visible_interaction_query(room_id=room_id),
+            sort=[("created_at", 1), ("request_id", 1)],
+            exhaust=True,
+        )
 
     async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
         try:
@@ -175,7 +209,7 @@ class HITLRuntimeStorePart:
         group_id: str,
     ) -> list[dict]:
         return await self._hitl_requests.find(
-            {"group_id": group_id, "status": "pending"},
+            _pending_actionable_query(group_id=group_id),
             sort=[("group_index", 1), ("request_id", 1)],
             exhaust=True,
         )
@@ -399,12 +433,11 @@ class HITLRuntimeStorePart:
         room_id: str,
         identity_clause: dict[str, str],
     ) -> dict[str, Any]:
-        return {
-            "room_id": room_id,
-            "status": "pending",
-            "source": "agent",
-            "$or": [identity_clause],
-        }
+        return _pending_actionable_query(
+            room_id=room_id,
+            source="agent",
+            **identity_clause,
+        )
 
     async def create_or_reuse_pending_hitl_request(
         self,
@@ -539,6 +572,60 @@ class HITLRuntimeStorePart:
                 return None
             return display_existing
         return display_existing or continuation_existing
+
+    async def claim_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> dict[str, Any] | None:
+        return await self._hitl_requests.find_one_and_update(
+            {
+                "request_id": request_id,
+                "status": "pending",
+                "open_projection_completed_at": {"$exists": False},
+                "$or": [
+                    {"open_projection_claim_id": {"$exists": False}},
+                    {"open_projection_claim_id": None},
+                    {
+                        "open_projection_claimed_at": {
+                            "$lte": utcnow() - timedelta(minutes=2)
+                        }
+                    },
+                ],
+            },
+            {
+                "$set": {
+                    "open_projection_claim_id": claim_id,
+                    "open_projection_claimed_at": utcnow(),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
+    async def complete_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> bool:
+        return await self._hitl_requests.update_one(
+            {"request_id": request_id, "open_projection_claim_id": claim_id},
+            {
+                "$set": {"open_projection_completed_at": utcnow()},
+                "$unset": {
+                    "open_projection_claim_id": "",
+                    "open_projection_claimed_at": "",
+                },
+            },
+        )
+
+    async def release_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> bool:
+        return await self._hitl_requests.update_one(
+            {"request_id": request_id, "open_projection_claim_id": claim_id},
+            {
+                "$unset": {
+                    "open_projection_claim_id": "",
+                    "open_projection_claimed_at": "",
+                }
+            },
+        )
 
     async def persist_pending_hitl_on_agent_message(
         self,
@@ -712,6 +799,7 @@ class HITLRuntimeStorePart:
                 ),
                 {},
             ),
+            ((("interaction_id", 1), ("group_index", 1), ("request_id", 1)), {}),
             ((("continuation_message_id", 1),), {}),
         ]
         for keys, kwargs in noncritical_indexes:

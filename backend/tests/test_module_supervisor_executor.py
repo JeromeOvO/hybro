@@ -1123,7 +1123,7 @@ def test_transient_trajectory_preserves_a2a_metadata_from_agent_output():
     projected = trajectory.entries[0].results[0]
     assert projected.a2a_task_id == "task-1"
     assert projected.a2a_context_id == "ctx-1"
-    assert projected.status_message == "The agent needs additional information."
+    assert projected.status_message == "Provide the effective date."
 
 
 def test_orchestration_result_from_output_record_projects_completed_status_as_success():

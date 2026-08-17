@@ -45,7 +45,27 @@ class _FakeCollection:
         return SimpleNamespace(inserted_id=document.get("_id", "inserted-1"))
 
     async def find_one(self, query: dict[str, Any]):
-        self.find_one_calls.append(deepcopy(query))
+        recorded_query = deepcopy(query)
+        # Keep legacy identity-shape assertions readable while the dedicated
+        # deadline tests assert the additional authoritative predicate.
+        clauses = recorded_query.get("$and")
+        if (
+            isinstance(clauses, list)
+            and len(clauses) == 2
+            and isinstance(clauses[0], dict)
+            and "status" in clauses[0]
+        ):
+            identity = dict(clauses[0])
+            room_id = identity.pop("room_id", None)
+            status = identity.pop("status", None)
+            source = identity.pop("source", None)
+            recorded_query = {
+                "room_id": room_id,
+                "status": status,
+                "source": source,
+                "$or": [identity],
+            }
+        self.find_one_calls.append(recorded_query)
         if self.find_one_results:
             return self.find_one_results.pop(0)
         return None

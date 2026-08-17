@@ -48,6 +48,9 @@ export default function RoomChatPage() {
     sendUserMessage,
     cancelProcessing,
     respondToHitlRequest,
+    respondToHitlBatch,
+    cancelHitlRequest,
+    refreshMessages,
     // Supervisor mode (from room extend_info)
     supervisorMode: roomSupervisorMode,
   } = useRoomWebhook({
@@ -179,6 +182,9 @@ export default function RoomChatPage() {
     onSendMessage: handleSendMessage,
     onCancelProcessing: cancelProcessing,
     onRespondToHitl: respondToHitlRequest,
+    onRespondToHitlBatch: respondToHitlBatch,
+    onCancelHitl: cancelHitlRequest,
+    onRefreshHitl: refreshMessages,
     onChatModeChange: setLocalChatMode,
     isSending: sending,
     isProcessing: processing,
@@ -228,7 +234,7 @@ export default function RoomChatPage() {
 
   return (
     <RequireAuth>
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex h-[calc(100dvh-3.5rem)] flex-col bg-background md:h-screen">
       <div className="flex-1 overflow-hidden">
         <div className="w-full h-full flex flex-col">
           <RoomPageShell

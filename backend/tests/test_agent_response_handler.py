@@ -1775,7 +1775,7 @@ class TestInteractiveEvent:
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
             "input-required",
-            message_text=None,
+            message_text="need input",
             task_id="t-1",
             context_id="c-1",
         )
@@ -1790,7 +1790,6 @@ class TestInteractiveEvent:
         self,
     ):
         private_prompt = "PRIVATE_SENTINEL_async_interactive_prompt"
-        generic_prompt = "The agent needs additional information."
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
@@ -1825,15 +1824,13 @@ class TestInteractiveEvent:
 
         await h.handle(event)
 
-        hitl.request_input.assert_awaited_once()
-        assert hitl.request_input.await_args.kwargs["prompt"] == generic_prompt
-        assert private_prompt not in repr(hitl.request_input.await_args.kwargs)
-        persisted_kwargs = db.update_task_state_on_message.await_args.kwargs
-        assert persisted_kwargs["message_text"] is None
-        notify_payload = mock_impl.await_args.kwargs
-        assert private_prompt not in repr(notify_payload)
-        emitter_payload = emitter.await_args.kwargs
-        assert private_prompt not in json.dumps(emitter_payload, sort_keys=True)
+        hitl.request_input.assert_not_awaited()
+        persisted_payload = repr(db.update_task_state_on_message.await_args_list)
+        assert private_prompt not in persisted_payload
+        notify_payload = repr(mock_impl.await_args_list)
+        assert private_prompt not in notify_payload
+        emitter_payload = repr(emitter.await_args_list)
+        assert private_prompt not in emitter_payload
 
     @pytest.mark.asyncio
     async def test_creates_hitl_request_for_async_interactive_continuation(self):
@@ -1891,7 +1888,7 @@ class TestInteractiveEvent:
             room_id="room-001",
             user_message_id="user-msg-001",
             source="agent",
-            prompt="The agent needs additional information.",
+            prompt="need input",
             agent_id="agent-001",
             agent_name="Agent X",
             a2a_task_id="t-1",
@@ -1956,7 +1953,8 @@ class TestInteractiveEvent:
             room_id="room-001",
             user_message_id="user-msg-001",
             source="agent",
-            prompt="The agent needs additional information.",
+            prompt="Please authenticate.",
+            prompt_type="authentication",
             agent_id="agent-001",
             agent_name="Agent X",
             a2a_task_id="t-1",
@@ -2025,7 +2023,7 @@ class TestInteractiveEvent:
             room_id="room-001",
             user_message_id="user-msg-001",
             source="agent",
-            prompt="The agent needs additional information.",
+            prompt="need input",
             agent_id="agent-001",
             agent_name=None,
             a2a_task_id="t-1",

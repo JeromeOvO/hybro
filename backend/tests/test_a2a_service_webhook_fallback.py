@@ -520,7 +520,7 @@ class TestReplyToTaskWebhookFallback:
         assert cfg["push_notification_config"]["token"] == "tok-hitl-001"
         assert cfg["blocking"] is False
         assert cfg["message_data"]["taskId"] == "task-hitl-001"
-        assert cfg["message_data"]["referenceTaskIds"] == ["task-hitl-001"]
+        assert "referenceTaskIds" not in cfg["message_data"]
 
     @pytest.mark.asyncio
     async def test_hitl_no_webhook_url_uses_blocking_true(self):

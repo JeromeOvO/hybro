@@ -451,6 +451,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "orchestration_runs",
                         "orchestration_run_events",
                         "hitl_requests",
+                        "hitl_interactions",
+                        "hitl_resume_commands",
                         "cancelled_messages",
                     )
                 ],
@@ -729,6 +731,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             message_store = runtime_store.messages
             task_store = runtime_store.tasks
             hitl_store = runtime_store.hitl
+            hitl_lifecycle_store = runtime_store.hitl_lifecycle
             memory_store = runtime_store.memory
             max_tasks_per_user = runtime_store.MAX_TASKS_PER_USER
             max_tasks_per_room = runtime_store.MAX_TASKS_PER_ROOM
@@ -795,6 +798,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 create_or_reuse_pending_hitl_request=(
                     hitl_store.create_or_reuse_pending_hitl_request
                 ),
+                claim_hitl_open_projection=hitl_store.claim_hitl_open_projection,
+                complete_hitl_open_projection=(
+                    hitl_store.complete_hitl_open_projection
+                ),
+                release_hitl_open_projection=hitl_store.release_hitl_open_projection,
                 persist_pending_hitl_on_agent_message=(
                     hitl_store.persist_pending_hitl_on_agent_message
                 ),
@@ -831,6 +839,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_store.save_continuation_on_user_message
                 ),
                 get_pending_hitl_requests=hitl_store.get_pending_hitl_requests,
+                get_pending_hitl_requests_strict=(
+                    hitl_store.get_pending_hitl_requests_strict
+                ),
                 get_pending_hitl_requests_for_message=(
                     hitl_store.get_pending_hitl_requests_for_message
                 ),
@@ -1143,6 +1154,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 mongo_dal,
                 room_files=file_storage,
             )
+            from execution.hitl.adapters import HITLTerminalLifecycleAdapter
+            from execution.hitl.application import HITLApplicationCoordinator
+            from execution.hitl.reconciler import HITLLifecycleReconciler
+
+            hitl_application = HITLApplicationCoordinator(
+                lifecycle=hitl_lifecycle_store,
+            )
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
@@ -1157,7 +1175,44 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 task_notifications=HITLTaskNotificationAdapter(
                     notify_task_update_with_string_state
                 ),
+                terminal_lifecycle=HITLTerminalLifecycleAdapter(
+                    orchestration_run_store,
+                    run_lifecycle,
+                ),
+                lifecycle=hitl_lifecycle_store,
+                application=hitl_application,
                 room_files=file_storage,
+            )
+
+            async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
+                from a2a_adapter.remote_task import fetch_remote_task
+                from common.a2a_constants import INTERACTIVE_STATES
+
+                message = await message_store.get_room_agent_message_by_message_id(
+                    command.get("continuation_message_id")
+                )
+                agent_url = getattr(message, "agent_url", None) if message else None
+                if not agent_url:
+                    return None
+                card = await a2a_service.get_agent_card_from_url(agent_url)
+                task = await fetch_remote_task(card, command["task_id"])
+                if task is None or getattr(task, "status", None) is None:
+                    return None
+                state = getattr(task.status.state, "value", task.status.state)
+                interactive_values = {item.value for item in INTERACTIVE_STATES}
+                return {
+                    "advanced": state not in interactive_values,
+                    "task_id": task.id,
+                    "context_id": task.context_id,
+                    "task_state": state,
+                }
+
+            hitl_reconciler = HITLLifecycleReconciler(
+                lifecycle=hitl_lifecycle_store,
+                service=hitl_manager,
+                application=hitl_application,
+                orchestration_run_store=orchestration_run_store,
+                inspect_remote_command=inspect_uncertain_hitl_command,
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -1416,6 +1471,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 client_request_id_resolver=execution_client_request_id_resolver,
                 orchestration_run_store=orchestration_run_store,
             )
+            hitl_application.bind_run_answer_projector(
+                execution_facade._record_and_schedule_resolved_hitl
+            )
             _execution_deps = create_execution_deps(execution_facade)
 
             from execution.terminal_projection import TerminalProjectionFinalizer
@@ -1478,6 +1536,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if healed:
                 logger.info("startup heal: healed %s diverged run(s)", healed)
         await hitl_store.ensure_hitl_indexes()
+        await hitl_lifecycle_store.ensure_hitl_lifecycle_indexes()
 
         # Init DAL Redis subsystems before the guard. Delivery-owned
         # Pub/Sub/KV clients are constructed through container.py above.
@@ -1620,6 +1679,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 StaleHITLDeps(
                     recover_stale_processing=hitl_manager.recover_stale_processing,
                     cancel_requests_for_message=hitl_manager.cancel_requests_for_message,
+                    reconcile_lifecycle=hitl_reconciler.reconcile_lifecycle,
                 )
             )
             stale_task_checker.set_run_watchdog_event_deps(

@@ -104,6 +104,7 @@ class A2ATaskTrackingPort(Protocol):
         push_notification_timeout: float,
         default_request_timeout: float,
         send_hitl_reply: AdapterCall,
+        outbound_message_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -676,6 +677,7 @@ class A2AService:
         task_id: str,
         context_id: str,
         user_input: str,
+        outbound_message_id: str | None = None,
     ) -> dict:
         """Send a follow-up message to an existing A2A task (for HITL replies).
 
@@ -692,6 +694,7 @@ class A2AService:
             push_notification_timeout=self._push_notification_timeout,
             default_request_timeout=self._default_request_timeout,
             send_hitl_reply=adapter_send_hitl_reply,
+            outbound_message_id=outbound_message_id,
         )
 
 

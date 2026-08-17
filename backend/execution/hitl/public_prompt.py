@@ -29,6 +29,20 @@ def safe_agent_input_prompt(prompt: str | None) -> str | None:
     return normalized
 
 
+def concrete_agent_input_prompt(prompt: str | None) -> str | None:
+    """Return a concrete public question, rejecting the legacy generic fallback."""
+    safe_prompt = safe_agent_input_prompt(prompt)
+    if safe_prompt is None:
+        return None
+    if safe_prompt.casefold() == GENERIC_AGENT_INPUT_PROMPT.casefold():
+        return None
+    return safe_prompt
+
+
 def public_agent_input_prompt(prompt: str | None) -> str:
-    """Return a bounded user-facing question or the generic safe fallback."""
+    """Return a bounded user-facing question or the legacy safe fallback.
+
+    New HITL creation paths must use :func:`concrete_agent_input_prompt`; this
+    fallback remains only for compatibility projections of historical records.
+    """
     return safe_agent_input_prompt(prompt) or GENERIC_AGENT_INPUT_PROMPT

@@ -115,11 +115,15 @@ function mergeIncoming(
       totalSteps: incoming.totalSteps,
       relatedMessageId: incoming.relatedMessageId,
       hitlRequestId: incoming.hitlRequestId,
+      hitlSource: incoming.hitlSource,
       hitlPrompt: incoming.hitlPrompt,
       hitlPromptType: incoming.hitlPromptType,
       hitlChoices: incoming.hitlChoices,
       hitlExpiresAt: incoming.hitlExpiresAt,
       hitlResolved: incoming.hitlResolved,
+      hitlInteractionId: incoming.hitlInteractionId,
+      hitlInteractionStatus: incoming.hitlInteractionStatus,
+      hitlApplicationStatus: incoming.hitlApplicationStatus,
       hitlGroupId: incoming.hitlGroupId,
       hitlGroupTotal: incoming.hitlGroupTotal,
       hitlGroupIndex: incoming.hitlGroupIndex,
@@ -162,11 +166,15 @@ function mergeIncoming(
     totalSteps: incoming.totalSteps !== undefined ? incoming.totalSteps : existing.totalSteps,
     relatedMessageId: incoming.relatedMessageId !== undefined ? incoming.relatedMessageId : existing.relatedMessageId,
     hitlRequestId: incoming.hitlRequestId !== undefined ? incoming.hitlRequestId : existing.hitlRequestId,
+    hitlSource: incoming.hitlSource !== undefined ? incoming.hitlSource : existing.hitlSource,
     hitlPrompt: incoming.hitlPrompt !== undefined ? incoming.hitlPrompt : existing.hitlPrompt,
     hitlPromptType: incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
     hitlChoices: incoming.hitlChoices !== undefined ? incoming.hitlChoices : existing.hitlChoices,
     hitlExpiresAt: incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
     hitlResolved: incoming.hitlResolved !== undefined ? incoming.hitlResolved : existing.hitlResolved,
+    hitlInteractionId: incoming.hitlInteractionId !== undefined ? incoming.hitlInteractionId : existing.hitlInteractionId,
+    hitlInteractionStatus: incoming.hitlInteractionStatus !== undefined ? incoming.hitlInteractionStatus : existing.hitlInteractionStatus,
+    hitlApplicationStatus: incoming.hitlApplicationStatus !== undefined ? incoming.hitlApplicationStatus : existing.hitlApplicationStatus,
     hitlGroupId: incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
     hitlGroupTotal: incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
@@ -253,6 +261,10 @@ export function isNoOpUpdate(
     existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
     existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
     existing.hitlResolved      === coalesce(incoming.hitlResolved, existing.hitlResolved) &&
+    existing.hitlSource        === coalesce(incoming.hitlSource, existing.hitlSource) &&
+    existing.hitlInteractionId === coalesce(incoming.hitlInteractionId, existing.hitlInteractionId) &&
+    existing.hitlInteractionStatus === coalesce(incoming.hitlInteractionStatus, existing.hitlInteractionStatus) &&
+    existing.hitlApplicationStatus === coalesce(incoming.hitlApplicationStatus, existing.hitlApplicationStatus) &&
     existing.hitlPrompt        === coalesce(incoming.hitlPrompt, existing.hitlPrompt) &&
     existing.hitlRequestId     === coalesce(incoming.hitlRequestId, existing.hitlRequestId) &&
     existing.hitlPromptType    === coalesce(incoming.hitlPromptType, existing.hitlPromptType) &&

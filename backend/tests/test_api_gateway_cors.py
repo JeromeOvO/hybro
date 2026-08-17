@@ -31,15 +31,18 @@ def test_open_cors_actual_responses_do_not_allow_credentials_with_wildcard():
     from main import app
 
     mock_deps = AsyncMock()
+    original_overrides = dict(app.dependency_overrides)
     app.dependency_overrides[get_api_gateway_deps] = lambda: mock_deps
 
-    client = TestClient(app)
-    response = client.get(
-        "/api/v1/relay/hub/status",
-        headers={"Origin": "https://external.example"},
-    )
-
-    app.dependency_overrides.clear()
+    try:
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/relay/hub/status",
+            headers={"Origin": "https://external.example"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
 
     assert response.headers["access-control-allow-origin"] == "*"
     assert "access-control-allow-credentials" not in response.headers

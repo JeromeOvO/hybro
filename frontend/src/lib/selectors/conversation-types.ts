@@ -59,6 +59,16 @@ export interface ConversationTurnView {
 
 // ── HITL ────────────────────────────────────────────────────
 
+export type HitlLifecycleState =
+  | 'open'
+  | 'submitting'
+  | 'applying'
+  | 'expired'
+  | 'agent_timeout'
+  | 'delivery_uncertain'
+  | 'routing_failed'
+  | 'canceled'
+
 export interface PendingHitl {
   hitlId: string
   source: 'agent' | 'supervisor'
@@ -67,10 +77,18 @@ export interface PendingHitl {
   promptType: HITLPromptType
   choices?: string[]
   messageId: string
+  interactionId: string
+  interactionStatus?: string
+  applicationStatus?: string
+  lifecycleState: HitlLifecycleState
+  errorMessage?: string
+  expiresAt?: string
+  clientRequestId?: string
   groupId?: string
   groupTotal?: number
   groupIndex?: number
   isAnswered: boolean
+  answer?: string
 }
 
 export interface HitlState {

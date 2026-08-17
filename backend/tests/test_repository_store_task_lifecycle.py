@@ -346,21 +346,14 @@ class TestRepositoryStoreHITL:
 
         assert pending == [{"request_id": "h1"}]
         assert hitl_requests.insert_one_calls == [{"request_id": "h1"}]
-        assert hitl_requests.find_calls == [
-            (
-                {
-                    "user_message_id": "u1",
-                    "$or": [
-                        {"status": "pending"},
-                        {
-                            "status": "canceled",
-                            "cancellation_reconciled": {"$ne": True},
-                        },
-                    ],
-                },
-                {"limit": 50},
-            )
-        ]
+        assert len(hitl_requests.find_calls) == 1
+        query, options = hitl_requests.find_calls[0]
+        assert query["$and"][0] == {
+            "user_message_id": "u1",
+            "status": "pending",
+        }
+        assert {"expires_at": None} in query["$and"][1]["$or"]
+        assert options == {"exhaust": True}
 
     @pytest.mark.asyncio
     async def test_persists_and_clears_hitl_request_id_on_display_message(self):
@@ -482,6 +475,14 @@ class TestRepositoryStoreHITL:
                 [
                     ("group_id", 1),
                     ("status", 1),
+                    ("group_index", 1),
+                    ("request_id", 1),
+                ],
+                {},
+            ),
+            (
+                [
+                    ("interaction_id", 1),
                     ("group_index", 1),
                     ("request_id", 1),
                 ],

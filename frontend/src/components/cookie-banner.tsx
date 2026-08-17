@@ -1,11 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const CONSENT_KEY = "cookie_consent"
 
 export function CookieBanner() {
   const [show, setShow] = useState(false)
+  const bannerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const stored = localStorage.getItem(CONSENT_KEY)
@@ -18,7 +19,26 @@ export function CookieBanner() {
 
   useEffect(() => {
     document.body.dataset.cookieBanner = show ? "visible" : "hidden"
+    const banner = bannerRef.current
+    if (!show || !banner) {
+      document.documentElement.style.removeProperty("--cookie-banner-height")
+      return () => {
+        delete document.body.dataset.cookieBanner
+      }
+    }
+
+    const updateInset = () => {
+      document.documentElement.style.setProperty(
+        "--cookie-banner-height",
+        `${banner.getBoundingClientRect().height}px`,
+      )
+    }
+    updateInset()
+    const observer = new ResizeObserver(updateInset)
+    observer.observe(banner)
     return () => {
+      observer.disconnect()
+      document.documentElement.style.removeProperty("--cookie-banner-height")
       delete document.body.dataset.cookieBanner
     }
   }, [show])
@@ -37,7 +57,7 @@ export function CookieBanner() {
   if (!show) return null
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-60 border-t bg-background px-4 py-3 shadow-lg sm:py-4 sm:flex sm:items-center sm:justify-between sm:gap-6 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-[calc(1rem+env(safe-area-inset-bottom))]">
+    <div ref={bannerRef} className="fixed bottom-0 inset-x-0 z-60 border-t bg-background px-4 py-3 shadow-lg sm:py-4 sm:flex sm:items-center sm:justify-between sm:gap-6 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-[calc(1rem+env(safe-area-inset-bottom))]">
       <p className="text-sm text-muted-foreground">
         We use cookies to analyze traffic via Google Analytics. See our{" "}
         <a href="/privacy" className="underline underline-offset-4 hover:text-foreground transition-colors">

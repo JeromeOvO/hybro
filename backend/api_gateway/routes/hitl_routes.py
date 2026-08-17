@@ -13,7 +13,7 @@ from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.dto import HITLRequest
 from common.protocols import HITLManager, RoomOwnershipReader
-from models.hitl import HITLResponseRequest
+from models.hitl import HITLBatchResponseRequest, HITLResponseRequest
 
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
 
@@ -38,9 +38,11 @@ async def verify_room_ownership(
 _HITL_ERROR_STATUS = {
     "HITLNotFoundError": 404,
     "HITLConflictError": 409,
+    "HITLExpiredError": 410,
     "HITLRoomMismatchError": 403,
     "HITLContinuationLostError": 410,
     "HITLRoutingFailedError": 502,
+    "HITLDeliveryUncertainError": 503,
 }
 
 _PUBLIC_PENDING_HITL_FIELDS = {
@@ -55,6 +57,10 @@ _PUBLIC_PENDING_HITL_FIELDS = {
     "source_step_id",
     "created_at",
     "expires_at",
+    "interaction_id",
+    "interaction_status",
+    "application_status",
+    "application_error",
     "group_id",
     "group_total",
     "group_index",
@@ -65,6 +71,13 @@ _PUBLIC_PENDING_HITL_FIELDS = {
 def _raise_http_for_hitl_error(exc: Exception) -> None:
     status_code = _HITL_ERROR_STATUS.get(exc.__class__.__name__, 500)
     message = getattr(exc, "message", str(exc))
+    code = getattr(exc, "code", None)
+    details = getattr(exc, "details", None)
+    if exc.__class__.__name__ == "HITLDeliveryUncertainError":
+        raise HTTPException(
+            status_code=status_code,
+            detail={"message": message, "code": code, **(details or {})},
+        ) from exc
     raise HTTPException(status_code=status_code, detail=message) from exc
 
 
@@ -108,6 +121,35 @@ async def respond_to_hitl_request(
     if response.reclaimed is not None:
         result["reclaimed"] = response.reclaimed
     return result
+
+
+@router.post("/respond-batch")
+async def respond_to_hitl_interaction(
+    room_id: str,
+    body: HITLBatchResponseRequest,
+    user: ClerkUser = Depends(get_current_user),
+    manager: HITLManager = Depends(get_hitl_manager),
+    room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
+):
+    """Atomically submit every required answer for one interaction."""
+    await verify_room_ownership(room_id, user, room_ownership)
+
+    try:
+        response = await manager.resolve_hitl_batch(
+            room_id,
+            body.interaction_id,
+            [answer.model_dump() for answer in body.answers],
+            user.user_id,
+            body.client_request_id,
+        )
+    except Exception as exc:
+        _raise_http_for_hitl_error(exc)
+    return {
+        "status": response.status,
+        "request_id": response.request_id,
+        "interaction_id": body.interaction_id,
+        "client_request_id": response.client_request_id,
+    }
 
 
 @router.get("/pending")

@@ -870,7 +870,7 @@ class TestHandleStreamStatusUpdatePrivacy:
 
         proc.tsm.notify_task.assert_awaited_once()
         notify_kwargs = proc.tsm.notify_task.await_args.kwargs
-        assert notify_kwargs["status_message"] == public_label
+        assert notify_kwargs["status_message"] is None
         assert private_prompt not in repr(notify_kwargs)
         persisted_task = current_message.message_content.message_task
         assert persisted_task.status.message is None
@@ -2584,7 +2584,7 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message == "Requesting test-agent"
+        assert result.status_message is None
         assert private_prompt not in json.dumps(
             result.__dict__, sort_keys=True, default=str
         )

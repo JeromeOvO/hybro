@@ -2037,3 +2037,26 @@ and cancels the local body if lease ownership is lost.
 
 Debate is not an execution mode. Legacy room `debateMode` metadata is ignored, and
 legacy active Debate orchestration is failed during recovery rather than resumed.
+
+### Durable HITL interaction application
+
+HITL uses three durable projections: `hitl_requests` for backward-compatible
+question APIs, `hitl_interactions` for questionnaire/deadline/application ownership,
+and `hitl_resume_commands` for fenced remote A2A continuation delivery. The stale
+task checker's existing leader lease also gates HITL lifecycle reconciliation.
+Remote delivery uncertainty is intentionally durable and is never blindly retried.
+
+The questionnaire endpoint `POST /rooms/{room_id}/hitl/respond-batch` requires an
+exact, duplicate-free answer inventory for the durable interaction. Request answers
+are CAS-recorded without invoking execution; only after the aggregate proves that
+all required answers and digests exist does the application coordinator claim one
+fenced application. Retrying a partially recorded batch repairs the same aggregate,
+and retrying an applied batch only replays idempotent projections. Individual
+`/respond` remains for compatibility and single-question clients.
+
+`GET /rooms/{room_id}/hitl/pending` uses the strict runtime-store read. Persistence
+failures propagate as an HTTP failure rather than an authoritative empty list, which
+prevents clients from hiding unresolved interactions during degraded hydration.
+Prompt schemas include text, textarea, single/multi choice, confirmation/approval,
+authentication guidance, date, and file capability signaling; clients must not use
+free text to collect credentials.

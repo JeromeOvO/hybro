@@ -41,7 +41,9 @@ from common.utils.artifact_delivery import (
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from execution.hitl.public_prompt import public_agent_input_prompt
+from execution.hitl.public_prompt import (
+    public_agent_input_prompt,
+)
 from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
@@ -685,11 +687,7 @@ class SupervisorExecutor:
             completed_at=utcnow(),
             a2a_task_id=output.a2a_task_id,
             a2a_context_id=output.a2a_context_id,
-            status_message=(
-                _GENERIC_AGENT_INPUT_REQUIRED_PROMPT
-                if status == StepStatus.AWAITING_INPUT
-                else output.status_message
-            ),
+            status_message=output.status_message,
             interactive_state=output.interactive_state,
             requires_auth=output.requires_auth,
             requires_policy=output.requires_policy,
@@ -3047,13 +3045,13 @@ class SupervisorExecutor:
                 )
             ),
             a2a_task_id=(
-                _field_from_task(task_metadata_dict, "hitl_a2a_task_id")
-                or _field_from_task(task, "id")
+                _field_from_task(task, "id")
+                or _field_from_task(task_metadata_dict, "hitl_a2a_task_id")
             ),
             a2a_context_id=(
-                _field_from_task(task_metadata_dict, "hitl_a2a_context_id")
-                or _field_from_task(task, "context_id")
+                _field_from_task(task, "context_id")
                 or _field_from_task(task, "contextId")
+                or _field_from_task(task_metadata_dict, "hitl_a2a_context_id")
             ),
             agent_message_id=intent.planned_agent_message_id,
             completed_at=utcnow(),
@@ -4040,6 +4038,11 @@ class SupervisorExecutor:
             user_message_id=state.user_message_id,
             source="agent",
             prompt=prompt,
+            **(
+                {"prompt_type": "authentication"}
+                if result.requires_auth or result.interactive_state == "auth-required"
+                else {}
+            ),
             agent_id=result.agent_id,
             agent_name=result.agent_name,
             a2a_task_id=result.a2a_task_id,
@@ -4167,9 +4170,7 @@ class SupervisorExecutor:
         display_message_id = (
             awaiting_result.agent_message_id or awaiting_result.paused_message_id
         )
-        hitl_prompt = (
-            awaiting_result.status_message or "The agent needs additional information."
-        )
+        hitl_prompt = awaiting_result.status_message or ""
         if not continuation_message_id:
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_orchestration_terminal(
@@ -4233,6 +4234,12 @@ class SupervisorExecutor:
                 user_message_id=user_message_id,
                 source="agent",
                 prompt=hitl_prompt,
+                **(
+                    {"prompt_type": "authentication"}
+                    if awaiting_result.requires_auth
+                    or awaiting_result.interactive_state == "auth-required"
+                    else {}
+                ),
                 agent_id=awaiting_result.agent_id,
                 agent_name=awaiting_result.agent_name,
                 a2a_task_id=awaiting_result.a2a_task_id,

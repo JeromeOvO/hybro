@@ -8,6 +8,7 @@ Mid-stream content stays in memory until terminal finalization.
 """
 
 import asyncio
+import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -446,6 +447,16 @@ class DirectTransport(AgentTransport):
                 )
 
         if full_response_text is None and paused_message_id:
+            maybe_refreshed = self._message_reader.get_room_agent_message_by_message_id(
+                message.message_id
+            )
+            refreshed_message = (
+                await maybe_refreshed
+                if inspect.isawaitable(maybe_refreshed)
+                else maybe_refreshed
+            )
+            if isinstance(refreshed_message, RoomAgentMessage):
+                message = refreshed_message
             task = get_task(message)
             if task and task.status and is_interactive_state(task.status.state):
                 logger.info(
@@ -656,18 +667,9 @@ class DirectTransport(AgentTransport):
         self,
         ctx: ProcessingContext,
         raw_status_message: str | None = None,
-    ) -> str:
-        if raw_status_message:
-            safe_prompt = safe_agent_input_prompt(raw_status_message)
-            if safe_prompt:
-                return safe_prompt
-        agent_name = getattr(ctx.agent_card, "name", None)
-        return self._public_task_label(
-            ctx.current_message,
-            agent_name
-            if isinstance(agent_name, str)
-            else ctx.current_message.agent_id or "agent",
-        )
+    ) -> str | None:
+        del ctx
+        return safe_agent_input_prompt(raw_status_message)
 
     def _materialize_message_as_response_artifact(
         self,
@@ -2205,8 +2207,11 @@ class DirectTransport(AgentTransport):
             if is_interactive_state(status):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
+                    task_obj.id = response.get("task_id") or task_obj.id
+                    task_obj.context_id = (
+                        response.get("context_id") or task_obj.context_id
+                    )
                     task_obj.status.state = coerce_task_state(status)
-                    task_obj.status.message = None
                 if not task_info:
                     current_message.agent_url = (
                         current_message.agent_url or self._agent_card_url(agent_card)

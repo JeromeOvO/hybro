@@ -120,6 +120,7 @@ from common.protocols.room_protocols import (
 )
 from common.protocols.runtime_store_protocols import (
     RuntimeAgentRoomStore,
+    RuntimeHITLLifecycleStore,
     RuntimeHITLStore,
     RuntimeMemoryStore,
     RuntimeMessageStore,
@@ -236,6 +237,7 @@ __all__ = [
     "RunEventRepository",
     "RunRepository",
     "RuntimeAgentRoomStore",
+    "RuntimeHITLLifecycleStore",
     "RuntimeHITLStore",
     "RuntimeMemoryStore",
     "RuntimeMessageStore",

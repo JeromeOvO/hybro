@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { act, render, screen, cleanup } from '@testing-library/react'
 import {
   ComposerShell,
   type ComposerShellAdapter,
@@ -25,6 +25,9 @@ const mockAdapter: ComposerShellAdapter = {
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
   onRespondToHitl: vi.fn(),
+  onRespondToHitlBatch: vi.fn(),
+  onCancelHitl: vi.fn(),
+  onRefreshHitl: vi.fn(),
   onChatModeChange: vi.fn(),
   isSending: false,
   isProcessing: false,
@@ -90,11 +93,51 @@ describe('ComposerShell', () => {
       hitlPrompt: 'What color?',
       hitlPromptType: 'text',
       hitlResolved: false,
+      hitlInteractionId: 'h1',
+      hitlInteractionStatus: 'open',
     }, 'db')
 
     render(<ComposerShell adapter={mockAdapter} />)
     expect(screen.getByText('What color?')).toBeDefined()
     expect(screen.getByTestId('hitl-response-frame')).toBeDefined()
-    expect(screen.getByTestId('room-chat-input').getAttribute('data-has-top-slot')).toBe('false')
+    expect(screen.queryByTestId('room-chat-input')).toBeNull()
+  })
+
+  it('re-renders when the same request changes lifecycle status only', () => {
+    const store = useMessageStore.getState()
+    store.upsertMessage({
+      id: 'hitl-status',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: 'Which market?',
+      senderName: 'Agent A',
+      timestamp: new Date().toISOString(),
+      taskStatus: 'input-required' as any,
+      hitlRequestId: 'same-request',
+      hitlPrompt: 'Which market?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+      hitlInteractionId: 'same-interaction',
+      hitlInteractionStatus: 'open',
+    }, 'db')
+
+    render(<ComposerShell adapter={mockAdapter} />)
+    expect(screen.getByText('Which market?')).toBeDefined()
+
+    act(() => {
+      store.upsertMessage({
+        id: 'hitl-status',
+        roomId: 'test-room',
+        messageType: 'agent',
+        content: 'Which market?',
+        senderName: 'Agent A',
+        timestamp: new Date().toISOString(),
+        hitlInteractionStatus: 'delivery_uncertain',
+        hitlApplicationStatus: 'delivery_uncertain',
+        taskError: 'Answer delivery is uncertain',
+      }, 'sse')
+    })
+
+    expect(screen.getByText('Checking whether your answers were received')).toBeDefined()
   })
 })

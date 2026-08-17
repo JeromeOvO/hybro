@@ -91,6 +91,7 @@ describe('useRoomWebhook consumer contract', () => {
     // Exact key snapshot (sorted) — any added/removed key fails the test
     expect(Object.keys(result.current).sort()).toEqual([
       'availableAgents',
+      'cancelHitlRequest',
       'cancelProcessing',
       'cancelling',
       'getAgentList',
@@ -99,6 +100,7 @@ describe('useRoomWebhook consumer contract', () => {
       'processing',
       'refreshMessages',
       'refreshRoomSetting',
+      'respondToHitlBatch',
       'respondToHitlRequest',
       'room',
       'sendUserMessage',

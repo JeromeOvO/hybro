@@ -312,6 +312,8 @@ class TestRequestInput:
             prompt="Need more info",
             agent_id="agent-789",
             agent_name="TestAgent",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
             continuation_message_id="agent-msg-789",
         )
 
@@ -411,7 +413,6 @@ class TestRequestInput:
     ):
         private_prompt = "PRIVATE_SENTINEL_agent_hitl_prompt"
         private_choice = "PRIVATE_SENTINEL_agent_hitl_choice"
-        generic_prompt = "The agent needs additional information."
         persisted_docs = []
 
         async def create_or_reuse_pending_hitl_request(request_data):
@@ -438,26 +439,10 @@ class TestRequestInput:
             display_message_id="agent-paused-msg",
         )
 
-        assert result is not None
-        assert result.prompt == generic_prompt
-        assert result.agent_prompt_hash
-        assert result.prompt_type == HITLPromptType.TEXT
-        assert result.choices is None
-        assert persisted_docs[0]["prompt"] == generic_prompt
-        assert persisted_docs[0]["agent_prompt_hash"] == result.agent_prompt_hash
-        assert persisted_docs[0]["prompt_type"] == HITLPromptType.TEXT.value
-        assert "choices" not in persisted_docs[0]
-        projection_kwargs = (
-            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args.kwargs
-        )
-        assert projection_kwargs["prompt"] == generic_prompt
-        assert projection_kwargs["prompt_type"] == HITLPromptType.TEXT
-        assert projection_kwargs["choices"] is None
-        event = mock_hitl_delivery.emit.await_args.args[0]
-        serialized = event.model_dump_json()
-        assert event.prompt == generic_prompt
-        assert private_prompt not in serialized
-        assert private_choice not in serialized
+        assert result is None
+        assert persisted_docs == []
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_not_awaited()
+        mock_hitl_delivery.emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_agent_request_input_preserves_safe_concrete_question(
@@ -483,6 +468,8 @@ class TestRequestInput:
             source="agent",
             prompt=prompt,
             agent_id="agent-broker",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
             continuation_message_id="agent-paused-msg",
             display_message_id="agent-paused-msg",
         )
@@ -964,6 +951,8 @@ class TestRequestInput:
                 prompt_type=HITLPromptType.CHOICE,
                 choices=["yes", "no"],
                 agent_id="agent-1",
+                a2a_task_id="a2a-task-1",
+                a2a_context_id="a2a-context-1",
                 continuation_message_id="agent-msg-456",
             )
 
@@ -1136,6 +1125,8 @@ class TestRequestInput:
             user_message_id="user-msg-456",
             source="agent",
             prompt="Need revenue",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
             continuation_message_id="agent-msg-789",
         )
 
@@ -1175,6 +1166,8 @@ class TestRequestInput:
             user_message_id="user-msg-456",
             source="agent",
             prompt="Need revenue",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
             continuation_message_id="agent-msg-789",
         )
 
@@ -1232,6 +1225,8 @@ class TestRequestInput:
             user_message_id="user-msg-456",
             source="agent",
             prompt="Need revenue",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
             continuation_message_id="agent-paused-msg",
             display_message_id="agent-paused-msg",
         )
@@ -1239,10 +1234,12 @@ class TestRequestInput:
         assert result is not None
         assert result.request_id == "hitl-reused"
         assert result.client_request_id == "cr-reused-hitl"
-        mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
-            "hitl-reused",
-            client_request_id="cr-reused-hitl",
-        )
+        mock_hitl_db_service.cas_update_hitl_request.assert_awaited_once()
+        repair_call = mock_hitl_db_service.cas_update_hitl_request.await_args
+        assert repair_call.args == ("hitl-reused",)
+        assert repair_call.kwargs["expected_status"] == HITLStatus.PENDING.value
+        assert repair_call.kwargs["client_request_id"] == "cr-reused-hitl"
+        assert repair_call.kwargs["agent_prompt_hash"]
         event = mock_hitl_delivery.emit.await_args.args[0]
         assert event.client_request_id == "cr-reused-hitl"
 
@@ -1274,19 +1271,20 @@ class TestRequestInput:
         hitl_service._persistence = mock_hitl_db_service
         hitl_service._delivery = mock_hitl_delivery
 
-        with pytest.raises(HITLRequestProjectionError) as exc_info:
-            await hitl_service.request_input(
-                room_id="room-123",
-                user_message_id="user-msg-456",
-                source="agent",
-                prompt=private_prompt,
-                prompt_type=HITLPromptType.CHOICE,
-                choices=[private_prompt],
-                continuation_message_id="agent-paused-msg",
-                display_message_id="agent-paused-msg",
-            )
+        result = await hitl_service.request_input(
+            room_id="room-123",
+            user_message_id="user-msg-456",
+            source="agent",
+            prompt=private_prompt,
+            prompt_type=HITLPromptType.CHOICE,
+            choices=[private_prompt],
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
+            continuation_message_id="agent-paused-msg",
+            display_message_id="agent-paused-msg",
+        )
 
-        assert exc_info.value.request_id == "hitl-reused"
+        assert result is None
         mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_not_awaited()
         mock_hitl_delivery.emit.assert_not_awaited()
 
@@ -1339,6 +1337,8 @@ class TestRequestInput:
             user_message_id="user-msg-456",
             source="agent",
             prompt="Need company revenue",
+            a2a_task_id="a2a-task-1",
+            a2a_context_id="a2a-context-1",
             continuation_message_id="agent-paused-msg",
         )
 
@@ -1627,22 +1627,12 @@ class TestRequestInput:
 
         assert result["status"] == "ok"
         assert result["request_id"] == "hitl-old"
-        assert result["followup_hitl_request_id"] == "hitl-next"
-        assert result["a2a_task_id"] == "a2a-task-1"
-        assert result["a2a_context_id"] == "a2a-context-1"
-        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_awaited_once()
-        projection_call = (
-            mock_hitl_db_service.persist_pending_hitl_on_agent_message.await_args
-        )
-        assert projection_call.args == ("agent-paused-msg",)
-        assert projection_call.kwargs["request_id"] == "hitl-next"
-        followup_doc = (
-            mock_hitl_db_service.create_or_reuse_pending_hitl_request.await_args.args[0]
-        )
-        assert followup_doc["prompt"] == "The agent needs additional information."
-        assert private_followup_prompt not in repr(followup_doc)
+        assert result["task_state"] == "failed"
+        assert result["routing_failed"] is True
+        assert result["error_code"] == "invalid_interactive_prompt"
+        mock_hitl_db_service.create_or_reuse_pending_hitl_request.assert_not_awaited()
+        mock_hitl_db_service.persist_pending_hitl_on_agent_message.assert_not_awaited()
         mock_hitl_db_service.persist_hitl_user_answer.assert_not_awaited()
-        mock_hitl_db_service.update_agent_message_task_state.assert_not_awaited()
         continuation.resume_queue_from_continuation.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1748,14 +1738,11 @@ class TestRequestInput:
 
         result = await hitl_service._handle_agent_response(request, "5000000")
 
-        assert result["resume_execution"] is False
-        assert result["task_state"] == "input-required"
-        assert result["followup_hitl_request_id"] == "hitl-next"
-        hitl_service.request_input.assert_awaited_once()
-        assert (
-            hitl_service.request_input.await_args.kwargs["prompt"]
-            == "The agent needs additional information."
-        )
+        assert result["resume_execution"] is True
+        assert result["task_state"] == "failed"
+        assert result["routing_failed"] is True
+        assert result["error_code"] == "invalid_interactive_prompt"
+        hitl_service.request_input.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_followup_with_new_safe_question_creates_hitl_with_new_prompt(
@@ -1885,10 +1872,11 @@ class TestRequestInput:
 
         result = await hitl_service._handle_agent_response(request, "user answer")
 
-        assert result["resume_execution"] is False
+        assert result["resume_execution"] is True
+        assert result["task_state"] == "failed"
+        assert result["routing_failed"] is True
         assert "agent_no_progress" not in result
-        assert result["followup_hitl_request_id"] == "hitl-next"
-        hitl_service.request_input.assert_awaited_once()
+        hitl_service.request_input.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_supervisor_grouped_hitl_allows_multiple_pending_requests_with_same_continuation_id(
@@ -1998,14 +1986,10 @@ class TestGetPendingRequests:
         ]
         hitl_service._persistence = mock_hitl_db_service
 
-        agent_request, supervisor_request = await hitl_service.get_pending_requests(
-            "room-123"
-        )
+        requests = await hitl_service.get_pending_requests("room-123")
 
-        assert agent_request.prompt == "The agent needs additional information."
-        assert agent_request.prompt_type == HITLPromptType.TEXT
-        assert agent_request.choices is None
-        assert private_prompt not in agent_request.model_dump_json()
+        assert len(requests) == 1
+        supervisor_request = requests[0]
         assert supervisor_request.prompt == "Which account should be used?"
         assert supervisor_request.prompt_type == HITLPromptType.CHOICE
         assert supervisor_request.choices == ["Personal", "Business"]
@@ -2063,10 +2047,7 @@ class TestGetPendingRequestsForMessage:
 
         result = await hitl_service.get_pending_requests_for_message("user-msg-456")
 
-        assert result[0].prompt == "The agent needs additional information."
-        assert result[0].prompt_type == HITLPromptType.TEXT
-        assert result[0].choices is None
-        assert private_prompt not in result[0].model_dump_json()
+        assert result == []
 
 
 # =============================================================================
@@ -2102,6 +2083,8 @@ class TestCancelRequest:
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
             cancellation_reconciled=False,
+            owning_run_terminal_status="canceled",
+            owning_run_terminal_reason="Human input request was canceled",
         )
 
     @pytest.mark.asyncio
@@ -2199,6 +2182,8 @@ class TestCancelRequest:
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
             cancellation_reconciled=False,
+            owning_run_terminal_status="canceled",
+            owning_run_terminal_reason="Human input request was canceled",
         )
         mock_hitl_db_service.update_hitl_request.assert_awaited_once_with(
             sample_hitl_request.request_id,

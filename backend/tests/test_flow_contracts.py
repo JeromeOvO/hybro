@@ -477,6 +477,8 @@ class TestHITLFlow:
             expected_status=HITLStatus.PENDING.value,
             status=HITLStatus.CANCELED.value,
             cancellation_reconciled=False,
+            owning_run_terminal_status="canceled",
+            owning_run_terminal_reason="Human input request was canceled",
         )
 
     @pytest.mark.asyncio

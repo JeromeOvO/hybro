@@ -38,6 +38,10 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         display_message_id=getattr(request, "display_message_id", None),
         client_request_id=getattr(request, "client_request_id", None),
         orchestration_run_id=getattr(request, "orchestration_run_id", None),
+        interaction_id=getattr(request, "interaction_id", None),
+        interaction_status=_enum_value(getattr(request, "interaction_status", None)),
+        application_status=getattr(request, "application_status", None),
+        application_error=getattr(request, "application_error", None),
         group_id=getattr(request, "group_id", None),
         group_total=getattr(request, "group_total", None),
         group_index=getattr(request, "group_index", None),
@@ -59,6 +63,7 @@ def hitl_response_dict_to_common(result: dict[str, Any]) -> CommonHITLResponse:
         resolved_at=result.get("resolved_at"),
         reclaimed=result.get("reclaimed"),
         error=result.get("error"),
+        client_request_id=result.get("client_request_id"),
     )
 
 

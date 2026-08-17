@@ -18,6 +18,7 @@ import re
 from datetime import timedelta
 from functools import wraps
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from common.dto import HITLRequestEvent, HITLResolvedEvent
 from common.observability import traced_create_task
@@ -34,10 +35,12 @@ from execution.hitl.exceptions import (
 )
 from execution.hitl.public_prompt import (
     GENERIC_AGENT_INPUT_PROMPT,
-    public_agent_input_prompt,
+    concrete_agent_input_prompt,
 )
 from models.hitl import (
     HITLEventType,
+    HITLInteraction,
+    HITLInteractionStatus,
     HITLPromptType,
     HITLRequest,
     HITLStatus,
@@ -50,8 +53,10 @@ if TYPE_CHECKING:
         HITLAgentReplyPort,
         HITLContinuationPort,
         HITLDeliveryPort,
+        HITLLifecyclePersistencePort,
         HITLPersistencePort,
         HITLTaskNotificationPort,
+        HITLTerminalLifecyclePort,
     )
 
 logger = get_logger(__name__)
@@ -122,11 +127,49 @@ def _infer_prompt_type(prompt_text: str) -> HITLPromptType:
     return HITLPromptType.TEXT
 
 
+def _is_authoritative_a2a_id(value: Any) -> bool:
+    return bool(
+        isinstance(value, str)
+        and value.strip()
+        and not value.startswith(("pending-", "relay-pending-"))
+    )
+
+
+def _is_actionable_agent_hitl_document(document: dict[str, Any]) -> bool:
+    return bool(
+        document.get("source") == "agent"
+        and concrete_agent_input_prompt(document.get("prompt")) is not None
+        and _is_authoritative_a2a_id(document.get("a2a_task_id"))
+        and _is_authoritative_a2a_id(document.get("a2a_context_id"))
+    )
+
+
+def _same_agent_hitl_logical_request(
+    persisted: dict[str, Any], current: dict[str, Any]
+) -> bool:
+    if any(
+        persisted.get(field) != current.get(field)
+        for field in ("room_id", "user_message_id", "source")
+    ):
+        return False
+    if (
+        persisted.get("agent_id")
+        and current.get("agent_id")
+        and persisted.get("agent_id") != current.get("agent_id")
+    ):
+        return False
+    return any(
+        persisted.get(field) and persisted.get(field) == current.get(field)
+        for field in ("display_message_id", "continuation_message_id")
+    )
+
+
 def _public_hitl_request_from_doc(document: dict[str, Any]) -> HITLRequest:
     data = {key: value for key, value in document.items() if key != "_id"}
     if data.get("source") == "agent":
-        data["prompt"] = _GENERIC_AGENT_INPUT_PROMPT
-        data["prompt_type"] = HITLPromptType.TEXT
+        data["prompt"] = concrete_agent_input_prompt(data.get("prompt"))
+        if data.get("prompt_type") != HITLPromptType.AUTHENTICATION.value:
+            data["prompt_type"] = HITLPromptType.TEXT
         data["choices"] = None
     return HITLRequest(**data)
 
@@ -139,6 +182,9 @@ class HITLService:
         *,
         continuation=None,
         task_notifications=None,
+        terminal_lifecycle=None,
+        lifecycle=None,
+        application=None,
         room_files=None,
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
@@ -146,6 +192,9 @@ class HITLService:
         self._agent_reply: HITLAgentReplyPort | None = None
         self._continuation: HITLContinuationPort | None = continuation
         self._task_notifications: HITLTaskNotificationPort | None = task_notifications
+        self._terminal_lifecycle: HITLTerminalLifecyclePort | None = terminal_lifecycle
+        self._lifecycle: HITLLifecyclePersistencePort | None = lifecycle
+        self._application = application
         self._room_files = room_files
 
     @property
@@ -230,8 +279,32 @@ class HITLService:
 
         agent_prompt_hash = _prompt_hash(prompt) if source == "agent" else None
         if source == "agent":
-            prompt = public_agent_input_prompt(prompt)
-            prompt_type = HITLPromptType.TEXT
+            concrete_prompt = concrete_agent_input_prompt(prompt)
+            has_authoritative_remote_ids = bool(
+                _is_authoritative_a2a_id(a2a_task_id)
+                and _is_authoritative_a2a_id(a2a_context_id)
+            )
+            if concrete_prompt is None or not has_authoritative_remote_ids:
+                logger.error(
+                    "Rejecting invalid agent HITL request",
+                    extra={
+                        "room_id": room_id,
+                        "agent_id": agent_id,
+                        "error_code": (
+                            "invalid_interactive_prompt"
+                            if concrete_prompt is None
+                            else "invalid_a2a_continuation"
+                        ),
+                    },
+                )
+                return None
+            prompt = concrete_prompt
+            prompt_type = (
+                HITLPromptType.AUTHENTICATION
+                if getattr(prompt_type, "value", prompt_type)
+                == HITLPromptType.AUTHENTICATION.value
+                else HITLPromptType.TEXT
+            )
             choices = None
         resolved_display_message_id = display_message_id
         if source == "agent" and resolved_display_message_id is None:
@@ -322,79 +395,66 @@ class HITLService:
                 )
                 return None
             persisted_doc, hitl_request_created = persisted
+            persisted_doc = dict(persisted_doc)
+            if not hitl_request_created:
+                request_id_to_repair = persisted_doc.get("request_id")
+                if not request_id_to_repair or not _same_agent_hitl_logical_request(
+                    persisted_doc, doc
+                ):
+                    # A uniqueness collision does not prove that the existing request
+                    # is malformed. Never cancel another active interaction from this
+                    # creation path; terminalization must go through the lifecycle
+                    # reconciler so its owning run and projections converge.
+                    logger.error(
+                        "Rejecting mismatched reused agent HITL request",
+                        extra={"hitl_request_id": request_id_to_repair},
+                    )
+                    return None
+
+                repair_update = {
+                    "prompt": prompt,
+                    "agent_prompt_hash": agent_prompt_hash,
+                    "prompt_type": getattr(prompt_type, "value", prompt_type),
+                    "choices": None,
+                    "a2a_task_id": a2a_task_id,
+                    "a2a_context_id": a2a_context_id,
+                }
+                if resolved_client_request_id and not persisted_doc.get(
+                    "client_request_id"
+                ):
+                    repair_update["client_request_id"] = resolved_client_request_id
+                repair_update = {
+                    key: value
+                    for key, value in repair_update.items()
+                    if persisted_doc.get(key) != value
+                }
+                if repair_update:
+                    repaired = await self.persistence.cas_update_hitl_request(
+                        request_id_to_repair,
+                        expected_status=HITLStatus.PENDING.value,
+                        **repair_update,
+                    )
+                    if not repaired:
+                        logger.error(
+                            "Failed to atomically repair reused agent HITL request",
+                            extra={"hitl_request_id": request_id_to_repair},
+                        )
+                        return None
+                    persisted_doc.update(repair_update)
+
+            if not _is_actionable_agent_hitl_document(persisted_doc):
+                # Keep malformed legacy data non-actionable without silently
+                # terminalizing it here. Pending hydration filters it, while a later
+                # authoritative retry may repair it. Any cancellation/failure must use
+                # the lifecycle reconciler rather than bypassing owning-run cleanup.
+                logger.error(
+                    "Rejecting malformed persisted agent HITL request",
+                    extra={"hitl_request_id": persisted_doc.get("request_id")},
+                )
+                return None
             request = HITLRequest(
                 **{k: v for k, v in persisted_doc.items() if k != "_id"}
             )
-            backfill_update: dict[str, Any] = {}
-            safe_persisted_prompt = public_agent_input_prompt(request.prompt)
-            sanitize_backfill_required = (
-                request.prompt != safe_persisted_prompt
-                or request.prompt_type != HITLPromptType.TEXT
-                or request.choices is not None
-            )
-            if sanitize_backfill_required:
-                backfill_update.update(
-                    {
-                        "prompt": safe_persisted_prompt,
-                        "prompt_type": HITLPromptType.TEXT.value,
-                        "choices": None,
-                    }
-                )
-                request.prompt = safe_persisted_prompt
-                request.prompt_type = HITLPromptType.TEXT
-                request.choices = None
-            if (
-                not hitl_request_created
-                and resolved_client_request_id
-                and not request.client_request_id
-            ):
-                backfill_update["client_request_id"] = resolved_client_request_id
-            if backfill_update:
-                try:
-                    backfilled = await self.persistence.update_hitl_request(
-                        request.request_id,
-                        **backfill_update,
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "Failed to backfill sanitized agent HITL request %s",
-                        request.request_id,
-                        extra={
-                            "hitl_request_id": request.request_id,
-                            "room_id": request.room_id,
-                            "display_message_id": request.display_message_id,
-                        },
-                        exc_info=True,
-                    )
-                    raise HITLRequestProjectionError(
-                        "failed to persist sanitized agent HITL request",
-                        request_id=request.request_id,
-                    ) from exc
-                if sanitize_backfill_required and not backfilled:
-                    logger.error(
-                        "Failed to backfill sanitized agent HITL request %s",
-                        request.request_id,
-                        extra={
-                            "hitl_request_id": request.request_id,
-                            "room_id": request.room_id,
-                            "display_message_id": request.display_message_id,
-                        },
-                    )
-                    raise HITLRequestProjectionError(
-                        "failed to persist sanitized agent HITL request",
-                        request_id=request.request_id,
-                    )
-                if backfilled and "client_request_id" in backfill_update:
-                    request.client_request_id = resolved_client_request_id
-                elif "client_request_id" in backfill_update:
-                    logger.warning(
-                        "Failed to backfill client_request_id on reused HITL request",
-                        extra={
-                            "hitl_request_id": request.request_id,
-                            "room_id": request.room_id,
-                            "display_message_id": request.display_message_id,
-                        },
-                    )
         else:
             saved = await self.persistence.create_hitl_request(doc)
             hitl_request_created = bool(saved)
@@ -412,6 +472,52 @@ class HITLService:
                 request = HITLRequest(
                     **{k: v for k, v in existing_doc.items() if k != "_id"}
                 )
+
+        # Materialize the complete durable interaction before any user-visible
+        # message projection or SSE emission. A partially written group remains
+        # recoverable but invisible until every expected question is attached.
+        if self._lifecycle is not None:
+            interaction_id = (
+                request.interaction_id or request.group_id or request.request_id
+            )
+            if request.interaction_id != interaction_id:
+                linked = await self.persistence.update_hitl_request(
+                    request.request_id,
+                    interaction_id=interaction_id,
+                )
+                if not linked:
+                    raise HITLRequestProjectionError(
+                        "failed to link HITL request to interaction",
+                        request_id=request.request_id,
+                    )
+                request.interaction_id = interaction_id
+            interaction = HITLInteraction(
+                interaction_id=interaction_id,
+                room_id=request.room_id,
+                user_message_id=request.user_message_id,
+                orchestration_run_id=request.orchestration_run_id,
+                source=request.source,
+                expected_request_count=request.group_total or 1,
+                expires_at=request.expires_at,
+            ).model_dump(mode="json")
+            await self._lifecycle.materialize_interaction(interaction)
+            materialized = await self._lifecycle.attach_interaction_request(
+                interaction_id,
+                request_id=request.request_id,
+                required=True,
+                expires_at=request.expires_at,
+                group_index=request.group_index,
+            )
+            if materialized is None:
+                raise HITLRequestProjectionError(
+                    "failed to materialize HITL interaction",
+                    request_id=request.request_id,
+                )
+            if materialized.get("status") == HITLInteractionStatus.MATERIALIZING.value:
+                return request
+            if request.group_id is not None:
+                await self.recover_open_interaction_projection(materialized)
+                return request
 
         # 1b. Mark the display agent message as input-required in DB
         # so page refresh loads the correct state.
@@ -677,6 +783,127 @@ class HITLService:
             )
         return request
 
+    async def recover_open_interaction_projection(
+        self, interaction: dict[str, Any]
+    ) -> int:
+        """Idempotently project every member after a group becomes OPEN."""
+        if interaction.get("status") not in {
+            HITLInteractionStatus.OPEN.value,
+            HITLInteractionStatus.PARTIALLY_ANSWERED.value,
+        }:
+            return 0
+        interaction_id = interaction["interaction_id"]
+        rows = await self.persistence.get_hitl_group_requests(interaction_id)
+        rows = sorted(
+            rows,
+            key=lambda row: (row.get("group_index", 10_000), row.get("request_id", "")),
+        )
+        expected_ids = list(interaction.get("request_ids") or [])
+        by_id = {row.get("request_id"): row for row in rows}
+        expected_total = int(interaction.get("expected_request_count") or 0)
+        indices = [row.get("group_index") for row in rows]
+        totals = {row.get("group_total") for row in rows}
+        compatible = all(
+            row.get("group_id") == interaction_id
+            and (row.get("interaction_id") or interaction_id) == interaction_id
+            for row in rows
+        )
+        if (
+            set(by_id) != set(expected_ids)
+            or len(by_id) != len(expected_ids)
+            or len(rows) != expected_total
+            or set(indices) != set(range(expected_total))
+            or totals != {expected_total}
+            or not compatible
+        ):
+            raise HITLRequestProjectionError(
+                "interaction requests are incomplete or conflicting during projection"
+            )
+        projected_count = 0
+        ordered_ids = [row["request_id"] for row in rows]
+        for request_id in ordered_ids:
+            row = by_id[request_id]
+            if row.get("open_projection_completed_at") is not None:
+                continue
+            claim_id = uuid4().hex
+            claimed = await self.persistence.claim_hitl_open_projection(
+                request_id, claim_id
+            )
+            if claimed is None:
+                latest = await self.persistence.get_hitl_request(request_id)
+                if latest and latest.get("open_projection_completed_at") is not None:
+                    continue
+                raise HITLRequestProjectionError(
+                    "HITL open projection is already claimed",
+                    request_id=request_id,
+                )
+            request = HITLRequest(**{k: v for k, v in row.items() if k != "_id"})
+            display_id = request.display_message_id or request.continuation_message_id
+            try:
+                projection_ok = True
+                if display_id and request.source == "agent":
+                    projection_ok = bool(
+                        await self.persistence.persist_pending_hitl_on_agent_message(
+                            display_id,
+                            request_id=request.request_id,
+                            prompt=request.prompt,
+                            prompt_type=request.prompt_type,
+                            choices=request.choices,
+                            a2a_task_id=request.a2a_task_id,
+                            a2a_context_id=request.a2a_context_id,
+                            group_id=request.group_id,
+                            group_total=request.group_total,
+                            group_index=request.group_index,
+                        )
+                    )
+                elif display_id:
+                    projection_ok = all(
+                        (
+                            await self.persistence.update_agent_message_task_state(
+                                display_id, "input-required"
+                            ),
+                            await self.persistence.persist_hitl_user_answer(
+                                display_id, None
+                            ),
+                            await self.persistence.persist_hitl_request_id_on_message(
+                                display_id, request.request_id
+                            ),
+                            await self.persistence.persist_hitl_group_metadata(
+                                display_id,
+                                group_id=request.group_id,
+                                group_total=request.group_total,
+                                group_index=request.group_index,
+                            ),
+                        )
+                    )
+                if not projection_ok:
+                    raise HITLRequestProjectionError(
+                        "failed to project open HITL group member",
+                        request_id=request.request_id,
+                    )
+                request.interaction_status = HITLInteractionStatus.OPEN
+                request.application_status = HITLInteractionStatus.OPEN.value
+                await self._emit_hitl_event(
+                    room_id=request.room_id,
+                    event_type=HITLEventType.INPUT_REQUESTED,
+                    request=request,
+                )
+                completed = await self.persistence.complete_hitl_open_projection(
+                    request_id, claim_id
+                )
+                if not completed:
+                    raise HITLRequestProjectionError(
+                        "failed to finalize open HITL projection marker",
+                        request_id=request_id,
+                    )
+                projected_count += 1
+            except Exception:
+                await self.persistence.release_hitl_open_projection(
+                    request_id, claim_id
+                )
+                raise
+        return projected_count
+
     async def _revert_supervisor_hitl_projection(
         self,
         *,
@@ -808,6 +1035,29 @@ class HITLService:
     # ------------------------------------------------------------------
 
     @_room_write_fenced
+    async def handle_batch_response(
+        self,
+        room_id: str,
+        interaction_id: str,
+        answers: list[dict[str, str]],
+        user_id: str,
+        client_request_id: str | None = None,
+    ) -> dict:
+        """Record a complete questionnaire and resume its interaction once."""
+        if self._application is None:
+            raise HITLRoutingFailedError(
+                "Batch HITL responses require lifecycle-bound application"
+            )
+        return await self._application.handle_batch_response(
+            self,
+            room_id=room_id,
+            interaction_id=interaction_id,
+            answers=answers,
+            user_id=user_id,
+            client_request_id=client_request_id,
+        )
+
+    @_room_write_fenced
     async def handle_response(
         self,
         room_id: str,
@@ -817,6 +1067,11 @@ class HITLService:
     ) -> dict:
         """Handle user's reply to an HITL request.
 
+        New lifecycle-bound deployments record answers on an interaction and
+        apply them through the durable application coordinator. The legacy
+        request lease path remains only for pre-Milestone-2 test/compatibility
+        bindings that do not provide lifecycle persistence.
+
         Uses a fenced two-phase CAS pattern:
           pending -> processing  (atomic claim, generates claim_id)
           processing -> responded  (fenced by claim_id)
@@ -824,6 +1079,15 @@ class HITLService:
         recovery reclaims the request and another worker re-claims it
         with a new claim_id, the original worker's writes are no-ops.
         """
+        if self._application is not None:
+            return await self._application.handle_response(
+                self,
+                room_id=room_id,
+                request_id=request_id,
+                user_input=user_input,
+                user_id=user_id,
+            )
+
         from uuid import uuid4
 
         claim_id = uuid4().hex
@@ -1167,6 +1431,7 @@ class HITLService:
             request.display_message_id
             and not route_result.get("followup_hitl_request_id")
             and not route_result.get("agent_no_progress")
+            and not route_result.get("routing_failed")
         ):
             await self._project_completed_hitl_display(
                 display_message_id=request.display_message_id,
@@ -1272,7 +1537,11 @@ class HITLService:
     # ------------------------------------------------------------------
 
     async def _handle_agent_response(
-        self, request: HITLRequest, user_input: str
+        self,
+        request: HITLRequest,
+        user_input: str,
+        *,
+        outbound_message_id: str | None = None,
     ) -> dict[str, Any]:
         """Send user's reply to the waiting A2A agent.
 
@@ -1297,20 +1566,31 @@ class HITLService:
             task_id=request.a2a_task_id,
             context_id=request.a2a_context_id,
             user_input=user_input,
+            outbound_message_id=outbound_message_id,
         )
 
         # reply_to_task returns {"blocking": bool, "task_state": str|None,
         # "response_text": str|None}.  When blocking=True the response is
         # already complete — use it directly instead of re-reading from DB.
         was_blocking = reply_result.get("blocking", False)
-        if not was_blocking:
+        raw_task_state = reply_result.get("task_state")
+        authoritative_task_id = reply_result.get("task_id") or request.a2a_task_id
+        authoritative_context_id = (
+            reply_result.get("context_id") or request.a2a_context_id
+        )
+        if not was_blocking and raw_task_state not in {
+            "failed",
+            "canceled",
+            "rejected",
+        }:
             # Push-notification mode — agent will POST webhook → resume_queue_from_continuation
             return {
                 "blocking": False,
                 "resume_execution": False,
+                "a2a_task_id": authoritative_task_id,
+                "a2a_context_id": authoritative_context_id,
             }
 
-        raw_task_state = reply_result.get("task_state")
         response_text = reply_result.get("response_text") or ""
         task_state = (
             str(raw_task_state).strip().lower().replace("_", "-")
@@ -1323,7 +1603,18 @@ class HITLService:
         # answer.  Without this, multi-round blocking HITL conversations get
         # stuck after the second prompt.
         if task_state in ("input-required", "auth-required", "policy-required"):
-            public_response_text = public_agent_input_prompt(response_text)
+            public_response_text = concrete_agent_input_prompt(response_text)
+            if public_response_text is None:
+                return {
+                    "blocking": True,
+                    "task_state": "failed",
+                    "response_text": "Task failed",
+                    "resume_execution": True,
+                    "routing_failed": True,
+                    "error_code": "invalid_interactive_prompt",
+                    "a2a_task_id": authoritative_task_id,
+                    "a2a_context_id": authoritative_context_id,
+                }
             response_prompt_hash = _prompt_hash(response_text)
             same_raw_agent_prompt = bool(
                 request.agent_prompt_hash
@@ -1360,8 +1651,8 @@ class HITLService:
                     "agent_name": request.agent_name,
                     "display_message_id": request.display_message_id,
                     "continuation_message_id": request.continuation_message_id,
-                    "a2a_task_id": request.a2a_task_id,
-                    "a2a_context_id": request.a2a_context_id,
+                    "a2a_task_id": authoritative_task_id,
+                    "a2a_context_id": authoritative_context_id,
                 }
             logger.info(
                 "hitl: blocking reply returned input_required for %s — "
@@ -1373,10 +1664,15 @@ class HITLService:
                 user_message_id=request.user_message_id,
                 source="agent",
                 prompt=public_response_text,
+                prompt_type=(
+                    HITLPromptType.AUTHENTICATION
+                    if task_state == "auth-required"
+                    else HITLPromptType.TEXT
+                ),
                 agent_id=request.agent_id,
                 agent_name=request.agent_name,
-                a2a_task_id=request.a2a_task_id,
-                a2a_context_id=request.a2a_context_id,
+                a2a_task_id=authoritative_task_id,
+                a2a_context_id=authoritative_context_id,
                 continuation_message_id=request.continuation_message_id,
                 display_message_id=request.display_message_id,
                 orchestration_run_id=request.orchestration_run_id,
@@ -1458,6 +1754,8 @@ class HITLService:
                 "task_state": task_state,
                 "response_text": task_result_text,
                 "resume_execution": True,
+                "a2a_task_id": authoritative_task_id,
+                "a2a_context_id": authoritative_context_id,
             }
         resumed = await self.continuation.resume_queue_from_continuation(
             request.continuation_message_id,
@@ -1475,6 +1773,8 @@ class HITLService:
             "response_text": task_result_text,
             "resume_execution": False,
             "queue_resume_triggered": True,
+            "a2a_task_id": authoritative_task_id,
+            "a2a_context_id": authoritative_context_id,
         }
 
     # ------------------------------------------------------------------
@@ -1482,10 +1782,17 @@ class HITLService:
     # ------------------------------------------------------------------
 
     async def _handle_supervisor_response(
-        self, request: HITLRequest, user_input: str
+        self,
+        request: HITLRequest,
+        user_input: str,
+        *,
+        effect_id: str | None = None,
     ) -> None:
-        """Validate durable supervisor linkage before facade-owned recovery."""
+        """Validate the stable, journaled supervisor continuation effect."""
         del user_input
+        # Lifecycle-bound callers always pass the stable command identity.
+        # The optional form remains for legacy single-request compatibility.
+        del effect_id
         if not request.orchestration_run_id:
             raise ContinuationLostError(
                 "Supervisor HITL request is missing orchestration_run_id"
@@ -1495,10 +1802,68 @@ class HITLService:
     # Queries
     # ------------------------------------------------------------------
 
+    async def _public_pending_requests(
+        self, docs: list[dict[str, Any]]
+    ) -> list[HITLRequest]:
+        eligible = [
+            document
+            for document in docs
+            if document.get("source") != "agent"
+            or _is_actionable_agent_hitl_document(document)
+        ]
+        if self._lifecycle is None:
+            return [_public_hitl_request_from_doc(document) for document in eligible]
+        by_interaction: dict[str, list[dict[str, Any]]] = {}
+        for document in eligible:
+            interaction_id = (
+                document.get("interaction_id")
+                or document.get("group_id")
+                or document["request_id"]
+            )
+            by_interaction.setdefault(interaction_id, []).append(document)
+        public: list[HITLRequest] = []
+        visible_statuses = {
+            HITLInteractionStatus.OPEN.value,
+            HITLInteractionStatus.PARTIALLY_ANSWERED.value,
+            HITLInteractionStatus.ANSWERS_RECORDED.value,
+            HITLInteractionStatus.APPLYING.value,
+            HITLInteractionStatus.DELIVERY_UNCERTAIN.value,
+        }
+        for interaction_id, rows in by_interaction.items():
+            interaction = await self._lifecycle.get_interaction_strict(interaction_id)
+            if interaction is None:
+                synthesis_rows = rows
+                group_id = rows[0].get("group_id") if rows else None
+                if group_id:
+                    synthesis_rows = await self.persistence.get_hitl_group_requests(
+                        group_id
+                    )
+                interaction = (
+                    await self._lifecycle.synthesize_interaction_from_requests(
+                        synthesis_rows
+                    )
+                )
+            if interaction is None or interaction.get("status") not in visible_statuses:
+                continue
+            for document in rows:
+                enriched = dict(document)
+                enriched["interaction_id"] = interaction_id
+                enriched["interaction_status"] = interaction.get("status")
+                enriched["application_status"] = interaction.get("status")
+                enriched["application_error"] = interaction.get("application_error")
+                public.append(_public_hitl_request_from_doc(enriched))
+        return public
+
     async def get_pending_requests(self, room_id: str) -> list[HITLRequest]:
         """Get all pending HITL requests for a room (SSE reconnect catch-up)."""
-        docs = await self.persistence.get_pending_hitl_requests(room_id)
-        return [_public_hitl_request_from_doc(document) for document in docs]
+        strict_reader = getattr(
+            self.persistence, "get_pending_hitl_requests_strict", None
+        )
+        if callable(strict_reader) and inspect.iscoroutinefunction(strict_reader):
+            docs = await strict_reader(room_id)
+        else:
+            docs = await self.persistence.get_pending_hitl_requests(room_id)
+        return await self._public_pending_requests(docs)
 
     async def get_pending_requests_for_message(
         self, user_message_id: str
@@ -1507,7 +1872,7 @@ class HITLService:
         docs = await self.persistence.get_pending_hitl_requests_for_message(
             user_message_id
         )
-        return [_public_hitl_request_from_doc(document) for document in docs]
+        return await self._public_pending_requests(docs)
 
     # ------------------------------------------------------------------
     # Cancellation
@@ -1569,6 +1934,8 @@ class HITLService:
         *,
         status: HITLStatus,
         event_type: HITLEventType,
+        owning_run_terminal_status: str,
+        owning_run_terminal_reason: str,
     ) -> list[HITLRequest]:
         requests_to_terminalize = await self._pending_group_terminalization_requests(
             request
@@ -1592,10 +1959,14 @@ class HITLService:
                 expected_status=HITLStatus.PENDING.value,
                 status=status.value,
                 cancellation_reconciled=False,
+                owning_run_terminal_status=owning_run_terminal_status,
+                owning_run_terminal_reason=owning_run_terminal_reason,
             )
             if not terminalized:
                 continue
 
+            terminal_request.owning_run_terminal_status = owning_run_terminal_status
+            terminal_request.owning_run_terminal_reason = owning_run_terminal_reason
             side_effect_errors: list[Exception] = []
             try:
                 await self._clear_hitl_continuation_once(
@@ -1614,6 +1985,26 @@ class HITLService:
                     },
                     exc_info=True,
                 )
+
+            if self._terminal_lifecycle is not None:
+                try:
+                    await self._terminal_lifecycle.terminalize_owning_run(
+                        terminal_request,
+                        terminal_status=owning_run_terminal_status,
+                        reason=owning_run_terminal_reason,
+                    )
+                except Exception as exc:
+                    side_effect_errors.append(exc)
+                    logger.warning(
+                        "Failed to terminalize owning run after HITL termination",
+                        extra={
+                            "hitl_request_id": terminal_request.request_id,
+                            "orchestration_run_id": (
+                                terminal_request.orchestration_run_id
+                            ),
+                        },
+                        exc_info=True,
+                    )
 
             try:
                 await self._emit_hitl_event(
@@ -1662,6 +2053,20 @@ class HITLService:
         event_type: HITLEventType,
     ) -> None:
         await self._clear_hitl_continuation_once(request, set())
+        if self._terminal_lifecycle is not None:
+            terminal_status = request.owning_run_terminal_status or (
+                "canceled" if request.status == HITLStatus.CANCELED else "failed"
+            )
+            terminal_reason = request.owning_run_terminal_reason or (
+                "Human input request was canceled"
+                if terminal_status == "canceled"
+                else "Human input request expired"
+            )
+            await self._terminal_lifecycle.terminalize_owning_run(
+                request,
+                terminal_status=terminal_status,
+                reason=terminal_reason,
+            )
         await self._emit_hitl_event(
             room_id=request.room_id,
             event_type=event_type,
@@ -1716,7 +2121,13 @@ class HITLService:
                 0
             ]
 
-    async def cancel_request(self, request_id: str, room_id: str | None = None) -> None:
+    async def cancel_request(
+        self,
+        request_id: str,
+        room_id: str | None = None,
+        *,
+        failure_reason: str | None = None,
+    ) -> None:
         """Cancel a pending HITL request."""
         doc = await self.persistence.get_hitl_request(request_id)
         if not doc:
@@ -1742,6 +2153,10 @@ class HITLService:
             request,
             status=HITLStatus.CANCELED,
             event_type=HITLEventType.INPUT_CANCELED,
+            owning_run_terminal_status=("failed" if failure_reason else "canceled"),
+            owning_run_terminal_reason=(
+                failure_reason or "Human input request was canceled"
+            ),
         )
         if not terminalized:
             return
@@ -1780,6 +2195,8 @@ class HITLService:
             request,
             status=HITLStatus.EXPIRED,
             event_type=HITLEventType.INPUT_EXPIRED,
+            owning_run_terminal_status="failed",
+            owning_run_terminal_reason="Human input request expired",
         )
         if not terminalized:
             return
@@ -1792,7 +2209,12 @@ class HITLService:
             },
         )
 
-    async def cancel_requests_for_message(self, user_message_id: str) -> None:
+    async def cancel_requests_for_message(
+        self,
+        user_message_id: str,
+        *,
+        failure_reason: str | None = None,
+    ) -> None:
         """Cancel all pending HITL requests for a given user message."""
         strict_reader = getattr(
             self.persistence,
@@ -1808,7 +2230,13 @@ class HITLService:
                     for doc in docs
                 ]
             else:
-                pending = await self.get_pending_requests_for_message(user_message_id)
+                docs = await self.persistence.get_pending_hitl_requests_for_message(
+                    user_message_id
+                )
+                pending = [
+                    HITLRequest(**{k: v for k, v in doc.items() if k != "_id"})
+                    for doc in docs
+                ]
             if not pending:
                 return
             batch_ids = {req.request_id for req in pending}
@@ -1816,7 +2244,10 @@ class HITLService:
                 raise RuntimeError("HITL cancellation scan made no progress")
             processed_request_ids.update(batch_ids)
             for req in pending:
-                await self.cancel_request(req.request_id)
+                await self.cancel_request(
+                    req.request_id,
+                    failure_reason=failure_reason,
+                )
 
     PROCESSING_TIMEOUT_SECONDS = 600
     LEASE_HEARTBEAT_SECONDS = 120
@@ -2081,6 +2512,15 @@ class HITLService:
                     agent_id=request.agent_id,
                     agent_name=request.agent_name,
                     source_step_id=request.source_step_id,
+                    interaction_id=request.interaction_id,
+                    interaction_status=(
+                        getattr(
+                            request.interaction_status,
+                            "value",
+                            request.interaction_status,
+                        )
+                    ),
+                    application_status=request.application_status,
                     group_id=request.group_id,
                     group_total=request.group_total,
                     group_index=request.group_index,
@@ -2103,6 +2543,13 @@ class HITLService:
                 message_id=data["message_id"],
                 source=source,
                 status=status_map.get(event_type, request_status),
+                interaction_id=request.interaction_id,
+                interaction_status=(
+                    getattr(
+                        request.interaction_status, "value", request.interaction_status
+                    )
+                ),
+                application_status=request.application_status,
                 related_message_id=data["related_message_id"],
                 error_message=error,
                 client_request_id=data.get("client_request_id"),

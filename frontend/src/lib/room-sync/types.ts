@@ -34,4 +34,6 @@ export interface HydrateRoomResult {
   appliedCount: number
   pendingHitlCount: number
   fetchFailed: boolean
+  /** Pending HITL authority was unavailable; existing interactions are preserved. */
+  hitlFetchFailed: boolean
 }

@@ -585,6 +585,8 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         "blocking": True,
         "task_state": "completed",
         "response_text": "Public final agent result",
+        "task_id": "remote-task",
+        "context_id": "remote-context",
     }
 
 
@@ -764,24 +766,18 @@ async def test_blocking_hitl_reply_uses_projected_task_for_public_response_text(
 
     persisted = store.update_task_on_message.await_args.args[1]
     update_kwargs = store.update_task_on_message.await_args.kwargs
-    assert persisted["status"]["state"] == "input-required"
-    assert persisted["status"]["message"] is None
+    assert persisted["status"]["state"] == "failed"
     assert persisted.get("history") in (None, [])
     assert persisted.get("artifacts") in (None, [])
-    assert persisted["metadata"] == {
-        "hitl_request_id": "local-hitl-request",
-        "hitl_prompt": "Continue?",
-        "hitl_prompt_type": "text",
-        "hitl_choices": ["Continue"],
-        "hitl_a2a_task_id": "remote-task",
-        "hitl_a2a_context_id": "remote-context",
-    }
-    assert update_kwargs["message_text"] is None
+    assert update_kwargs["message_text"] == "Task failed"
     assert result == {
-        "status": "sent",
+        "status": "failed",
         "blocking": True,
-        "task_state": "input-required",
-        "response_text": None,
+        "task_state": "failed",
+        "response_text": "Task failed",
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "error_code": "invalid_interactive_prompt",
     }
     assert private_sentinel not in json.dumps(persisted)
     assert private_sentinel not in json.dumps(update_kwargs)
@@ -863,6 +859,8 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
         "blocking": True,
         "task_state": "input-required",
         "response_text": safe_question,
+        "task_id": "remote-task",
+        "context_id": "remote-context",
     }
 
 
@@ -934,13 +932,15 @@ async def test_blocking_hitl_reply_with_user_role_status_message_does_not_leak_i
     )
 
     persisted = store.update_task_on_message.await_args.args[1]
-    assert persisted["status"]["state"] == "input-required"
-    assert persisted["status"]["message"] is None
+    assert persisted["status"]["state"] == "failed"
     assert result == {
-        "status": "sent",
+        "status": "failed",
         "blocking": True,
-        "task_state": "input-required",
-        "response_text": None,
+        "task_state": "failed",
+        "response_text": "Task failed",
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "error_code": "invalid_interactive_prompt",
     }
 
 

@@ -176,6 +176,9 @@ export type HITLInputRequestedData = {
   agent_id?: string | null
   agent_name?: string | null
   source_step_id?: string | null
+  interaction_id?: string | null
+  interaction_status?: string | null
+  application_status?: string | null
   group_id?: string | null
   group_total?: number | null
   group_index?: number | null
@@ -195,6 +198,9 @@ export type HITLStatusUpdateData = {
   agent_id?: string | null
   agent_name?: string | null
   source_step_id?: string | null
+  interaction_id?: string | null
+  interaction_status?: string | null
+  application_status?: string | null
   group_id?: string | null
   group_total?: number | null
   group_index?: number | null
@@ -355,7 +361,18 @@ export interface TaskUpdateEvent {
 
 // --- HITL (Human-in-the-Loop) Types ---
 
-export type HITLPromptType = 'text' | 'choice' | 'confirmation'
+export type HITLPromptType =
+  | 'text'
+  | 'textarea'
+  | 'choice'
+  | 'single_choice'
+  | 'multi_choice'
+  | 'confirmation'
+  | 'approval'
+  | 'authentication'
+  | 'date'
+  | 'file'
+  | 'unknown'
 export type HITLStatus = 'pending' | 'responded' | 'expired' | 'canceled' | 'error'
 
 // --- Internal Processing Status (SSE processing_status events) ---

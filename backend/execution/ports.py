@@ -62,10 +62,12 @@ class HITLPersistencePort(Protocol):
         request_id: str,
         *,
         status: str,
-        claim_id: str,
+        claim_id: str | None,
         user_input: str,
         responded_at: Any,
         responded_by_user_id: str,
+        answer_digest: str | None = None,
+        answered_at: Any | None = None,
     ) -> dict[str, Any] | None: ...
     async def get_hitl_request(self, request_id: str) -> dict[str, Any] | None: ...
     async def update_hitl_request(self, request_id: str, **updates: Any) -> bool: ...
@@ -83,6 +85,9 @@ class HITLPersistencePort(Protocol):
     ) -> bool: ...
     async def get_hitl_group_requests(self, group_id: str) -> list[dict[str, Any]]: ...
     async def get_pending_hitl_requests(self, room_id: str) -> list[dict[str, Any]]: ...
+    async def get_pending_hitl_requests_strict(
+        self, room_id: str
+    ) -> list[dict[str, Any]]: ...
     async def get_pending_hitl_requests_for_message(
         self, message_id: str
     ) -> list[dict[str, Any]]: ...
@@ -108,6 +113,15 @@ class HITLPersistencePort(Protocol):
         self,
         request_data: dict[str, Any],
     ) -> tuple[dict[str, Any], bool] | None: ...
+    async def claim_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> dict[str, Any] | None: ...
+    async def complete_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> bool: ...
+    async def release_hitl_open_projection(
+        self, request_id: str, claim_id: str
+    ) -> bool: ...
     async def persist_pending_hitl_on_agent_message(
         self,
         message_id: str,
@@ -165,6 +179,155 @@ class HITLPersistencePort(Protocol):
         expected_status: str,
         **updates: Any,
     ) -> bool: ...
+    async def cas_update_hitl_request_strict(
+        self,
+        request_id: str,
+        *,
+        expected_status: str,
+        **updates: Any,
+    ) -> bool: ...
+
+
+class HITLLifecyclePersistencePort(Protocol):
+    async def materialize_interaction(
+        self, interaction_data: dict[str, Any]
+    ) -> dict[str, Any]: ...
+    async def attach_interaction_request(
+        self,
+        interaction_id: str,
+        *,
+        request_id: str,
+        required: bool,
+        expires_at: Any,
+        group_index: int | None = None,
+    ) -> dict[str, Any] | None: ...
+    async def get_interaction_strict(
+        self, interaction_id: str
+    ) -> dict[str, Any] | None: ...
+    async def get_interaction_for_request_strict(
+        self, request_id: str
+    ) -> dict[str, Any] | None: ...
+    async def synthesize_interaction_from_requests(
+        self, requests: list[dict[str, Any]]
+    ) -> dict[str, Any] | None: ...
+    async def record_interaction_answer(
+        self,
+        interaction_id: str,
+        *,
+        request_id: str,
+        answer_digest: str,
+    ) -> dict[str, Any] | None: ...
+    async def claim_interaction_application(
+        self,
+        interaction_id: str,
+        *,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None: ...
+    async def renew_interaction_application(
+        self,
+        interaction_id: str,
+        *,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> bool: ...
+    async def resume_uncertain_interaction(
+        self, interaction_id: str, *, claim_id: str
+    ) -> dict[str, Any] | None: ...
+    async def claim_run_answer_projection(
+        self,
+        interaction_id: str,
+        *,
+        application_revision: int,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None: ...
+    async def renew_run_answer_projection(
+        self,
+        interaction_id: str,
+        *,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> bool: ...
+    async def mark_run_answer_projection(
+        self,
+        interaction_id: str,
+        *,
+        claim_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any] | None: ...
+    async def mark_interaction_application_state(
+        self,
+        interaction_id: str,
+        *,
+        claim_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any] | None: ...
+    async def terminalize_interaction(
+        self,
+        interaction_id: str,
+        *,
+        expected_statuses: list[str],
+        status: str,
+        reason: str,
+    ) -> dict[str, Any] | None: ...
+    async def mark_interaction_terminal_reconciled(
+        self, interaction_id: str, *, version: int
+    ) -> bool: ...
+    async def create_resume_command(
+        self, command_data: dict[str, Any]
+    ) -> dict[str, Any]: ...
+    async def get_resume_command_for_interaction_strict(
+        self, interaction_id: str, application_revision: int
+    ) -> dict[str, Any] | None: ...
+    async def claim_resume_command(
+        self,
+        command_id: str,
+        *,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None: ...
+    async def get_resume_command_strict(
+        self, command_id: str
+    ) -> dict[str, Any] | None: ...
+    async def renew_resume_command(
+        self,
+        command_id: str,
+        *,
+        claim_id: str,
+        lease_seconds: int,
+    ) -> bool: ...
+    async def mark_resume_command_state(
+        self,
+        command_id: str,
+        *,
+        claim_id: str | None,
+        expected_statuses: list[str],
+        status: str,
+        response_snapshot: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        retry_after_seconds: int | None = None,
+    ) -> dict[str, Any] | None: ...
+    async def mark_resume_command_aggregate_applied(self, command_id: str) -> bool: ...
+    def iter_due_interactions(
+        self, now: Any, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
+    def iter_stale_applications(
+        self, now: Any, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
+    def iter_due_resume_commands(
+        self, now: Any, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
+    def iter_active_interactions(
+        self, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
+    def iter_unreconciled_terminal_requests(
+        self, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
+    async def ensure_hitl_lifecycle_indexes(self) -> None: ...
 
 
 class HITLContinuationPort(Protocol):
@@ -185,7 +348,18 @@ class HITLAgentReplyPort(Protocol):
         task_id: str,
         context_id: str,
         user_input: str,
+        outbound_message_id: str | None = None,
     ) -> dict[str, Any]: ...
+
+
+class HITLTerminalLifecyclePort(Protocol):
+    async def terminalize_owning_run(
+        self,
+        request: Any,
+        *,
+        terminal_status: str,
+        reason: str,
+    ) -> None: ...
 
 
 class HITLTaskNotificationPort(Protocol):

@@ -56,7 +56,18 @@ class HITLManager(Protocol):
         a2a_context_id: str | None = None,
         continuation_message_id: str | None = None,
         display_message_id: str | None = None,
-        prompt_type: Literal["text", "choice", "confirmation"] = "text",
+        prompt_type: Literal[
+            "text",
+            "textarea",
+            "choice",
+            "single_choice",
+            "multi_choice",
+            "confirmation",
+            "approval",
+            "authentication",
+            "date",
+            "file",
+        ] = "text",
         choices: list[str] | None = None,
         group_id: str | None = None,
         group_total: int | None = None,
@@ -69,6 +80,15 @@ class HITLManager(Protocol):
         request_id: str,
         response: str,
         responder_id: str,
+    ) -> HITLResponse: ...
+
+    async def resolve_hitl_batch(
+        self,
+        room_id: str,
+        interaction_id: str,
+        answers: list[dict[str, str]],
+        responder_id: str,
+        client_request_id: str | None = None,
     ) -> HITLResponse: ...
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]: ...
