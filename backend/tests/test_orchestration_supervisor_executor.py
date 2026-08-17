@@ -8591,6 +8591,81 @@ Prior Claims: no
 
 
 @pytest.mark.asyncio
+async def test_auto_resolved_agent_input_advances_dispatch_step():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Complete the workflow"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(_run_state(status=OrchestrationStatus.RUNNING))
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    agent_message_id = "run-1:step-1:target-1:message"
+    awaiting = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Prepare the artifact",
+        response_text="Provide the intake",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        agent_message_id=agent_message_id,
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+    completed = awaiting.model_copy(
+        update={
+            "response_text": "Artifact prepared",
+            "success": True,
+            "status": StepStatus.SUCCESS,
+        }
+    )
+    executor._dispatch_targets = AsyncMock(return_value=[awaiting])
+
+    async def resolve_input_required(*, state, **_kwargs):
+        return state, [completed], set()
+
+    executor._resolve_agent_input_required_results = AsyncMock(
+        side_effect=resolve_input_required
+    )
+
+    saved, status = await executor._run_delegate_action(
+        state=state,
+        planner_action=PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Prepare the artifact",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Agent One",
+                    task="Prepare the artifact",
+                )
+            ],
+        ),
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Complete the workflow",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+        resource_fingerprints={},
+    )
+
+    assert status is None
+    assert saved.steps_used == 1
+    assert saved.dispatch_intents[0].status == StepStatus.SUCCESS.value
+
+
+@pytest.mark.asyncio
 async def test_auth_required_does_not_auto_continue_with_existing_fact():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(

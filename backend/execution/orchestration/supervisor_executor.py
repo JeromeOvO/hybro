@@ -2555,7 +2555,7 @@ class SupervisorExecutor:
                 state,
                 results,
                 status=OrchestrationStatus.RUNNING,
-                advance_step=False,
+                advance_step=True,
                 available_resource_refs=blocker_available_resource_refs,
                 attempted_agent_ids=blocker_attempted_agent_ids,
                 eligible_alternate_agent_ids=blocker_eligible_alternate_agent_ids,
