@@ -43,6 +43,7 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.hitl.public_prompt import (
     is_file_upload_request,
+    is_internal_agent_contract_prompt,
     public_agent_input_prompt,
 )
 from execution.orchestration.action_validator import (
@@ -2537,7 +2538,7 @@ class SupervisorExecutor:
                 for result in results
                 if result.status == StepStatus.AWAITING_INPUT
             ]
-            hitl_required = [
+            hitl_candidates = [
                 result
                 for result in awaiting
                 if self._awaiting_result_requires_hitl(result)
@@ -2547,7 +2548,14 @@ class SupervisorExecutor:
             if not self.guardrails_enabled:
                 # Preserve live-dispatch behavior while keeping recovery
                 # scoped to input requests that actually require user action.
-                hitl_required = awaiting
+                hitl_candidates = awaiting
+            hitl_required = [
+                result
+                for result in hitl_candidates
+                if not is_internal_agent_contract_prompt(
+                    self._extract_input_required_prompt(result)
+                )
+            ]
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
                 state = await self._ingest_orchestration_results(
@@ -2816,9 +2824,14 @@ class SupervisorExecutor:
             hitl_required = [
                 result
                 for result in awaiting
-                if self._awaiting_result_requires_hitl(result)
-                or result.agent_message_id in follow_up_hitl_message_ids
-                or self._is_plain_a2a_input_result(result)
+                if (
+                    self._awaiting_result_requires_hitl(result)
+                    or result.agent_message_id in follow_up_hitl_message_ids
+                    or self._is_plain_a2a_input_result(result)
+                )
+                and not is_internal_agent_contract_prompt(
+                    self._extract_input_required_prompt(result)
+                )
             ]
             if hitl_required:
                 trajectory.status = TrajectoryStatus.AWAITING_INPUT
@@ -2871,7 +2884,7 @@ class SupervisorExecutor:
                     state,
                     results,
                     status=OrchestrationStatus.RUNNING,
-                    advance_step=False,
+                    advance_step=True,
                 )
                 return state, None
 
@@ -3683,6 +3696,7 @@ class SupervisorExecutor:
         if not prompt_tokens:
             return None
         selected_context_refs: list[str] = []
+        selected_artifact_refs: list[str] = []
         resource_payloads: list[ResolvedResourcePayload] = []
 
         def add_payload(
@@ -3693,9 +3707,12 @@ class SupervisorExecutor:
             mime_type: str = "text/plain",
         ) -> None:
             cleaned = text.strip()
-            if not cleaned or ref_id in selected_context_refs:
+            selected_refs = (
+                selected_artifact_refs if kind == "artifact" else selected_context_refs
+            )
+            if not cleaned or ref_id in selected_refs:
                 return
-            selected_context_refs.append(ref_id)
+            selected_refs.append(ref_id)
             resource_payloads.append(
                 ResolvedResourcePayload(
                     ref_id=ref_id,
@@ -3703,6 +3720,62 @@ class SupervisorExecutor:
                     mime_type=mime_type,
                     text=cleaned,
                 )
+            )
+
+        # A structured sibling artifact is the highest-fidelity continuation
+        # payload. Return one complete JSON value rather than mixing it with prose
+        # facts, which would no longer be parseable by the remote Agent.
+        for artifact in reversed(state.artifacts):
+            if not isinstance(artifact, Mapping):
+                continue
+            data_parts = [
+                part.get("data")
+                for part in artifact.get("parts", [])
+                if isinstance(part, Mapping)
+                and str(part.get("kind") or "").casefold() == "data"
+                and part.get("data") is not None
+            ]
+            if not data_parts:
+                continue
+            structured_value: Any = (
+                data_parts[0] if len(data_parts) == 1 else data_parts
+            )
+            structured_text = json.dumps(
+                structured_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            artifact_tokens = self._input_required_prompt_tokens(
+                " ".join(
+                    str(value)
+                    for value in (
+                        artifact.get("artifact_key"),
+                        artifact.get("title"),
+                        artifact.get("name"),
+                        artifact.get("kind"),
+                        structured_text,
+                    )
+                    if value
+                )
+            )
+            if not prompt_tokens & artifact_tokens:
+                continue
+            ref_id = str(
+                artifact.get("artifact_key")
+                or artifact.get("ref_id")
+                or artifact.get("id")
+                or f"artifact:{len(state.artifacts)}"
+            )
+            add_payload(
+                ref_id=ref_id,
+                kind="artifact",
+                text=structured_text,
+                mime_type="application/json",
+            )
+            return ResolvedDispatchPayload(
+                selected_artifact_refs=selected_artifact_refs,
+                resource_payloads=resource_payloads,
             )
 
         for fact in reversed(state.facts):
@@ -3714,10 +3787,19 @@ class SupervisorExecutor:
             text = fact.get("text")
             value = fact.get("value")
             if not isinstance(text, str) and value is not None:
-                text = str(value)
+                text = (
+                    json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    if isinstance(value, (Mapping, list))
+                    else str(value)
+                )
             if not isinstance(text, str):
                 continue
-            key = str(fact.get("key") or fact.get("name") or "").lower()
+            key = str(
+                fact.get("key")
+                or fact.get("name")
+                or fact.get("semantic_key")
+                or ref_id
+            ).lower()
             fact_kind = str(fact.get("kind") or "").lower()
             ref_id_lower = ref_id.lower()
             key_tokens = self._input_required_prompt_tokens(key.replace("_", " "))
@@ -3806,6 +3888,7 @@ class SupervisorExecutor:
             return None
         return ResolvedDispatchPayload(
             selected_context_refs=selected_context_refs,
+            selected_artifact_refs=selected_artifact_refs,
             resource_payloads=resource_payloads,
         )
 
@@ -4020,6 +4103,56 @@ class SupervisorExecutor:
             a2a_context_id=continuation.a2a_context_id,
         )
 
+    async def _input_required_recovery_view(
+        self,
+        state: OrchestrationRunState,
+        results: list[StepResult],
+    ) -> OrchestrationRunState:
+        """Expose successful same-batch outputs without persisting them early."""
+        recovery_view = state.model_copy(deep=True)
+        for result in results:
+            if result.status != StepStatus.SUCCESS or not result.success:
+                continue
+            matched_intent = self._orchestration_fallback_intent_for_result(
+                result,
+                recovery_view.dispatch_intents,
+            )
+            output_message_id = result.agent_message_id or (
+                matched_intent.planned_agent_message_id
+                if matched_intent is not None
+                else None
+            )
+            if not output_message_id:
+                continue
+            artifacts = await self._orchestration_artifacts_for_output_message(
+                state,
+                output_message_id,
+            )
+            recovery_view = self.result_ingestor.ingest(
+                recovery_view,
+                AgentResultRead(
+                    agent_message_id=output_message_id,
+                    agent_id=result.agent_id,
+                    status=self._orchestration_result_status_to_agent_result_status(
+                        result
+                    ),
+                    text=result.response_text,
+                    error=result.error_message,
+                    error_code=result.error_code,
+                    artifacts=artifacts,
+                    a2a_task_id=result.a2a_task_id,
+                    a2a_context_id=result.a2a_context_id,
+                    status_message=result.status_message,
+                    interactive_state=result.interactive_state,
+                    requires_auth=result.requires_auth,
+                    requires_policy=result.requires_policy,
+                ),
+            )
+        # AgentResultIngestor increments versions for authoritative writes. This
+        # view is ephemeral, so preserve the persisted optimistic-lock version.
+        recovery_view.state_version = state.state_version
+        return recovery_view
+
     async def _handle_agent_input_required(
         self,
         *,
@@ -4033,19 +4166,6 @@ class SupervisorExecutor:
         continuation = self._find_or_create_pending_continuation(state, result)
         if self._awaiting_result_requires_hitl(result):
             return result
-        answer = self._find_fact_answer_for_input_required(state, prompt)
-        if answer is None:
-            answer = self._find_user_message_answer_for_input_required(
-                user_message,
-                prompt,
-            )
-        if answer and continuation is not None:
-            return await self._resume_agent_continuation_after_hitl_answer(
-                state=state,
-                continuation=continuation,
-                answer=answer,
-                user_message=user_message,
-            )
         resolved_payload = self._new_input_required_payload(
             state,
             continuation,
@@ -4086,6 +4206,19 @@ class SupervisorExecutor:
                 if continued is not None:
                     return continued
 
+        answer = self._find_fact_answer_for_input_required(state, prompt)
+        if answer is None:
+            answer = self._find_user_message_answer_for_input_required(
+                user_message,
+                prompt,
+            )
+        if answer and continuation is not None:
+            return await self._resume_agent_continuation_after_hitl_answer(
+                state=state,
+                continuation=continuation,
+                answer=answer,
+                user_message=user_message,
+            )
         return result
 
     async def _resolve_agent_input_required_results(
@@ -4095,7 +4228,7 @@ class SupervisorExecutor:
         results: list[StepResult],
         user_message,
     ) -> tuple[OrchestrationRunState, list[StepResult], set[str]]:
-        current = state
+        current = await self._input_required_recovery_view(state, results)
         resolved_results: list[StepResult] = []
         follow_up_hitl_message_ids: set[str] = set()
         for result in results:
@@ -4136,7 +4269,10 @@ class SupervisorExecutor:
                 follow_up_hitl_message_ids.add(resolved.agent_message_id)
             persisted = await self.orchestration_run_store.get_run(current.run_id)
             if persisted is not None:
-                current = persisted
+                current = await self._input_required_recovery_view(
+                    persisted,
+                    results,
+                )
         return current, resolved_results, follow_up_hitl_message_ids
 
     async def _checkpoint_file_turn_finalization(

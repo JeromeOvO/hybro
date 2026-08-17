@@ -9077,6 +9077,247 @@ Prior Claims: no
 
 
 @pytest.mark.asyncio
+async def test_agent_input_required_prefers_successful_sibling_data_artifact():
+    store = InMemoryOrchestrationRunStore()
+    intake = """Prepare a final cyber quote for Acme SaaS Inc.
+
+Customer intake:
+Operating countries: United Kingdom, United States
+Employees: 250
+Coverage limit: 5000000
+Retention: 50000
+Effective Date: 2026-08-01
+MFA: yes
+Backups: yes
+Security Training: yes
+Cloud Providers: AWS, Azure
+Prior Claims: no
+"""
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text=intake),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.DISPATCHING,
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="run-1:step-1",
+                    step_target_id="run-1:step-1:target-1",
+                    dispatch_intent_id="broker-intent",
+                    planned_agent_message_id="broker-msg",
+                    agent_id="broker-agent",
+                    task="Prepare the underwriting submission",
+                    task_hash="broker-hash",
+                ),
+                DispatchIntent(
+                    step_id="run-1:step-1",
+                    step_target_id="run-1:step-1:target-2",
+                    dispatch_intent_id="insurer-intent",
+                    planned_agent_message_id="insurer-msg",
+                    agent_id="insurer-agent",
+                    task="Quote the underwriting submission",
+                    task_hash="insurer-hash",
+                ),
+            ],
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    submission = {
+        "client": {
+            "name": "Acme SaaS Inc",
+            "operating_countries": ["United Kingdom", "United States"],
+            "employee_count": 250,
+        },
+        "requested_coverage": {
+            "limit": 5_000_000,
+            "retention": 50_000,
+            "effective_date": "2026-08-01",
+        },
+        "cyber_controls": {
+            "mfa": True,
+            "backups": True,
+            "security_training": True,
+            "cloud_providers": ["AWS", "Azure"],
+        },
+        "claims_history": {"prior_claims": False},
+    }
+    broker_message = _agent_message("broker-msg")
+    broker_message.message_content.message_task = {
+        "artifacts": [
+            {
+                "artifactId": "submission-1",
+                "name": "cyber_submission",
+                "parts": [{"kind": "data", "data": submission}],
+            }
+        ]
+    }
+    await executor.message_writer.add_room_agent_message(broker_message)
+
+    async def reply_to_task(**kwargs):
+        try:
+            parsed = json.loads(kwargs["user_input"])
+        except (TypeError, json.JSONDecodeError):
+            return {
+                "blocking": True,
+                "task_state": "input-required",
+                "response_text": "Send a JSON object or DataPart.",
+            }
+        assert parsed == submission
+        return {
+            "blocking": True,
+            "task_state": "completed",
+            "response_text": "Indicative quote: USD 35,700.",
+        }
+
+    reply = AsyncMock(side_effect=reply_to_task)
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(),
+        agent_reply=SimpleNamespace(reply_to_task=reply),
+    )
+    results = [
+        StepResult(
+            step_number=1,
+            agent_id="broker-agent",
+            agent_name="Cyber Broker Agent",
+            task="Prepare the underwriting submission",
+            response_text="Submission prepared.",
+            success=True,
+            status=StepStatus.SUCCESS,
+            agent_message_id="broker-msg",
+        ),
+        StepResult(
+            step_number=1,
+            agent_id="insurer-agent",
+            agent_name="Cyber Insurer Agent",
+            task="Quote the underwriting submission",
+            response_text=(
+                "Send a JSON object (directly or in a DataPart) containing client, "
+                "requested_coverage, cyber_controls, and claims_history."
+            ),
+            success=False,
+            status=StepStatus.AWAITING_INPUT,
+            agent_message_id="insurer-msg",
+            a2a_task_id="insurer-task",
+            a2a_context_id="insurer-context",
+        ),
+    ]
+
+    (
+        recovery_view,
+        resolved,
+        follow_up_ids,
+    ) = await executor._resolve_agent_input_required_results(
+        state=state,
+        results=results,
+        user_message=user_message,
+    )
+
+    assert resolved[1].status == StepStatus.SUCCESS
+    assert resolved[1].response_text == "Indicative quote: USD 35,700."
+    assert follow_up_ids == set()
+    reply.assert_awaited_once()
+    assert json.loads(reply.await_args.kwargs["user_input"]) == submission
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    persisted = await store.get_run("run-1")
+    assert persisted is not None
+    assert persisted.agent_outputs == []
+    assert persisted.artifacts == []
+    assert recovery_view.state_version == persisted.state_version
+
+    authoritative = await executor._ingest_orchestration_results(
+        recovery_view,
+        resolved,
+        status=OrchestrationStatus.RUNNING,
+        advance_step=True,
+    )
+
+    assert authoritative.steps_used == 1
+    assert {output.agent_message_id for output in authoritative.agent_outputs} == {
+        "broker-msg",
+        "insurer-msg",
+    }
+
+
+@pytest.mark.asyncio
+async def test_internal_agent_contract_request_replans_without_hitl():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Complete the quote workflow"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(_run_state(status=OrchestrationStatus.RUNNING))
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor._dispatch_targets = AsyncMock(
+        return_value=[
+            StepResult(
+                step_number=1,
+                agent_id="agent-1",
+                agent_name="Insurer Agent",
+                task="Quote the submission",
+                response_text=(
+                    "Send a JSON object or DataPart containing client.name and "
+                    "requested_coverage.limit."
+                ),
+                success=False,
+                status=StepStatus.AWAITING_INPUT,
+                agent_message_id="run-1:step-1:target-1:message",
+                a2a_task_id="task-1",
+                a2a_context_id="context-1",
+            )
+        ]
+    )
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(),
+        agent_reply=SimpleNamespace(reply_to_task=AsyncMock()),
+    )
+
+    saved, status = await executor._run_delegate_action(
+        state=state,
+        planner_action=PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="Quote the submission",
+            targets=[
+                PlannedDelegateTarget(
+                    agent_id="agent-1",
+                    agent_name="Insurer Agent",
+                    task="Quote the submission",
+                )
+            ],
+        ),
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Insurer Agent")],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Complete the quote workflow",
+        conversation_context=None,
+        token=None,
+        request_user_id="user-1",
+        quoted_text=None,
+        user_message=user_message,
+        resource_fingerprints={},
+    )
+
+    assert status is None
+    assert saved.status == OrchestrationStatus.RUNNING
+    assert saved.steps_used == 1
+    assert saved.pending_hitl_request_ids == []
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_auto_resolved_agent_input_advances_dispatch_step():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(

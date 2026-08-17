@@ -14,6 +14,20 @@ _PRIVATE_MARKERS = (
     "BEGIN SYSTEM PROMPT",
     "END SYSTEM PROMPT",
 )
+_INTERNAL_CONTRACT_FORMAT = re.compile(
+    r"\b(?:json(?:\s+object)?|application/json|data\s*part|"
+    r"structured(?:\s+data)?\s+payload|schema(?:-conformant)?\s+payload|"
+    r"machine-readable\s+payload)\b",
+    re.I,
+)
+_INTERNAL_CONTRACT_FIELD = re.compile(
+    r"\b[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\b",
+    re.I,
+)
+_INTERNAL_CONTRACT_IMPERATIVE = re.compile(
+    r"\b(?:send|provide|include|containing|return|supply|pass)\b",
+    re.I,
+)
 _FILE_UPLOAD_VERB = re.compile(
     r"\b(?:upload(?:s|ing)?|attach(?:es|ing)?)\b",
     re.I,
@@ -45,10 +59,21 @@ def safe_agent_input_prompt(prompt: str | None) -> str | None:
     return normalized
 
 
-def concrete_agent_input_prompt(prompt: str | None) -> str | None:
-    """Return a concrete public question, rejecting the legacy generic fallback."""
+def is_internal_agent_contract_prompt(prompt: str | None) -> bool:
+    """Return whether an Agent is requesting a private transport/schema payload."""
     safe_prompt = safe_agent_input_prompt(prompt)
     if safe_prompt is None:
+        return False
+    if _INTERNAL_CONTRACT_FORMAT.search(safe_prompt):
+        return True
+    dotted_fields = _INTERNAL_CONTRACT_FIELD.findall(safe_prompt)
+    return bool(dotted_fields and _INTERNAL_CONTRACT_IMPERATIVE.search(safe_prompt))
+
+
+def concrete_agent_input_prompt(prompt: str | None) -> str | None:
+    """Return a concrete public question, rejecting private contract requests."""
+    safe_prompt = safe_agent_input_prompt(prompt)
+    if safe_prompt is None or is_internal_agent_contract_prompt(safe_prompt):
         return None
     if safe_prompt.casefold() == GENERIC_AGENT_INPUT_PROMPT.casefold():
         return None
@@ -84,9 +109,5 @@ def is_file_upload_request(
 
 
 def public_agent_input_prompt(prompt: str | None) -> str:
-    """Return a bounded user-facing question or the legacy safe fallback.
-
-    New HITL creation paths must use :func:`concrete_agent_input_prompt`; this
-    fallback remains only for compatibility projections of historical records.
-    """
-    return safe_agent_input_prompt(prompt) or GENERIC_AGENT_INPUT_PROMPT
+    """Return a bounded public question or a non-actionable safe fallback."""
+    return concrete_agent_input_prompt(prompt) or GENERIC_AGENT_INPUT_PROMPT

@@ -60,8 +60,9 @@ from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.transports.base import AgentTransport
 from execution.hitl.public_prompt import (
+    concrete_agent_input_prompt,
     is_file_upload_request,
-    safe_agent_input_prompt,
+    is_internal_agent_contract_prompt,
 )
 from execution.state.task_state_manager import (
     TaskStateManager,
@@ -376,15 +377,17 @@ class DirectTransport(AgentTransport):
                     if status_value == CommonTaskState.AUTH_REQUIRED.value:
                         status_msg = "Authentication required"
                     else:
-                        status_msg = interactive_status_context.get(
-                            "status_message"
-                        ) or (
-                            self._public_interactive_status_message(
-                                ProcessingContext(
-                                    room_id=room_id,
-                                    current_message=message,
-                                    agent_card=agent.agent_card,
-                                    user_message_id=user_message_id,
+                        status_msg = (
+                            interactive_status_context.get("raw_status_message")
+                            or interactive_status_context.get("status_message")
+                            or (
+                                self._public_interactive_status_message(
+                                    ProcessingContext(
+                                        room_id=room_id,
+                                        current_message=message,
+                                        agent_card=agent.agent_card,
+                                        user_message_id=user_message_id,
+                                    )
                                 )
                             )
                         )
@@ -477,13 +480,17 @@ class DirectTransport(AgentTransport):
                 if status_value == CommonTaskState.AUTH_REQUIRED.value:
                     status_msg = "Authentication required"
                 else:
-                    status_msg = interactive_status_context.get("status_message") or (
-                        self._public_interactive_status_message(
-                            ProcessingContext(
-                                room_id=room_id,
-                                current_message=message,
-                                agent_card=agent.agent_card,
-                                user_message_id=user_message_id,
+                    status_msg = (
+                        interactive_status_context.get("raw_status_message")
+                        or interactive_status_context.get("status_message")
+                        or (
+                            self._public_interactive_status_message(
+                                ProcessingContext(
+                                    room_id=room_id,
+                                    current_message=message,
+                                    agent_card=agent.agent_card,
+                                    user_message_id=user_message_id,
+                                )
                             )
                         )
                     )
@@ -674,7 +681,7 @@ class DirectTransport(AgentTransport):
         raw_status_message: str | None = None,
     ) -> str | None:
         del ctx
-        return safe_agent_input_prompt(raw_status_message)
+        return concrete_agent_input_prompt(raw_status_message)
 
     def _materialize_message_as_response_artifact(
         self,
@@ -1286,6 +1293,11 @@ class DirectTransport(AgentTransport):
         if ctx.send_sse and a2a_status_message_text:
             if is_interactive_state(state):
                 if interactive_status_context is not None:
+                    interactive_status_context["raw_status_message"] = (
+                        a2a_status_message_text
+                        if is_internal_agent_contract_prompt(a2a_status_message_text)
+                        else None
+                    )
                     interactive_status_context["status_message"] = (
                         self._public_interactive_status_message(
                             ctx, a2a_status_message_text
@@ -2174,13 +2186,18 @@ class DirectTransport(AgentTransport):
             raw_status_message = response.get("message")
             if is_interactive_state(status):
                 if interactive_status_context is not None:
+                    raw_prompt = (
+                        raw_status_message
+                        if isinstance(raw_status_message, str)
+                        else None
+                    )
+                    interactive_status_context["raw_status_message"] = (
+                        raw_prompt
+                        if is_internal_agent_contract_prompt(raw_prompt)
+                        else None
+                    )
                     interactive_status_context["status_message"] = (
-                        self._public_interactive_status_message(
-                            ctx,
-                            raw_status_message
-                            if isinstance(raw_status_message, str)
-                            else None,
-                        )
+                        self._public_interactive_status_message(ctx, raw_prompt)
                     )
             if task_info:
                 await self.tsm.notify_task(
@@ -2382,6 +2399,11 @@ class DirectTransport(AgentTransport):
                 else None
             )
             if interactive_status_context is not None:
+                interactive_status_context["raw_status_message"] = (
+                    raw_status_message
+                    if is_internal_agent_contract_prompt(raw_status_message)
+                    else None
+                )
                 interactive_status_context["status_message"] = (
                     self._public_interactive_status_message(ctx, raw_status_message)
                 )

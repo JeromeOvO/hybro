@@ -830,6 +830,27 @@ class TestHandleStreamingCancellation:
         proc.response_handler.handle.assert_awaited_once()
 
 
+class TestInteractivePromptProjection:
+    def test_internal_contract_prompt_is_private_but_friendly_question_is_public(self):
+        proc = _make_processor()
+        ctx = MagicMock()
+
+        assert (
+            proc._public_interactive_status_message(
+                ctx,
+                "Send JSON or a DataPart containing client.name.",
+            )
+            is None
+        )
+        assert (
+            proc._public_interactive_status_message(
+                ctx,
+                "What is the annual revenue?",
+            )
+            == "What is the annual revenue?"
+        )
+
+
 class TestHandleStreamStatusUpdatePrivacy:
     @pytest.mark.asyncio
     async def test_interactive_status_update_emits_public_label_not_remote_prompt(self):
@@ -2422,6 +2443,44 @@ class TestDispatchInteractive:
         assert result.message_id == message.message_id
         assert result.a2a_task_id == "agent-task-auth"
         assert result.status_message == "Authentication required"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_keeps_internal_contract_for_execution_only(self):
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        task = message.message_content.message_task
+        assert task is not None
+        task.id = "agent-task-contract"
+        task.context_id = "agent-context-contract"
+        task.status.state = TaskState.input_required
+        internal_prompt = "Send JSON or a DataPart containing client.name."
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
+
+        async def handle_sync_response(*_args, **kwargs):
+            status_context = kwargs["interactive_status_context"]
+            status_context["raw_status_message"] = internal_prompt
+            status_context["status_message"] = None
+            return True, None, message.message_id, "agent-task-contract"
+
+        proc.handle_sync_response = AsyncMock(side_effect=handle_sync_response)
+        agent = MagicMock()
+        agent.agent_card = MagicMock()
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.AWAITING_INPUT
+        assert result.status_message == internal_prompt
+        assert (
+            proc._public_interactive_status_message(MagicMock(), internal_prompt)
+            is None
+        )
 
     @pytest.mark.asyncio
     async def test_dispatch_file_prompt_sets_explicit_end_turn_outcome(self):

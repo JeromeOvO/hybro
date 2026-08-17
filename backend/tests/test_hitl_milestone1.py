@@ -93,7 +93,12 @@ async def test_reply_json_rpc_error_becomes_failed_task_not_input_required():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "prompt",
-    ["", "The agent needs additional information.", "PRIVATE_SENTINEL hidden"],
+    [
+        "",
+        "The agent needs additional information.",
+        "PRIVATE_SENTINEL hidden",
+        "Send a JSON object or DataPart containing client.name and client.industry.",
+    ],
 )
 async def test_agent_hitl_rejects_missing_generic_or_private_prompt(prompt: str):
     service = HITLService()
