@@ -166,6 +166,7 @@ class StepResult(BaseModel):
     interactive_state: str | None = None
     requires_auth: bool = False
     requires_policy: bool = False
+    end_turn: bool = False
 
 
 # =========================================================================

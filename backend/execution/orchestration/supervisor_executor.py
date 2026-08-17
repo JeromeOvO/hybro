@@ -42,6 +42,7 @@ from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.hitl.public_prompt import (
+    is_file_upload_request,
     public_agent_input_prompt,
 )
 from execution.orchestration.action_validator import (
@@ -74,6 +75,7 @@ from execution.orchestration.dispatch_payload import (
     ResolvedResourcePayload,
     resolve_dispatch_payload_refs,
 )
+from execution.orchestration.file_turn import persist_file_turn_task
 from execution.orchestration.goal_progress import rebuild_goal_progress
 from execution.orchestration.outcome_evaluator import (
     DelegationOutcomeEvaluator,
@@ -1003,6 +1005,13 @@ class SupervisorExecutor:
         if terminal_result is not None:
             return terminal_result
         if state.status == OrchestrationStatus.FINALIZING:
+            if state.file_turn is not None:
+                state = await self._finalize_file_turn(state)
+                return await self._log_state_and_return(
+                    room_id,
+                    state,
+                    self._state_run_result(status=RunStatus.COMPLETED, state=state),
+                )
             committed = state.finalization_committed_at is not None
             final_message_id = (
                 state.final_source_message_id
@@ -2452,6 +2461,21 @@ class SupervisorExecutor:
         entry.results = results
         entry.completed_at = utcnow()
 
+        end_turn_result = next(
+            (result for result in results if result.end_turn),
+            None,
+        )
+        if end_turn_result is not None:
+            return await self._complete_agent_file_upload_turn(
+                state=state,
+                results=results,
+                result=end_turn_result,
+                prompt=(
+                    end_turn_result.status_message or end_turn_result.response_text
+                ),
+                trajectory=trajectory,
+            )
+
         blocker_available_resource_refs = set(resource_fingerprints)
         blocker_attempted_agent_ids = self._attempted_agent_ids_for_blocker_context(
             state,
@@ -2752,6 +2776,21 @@ class SupervisorExecutor:
         if not results:
             return state, None
 
+        end_turn_result = next(
+            (result for result in results if result.end_turn),
+            None,
+        )
+        if end_turn_result is not None:
+            return await self._complete_agent_file_upload_turn(
+                state=state,
+                results=results,
+                result=end_turn_result,
+                prompt=(
+                    end_turn_result.status_message or end_turn_result.response_text
+                ),
+                trajectory=trajectory,
+            )
+
         paused = [result for result in results if result.status == StepStatus.PAUSED]
         awaiting = [
             result for result in results if result.status == StepStatus.AWAITING_INPUT
@@ -3046,13 +3085,16 @@ class SupervisorExecutor:
             ),
             a2a_task_id=(
                 _field_from_task(task, "id")
+                or _field_from_task(task_metadata_dict, "remote_task_id")
                 or _field_from_task(task_metadata_dict, "hitl_a2a_task_id")
             ),
             a2a_context_id=(
                 _field_from_task(task, "context_id")
                 or _field_from_task(task, "contextId")
+                or _field_from_task(task_metadata_dict, "remote_context_id")
                 or _field_from_task(task_metadata_dict, "hitl_a2a_context_id")
             ),
+            end_turn=bool(task_metadata_dict.get("end_turn")),
             agent_message_id=intent.planned_agent_message_id,
             completed_at=utcnow(),
         )
@@ -3963,6 +4005,7 @@ class SupervisorExecutor:
                 ),
                 requires_auth=task_state == "auth-required",
                 requires_policy=requires_policy,
+                end_turn=is_file_upload_request(response_text),
             )
         return StepResult(
             step_number=0,
@@ -3983,9 +4026,10 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         result: StepResult,
         user_message,
-        create_hitl: bool = True,
     ) -> StepResult:
         prompt = self._extract_input_required_prompt(result)
+        if result.end_turn:
+            return result
         continuation = self._find_or_create_pending_continuation(state, result)
         if self._awaiting_result_requires_hitl(result):
             return result
@@ -4042,101 +4086,6 @@ class SupervisorExecutor:
                 if continued is not None:
                     return continued
 
-        source_intent = (
-            next(
-                (
-                    intent
-                    for intent in state.dispatch_intents
-                    if continuation is not None
-                    and intent.dispatch_intent_id == continuation.source_intent_id
-                ),
-                None,
-            )
-            if continuation is not None
-            else None
-        )
-        has_delivered_source_refs = source_intent is not None and bool(
-            source_intent.context_refs
-            or source_intent.artifact_refs
-            or source_intent.attachment_refs
-        )
-        if not create_hitl or not has_delivered_source_refs:
-            return result
-
-        return await self._create_agent_input_required_hitl(
-            state=state,
-            result=result,
-            prompt=prompt,
-            continuation=continuation,
-        )
-
-    async def _create_agent_input_required_hitl(
-        self,
-        *,
-        state: OrchestrationRunState,
-        result: StepResult,
-        prompt: str,
-        continuation: PendingAgentContinuation | None,
-    ) -> StepResult:
-        if self.hitl_coordinator is None:
-            raise RuntimeError("HITL coordinator has not been bound")
-        request = await self.hitl_coordinator.request_input(
-            room_id=state.room_id,
-            user_message_id=state.user_message_id,
-            source="agent",
-            prompt=prompt,
-            **(
-                {"prompt_type": "authentication"}
-                if result.requires_auth or result.interactive_state == "auth-required"
-                else {}
-            ),
-            agent_id=result.agent_id,
-            agent_name=result.agent_name,
-            a2a_task_id=result.a2a_task_id,
-            a2a_context_id=result.a2a_context_id,
-            continuation_message_id=(
-                result.paused_message_id or result.agent_message_id
-            ),
-            display_message_id=result.agent_message_id,
-            orchestration_run_id=state.run_id,
-        )
-        request_id = getattr(request, "request_id", request)
-        if not isinstance(request_id, str) or not request_id:
-            raise RuntimeError("failed to create agent HITL request")
-
-        def mutate(updated: OrchestrationRunState) -> None:
-            updated.status = OrchestrationStatus.AWAITING_USER
-            if continuation is not None and not any(
-                item.continuation_id == continuation.continuation_id
-                for item in updated.pending_agent_continuations
-            ):
-                updated.pending_agent_continuations.append(continuation)
-            if request_id not in updated.pending_hitl_request_ids:
-                updated.pending_hitl_request_ids.append(request_id)
-            if not any(
-                question.get("request_id") == request_id
-                for question in updated.open_questions
-            ):
-                updated.open_questions.append(
-                    {
-                        "request_id": request_id,
-                        "source": "agent",
-                        "agent_id": result.agent_id,
-                        "prompt": public_agent_input_prompt(prompt),
-                        "status": "open",
-                        "created_at": utcnow().isoformat(),
-                    }
-                )
-
-        await self._save_orchestration_state(
-            state,
-            event_type=OrchestrationEventType.HITL_REQUESTED,
-            payload={
-                "status": OrchestrationStatus.AWAITING_USER.value,
-                "request_ids": [request_id],
-            },
-            mutate=mutate,
-        )
         return result
 
     async def _resolve_agent_input_required_results(
@@ -4157,7 +4106,6 @@ class SupervisorExecutor:
                 state=current,
                 result=result,
                 user_message=user_message,
-                create_hitl=False,
             )
             resolved_results.append(resolved)
             source_intent = next(
@@ -4191,6 +4139,189 @@ class SupervisorExecutor:
                 current = persisted
         return current, resolved_results, follow_up_hitl_message_ids
 
+    async def _checkpoint_file_turn_finalization(
+        self,
+        *,
+        state: OrchestrationRunState,
+        prompt: str,
+        step_number: int,
+        results: list[StepResult],
+        selected: StepResult | None,
+    ) -> OrchestrationRunState:
+        summary_id = state.summary_message_id or f"sys-{state.user_message_id}"
+        selected_id = (
+            (selected.agent_message_id or selected.paused_message_id)
+            if selected
+            else None
+        )
+        returned = {
+            result.agent_message_id or result.paused_message_id: result.status.value
+            for result in results
+        }
+        siblings = {
+            message_id
+            for message_id, status in returned.items()
+            if message_id != selected_id
+            and status in {StepStatus.PAUSED.value, StepStatus.AWAITING_INPUT.value}
+        }
+        siblings.update(
+            dispatch.agent_message_id
+            for dispatch in state.active_dispatches
+            if dispatch.agent_message_id != selected_id
+            and dispatch.agent_message_id not in returned
+        )
+        siblings.discard(None)
+
+        def checkpoint(updated: OrchestrationRunState) -> None:
+            updated.status = OrchestrationStatus.FINALIZING
+            updated.steps_used = min(
+                max(updated.steps_used, step_number), updated.step_budget
+            )
+            updated.summary_message_id = summary_id
+            updated.finalization_mode = FinalizationMode.PLATFORM.value
+            updated.final_source_message_id = summary_id
+            updated.finalization_committed_at = None
+            updated.pending_hitl_request_ids = []
+            updated.open_questions = []
+            updated.pending_agent_continuations = []
+            updated.active_dispatches = []
+            updated.file_turn = {
+                "prompt": prompt,
+                "summary_message_id": summary_id,
+                "child_message_id": selected_id,
+                "child_agent_id": selected.agent_id if selected else None,
+                "child_agent_name": selected.agent_name if selected else None,
+            }
+            if selected and selected_id:
+                output = next(
+                    (
+                        item
+                        for item in updated.agent_outputs
+                        if item.agent_message_id == selected_id
+                    ),
+                    None,
+                )
+                if output is None:
+                    output = AgentOutputRecord(
+                        agent_message_id=selected_id,
+                        agent_id=selected.agent_id,
+                        status="success",
+                    )
+                    updated.agent_outputs.append(output)
+                output.status, output.text = "success", prompt
+                output.status_message = output.interactive_state = None
+            for intent in updated.dispatch_intents:
+                message_id = intent.planned_agent_message_id
+                if message_id == selected_id:
+                    intent.status = "success"
+                elif message_id in siblings:
+                    intent.status = "canceled"
+                elif message_id in returned:
+                    intent.status = returned[message_id]
+
+        return await self._save_orchestration_state(
+            state,
+            event_type=OrchestrationEventType.STATE_REDUCED,
+            payload={"status": "finalizing", "file_turn": True},
+            mutate=checkpoint,
+        )
+
+    async def _finalize_file_turn(
+        self, state: OrchestrationRunState
+    ) -> OrchestrationRunState:
+        marker = state.file_turn or {}
+        prompt, summary_id = marker.get("prompt"), marker.get("summary_message_id")
+        if not isinstance(prompt, str) or not prompt.strip() or not summary_id:
+            raise RuntimeError("FINALIZING file turn is missing durable metadata")
+        if not await self.message_reader.get_room_agent_message_by_message_id(
+            summary_id
+        ):
+            message = self.room_runtime.create_agent_message(
+                room_id=state.room_id,
+                related_message_id=state.user_message_id,
+                agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+                content=prompt,
+                user_id=None,
+                step_number=state.steps_used,
+                task_content="Orchestrating workflow...",
+                client_request_id=state.client_request_id,
+            )
+            message.message_id = summary_id
+            await self.message_writer.upsert_room_agent_message(message)
+        child_id = marker.get("child_message_id")
+        if child_id:
+            await persist_file_turn_task(
+                message_writer=self.message_writer,
+                message_reader=self.message_reader,
+                delivery=self.delivery,
+                room_id=state.room_id,
+                message_id=child_id,
+                state="completed",
+                task_metadata={"end_turn": True},
+                agent_id=marker.get("child_agent_id"),
+                agent_name=marker.get("child_agent_name"),
+            )
+        for intent in state.dispatch_intents:
+            if intent.status != "canceled":
+                continue
+            await persist_file_turn_task(
+                message_writer=self.message_writer,
+                message_reader=self.message_reader,
+                delivery=self.delivery,
+                room_id=state.room_id,
+                message_id=intent.planned_agent_message_id,
+                state="canceled",
+            )
+        await persist_file_turn_task(
+            message_writer=self.message_writer,
+            message_reader=self.message_reader,
+            delivery=self.delivery,
+            room_id=state.room_id,
+            message_id=summary_id,
+            state="completed",
+            message_text=prompt,
+            task_metadata={"end_turn": True},
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+            agent_name="HYBRO AI",
+        )
+        await self.delivery.send_agent_response(
+            room_id=state.room_id,
+            message_id=summary_id,
+            agent_id=CoordinatorAgentId.SYSTEM_HYBRO,
+            content=prompt,
+            related_message_id=state.user_message_id,
+            client_request_id=state.client_request_id,
+        )
+        return await self._mark_orchestration_terminal(
+            state,
+            OrchestrationStatus.COMPLETED,
+            reason="turn ended with a file upload instruction",
+            mutate=lambda updated: setattr(
+                updated, "finalization_committed_at", utcnow()
+            ),
+        )
+
+    async def _complete_agent_file_upload_turn(
+        self,
+        *,
+        state: OrchestrationRunState,
+        results: list[StepResult],
+        result: StepResult,
+        prompt: str,
+        trajectory: SupervisorTrajectory,
+    ) -> tuple[OrchestrationRunState, RunStatus]:
+        if not (result.agent_message_id or result.paused_message_id):
+            raise RuntimeError("file upload instruction is missing an agent message id")
+        state = await self._checkpoint_file_turn_finalization(
+            state=state,
+            prompt=prompt,
+            step_number=max(result.step_number, state.steps_used + 1),
+            results=results,
+            selected=result,
+        )
+        trajectory.status = TrajectoryStatus.COMPLETED
+        return await self._finalize_file_turn(state), RunStatus.COMPLETED
+
     async def _run_agent_awaiting_input_action(
         self,
         *,
@@ -4207,9 +4338,6 @@ class SupervisorExecutor:
         request_user_id: str | None,
         quoted_text: str | None,
     ) -> tuple[OrchestrationRunState, RunStatus]:
-        if self.hitl_coordinator is None:
-            raise RuntimeError("HITL coordinator has not been bound")
-
         awaiting_result = awaiting[0]
         continuation_message_id = (
             awaiting_result.paused_message_id or awaiting_result.agent_message_id
@@ -4218,6 +4346,16 @@ class SupervisorExecutor:
             awaiting_result.agent_message_id or awaiting_result.paused_message_id
         )
         hitl_prompt = awaiting_result.status_message or ""
+        if awaiting_result.end_turn:
+            return await self._complete_agent_file_upload_turn(
+                state=state,
+                results=results,
+                result=awaiting_result,
+                prompt=hitl_prompt,
+                trajectory=trajectory,
+            )
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
         if not continuation_message_id:
             trajectory.status = TrajectoryStatus.FAILED
             state = await self._mark_orchestration_terminal(
@@ -4489,6 +4627,34 @@ class SupervisorExecutor:
             result,
         )
 
+    async def _complete_supervisor_file_upload_turn(
+        self,
+        *,
+        state: OrchestrationRunState,
+        prompt: str,
+        room_id: str,
+        user_message_id: str,
+        request_user_id: str | None,
+        step_number: int,
+    ) -> SupervisorRunResult:
+        if state.active_dispatches:
+            raise RuntimeError(
+                "cannot end a supervisor clarification turn with active dispatches"
+            )
+        state = await self._checkpoint_file_turn_finalization(
+            state=state,
+            prompt=prompt,
+            step_number=step_number,
+            results=[],
+            selected=None,
+        )
+        completed = await self._finalize_file_turn(state)
+        return await self._log_state_and_return(
+            room_id,
+            completed,
+            self._state_run_result(status=RunStatus.COMPLETED, state=completed),
+        )
+
     async def _run_ask_user_action(
         self,
         *,
@@ -4504,9 +4670,6 @@ class SupervisorExecutor:
         quoted_text: str | None,
         resume_pending_artifacts: bool = False,
     ) -> SupervisorRunResult:
-        if self.hitl_coordinator is None:
-            raise RuntimeError("HITL coordinator has not been bound")
-
         trajectory = self._trajectory_from_state(state)
         action = self._orchestration_supervisor_action(planner_action, agent_registry)
         step_number = (
@@ -4530,6 +4693,40 @@ class SupervisorExecutor:
                 choices=action.choices,
             )
         ]
+        upload_question = next(
+            (
+                question
+                for question in questions
+                if is_file_upload_request(
+                    question.prompt,
+                    prompt_type=question.prompt_type,
+                )
+            ),
+            None,
+        )
+        if upload_question is not None:
+            remaining_questions = [
+                question.prompt
+                for question in questions
+                if question is not upload_question and question.prompt.strip()
+            ]
+            upload_copy = upload_question.prompt
+            if remaining_questions:
+                upload_copy = (
+                    f"{upload_copy}\n\nIn the same new message, please also answer:\n"
+                    + "\n".join(f"- {question}" for question in remaining_questions)
+                )
+            trajectory.status = TrajectoryStatus.COMPLETED
+            return await self._complete_supervisor_file_upload_turn(
+                state=state,
+                prompt=upload_copy,
+                room_id=room_id,
+                user_message_id=user_message_id,
+                request_user_id=request_user_id,
+                step_number=step_number,
+            )
+        if self.hitl_coordinator is None:
+            raise RuntimeError("HITL coordinator has not been bound")
         group_id = (
             f"{state.run_id}:step-{step_number}:supervisor-hitl-group"
             if len(questions) > 1
@@ -7891,6 +8088,7 @@ class SupervisorExecutor:
                         interactive_state=result.interactive_state,
                         requires_auth=result.requires_auth,
                         requires_policy=result.requires_policy,
+                        end_turn=result.end_turn,
                     )
 
                 if (
@@ -7967,6 +8165,7 @@ class SupervisorExecutor:
                     error_code=error_code,
                     agent_message_id=message.message_id,
                     status_message=status_message,
+                    end_turn=result.end_turn,
                 )
 
                 logger.info(

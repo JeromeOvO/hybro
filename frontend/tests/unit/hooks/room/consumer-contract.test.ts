@@ -101,7 +101,6 @@ describe('useRoomWebhook consumer contract', () => {
       'refreshMessages',
       'refreshRoomSetting',
       'respondToHitlBatch',
-      'respondToHitlRequest',
       'room',
       'sendUserMessage',
       'sending',
@@ -135,7 +134,6 @@ describe('useRoomWebhook consumer contract', () => {
     const functionKeys = [
       'sendUserMessage',
       'cancelProcessing',
-      'respondToHitlRequest',
       'updateRoomSettings',
       'refreshMessages',
       'refreshRoomSetting',

@@ -31,7 +31,10 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
-from execution.hitl.public_prompt import concrete_agent_input_prompt
+from execution.hitl.public_prompt import (
+    concrete_agent_input_prompt,
+    is_file_upload_request,
+)
 from execution.orchestration.result_ingestor import AgentResultRead
 from execution.task_tracking import resolve_public_task_label
 
@@ -60,6 +63,7 @@ class ResponseTaskWriter(Protocol):
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]: ...
 
 
@@ -867,14 +871,18 @@ class AgentResponseHandler:
         ) = await self._project_completed_output(e)
         platform_state = "failed" if delivery_failed else "completed"
         platform_error = OUTPUT_DELIVERY_FAILURE_MESSAGE if delivery_failed else None
-        task_metadata = (
-            {
+        task_metadata = None
+        if delivery_failed:
+            task_metadata = {
                 "output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE,
                 "remote_task_state": "completed",
             }
-            if delivery_failed
-            else None
-        )
+        elif e.end_turn:
+            task_metadata = {
+                "end_turn": True,
+                "remote_task_id": e.task_id,
+                "remote_context_id": e.context_id,
+            }
 
         finalization_token, fenced = await self._begin_terminal_finalization(
             e, platform_state
@@ -1377,21 +1385,10 @@ class AgentResponseHandler:
     async def _on_interactive(self, e: AgentEvent) -> None:
         state = e.state or "input-required"
         prompt = concrete_agent_input_prompt(e.text)
-        has_remote_ids = bool(
-            e.task_id
-            and not str(e.task_id).startswith(("pending-", "relay-pending-"))
-            and e.context_id
-        )
-        if prompt is None or not has_remote_ids:
+        if prompt is None:
             e.kind = "error"
             e.state = "failed"
-            e.details = {
-                "error_code": (
-                    "invalid_interactive_prompt"
-                    if prompt is None
-                    else "invalid_a2a_continuation"
-                )
-            }
+            e.details = {"error_code": "invalid_interactive_prompt"}
             await self._on_error(e)
             return
 
@@ -1399,6 +1396,23 @@ class AgentResponseHandler:
         e.details = None
         e.parts = None
         e.artifacts = None
+        if is_file_upload_request(prompt):
+            e.kind = "response"
+            e.state = "completed"
+            e.end_turn = True
+            await self._on_response(e)
+            return
+        has_remote_ids = bool(
+            e.task_id
+            and not str(e.task_id).startswith(("pending-", "relay-pending-"))
+            and e.context_id
+        )
+        if not has_remote_ids:
+            e.kind = "error"
+            e.state = "failed"
+            e.details = {"error_code": "invalid_a2a_continuation"}
+            await self._on_error(e)
+            return
         if not e.skip_persist:
             await self._task_writer.update_task_state_on_message(
                 e.message_id,
@@ -1887,6 +1901,8 @@ class AgentResponseHandler:
                 artifacts=artifacts or [],
                 error=error,
                 error_code=error_code,
+                a2a_task_id=e.task_id,
+                a2a_context_id=e.context_id,
             )
             maybe_result = service.ingest_agent_result(result)
             if inspect.isawaitable(maybe_result):
@@ -1914,6 +1930,7 @@ class AgentResponseHandler:
             event.message_id,
             response_text,
             failed=failed,
+            end_turn=event.end_turn,
         )
 
     async def _resume_orchestration(
@@ -1922,12 +1939,61 @@ class AgentResponseHandler:
         response_text: str,
         *,
         failed: bool = False,
+        end_turn: bool = False,
     ) -> None:
-        try:
-            await self._rmc.resume_queue_from_continuation(
-                message_id=message_id,
-                task_result_text=response_text if not failed else None,
-                failed=failed,
+        resume_kwargs = {
+            "message_id": message_id,
+            "task_result_text": response_text if not failed else None,
+            "failed": failed,
+        }
+        if end_turn:
+            resume_kwargs["end_turn"] = True
+        resumed = await self._rmc.resume_queue_from_continuation(**resume_kwargs)
+        if resumed is not False:
+            return
+        continuation = (
+            await self._continuation_store.get_pending_continuation_on_message(
+                message_id
             )
-        except Exception:
-            logger.exception("Failed to resume orchestration for %s", message_id)
+        )
+        supervisor = getattr(self._rmc, "supervisor_executor", None)
+        run_store = getattr(supervisor, "orchestration_run_store", None)
+        if continuation:
+            run_id = (
+                continuation.get("orchestration_run_id")
+                if isinstance(continuation, dict)
+                else None
+            )
+            run = await run_store.get_run(run_id) if run_id and run_store else None
+            run_status = getattr(getattr(run, "status", None), "value", None)
+            if run_status in {"completed", "failed", "canceled", "budget_exhausted"}:
+                return
+            raise RuntimeError(f"failed to resume orchestration for {message_id}")
+
+        message = (
+            await self._client_request_resolver.get_room_agent_message_by_message_id(
+                message_id
+            )
+        )
+        if message is None or run_store is None:
+            return
+        extend_info = getattr(message, "extend_info", None)
+        run_id = (
+            extend_info.get("orchestration_run_id")
+            if isinstance(extend_info, dict)
+            else None
+        )
+        if run_id:
+            run = await run_store.get_run(run_id)
+        else:
+            user_message_id = getattr(message, "related_message_id", None)
+            run = (
+                await run_store.get_latest_by_user_message_id(user_message_id)
+                if user_message_id
+                else None
+            )
+        if run is None:
+            return
+        run_status = getattr(getattr(run, "status", None), "value", None)
+        if run_status not in {"completed", "failed", "canceled", "budget_exhausted"}:
+            raise RuntimeError(f"failed to resume orchestration for {message_id}")

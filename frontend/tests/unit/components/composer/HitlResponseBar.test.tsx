@@ -5,8 +5,6 @@ import { HitlResponseBar, type HitlPromptView } from '@/components/composer/Hitl
 const baseHitl: HitlPromptView = {
   hitlId: 'hitl-1',
   interactionId: 'interaction-1',
-  turnId: 'turn-1',
-  ts: 1,
   source: 'agent',
   agentName: 'HITL Mock Agent',
   prompt: 'Human approval required.',
@@ -114,7 +112,7 @@ describe('HitlResponseBar', () => {
 
   it('shows file requests as unsupported instead of pretending a filename is uploaded', () => {
     renderBar([{ ...baseHitl, prompt: 'Upload the signed form', promptType: 'file' }])
-    expect(screen.getByText('File responses are not available for this request')).toBeDefined()
+    expect(screen.getByText('Unsupported input type')).toBeDefined()
     expect(screen.queryByRole('button', { name: 'Review answers' })).toBeDisabled()
   })
 })

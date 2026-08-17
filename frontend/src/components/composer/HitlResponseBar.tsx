@@ -8,7 +8,6 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
-  FileUp,
   KeyRound,
   LoaderCircle,
   MessageCircleQuestion,
@@ -23,8 +22,6 @@ import { Button } from '@/components/ui/button'
 
 export interface HitlPromptView {
   hitlId: string
-  turnId: string
-  ts: number
   source: 'supervisor' | 'agent'
   agentName?: string
   prompt: string
@@ -33,11 +30,8 @@ export interface HitlPromptView {
   interactionId: string
   lifecycleState: HitlLifecycleState
   errorMessage?: string
-  expiresAt?: string
   clientRequestId?: string
   answer?: string
-  groupId?: string
-  groupTotal?: number
   groupIndex?: number
 }
 
@@ -85,7 +79,7 @@ function RecoveryState({
   onCancel,
   onRefresh,
 }: {
-  state: Exclude<HitlLifecycleState, 'open' | 'submitting'>
+  state: Exclude<HitlLifecycleState, 'open'>
   message?: string
   onCancel?: () => Promise<void>
   onRefresh?: () => Promise<void>
@@ -267,24 +261,13 @@ function PromptControl({
       />
     )
   }
-  if (hitl.promptType === 'file') {
-    return (
-      <div className="conversation-hitl-unsupported" role="alert">
-        <FileUp className="h-5 w-5" aria-hidden="true" />
-        <div>
-          <strong>File responses are not available for this request</strong>
-          <p>Hybro will not pretend that a filename is an uploaded file. Cancel this request and restart the step with an attachment.</p>
-        </div>
-      </div>
-    )
-  }
-  if (hitl.promptType === 'unknown') {
+  if (hitl.promptType === 'file' || hitl.promptType === 'unknown') {
     return (
       <div className="conversation-hitl-unsupported" role="alert">
         <AlertTriangle className="h-5 w-5" aria-hidden="true" />
         <div>
           <strong>Unsupported input type</strong>
-          <p>This request cannot be answered safely. Cancel it rather than sending an untyped response.</p>
+          <p>This historical request cannot be answered safely. Cancel it and send a new message instead.</p>
         </div>
       </div>
     )
@@ -431,7 +414,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
     return (
       <section className="conversation-hitl-panel" data-testid="hitl-response-bar" aria-label="Human input status">
         <RecoveryState
-          state={state as Exclude<HitlLifecycleState, 'open' | 'submitting'>}
+          state={state as Exclude<HitlLifecycleState, 'open'>}
           message={submissionError ?? current.errorMessage}
           onRefresh={onRefresh}
           onCancel={onCancel ? () => onCancel(current.hitlId) : undefined}

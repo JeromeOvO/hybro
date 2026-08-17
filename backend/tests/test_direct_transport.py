@@ -2424,6 +2424,51 @@ class TestDispatchInteractive:
         assert result.status_message == "Authentication required"
 
     @pytest.mark.asyncio
+    async def test_dispatch_file_prompt_sets_explicit_end_turn_outcome(self):
+        proc = _make_processor()
+        message = _make_room_agent_message()
+        task = message.message_content.message_task
+        assert task is not None
+        task.id = "agent-task-upload"
+        task.context_id = "agent-context-upload"
+        task.status.state = TaskState.input_required
+        task.status.message = Message(
+            message_id="status-msg-upload",
+            role=MessageRole.AGENT,
+            parts=[
+                TextPart(
+                    kind="text",
+                    text="Please upload the signed PDF in a new message.",
+                )
+            ],
+        )
+        proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
+
+        async def handle_sync_response(*_args, **kwargs):
+            kwargs["interactive_status_context"]["status_message"] = (
+                "Please upload the signed PDF in a new message."
+            )
+            return True, None, message.message_id, "agent-task-upload"
+
+        proc.handle_sync_response = AsyncMock(side_effect=handle_sync_response)
+        agent = MagicMock()
+        agent.agent_card = MagicMock()
+        ctx = DispatchContext(
+            agent=agent,
+            room_agent_message=message,
+            room_id="room-1",
+            user_message_id="user-msg-1",
+            prepared_message=MagicMock(),
+        )
+
+        result = await proc.dispatch(ctx, message)
+
+        assert result.status == ProcessingStatus.AWAITING_INPUT
+        assert result.end_turn is True
+        assert result.a2a_task_id == "agent-task-upload"
+        assert result.a2a_context_id == "agent-context-upload"
+
+    @pytest.mark.asyncio
     async def test_dispatch_auth_required_without_message_uses_default_prompt(self):
         proc = _make_processor()
         message = _make_room_agent_message()

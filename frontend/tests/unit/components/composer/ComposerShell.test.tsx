@@ -24,7 +24,6 @@ const mockAdapter: ComposerShellAdapter = {
   roomId: 'test-room',
   onSendMessage: vi.fn(),
   onCancelProcessing: vi.fn(),
-  onRespondToHitl: vi.fn(),
   onRespondToHitlBatch: vi.fn(),
   onCancelHitl: vi.fn(),
   onRefreshHitl: vi.fn(),
@@ -68,6 +67,35 @@ describe('ComposerShell', () => {
     const input = screen.getByTestId('room-chat-input')
     expect(input.getAttribute('data-processing')).toBe('true')
     expect(input.getAttribute('data-disabled')).toBe('true')
+  })
+
+  it('restores the normal composer for a terminal file upload instruction', () => {
+    const store = useMessageStore.getState()
+    store.upsertMessage({
+      id: 'user-upload',
+      roomId: 'test-room',
+      messageType: 'user',
+      content: 'Review my application',
+      senderName: 'User',
+      timestamp: new Date().toISOString(),
+      turnTerminalStatus: 'completed',
+    }, 'db')
+    store.upsertMessage({
+      id: 'agent-upload',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: 'Please upload the PDF in a new message.',
+      senderName: 'Agent A',
+      timestamp: new Date().toISOString(),
+      relatedMessageId: 'user-upload',
+      taskStatus: 'completed',
+    }, 'db')
+
+    render(<ComposerShell adapter={mockAdapter} />)
+
+    expect(screen.getByTestId('room-chat-input')).toBeDefined()
+    expect(screen.queryByTestId('hitl-response-frame')).toBeNull()
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-disabled')).toBe('false')
   })
 
   it('shows HitlResponseBar when there are pending HITLs', () => {

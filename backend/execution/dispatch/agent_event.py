@@ -70,3 +70,4 @@ class AgentEvent:
     emit_processing_status: bool = True
     retry_on_finalization_conflict: bool = False
     finalization_recovery_id: str | None = None
+    end_turn: bool = False

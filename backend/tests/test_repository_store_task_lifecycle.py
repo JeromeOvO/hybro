@@ -3,11 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from common.a2a_constants import TERMINAL_STATES
 from dal.runtime_store import RuntimeRepositoryStore
+from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
 
 
 class FakeMongo:
@@ -112,6 +114,57 @@ def _store(
         room_repository=object(),
         message_repository=object(),
         agent_repository=object(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_message_store_persists_task_metadata_on_task_state_update():
+    repository = SimpleNamespace(
+        update_agent_message_if_not_terminal=AsyncMock(return_value=True)
+    )
+    store = MessageRuntimeStorePart(
+        room_agent_messages=object(),
+        room_user_messages=object(),
+        message_repository=repository,
+    )
+
+    updated, _ = await store.update_task_state_on_message(
+        "message-1",
+        "completed",
+        message_text="done",
+        artifacts=[],
+        task_metadata={"end_turn": True},
+    )
+
+    assert updated is True
+    updates = repository.update_agent_message_if_not_terminal.await_args.args[1]
+    assert updates["message_content.message_task.metadata"] == {"end_turn": True}
+
+
+@pytest.mark.asyncio
+async def test_repository_store_forwards_task_metadata_on_task_state_update():
+    delegate = SimpleNamespace(
+        update_task_state_on_message=AsyncMock(return_value=(True, "done"))
+    )
+    store = object.__new__(RuntimeRepositoryStore)
+    store._message_part = delegate
+
+    result = await store.update_task_state_on_message(
+        "message-1",
+        "completed",
+        message_text="done",
+        task_metadata={"end_turn": True},
+    )
+
+    assert result == (True, "done")
+    delegate.update_task_state_on_message.assert_awaited_once_with(
+        "message-1",
+        "completed",
+        message_text="done",
+        artifacts=None,
+        task_id=None,
+        context_id=None,
+        task_metadata={"end_turn": True},
     )
 
 

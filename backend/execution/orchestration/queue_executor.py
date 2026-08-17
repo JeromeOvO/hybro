@@ -25,6 +25,7 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.hitl.public_prompt import concrete_agent_input_prompt
+from execution.orchestration.file_turn import persist_file_turn_task
 from execution.state.task_state_manager import TaskStateManager
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.processing import ProcessingResult, ProcessingStatus
@@ -470,6 +471,31 @@ class QueueExecutor:
                         queue_result = QueueResult.FAILED
                         failure_error = "invalid_interactive_prompt"
                         break
+                    if result.end_turn:
+                        await persist_file_turn_task(
+                            message_writer=self.message_writer,
+                            message_reader=self.message_reader,
+                            delivery=self.delivery,
+                            room_id=room_id,
+                            message_id=current_message.message_id,
+                            state="completed",
+                            message_text=agent_hitl_prompt,
+                            task_metadata={"end_turn": True},
+                            agent_id=current_message.agent_id,
+                            agent_name=(agent.agent_card.name if agent else "Agent"),
+                        )
+                        await self._publish_agent_message_committed(
+                            room_id=room_id,
+                            agent_id=current_message.agent_id,
+                            agent_name=(agent.agent_card.name if agent else "Agent"),
+                            was_successful=True,
+                            message_id=current_message.message_id,
+                        )
+                        message_queue.clear()
+                        last_popped.clear()
+                        queue_result = QueueResult.COMPLETED
+                        break
+
                     # Agent returned input_required — create HITL request
                     # so the frontend shows an input form, then pause the
                     # queue exactly like PAUSED.

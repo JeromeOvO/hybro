@@ -59,7 +59,10 @@ from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.transports.base import AgentTransport
-from execution.hitl.public_prompt import safe_agent_input_prompt
+from execution.hitl.public_prompt import (
+    is_file_upload_request,
+    safe_agent_input_prompt,
+)
 from execution.state.task_state_manager import (
     TaskStateManager,
     get_task,
@@ -410,6 +413,7 @@ class DirectTransport(AgentTransport):
                             or (task_data.get("metadata") or {}).get("requires_policy")
                             or (task_data.get("metadata") or {}).get("policy_required")
                         ),
+                        end_turn=is_file_upload_request(status_msg),
                     )
                 return ProcessingResult(status, full_response_text)
         else:
@@ -501,6 +505,7 @@ class DirectTransport(AgentTransport):
                         or (task_data.get("metadata") or {}).get("requires_policy")
                         or (task_data.get("metadata") or {}).get("policy_required")
                     ),
+                    end_turn=is_file_upload_request(status_msg),
                 )
 
             logger.info(

@@ -46,18 +46,6 @@ export interface HitlPendingResponse {
 
 const HITL_RESPOND_TIMEOUT_MS = 180_000
 
-export async function respondToHitl(
-  roomId: string,
-  requestId: string,
-  userInput: string,
-  getToken?: () => Promise<string | null>,
-): Promise<HitlRespondResponse> {
-  return apiPost<HitlRespondResponse>(`${hitlUrl(roomId)}/respond`, {
-    request_id: requestId,
-    user_input: userInput,
-  }, getToken, undefined, HITL_RESPOND_TIMEOUT_MS)
-}
-
 export async function respondToHitlBatch(
   roomId: string,
   interactionId: string,

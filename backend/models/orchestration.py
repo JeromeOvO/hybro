@@ -531,6 +531,7 @@ class OrchestrationRunState(BaseModel):
     completion_evidence: CompletionEvidence | None = None
     terminal_reason: str | None = None
     terminal_summary: dict[str, Any] | None = None
+    file_turn: dict[str, Any] | None = None
     open_failures: list[OpenFailureRecord] = Field(default_factory=list)
     delegation_outcomes: list[DelegationOutcomeRecord] = Field(default_factory=list)
     pending_agent_continuations: list[PendingAgentContinuation] = Field(

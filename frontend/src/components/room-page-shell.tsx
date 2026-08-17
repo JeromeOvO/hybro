@@ -75,7 +75,6 @@ export interface TimelineAdapter {
   getToken?: () => Promise<string | null>
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
-  onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
   onCancelHitl: (requestId: string) => Promise<void>
   onRefreshHitl: () => Promise<void>

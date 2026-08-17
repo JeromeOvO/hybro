@@ -18,6 +18,7 @@ import pytest
 from a2a_adapter.task_status import coerce_task_state
 from common.dto import MessageCommitted
 from common.utils.cancellation import CancellationToken
+from execution.orchestration.file_turn import persist_file_turn_task
 from execution.orchestration.queue_executor import (
     QueueExecutor,
     QueueProcessingResult,
@@ -118,8 +119,14 @@ def _make_queue_executor():
     qe.message_reader.get_room_user_message_by_message_id = AsyncMock(return_value=None)
     qe.message_writer.add_room_agent_message = AsyncMock(return_value=True)
     qe.message_writer.update_room_agent_message_with_new_message_content_by_message_id = AsyncMock()
+    qe.message_writer.update_task_state_on_message = AsyncMock(
+        return_value=(True, None)
+    )
     qe.task_state_store.resolve_client_request_id_for_message_id = AsyncMock(
         return_value=None
+    )
+    qe.task_state_store.update_task_state_on_message = AsyncMock(
+        return_value=(True, None)
     )
     qe.delivery.send_task_submitted = AsyncMock()
     qe.delivery.send_task_update = AsyncMock()
@@ -703,6 +710,152 @@ class TestProcessQueue:
 
         assert result.result == QueueResult.COMPLETED
         assert qe._process_single_message.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_file_upload_instruction_completes_turn_without_hitl_or_continuation(
+        self,
+    ):
+        qe = _make_queue_executor()
+        message_content = SimpleNamespace(
+            message_text="",
+            message_task=SimpleNamespace(
+                status=SimpleNamespace(state="input-required"), metadata={}
+            ),
+        )
+        msg = MagicMock(
+            message_id="msg-upload",
+            step_number=1,
+            total_steps=2,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
+            message_content=message_content,
+        )
+        queued_follow_up = MagicMock(message_id="msg-follow-up")
+        queue = deque([msg, queued_follow_up])
+        agent = MagicMock()
+        agent.agent_id = "a1"
+        agent.agent_card = MagicMock()
+        agent.agent_card.name = "TestAgent"
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(
+                ProcessingStatus.AWAITING_INPUT,
+                message_id="msg-upload",
+                status_message="Please upload the signed PDF in a new message.",
+                end_turn=True,
+            )
+        )
+        qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=msg
+        )
+
+        async def update_task(_message_id, state, **kwargs):
+            message_content.message_task.status.state = state
+            message_content.message_task.metadata = kwargs["task_metadata"]
+            message_content.message_text = kwargs["message_text"]
+            return True, kwargs["message_text"]
+
+        qe.message_writer.update_task_state_on_message = AsyncMock(
+            side_effect=update_task
+        )
+        qe.hitl_coordinator.request_input = AsyncMock()
+        qe.continuation_store.save_continuation_on_message = AsyncMock()
+
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
+
+        assert result.result == QueueResult.COMPLETED
+        assert message_content.message_text == (
+            "Please upload the signed PDF in a new message."
+        )
+        qe.message_writer.update_task_state_on_message.assert_awaited_once_with(
+            "msg-upload",
+            "completed",
+            message_text="Please upload the signed PDF in a new message.",
+            task_metadata={"end_turn": True},
+        )
+        qe.delivery.send_task_update.assert_awaited_once_with(
+            room_id="room-1",
+            message_id="msg-upload",
+            status="completed",
+            agent_id="a1",
+            agent_name="TestAgent",
+        )
+        qe.hitl_coordinator.request_input.assert_not_awaited()
+        qe.continuation_store.save_continuation_on_message.assert_not_awaited()
+        assert qe._process_single_message.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_file_upload_instruction_rejects_silent_task_persistence_failure(
+        self,
+    ):
+        qe = _make_queue_executor()
+        message = MagicMock(
+            message_id="msg-upload",
+            message_content=SimpleNamespace(
+                message_text="",
+                message_task=SimpleNamespace(
+                    status=SimpleNamespace(state="input-required"), metadata={}
+                ),
+            ),
+        )
+        qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=message
+        )
+        qe.message_writer.update_task_state_on_message = AsyncMock(
+            return_value=(False, None)
+        )
+
+        with pytest.raises(RuntimeError, match="failed to persist file-turn task"):
+            await persist_file_turn_task(
+                message_writer=qe.message_writer,
+                message_reader=qe.message_reader,
+                delivery=qe.delivery,
+                room_id="room-1",
+                message_id="msg-upload",
+                state="completed",
+                message_text="Please upload the PDF in a new message.",
+                task_metadata={"end_turn": True},
+                agent_id="a1",
+                agent_name="Agent One",
+            )
+
+        qe.message_writer.update_task_state_on_message.assert_awaited_once()
+        qe.delivery.send_task_update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_successful_upload_prose_does_not_end_queue(self):
+        qe = _make_queue_executor()
+        messages = [
+            MagicMock(
+                message_id=f"msg-{index}",
+                step_number=index,
+                total_steps=2,
+                extend_info=None,
+                agent_id="a1",
+                user_id="u1",
+            )
+            for index in (1, 2)
+        ]
+        agent = MagicMock()
+        agent.agent_id = "a1"
+        agent.agent_card.name = "TestAgent"
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            side_effect=[
+                ProcessingResult(
+                    ProcessingStatus.SUCCESS,
+                    response_text="I uploaded the PDF for reference.",
+                ),
+                ProcessingResult(ProcessingStatus.SUCCESS, response_text="Done"),
+            ]
+        )
+        qe._queue_next_messages = AsyncMock()
+
+        result = await qe.process_queue(deque(messages), "room-1", "umsg-1")
+
+        assert result.result == QueueResult.COMPLETED
+        assert qe._process_single_message.await_count == 2
 
     @pytest.mark.asyncio
     async def test_preflight_failure_defers_child_mutation_to_root_projection(self):

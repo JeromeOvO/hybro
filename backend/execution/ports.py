@@ -807,6 +807,7 @@ class RoomMessageWriter(Protocol):
         artifacts: list[dict[str, Any]] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]: ...
 
 

@@ -17,8 +17,6 @@ import type { ChatMode } from '@/lib/types/chat-mode'
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
     hitlId: hitl.hitlId,
-    turnId: hitl.messageId,
-    ts: Date.now(),
     source: hitl.source,
     agentName: hitl.agentName,
     prompt: hitl.question,
@@ -27,11 +25,8 @@ function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
     interactionId: hitl.interactionId,
     lifecycleState: hitl.lifecycleState,
     errorMessage: hitl.errorMessage,
-    expiresAt: hitl.expiresAt,
     clientRequestId: hitl.clientRequestId,
     answer: hitl.answer,
-    groupId: hitl.groupId,
-    groupTotal: hitl.groupTotal,
     groupIndex: hitl.groupIndex,
   }
 }
@@ -40,7 +35,6 @@ export interface ComposerShellAdapter {
   roomId: string
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
-  onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
   onCancelHitl: (requestId: string) => Promise<void>
   onRefreshHitl: () => Promise<void>

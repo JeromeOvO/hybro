@@ -145,6 +145,7 @@ class RuntimeMessageStore(Protocol):
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]: ...
     async def update_task_state_on_message_if_not_terminal(
         self,

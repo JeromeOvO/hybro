@@ -52,6 +52,7 @@ def _make_handler(
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
@@ -1747,6 +1748,123 @@ class TestCanceledEvent:
         )
 
 
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_after_continuation_is_consumed():
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    handler = _make_handler(rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_retries_for_nonterminal_durable_owner():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    db.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            related_message_id="user-message-1",
+            extend_info={},
+        )
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_latest_by_user_message_id = (
+        AsyncMock(return_value=SimpleNamespace(status=SimpleNamespace(value="running")))
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    with pytest.raises(RuntimeError, match="failed to resume orchestration"):
+        await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_for_terminal_durable_owner():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    db.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            related_message_id="user-message-1",
+            extend_info={},
+        )
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_latest_by_user_message_id = (
+        AsyncMock(
+            return_value=SimpleNamespace(status=SimpleNamespace(value="completed"))
+        )
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_when_durable_owner_is_absent():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    db.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            related_message_id="user-message-1",
+            extend_info={},
+        )
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_latest_by_user_message_id = (
+        AsyncMock(return_value=None)
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_retries_when_false_leaves_continuation_open():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(
+        return_value={"orchestration_run_id": "run-1"}
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_run = AsyncMock(
+        return_value=SimpleNamespace(status=SimpleNamespace(value="running"))
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    with pytest.raises(RuntimeError, match="failed to resume orchestration"):
+        await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_for_terminal_owner():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(
+        return_value={"orchestration_run_id": "run-1"}
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_run = AsyncMock(
+        return_value=SimpleNamespace(status=SimpleNamespace(value="completed"))
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_propagates_exception():
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(
+        side_effect=RuntimeError("lock unavailable")
+    )
+    handler = _make_handler(rmc=rmc)
+
+    with pytest.raises(RuntimeError, match="lock unavailable"):
+        await handler._resume_orchestration("msg-001", "answer")
+
+
 # =============================================================================
 # Interactive events
 # =============================================================================
@@ -1783,6 +1901,70 @@ class TestInteractiveEvent:
             message_id="msg-001",
             task_result_text="",
             failed=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_file_upload_prompt_becomes_terminal_response_without_hitl(self):
+        hitl = SimpleNamespace(request_input=AsyncMock())
+        h = _make_handler(hitl_coordinator=hitl)
+        event = AgentEvent(
+            kind="interactive",
+            **_base_event(),
+            text="Please upload the signed PDF in a new message.",
+            state="input-required",
+            task_id="t-1",
+            context_id="c-1",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        hitl.request_input.assert_not_awaited()
+        persisted = h._message_writer.update_task_state_on_message.await_args
+        assert persisted.args == ("msg-001", "completed")
+        assert persisted.kwargs["message_text"] == (
+            "Please upload the signed PDF in a new message."
+        )
+        assert persisted.kwargs["task_metadata"] == {
+            "end_turn": True,
+            "remote_task_id": "t-1",
+            "remote_context_id": "c-1",
+        }
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001",
+            task_result_text="Please upload the signed PDF in a new message.",
+            failed=False,
+            end_turn=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_file_upload_prompt_does_not_require_continuation_ids(self):
+        hitl = SimpleNamespace(request_input=AsyncMock())
+        h = _make_handler(hitl_coordinator=hitl)
+        event = AgentEvent(
+            kind="interactive",
+            **_base_event(),
+            text="Please attach the source document in a new message.",
+            state="input-required",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "execution.dispatch.response_handler.AgentResponseHandler._notify",
+                AsyncMock(return_value=True),
+            )
+            await h.handle(event)
+
+        hitl.request_input.assert_not_awaited()
+        h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
+            message_id="msg-001",
+            task_result_text="Please attach the source document in a new message.",
+            failed=False,
+            end_turn=True,
         )
 
     @pytest.mark.asyncio
@@ -2304,7 +2486,7 @@ class TestProcessingStatusEvent:
 
 class TestResumeOrchestrationErrorHandling:
     @pytest.mark.asyncio
-    async def test_resume_exception_does_not_propagate(self):
+    async def test_resume_exception_keeps_terminal_finalization_retryable(self):
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(side_effect=RuntimeError("boom"))
         h = _make_handler(rmc=rmc)
@@ -2319,8 +2501,8 @@ class TestResumeOrchestrationErrorHandling:
                 "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
-            # Should not raise despite resume failure
-            await h.handle(event)
+            with pytest.raises(RuntimeError, match="boom"):
+                await h.handle(event)
 
 
 # =============================================================================

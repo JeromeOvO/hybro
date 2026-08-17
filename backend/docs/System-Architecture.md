@@ -590,7 +590,21 @@ boundaries to plan, reduce, persist, and resume each versioned step.
 
 HITL records preserve the optional `orchestration_run_id` needed to resume the
 durable run. Delivery events and public SSE frames do not expose private
-orchestration linkage. Grouped cancellation or expiry terminalizes each pending
+orchestration linkage. File-upload blockers are not HITL: typed file questions,
+or conservative untyped prompts containing both an upload/attach verb and a
+file/PDF/document noun, become normal terminal agent or HYBRO messages asking
+the user to attach the file in a new turn. Supervisor clarification branches
+before any HITL request, interaction, or continuation artifacts are created;
+the normal terminal HYBRO message is then committed as the final source. Prompts
+that offer a text alternative or negate uploading remain ordinary HITL
+questions. Classification runs only at Supervisor ASK_USER, inline direct
+interactive results, and asynchronous interactive callbacks; completed prose is
+never reclassified. A transient `end_turn` signal reaches orchestration, which
+atomically checkpoints `FINALIZING` with one durable file-turn marker before
+side effects. Its idempotent finalizer writes the instruction into the
+preallocated HYBRO summary message, completes the selected child and HYBRO
+tasks, cancels active siblings, and completes the run. Recovery reruns the same
+finalizer after interruption. Grouped cancellation or expiry terminalizes each pending
 sibling while retaining its own run linkage metadata.
 
 `RoomMessageCenter` routes every durable orchestration envelope through

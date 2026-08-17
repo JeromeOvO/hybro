@@ -952,6 +952,7 @@ class RuntimeRepositoryStore:
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]:
         return await self._message_delegate().update_task_state_on_message(
             message_id,
@@ -960,6 +961,7 @@ class RuntimeRepositoryStore:
             artifacts=artifacts,
             task_id=task_id,
             context_id=context_id,
+            task_metadata=task_metadata,
         )
 
     async def terminal_finalization_matches(

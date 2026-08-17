@@ -614,6 +614,11 @@ async def test_materializing_group_is_not_emitted():
     persistence.resolve_client_request_id_for_message_id = AsyncMock(return_value=None)
     persistence.count_hitl_requests_for_message = AsyncMock(return_value=0)
     persistence.create_hitl_request = AsyncMock(return_value=True)
+
+    async def get_created_request(_request_id):
+        return persistence.create_hitl_request.await_args.args[0]
+
+    persistence.get_hitl_request = AsyncMock(side_effect=get_created_request)
     lifecycle = MagicMock()
     lifecycle.materialize_interaction = AsyncMock(side_effect=lambda doc: doc)
     lifecycle.attach_interaction_request = AsyncMock(

@@ -2259,6 +2259,7 @@ class RoomMessageCenter:
         task_result_text: str | None = None,
         *,
         failed: bool = False,
+        end_turn: bool = False,
     ) -> bool:
         """Resume queue processing after a push notification task completes.
 
@@ -2271,6 +2272,8 @@ class RoomMessageCenter:
             failed: If True, the step that triggered the resume failed. The
                 orchestrator should treat this as an error rather than a
                 successful response.
+            end_turn: Discard queued follow-up work because the agent's normal
+                response asks for a file upload in a new user message.
 
         Returns ``True`` if the queue was resumed successfully.
         """
@@ -2382,6 +2385,9 @@ class RoomMessageCenter:
                 # E.g. another concurrent resume already processed it.
                 return False
 
+            if end_turn:
+                locked_continuation = dict(locked_continuation)
+                locked_continuation["remaining_queue"] = []
             try:
                 return await self._resume_continuation_locked(
                     locked_continuation, message_id, task_result_text

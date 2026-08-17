@@ -10,11 +10,9 @@ import { useMessageStore } from '@/stores/message-store'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import {
   appendProcessingStatusLog,
-  clearProcessingStatusLogs,
   ensureInitialProcessingStatusLog,
   findProcessingStatusUserEntity,
 } from './processing-status-log'
-import { resolveClientRequestMessageId } from './sse-handlers/pending-turn-buffer'
 
 export function useRoomActions(
   roomId: string,
@@ -147,121 +145,6 @@ export function useRoomActions(
     }
   }, [getToken, setCancelling, lifecycle, roomId, reconcileWithDb])
 
-  // Respond to a HITL request — inline Q&A display pattern:
-  // 1. Mark agent message resolved + embed answer  2. Optionally show processing placeholder (last in group)
-  const respondToHitlRequest = useCallback(async (requestId: string, userInput: string) => {
-    const entityId = hitlRequestIndex.current.get(requestId)
-    const store = useMessageStore.getState()
-    const entity = entityId
-      ? store.entities[entityId]
-      : Object.values(store.entities).find((candidate) =>
-          candidate.roomId === roomId &&
-          candidate.messageType === 'agent' &&
-          candidate.hitlRequestId === requestId
-        )
-    if (!entityId && entity) {
-      hitlRequestIndex.current.set(requestId, entity.id)
-    }
-    const processingUserEntity = findProcessingStatusUserEntity(roomId, {
-      relatedMessageId: entity?.relatedMessageId,
-      clientRequestId: entity?.clientRequestId,
-      beforeTimestamp: entity?.timestamp,
-    })
-
-    // Determine if this is the last unanswered question in its group
-    const isGrouped = entity?.hitlGroupId != null
-    let isLastInGroup = true
-    if (isGrouped && entity?.hitlGroupId) {
-      const allEntities = Object.values(store.entities)
-      const siblings = allEntities.filter(e => e.hitlGroupId === entity.hitlGroupId && e.id !== entity.id)
-      const unresolvedSiblings = siblings.filter(e => !e.hitlResolved && !e.hitlUserAnswer)
-      isLastInGroup = unresolvedSiblings.length === 0
-    }
-
-    // Optimistic: mark resolved and embed the user's answer inline
-    if (entity) {
-      store.upsertMessage({
-        id: entity.id,
-        roomId,
-        messageType: 'agent',
-        content: entity.content,
-        senderName: entity.senderName,
-        timestamp: entity.timestamp,
-        hitlResolved: true,
-        hitlUserAnswer: userInput,
-      }, 'optimistic')
-    }
-    hitlRequestIndex.current.delete(requestId)
-
-    // Only show processing placeholder after the LAST question in a group (or non-grouped)
-    if (isLastInGroup) {
-      lifecycle.resetPlaceholder()
-      lifecycle.resetProcessingResolved()
-      lifecycle.setPendingRunEventAck(entity?.clientRequestId ?? null)
-      if (entity?.clientRequestId && processingUserEntity?.id) {
-        resolveClientRequestMessageId(entity.clientRequestId, processingUserEntity.id)
-      }
-      store.removeMessage(lifecycle.placeholderId(roomId))
-      ensureInitialProcessingStatusLog(roomId, processingUserEntity)
-      appendProcessingStatusLog(
-        roomId,
-        processingUserEntity,
-        'Processing your input...',
-        new Date(Date.now() + 1).toISOString(),
-      )
-      lifecycle.startProcessing(processingUserEntity?.id)
-    }
-
-    try {
-      const { respondToHitl } = await import('@/lib/api/hitl')
-      await respondToHitl(roomId, requestId, userInput, getToken)
-    } catch (err) {
-      // A conflict can mean a different answer, expiry, cancellation, or an
-      // in-flight claimant. Reconcile, then surface it; never assume success.
-      if (err instanceof ApiError && err.status === 409) {
-        await reconcileWithDb(roomId)
-      }
-
-      // AbortError (timeout) — the backend is still processing the supervisor
-      // resume which can take 60-120s. Keep the optimistic state; the eventual
-      // hitl_response SSE will reconcile.
-      if (err instanceof Error && err.name === 'AbortError') {
-        return
-      }
-
-      // Genuine failure — rollback optimistic updates so the HITL form reappears
-      if (entity) {
-        store.upsertMessage({
-          id: entity.id,
-          roomId,
-          messageType: 'agent',
-          content: entity.content,
-          senderName: entity.senderName,
-          timestamp: entity.timestamp,
-          hitlResolved: false,
-          hitlUserAnswer: undefined,
-        }, 'optimistic')
-      }
-      if (entityId) {
-        hitlRequestIndex.current.set(requestId, entityId)
-      }
-      if (isLastInGroup) {
-        store.removeMessage(lifecycle.placeholderId(roomId))
-        clearProcessingStatusLogs(
-          roomId,
-          findProcessingStatusUserEntity(roomId, {
-            messageId: processingUserEntity?.id,
-            clientRequestId: entity?.clientRequestId,
-            latestWithLogs: true,
-          }),
-        )
-        lifecycle.stopProcessing({ clearMessageId: false })
-      }
-
-      throw err
-    }
-  }, [roomId, getToken, lifecycle, hitlRequestIndex, reconcileWithDb])
-
   const respondToHitlBatch = useCallback(async (
     interactionId: string,
     answers: Array<{ requestId: string; answer: string }>,
@@ -377,7 +260,6 @@ export function useRoomActions(
   return {
     updateRoomSettings,
     cancelProcessing,
-    respondToHitlRequest,
     respondToHitlBatch,
     cancelHitlRequest,
     refreshMessages,

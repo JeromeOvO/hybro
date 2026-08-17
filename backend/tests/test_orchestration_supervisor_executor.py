@@ -706,7 +706,7 @@ def _text_pdf_bytes(text: str) -> bytes:
     return buffer.getvalue()
 
 
-def _executor(
+def _executor(  # noqa: C901
     *,
     store: InMemoryOrchestrationRunStore,
     planner: RecordingPlanner,
@@ -735,6 +735,31 @@ def _executor(
             return False
         message.message_content = message_content
         return True
+
+    async def update_task_state(
+        message_id: str,
+        state: str,
+        *,
+        message_text=None,
+        task_metadata=None,
+        **_kwargs,
+    ):
+        message = persisted_messages.get(message_id)
+        if message is None:
+            return False, message_text
+        if message.message_content.message_task is None:
+            message.message_content.message_task = SimpleNamespace(
+                status=SimpleNamespace(state=state), metadata={}
+            )
+        task = message.message_content.message_task
+        task.status.state = state
+        task.metadata = {
+            **(getattr(task, "metadata", None) or {}),
+            **(task_metadata or {}),
+        }
+        if message_text is not None:
+            message.message_content.message_text = message_text
+        return True, message_text
 
     async def process_agent_message(message, *_args, **_kwargs):
         persisted_messages[
@@ -771,9 +796,11 @@ def _executor(
             update_room_agent_message_with_new_message_content_by_message_id=AsyncMock(
                 side_effect=update_agent_message
             ),
+            update_task_state_on_message=AsyncMock(side_effect=update_task_state),
         ),
         task_state_store=SimpleNamespace(
-            resolve_client_request_id_for_message_id=AsyncMock(return_value="client-1")
+            resolve_client_request_id_for_message_id=AsyncMock(return_value="client-1"),
+            update_task_state_on_message=AsyncMock(side_effect=update_task_state),
         ),
         continuation_store=SimpleNamespace(
             save_continuation_on_user_message=AsyncMock(return_value=True)
@@ -3489,6 +3516,190 @@ async def test_run_ask_user_creates_hitl_prompt_and_continuation():
 
 
 @pytest.mark.asyncio
+async def test_run_ask_user_file_blocker_ends_turn_without_hitl_or_continuation():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    upload_prompt = "Please upload the signed PDF in a new message."
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.ASK_USER,
+            reasoning="need the source document",
+            questions=[
+                {"prompt": "Which account?", "prompt_type": "text"},
+                {"prompt": upload_prompt},
+            ],
+        )
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+
+    def create_upload_message(**_kwargs):
+        message = _agent_message("generated-upload")
+        message.message_content.message_task = SimpleNamespace(
+            status=SimpleNamespace(state="working"), metadata={}
+        )
+        return message
+
+    executor.room_runtime.create_agent_message.side_effect = create_upload_message
+    executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock())
+    executor._checkpoint_interrupt = AsyncMock()
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Coordinate this",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.run_state is not None
+    assert result.run_state.status == OrchestrationStatus.COMPLETED
+    assert result.run_state.pending_hitl_request_ids == []
+    assert result.run_state.open_questions == []
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    executor._checkpoint_interrupt.assert_not_awaited()
+    expected_copy = (
+        f"{upload_prompt}\n\nIn the same new message, please also answer:\n"
+        "- Which account?"
+    )
+    summary_id = result.run_state.summary_message_id
+    summary_message = (
+        await executor.message_reader.get_room_agent_message_by_message_id(summary_id)
+    )
+    assert summary_message.message_content.message_text == expected_copy
+    assert summary_message.message_content.message_task.status.state == "completed"
+    assert summary_message.message_content.message_task.metadata["end_turn"] is True
+    assert result.run_state.final_source_message_id == summary_id
+    assert result.run_state.finalization_mode == FinalizationMode.PLATFORM.value
+    assert result.run_state.finalization_committed_at is not None
+    assert result.run_state.file_turn["summary_message_id"] == summary_id
+
+
+async def _recover_file_turn(executor, state, user_message):
+    return await executor._execute_orchestration_loop(
+        state=state,
+        room_id=state.room_id,
+        user_message_id=state.user_message_id,
+        message_text=state.goal,
+        agent_registry=[],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+
+@pytest.mark.asyncio
+async def test_file_turn_recovery_retries_crash_before_summary_persistence():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.RUNNING,
+            summary_message_id="sys-msg-1",
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    persist = executor.message_writer.upsert_room_agent_message
+    executor.message_writer.upsert_room_agent_message = AsyncMock(
+        side_effect=RuntimeError("crash before message persistence")
+    )
+
+    with pytest.raises(RuntimeError, match="before message persistence"):
+        await executor._complete_supervisor_file_upload_turn(
+            state=state,
+            prompt="Please upload the PDF in a new message.",
+            room_id="room-1",
+            user_message_id="msg-1",
+            request_user_id="user-1",
+            step_number=1,
+        )
+
+    checkpoint = await store.get_run(state.run_id)
+    assert checkpoint.status == OrchestrationStatus.FINALIZING
+    assert checkpoint.file_turn["summary_message_id"] == "sys-msg-1"
+    assert checkpoint.finalization_committed_at is None
+    executor.message_writer.upsert_room_agent_message = persist
+
+    recovered = await _recover_file_turn(executor, checkpoint, user_message)
+
+    assert recovered.status == RunStatus.COMPLETED
+    assert recovered.run_state.finalization_committed_at is not None
+    summary = await executor.message_reader.get_room_agent_message_by_message_id(
+        "sys-msg-1"
+    )
+    assert summary.message_content.message_text.startswith("Please upload")
+
+
+@pytest.mark.asyncio
+async def test_file_turn_recovery_reconciles_crash_after_summary_persistence():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="msg-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Coordinate this"),
+    )
+    store = InMemoryOrchestrationRunStore()
+    state = await store.create_run(
+        _run_state(status=OrchestrationStatus.RUNNING, summary_message_id="sys-msg-1")
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    mark_terminal = executor._mark_orchestration_terminal
+    executor._mark_orchestration_terminal = AsyncMock(
+        side_effect=RuntimeError("crash after message persistence")
+    )
+
+    with pytest.raises(RuntimeError, match="after message persistence"):
+        await executor._complete_supervisor_file_upload_turn(
+            state=state,
+            prompt="Please attach the document in a new message.",
+            room_id="room-1",
+            user_message_id="msg-1",
+            request_user_id="user-1",
+            step_number=1,
+        )
+
+    checkpoint = await store.get_run(state.run_id)
+    summary = await executor.message_reader.get_room_agent_message_by_message_id(
+        "sys-msg-1"
+    )
+    assert checkpoint.status == OrchestrationStatus.FINALIZING
+    assert summary.message_content.message_task.status.state == "completed"
+    executor._mark_orchestration_terminal = mark_terminal
+
+    recovered = await _recover_file_turn(executor, checkpoint, user_message)
+
+    assert recovered.status == RunStatus.COMPLETED
+    assert recovered.run_state.status == OrchestrationStatus.COMPLETED
+    assert recovered.run_state.finalization_committed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_run_ask_user_marks_sidecar_recoverable_before_hitl_request():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -5702,6 +5913,228 @@ async def test_ingest_orchestration_results_persists_one_idempotent_outcome():
     assert [event.type for event in events].count(
         OrchestrationEventType.OUTCOME_EVALUATED
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_file_upload_prompt_completes_orchestration_without_hitl():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Review submission."),
+        extend_info={},
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.WAITING_AGENT,
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="run-1:step-1",
+                    step_target_id="run-1:step-1:target-1",
+                    dispatch_intent_id="intent-upload",
+                    planned_agent_message_id="agent-msg-upload",
+                    agent_id="agent-1",
+                    task="Review submission.",
+                    task_hash="hash-upload",
+                )
+            ],
+            active_dispatches=[
+                ActiveDispatchRef(
+                    agent_message_id="agent-msg-upload",
+                    agent_id="agent-1",
+                    status="awaiting_input",
+                )
+            ],
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    agent_message = _agent_message("agent-msg-upload")
+    agent_message.message_content.message_task = SimpleNamespace(
+        status=SimpleNamespace(state="input-required"), metadata={"end_turn": True}
+    )
+    await executor.message_writer.upsert_room_agent_message(agent_message)
+
+    executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock())
+    prompt = "Please attach the source document in a new message."
+    awaiting = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Review submission.",
+        response_text="",
+        success=False,
+        status=StepStatus.AWAITING_INPUT,
+        agent_message_id="agent-msg-upload",
+        paused_message_id="agent-msg-upload",
+        a2a_task_id="remote-task",
+        a2a_context_id="remote-context",
+        status_message=prompt,
+        end_turn=True,
+    )
+
+    completed, run_status = await executor._run_agent_awaiting_input_action(
+        state=state,
+        results=[awaiting],
+        awaiting=[awaiting],
+        trajectory=SupervisorTrajectory(),
+        agent_registry=[],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Review submission.",
+        conversation_context=None,
+        request_user_id="user-1",
+        quoted_text=None,
+    )
+
+    assert run_status == RunStatus.COMPLETED
+    assert completed.status == OrchestrationStatus.COMPLETED
+    assert completed.pending_hitl_request_ids == []
+    assert completed.pending_agent_continuations == []
+    assert completed.steps_used == 1
+    assert completed.active_dispatches == []
+    assert completed.dispatch_intents[0].status == StepStatus.SUCCESS.value
+    assert completed.finalization_mode == FinalizationMode.PLATFORM.value
+    assert completed.final_source_message_id == completed.summary_message_id
+    assert completed.finalization_committed_at is not None
+    output = next(
+        item
+        for item in completed.agent_outputs
+        if item.agent_message_id == "agent-msg-upload"
+    )
+    assert output.status == StepStatus.SUCCESS.value
+    assert completed.file_turn["child_message_id"] == "agent-msg-upload"
+    assert awaiting.status == StepStatus.AWAITING_INPUT
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    persisted_message = (
+        await executor.message_reader.get_room_agent_message_by_message_id(
+            "agent-msg-upload"
+        )
+    )
+    assert persisted_message.message_content.message_text == ""
+    assert persisted_message.message_content.message_task.status.state == "completed"
+    assert persisted_message.message_content.message_task.metadata["end_turn"] is True
+    executor.delivery.send_task_update.assert_any_await(
+        room_id="room-1",
+        message_id="agent-msg-upload",
+        status="completed",
+        agent_id="agent-1",
+        agent_name="Agent One",
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_file_upload_turn_cancels_sibling_paused_work():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Run two agents."),
+    )
+    intents = [
+        DispatchIntent(
+            step_id="run-1:step-1",
+            step_target_id=f"target-{index}",
+            dispatch_intent_id=f"intent-{index}",
+            planned_agent_message_id=message_id,
+            agent_id=f"agent-{index}",
+            task=f"Task {index}",
+            task_hash=f"hash-{index}",
+        )
+        for index, message_id in ((1, "agent-msg-upload"), (2, "agent-msg-paused"))
+    ]
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.WAITING_AGENT,
+            dispatch_intents=intents,
+            active_dispatches=[
+                ActiveDispatchRef(
+                    agent_message_id=intent.planned_agent_message_id,
+                    agent_id=intent.agent_id,
+                    status="waiting_agent",
+                )
+                for intent in intents
+            ],
+        )
+    )
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    for message_id, task_state in (
+        ("agent-msg-upload", "input-required"),
+        ("agent-msg-paused", "working"),
+    ):
+        message = _agent_message(message_id)
+        message.message_content.message_task = SimpleNamespace(
+            status=SimpleNamespace(state=task_state)
+        )
+        await executor.message_writer.upsert_room_agent_message(message)
+
+    async def transition_task(message, terminal_state):
+        message.message_content.message_task.status.state = terminal_state
+        assert await executor.message_writer.update_room_agent_message_with_new_message_content_by_message_id(
+            message.message_id, message.message_content
+        )
+
+    executor.tsm = SimpleNamespace(
+        transition_task=AsyncMock(side_effect=transition_task)
+    )
+    prompt = "Please upload the PDF in a new message."
+    upload = StepResult(
+        step_number=1,
+        agent_id="agent-1",
+        agent_name="Agent One",
+        task="Task 1",
+        response_text="",
+        status=StepStatus.AWAITING_INPUT,
+        agent_message_id="agent-msg-upload",
+        status_message=prompt,
+        end_turn=True,
+    )
+    sibling = StepResult(
+        step_number=1,
+        agent_id="agent-2",
+        agent_name="Agent Two",
+        task="Task 2",
+        response_text="",
+        status=StepStatus.PAUSED,
+        agent_message_id="agent-msg-paused",
+        paused_message_id="agent-msg-paused",
+    )
+
+    completed, run_status = await executor._complete_agent_file_upload_turn(
+        state=state,
+        results=[upload, sibling],
+        result=upload,
+        prompt=prompt,
+        trajectory=SupervisorTrajectory(),
+    )
+
+    assert run_status == RunStatus.COMPLETED
+    assert completed.active_dispatches == []
+    assert [intent.status for intent in completed.dispatch_intents] == [
+        "success",
+        "canceled",
+    ]
+    persisted_sibling = (
+        await executor.message_reader.get_room_agent_message_by_message_id(
+            "agent-msg-paused"
+        )
+    )
+    assert persisted_sibling.message_content.message_task.status.state == "canceled"
+    assert any(
+        call.kwargs.get("message_id") == "agent-msg-paused"
+        and call.kwargs.get("status") == "canceled"
+        for call in executor.delivery.send_task_update.await_args_list
+    )
 
 
 @pytest.mark.asyncio
@@ -8367,6 +8800,59 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
 
 
 @pytest.mark.asyncio
+async def test_direct_file_upload_result_propagates_end_turn_without_hitl():
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        message_id="message-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Review the signed form"),
+        extend_info={
+            "orchestration": True,
+            "orchestration_run_id": "message-1",
+            "candidate_agent_ids": ["agent-1"],
+            "client_request_id": "client-1",
+        },
+    )
+    planner = RecordingPlanner(
+        PlannerAction(
+            action=PlannerActionType.DELEGATE,
+            reasoning="ask broker",
+            targets=[PlannedDelegateTarget(agent_id="agent-1", task="Review form")],
+        ),
+    )
+    store = InMemoryOrchestrationRunStore()
+    executor = _executor(store=store, planner=planner, user_message=user_message)
+    executor.agent_message_processor.process_single_message = AsyncMock(
+        return_value=ProcessingResult(
+            ProcessingStatus.AWAITING_INPUT,
+            message_id="message-1:step-1:target-1:message",
+            a2a_task_id="task-1",
+            a2a_context_id="ctx-1",
+            status_message="Please upload the signed PDF in a new message.",
+            end_turn=True,
+        )
+    )
+    executor.hitl_coordinator = SimpleNamespace(request_input=AsyncMock())
+
+    result = await executor.run(
+        room_id="room-1",
+        user_message_id="message-1",
+        message_text="Review the signed form",
+        agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent One")],
+        room_config=RoomConfig(),
+        request_user_id="user-1",
+        user_message=user_message,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.run_state.file_turn["prompt"] == (
+        "Please upload the signed PDF in a new message."
+    )
+    assert result.run_state.pending_hitl_request_ids == []
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_plain_input_required_creates_direct_agent_hitl_when_guardrails_disabled():
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -8986,7 +9472,7 @@ async def test_agent_input_required_does_not_replay_original_dispatch_refs():
     )
 
     assert result.status == StepStatus.AWAITING_INPUT
-    executor.hitl_coordinator.request_input.assert_awaited_once()
+    executor.hitl_coordinator.request_input.assert_not_awaited()
     executor.orchestration_resource_provider.resolve_ref.assert_not_awaited()
     reply_to_task.assert_not_awaited()
 
@@ -9295,6 +9781,111 @@ async def test_hitl_answer_follow_up_input_required_stays_awaiting_input():
     assert result.a2a_task_id == "task-1"
     assert result.a2a_context_id == "ctx-1"
     assert result.status_message == "Need coverage limit too."
+    assert result.end_turn is False
+
+
+@pytest.mark.asyncio
+async def test_hitl_answer_file_follow_up_ends_turn_without_second_hitl():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="The account is ACME."),
+        message_id="msg-2",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.AWAITING_USER,
+            summary_message_id="sys-msg-1",
+            dispatch_intents=[
+                DispatchIntent(
+                    step_id="run-1:step-1",
+                    step_target_id="target-1",
+                    dispatch_intent_id="intent-1",
+                    planned_agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    task="Prepare the submission",
+                    task_hash="hash-1",
+                )
+            ],
+            active_dispatches=[
+                ActiveDispatchRef(
+                    agent_message_id="agent-msg-1",
+                    agent_id="agent-1",
+                    status="awaiting_input",
+                )
+            ],
+        )
+    )
+    executor = _executor(
+        store=store, planner=RecordingPlanner(), user_message=user_message
+    )
+    prompt = "Please upload the signed PDF in a new message."
+    executor.hitl_coordinator = SimpleNamespace(
+        request_input=AsyncMock(),
+        agent_reply=SimpleNamespace(
+            reply_to_task=AsyncMock(
+                return_value={
+                    "blocking": True,
+                    "task_state": "input-required",
+                    "response_text": prompt,
+                }
+            )
+        ),
+    )
+    agent_message = _agent_message("agent-msg-1")
+    agent_message.message_content.message_task = SimpleNamespace(
+        status=SimpleNamespace(state="input-required"), metadata={}
+    )
+    await executor.message_writer.upsert_room_agent_message(agent_message)
+    continuation = PendingAgentContinuation(
+        continuation_id="cont-1",
+        source_intent_id="intent-1",
+        source_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+    )
+
+    follow_up = await executor._resume_agent_continuation_after_hitl_answer(
+        state=state,
+        continuation=continuation,
+        answer="ACME",
+        user_message=user_message,
+    )
+    completed, status = await executor._run_agent_awaiting_input_action(
+        state=state,
+        results=[follow_up],
+        awaiting=[follow_up],
+        trajectory=SupervisorTrajectory(),
+        agent_registry=[],
+        room_config=RoomConfig(),
+        room_id="room-1",
+        user_message_id="msg-1",
+        message_text="Prepare the submission",
+        conversation_context=None,
+        request_user_id="user-1",
+        quoted_text=None,
+    )
+
+    assert follow_up.end_turn is True
+    assert status == RunStatus.COMPLETED
+    assert completed.status == OrchestrationStatus.COMPLETED
+    assert completed.final_source_message_id == "sys-msg-1"
+    executor.hitl_coordinator.request_input.assert_not_awaited()
+    summary = await executor.message_reader.get_room_agent_message_by_message_id(
+        "sys-msg-1"
+    )
+    assert summary.message_content.message_text == prompt
+    persisted_agent = (
+        await executor.message_reader.get_room_agent_message_by_message_id(
+            "agent-msg-1"
+        )
+    )
+    assert persisted_agent.message_content.message_task.status.state == "completed"
+    assert persisted_agent.message_content.message_task.metadata["end_turn"] is True
 
 
 @pytest.mark.asyncio

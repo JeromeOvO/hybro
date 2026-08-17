@@ -687,6 +687,11 @@ The client submits the complete answer inventory to
 `POST /rooms/{room_id}/hitl/respond-batch`, preserving `client_request_id` for run
 correlation. A 409 is reconciled and surfaced rather than assumed successful; 410,
 delivery uncertainty, routing failure, timeout, and applying states remain explicit.
+The frontend has no single-request response pipeline; even singleton interactions
+use the batch endpoint. File-upload instructions arrive in the ordinary terminal
+HYBRO summary message, so they do not replace the composer. Historical `file` and
+`unknown` prompt records remain wire-compatible but share one unsupported-state
+renderer.
 
 Pending HITL hydration is authoritative only after a successful `/pending` read.
 `HydrateRoomResult.hitlFetchFailed` distinguishes a degraded read from a real empty

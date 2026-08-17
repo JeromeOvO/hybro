@@ -480,10 +480,21 @@ class HITLService:
         # message projection or SSE emission. A partially written group remains
         # recoverable but invisible until every expected question is attached.
         if self._lifecycle is not None:
-            interaction_id = (
-                request.interaction_id or request.group_id or request.request_id
+            persisted_identity = await self.persistence.get_hitl_request(
+                request.request_id
             )
-            if request.interaction_id != interaction_id:
+            if persisted_identity is None:
+                raise HITLRequestProjectionError(
+                    "persisted HITL request disappeared before interaction materialization",
+                    request_id=request.request_id,
+                )
+            raw_interaction_id = persisted_identity.get("interaction_id")
+            interaction_id = (
+                raw_interaction_id
+                or persisted_identity.get("group_id")
+                or request.request_id
+            )
+            if raw_interaction_id != interaction_id:
                 linked = await self.persistence.update_hitl_request(
                     request.request_id,
                     interaction_id=interaction_id,
@@ -493,7 +504,7 @@ class HITLService:
                         "failed to link HITL request to interaction",
                         request_id=request.request_id,
                     )
-                request.interaction_id = interaction_id
+            request.interaction_id = interaction_id
             interaction = HITLInteraction(
                 interaction_id=interaction_id,
                 room_id=request.room_id,
@@ -518,9 +529,8 @@ class HITLService:
                 )
             if materialized.get("status") == HITLInteractionStatus.MATERIALIZING.value:
                 return request
-            if request.group_id is not None:
-                await self.recover_open_interaction_projection(materialized)
-                return request
+            await self.recover_open_interaction_projection(materialized)
+            return request
 
         # 1b. Mark the display agent message as input-required in DB
         # so page refresh loads the correct state.
@@ -796,32 +806,78 @@ class HITLService:
         }:
             return 0
         interaction_id = interaction["interaction_id"]
-        rows = await self.persistence.get_hitl_group_requests(interaction_id)
-        rows = sorted(
-            rows,
-            key=lambda row: (row.get("group_index", 10_000), row.get("request_id", "")),
-        )
         expected_ids = list(interaction.get("request_ids") or [])
-        by_id = {row.get("request_id"): row for row in rows}
         expected_total = int(interaction.get("expected_request_count") or 0)
-        indices = [row.get("group_index") for row in rows]
-        totals = {row.get("group_total") for row in rows}
-        compatible = all(
-            row.get("group_id") == interaction_id
-            and (row.get("interaction_id") or interaction_id) == interaction_id
+        rows = [
+            row
+            for request_id in expected_ids
+            if (row := await self.persistence.get_hitl_request(request_id)) is not None
+        ]
+        by_id = {row.get("request_id"): row for row in rows}
+        for row in rows:
+            request_id = row.get("request_id")
+            canonical_id = (
+                row.get("interaction_id") or row.get("group_id") or request_id
+            )
+            if canonical_id != interaction_id:
+                continue
+            if row.get("interaction_id") is None:
+                linked = await self.persistence.update_hitl_request(
+                    request_id,
+                    interaction_id=interaction_id,
+                )
+                if not linked:
+                    raise HITLRequestProjectionError(
+                        "failed to backfill interaction identity during projection",
+                        request_id=request_id,
+                    )
+                row["interaction_id"] = interaction_id
+        has_group_metadata = any(
+            row.get("group_id") is not None
+            or row.get("group_total") is not None
+            or row.get("group_index") is not None
             for row in rows
         )
+        shared_fields_match = all(
+            row.get("interaction_id") == interaction_id
+            and row.get("room_id") == interaction.get("room_id")
+            and row.get("user_message_id") == interaction.get("user_message_id")
+            and row.get("source") == interaction.get("source")
+            and row.get("orchestration_run_id")
+            == interaction.get("orchestration_run_id")
+            for row in rows
+        )
+        if has_group_metadata:
+            indices = [row.get("group_index") for row in rows]
+            totals = {row.get("group_total") for row in rows}
+            shape_matches = (
+                set(indices) == set(range(expected_total))
+                and totals == {expected_total}
+                and all(row.get("group_id") == interaction_id for row in rows)
+            )
+        else:
+            shape_matches = all(
+                row.get("group_id") is None
+                and row.get("group_index") is None
+                and row.get("group_total") is None
+                for row in rows
+            )
         if (
-            set(by_id) != set(expected_ids)
-            or len(by_id) != len(expected_ids)
+            not expected_ids
+            or len(set(expected_ids)) != len(expected_ids)
+            or set(by_id) != set(expected_ids)
             or len(rows) != expected_total
-            or set(indices) != set(range(expected_total))
-            or totals != {expected_total}
-            or not compatible
+            or len(by_id) != expected_total
+            or not shared_fields_match
+            or not shape_matches
         ):
             raise HITLRequestProjectionError(
                 "interaction requests are incomplete or conflicting during projection"
             )
+        rows = sorted(
+            rows,
+            key=lambda row: (row.get("group_index", 0), row.get("request_id", "")),
+        )
         projected_count = 0
         ordered_ids = [row["request_id"] for row in rows]
         for request_id in ordered_ids:

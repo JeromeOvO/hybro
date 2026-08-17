@@ -61,7 +61,6 @@ export interface ConversationTurnView {
 
 export type HitlLifecycleState =
   | 'open'
-  | 'submitting'
   | 'applying'
   | 'expired'
   | 'agent_timeout'
