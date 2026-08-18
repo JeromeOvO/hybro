@@ -16,6 +16,8 @@ import {
   X,
 } from 'lucide-react'
 import { ApiError } from '@/lib/api-client'
+import { useHitlInteractionController } from '@/hooks/useHitlInteractionController'
+import type { HitlDraftValue } from '@/lib/hitl/interaction-controller'
 import type { HITLPromptType } from '@/lib/types/sse'
 import type { HitlLifecycleState } from '@/lib/selectors/conversation-types'
 import { Button } from '@/components/ui/button'
@@ -51,8 +53,7 @@ interface HitlResponseBarProps {
   onRefresh?: () => Promise<void>
 }
 
-type DraftValue = string | string[]
-type Drafts = Record<string, DraftValue>
+type DraftValue = HitlDraftValue
 
 const GENERIC_PROMPT = /^the agent needs additional information\.?$/i
 
@@ -302,37 +303,33 @@ function PromptControl({
 export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlResponseBarProps) {
   const ordered = useMemo(() => sortHitls(hitls), [hitls])
   const interactionId = ordered[0]?.interactionId
-  const [currentId, setCurrentId] = useState<string | null>(ordered[0]?.hitlId ?? null)
-  const [drafts, setDrafts] = useState<Drafts>(() => Object.fromEntries(
-    ordered.filter(hitl => hitl.answer).map(hitl => [hitl.hitlId, hitl.answer as string]),
-  ))
-  const [reviewing, setReviewing] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
-  const [submissionError, setSubmissionError] = useState<string | null>(null)
-  const [errorState, setErrorState] = useState<HitlLifecycleState | null>(null)
+  const interactionKey = `${interactionId ?? 'none'}:${ordered.map(hitl => hitl.hitlId).join(',')}`
+  const seed = useMemo(() => ({
+    interactionKey,
+    firstRequestId: ordered[0]?.hitlId ?? null,
+    answers: ordered.map(hitl => ({
+      requestId: hitl.hitlId,
+      answer: hitl.answer,
+    })),
+  }), [interactionKey, ordered])
+  const { state: controller, dispatch } = useHitlInteractionController(seed)
+  const {
+    currentId,
+    drafts,
+    reviewing,
+    errorState,
+    errorMessage: submissionError,
+  } = controller
+  const submitting = controller.submission === 'submitting'
+  const submitted = controller.submission === 'submitted'
   const headingRef = useRef<HTMLHeadingElement>(null)
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
-  const previousInteractionRef = useRef(interactionId)
 
   useEffect(() => {
-    if (previousInteractionRef.current !== interactionId) {
-      previousInteractionRef.current = interactionId
-      setDrafts(Object.fromEntries(
-        ordered.filter(hitl => hitl.answer).map(hitl => [hitl.hitlId, hitl.answer as string]),
-      ))
-      setReviewing(false)
-      setSubmitting(false)
-      setSubmitted(false)
-      setSubmissionError(null)
-      setErrorState(null)
-      setCurrentId(ordered[0]?.hitlId ?? null)
-      return
-    }
-    if (!ordered.some(hitl => hitl.hitlId === currentId)) {
-      setCurrentId(ordered[0]?.hitlId ?? null)
-    }
-  }, [currentId, interactionId, ordered])
+    if (currentId && ordered.some(hitl => hitl.hitlId === currentId)) return
+    const first = ordered[0]
+    if (first) dispatch({ type: 'navigate', requestId: first.hitlId })
+  }, [currentId, dispatch, ordered])
 
   const currentIndex = Math.max(0, ordered.findIndex(hitl => hitl.hitlId === currentId))
   const current = ordered[currentIndex] ?? ordered[0]
@@ -344,21 +341,18 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   }, [currentId, reviewing, submissionError])
 
   const setDraft = useCallback((requestId: string, value: DraftValue) => {
-    setDrafts(previous => ({ ...previous, [requestId]: value }))
-    setSubmissionError(null)
-  }, [])
+    dispatch({ type: 'answer', requestId, value })
+  }, [dispatch])
 
   const goTo = useCallback((index: number) => {
     const target = ordered[index]
     if (!target) return
-    setCurrentId(target.hitlId)
-    setReviewing(false)
-  }, [ordered])
+    dispatch({ type: 'navigate', requestId: target.hitlId })
+  }, [dispatch, ordered])
 
   const handleSubmit = useCallback(async () => {
     if (!interactionId || !allAnswered || submitting) return
-    setSubmitting(true)
-    setSubmissionError(null)
+    dispatch({ type: 'submit_started' })
     try {
       await onSubmit(
         interactionId,
@@ -368,7 +362,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
         })),
         ordered.find(hitl => hitl.clientRequestId)?.clientRequestId,
       )
-      setSubmitted(true)
+      dispatch({ type: 'submit_succeeded' })
     } catch (error) {
       const apiDetail = error instanceof ApiError && error.details && typeof error.details === 'object'
         ? (error.details as { detail?: { lifecycle_state?: string } }).detail
@@ -377,26 +371,42 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
         error instanceof ApiError
         && (error.status === 503 || apiDetail?.lifecycle_state === 'delivery_uncertain')
       ) {
-        setErrorState('delivery_uncertain')
-        setSubmissionError('The connection ended before receipt was confirmed.')
+        dispatch({
+          type: 'submit_failed',
+          lifecycle: 'delivery_uncertain',
+          message: 'The connection ended before receipt was confirmed.',
+        })
       } else if (error instanceof ApiError && error.status === 410) {
-        setErrorState('expired')
-        setSubmissionError('The response deadline passed before these answers were accepted.')
+        dispatch({
+          type: 'submit_failed',
+          lifecycle: 'expired',
+          message: 'The response deadline passed before these answers were accepted.',
+        })
       } else if (error instanceof ApiError && error.status === 409) {
-        setSubmissionError('This request changed before submission. Check its latest status before trying again.')
+        dispatch({
+          type: 'submit_failed',
+          message: 'This request changed before submission. Check its latest status before trying again.',
+        })
       } else if (error instanceof ApiError && error.status === 502) {
-        setErrorState('routing_failed')
-        setSubmissionError('Your answers were saved, but Hybro could not continue the run.')
+        dispatch({
+          type: 'submit_failed',
+          lifecycle: 'routing_failed',
+          message: 'Your answers were saved, but Hybro could not continue the run.',
+        })
       } else if (error instanceof Error && error.name === 'AbortError') {
-        setErrorState('delivery_uncertain')
-        setSubmissionError('The connection ended before receipt was confirmed.')
+        dispatch({
+          type: 'submit_failed',
+          lifecycle: 'delivery_uncertain',
+          message: 'The connection ended before receipt was confirmed.',
+        })
       } else {
-        setSubmissionError(error instanceof Error ? error.message : 'Unable to submit these answers.')
+        dispatch({
+          type: 'submit_failed',
+          message: error instanceof Error ? error.message : 'Unable to submit these answers.',
+        })
       }
-    } finally {
-      setSubmitting(false)
     }
-  }, [allAnswered, drafts, interactionId, onSubmit, ordered, submitting])
+  }, [allAnswered, dispatch, drafts, interactionId, onSubmit, ordered, submitting])
 
   if (!current) return null
 
@@ -504,7 +514,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
             <Button
               disabled={!hasAnswer(current, drafts[current.hitlId])}
               onClick={() => {
-                if (currentIndex === ordered.length - 1) setReviewing(true)
+                if (currentIndex === ordered.length - 1) dispatch({ type: 'review' })
                 else goTo(currentIndex + 1)
               }}
             >
