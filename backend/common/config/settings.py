@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     lead_ai_model: str = "gpt-5-mini"
-    classifier_ai_model: str = "gpt-5-mini"
+    classifier_ai_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
     supervisor_model: str | None = None
 
