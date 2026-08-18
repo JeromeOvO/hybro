@@ -174,9 +174,6 @@ def test_hitl_manager_create_preserves_public_metadata_fields():
         "display_message_id",
         "prompt_type",
         "choices",
-        "group_id",
-        "group_total",
-        "group_index",
     ]:
         assert name in sig.parameters
 

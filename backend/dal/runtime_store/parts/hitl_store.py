@@ -193,93 +193,6 @@ class HITLRuntimeStorePart:
             exhaust=True,
         )
 
-    async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
-        try:
-            return await self._hitl_requests.find(
-                {"group_id": group_id},
-                sort=[("group_index", 1)],
-                limit=100,
-            )
-        except Exception:
-            logger.error("Failed to get HITL group requests", exc_info=True)
-            return []
-
-    async def get_pending_hitl_group_requests_strict(
-        self,
-        group_id: str,
-    ) -> list[dict]:
-        return await self._hitl_requests.find(
-            _pending_actionable_query(group_id=group_id),
-            sort=[("group_index", 1), ("request_id", 1)],
-            exhaust=True,
-        )
-
-    async def get_unreconciled_terminal_hitl_group_requests_strict(
-        self,
-        group_id: str,
-        status: str,
-    ) -> list[dict]:
-        return await self._hitl_requests.find(
-            {
-                "group_id": group_id,
-                "status": status,
-                "cancellation_reconciled": {"$ne": True},
-            },
-            sort=[("group_index", 1), ("request_id", 1)],
-            exhaust=True,
-        )
-
-    async def count_pending_in_hitl_group(self, group_id: str) -> int:
-        try:
-            return await self._hitl_requests.count(
-                {"group_id": group_id, "status": {"$in": ["pending", "processing"]}},
-            )
-        except Exception:
-            logger.error("Failed to count pending HITL group requests", exc_info=True)
-            return -1
-
-    async def claim_hitl_group_routing(
-        self,
-        group_id: str,
-        claim_id: str,
-    ) -> bool:
-        try:
-            return await self._hitl_requests.update_one(
-                {
-                    "group_id": group_id,
-                    "group_index": 0,
-                    "group_routing_claim_id": {"$exists": False},
-                },
-                {
-                    "$set": {
-                        "group_routing_claim_id": claim_id,
-                        "group_routing_claimed_at": utcnow(),
-                    }
-                },
-            )
-        except Exception:
-            logger.error("Failed to claim HITL group routing", exc_info=True)
-            return False
-
-    async def release_hitl_group_routing(
-        self,
-        group_id: str,
-        claim_id: str,
-    ) -> bool:
-        try:
-            return await self._hitl_requests.update_one(
-                {"group_id": group_id, "group_routing_claim_id": claim_id},
-                {
-                    "$unset": {
-                        "group_routing_claim_id": "",
-                        "group_routing_claimed_at": "",
-                    }
-                },
-            )
-        except Exception:
-            logger.error("Failed to release HITL group routing", exc_info=True)
-            return False
-
     async def count_hitl_requests_for_message(
         self,
         continuation_message_id: str,
@@ -289,11 +202,7 @@ class HITLRuntimeStorePart:
                 {
                     "continuation_message_id": continuation_message_id,
                     "status": {"$ne": "canceled"},
-                    "$or": [
-                        {"group_index": None},
-                        {"group_index": {"$exists": False}},
-                        {"group_index": 0},
-                    ],
+                    "question_index": 0,
                 }
             )
         except Exception:
@@ -435,7 +344,7 @@ class HITLRuntimeStorePart:
     ) -> dict[str, Any]:
         return _pending_actionable_query(
             room_id=room_id,
-            source="agent",
+            public_source="agent",
             **identity_clause,
         )
 
@@ -637,9 +546,9 @@ class HITLRuntimeStorePart:
         choices: list[str] | None,
         a2a_task_id: str | None,
         a2a_context_id: str | None,
-        group_id: str | None,
-        group_total: int | None,
-        group_index: int | None,
+        interaction_id: str,
+        question_count: int,
+        question_index: int,
     ) -> bool:
         try:
             metadata: dict[str, Any] = {
@@ -653,9 +562,9 @@ class HITLRuntimeStorePart:
             optional_metadata = {
                 "hitl_a2a_task_id": a2a_task_id,
                 "hitl_a2a_context_id": a2a_context_id,
-                "hitl_group_id": group_id,
-                "hitl_group_total": group_total,
-                "hitl_group_index": group_index,
+                "hitl_group_id": interaction_id if question_count > 1 else None,
+                "hitl_group_total": question_count if question_count > 1 else None,
+                "hitl_group_index": question_index if question_count > 1 else None,
             }
             metadata.update(
                 {
@@ -728,17 +637,17 @@ class HITLRuntimeStorePart:
             logger.error("Failed to persist HITL user answer", exc_info=True)
             return False
 
-    async def persist_hitl_group_metadata(
+    async def persist_hitl_interaction_metadata(
         self,
         message_id: str,
         *,
-        group_id: str | None,
-        group_total: int | None,
-        group_index: int | None,
+        interaction_id: str | None,
+        question_count: int | None,
+        question_index: int | None,
     ) -> bool:
         try:
             await self._ensure_message_task_metadata(message_id)
-            if group_id is None:
+            if interaction_id is None or not question_count or question_count <= 1:
                 return await self._room_agent_messages.update_one(
                     {"message_id": message_id},
                     {
@@ -750,22 +659,22 @@ class HITLRuntimeStorePart:
                     },
                 )
             updates: dict[str, Any] = {
-                "message_content.message_task.metadata.hitl_group_id": group_id,
+                "message_content.message_task.metadata.hitl_group_id": interaction_id,
             }
-            if group_total is not None:
+            if question_count is not None:
                 updates["message_content.message_task.metadata.hitl_group_total"] = (
-                    group_total
+                    question_count
                 )
-            if group_index is not None:
+            if question_index is not None:
                 updates["message_content.message_task.metadata.hitl_group_index"] = (
-                    group_index
+                    question_index
                 )
             return await self._room_agent_messages.update_one(
                 {"message_id": message_id},
                 {"$set": updates},
             )
         except Exception:
-            logger.error("Failed to persist HITL group metadata", exc_info=True)
+            logger.error("Failed to persist HITL interaction metadata", exc_info=True)
             return False
 
     async def iter_stale_processing_hitl_requests(
@@ -790,16 +699,7 @@ class HITLRuntimeStorePart:
             ((("room_id", 1), ("status", 1)), {}),
             ((("expires_at", 1), ("status", 1)), {}),
             ((("user_message_id", 1), ("status", 1)), {}),
-            (
-                (
-                    ("group_id", 1),
-                    ("status", 1),
-                    ("group_index", 1),
-                    ("request_id", 1),
-                ),
-                {},
-            ),
-            ((("interaction_id", 1), ("group_index", 1), ("request_id", 1)), {}),
+            ((("interaction_id", 1), ("question_index", 1)), {"unique": True}),
             ((("continuation_message_id", 1),), {}),
         ]
         for keys, kwargs in noncritical_indexes:
@@ -820,7 +720,7 @@ class HITLRuntimeStorePart:
                     "name": _PENDING_HITL_DISPLAY_INDEX,
                     "partialFilterExpression": {
                         "status": "pending",
-                        "source": "agent",
+                        "public_source": "agent",
                         "display_message_id": {"$type": "string"},
                     },
                 },
@@ -832,7 +732,7 @@ class HITLRuntimeStorePart:
                     "name": _PENDING_HITL_CONTINUATION_INDEX,
                     "partialFilterExpression": {
                         "status": "pending",
-                        "source": "agent",
+                        "public_source": "agent",
                         "continuation_message_id": {"$type": "string"},
                     },
                 },

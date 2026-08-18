@@ -11,6 +11,7 @@ from common.dto.hitl import (
     HITLApplicationRoute,
     HITLAuthorizationResultAnswer,
     HITLCancelCommand,
+    HITLEvidenceOrigin,
     HITLInteractionKind,
     HITLPolicyDecisionAnswer,
     HITLPublicSource,
@@ -35,6 +36,11 @@ def test_hitl_contract_enum_values_are_stable():
     assert {item.value for item in HITLPublicSource} == {
         "supervisor",
         "agent",
+        "system",
+    }
+    assert {item.value for item in HITLEvidenceOrigin} == {
+        "agent",
+        "supervisor",
         "system",
     }
     assert {item.value for item in HITLAnswerKind} == {

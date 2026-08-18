@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from common.dto.hitl import HITLApplicationRoute
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.hitl.delivery import (
@@ -22,6 +23,12 @@ from execution.hitl.exceptions import (
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )
+from execution.hitl.validation import (
+    HITLAggregateCorruptionError,
+    validate_command_route_consistency,
+    validate_exact_member_inventory,
+    validate_route_classifications,
+)
 from models.hitl import (
     HITLEventType,
     HITLInteractionStatus,
@@ -36,11 +43,9 @@ logger = get_logger(__name__)
 
 
 def _as_utc_datetime(value: Any) -> datetime:
-    """Parse legacy ISO timestamps while new records use BSON datetimes."""
+    """Require BSON-native datetimes in the R1 persisted schema."""
     if isinstance(value, datetime):
         return ensure_utc(value)
-    if isinstance(value, str):
-        return ensure_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
     raise TypeError(f"unsupported HITL datetime value: {type(value).__name__}")
 
 
@@ -165,6 +170,7 @@ class HITLApplicationCoordinator:
         *,
         reason: str = "Human input deadline expired",
     ) -> None:
+        await self._request_rows(service, interaction, require_answers=False)
         interaction_id = interaction["interaction_id"]
         terminal = await self._lifecycle.terminalize_interaction(
             interaction_id,
@@ -175,42 +181,14 @@ class HITLApplicationCoordinator:
             ],
             status=HITLInteractionStatus.EXPIRED.value,
             reason=reason,
+            member_status=HITLStatus.EXPIRED.value,
+            owning_run_terminal_status="failed",
         )
         terminal = terminal or await self._lifecycle.get_interaction_strict(
             interaction_id
         )
-        for request_id in (terminal or interaction).get("request_ids") or []:
-            row = await service.persistence.get_hitl_request(request_id)
-            if not row:
-                continue
-            if row.get("status") in {
-                HITLStatus.PENDING.value,
-                HITLStatus.ANSWER_RECORDED.value,
-                HITLStatus.PROCESSING.value,
-            }:
-                changed = await service.persistence.cas_update_hitl_request_strict(
-                    request_id,
-                    expected_status=row["status"],
-                    status=HITLStatus.EXPIRED.value,
-                    owning_run_terminal_status="failed",
-                    owning_run_terminal_reason=reason,
-                    cancellation_reconciled=False,
-                )
-                if changed:
-                    row["status"] = HITLStatus.EXPIRED.value
-                    row["owning_run_terminal_status"] = "failed"
-                    row["owning_run_terminal_reason"] = reason
-                    row["cancellation_reconciled"] = False
-            if (
-                row.get("status") == HITLStatus.EXPIRED.value
-                and row.get("cancellation_reconciled") is not True
-            ):
-                request = HITLRequest(
-                    **{key: value for key, value in row.items() if key != "_id"}
-                )
-                await service._reconcile_terminal_request(
-                    request, event_type=HITLEventType.INPUT_EXPIRED
-                )
+        if terminal is not None:
+            await service.reconcile_terminal_interaction(terminal)
 
     async def fail_interaction(
         self,
@@ -220,6 +198,7 @@ class HITLApplicationCoordinator:
         reason: str,
         application_claim_id: str | None = None,
     ) -> None:
+        await self._request_rows(service, interaction, require_answers=False)
         if application_claim_id:
             terminal = await self._lifecycle.mark_interaction_application_state(
                 interaction["interaction_id"],
@@ -237,47 +216,24 @@ class HITLApplicationCoordinator:
                 ],
                 status=HITLInteractionStatus.FAILED.value,
                 reason=reason,
+                member_status=HITLStatus.CANCELED.value,
+                owning_run_terminal_status="failed",
             )
         if terminal is None:
             raise HITLRoutingFailedError(
                 "Lost application fence while failing HITL interaction"
             )
-        for request_id in terminal.get("request_ids") or []:
-            row = await service.persistence.get_hitl_request(request_id)
-            if not row:
-                continue
-            if row.get("status") in {
-                HITLStatus.PENDING.value,
-                HITLStatus.ANSWER_RECORDED.value,
-                HITLStatus.PROCESSING.value,
-            }:
-                changed = await service.persistence.cas_update_hitl_request_strict(
-                    request_id,
-                    expected_status=row["status"],
-                    status=HITLStatus.CANCELED.value,
-                    owning_run_terminal_status="failed",
-                    owning_run_terminal_reason=reason,
-                    cancellation_reconciled=False,
-                )
-                if changed:
-                    row.update(
-                        {
-                            "status": HITLStatus.CANCELED.value,
-                            "owning_run_terminal_status": "failed",
-                            "owning_run_terminal_reason": reason,
-                            "cancellation_reconciled": False,
-                        }
-                    )
-            if (
-                row.get("status") == HITLStatus.CANCELED.value
-                and row.get("cancellation_reconciled") is not True
-            ):
-                request = HITLRequest(
-                    **{key: value for key, value in row.items() if key != "_id"}
-                )
-                await service._reconcile_terminal_request(
-                    request, event_type=HITLEventType.INPUT_CANCELED
-                )
+        # mark_interaction_application_state predates aggregate terminal outcome
+        # metadata, so persist it with a fenced terminal CAS when no application
+        # claim owns the failure. Claimed failures still converge from this
+        # in-memory proven outcome and retries/reconciliation reread members.
+        terminal = {
+            **terminal,
+            "member_terminal_status": HITLStatus.CANCELED.value,
+            "owning_run_terminal_status": "failed",
+            "terminal_reason": reason,
+        }
+        await service.reconcile_terminal_interaction(terminal)
 
     async def _project_run_answers(
         self,
@@ -305,6 +261,22 @@ class HITLApplicationCoordinator:
                 return latest
             raise HITLRoutingFailedError("Run answer projection is already claimed")
         projection_result = self._result(rows[0], status="applied", interaction=claimed)
+        snapshot = validate_route_classifications(claimed)
+        # Projection authority comes from the aggregate and immutable route
+        # snapshot, never from a mutable member row.
+        projection_result.update(
+            {
+                "room_id": claimed.get("room_id"),
+                "user_message_id": claimed.get("user_message_id"),
+                "orchestration_run_id": claimed.get("orchestration_run_id"),
+                "interaction_id": claimed.get("interaction_id"),
+                "request_ids": list(claimed.get("request_ids") or []),
+                "continuation_message_id": snapshot.continuation_message_id,
+                "a2a_task_id": snapshot.task_id,
+                "a2a_context_id": snapshot.context_id,
+                "agent_id": snapshot.agent_id,
+            }
+        )
         if application_result:
             projection_result.update(application_result)
         projection_result["answer_records"] = [
@@ -338,23 +310,15 @@ class HITLApplicationCoordinator:
     async def _interaction_for_request(
         self, service, request_doc: dict[str, Any]
     ) -> dict[str, Any]:
-        interaction_id = (
-            request_doc.get("group_id")
-            or request_doc.get("interaction_id")
-            or request_doc["request_id"]
-        )
+        interaction_id = request_doc.get("interaction_id")
+        if not isinstance(interaction_id, str) or not interaction_id:
+            raise HITLRoutingFailedError("HITL request has no persisted interaction")
         interaction = await self._lifecycle.get_interaction_strict(interaction_id)
-        if interaction is not None:
-            return interaction
-        if request_doc.get("group_id"):
-            rows = await service.persistence.get_hitl_group_requests(
-                request_doc["group_id"]
-            )
-        else:
-            rows = [request_doc]
-        interaction = await self._lifecycle.synthesize_interaction_from_requests(rows)
         if interaction is None:
-            raise HITLRoutingFailedError("Unable to materialize HITL interaction")
+            raise HITLRoutingFailedError("Persisted HITL interaction is missing")
+        rows = await self._request_rows(service, interaction, require_answers=False)
+        if request_doc.get("request_id") not in {row.get("request_id") for row in rows}:
+            raise HITLRoutingFailedError("HITL request is not an aggregate member")
         return interaction
 
     async def handle_response(  # noqa: C901
@@ -371,9 +335,9 @@ class HITLApplicationCoordinator:
             raise HITLNotFoundError("HITL request not found")
         if doc.get("room_id") != room_id:
             raise HITLRoomMismatchError("Room mismatch")
+        interaction = await self._interaction_for_request(service, doc)
         expires_at = doc.get("expires_at")
         if expires_at is not None and _as_utc_datetime(expires_at) <= utcnow():
-            interaction = await self._interaction_for_request(service, doc)
             await self.expire_interaction(service, interaction)
             raise HITLExpiredError("HITL request has expired")
 
@@ -384,7 +348,6 @@ class HITLApplicationCoordinator:
         }:
             if doc.get("user_input") != user_input:
                 raise HITLConflictError(f"Request already {current_status}")
-            interaction = await self._interaction_for_request(service, doc)
             aggregate_expiry = interaction.get("expires_at")
             if (
                 current_status != HITLStatus.RESPONDED.value
@@ -414,7 +377,6 @@ class HITLApplicationCoordinator:
             latest = await service.persistence.get_hitl_request(request_id)
             if latest and latest.get("expires_at") is not None:
                 if _as_utc_datetime(latest["expires_at"]) <= utcnow():
-                    interaction = await self._interaction_for_request(service, latest)
                     await self.expire_interaction(service, interaction)
                     raise HITLExpiredError("HITL request has expired")
             if (
@@ -426,7 +388,6 @@ class HITLApplicationCoordinator:
                     HITLStatus.RESPONDED.value,
                 }
             ):
-                interaction = await self._interaction_for_request(service, latest)
                 return await self.apply_interaction(service, interaction)
             raise HITLConflictError(
                 f"Request already {(latest or {}).get('status', 'unknown')}"
@@ -442,7 +403,6 @@ class HITLApplicationCoordinator:
                 "responded_by_user_id": user_id,
             }
         )
-        interaction = await self._interaction_for_request(service, doc)
         recorded = await self._lifecycle.record_interaction_answer(
             interaction["interaction_id"],
             request_id=request_id,
@@ -511,15 +471,18 @@ class HITLApplicationCoordinator:
                 raise HITLRoutingFailedError("Interaction request is missing")
             if row.get("room_id") != room_id:
                 raise HITLRoomMismatchError("Room mismatch")
-            row_interaction_id = (
-                row.get("interaction_id") or row.get("group_id") or row["request_id"]
-            )
-            if row_interaction_id != interaction_id:
+            if row.get("interaction_id") != interaction_id:
                 raise HITLRoutingFailedError("Interaction request identity mismatch")
             row_client_id = row.get("client_request_id")
             if isinstance(row_client_id, str) and row_client_id.strip():
                 authoritative_client_ids.add(row_client_id.strip())
             preflight_rows[request_id] = row
+        try:
+            validate_exact_member_inventory(
+                interaction, [preflight_rows[request_id] for request_id in expected_ids]
+            )
+        except HITLAggregateCorruptionError as exc:
+            raise HITLRoutingFailedError(str(exc)) from exc
         if len(authoritative_client_ids) > 1:
             raise HITLRoutingFailedError(
                 "Interaction contains conflicting client_request_id values"
@@ -638,15 +601,63 @@ class HITLApplicationCoordinator:
         result["client_request_id"] = authoritative_client_id
         return result
 
+    async def repair_persisted_answer_refs(
+        self, service, interaction: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Repair aggregate answer references from authoritative member rows."""
+
+        rows = await self._request_rows(service, interaction, require_answers=False)
+        current = interaction
+        for row in rows:
+            if row.get("status") not in {
+                HITLStatus.ANSWER_RECORDED.value,
+                HITLStatus.RESPONDED.value,
+            }:
+                continue
+            user_input = row.get("user_input")
+            answer_digest = row.get("answer_digest")
+            if (
+                not isinstance(user_input, str)
+                or not isinstance(answer_digest, str)
+                or answer_digest != _digest(user_input)
+            ):
+                raise HITLRoutingFailedError("Interaction answer digest mismatch")
+            recorded = await self._lifecycle.record_interaction_answer(
+                interaction["interaction_id"],
+                request_id=row["request_id"],
+                answer_digest=answer_digest,
+            )
+            if recorded is None:
+                latest = await self._lifecycle.get_interaction_strict(
+                    interaction["interaction_id"]
+                )
+                refs = {
+                    ref.get("request_id"): ref.get("digest")
+                    for ref in (latest or {}).get("answer_refs") or []
+                    if isinstance(ref, dict)
+                }
+                if refs.get(row["request_id"]) != answer_digest:
+                    raise HITLRoutingFailedError(
+                        "Failed to repair interaction answer reference"
+                    )
+                current = latest
+            else:
+                current = recorded
+        return current
+
     async def apply_interaction(  # noqa: C901
         self, service, interaction: dict[str, Any]
     ) -> dict[str, Any]:
+        interaction = await self.repair_persisted_answer_refs(service, interaction)
         interaction_id = interaction["interaction_id"]
         status = interaction.get("status")
         if status == HITLInteractionStatus.APPLIED.value:
             rows = await self._request_rows(service, interaction)
             recovery_result = None
-            if interaction.get("source") == "agent":
+            if (
+                interaction.get("application_route")
+                == HITLApplicationRoute.A2A_RESUME.value
+            ):
                 command = (
                     await self._lifecycle.get_resume_command_for_interaction_strict(
                         interaction["interaction_id"],
@@ -707,7 +718,8 @@ class HITLApplicationCoordinator:
         combined_input = self._combined_input(rows)
         route_result: dict[str, Any] = {}
         try:
-            if request.source == "agent":
+            snapshot = validate_route_classifications(claimed)
+            if snapshot.route == HITLApplicationRoute.A2A_RESUME:
                 route_result = await self._apply_agent(
                     service,
                     request=request,
@@ -715,7 +727,7 @@ class HITLApplicationCoordinator:
                     claim_id=claim_id,
                     user_input=combined_input,
                 )
-            else:
+            elif snapshot.route == HITLApplicationRoute.SUPERVISOR_RUN:
                 route_result = await self._apply_supervisor(
                     service,
                     request=request,
@@ -818,15 +830,19 @@ class HITLApplicationCoordinator:
         answer_digest = _digest(
             "\n".join(f"{row['request_id']}:{row['answer_digest']}" for row in rows)
         )
+        snapshot = validate_route_classifications(interaction)
         command = HITLSupervisorEffectCommand(
+            schema_version=3,
             command_id=command_id,
             interaction_id=interaction["interaction_id"],
             application_revision=revision,
-            orchestration_run_id=request.orchestration_run_id or "",
+            orchestration_run_id=snapshot.orchestration_run_id or "",
             answer_request_ids=[row["request_id"] for row in rows],
             answer_digest=answer_digest,
         ).model_dump(mode="python")
+        validate_command_route_consistency(interaction, command)
         durable_command = await self._lifecycle.create_resume_command(command)
+        validate_command_route_consistency(interaction, durable_command)
         status = durable_command.get("status")
         if status in {
             HITLResumeCommandStatus.ACKNOWLEDGED.value,
@@ -868,6 +884,7 @@ class HITLApplicationCoordinator:
         if claimed_command is None:
             raise HITLRoutingFailedError("Supervisor effect is already being applied")
         try:
+            request.orchestration_run_id = snapshot.orchestration_run_id
             await self._run_fenced_effect(
                 lambda: service._handle_supervisor_response(
                     request,
@@ -933,19 +950,24 @@ class HITLApplicationCoordinator:
         answer_digest = _digest(
             "\n".join(f"{row['request_id']}:{row['answer_digest']}" for row in rows)
         )
+        snapshot = validate_route_classifications(interaction)
         command = HITLResumeCommand(
+            schema_version=3,
             command_id=command_id,
             interaction_id=interaction["interaction_id"],
             application_revision=revision,
-            task_id=request.a2a_task_id or "",
-            context_id=request.a2a_context_id or "",
-            continuation_message_id=request.continuation_message_id or "",
+            task_id=snapshot.task_id or "",
+            context_id=snapshot.context_id or "",
+            continuation_message_id=snapshot.continuation_message_id or "",
+            agent_id=snapshot.agent_id or "",
             display_message_id=request.display_message_id,
             outbound_message_id=outbound_message_id,
             answer_request_ids=[row["request_id"] for row in rows],
             answer_digest=answer_digest,
         ).model_dump(mode="python")
+        validate_command_route_consistency(interaction, command)
         durable_command = await self._lifecycle.create_resume_command(command)
+        validate_command_route_consistency(interaction, durable_command)
         command_status = durable_command.get("status")
         if command_status in {
             HITLResumeCommandStatus.ACKNOWLEDGED.value,
@@ -964,9 +986,24 @@ class HITLApplicationCoordinator:
                         "Remote result projection remains pending"
                     )
                 durable_command = projected
-            return dict(durable_command.get("response_snapshot") or {})
+            response_snapshot = dict(durable_command.get("response_snapshot") or {})
+            if response_snapshot.get("reconciled_from_get_task") is True:
+                return await service._project_reconciled_agent_response(
+                    request,
+                    response_snapshot,
+                )
+            return response_snapshot
         if command_status == HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value:
             raise TimeoutError("previous delivery remains uncertain")
+        if command_status == HITLResumeCommandStatus.PERMANENT_FAILURE.value:
+            raise HITLDeliveryError(
+                durable_command.get("error_message")
+                or "Remote continuation permanently failed",
+                disposition=HITLDeliveryDisposition.PERMANENT,
+                phase=HITLDeliveryPhase.REMOTE_RESPONSE,
+                error_code=durable_command.get("error_code")
+                or "remote_permanent_failure",
+            )
         command_claim_id = uuid4().hex
         claimed_command = await self._lifecycle.claim_resume_command(
             command_id,
@@ -978,6 +1015,10 @@ class HITLApplicationCoordinator:
                 "Remote continuation is already being delivered"
             )
         try:
+            request.a2a_task_id = snapshot.task_id
+            request.a2a_context_id = snapshot.context_id
+            request.continuation_message_id = snapshot.continuation_message_id
+            request.agent_id = snapshot.agent_id
             route_result = await self._run_fenced_effect(
                 lambda: service._handle_agent_response(
                     request,
@@ -1154,8 +1195,12 @@ class HITLApplicationCoordinator:
                 version=int(interaction["version"]),
             )
 
-    async def _request_rows(  # noqa: C901
-        self, service, interaction: dict[str, Any]
+    async def _request_rows(
+        self,
+        service,
+        interaction: dict[str, Any],
+        *,
+        require_answers: bool = True,
     ) -> list[dict[str, Any]]:
         expected_ids = list(interaction.get("request_ids") or [])
         required_ids = list(interaction.get("required_request_ids") or [])
@@ -1170,26 +1215,21 @@ class HITLApplicationCoordinator:
             row = await service.persistence.get_hitl_request(request_id)
             if row is None:
                 raise HITLRoutingFailedError("Interaction request is missing")
-            actual_interaction_id = (
-                row.get("interaction_id") or row.get("group_id") or row["request_id"]
-            )
-            if actual_interaction_id != interaction["interaction_id"]:
-                raise HITLRoutingFailedError("Interaction request identity mismatch")
-            if row.get("user_input") is None:
+            if require_answers and row.get("user_input") is None:
                 raise HITLRoutingFailedError("Interaction answer is missing")
-            digest = row.get("answer_digest")
-            if not isinstance(digest, str) or digest != _digest(str(row["user_input"])):
-                raise HITLRoutingFailedError("Interaction answer digest mismatch")
+            if require_answers:
+                digest = row.get("answer_digest")
+                if not isinstance(digest, str) or digest != _digest(
+                    str(row["user_input"])
+                ):
+                    raise HITLRoutingFailedError("Interaction answer digest mismatch")
             rows.append(row)
-        if [row["request_id"] for row in rows] != expected_ids:
-            raise HITLRoutingFailedError("Interaction request inventory mismatch")
-        group_id = rows[0].get("group_id")
-        if group_id:
-            group_rows = await service.persistence.get_hitl_group_requests(group_id)
-            if {row.get("request_id") for row in group_rows} != set(expected_ids):
-                raise HITLRoutingFailedError(
-                    "Aggregate inventory does not match durable group requests"
-                )
+        try:
+            validate_exact_member_inventory(interaction, rows)
+        except HITLAggregateCorruptionError as exc:
+            raise HITLRoutingFailedError(str(exc)) from exc
+        if not require_answers:
+            return rows
         answer_refs = {
             ref.get("request_id"): ref.get("digest")
             for ref in interaction.get("answer_refs") or []
@@ -1223,7 +1263,7 @@ class HITLApplicationCoordinator:
             "room_id": request.get("room_id"),
             "user_message_id": request.get("user_message_id"),
             "orchestration_run_id": request.get("orchestration_run_id"),
-            "source": request.get("source"),
+            "source": request.get("public_source"),
             "response": request.get("user_input"),
             "user_input": request.get("user_input"),
             "responder_id": request.get("responded_by_user_id"),
@@ -1234,9 +1274,7 @@ class HITLApplicationCoordinator:
             "agent_id": request.get("agent_id"),
             "agent_name": request.get("agent_name"),
             "client_request_id": request.get("client_request_id"),
-            "interaction_id": request.get("interaction_id")
-            or request.get("group_id")
-            or request["request_id"],
+            "interaction_id": request.get("interaction_id"),
             "interaction_status": (interaction or {}).get("status"),
             "request_ids": list((interaction or {}).get("request_ids") or []),
             "application_revision": (interaction or {}).get("application_revision"),

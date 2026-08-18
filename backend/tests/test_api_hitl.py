@@ -165,7 +165,7 @@ class TestGetPendingHitlRequests:
                 request_id=sample_hitl_request.request_id,
                 room_id=sample_hitl_request.room_id,
                 user_message_id=sample_hitl_request.user_message_id,
-                source=sample_hitl_request.source,
+                source=sample_hitl_request.public_source.value,
                 prompt=sample_hitl_request.prompt,
                 display_message_id=sample_hitl_request.display_message_id,
                 client_request_id="cr-pending-hitl",
@@ -199,7 +199,7 @@ class TestGetPendingHitlRequests:
                 request_id=sample_hitl_request.request_id,
                 room_id=sample_hitl_request.room_id,
                 user_message_id=sample_hitl_request.user_message_id,
-                source=sample_hitl_request.source,
+                source=sample_hitl_request.public_source.value,
                 prompt=sample_hitl_request.prompt,
                 display_message_id=sample_hitl_request.display_message_id,
             )

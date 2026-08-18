@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
 from dal.runtime_store.parts.hitl_lifecycle_store import HITLLifecycleRuntimeStorePart
 from execution.facade import ExecutionFacade
@@ -22,7 +23,6 @@ from execution.hitl.reconciler import HITLLifecycleReconciler
 from execution.hitl.service import HITLService
 from execution.task_tracking import A2ATaskTrackingService
 from models.hitl import HITLInteractionStatus, HITLResumeCommandStatus
-from scripts.backfill_hitl_interactions import build_backfill_plan
 
 
 def _digest(value: str) -> str:
@@ -30,14 +30,21 @@ def _digest(value: str) -> str:
 
 
 def _row(*, source: str = "supervisor", answer: str = "answer") -> dict:
+    route = "a2a_resume" if source == "agent" else "supervisor_run"
     return {
+        "schema_version": 3,
         "request_id": "request-1",
         "interaction_id": "interaction-1",
+        "question_index": 0,
+        "question_count": 1,
         "room_id": "room-1",
         "user_message_id": "user-message-1",
         "orchestration_run_id": "run-1",
-        "source": source,
+        "application_route": route,
+        "public_source": source,
+        "evidence_origin": source,
         "prompt": "Question?",
+        "prompt_type": "text",
         "status": "answer_recorded",
         "user_input": answer,
         "answer_digest": _digest(answer),
@@ -45,6 +52,7 @@ def _row(*, source: str = "supervisor", answer: str = "answer") -> dict:
         "expires_at": utcnow() + timedelta(hours=1),
         **(
             {
+                "agent_id": "agent-1",
                 "a2a_task_id": "remote-task",
                 "a2a_context_id": "remote-context",
                 "continuation_message_id": "agent-message",
@@ -87,12 +95,42 @@ async def test_journaled_run_projection_schedules_supervisor_recovery():
 
 
 def _interaction(*, source: str = "supervisor", status: str = "applying") -> dict:
+    if source == "agent":
+        snapshot = HITLRouteSnapshot(
+            route=HITLApplicationRoute.A2A_RESUME,
+            task_id="remote-task",
+            context_id="remote-context",
+            continuation_message_id="agent-message",
+            agent_id="agent-1",
+        )
+    else:
+        snapshot = HITLRouteSnapshot(
+            route=HITLApplicationRoute.SUPERVISOR_RUN,
+            orchestration_run_id="run-1",
+        )
+    inventory = {
+        "request_id": "request-1",
+        "prompt": "Question?",
+        "prompt_type": "text",
+    }
+    if source == "agent":
+        inventory.update(
+            agent_id="agent-1",
+            continuation_message_id="agent-message",
+            display_message_id="agent-message",
+        )
     return {
+        "schema_version": 3,
         "interaction_id": "interaction-1",
         "room_id": "room-1",
         "user_message_id": "user-message-1",
         "orchestration_run_id": "run-1",
-        "source": source,
+        "application_route": snapshot.route.value,
+        "public_source": source,
+        "evidence_origin": source,
+        "route_snapshot": snapshot.model_dump(mode="python"),
+        "route_fingerprint": snapshot.fingerprint,
+        "creation_inventory": [inventory],
         "request_ids": ["request-1"],
         "required_request_ids": ["request-1"],
         "answer_request_ids": ["request-1"],
@@ -117,8 +155,14 @@ def _interaction(*, source: str = "supervisor", status: str = "applying") -> dic
 )
 async def test_confirmed_command_drives_aggregate_application(command_status: str):
     command = {
+        "schema_version": 3,
         "command_id": "command-1",
+        "kind": "supervisor_resume",
         "interaction_id": "interaction-1",
+        "application_revision": 1,
+        "orchestration_run_id": "run-1",
+        "answer_request_ids": ["request-1"],
+        "answer_digest": "digest",
         "status": command_status,
         "response_snapshot": {"task_state": "completed"},
     }
@@ -134,6 +178,7 @@ async def test_confirmed_command_drives_aggregate_application(command_status: st
     )
     lifecycle.get_interaction_strict = AsyncMock(return_value=_interaction())
     application = MagicMock()
+    application._request_rows = AsyncMock(return_value=[_row()])
     application.apply_interaction = AsyncMock(return_value={"status": "applied"})
     reconciler = HITLLifecycleReconciler(
         lifecycle=lifecycle,
@@ -150,9 +195,20 @@ async def test_confirmed_command_drives_aggregate_application(command_status: st
 @pytest.mark.asyncio
 async def test_confirmed_uncertain_command_resumes_without_resend():
     command = {
+        "schema_version": 3,
         "command_id": "command-1",
+        "kind": "a2a_resume",
         "interaction_id": "interaction-1",
+        "application_revision": 1,
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "continuation_message_id": "agent-message",
+        "agent_id": "agent-1",
+        "outbound_message_id": "outbound-1",
+        "answer_request_ids": ["request-1"],
+        "answer_digest": "digest",
         "status": HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
+        "uncertain_since": utcnow(),
     }
     lifecycle = MagicMock()
 
@@ -168,10 +224,16 @@ async def test_confirmed_uncertain_command_resumes_without_resend():
         ]
     )
     lifecycle.get_interaction_strict = AsyncMock(
-        return_value=_interaction(status=HITLInteractionStatus.DELIVERY_UNCERTAIN.value)
+        return_value=_interaction(
+            source="agent",
+            status=HITLInteractionStatus.DELIVERY_UNCERTAIN.value,
+        )
     )
-    lifecycle.resume_uncertain_interaction = AsyncMock(return_value=_interaction())
+    lifecycle.resume_uncertain_interaction = AsyncMock(
+        return_value=_interaction(source="agent")
+    )
     application = MagicMock()
+    application._request_rows = AsyncMock(return_value=[_row(source="agent")])
     application.apply_interaction = AsyncMock(return_value={"status": "applied"})
     reconciler = HITLLifecycleReconciler(
         lifecycle=lifecycle,
@@ -183,6 +245,37 @@ async def test_confirmed_uncertain_command_resumes_without_resend():
     assert await reconciler._reconcile_commands() == 1
     lifecycle.resume_uncertain_interaction.assert_awaited_once()
     application.apply_interaction.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stale_command_reclaim_matches_scan_version_claim_and_lease():
+    commands = MagicMock()
+    commands.find_one_and_update = AsyncMock(return_value=None)
+    part = HITLLifecycleRuntimeStorePart(
+        interactions=MagicMock(),
+        resume_commands=commands,
+        hitl_requests=MagicMock(),
+    )
+    observed_lease = utcnow() - timedelta(seconds=1)
+    now = utcnow()
+
+    result = await part.reclaim_stale_resume_command(
+        "command-1",
+        observed_claim_id="old-claim",
+        observed_version=7,
+        observed_lease_expires_at=observed_lease,
+        now=now,
+        status=HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
+        error_code="worker_lost",
+        error_message="lost",
+    )
+
+    assert result is None  # a concurrent renewal wins and is not overwritten
+    query = commands.find_one_and_update.await_args.args[0]
+    assert query["claim_id"] == "old-claim"
+    assert query["version"] == 7
+    assert query["lease_expires_at"] == observed_lease
+    assert query["$and"] == [{"lease_expires_at": {"$lte": now}}]
 
 
 @pytest.mark.asyncio
@@ -333,9 +426,20 @@ async def test_aggregate_deadline_race_expires_every_projection_and_returns_410(
         return_value={**interaction, "status": HITLInteractionStatus.EXPIRED.value}
     )
     coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+
+    async def reconcile_terminal(terminal):
+        row.update(
+            status="expired",
+            owning_run_terminal_status="failed",
+            owning_run_terminal_reason=terminal.get("terminal_reason"),
+        )
+        await persistence.cas_update_hitl_request_strict(
+            "request-1", expected_status="pending", status="expired"
+        )
+
     service = SimpleNamespace(
         persistence=persistence,
-        _reconcile_terminal_request=AsyncMock(),
+        reconcile_terminal_interaction=AsyncMock(side_effect=reconcile_terminal),
     )
 
     with pytest.raises(HITLExpiredError):
@@ -350,7 +454,7 @@ async def test_aggregate_deadline_race_expires_every_projection_and_returns_410(
     assert persistence.cas_update_hitl_request_strict.await_args.kwargs["status"] == (
         "expired"
     )
-    service._reconcile_terminal_request.assert_awaited_once()
+    service.reconcile_terminal_interaction.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -360,9 +464,8 @@ async def test_open_group_projects_every_member_in_group_order_with_markers():
             **_row(),
             "request_id": f"request-{index}",
             "interaction_id": "group-1",
-            "group_id": "group-1",
-            "group_total": 2,
-            "group_index": index - 1,
+            "question_count": 2,
+            "question_index": index - 1,
             "status": "pending",
             "display_message_id": "display-message",
         }
@@ -378,7 +481,7 @@ async def test_open_group_projects_every_member_in_group_order_with_markers():
     persistence.update_agent_message_task_state = AsyncMock(return_value=True)
     persistence.persist_hitl_user_answer = AsyncMock(return_value=True)
     persistence.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
-    persistence.persist_hitl_group_metadata = AsyncMock(return_value=True)
+    persistence.persist_hitl_interaction_metadata = AsyncMock(return_value=True)
     persistence.complete_hitl_open_projection = AsyncMock(return_value=True)
     persistence.release_hitl_open_projection = AsyncMock(return_value=True)
     service = HITLService()
@@ -387,14 +490,22 @@ async def test_open_group_projects_every_member_in_group_order_with_markers():
 
     count = await service.recover_open_interaction_projection(
         {
+            **_interaction(
+                source="supervisor", status=HITLInteractionStatus.OPEN.value
+            ),
             "interaction_id": "group-1",
-            "status": HITLInteractionStatus.OPEN.value,
+            "creation_inventory": [
+                {
+                    "request_id": f"request-{index}",
+                    "prompt": "Question?",
+                    "prompt_type": "text",
+                    "display_message_id": "display-message",
+                }
+                for index in (1, 2)
+            ],
             "request_ids": ["request-1", "request-2"],
+            "required_request_ids": ["request-1", "request-2"],
             "expected_request_count": 2,
-            "room_id": "room-1",
-            "user_message_id": "user-message-1",
-            "orchestration_run_id": "run-1",
-            "source": "supervisor",
         }
     )
 
@@ -420,118 +531,22 @@ async def test_open_singleton_projects_from_authoritative_request_ids():
     persistence.update_agent_message_task_state = AsyncMock(return_value=True)
     persistence.persist_hitl_user_answer = AsyncMock(return_value=True)
     persistence.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
-    persistence.persist_hitl_group_metadata = AsyncMock(return_value=True)
+    persistence.persist_hitl_interaction_metadata = AsyncMock(return_value=True)
     persistence.complete_hitl_open_projection = AsyncMock(return_value=True)
     persistence.release_hitl_open_projection = AsyncMock(return_value=True)
     service = HITLService()
     service._persistence = persistence
     service._emit_hitl_event = AsyncMock()
 
-    count = await service.recover_open_interaction_projection(
-        {
-            "interaction_id": "interaction-1",
-            "status": HITLInteractionStatus.OPEN.value,
-            "request_ids": ["request-1"],
-            "expected_request_count": 1,
-            "room_id": "room-1",
-            "user_message_id": "user-message-1",
-            "orchestration_run_id": "run-1",
-            "source": "supervisor",
-        }
+    interaction = _interaction(
+        source="supervisor", status=HITLInteractionStatus.OPEN.value
     )
+    interaction["creation_inventory"][0]["display_message_id"] = "display-message"
+    count = await service.recover_open_interaction_projection(interaction)
 
     assert count == 1
     persistence.get_hitl_request.assert_awaited_once_with("request-1")
     persistence.complete_hitl_open_projection.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_open_projection_backfills_missing_singleton_interaction_id():
-    row = {
-        **_row(),
-        "interaction_id": None,
-        "status": "pending",
-        "display_message_id": "display-message",
-    }
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=row)
-    persistence.update_hitl_request = AsyncMock(return_value=True)
-    persistence.claim_hitl_open_projection = AsyncMock(return_value=row)
-    persistence.update_agent_message_task_state = AsyncMock(return_value=True)
-    persistence.persist_hitl_user_answer = AsyncMock(return_value=True)
-    persistence.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
-    persistence.persist_hitl_group_metadata = AsyncMock(return_value=True)
-    persistence.complete_hitl_open_projection = AsyncMock(return_value=True)
-    persistence.release_hitl_open_projection = AsyncMock(return_value=True)
-    service = HITLService()
-    service._persistence = persistence
-    service._emit_hitl_event = AsyncMock()
-
-    assert (
-        await service.recover_open_interaction_projection(
-            {
-                "interaction_id": "request-1",
-                "status": HITLInteractionStatus.OPEN.value,
-                "request_ids": ["request-1"],
-                "expected_request_count": 1,
-                "room_id": "room-1",
-                "user_message_id": "user-message-1",
-                "orchestration_run_id": "run-1",
-                "source": "supervisor",
-            }
-        )
-        == 1
-    )
-
-    persistence.update_hitl_request.assert_awaited_once_with(
-        "request-1", interaction_id="request-1"
-    )
-
-
-@pytest.mark.asyncio
-async def test_open_projection_accepts_one_member_legacy_group():
-    row = {
-        **_row(),
-        "interaction_id": None,
-        "group_id": "legacy-group-1",
-        "group_total": 1,
-        "group_index": 0,
-        "status": "pending",
-        "display_message_id": "display-message",
-    }
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=row)
-    persistence.update_hitl_request = AsyncMock(return_value=True)
-    persistence.claim_hitl_open_projection = AsyncMock(return_value=row)
-    persistence.update_agent_message_task_state = AsyncMock(return_value=True)
-    persistence.persist_hitl_user_answer = AsyncMock(return_value=True)
-    persistence.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
-    persistence.persist_hitl_group_metadata = AsyncMock(return_value=True)
-    persistence.complete_hitl_open_projection = AsyncMock(return_value=True)
-    persistence.release_hitl_open_projection = AsyncMock(return_value=True)
-    service = HITLService()
-    service._persistence = persistence
-    service._emit_hitl_event = AsyncMock()
-
-    assert (
-        await service.recover_open_interaction_projection(
-            {
-                "interaction_id": "legacy-group-1",
-                "status": HITLInteractionStatus.OPEN.value,
-                "request_ids": ["request-1"],
-                "expected_request_count": 1,
-                "room_id": "room-1",
-                "user_message_id": "user-message-1",
-                "orchestration_run_id": "run-1",
-                "source": "supervisor",
-            }
-        )
-        == 1
-    )
-
-    projected_request = service._emit_hitl_event.await_args.kwargs["request"]
-    assert projected_request.interaction_id == "legacy-group-1"
-    assert projected_request.group_total == 1
 
 
 @pytest.mark.asyncio
@@ -546,18 +561,9 @@ async def test_open_projection_rejects_conflicting_authoritative_member():
     service = HITLService()
     service._persistence = persistence
 
-    with pytest.raises(HITLRequestProjectionError, match="conflicting"):
+    with pytest.raises(HITLRequestProjectionError, match="identity mismatch"):
         await service.recover_open_interaction_projection(
-            {
-                "interaction_id": "interaction-1",
-                "status": HITLInteractionStatus.OPEN.value,
-                "request_ids": ["request-1"],
-                "expected_request_count": 1,
-                "room_id": "room-1",
-                "user_message_id": "user-message-1",
-                "orchestration_run_id": "run-1",
-                "source": "supervisor",
-            }
+            _interaction(source="supervisor", status=HITLInteractionStatus.OPEN.value)
         )
 
 
@@ -569,6 +575,7 @@ async def test_digest_inventory_mismatch_blocks_network_application():
     lifecycle.claim_interaction_application = AsyncMock(
         return_value={**interaction, "status": "applying"}
     )
+    lifecycle.record_interaction_answer = AsyncMock(return_value=interaction)
     lifecycle.mark_interaction_application_state = AsyncMock(return_value={})
     persistence = MagicMock()
     persistence.get_hitl_request = AsyncMock(return_value=_row(source="agent"))
@@ -610,34 +617,6 @@ async def test_run_answer_projection_is_journaled_for_both_sources(source: str):
     assert result["run_projection_status"] == "applied"
     projector.assert_awaited_once()
     lifecycle.mark_run_answer_projection.assert_awaited_once()
-
-
-@pytest.mark.parametrize(
-    "updates",
-    [
-        [
-            {"request_id": "r1", "group_total": 2, "group_index": 0},
-            {"request_id": "r2", "group_total": 3, "group_index": 1},
-        ],
-        [
-            {"request_id": "r1", "group_total": 2, "group_index": 0},
-            {"request_id": "r2", "group_total": 2, "group_index": 0},
-        ],
-    ],
-)
-def test_backfill_reports_structural_legacy_group_conflicts(updates):
-    rows = [
-        {
-            **_row(),
-            **update,
-            "interaction_id": "group-1",
-            "group_id": "group-1",
-        }
-        for update in updates
-    ]
-    aggregates, conflicts = build_backfill_plan(rows)
-    assert aggregates == []
-    assert conflicts and conflicts[0]["conflicting_fields"]
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
@@ -26,61 +25,6 @@ _COMMAND_CLAIMABLE = {
 }
 
 
-def _coerce_bson_datetime(value: Any) -> datetime:
-    """Accept legacy ISO strings while keeping new lifecycle dates BSON-native."""
-    if isinstance(value, datetime):
-        return ensure_utc(value)
-    if isinstance(value, str):
-        return ensure_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
-    raise TypeError(f"unsupported HITL datetime value: {type(value).__name__}")
-
-
-def _legacy_answer_digest(row: dict[str, Any]) -> str:
-    existing = row.get("answer_digest")
-    if isinstance(existing, str) and existing:
-        return existing
-    answer = row.get("user_input")
-    if not isinstance(answer, str):
-        raise ValueError("legacy answered HITL request has no verifiable answer")
-    return hashlib.sha256(answer.encode("utf-8")).hexdigest()
-
-
-def _validate_legacy_group(
-    requests: list[dict[str, Any]], interaction_id: str, expected: int
-) -> None:
-    request_ids = [row.get("request_id") for row in requests]
-    if any(
-        not isinstance(request_id, str) or not request_id for request_id in request_ids
-    ):
-        raise ValueError("legacy HITL group contains a blank request_id")
-    if len(set(request_ids)) != len(request_ids):
-        raise ValueError("legacy HITL group contains duplicate request IDs")
-    totals = {int(row.get("group_total") or 1) for row in requests}
-    if totals != {expected}:
-        raise ValueError("legacy HITL group has conflicting group_total values")
-    if len(requests) > expected:
-        raise ValueError("legacy HITL group has more requests than group_total")
-    if expected > 1:
-        indices = [row.get("group_index") for row in requests]
-        if any(
-            not isinstance(index, int) or not 0 <= index < expected for index in indices
-        ):
-            raise ValueError("legacy HITL group has invalid group indices")
-        if len(set(indices)) != len(indices):
-            raise ValueError("legacy HITL group contains duplicate group indices")
-        if len(requests) == expected and set(indices) != set(range(expected)):
-            raise ValueError("legacy HITL group indices are incomplete")
-        if any(
-            row.get("group_id") != interaction_id
-            or (
-                row.get("interaction_id") is not None
-                and row.get("interaction_id") != interaction_id
-            )
-            for row in requests
-        ):
-            raise ValueError("legacy HITL group has incompatible interaction IDs")
-
-
 class HITLLifecycleRuntimeStorePart:
     """CAS/fenced persistence for HITL aggregates and remote commands."""
 
@@ -103,21 +47,27 @@ class HITLLifecycleRuntimeStorePart:
             immutable = (
                 "room_id",
                 "user_message_id",
-                "source",
+                "orchestration_run_id",
+                "application_route",
+                "public_source",
+                "evidence_origin",
+                "route_snapshot",
+                "route_fingerprint",
+                "creation_inventory",
                 "expected_request_count",
             )
             if any(existing.get(key) != doc.get(key) for key in immutable):
                 raise ValueError("conflicting HITL interaction metadata") from None
             return existing
 
-    async def attach_interaction_request(
+    async def attach_interaction_request(  # noqa: C901
         self,
         interaction_id: str,
         *,
         request_id: str,
         required: bool,
         expires_at: datetime | None,
-        group_index: int | None = None,
+        question_index: int,
     ) -> dict[str, Any] | None:
         for _attempt in range(8):
             current = await self.get_interaction_strict(interaction_id)
@@ -130,33 +80,48 @@ class HITLLifecycleRuntimeStorePart:
                     {"request_id": existing, "index": index}
                     for index, existing in enumerate(request_ids)
                 ]
+            expected = int(current["expected_request_count"])
+            inventory = list(current.get("creation_inventory") or [])
+            if len(inventory) != expected:
+                raise ValueError("interaction creation inventory is incomplete")
+            if not 0 <= question_index < expected:
+                raise ValueError("question_index is outside the interaction inventory")
+            if inventory[question_index].get("request_id") != request_id:
+                raise ValueError("request does not match creation inventory")
+            existing_order = next(
+                (item for item in request_order if item["request_id"] == request_id),
+                None,
+            )
+            if existing_order is not None and existing_order["index"] != question_index:
+                raise ValueError("request was attached with a different question_index")
             if request_id not in request_ids:
+                if any(item["index"] == question_index for item in request_order):
+                    raise ValueError("question_index is already attached")
                 request_order.append(
                     {
                         "request_id": request_id,
-                        "index": (
-                            group_index
-                            if group_index is not None
-                            else len(request_order)
-                        ),
+                        "index": question_index,
                     }
                 )
-            request_order.sort(key=lambda item: (item["index"], item["request_id"]))
+            request_order.sort(key=lambda item: item["index"])
             request_ids = [item["request_id"] for item in request_order]
             required_ids = list(current.get("required_request_ids") or [])
             if required and request_id not in required_ids:
                 required_ids.append(request_id)
             current_expiry = current.get("expires_at")
             expiry_candidates = [
-                _coerce_bson_datetime(value)
+                ensure_utc(value)
                 for value in (current_expiry, expires_at)
                 if value is not None
             ]
             shared_expiry = min(expiry_candidates) if expiry_candidates else None
-            expected = int(current["expected_request_count"])
             status = current.get("status")
             if status == HITLInteractionStatus.MATERIALIZING.value:
-                if len(request_ids) >= expected:
+                if len(request_ids) == expected:
+                    if [item["index"] for item in request_order] != list(
+                        range(expected)
+                    ):
+                        raise ValueError("interaction question inventory is incomplete")
                     status = HITLInteractionStatus.OPEN.value
             updated = await self._interactions.find_one_and_update(
                 {
@@ -201,128 +166,6 @@ class HITLLifecycleRuntimeStorePart:
         self, request_id: str
     ) -> dict[str, Any] | None:
         return await self._interactions.find_one({"request_ids": request_id})
-
-    async def synthesize_interaction_from_requests(  # noqa: C901
-        self, requests: list[dict[str, Any]]
-    ) -> dict[str, Any] | None:
-        if not requests:
-            return None
-        first = requests[0]
-        interaction_id = (
-            first.get("group_id") or first.get("interaction_id") or first["request_id"]
-        )
-        expected = int(first.get("group_total") or 1)
-        _validate_legacy_group(requests, interaction_id, expected)
-        source = first.get("source")
-        room_id = first.get("room_id")
-        user_message_id = first.get("user_message_id")
-        if any(
-            (row.get("group_id") or row.get("interaction_id") or row["request_id"])
-            != interaction_id
-            or row.get("source") != source
-            or row.get("room_id") != room_id
-            or row.get("user_message_id") != user_message_id
-            for row in requests
-        ):
-            raise ValueError("conflicting legacy HITL interaction records")
-        statuses = {row.get("status") for row in requests}
-        answered = [
-            row["request_id"]
-            for row in requests
-            if row.get("status")
-            in {
-                "answer_recorded",
-                "processing",
-                "responded",
-            }
-        ]
-        if statuses == {"responded"}:
-            status = HITLInteractionStatus.APPLIED.value
-        elif "processing" in statuses:
-            status = HITLInteractionStatus.ANSWERS_RECORDED.value
-        elif statuses & {"canceled"}:
-            status = HITLInteractionStatus.CANCELED.value
-        elif statuses & {"expired"}:
-            status = HITLInteractionStatus.EXPIRED.value
-        elif answered:
-            status = HITLInteractionStatus.PARTIALLY_ANSWERED.value
-        elif len(requests) >= expected:
-            status = HITLInteractionStatus.OPEN.value
-        else:
-            status = HITLInteractionStatus.MATERIALIZING.value
-        expiries = [row.get("expires_at") for row in requests if row.get("expires_at")]
-        now = utcnow()
-        doc = {
-            "schema_version": 2,
-            "interaction_id": interaction_id,
-            "room_id": room_id,
-            "user_message_id": user_message_id,
-            "orchestration_run_id": first.get("orchestration_run_id"),
-            "source": source,
-            "request_ids": [],
-            "request_order": [],
-            "expected_request_count": expected,
-            "required_request_ids": [],
-            "status": HITLInteractionStatus.MATERIALIZING.value,
-            "version": 1,
-            "expires_at": min(expiries) if expiries else None,
-            "answer_request_ids": [],
-            "answer_refs": [],
-            "application_revision": 0,
-            "application_attempts": 0,
-            # Legacy request rows cannot prove the owning-run event was appended;
-            # replay through the idempotent run projection journal.
-            "run_projection_status": "pending",
-            "terminal_reconciled": False,
-            "created_at": min(
-                (row.get("created_at") or now for row in requests), default=now
-            ),
-            "updated_at": now,
-        }
-        interaction = await self.materialize_interaction(doc)
-        for row in sorted(requests, key=lambda item: item.get("group_index") or 0):
-            interaction = await self.attach_interaction_request(
-                interaction_id,
-                request_id=row["request_id"],
-                required=True,
-                expires_at=row.get("expires_at"),
-                group_index=row.get("group_index"),
-            )
-            if interaction is None:
-                return None
-        if answered:
-            for row in requests:
-                if row["request_id"] not in answered:
-                    continue
-                interaction = await self.record_interaction_answer(
-                    interaction_id,
-                    request_id=row["request_id"],
-                    answer_digest=_legacy_answer_digest(row),
-                )
-                if interaction is None:
-                    return None
-        if status in {
-            HITLInteractionStatus.APPLIED.value,
-            HITLInteractionStatus.CANCELED.value,
-            HITLInteractionStatus.EXPIRED.value,
-        }:
-            current = await self.get_interaction_strict(interaction_id)
-            if current and current.get("status") not in _INTERACTION_TERMINAL:
-                updates: dict[str, Any] = {
-                    "status": status,
-                    "updated_at": utcnow(),
-                }
-                if status == HITLInteractionStatus.APPLIED.value:
-                    updates["applied_at"] = utcnow()
-                interaction = await self._interactions.find_one_and_update(
-                    {
-                        "interaction_id": interaction_id,
-                        "version": current.get("version", 1),
-                    },
-                    {"$set": updates, "$inc": {"version": 1}},
-                    return_document=ReturnDocument.AFTER,
-                )
-        return interaction
 
     async def record_interaction_answer(
         self,
@@ -607,6 +450,15 @@ class HITLLifecycleRuntimeStorePart:
             updates["application_lease_expires_at"] = None
         if status == HITLInteractionStatus.APPLIED.value:
             updates["applied_at"] = now
+        if status == HITLInteractionStatus.FAILED.value:
+            updates.update(
+                {
+                    "terminal_reason": error,
+                    "member_terminal_status": "canceled",
+                    "owning_run_terminal_status": "failed",
+                    "terminal_reconciled": False,
+                }
+            )
         query: dict[str, Any] = {
             "interaction_id": interaction_id,
             "status": HITLInteractionStatus.APPLYING.value,
@@ -627,6 +479,8 @@ class HITLLifecycleRuntimeStorePart:
         expected_statuses: list[str],
         status: str,
         reason: str,
+        member_status: str | None = None,
+        owning_run_terminal_status: str | None = None,
     ) -> dict[str, Any] | None:
         if status not in {
             HITLInteractionStatus.CANCELED.value,
@@ -643,6 +497,8 @@ class HITLLifecycleRuntimeStorePart:
                 "$set": {
                     "status": status,
                     "terminal_reason": reason,
+                    "member_terminal_status": member_status,
+                    "owning_run_terminal_status": owning_run_terminal_status,
                     "terminal_reconciled": False,
                     "application_claim_id": None,
                     "application_lease_expires_at": None,
@@ -663,6 +519,17 @@ class HITLLifecycleRuntimeStorePart:
                 "$inc": {"version": 1},
             },
         )
+
+    async def iter_materializing_interactions(
+        self, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]:
+        rows = await self._interactions.find(
+            {"status": HITLInteractionStatus.MATERIALIZING.value},
+            sort=[("updated_at", 1), ("interaction_id", 1)],
+            limit=limit,
+        )
+        for row in rows:
+            yield row
 
     async def iter_due_interactions(
         self, now: datetime, *, limit: int = 100
@@ -732,6 +599,26 @@ class HITLLifecycleRuntimeStorePart:
         for row in rows:
             yield row
 
+    async def iter_unreconciled_terminal_interactions(
+        self, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]:
+        rows = await self._interactions.find(
+            {
+                "status": {
+                    "$in": [
+                        HITLInteractionStatus.CANCELED.value,
+                        HITLInteractionStatus.EXPIRED.value,
+                        HITLInteractionStatus.FAILED.value,
+                    ]
+                },
+                "terminal_reconciled": {"$ne": True},
+            },
+            sort=[("updated_at", 1), ("interaction_id", 1)],
+            limit=limit,
+        )
+        for row in rows:
+            yield row
+
     async def iter_unreconciled_terminal_requests(
         self, *, limit: int = 100
     ) -> AsyncIterator[dict[str, Any]]:
@@ -763,8 +650,11 @@ class HITLLifecycleRuntimeStorePart:
                 "application_revision",
                 "task_id",
                 "context_id",
+                "continuation_message_id",
+                "agent_id",
                 "outbound_message_id",
                 "orchestration_run_id",
+                "answer_request_ids",
                 "answer_digest",
             )
             if any(existing.get(key) != doc.get(key) for key in immutable):
@@ -837,6 +727,45 @@ class HITLLifecycleRuntimeStorePart:
         )
         return bool(getattr(result, "matched_count", result))
 
+    async def reclaim_stale_resume_command(
+        self,
+        command_id: str,
+        *,
+        observed_claim_id: str | None,
+        observed_version: int,
+        observed_lease_expires_at: datetime,
+        now: datetime,
+        status: str,
+        error_code: str,
+        error_message: str,
+        retry_after_seconds: int | None = None,
+    ) -> dict[str, Any] | None:
+        """CAS a stale DELIVERING scan result without clobbering renewal."""
+        updates: dict[str, Any] = {
+            "status": status,
+            "claim_id": None,
+            "lease_expires_at": None,
+            "error_code": error_code,
+            "error_message": error_message,
+            "updated_at": now,
+        }
+        if status == HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value:
+            updates["uncertain_since"] = now
+        if retry_after_seconds is not None:
+            updates["next_attempt_at"] = now + timedelta(seconds=retry_after_seconds)
+        return await self._resume_commands.find_one_and_update(
+            {
+                "command_id": command_id,
+                "status": HITLResumeCommandStatus.DELIVERING.value,
+                "claim_id": observed_claim_id,
+                "version": observed_version,
+                "lease_expires_at": observed_lease_expires_at,
+                "$and": [{"lease_expires_at": {"$lte": now}}],
+            },
+            {"$set": updates, "$inc": {"version": 1}},
+            return_document=ReturnDocument.AFTER,
+        )
+
     async def mark_resume_command_state(
         self,
         command_id: str,
@@ -896,6 +825,7 @@ class HITLLifecycleRuntimeStorePart:
                         "next_attempt_at": {"$lte": now},
                     },
                     {"status": HITLResumeCommandStatus.ACKNOWLEDGED.value},
+                    {"status": HITLResumeCommandStatus.PERMANENT_FAILURE.value},
                     {
                         "status": HITLResumeCommandStatus.PROJECTED.value,
                         "aggregate_applied_at": {"$exists": False},

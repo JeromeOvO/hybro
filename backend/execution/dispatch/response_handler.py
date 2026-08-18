@@ -17,6 +17,12 @@ from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import is_interactive_state
 from common.a2a_task_projection import public_artifact_data, public_part_data
 from common.config.settings import settings
+from common.dto import (
+    HITLApplicationRoute,
+    HITLEvidenceOrigin,
+    HITLPublicSource,
+    HITLRouteSnapshot,
+)
 from common.observability import traced_create_task
 from common.utils.a2a_helpers import (
     extract_text_from_artifact_dicts,
@@ -35,6 +41,7 @@ from execution.hitl.public_prompt import (
     concrete_agent_input_prompt,
     is_file_upload_request,
 )
+from execution.hitl.validation import deterministic_interaction_id
 from execution.orchestration.result_ingestor import AgentResultRead
 from execution.task_tracking import resolve_public_task_label
 
@@ -1483,23 +1490,40 @@ class AgentResponseHandler:
             except Exception:
                 logger.debug("agent name lookup failed", exc_info=True)
 
-        hitl_req = await self.hitl_coordinator.request_input(
+        interaction_id = deterministic_interaction_id(
+            event_identity=e.message_id,
+            round_identity=f"{e.task_id}:{e.context_id}",
+        )
+        hitl_requests = await self.hitl_coordinator.request_interaction(
             room_id=e.room_id,
             user_message_id=user_message_id,
-            source="agent",
-            prompt=prompt,
-            **(
-                {"prompt_type": "authentication"}
-                if str(e.state or "").replace("_", "-") == "auth-required"
-                else {}
+            interaction_id=interaction_id,
+            application_route=HITLApplicationRoute.A2A_RESUME,
+            public_source=HITLPublicSource.AGENT,
+            evidence_origin=HITLEvidenceOrigin.AGENT,
+            route_snapshot=HITLRouteSnapshot(
+                route=HITLApplicationRoute.A2A_RESUME,
+                task_id=e.task_id,
+                context_id=e.context_id,
+                continuation_message_id=e.message_id,
+                agent_id=e.agent_id,
             ),
-            agent_id=e.agent_id,
-            agent_name=agent_name,
-            a2a_task_id=e.task_id,
-            a2a_context_id=e.context_id,
-            continuation_message_id=e.message_id,
-            display_message_id=msg.message_id if msg else e.message_id,
+            questions=[
+                {
+                    "prompt": prompt,
+                    **(
+                        {"prompt_type": "authentication"}
+                        if str(e.state or "").replace("_", "-") == "auth-required"
+                        else {}
+                    ),
+                    "agent_id": e.agent_id,
+                    "agent_name": agent_name,
+                    "continuation_message_id": e.message_id,
+                    "display_message_id": msg.message_id if msg else e.message_id,
+                }
+            ],
         )
+        hitl_req = hitl_requests[0] if hitl_requests else None
         if hitl_req:
             await self._emit_processing_status(
                 room_id=e.room_id,

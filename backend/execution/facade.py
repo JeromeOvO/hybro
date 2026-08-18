@@ -11,8 +11,12 @@ from common.dto import (
     CancellationAck,
     ExecutionAck,
     ExecutionRequest,
+    HITLApplicationRoute,
+    HITLEvidenceOrigin,
+    HITLPublicSource,
     HITLRequest,
     HITLResponse,
+    HITLRouteSnapshot,
     HubAgentResponseInternal,
     RunInfo,
 )
@@ -35,6 +39,7 @@ from execution.hitl.translators import (
     hitl_response_dict_to_common,
     model_hitl_request_to_common,
 )
+from execution.hitl.validation import deterministic_interaction_id
 from execution.idempotency import (
     IDEMPOTENCY_FINGERPRINT_VERSION,
     build_execution_request_fingerprint,
@@ -172,14 +177,7 @@ class RoomMessageCenterPort(Protocol):
 
 
 class HITLServicePort(Protocol):
-    async def request_input(
-        self,
-        room_id: str,
-        user_message_id: str,
-        source: str,
-        prompt: str,
-        **kwargs: Any,
-    ) -> Any | None: ...
+    async def request_interaction(self, **kwargs: Any) -> list[Any] | None: ...
 
     async def handle_response(
         self,
@@ -970,13 +968,61 @@ class ExecutionFacade:
         source: str,
         **kwargs: Any,
     ) -> HITLRequest | None:
-        result = await self._hitl_manager.request_input(
+        public_source = HITLPublicSource(source)
+        if public_source == HITLPublicSource.AGENT:
+            route = HITLApplicationRoute.A2A_RESUME
+            route_snapshot = HITLRouteSnapshot(
+                route=route,
+                task_id=kwargs["a2a_task_id"],
+                context_id=kwargs["a2a_context_id"],
+                continuation_message_id=kwargs["continuation_message_id"],
+                agent_id=kwargs["agent_id"],
+            )
+        else:
+            route = HITLApplicationRoute.SUPERVISOR_RUN
+            route_snapshot = HITLRouteSnapshot(
+                route=route,
+                orchestration_run_id=kwargs["orchestration_run_id"],
+            )
+        interaction_id = kwargs.pop("interaction_id", None)
+        if interaction_id is None:
+            round_identity = kwargs.get("request_id") or kwargs.pop(
+                "round_identity", None
+            )
+            if not isinstance(round_identity, str) or not round_identity.strip():
+                raise ValueError(
+                    "create_hitl_request requires request_id or round_identity"
+                )
+            interaction_id = deterministic_interaction_id(
+                event_identity=kwargs.get("continuation_message_id") or user_message_id,
+                round_identity=round_identity,
+            )
+        question_keys = {
+            "prompt_type",
+            "choices",
+            "agent_id",
+            "agent_name",
+            "source_step_id",
+            "continuation_message_id",
+            "display_message_id",
+            "request_id",
+        }
+        question = {"prompt": prompt}
+        question.update(
+            {key: kwargs.pop(key) for key in list(kwargs) if key in question_keys}
+        )
+        results = await self._hitl_manager.request_interaction(
             room_id=room_id,
             user_message_id=user_message_id,
-            source=source,
-            prompt=prompt,
+            interaction_id=interaction_id,
+            application_route=route,
+            public_source=public_source,
+            evidence_origin=HITLEvidenceOrigin(source),
+            route_snapshot=route_snapshot,
+            questions=[question],
             **kwargs,
         )
+        result = results[0] if results else None
         return model_hitl_request_to_common(result) if result is not None else None
 
     async def resolve_hitl(

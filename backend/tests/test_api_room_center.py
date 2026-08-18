@@ -1318,7 +1318,8 @@ class TestInquiryRoomMessages:
                     {
                         "request_id": "local-hitl-request",
                         "room_id": sample_room.room_id,
-                        "source": "agent",
+                        "public_source": "agent",
+                        "application_route": "a2a_resume",
                         "agent_id": "insurer-agent",
                         "display_message_id": local_message.message_id,
                         "continuation_message_id": local_message.message_id,
@@ -1335,13 +1336,14 @@ class TestInquiryRoomMessages:
                         {
                             "request_id": "local-supervisor-hitl-request",
                             "room_id": sample_room.room_id,
-                            "source": "supervisor",
+                            "public_source": "supervisor",
+                            "application_route": "supervisor_run",
                             "display_message_id": supervisor_message.message_id,
                             "prompt": "Which market should be prioritized?",
                             "prompt_type": "text",
-                            "group_id": "supervisor-group-1",
-                            "group_total": 2,
-                            "group_index": 0,
+                            "interaction_id": "supervisor-group-1",
+                            "question_count": 2,
+                            "question_index": 0,
                             "status": "responded",
                             "user_input": "California",
                         }

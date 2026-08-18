@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.hitl.validation import validate_command_route_consistency
 from models.hitl import (
     HITLEventType,
     HITLInteractionStatus,
@@ -36,17 +37,23 @@ class HITLLifecycleReconciler:
 
     async def reconcile_lifecycle(self) -> dict[str, int]:
         counts = {
+            "materializing": 0,
             "expired": 0,
+            "answers": 0,
             "applications": 0,
             "commands": 0,
+            "terminal_interactions": 0,
             "terminal_requests": 0,
             "divergence": 0,
             "errors": 0,
         }
         passes = (
+            ("materializing", self._resume_materializing),
             ("expired", self._expire_due),
+            ("answers", self._repair_answers),
             ("applications", self._resume_applications),
             ("commands", self._reconcile_commands),
+            ("terminal_interactions", self._reconcile_terminal_interactions),
             ("terminal_requests", self._reconcile_terminal_requests),
             ("divergence", self._heal_run_divergence),
         )
@@ -57,6 +64,24 @@ class HITLLifecycleReconciler:
                 counts["errors"] += 1
                 logger.exception("HITL lifecycle reconciliation pass failed: %s", name)
         return counts
+
+    async def _resume_materializing(self) -> int:
+        repaired = 0
+        async for interaction in self._lifecycle.iter_materializing_interactions(
+            limit=self._limit
+        ):
+            try:
+                requests = await self._service.resume_materializing_interaction(
+                    interaction
+                )
+                repaired += int(requests is not None)
+            except Exception:
+                logger.warning(
+                    "HITL interaction remains materializing",
+                    extra={"interaction_id": interaction.get("interaction_id")},
+                    exc_info=True,
+                )
+        return repaired
 
     async def _expire_due(self) -> int:
         repaired = 0
@@ -70,6 +95,31 @@ class HITLLifecycleReconciler:
                 logger.exception(
                     "Failed to expire HITL interaction %s",
                     interaction.get("interaction_id"),
+                )
+        return repaired
+
+    async def _repair_answers(self) -> int:
+        repaired = 0
+        async for interaction in self._lifecycle.iter_active_interactions(
+            limit=self._limit
+        ):
+            try:
+                before = list(interaction.get("answer_refs") or [])
+                current = await self._application.repair_persisted_answer_refs(
+                    self._service, interaction
+                )
+                if list(current.get("answer_refs") or []) != before:
+                    repaired += 1
+                if (
+                    current.get("status")
+                    == HITLInteractionStatus.ANSWERS_RECORDED.value
+                ):
+                    await self._application.apply_interaction(self._service, current)
+            except Exception:
+                logger.warning(
+                    "HITL answer reference repair remains pending",
+                    extra={"interaction_id": interaction.get("interaction_id")},
+                    exc_info=True,
                 )
         return repaired
 
@@ -149,15 +199,26 @@ class HITLLifecycleReconciler:
             utcnow(), limit=self._limit
         ):
             try:
+                interaction = await self._lifecycle.get_interaction_strict(
+                    command["interaction_id"]
+                )
+                if interaction is None:
+                    continue
+                await self._application._request_rows(
+                    self._service, interaction, require_answers=False
+                )
+                validate_command_route_consistency(interaction, command)
                 status = command.get("status")
                 if (
                     status == HITLResumeCommandStatus.DELIVERING.value
                     and command.get("kind") == "supervisor_resume"
                 ):
-                    retryable = await self._lifecycle.mark_resume_command_state(
+                    retryable = await self._lifecycle.reclaim_stale_resume_command(
                         command["command_id"],
-                        claim_id=None,
-                        expected_statuses=[status],
+                        observed_claim_id=command.get("claim_id"),
+                        observed_version=int(command["version"]),
+                        observed_lease_expires_at=command["lease_expires_at"],
+                        now=utcnow(),
                         status=HITLResumeCommandStatus.RETRYABLE_ERROR.value,
                         error_code="supervisor_worker_lost",
                         error_message="Replaying idempotent supervisor effect",
@@ -167,19 +228,18 @@ class HITLLifecycleReconciler:
                         repaired += 1
                     continue
                 if status == HITLResumeCommandStatus.DELIVERING.value:
-                    uncertain = await self._lifecycle.mark_resume_command_state(
+                    uncertain = await self._lifecycle.reclaim_stale_resume_command(
                         command["command_id"],
-                        claim_id=None,
-                        expected_statuses=[status],
+                        observed_claim_id=command.get("claim_id"),
+                        observed_version=int(command["version"]),
+                        observed_lease_expires_at=command["lease_expires_at"],
+                        now=utcnow(),
                         status=HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
                         error_code="worker_lost_after_delivery_started",
                         error_message="Delivery acknowledgement was not persisted",
                     )
                     if uncertain is not None:
-                        interaction = await self._lifecycle.get_interaction_strict(
-                            command["interaction_id"]
-                        )
-                        if interaction and interaction.get("application_claim_id"):
+                        if interaction.get("application_claim_id"):
                             await self._lifecycle.mark_interaction_application_state(
                                 interaction["interaction_id"],
                                 claim_id=interaction["application_claim_id"],
@@ -206,15 +266,23 @@ class HITLLifecycleReconciler:
                     await self._finish_confirmed_command(command)
                     repaired += 1
                     continue
-                if status == HITLResumeCommandStatus.RETRYABLE_ERROR.value:
-                    interaction = await self._lifecycle.get_interaction_strict(
-                        command["interaction_id"]
+                if status == HITLResumeCommandStatus.PERMANENT_FAILURE.value:
+                    await self._application.fail_interaction(
+                        self._service,
+                        interaction,
+                        reason=(
+                            command.get("error_message")
+                            or "Remote continuation permanently failed"
+                        ),
+                        application_claim_id=interaction.get("application_claim_id"),
                     )
-                    if interaction:
-                        await self._application.apply_interaction(
-                            self._service, interaction
-                        )
-                        repaired += 1
+                    repaired += 1
+                    continue
+                if status == HITLResumeCommandStatus.RETRYABLE_ERROR.value:
+                    await self._application.apply_interaction(
+                        self._service, interaction
+                    )
+                    repaired += 1
                     continue
                 if (
                     status == HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value
@@ -246,6 +314,22 @@ class HITLLifecycleReconciler:
                 logger.warning(
                     "HITL resume command remains pending",
                     extra={"command_id": command.get("command_id")},
+                    exc_info=True,
+                )
+        return repaired
+
+    async def _reconcile_terminal_interactions(self) -> int:
+        repaired = 0
+        async for (
+            interaction
+        ) in self._lifecycle.iter_unreconciled_terminal_interactions(limit=self._limit):
+            try:
+                await self._service.reconcile_terminal_interaction(interaction)
+                repaired += 1
+            except Exception:
+                logger.warning(
+                    "HITL terminal interaction remains unreconciled",
+                    extra={"interaction_id": interaction.get("interaction_id")},
                     exc_info=True,
                 )
         return repaired

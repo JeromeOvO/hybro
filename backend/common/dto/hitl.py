@@ -54,6 +54,14 @@ class HITLPublicSource(StrEnum):
     SYSTEM = "system"
 
 
+class HITLEvidenceOrigin(StrEnum):
+    """Where the need for human evidence was observed."""
+
+    AGENT = "agent"
+    SUPERVISOR = "supervisor"
+    SYSTEM = "system"
+
+
 class HITLAnswerKind(StrEnum):
     TEXT = "text"
     SINGLE_CHOICE = "single_choice"
@@ -266,6 +274,7 @@ __all__ = [
     "HITLAuthorizationResultAnswer",
     "HITLCancelCommand",
     "HITLConfirmationAnswer",
+    "HITLEvidenceOrigin",
     "HITLInteractionKind",
     "HITLMultiChoiceAnswer",
     "HITLPolicyDecision",

@@ -10,7 +10,7 @@ from execution.hitl.service import HITLService
 from execution.orchestration.run_reducer import record_hitl_terminalization
 from execution.orchestration.run_store import InMemoryOrchestrationRunStore
 from execution.task_tracking import A2ATaskTrackingService
-from models.hitl import HITLPromptType, HITLRequest, HITLStatus
+from models.hitl import HITLRequest, HITLStatus
 from models.orchestration import OrchestrationRunState, OrchestrationStatus
 from models.run import RunState
 
@@ -90,221 +90,6 @@ async def test_reply_json_rpc_error_becomes_failed_task_not_input_required():
     assert store.update_task_on_message.await_args.args[1]["id"] == "remote-task-1"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        "",
-        "The agent needs additional information.",
-        "PRIVATE_SENTINEL hidden",
-        "Send a JSON object or DataPart containing client.name and client.industry.",
-    ],
-)
-async def test_agent_hitl_rejects_missing_generic_or_private_prompt(prompt: str):
-    service = HITLService()
-    persistence = MagicMock()
-    persistence.create_or_reuse_pending_hitl_request = AsyncMock()
-    service._persistence = persistence
-
-    result = await service.request_input(
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="agent",
-        prompt=prompt,
-        a2a_task_id="remote-task-1",
-        a2a_context_id="remote-context-1",
-        continuation_message_id="agent-message-1",
-    )
-
-    assert result is None
-    persistence.create_or_reuse_pending_hitl_request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_agent_auth_hitl_preserves_authentication_prompt_type():
-    service = HITLService()
-    persistence = MagicMock()
-    persistence.count_hitl_requests_for_message = AsyncMock(return_value=0)
-    persistence.get_room_user_message_by_message_id = AsyncMock(return_value=None)
-    persistence.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-    persistence.create_or_reuse_pending_hitl_request = AsyncMock(
-        side_effect=lambda doc: (doc, True)
-    )
-    persistence.persist_pending_hitl_on_agent_message = AsyncMock(return_value=True)
-    delivery = MagicMock()
-    delivery.emit = AsyncMock()
-    service._persistence = persistence
-    service._delivery = delivery
-
-    request = await service.request_input(
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="agent",
-        prompt="Authenticate with the carrier portal",
-        prompt_type=HITLPromptType.AUTHENTICATION,
-        a2a_task_id="remote-task-1",
-        a2a_context_id="remote-context-1",
-        continuation_message_id="agent-message-1",
-    )
-
-    assert request is not None
-    assert request.prompt_type == HITLPromptType.AUTHENTICATION
-    emitted = delivery.emit.await_args.args[0]
-    assert emitted.prompt_type == "authentication"
-
-
-@pytest.mark.asyncio
-async def test_reused_legacy_agent_hitl_atomically_backfills_authoritative_ids():
-    service = HITLService()
-    persistence = MagicMock()
-    persistence.count_hitl_requests_for_message = AsyncMock(return_value=0)
-    persistence.get_room_user_message_by_message_id = AsyncMock(return_value=None)
-    persistence.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-    persistence.persist_pending_hitl_on_agent_message = AsyncMock(return_value=True)
-    persistence.cas_update_hitl_request = AsyncMock(return_value=True)
-
-    async def reuse_legacy(request_data):
-        legacy = dict(request_data)
-        legacy.update(
-            {
-                "request_id": "legacy-hitl-1",
-                "a2a_task_id": "pending-old-context",
-                "a2a_context_id": None,
-            }
-        )
-        return legacy, False
-
-    persistence.create_or_reuse_pending_hitl_request = AsyncMock(
-        side_effect=reuse_legacy
-    )
-    delivery = MagicMock()
-    delivery.emit = AsyncMock()
-    service._persistence = persistence
-    service._delivery = delivery
-
-    result = await service.request_input(
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="agent",
-        prompt="What is the insured email address?",
-        agent_id="agent-1",
-        a2a_task_id="remote-task-2",
-        a2a_context_id="remote-context-2",
-        continuation_message_id="agent-message-1",
-    )
-
-    assert result is not None
-    assert result.request_id == "legacy-hitl-1"
-    assert result.a2a_task_id == "remote-task-2"
-    assert result.a2a_context_id == "remote-context-2"
-    persistence.cas_update_hitl_request.assert_awaited_once_with(
-        "legacy-hitl-1",
-        expected_status=HITLStatus.PENDING.value,
-        a2a_task_id="remote-task-2",
-        a2a_context_id="remote-context-2",
-    )
-    projection = persistence.persist_pending_hitl_on_agent_message.await_args.kwargs
-    assert projection["a2a_task_id"] == "remote-task-2"
-    assert projection["a2a_context_id"] == "remote-context-2"
-
-
-@pytest.mark.asyncio
-async def test_mismatched_reused_agent_hitl_is_not_silently_canceled():
-    service = HITLService()
-    persistence = MagicMock()
-    persistence.count_hitl_requests_for_message = AsyncMock(return_value=0)
-    persistence.get_room_user_message_by_message_id = AsyncMock(return_value=None)
-    persistence.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
-    persistence.cas_update_hitl_request = AsyncMock(return_value=True)
-
-    async def reuse_other_request(request_data):
-        existing = dict(request_data)
-        existing.update(
-            {
-                "request_id": "existing-hitl-1",
-                "continuation_message_id": "different-agent-message",
-                "display_message_id": "different-agent-message",
-            }
-        )
-        return existing, False
-
-    persistence.create_or_reuse_pending_hitl_request = AsyncMock(
-        side_effect=reuse_other_request
-    )
-    service._persistence = persistence
-
-    result = await service.request_input(
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="agent",
-        prompt="What is the insured email address?",
-        agent_id="agent-1",
-        a2a_task_id="remote-task-2",
-        a2a_context_id="remote-context-2",
-        continuation_message_id="agent-message-1",
-    )
-
-    assert result is None
-    persistence.cas_update_hitl_request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_pending_hydration_excludes_malformed_agent_hitl_records():
-    valid_agent = HITLRequest(
-        request_id="valid-agent-hitl",
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="agent",
-        prompt="What is the insured email address?",
-        prompt_type=HITLPromptType.TEXT,
-        a2a_task_id="remote-task-1",
-        a2a_context_id="remote-context-1",
-        continuation_message_id="agent-message-1",
-        display_message_id="agent-message-1",
-    ).model_dump(mode="json")
-    supervisor = HITLRequest(
-        request_id="supervisor-hitl",
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="supervisor",
-        prompt="Choose a market",
-        prompt_type=HITLPromptType.TEXT,
-    ).model_dump(mode="json")
-    malformed = []
-    for request_id, updates in (
-        ("missing-task", {"a2a_task_id": None}),
-        ("provisional-task", {"a2a_task_id": "pending-context"}),
-        ("missing-context", {"a2a_context_id": None}),
-        ("provisional-context", {"a2a_context_id": "relay-pending-context"}),
-        ("generic-prompt", {"prompt": "The agent needs additional information."}),
-    ):
-        document = dict(valid_agent)
-        document.update({"request_id": request_id, **updates})
-        malformed.append(document)
-
-    persistence = MagicMock()
-    persistence.get_pending_hitl_requests = AsyncMock(
-        return_value=[valid_agent, supervisor, *malformed]
-    )
-    persistence.get_pending_hitl_requests_for_message = AsyncMock(
-        return_value=[valid_agent, supervisor, *malformed]
-    )
-    service = HITLService()
-    service._persistence = persistence
-
-    room_pending = await service.get_pending_requests("room-1")
-    message_pending = await service.get_pending_requests_for_message("user-message-1")
-
-    assert [request.request_id for request in room_pending] == [
-        "valid-agent-hitl",
-        "supervisor-hitl",
-    ]
-    assert [request.request_id for request in message_pending] == [
-        "valid-agent-hitl",
-        "supervisor-hitl",
-    ]
-
-
 def test_hitl_terminalization_clears_pending_state_and_terminates_run():
     state = OrchestrationRunState(
         run_id="run-1",
@@ -372,37 +157,6 @@ async def test_terminal_lifecycle_projects_orchestration_and_public_run():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("task_id", "context_id"),
-    [
-        (None, "remote-context-1"),
-        ("remote-task-1", None),
-        ("", "remote-context-1"),
-        ("pending-local", "remote-context-1"),
-        ("relay-pending-local", "remote-context-1"),
-    ],
-)
-async def test_agent_hitl_requires_authoritative_remote_ids(task_id, context_id):
-    service = HITLService()
-    persistence = MagicMock()
-    persistence.create_or_reuse_pending_hitl_request = AsyncMock()
-    service._persistence = persistence
-
-    result = await service.request_input(
-        room_id="room-1",
-        user_message_id="user-message-1",
-        source="agent",
-        prompt="What is the insured email address?",
-        a2a_task_id=task_id,
-        a2a_context_id=context_id,
-        continuation_message_id="agent-message-1",
-    )
-
-    assert result is None
-    persistence.create_or_reuse_pending_hitl_request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_successful_reply_returns_rotated_authoritative_continuation_ids():
     store = MagicMock()
     store.get_room_agent_message_by_message_id = AsyncMock(
@@ -441,6 +195,7 @@ async def test_successful_reply_returns_rotated_authoritative_continuation_ids()
     assert result["task_id"] == "remote-task-2"
     assert result["context_id"] == "remote-context-2"
     request = SimpleNamespace(
+        interaction_id="interaction-1",
         continuation_message_id="agent-message-1",
         a2a_task_id="remote-task-1",
         a2a_context_id="remote-context-1",
@@ -467,68 +222,15 @@ async def test_successful_reply_returns_rotated_authoritative_continuation_ids()
         a2a_task_id="remote-task-2",
         a2a_context_id="remote-context-2",
     )
-    hitl.request_input = AsyncMock(return_value=followup)
+    hitl.request_interaction = AsyncMock(return_value=[followup])
 
     chained = await hitl._handle_agent_response(request, "insured@example.com")
 
-    assert hitl.request_input.await_args.kwargs["a2a_task_id"] == "remote-task-2"
-    assert hitl.request_input.await_args.kwargs["a2a_context_id"] == "remote-context-2"
+    snapshot = hitl.request_interaction.await_args.kwargs["route_snapshot"]
+    assert snapshot.task_id == "remote-task-2"
+    assert snapshot.context_id == "remote-context-2"
     assert chained["a2a_task_id"] == "remote-task-2"
     assert chained["a2a_context_id"] == "remote-context-2"
-
-
-@pytest.mark.asyncio
-async def test_cancel_failure_persists_failed_run_outcome_for_reconciliation():
-    service = HITLService()
-    persistence = MagicMock()
-    pending = {
-        "request_id": "hitl-1",
-        "room_id": "room-1",
-        "user_message_id": "user-message-1",
-        "source": "supervisor",
-        "prompt": "Clarify?",
-        "status": "pending",
-        "orchestration_run_id": "run-1",
-    }
-    persistence.get_hitl_request = AsyncMock(return_value=pending)
-    persistence.get_hitl_group_requests = AsyncMock(return_value=[])
-    persistence.cas_update_hitl_request = AsyncMock(return_value=True)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
-    persistence.update_hitl_request = AsyncMock(return_value=True)
-    service._persistence = persistence
-    service._delivery = SimpleNamespace(emit=AsyncMock())
-    lifecycle = SimpleNamespace(
-        terminalize_owning_run=AsyncMock(side_effect=RuntimeError("temporary"))
-    )
-    service._terminal_lifecycle = lifecycle
-
-    with pytest.raises(RuntimeError, match="side effects remain pending"):
-        await service.cancel_request(
-            "hitl-1", failure_reason="Agent did not acknowledge the task"
-        )
-
-    cas_kwargs = persistence.cas_update_hitl_request.await_args.kwargs
-    assert cas_kwargs["owning_run_terminal_status"] == "failed"
-    assert cas_kwargs["owning_run_terminal_reason"] == (
-        "Agent did not acknowledge the task"
-    )
-    persisted_terminal = {
-        **pending,
-        "status": "canceled",
-        "cancellation_reconciled": False,
-        "owning_run_terminal_status": "failed",
-        "owning_run_terminal_reason": "Agent did not acknowledge the task",
-    }
-    persistence.get_hitl_request.return_value = persisted_terminal
-    lifecycle.terminalize_owning_run.side_effect = None
-
-    await service.cancel_request("hitl-1")
-
-    assert lifecycle.terminalize_owning_run.await_args.kwargs == {
-        "terminal_status": "failed",
-        "reason": "Agent did not acknowledge the task",
-    }
 
 
 @pytest.mark.asyncio
@@ -584,3 +286,100 @@ async def test_terminal_event_append_failure_is_retryable_and_exactly_once():
     saved = await store.get_run("run-1")
     assert saved is not None
     assert saved.terminal_reason == "Input expired"
+
+
+def _agent_hitl_request(**updates) -> HITLRequest:
+    data = {
+        "schema_version": 3,
+        "request_id": "hitl-old",
+        "interaction_id": "interaction-old",
+        "question_index": 0,
+        "question_count": 1,
+        "room_id": "room-123",
+        "user_message_id": "user-msg-456",
+        "application_route": "a2a_resume",
+        "public_source": "agent",
+        "evidence_origin": "agent",
+        "prompt": "Need more information.",
+        "agent_id": "agent-1",
+        "agent_name": "Agent",
+        "a2a_task_id": "task-1",
+        "a2a_context_id": "context-1",
+        "continuation_message_id": "agent-message-1",
+        "display_message_id": "agent-message-1",
+        "orchestration_run_id": "run-1",
+    }
+    data.update(updates)
+    return HITLRequest(**data)
+
+
+@pytest.mark.asyncio
+async def test_followup_without_interactive_state_fails_without_new_interaction():
+    request = _agent_hitl_request()
+    service = HITLService()
+    service._persistence = SimpleNamespace(reset_last_notified_state=AsyncMock())
+    service._agent_reply = SimpleNamespace(
+        reply_to_task=AsyncMock(
+            return_value={"blocking": True, "task_state": None, "response_text": ""}
+        )
+    )
+    service.request_interaction = AsyncMock()
+
+    result = await service._handle_agent_response(request, "answer")
+
+    assert result["routing_failed"] is True
+    assert result["error_code"] == "invalid_interactive_prompt"
+    service.request_interaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_safe_followup_creates_new_interaction_with_rotated_route():
+    request = _agent_hitl_request(prompt="Where do you want to go?")
+    service = HITLService()
+    service._persistence = SimpleNamespace(reset_last_notified_state=AsyncMock())
+    service._agent_reply = SimpleNamespace(
+        reply_to_task=AsyncMock(
+            return_value={
+                "blocking": True,
+                "task_state": "input-required",
+                "response_text": "What is your budget?",
+                "task_id": "task-2",
+                "context_id": "context-2",
+            }
+        )
+    )
+    followup = request.model_copy(
+        update={"request_id": "hitl-next", "interaction_id": "interaction-next"}
+    )
+    service.request_interaction = AsyncMock(return_value=[followup])
+
+    result = await service._handle_agent_response(request, "Paris")
+
+    assert result["followup_hitl_request_id"] == "hitl-next"
+    kwargs = service.request_interaction.await_args.kwargs
+    assert kwargs["questions"][0]["prompt"] == "What is your budget?"
+    assert kwargs["route_snapshot"].task_id == "task-2"
+    assert kwargs["route_snapshot"].context_id == "context-2"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_followup_returns_control_without_new_interaction():
+    request = _agent_hitl_request(prompt="Please provide the complete submission.")
+    service = HITLService()
+    service._persistence = SimpleNamespace(reset_last_notified_state=AsyncMock())
+    service._agent_reply = SimpleNamespace(
+        reply_to_task=AsyncMock(
+            return_value={
+                "blocking": True,
+                "task_state": "input-required",
+                "response_text": " Please provide the complete submission. ",
+            }
+        )
+    )
+    service.request_interaction = AsyncMock()
+
+    result = await service._handle_agent_response(request, "answer")
+
+    assert result["agent_no_progress"] is True
+    assert result["resume_execution"] is True
+    service.request_interaction.assert_not_awaited()

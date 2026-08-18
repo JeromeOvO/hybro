@@ -813,21 +813,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_store.resolve_client_request_id_for_message_id
                 ),
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
-                persist_hitl_group_metadata=hitl_store.persist_hitl_group_metadata,
+                persist_hitl_interaction_metadata=(
+                    hitl_store.persist_hitl_interaction_metadata
+                ),
                 get_hitl_request=hitl_store.get_hitl_request,
                 update_hitl_request=hitl_store.update_hitl_request,
                 claim_hitl_request=hitl_store.claim_hitl_request,
                 fenced_update_hitl_request=hitl_store.fenced_update_hitl_request,
-                count_pending_in_hitl_group=hitl_store.count_pending_in_hitl_group,
-                get_hitl_group_requests=hitl_store.get_hitl_group_requests,
-                get_pending_hitl_group_requests_strict=(
-                    hitl_store.get_pending_hitl_group_requests_strict
-                ),
-                get_unreconciled_terminal_hitl_group_requests_strict=(
-                    hitl_store.get_unreconciled_terminal_hitl_group_requests_strict
-                ),
-                release_hitl_group_routing=hitl_store.release_hitl_group_routing,
-                claim_hitl_group_routing=hitl_store.claim_hitl_group_routing,
                 reset_last_notified_state=message_store.reset_last_notified_state,
                 get_room_agent_message_by_message_id=(
                     message_store.get_room_agent_message_by_message_id
@@ -1186,7 +1178,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
                 from a2a_adapter.remote_task import fetch_remote_task
-                from common.a2a_constants import INTERACTIVE_STATES
+                from common.a2a_constants import TERMINAL_STATES
+                from execution.task_tracking import extract_public_completed_status_text
 
                 message = await message_store.get_room_agent_message_by_message_id(
                     command.get("continuation_message_id")
@@ -1199,12 +1192,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 if task is None or getattr(task, "status", None) is None:
                     return None
                 state = getattr(task.status.state, "value", task.status.state)
-                interactive_values = {item.value for item in INTERACTIVE_STATES}
+                terminal_values = {item.value for item in TERMINAL_STATES}
+                if state not in terminal_values:
+                    return {"advanced": False}
                 return {
-                    "advanced": state not in interactive_values,
+                    "advanced": True,
+                    "reconciled_from_get_task": True,
+                    "blocking": True,
                     "task_id": task.id,
                     "context_id": task.context_id,
                     "task_state": state,
+                    "response_text": extract_public_completed_status_text(task) or "",
                 }
 
             hitl_reconciler = HITLLifecycleReconciler(

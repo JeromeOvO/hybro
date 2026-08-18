@@ -42,14 +42,7 @@ ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 
 
 class HITLCoordinator(Protocol):
-    async def request_input(
-        self,
-        room_id: str,
-        user_message_id: str,
-        source: str,
-        prompt: str,
-        **kwargs: Any,
-    ) -> Any | None: ...
+    async def request_interaction(self, **kwargs: Any) -> list[Any] | None: ...
 
     async def cancel_request(self, request_id: str, room_id: str) -> None: ...
 
@@ -78,12 +71,6 @@ class HITLPersistencePort(Protocol):
         *update_docs: dict[str, Any],
         **updates: Any,
     ) -> bool: ...
-    async def count_pending_in_hitl_group(self, group_id: str) -> int: ...
-    async def claim_hitl_group_routing(self, group_id: str, claim_id: str) -> bool: ...
-    async def release_hitl_group_routing(
-        self, group_id: str, claim_id: str
-    ) -> bool: ...
-    async def get_hitl_group_requests(self, group_id: str) -> list[dict[str, Any]]: ...
     async def get_pending_hitl_requests(self, room_id: str) -> list[dict[str, Any]]: ...
     async def get_pending_hitl_requests_strict(
         self, room_id: str
@@ -132,20 +119,20 @@ class HITLPersistencePort(Protocol):
         choices: list[str] | None,
         a2a_task_id: str | None,
         a2a_context_id: str | None,
-        group_id: str | None,
-        group_total: int | None,
-        group_index: int | None,
+        interaction_id: str,
+        question_count: int,
+        question_index: int,
     ) -> bool: ...
     async def persist_hitl_user_answer(
         self, message_id: str, user_input: str | None
     ) -> None: ...
-    async def persist_hitl_group_metadata(
+    async def persist_hitl_interaction_metadata(
         self,
         message_id: str,
         *,
-        group_id: str | None,
-        group_total: int | None,
-        group_index: int | None,
+        interaction_id: str | None,
+        question_count: int | None,
+        question_index: int | None,
     ) -> None: ...
     async def get_room_agent_message_by_message_id(
         self, message_id: str
@@ -199,7 +186,7 @@ class HITLLifecyclePersistencePort(Protocol):
         request_id: str,
         required: bool,
         expires_at: Any,
-        group_index: int | None = None,
+        question_index: int,
     ) -> dict[str, Any] | None: ...
     async def get_interaction_strict(
         self, interaction_id: str
@@ -207,9 +194,9 @@ class HITLLifecyclePersistencePort(Protocol):
     async def get_interaction_for_request_strict(
         self, request_id: str
     ) -> dict[str, Any] | None: ...
-    async def synthesize_interaction_from_requests(
-        self, requests: list[dict[str, Any]]
-    ) -> dict[str, Any] | None: ...
+    async def iter_materializing_interactions(
+        self, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
     async def record_interaction_answer(
         self,
         interaction_id: str,
@@ -272,6 +259,8 @@ class HITLLifecyclePersistencePort(Protocol):
         expected_statuses: list[str],
         status: str,
         reason: str,
+        member_status: str | None = None,
+        owning_run_terminal_status: str | None = None,
     ) -> dict[str, Any] | None: ...
     async def mark_interaction_terminal_reconciled(
         self, interaction_id: str, *, version: int
@@ -299,6 +288,19 @@ class HITLLifecyclePersistencePort(Protocol):
         claim_id: str,
         lease_seconds: int,
     ) -> bool: ...
+    async def reclaim_stale_resume_command(
+        self,
+        command_id: str,
+        *,
+        observed_claim_id: str | None,
+        observed_version: int,
+        observed_lease_expires_at: Any,
+        now: Any,
+        status: str,
+        error_code: str,
+        error_message: str,
+        retry_after_seconds: int | None = None,
+    ) -> dict[str, Any] | None: ...
     async def mark_resume_command_state(
         self,
         command_id: str,
@@ -324,6 +326,9 @@ class HITLLifecyclePersistencePort(Protocol):
     def iter_active_interactions(
         self, *, limit: int = 100
     ) -> AsyncIterator[dict[str, Any]]: ...
+    def iter_unreconciled_terminal_interactions(
+        self, *, limit: int = 100
+    ) -> AsyncIterator[dict[str, Any]]: ...
     def iter_unreconciled_terminal_requests(
         self, *, limit: int = 100
     ) -> AsyncIterator[dict[str, Any]]: ...
@@ -337,6 +342,11 @@ class HITLContinuationPort(Protocol):
         *,
         task_result_text: str | None = None,
         failed: bool = False,
+    ) -> bool: ...
+
+    async def has_pending_queue_continuation(
+        self,
+        continuation_message_id: str,
     ) -> bool: ...
 
 

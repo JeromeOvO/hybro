@@ -19,12 +19,19 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from common.a2a_constants import SSEProcessingStatus
+from common.dto import (
+    HITLApplicationRoute,
+    HITLEvidenceOrigin,
+    HITLPublicSource,
+    HITLRouteSnapshot,
+)
 from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.hitl.public_prompt import concrete_agent_input_prompt
+from execution.hitl.validation import deterministic_interaction_id
 from execution.orchestration.file_turn import persist_file_turn_task
 from execution.state.task_state_manager import TaskStateManager
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
@@ -514,24 +521,45 @@ class QueueExecutor:
                         )
                         if self.hitl_coordinator is None:
                             raise RuntimeError("HITL coordinator has not been bound")
-                        hitl_req = await self.hitl_coordinator.request_input(
+                        interaction_id = deterministic_interaction_id(
+                            event_identity=result.message_id,
+                            round_identity=(
+                                f"{result.a2a_task_id}:{result.a2a_context_id}"
+                            ),
+                        )
+                        hitl_requests = await self.hitl_coordinator.request_interaction(
                             room_id=room_id,
                             user_message_id=user_message_id,
-                            source="agent",
-                            prompt=agent_hitl_prompt,
-                            **(
-                                {"prompt_type": "authentication"}
-                                if result.requires_auth
-                                or result.interactive_state == "auth-required"
-                                else {}
+                            interaction_id=interaction_id,
+                            application_route=HITLApplicationRoute.A2A_RESUME,
+                            public_source=HITLPublicSource.AGENT,
+                            evidence_origin=HITLEvidenceOrigin.AGENT,
+                            route_snapshot=HITLRouteSnapshot(
+                                route=HITLApplicationRoute.A2A_RESUME,
+                                task_id=result.a2a_task_id,
+                                context_id=result.a2a_context_id,
+                                continuation_message_id=result.message_id,
+                                agent_id=current_message.agent_id,
                             ),
-                            agent_id=current_message.agent_id,
-                            agent_name=(agent.agent_card.name if agent else None),
-                            a2a_task_id=result.a2a_task_id,
-                            a2a_context_id=result.a2a_context_id,
-                            continuation_message_id=result.message_id,
-                            display_message_id=current_message.message_id,
+                            questions=[
+                                {
+                                    "prompt": agent_hitl_prompt,
+                                    **(
+                                        {"prompt_type": "authentication"}
+                                        if result.requires_auth
+                                        or result.interactive_state == "auth-required"
+                                        else {}
+                                    ),
+                                    "agent_id": current_message.agent_id,
+                                    "agent_name": (
+                                        agent.agent_card.name if agent else None
+                                    ),
+                                    "continuation_message_id": result.message_id,
+                                    "display_message_id": current_message.message_id,
+                                }
+                            ],
                         )
+                        hitl_req = hitl_requests[0] if hitl_requests else None
                         if hitl_req is None:
                             logger.warning(
                                 "QueueExecutor: Max HITL rounds exceeded "
@@ -917,6 +945,8 @@ class QueueExecutor:
         self,
         message_id: str,
         task_result_text: str | None = None,
+        *,
+        failed: bool = False,
     ) -> ResumeResult:
         """Resume queue processing after a push notification task completes.
 
@@ -1019,6 +1049,34 @@ class QueueExecutor:
             if token.is_cancelled:
                 self._release_cancellation_token(user_message_id, token)
                 return ResumeResult(success=True)
+
+            if failed:
+                await self._publish_agent_message_committed(
+                    room_id=room_id,
+                    agent_id=continuation_fields.get("current_agent_id"),
+                    agent_name=continuation_fields.get("current_agent_name", "Agent"),
+                    was_successful=False,
+                    message_id=message_id,
+                )
+                await self._emit_processing_status(
+                    room_id=room_id,
+                    status=SSEProcessingStatus.FAILED,
+                    message_id=user_message_id,
+                    lifecycle_message_id=user_message_id,
+                    system_message_id=f"sys-{user_message_id}",
+                    details={
+                        "message": task_result_text or "Agent task failed",
+                        "code": "agent_task_failed",
+                    },
+                    turn_event_enabled=False,
+                )
+                self._release_cancellation_token(user_message_id, token)
+                return ResumeResult(
+                    success=True,
+                    needs_completion=False,
+                    room_id=room_id,
+                    user_message_id=user_message_id,
+                )
 
             quoted_text_resume: str | None = None
             um_resume = await self.message_reader.get_room_user_message_by_message_id(

@@ -220,7 +220,8 @@ async def test_trusted_hitl_projection_uses_verified_record_and_redacts_agent_pr
             return_value={
                 "request_id": "hitl-1",
                 "room_id": "room-1",
-                "source": "agent",
+                "public_source": "agent",
+                "application_route": "a2a_resume",
                 "status": "pending",
                 "display_message_id": "agent-1",
                 "agent_id": "agent-1",
@@ -264,7 +265,8 @@ async def test_trusted_hitl_projection_fails_closed_on_identity_mismatch(
             return_value={
                 "request_id": "hitl-1",
                 "room_id": "room-1",
-                "source": "agent",
+                "public_source": "agent",
+                "application_route": "a2a_resume",
                 "agent_id": "agent-1",
                 "display_message_id": "agent-1",
                 "a2a_task_id": "task-1",
@@ -290,7 +292,8 @@ async def test_trusted_hitl_projection_fails_closed_on_identity_mismatch(
         {
             "request_id": "hitl-1",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "status": "canceled",
             "display_message_id": "agent-1",
         },

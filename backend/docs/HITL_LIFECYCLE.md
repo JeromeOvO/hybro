@@ -11,6 +11,16 @@ observations remain private runtime data on
 `execution.dispatch.agent_event.AgentEvent` and are not fields on public delivery
 DTOs.
 
+## R1 persisted aggregate migration
+
+R1 makes the persisted interaction and its immutable `HITLRouteSnapshot` the sole
+answer-application authority. Request members carry required independent
+`application_route`, `public_source`, and `evidence_origin` classifications plus
+an exact `question_index`; they no longer synthesize interactions or route through
+legacy group metadata. This is an intentionally destructive schema change. **Wipe
+the runtime MongoDB database before starting this version**; no backfill or legacy
+readiness path is supported.
+
 ## Continuation and failure invariants
 
 Hybro treats the remote A2A `Task.id` and `Task.contextId` returned by the agent as
@@ -39,9 +49,10 @@ provisional task as never acknowledged.
 `hitl_requests` remains the compatibility projection for individual questions. The
 `hitl_interactions` aggregate owns whether the complete questionnaire is visible,
 which required answers are recorded, the shared earliest deadline, and whether its
-single application revision is pending or complete. Requests are not emitted until
-the aggregate is `open`; grouped requests stay `materializing` until all expected
-request IDs are durably attached.
+single application revision is pending or complete. The aggregate persists a complete immutable creation inventory before any request
+row is written. Requests are not emitted until the aggregate is `open`; grouped
+requests stay `materializing` until all inventory members are durably created and
+attached. Retries and the reconciler resume missing members from that inventory.
 
 | Interaction state | Meaning | Next states |
 | --- | --- | --- |
@@ -63,10 +74,10 @@ digest; plaintext answers remain only on the access-controlled request documents
 
 Deadlines are authoritative in Mongo claim and pending-read queries. Legacy missing
 or null deadlines remain non-expiring. The leader-gated stale checker runs bounded
-passes in this order: cancellation, interaction deadline/application/command
-reconciliation, then generic stale-agent processing. Lazy synthesis makes startup
-non-blocking; `scripts/backfill_hitl_interactions.py` is dry-run unless `--apply` is
-explicitly supplied and reports conflicting legacy groups rather than guessing.
+passes in this order: cancellation, materialization, interaction deadline,
+application/command and terminal-member reconciliation, then generic stale-agent
+processing. The R1 schema has no lazy synthesis or backfill path; startup assumes
+the required fresh-schema wipe has already been completed.
 
 ### Recovery invariants added after Milestone 2 review
 

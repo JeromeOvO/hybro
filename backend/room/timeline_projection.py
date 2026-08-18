@@ -103,7 +103,7 @@ class RoomTimelineProjector:
         if (
             request.get("request_id") != request_id
             or request.get("room_id") != agent_message.room_id
-            or request.get("source") not in {"agent", "supervisor"}
+            or request.get("public_source") not in {"agent", "supervisor", "system"}
             or request.get("status") in {"canceled", "expired"}
         ):
             return None, None
@@ -122,7 +122,7 @@ class RoomTimelineProjector:
         if request_context_id is not None and request_context_id != task.context_id:
             return None, None
 
-        if request.get("source") == "agent":
+        if request.get("public_source") == "agent":
             prompt = _GENERIC_AGENT_INPUT_PROMPT
             prompt_type = "text"
             choices = None
@@ -139,12 +139,18 @@ class RoomTimelineProjector:
             "hitl_prompt_type": prompt_type,
             "hitl_choices": choices,
         }
+        question_count = request.get("question_count")
+        is_questionnaire = isinstance(question_count, int) and question_count > 1
         optional_fields = {
             "hitl_a2a_task_id": request.get("a2a_task_id"),
             "hitl_a2a_context_id": request.get("a2a_context_id"),
-            "hitl_group_id": request.get("group_id"),
-            "hitl_group_total": request.get("group_total"),
-            "hitl_group_index": request.get("group_index"),
+            "hitl_group_id": (
+                request.get("interaction_id") if is_questionnaire else None
+            ),
+            "hitl_group_total": question_count if is_questionnaire else None,
+            "hitl_group_index": (
+                request.get("question_index") if is_questionnaire else None
+            ),
             "user_answer": request.get("user_input"),
         }
         trusted.update(

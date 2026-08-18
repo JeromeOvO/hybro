@@ -69,9 +69,6 @@ class HITLManager(Protocol):
             "file",
         ] = "text",
         choices: list[str] | None = None,
-        group_id: str | None = None,
-        group_total: int | None = None,
-        group_index: int | None = None,
     ) -> HITLRequest | None: ...
 
     async def resolve_hitl(

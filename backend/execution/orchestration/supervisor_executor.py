@@ -31,6 +31,12 @@ from cachetools import TTLCache
 
 from common.a2a_constants import SSEProcessingStatus
 from common.config import settings as _settings
+from common.dto import (
+    HITLApplicationRoute,
+    HITLEvidenceOrigin,
+    HITLPublicSource,
+    HITLRouteSnapshot,
+)
 from common.message_commit_events import publish_message_committed
 from common.observability import bind_log_context, safe_exception_metadata
 from common.utils.a2a_helpers import artifacts_to_dicts
@@ -46,6 +52,7 @@ from execution.hitl.public_prompt import (
     is_internal_agent_contract_prompt,
     public_agent_input_prompt,
 )
+from execution.hitl.validation import deterministic_interaction_id
 from execution.orchestration.action_validator import (
     PlannerActionValidationError,
     PlannerActionValidator,
@@ -4550,25 +4557,45 @@ class SupervisorExecutor:
             return mutate
 
         try:
-            request = await self.hitl_coordinator.request_input(
+            interaction_id = deterministic_interaction_id(
+                event_identity=continuation_message_id,
+                round_identity=(
+                    f"{state.run_id}:{awaiting_result.a2a_task_id}:"
+                    f"{awaiting_result.a2a_context_id}"
+                ),
+            )
+            requests = await self.hitl_coordinator.request_interaction(
                 room_id=room_id,
                 user_message_id=user_message_id,
-                source="agent",
-                prompt=hitl_prompt,
-                **(
-                    {"prompt_type": "authentication"}
-                    if awaiting_result.requires_auth
-                    or awaiting_result.interactive_state == "auth-required"
-                    else {}
+                interaction_id=interaction_id,
+                application_route=HITLApplicationRoute.A2A_RESUME,
+                public_source=HITLPublicSource.AGENT,
+                evidence_origin=HITLEvidenceOrigin.AGENT,
+                route_snapshot=HITLRouteSnapshot(
+                    route=HITLApplicationRoute.A2A_RESUME,
+                    task_id=awaiting_result.a2a_task_id,
+                    context_id=awaiting_result.a2a_context_id,
+                    continuation_message_id=continuation_message_id,
+                    agent_id=awaiting_result.agent_id,
                 ),
-                agent_id=awaiting_result.agent_id,
-                agent_name=awaiting_result.agent_name,
-                a2a_task_id=awaiting_result.a2a_task_id,
-                a2a_context_id=awaiting_result.a2a_context_id,
-                continuation_message_id=continuation_message_id,
-                display_message_id=display_message_id,
+                questions=[
+                    {
+                        "prompt": hitl_prompt,
+                        **(
+                            {"prompt_type": "authentication"}
+                            if awaiting_result.requires_auth
+                            or awaiting_result.interactive_state == "auth-required"
+                            else {}
+                        ),
+                        "agent_id": awaiting_result.agent_id,
+                        "agent_name": awaiting_result.agent_name,
+                        "continuation_message_id": continuation_message_id,
+                        "display_message_id": display_message_id,
+                    }
+                ],
                 orchestration_run_id=state.run_id,
             )
+            request = requests[0] if requests else None
         except Exception as exc:
             request_id = getattr(exc, "request_id", None)
             if request_id is not None:
@@ -5092,15 +5119,6 @@ class SupervisorExecutor:
                 existing["display_message_id"] = message_id
 
         for qi, question in enumerate(questions):
-            blocker_keys = list(question.blocker_keys)
-            prompt_type = HITLPromptType.TEXT
-            if question.prompt_type:
-                try:
-                    prompt_type = HITLPromptType(question.prompt_type)
-                except ValueError:
-                    pass
-
-            request = None
             hitl_agent_message = None
             try:
                 hitl_agent_message = self.room_runtime.create_agent_message(
@@ -5117,94 +5135,106 @@ class SupervisorExecutor:
                 created_messages.append(hitl_agent_message.message_id)
                 await self.message_writer.upsert_room_agent_message(hitl_agent_message)
 
-                def persist_request_creating(
-                    updated: OrchestrationRunState,
-                    *,
-                    question: ClarifyQuestion = question,
-                    message_id: str = hitl_agent_message.message_id,
-                    blocker_keys: list[str] = blocker_keys,
-                ) -> None:
-                    mark_supervisor_request_creating(
-                        updated,
-                        question=question,
-                        message_id=message_id,
-                        blocker_keys=blocker_keys,
+                # Keep the durable Run in INGESTING until request_interaction has
+                # persisted the complete aggregate. A crash here re-enters this
+                # deterministic branch instead of exposing an unanswerable
+                # AWAITING_USER checkpoint.
+                if qi != len(questions) - 1:
+                    continue
+
+                interaction_id = group_id or pending_request_ids[0]
+                question_inventory: list[dict[str, Any]] = []
+                for index, inventory_question in enumerate(questions):
+                    inventory_prompt_type = HITLPromptType.TEXT
+                    if inventory_question.prompt_type:
+                        try:
+                            inventory_prompt_type = HITLPromptType(
+                                inventory_question.prompt_type
+                            )
+                        except ValueError:
+                            pass
+                    question_inventory.append(
+                        {
+                            "request_id": pending_request_ids[index],
+                            "prompt": inventory_question.prompt,
+                            "prompt_type": inventory_prompt_type,
+                            "choices": inventory_question.choices,
+                            "agent_id": CoordinatorAgentId.SYSTEM_CLARIFIER,
+                            "agent_name": "HYBRO AI",
+                            "source_step_id": str(step_number),
+                            "continuation_message_id": user_message_id,
+                            "display_message_id": (
+                                f"{pending_request_ids[index]}:message"
+                            ),
+                        }
                     )
-
-                state = await self._save_orchestration_state(
-                    state,
-                    event_type=OrchestrationEventType.HITL_REQUESTED,
-                    payload={
-                        "status": OrchestrationStatus.AWAITING_USER.value,
-                        "phase": "request_creating",
-                        "display_message_id": hitl_agent_message.message_id,
-                    },
-                    mutate=persist_request_creating,
-                )
-
-                request = await self.hitl_coordinator.request_input(
+                requests = await self.hitl_coordinator.request_interaction(
                     room_id=room_id,
                     user_message_id=user_message_id,
-                    source="supervisor",
-                    prompt=question.prompt,
-                    request_id=pending_request_ids[qi],
-                    prompt_type=prompt_type,
-                    choices=question.choices,
-                    agent_id=CoordinatorAgentId.SYSTEM_CLARIFIER,
-                    agent_name="HYBRO AI",
-                    source_step_id=str(step_number),
-                    continuation_message_id=user_message_id,
-                    display_message_id=hitl_agent_message.message_id,
-                    group_id=group_id,
-                    group_total=len(questions) if group_id else None,
-                    group_index=qi if group_id else None,
+                    interaction_id=interaction_id,
+                    application_route=HITLApplicationRoute.SUPERVISOR_RUN,
+                    public_source=HITLPublicSource.SUPERVISOR,
+                    evidence_origin=HITLEvidenceOrigin.SUPERVISOR,
+                    route_snapshot=HITLRouteSnapshot(
+                        route=HITLApplicationRoute.SUPERVISOR_RUN,
+                        orchestration_run_id=state.run_id,
+                    ),
+                    questions=question_inventory,
                     orchestration_run_id=state.run_id,
                 )
-                if request is None:
-                    raise RuntimeError("failed to create orchestration HITL request")
-                created_request_ids.append(request.request_id)
-                prompt_by_request_id[request.request_id] = question.prompt
-                extra_by_request_id[request.request_id] = {
-                    "step": step_number,
-                    "prompt_type": question.prompt_type,
-                    "choices": question.choices,
-                    "blocker_keys": list(question.blocker_keys),
-                    "required_obligation_keys": list(question.required_obligation_keys),
-                    "blocker_obligations": {
-                        blocker_key: list(obligations)
-                        for blocker_key, obligations in (
-                            question.blocker_obligations.items()
-                        )
-                    },
-                    "display_message_id": hitl_agent_message.message_id,
-                }
-
-                def persist_request_open(
-                    updated: OrchestrationRunState,
-                    *,
-                    request_id: str = request.request_id,
-                    question: ClarifyQuestion = question,
-                    message_id: str = hitl_agent_message.message_id,
-                    blocker_keys: list[str] = blocker_keys,
-                ) -> None:
-                    mark_supervisor_request_open(
-                        updated,
-                        request_id=request_id,
-                        question=question,
-                        message_id=message_id,
-                        blocker_keys=blocker_keys,
+                if requests is None or len(requests) != len(questions):
+                    raise RuntimeError(
+                        "failed to create orchestration HITL interaction"
                     )
+                for created_index, request in enumerate(requests):
+                    created_question = questions[created_index]
+                    created_message_id = f"{request.request_id}:message"
+                    created_blocker_keys = list(created_question.blocker_keys)
+                    created_request_ids.append(request.request_id)
+                    prompt_by_request_id[request.request_id] = created_question.prompt
+                    extra_by_request_id[request.request_id] = {
+                        "step": step_number,
+                        "prompt_type": created_question.prompt_type,
+                        "choices": created_question.choices,
+                        "blocker_keys": created_blocker_keys,
+                        "required_obligation_keys": list(
+                            created_question.required_obligation_keys
+                        ),
+                        "blocker_obligations": {
+                            key: list(obligations)
+                            for key, obligations in (
+                                created_question.blocker_obligations.items()
+                            )
+                        },
+                        "display_message_id": created_message_id,
+                    }
 
-                state = await self._save_orchestration_state(
-                    state,
-                    event_type=OrchestrationEventType.HITL_REQUESTED,
-                    payload={
-                        "status": OrchestrationStatus.INGESTING.value,
-                        "request_ids": [request.request_id],
-                        "phase": "request_created",
-                    },
-                    mutate=persist_request_open,
-                )
+                    def persist_request_open(
+                        updated: OrchestrationRunState,
+                        *,
+                        request_id: str = request.request_id,
+                        question: ClarifyQuestion = created_question,
+                        message_id: str = created_message_id,
+                        blocker_keys: list[str] = created_blocker_keys,
+                    ) -> None:
+                        mark_supervisor_request_open(
+                            updated,
+                            request_id=request_id,
+                            question=question,
+                            message_id=message_id,
+                            blocker_keys=blocker_keys,
+                        )
+
+                    state = await self._save_orchestration_state(
+                        state,
+                        event_type=OrchestrationEventType.HITL_REQUESTED,
+                        payload={
+                            "status": OrchestrationStatus.INGESTING.value,
+                            "request_ids": [request.request_id],
+                            "phase": "request_created",
+                        },
+                        mutate=persist_request_open,
+                    )
             except Exception as exc:
                 request_id = getattr(exc, "request_id", None)
                 if isinstance(request_id, str):

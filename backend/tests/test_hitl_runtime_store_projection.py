@@ -58,11 +58,11 @@ class _FakeCollection:
             identity = dict(clauses[0])
             room_id = identity.pop("room_id", None)
             status = identity.pop("status", None)
-            source = identity.pop("source", None)
+            source = identity.pop("public_source", None)
             recorded_query = {
                 "room_id": room_id,
                 "status": status,
-                "source": source,
+                "public_source": source,
                 "$or": [identity],
             }
         self.find_one_calls.append(recorded_query)
@@ -187,13 +187,13 @@ async def test_scoped_pending_query_uses_agent_message_identity_only():
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"display_message_id": "display-msg-1"}],
         },
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"continuation_message_id": "continuation-msg-1"}],
         },
     ]
@@ -230,13 +230,13 @@ async def test_public_pending_query_returns_none_for_ambiguous_identities():
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"display_message_id": "display-msg-1"}],
         },
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"continuation_message_id": "continuation-msg-1"}],
         },
     ]
@@ -261,32 +261,6 @@ async def test_pending_query_without_display_or_continuation_identity_returns_no
 
 
 @pytest.mark.asyncio
-async def test_legacy_continuation_only_doc_matches_pending_query():
-    legacy = {"request_id": "legacy-req", "continuation_message_id": "cont-1"}
-    hitl_requests = _FakeCollection(find_one_results=[legacy])
-    store = _store(hitl_requests=hitl_requests)
-
-    result = await store.find_pending_hitl_request_for_agent_message(
-        room_id="room-1",
-        display_message_id=None,
-        continuation_message_id="cont-1",
-        agent_id=None,
-        a2a_task_id=None,
-        a2a_context_id=None,
-    )
-
-    assert result == legacy
-    assert hitl_requests.find_one_calls == [
-        {
-            "room_id": "room-1",
-            "status": "pending",
-            "source": "agent",
-            "$or": [{"continuation_message_id": "cont-1"}],
-        }
-    ]
-
-
-@pytest.mark.asyncio
 async def test_duplicate_insert_reads_existing_doc_without_a2a_metadata_filter():
     existing = {"request_id": "req-existing", "display_message_id": "display-msg-1"}
     hitl_requests = _FakeCollection(
@@ -300,7 +274,7 @@ async def test_duplicate_insert_reads_existing_doc_without_a2a_metadata_filter()
             "request_id": "req-new",
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "display_message_id": "display-msg-1",
             "continuation_message_id": "cont-1",
             "agent_id": "agent-1",
@@ -315,13 +289,13 @@ async def test_duplicate_insert_reads_existing_doc_without_a2a_metadata_filter()
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"display_message_id": "display-msg-1"}],
         },
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"continuation_message_id": "cont-1"}],
         },
     ]
@@ -362,7 +336,7 @@ async def test_index_specific_duplicate_readback_validates_both_identities(
             "request_id": "req-new",
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "display_message_id": "display-msg-1",
             "continuation_message_id": "cont-1",
         }
@@ -378,13 +352,13 @@ async def test_index_specific_duplicate_readback_validates_both_identities(
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             **expected_query,
         },
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             **other_query,
         },
     ]
@@ -408,7 +382,7 @@ async def test_named_duplicate_readback_returns_none_for_ambiguous_identities():
             "request_id": "req-new",
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "display_message_id": "display-msg-1",
             "continuation_message_id": "cont-1",
         }
@@ -419,13 +393,13 @@ async def test_named_duplicate_readback_returns_none_for_ambiguous_identities():
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"display_message_id": "display-msg-1"}],
         },
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"continuation_message_id": "cont-1"}],
         },
     ]
@@ -447,7 +421,7 @@ async def test_ambiguous_unidentified_duplicate_readback_returns_none():
             "request_id": "req-new",
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "display_message_id": "display-msg-1",
             "continuation_message_id": "cont-1",
         }
@@ -458,45 +432,15 @@ async def test_ambiguous_unidentified_duplicate_readback_returns_none():
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"display_message_id": "display-msg-1"}],
         },
         {
             "room_id": "room-1",
             "status": "pending",
-            "source": "agent",
+            "public_source": "agent",
             "$or": [{"continuation_message_id": "cont-1"}],
         },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_duplicate_insert_reads_legacy_continuation_doc():
-    legacy = {"request_id": "legacy-req", "continuation_message_id": "cont-1"}
-    hitl_requests = _FakeCollection(
-        insert_one_side_effect=DuplicateKeyError("duplicate continuation"),
-        find_one_results=[legacy],
-    )
-    store = _store(hitl_requests=hitl_requests)
-
-    result = await store.create_or_reuse_pending_hitl_request(
-        {
-            "request_id": "req-new",
-            "room_id": "room-1",
-            "status": "pending",
-            "source": "agent",
-            "continuation_message_id": "cont-1",
-        }
-    )
-
-    assert result == (legacy, False)
-    assert hitl_requests.find_one_calls == [
-        {
-            "room_id": "room-1",
-            "status": "pending",
-            "source": "agent",
-            "$or": [{"continuation_message_id": "cont-1"}],
-        }
     ]
 
 
@@ -524,9 +468,9 @@ async def test_persist_pending_hitl_on_agent_message_projects_metadata_noop_succ
         choices=None,
         a2a_task_id=None,
         a2a_context_id=None,
-        group_id=None,
-        group_total=None,
-        group_index=None,
+        interaction_id="interaction-1",
+        question_count=1,
+        question_index=0,
     )
 
     assert result is True
@@ -584,9 +528,9 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
         choices=["Approve", "Reject"],
         a2a_task_id="task-1",
         a2a_context_id="ctx-1",
-        group_id="group-1",
-        group_total=2,
-        group_index=0,
+        interaction_id="group-1",
+        question_count=2,
+        question_index=0,
     )
 
     assert result is True
@@ -648,9 +592,9 @@ async def test_persist_pending_hitl_cannot_reopen_terminal_projection_winner():
         choices=None,
         a2a_task_id=None,
         a2a_context_id=None,
-        group_id=None,
-        group_total=None,
-        group_index=None,
+        interaction_id="interaction-1",
+        question_count=1,
+        question_index=0,
     )
 
     assert result is False
@@ -670,9 +614,9 @@ async def test_persist_pending_hitl_on_missing_agent_message_returns_false():
         choices=None,
         a2a_task_id="task-1",
         a2a_context_id="ctx-1",
-        group_id="group-1",
-        group_total=2,
-        group_index=0,
+        interaction_id="group-1",
+        question_count=2,
+        question_index=0,
     )
 
     assert result is False

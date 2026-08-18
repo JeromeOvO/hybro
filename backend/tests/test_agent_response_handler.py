@@ -175,7 +175,7 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
         "update_task_state_on_message",
         "accumulate_artifact_on_message",
         "resume_queue_from_continuation",
-        "request_input",
+        "request_interaction",
     }
     post_emit = []
     for node in ast.walk(fn):
@@ -1905,7 +1905,7 @@ class TestInteractiveEvent:
 
     @pytest.mark.asyncio
     async def test_file_upload_prompt_becomes_terminal_response_without_hitl(self):
-        hitl = SimpleNamespace(request_input=AsyncMock())
+        hitl = SimpleNamespace(request_interaction=AsyncMock())
         h = _make_handler(hitl_coordinator=hitl)
         event = AgentEvent(
             kind="interactive",
@@ -1923,7 +1923,7 @@ class TestInteractiveEvent:
             )
             await h.handle(event)
 
-        hitl.request_input.assert_not_awaited()
+        hitl.request_interaction.assert_not_awaited()
         persisted = h._message_writer.update_task_state_on_message.await_args
         assert persisted.args == ("msg-001", "completed")
         assert persisted.kwargs["message_text"] == (
@@ -1943,7 +1943,7 @@ class TestInteractiveEvent:
 
     @pytest.mark.asyncio
     async def test_file_upload_prompt_does_not_require_continuation_ids(self):
-        hitl = SimpleNamespace(request_input=AsyncMock())
+        hitl = SimpleNamespace(request_interaction=AsyncMock())
         h = _make_handler(hitl_coordinator=hitl)
         event = AgentEvent(
             kind="interactive",
@@ -1959,7 +1959,7 @@ class TestInteractiveEvent:
             )
             await h.handle(event)
 
-        hitl.request_input.assert_not_awaited()
+        hitl.request_interaction.assert_not_awaited()
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001",
             task_result_text="Please attach the source document in a new message.",
@@ -1984,7 +1984,9 @@ class TestInteractiveEvent:
         )
         db.get_room_by_room_id = AsyncMock(return_value=None)
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-001")]
+            )
         )
         h = _make_handler(
             db=db,
@@ -2006,7 +2008,7 @@ class TestInteractiveEvent:
 
         await h.handle(event)
 
-        hitl.request_input.assert_not_awaited()
+        hitl.request_interaction.assert_not_awaited()
         persisted_payload = repr(db.update_task_state_on_message.await_args_list)
         assert private_prompt not in persisted_payload
         notify_payload = repr(mock_impl.await_args_list)
@@ -2032,9 +2034,10 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(
+            request_interaction=AsyncMock(
                 side_effect=lambda **_kwargs: (
-                    call_order.append("hitl") or SimpleNamespace(request_id="hitl-001")
+                    call_order.append("hitl")
+                    or [SimpleNamespace(request_id="hitl-001")]
                 )
             )
         )
@@ -2066,18 +2069,12 @@ class TestInteractiveEvent:
         assert task_update_call["message_id"] == "msg-001"
         assert task_update_call["emit_processing_status"] is False
 
-        hitl.request_input.assert_awaited_once_with(
-            room_id="room-001",
-            user_message_id="user-msg-001",
-            source="agent",
-            prompt="need input",
-            agent_id="agent-001",
-            agent_name="Agent X",
-            a2a_task_id="t-1",
-            a2a_context_id="c-1",
-            continuation_message_id="msg-001",
-            display_message_id="display-msg-001",
-        )
+        hitl.request_interaction.assert_awaited_once()
+        hitl_kwargs = hitl.request_interaction.await_args.kwargs
+        assert hitl_kwargs["application_route"] == "a2a_resume"
+        assert hitl_kwargs["route_snapshot"].task_id == "t-1"
+        assert hitl_kwargs["questions"][0]["prompt"] == "need input"
+        assert hitl_kwargs["questions"][0]["agent_name"] == "Agent X"
         emitter.assert_awaited_once_with(
             room_id="room-001",
             status="awaiting_input",
@@ -2107,7 +2104,9 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-001")]
+            )
         )
         h = _make_handler(
             db=db,
@@ -2131,19 +2130,10 @@ class TestInteractiveEvent:
         mock_impl.assert_awaited_once()
         task_update_call = mock_impl.call_args.kwargs
         assert task_update_call["emit_processing_status"] is False
-        hitl.request_input.assert_awaited_once_with(
-            room_id="room-001",
-            user_message_id="user-msg-001",
-            source="agent",
-            prompt="Please authenticate.",
-            prompt_type="authentication",
-            agent_id="agent-001",
-            agent_name="Agent X",
-            a2a_task_id="t-1",
-            a2a_context_id="c-1",
-            continuation_message_id="msg-001",
-            display_message_id="display-msg-001",
-        )
+        hitl.request_interaction.assert_awaited_once()
+        hitl_kwargs = hitl.request_interaction.await_args.kwargs
+        assert hitl_kwargs["route_snapshot"].context_id == "c-1"
+        assert hitl_kwargs["questions"][0]["prompt_type"] == "authentication"
         emitter.assert_awaited_once_with(
             room_id="room-001",
             status="awaiting_input",
@@ -2178,8 +2168,8 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(
-                return_value=SimpleNamespace(request_id="hitl-existing")
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-existing")]
             )
         )
         h = _make_handler(db=db, hitl_coordinator=hitl)
@@ -2201,18 +2191,9 @@ class TestInteractiveEvent:
             )
             await h.handle(event)
 
-        hitl.request_input.assert_awaited_once_with(
-            room_id="room-001",
-            user_message_id="user-msg-001",
-            source="agent",
-            prompt="need input",
-            agent_id="agent-001",
-            agent_name=None,
-            a2a_task_id="t-1",
-            a2a_context_id="c-1",
-            continuation_message_id="msg-001",
-            display_message_id="display-msg-001",
-        )
+        hitl.request_interaction.assert_awaited_once()
+        hitl_kwargs = hitl.request_interaction.await_args.kwargs
+        assert hitl_kwargs["questions"][0]["display_message_id"] == ("display-msg-001")
         emitter.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -2229,7 +2210,9 @@ class TestInteractiveEvent:
         )
         db.get_room_by_room_id = AsyncMock(side_effect=RuntimeError("db down"))
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-001")]
+            )
         )
         h = _make_handler(db=db, hitl_coordinator=hitl)
         emitter = AsyncMock()
@@ -2252,8 +2235,11 @@ class TestInteractiveEvent:
             await h.handle(event)
 
         debug.assert_called_once_with("agent name lookup failed", exc_info=True)
-        hitl.request_input.assert_awaited_once()
-        assert hitl.request_input.call_args.kwargs["agent_name"] is None
+        hitl.request_interaction.assert_awaited_once()
+        assert (
+            hitl.request_interaction.call_args.kwargs["questions"][0]["agent_name"]
+            is None
+        )
         emitter.assert_awaited_once()
         h._delivery.send_processing_status.assert_not_awaited()
 

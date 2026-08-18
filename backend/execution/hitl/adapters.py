@@ -70,6 +70,17 @@ class A2AHITLContinuationAdapter:
             failed=failed,
         )
 
+    async def has_pending_queue_continuation(
+        self,
+        continuation_message_id: str,
+    ) -> bool:
+        room_message_center = self._room_message_center_provider()
+        store = room_message_center.continuation_store
+        pending = await store.get_pending_continuation_on_message(
+            continuation_message_id
+        )
+        return bool(pending)
+
 
 class HITLTerminalLifecycleAdapter:
     """Converge orchestration and public run state after HITL termination."""

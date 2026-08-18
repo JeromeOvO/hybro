@@ -468,39 +468,6 @@ class TestRepositoryStoreHITL:
         )
 
     @pytest.mark.asyncio
-    async def test_group_routing_claim_release_and_count_shapes(self):
-        hitl_requests = RecordingCollection([_result(1), _result(1), 2])
-        store = _store(hitl_collection=hitl_requests)
-
-        assert await store.claim_hitl_group_routing("group-1", "claim-1")
-        assert await store.release_hitl_group_routing("group-1", "claim-1")
-        count = await store.count_pending_in_hitl_group("group-1")
-
-        assert count == 2
-        assert hitl_requests.update_one_calls[0][0] == {
-            "group_id": "group-1",
-            "group_index": 0,
-            "group_routing_claim_id": {"$exists": False},
-        }
-        assert (
-            hitl_requests.update_one_calls[0][1]["$set"]["group_routing_claim_id"]
-            == "claim-1"
-        )
-        assert hitl_requests.update_one_calls[1] == (
-            {"group_id": "group-1", "group_routing_claim_id": "claim-1"},
-            {
-                "$unset": {
-                    "group_routing_claim_id": "",
-                    "group_routing_claimed_at": "",
-                }
-            },
-            {},
-        )
-        assert hitl_requests.count_calls == [
-            {"group_id": "group-1", "status": {"$in": ["pending", "processing"]}}
-        ]
-
-    @pytest.mark.asyncio
     async def test_stale_processing_iterator_and_indexes_use_hitl_collection(self):
         docs = [{"request_id": "h1"}]
         hitl_requests = RecordingCollection([docs])
@@ -525,21 +492,8 @@ class TestRepositoryStoreHITL:
             ([("expires_at", 1), ("status", 1)], {}),
             ([("user_message_id", 1), ("status", 1)], {}),
             (
-                [
-                    ("group_id", 1),
-                    ("status", 1),
-                    ("group_index", 1),
-                    ("request_id", 1),
-                ],
-                {},
-            ),
-            (
-                [
-                    ("interaction_id", 1),
-                    ("group_index", 1),
-                    ("request_id", 1),
-                ],
-                {},
+                [("interaction_id", 1), ("question_index", 1)],
+                {"unique": True},
             ),
             ([("continuation_message_id", 1)], {}),
             (
@@ -549,7 +503,7 @@ class TestRepositoryStoreHITL:
                     "name": "uq_pending_hitl_display_message",
                     "partialFilterExpression": {
                         "status": "pending",
-                        "source": "agent",
+                        "public_source": "agent",
                         "display_message_id": {"$type": "string"},
                     },
                 },
@@ -561,7 +515,7 @@ class TestRepositoryStoreHITL:
                     "name": "uq_pending_hitl_continuation_message",
                     "partialFilterExpression": {
                         "status": "pending",
-                        "source": "agent",
+                        "public_source": "agent",
                         "continuation_message_id": {"$type": "string"},
                     },
                 },

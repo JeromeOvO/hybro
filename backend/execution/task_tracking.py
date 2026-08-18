@@ -757,7 +757,8 @@ def _is_trusted_local_hitl_request(
     if (
         request.get("request_id") != request_id
         or request.get("room_id") != room_id
-        or request.get("source") != "agent"
+        or request.get("public_source") != "agent"
+        or request.get("application_route") != "a2a_resume"
     ):
         return False
     projected_message_id = request.get("display_message_id") or request.get(
@@ -786,13 +787,17 @@ def _trusted_metadata_from_hitl_request(request: dict[str, Any]) -> dict[str, An
             request.get("prompt_type"), "value", request.get("prompt_type")
         ),
     }
+    question_count = request.get("question_count")
+    is_questionnaire = isinstance(question_count, int) and question_count > 1
     optional_fields = {
         "hitl_choices": request.get("choices"),
         "hitl_a2a_task_id": request.get("a2a_task_id"),
         "hitl_a2a_context_id": request.get("a2a_context_id"),
-        "hitl_group_id": request.get("group_id"),
-        "hitl_group_total": request.get("group_total"),
-        "hitl_group_index": request.get("group_index"),
+        "hitl_group_id": request.get("interaction_id") if is_questionnaire else None,
+        "hitl_group_total": question_count if is_questionnaire else None,
+        "hitl_group_index": (
+            request.get("question_index") if is_questionnaire else None
+        ),
         "user_answer": request.get("user_input"),
     }
     trusted.update(

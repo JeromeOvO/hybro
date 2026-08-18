@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from a2a_adapter.task_status import coerce_task_state
+from common.a2a_constants import SSEProcessingStatus
 from common.dto import MessageCommitted
 from common.utils.cancellation import CancellationToken
 from execution.orchestration.file_turn import persist_file_turn_task
@@ -262,6 +263,47 @@ async def test_invalid_continuation_releases_paused_token():
     assert result.success is False
     qe.continuation_store.save_continuation_on_message.assert_awaited_once_with(
         "agent-1", {"remaining_queue": [], "user_message_id": "user-1"}
+    )
+    qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
+
+
+@pytest.mark.asyncio
+async def test_failed_terminal_continuation_stops_queue_and_projects_root_failure():
+    qe = _make_queue_executor()
+    token = CancellationToken(message_id="user-1")
+    qe.cancellation_control.create_token.side_effect = None
+    qe.cancellation_control.create_token.return_value = token
+    qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+        return_value={
+            "remaining_queue": [],
+            "room_id": "room-1",
+            "user_message_id": "user-1",
+            "current_agent_id": "agent-1",
+            "current_agent_name": "Agent One",
+        }
+    )
+    qe._publish_agent_message_committed = AsyncMock()
+    qe._emit_processing_status = AsyncMock()
+    qe.process_queue = AsyncMock()
+
+    result = await qe.resume_from_continuation(
+        "agent-1",
+        "Remote task expired",
+        failed=True,
+    )
+
+    assert result.success is True
+    assert result.needs_completion is False
+    qe.process_queue.assert_not_awaited()
+    qe._publish_agent_message_committed.assert_awaited_once_with(
+        room_id="room-1",
+        agent_id="agent-1",
+        agent_name="Agent One",
+        was_successful=False,
+        message_id="agent-1",
+    )
+    assert qe._emit_processing_status.await_args.kwargs["status"] == (
+        SSEProcessingStatus.FAILED
     )
     qe.cancellation_control.release_token.assert_called_once_with("user-1", token)
 
@@ -759,7 +801,7 @@ class TestProcessQueue:
         qe.message_writer.update_task_state_on_message = AsyncMock(
             side_effect=update_task
         )
-        qe.hitl_coordinator.request_input = AsyncMock()
+        qe.hitl_coordinator.request_interaction = AsyncMock()
         qe.continuation_store.save_continuation_on_message = AsyncMock()
 
         result = await qe.process_queue(queue, "room-1", "umsg-1")
@@ -781,7 +823,7 @@ class TestProcessQueue:
             agent_id="a1",
             agent_name="TestAgent",
         )
-        qe.hitl_coordinator.request_input.assert_not_awaited()
+        qe.hitl_coordinator.request_interaction.assert_not_awaited()
         qe.continuation_store.save_continuation_on_message.assert_not_awaited()
         assert qe._process_single_message.await_count == 1
 
@@ -1105,7 +1147,7 @@ class TestProcessQueue:
         emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
         qe.bind_execution_event_deps(emit)
         hitl_service = MagicMock()
-        hitl_service.request_input = AsyncMock(
+        hitl_service.request_interaction = AsyncMock(
             return_value=SimpleNamespace(request_id="hitl-1")
         )
 
@@ -1113,8 +1155,10 @@ class TestProcessQueue:
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
         assert result.result == QueueResult.FAILED
-        hitl_service.request_input.assert_not_awaited()
-        assert private_prompt not in repr(hitl_service.request_input.await_args_list)
+        hitl_service.request_interaction.assert_not_awaited()
+        assert private_prompt not in repr(
+            hitl_service.request_interaction.await_args_list
+        )
         emit.assert_not_awaited()
         qe.delivery.send_processing_status.assert_not_called()
         assert order == []

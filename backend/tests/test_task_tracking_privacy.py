@@ -509,7 +509,8 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -517,9 +518,9 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
             "prompt": "Choose the approved public option",
             "prompt_type": "choice",
             "choices": ["Approve", "Reject"],
-            "group_id": "local-group",
-            "group_total": 2,
-            "group_index": 1,
+            "interaction_id": "local-group",
+            "question_count": 2,
+            "question_index": 1,
             "user_input": "Approve",
         }
     )
@@ -621,7 +622,8 @@ async def test_blocking_hitl_reply_drops_spoofed_existing_hitl_metadata():
         return_value={
             "request_id": "spoofed-hitl-request",
             "room_id": "other-room",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "display_message_id": "agent-message-1",
             "prompt": private_sentinel,
         }
@@ -634,7 +636,8 @@ async def test_blocking_hitl_reply_drops_spoofed_existing_hitl_metadata():
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -707,7 +710,8 @@ async def test_blocking_hitl_reply_uses_projected_task_for_public_response_text(
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -810,7 +814,8 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -890,7 +895,8 @@ async def test_blocking_hitl_reply_with_user_role_status_message_does_not_leak_i
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",

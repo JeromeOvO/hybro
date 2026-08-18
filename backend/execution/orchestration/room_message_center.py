@@ -2390,7 +2390,10 @@ class RoomMessageCenter:
                 locked_continuation["remaining_queue"] = []
             try:
                 return await self._resume_continuation_locked(
-                    locked_continuation, message_id, task_result_text
+                    locked_continuation,
+                    message_id,
+                    task_result_text,
+                    failed=failed,
                 )
             except asyncio.CancelledError:
                 await asyncio.shield(
@@ -2533,6 +2536,8 @@ class RoomMessageCenter:
         continuation: dict,
         message_id: str,
         task_result_text: str | None,
+        *,
+        failed: bool = False,
     ) -> bool:
         """Inner resume path — caller MUST hold the per-room lock (if available)."""
 
@@ -2552,6 +2557,7 @@ class RoomMessageCenter:
         result = await self.queue_executor.resume_from_continuation(
             message_id,
             task_result_text,
+            failed=failed,
         )
 
         if not result.success:

@@ -670,46 +670,6 @@ class RuntimeRepositoryStore:
     async def get_pending_hitl_requests_strict(self, room_id: str) -> list[dict]:
         return await self._hitl_delegate().get_pending_hitl_requests_strict(room_id)
 
-    async def get_hitl_group_requests(self, group_id: str) -> list[dict]:
-        return await self._hitl_delegate().get_hitl_group_requests(group_id)
-
-    async def get_pending_hitl_group_requests_strict(
-        self,
-        group_id: str,
-    ) -> list[dict]:
-        return await self._hitl_delegate().get_pending_hitl_group_requests_strict(
-            group_id
-        )
-
-    async def get_unreconciled_terminal_hitl_group_requests_strict(
-        self,
-        group_id: str,
-        status: str,
-    ) -> list[dict]:
-        return await self._hitl_delegate().get_unreconciled_terminal_hitl_group_requests_strict(
-            group_id,
-            status,
-        )
-
-    async def count_pending_in_hitl_group(self, group_id: str) -> int:
-        return await self._hitl_delegate().count_pending_in_hitl_group(group_id)
-
-    async def claim_hitl_group_routing(
-        self,
-        group_id: str,
-        claim_id: str,
-    ) -> bool:
-        return await self._hitl_delegate().claim_hitl_group_routing(group_id, claim_id)
-
-    async def release_hitl_group_routing(
-        self,
-        group_id: str,
-        claim_id: str,
-    ) -> bool:
-        return await self._hitl_delegate().release_hitl_group_routing(
-            group_id, claim_id
-        )
-
     async def count_hitl_requests_for_message(
         self,
         continuation_message_id: str,
@@ -794,9 +754,9 @@ class RuntimeRepositoryStore:
         choices: list[str] | None,
         a2a_task_id: str | None,
         a2a_context_id: str | None,
-        group_id: str | None,
-        group_total: int | None,
-        group_index: int | None,
+        interaction_id: str,
+        question_count: int,
+        question_index: int,
     ) -> bool:
         return await self._hitl_delegate().persist_pending_hitl_on_agent_message(
             message_id,
@@ -806,9 +766,9 @@ class RuntimeRepositoryStore:
             choices=choices,
             a2a_task_id=a2a_task_id,
             a2a_context_id=a2a_context_id,
-            group_id=group_id,
-            group_total=group_total,
-            group_index=group_index,
+            interaction_id=interaction_id,
+            question_count=question_count,
+            question_index=question_index,
         )
 
     async def _ensure_message_task_metadata(self, message_id: str) -> None:
@@ -823,19 +783,19 @@ class RuntimeRepositoryStore:
             message_id, user_input
         )
 
-    async def persist_hitl_group_metadata(
+    async def persist_hitl_interaction_metadata(
         self,
         message_id: str,
         *,
-        group_id: str | None,
-        group_total: int | None,
-        group_index: int | None,
+        interaction_id: str | None,
+        question_count: int | None,
+        question_index: int | None,
     ) -> bool:
-        return await self._hitl_delegate().persist_hitl_group_metadata(
+        return await self._hitl_delegate().persist_hitl_interaction_metadata(
             message_id,
-            group_id=group_id,
-            group_total=group_total,
-            group_index=group_index,
+            interaction_id=interaction_id,
+            question_count=question_count,
+            question_index=question_index,
         )
 
     async def iter_stale_processing_hitl_requests(

@@ -10,11 +10,23 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
+from common.dto.hitl import (
+    HITLApplicationRoute,
+    HITLEvidenceOrigin,
+    HITLPublicSource,
+    HITLRouteSnapshot,
+)
 from common.utils.time import utcnow
 
 # ---------------------------------------------------------------------------
@@ -108,15 +120,49 @@ class HITLResumeCommandStatus(str, Enum):
 # ---------------------------------------------------------------------------
 
 
-class HITLRequest(BaseModel):
-    """A request for human input, emitted as an event and persisted to DB."""
+class HITLCreationQuestion(BaseModel):
+    """Immutable inventory entry used to resume aggregate materialization."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    prompt: str
+    prompt_type: HITLPromptType = HITLPromptType.TEXT
+    choices: list[str] | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    source_step_id: str | None = None
+    continuation_message_id: str | None = None
+    display_message_id: str | None = None
+
+
+_HITLRequestId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+_HITLUserInput = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000),
+]
+
+
+class HITLRequest(BaseModel):
+    """One immutable ordered member of a persisted HITL interaction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[3]
     request_id: str = Field(default_factory=lambda: uuid4().hex)
+    interaction_id: str
+    question_index: int = Field(ge=0, le=99)
+    question_count: int = Field(ge=1, le=100)
     room_id: str
     user_message_id: str
 
-    # What triggered this
-    source: Literal["agent", "supervisor"]
+    # Independent classifications. Routing is owned only by the interaction snapshot.
+    application_route: HITLApplicationRoute
+    public_source: HITLPublicSource
+    evidence_origin: HITLEvidenceOrigin
     source_step_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
@@ -143,54 +189,60 @@ class HITLRequest(BaseModel):
     prompt_type: HITLPromptType = HITLPromptType.TEXT
     choices: list[str] | None = None
 
-    # Multi-question grouping (set when a single CLARIFY emits N questions)
-    # interaction_id is the aggregate identity. Legacy records synthesize it
-    # deterministically from group_id/request_id during parsing.
-    interaction_id: str | None = None
+    # Public lifecycle projection metadata (not routing authority).
     interaction_status: HITLInteractionStatus | None = None
     application_status: str | None = None
     application_error: str | None = None
-    group_id: str | None = None
-    group_total: int | None = None
-    group_index: int | None = None
 
     # Lifecycle
     status: HITLStatus = HITLStatus.PENDING
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
-    # Response (populated when status == "responded")
+    # Response and recoverable projection state.
     user_input: str | None = None
+    answer_digest: str | None = None
+    answered_at: datetime | None = None
     responded_at: datetime | None = None
     responded_by_user_id: str | None = None
+    claim_id: str | None = None
+    routing_completed_at: datetime | None = None
+    application_projected: bool = False
+    cancellation_reconciled: bool = False
+    open_projection_claim_id: str | None = None
+    open_projection_claimed_at: datetime | None = None
+    open_projection_completed_at: datetime | None = None
 
     # Durable owning-run terminal reconciliation for cancel/expiry failures.
     owning_run_terminal_status: Literal["canceled", "failed"] | None = None
     owning_run_terminal_reason: str | None = None
 
-    @model_validator(mode="after")
-    def synthesize_interaction_id(self) -> HITLRequest:
-        if not self.interaction_id:
-            self.interaction_id = self.group_id or self.request_id
-        return self
-
 
 class HITLInteraction(BaseModel):
     """Durable aggregate that owns answer collection and application."""
 
-    schema_version: int = 2
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[3]
     interaction_id: str
     room_id: str
     user_message_id: str
     orchestration_run_id: str | None = None
-    source: Literal["agent", "supervisor"]
+    application_route: HITLApplicationRoute
+    public_source: HITLPublicSource
+    evidence_origin: HITLEvidenceOrigin
+    route_snapshot: HITLRouteSnapshot
+    route_fingerprint: str
+    creation_inventory: list[HITLCreationQuestion] = Field(min_length=1, max_length=100)
     request_ids: list[str] = Field(default_factory=list)
+    request_order: list[dict[str, Any]] = Field(default_factory=list)
     expected_request_count: int = Field(ge=1, le=100)
     required_request_ids: list[str] = Field(default_factory=list)
     status: HITLInteractionStatus = HITLInteractionStatus.MATERIALIZING
     version: int = Field(default=1, ge=1)
     expires_at: datetime | None = None
     answer_request_ids: list[str] = Field(default_factory=list)
+    answer_refs: list[dict[str, str]] = Field(default_factory=list)
     answer_digest: str | None = None
     application_revision: int = Field(default=0, ge=0)
     application_claim_id: str | None = None
@@ -206,12 +258,30 @@ class HITLInteraction(BaseModel):
     run_projection_error: str | None = None
     applied_at: datetime | None = None
     terminal_reason: str | None = None
+    member_terminal_status: Literal["canceled", "expired"] | None = None
+    owning_run_terminal_status: Literal["canceled", "failed"] | None = None
     terminal_reconciled: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
     @model_validator(mode="after")
-    def validate_state(self) -> HITLInteraction:
+    def validate_state(self) -> HITLInteraction:  # noqa: C901
+        if self.application_route != self.route_snapshot.route:
+            raise ValueError("application_route must match route_snapshot.route")
+        if self.route_fingerprint != self.route_snapshot.fingerprint:
+            raise ValueError("route_fingerprint does not match route_snapshot")
+        if (
+            self.application_route == HITLApplicationRoute.SUPERVISOR_RUN
+            and self.orchestration_run_id != self.route_snapshot.orchestration_run_id
+        ):
+            raise ValueError(
+                "supervisor orchestration_run_id must match route_snapshot"
+            )
+        inventory_ids = [item.request_id for item in self.creation_inventory]
+        if len(set(inventory_ids)) != len(inventory_ids):
+            raise ValueError("creation_inventory request_ids must be unique")
+        if len(inventory_ids) != self.expected_request_count:
+            raise ValueError("creation_inventory must be complete")
         if len(set(self.request_ids)) != len(self.request_ids):
             raise ValueError("request_ids must be unique")
         if len(self.request_ids) > self.expected_request_count:
@@ -243,7 +313,9 @@ class HITLInteraction(BaseModel):
 class HITLResumeCommand(BaseModel):
     """Durable journal entry for one remote continuation application."""
 
-    schema_version: int = 2
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[3]
     command_id: str
     kind: Literal["a2a_resume"] = "a2a_resume"
     interaction_id: str
@@ -251,6 +323,7 @@ class HITLResumeCommand(BaseModel):
     task_id: str
     context_id: str
     continuation_message_id: str
+    agent_id: str
     display_message_id: str | None = None
     outbound_message_id: str
     answer_request_ids: list[str] = Field(min_length=1)
@@ -265,6 +338,7 @@ class HITLResumeCommand(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     uncertain_since: datetime | None = None
+    aggregate_applied_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -274,6 +348,7 @@ class HITLResumeCommand(BaseModel):
             "task_id",
             "context_id",
             "continuation_message_id",
+            "agent_id",
             "outbound_message_id",
         ):
             value = getattr(self, field_name)
@@ -296,7 +371,9 @@ class HITLResumeCommand(BaseModel):
 class HITLSupervisorEffectCommand(BaseModel):
     """Durable journal for the local supervisor continuation effect."""
 
-    schema_version: int = 2
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[3]
     command_id: str
     kind: Literal["supervisor_resume"] = "supervisor_resume"
     interaction_id: str
@@ -314,6 +391,7 @@ class HITLSupervisorEffectCommand(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     uncertain_since: datetime | None = None
+    aggregate_applied_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -334,15 +412,15 @@ class HITLSupervisorEffectCommand(BaseModel):
 class HITLResponseRequest(BaseModel):
     """REST request body for POST /rooms/{room_id}/hitl/respond."""
 
-    request_id: str
-    user_input: str = Field(..., min_length=1, max_length=10_000)
+    request_id: _HITLRequestId
+    user_input: _HITLUserInput
 
 
 class HITLBatchAnswer(BaseModel):
     """One answer in an atomic questionnaire submission."""
 
-    request_id: str = Field(..., min_length=1, max_length=128)
-    user_input: str = Field(..., min_length=1, max_length=10_000)
+    request_id: _HITLRequestId
+    user_input: _HITLUserInput
 
 
 class HITLBatchResponseRequest(BaseModel):

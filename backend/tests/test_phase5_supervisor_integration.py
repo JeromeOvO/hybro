@@ -1450,7 +1450,7 @@ class _FakePhase5App:
         self.hitl_coordinator = AsyncMock()
 
         request = SimpleNamespace(request_id=f"request-{uuid4().hex}")
-        self.hitl_coordinator.request_input = AsyncMock(return_value=request)
+        self.hitl_coordinator.request_interaction = AsyncMock(return_value=[request])
 
         self.room_runtime = _FakeRoomRuntime()
         self._agent_results = {}

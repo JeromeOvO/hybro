@@ -69,7 +69,7 @@ def _make_facade(**overrides):
     room_center.update_user_message_orchestration_status = AsyncMock(return_value=True)
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_manager = SimpleNamespace(
-        request_input=AsyncMock(),
+        request_interaction=AsyncMock(),
         handle_response=AsyncMock(),
         get_pending_requests=AsyncMock(return_value=[]),
         cancel_request=AsyncMock(return_value=None),
@@ -1130,7 +1130,7 @@ async def test_resolve_hitl_updates_orchestration_state_after_successful_respons
             "response": "annual revenue is $2M",
         }
     )
-    hitl_manager.request_input = AsyncMock()
+    hitl_manager.request_interaction = AsyncMock()
     hitl_manager.get_pending_requests = AsyncMock(return_value=[])
     hitl_manager.cancel_request = AsyncMock(return_value=None)
     run_store = InMemoryOrchestrationRunStore()
@@ -1263,7 +1263,7 @@ async def test_resolve_hitl_records_policy_followup_without_queue_resume():
             "a2a_context_id": "ctx-1",
         }
     )
-    hitl_manager.request_input = AsyncMock()
+    hitl_manager.request_interaction = AsyncMock()
     hitl_manager.get_pending_requests = AsyncMock(return_value=[])
     hitl_manager.cancel_request = AsyncMock(return_value=None)
     run_store = InMemoryOrchestrationRunStore()
@@ -1791,13 +1791,16 @@ async def test_hitl_methods_delegate_and_translate():
         request_id="req-1",
         room_id="room-1",
         user_message_id="user-msg-1",
-        source="agent",
+        public_source="agent",
+        interaction_id="interaction-1",
+        question_count=1,
+        question_index=0,
         prompt="Need input",
         prompt_type="text",
         status="pending",
         display_message_id="display-msg-1",
     )
-    deps["hitl_manager"].request_input.return_value = model_request
+    deps["hitl_manager"].request_interaction.return_value = [model_request]
     deps["hitl_manager"].handle_response.return_value = {
         "status": "ok",
         "request_id": "req-1",
@@ -1810,6 +1813,11 @@ async def test_hitl_methods_delegate_and_translate():
         "Need input",
         "agent",
         display_message_id="display-msg-1",
+        continuation_message_id="continuation-msg-1",
+        a2a_task_id="task-1",
+        a2a_context_id="context-1",
+        agent_id="agent-1",
+        request_id="req-1",
     )
     resolved = await facade.resolve_hitl("room-1", "req-1", "yes", "user-1")
     pending = await facade.get_pending_hitl("room-1")
