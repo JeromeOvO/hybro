@@ -3171,6 +3171,65 @@ class SupervisorExecutor:
             completed_at=utcnow(),
         )
 
+    async def _deliver_claimed_continuation(
+        self,
+        *,
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation,
+        user_input: str,
+    ) -> dict[str, Any]:
+        if continuation.status in {"acknowledged", "projected"}:
+            if continuation.response_snapshot is None:
+                raise RuntimeError("acknowledged continuation has no response snapshot")
+            return dict(continuation.response_snapshot)
+        if continuation.status == "delivery_uncertain":
+            raise TimeoutError("continuation delivery remains uncertain")
+        if continuation.status == "permanent_failure":
+            raise RuntimeError(
+                continuation.delivery_error or "continuation permanently failed"
+            )
+        if continuation.status != "resuming" or not continuation.outbound_message_id:
+            raise RuntimeError("continuation is not durably claimed")
+        try:
+            reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
+                message_id=continuation.source_agent_message_id,
+                task_id=continuation.a2a_task_id,
+                context_id=continuation.a2a_context_id,
+                user_input=user_input,
+                outbound_message_id=continuation.outbound_message_id,
+            )
+        except Exception as exc:
+            await self._reconcile_persisted_continuation(
+                state=state,
+                continuation_id=continuation.continuation_id,
+                status="delivery_uncertain",
+                delivery_error=exc.__class__.__name__,
+            )
+            raise
+        acknowledged = await self._reconcile_persisted_continuation(
+            state=state,
+            continuation_id=continuation.continuation_id,
+            status="acknowledged",
+            response_snapshot=dict(reply_result),
+        )
+        persisted = next(
+            (
+                item
+                for item in acknowledged.pending_agent_continuations
+                if item.continuation_id == continuation.continuation_id
+            ),
+            None,
+        )
+        if persisted is None or persisted.response_snapshot is None:
+            raise RuntimeError("continuation acknowledgement was not persisted")
+        await self._reconcile_persisted_continuation(
+            state=acknowledged,
+            continuation_id=continuation.continuation_id,
+            status="projected",
+            response_snapshot=dict(reply_result),
+        )
+        return dict(reply_result)
+
     async def _continue_agent_task_with_resolved_refs(
         self,
         *,
@@ -3195,21 +3254,13 @@ class SupervisorExecutor:
         ).strip()
         if not resource_text:
             return None
-        try:
-            reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
-                message_id=awaiting_output.agent_message_id,
-                task_id=awaiting_output.a2a_task_id,
-                context_id=awaiting_output.a2a_context_id,
-                user_input=resource_text,
-            )
-        except Exception:
-            if continuation_state is not None:
-                await self._reconcile_persisted_continuation(
-                    state=continuation_state,
-                    continuation_id=claimed_continuation.continuation_id,
-                    status="open",
-                )
-            raise
+        if continuation_state is None:
+            return None
+        reply_result = await self._deliver_claimed_continuation(
+            state=continuation_state,
+            continuation=claimed_continuation,
+            user_input=resource_text,
+        )
         await self._record_a2a_task_recovery(
             awaiting_output=awaiting_output,
             resolved_payload=resolved_payload,
@@ -3251,6 +3302,11 @@ class SupervisorExecutor:
             or requires_policy
         ):
             status_message = response_text or awaiting_output.status_message
+            await self._reconcile_persisted_continuation(
+                state=continuation_state,
+                continuation_id=claimed_continuation.continuation_id,
+                status="open",
+            )
             return StepResult(
                 step_number=0,
                 agent_id=awaiting_output.agent_id,
@@ -3270,14 +3326,17 @@ class SupervisorExecutor:
                 requires_auth=task_state == "auth-required",
                 requires_policy=requires_policy,
             )
-        if (
-            task_state in {"failed", "canceled", "rejected"}
-            and continuation_state is not None
-        ):
+        if task_state in {"failed", "canceled", "rejected"}:
             await self._reconcile_persisted_continuation(
                 state=continuation_state,
                 continuation_id=claimed_continuation.continuation_id,
                 status="open",
+            )
+        else:
+            await self._reconcile_persisted_continuation(
+                state=continuation_state,
+                continuation_id=claimed_continuation.continuation_id,
+                status="resolved",
             )
         return StepResult(
             step_number=0,
@@ -3333,6 +3392,134 @@ class SupervisorExecutor:
             if expanded <= lineage:
                 return lineage
             lineage.update(expanded)
+
+    async def _inspect_uncertain_continuation(
+        self,
+        *,
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation,
+    ) -> PendingAgentContinuation:
+        """Inspect authoritative remote state without resending an uncertain send."""
+
+        from a2a_adapter.remote_task import fetch_remote_task
+        from common.a2a_constants import INTERACTIVE_STATES, TERMINAL_STATES
+        from common.utils.a2a_helpers import get_text_from_message
+
+        agent = await self.agent_dispatcher.resolve_agent(
+            continuation.agent_id,
+            state.room_id,
+        )
+        if agent is None:
+            return continuation
+        task = await fetch_remote_task(agent.agent_card, continuation.a2a_task_id)
+        if task is None or task.status is None:
+            return continuation
+        state_value = getattr(task.status.state, "value", task.status.state)
+        advanced_states = {
+            *(item.value for item in INTERACTIVE_STATES),
+            *(item.value for item in TERMINAL_STATES),
+        }
+        if state_value not in advanced_states:
+            return continuation
+        response_text = (
+            get_text_from_message(task.status.message)
+            if task.status.message is not None
+            else ""
+        )
+        snapshot = {
+            "blocking": True,
+            "task_state": state_value,
+            "response_text": response_text,
+            "a2a_task_id": task.id,
+            "a2a_context_id": task.context_id,
+        }
+        acknowledged = await self._reconcile_persisted_continuation(
+            state=state,
+            continuation_id=continuation.continuation_id,
+            status="acknowledged",
+            response_snapshot=snapshot,
+        )
+        projected = await self._reconcile_persisted_continuation(
+            state=acknowledged,
+            continuation_id=continuation.continuation_id,
+            status="projected",
+            response_snapshot=snapshot,
+        )
+        return next(
+            (
+                item
+                for item in projected.pending_agent_continuations
+                if item.continuation_id == continuation.continuation_id
+            ),
+            continuation,
+        )
+
+    async def _ensure_input_continuation_claimed(
+        self,
+        *,
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation,
+    ) -> PendingAgentContinuation | None:
+        """Persist and claim one continuation exactly once before remote send."""
+
+        for _attempt in range(4):
+            current = await self.orchestration_run_store.get_run(state.run_id)
+            if current is None:
+                return None
+            existing = next(
+                (
+                    item
+                    for item in current.pending_agent_continuations
+                    if item.continuation_id == continuation.continuation_id
+                ),
+                None,
+            )
+            updated = current.model_copy(deep=True)
+            if existing is None:
+                updated.pending_agent_continuations.append(continuation)
+                replacement = continuation
+            elif existing.status == "open":
+                replacement = claim_continuation(existing, ())
+                if replacement is None:
+                    return None
+                updated.pending_agent_continuations = [
+                    replacement
+                    if item.continuation_id == existing.continuation_id
+                    else item
+                    for item in updated.pending_agent_continuations
+                ]
+            elif existing.status == "delivery_uncertain":
+                return await self._inspect_uncertain_continuation(
+                    state=current,
+                    continuation=existing,
+                )
+            elif existing.status == "resuming":
+                replacement = reconcile_continuation(
+                    existing,
+                    status="delivery_uncertain",
+                    delivery_error="worker stopped before acknowledgement persisted",
+                )
+                updated.pending_agent_continuations = [
+                    replacement
+                    if item.continuation_id == existing.continuation_id
+                    else item
+                    for item in updated.pending_agent_continuations
+                ]
+            else:
+                return existing
+            updated.state_version = current.state_version + 1
+            updated.updated_at = utcnow()
+            try:
+                await self.orchestration_run_store.save_state(
+                    updated,
+                    expected_version=current.state_version,
+                )
+            except OrchestrationStoreConflict:
+                continue
+            if existing is None:
+                continue
+            return replacement
+        return None
 
     async def _claim_matching_continuation(
         self,
@@ -3402,6 +3589,8 @@ class SupervisorExecutor:
         current: OrchestrationRunState,
         continuation_id: str,
         status: str,
+        response_snapshot: dict[str, Any] | None = None,
+        delivery_error: str | None = None,
     ) -> tuple[OrchestrationRunState, PendingAgentContinuation] | None:
         continuation = next(
             (
@@ -3413,7 +3602,12 @@ class SupervisorExecutor:
         )
         if continuation is None:
             return None
-        reconciled = reconcile_continuation(continuation, status=status)
+        reconciled = reconcile_continuation(
+            continuation,
+            status=status,
+            response_snapshot=response_snapshot,
+            delivery_error=delivery_error,
+        )
         if reconciled == continuation:
             return None
 
@@ -3483,6 +3677,8 @@ class SupervisorExecutor:
         state: OrchestrationRunState,
         continuation_id: str,
         status: str,
+        response_snapshot: dict[str, Any] | None = None,
+        delivery_error: str | None = None,
     ) -> OrchestrationRunState:
         for _attempt in range(2):
             current = await self.orchestration_run_store.get_run(state.run_id)
@@ -3492,6 +3688,8 @@ class SupervisorExecutor:
                 current=current,
                 continuation_id=continuation_id,
                 status=status,
+                response_snapshot=response_snapshot,
+                delivery_error=delivery_error,
             )
             if update is None:
                 return current
@@ -4093,10 +4291,15 @@ class SupervisorExecutor:
                 agent_name = resolved_name.strip()
             break
 
-        reply_result = await self.hitl_coordinator.agent_reply.reply_to_task(
-            message_id=continuation.source_agent_message_id,
-            task_id=continuation.a2a_task_id,
-            context_id=continuation.a2a_context_id,
+        claimed_continuation = await self._ensure_input_continuation_claimed(
+            state=state,
+            continuation=continuation,
+        )
+        if claimed_continuation is None:
+            raise RuntimeError("failed to durably claim agent continuation")
+        reply_result = await self._deliver_claimed_continuation(
+            state=state,
+            continuation=claimed_continuation,
             user_input=answer,
         )
         if not reply_result.get("blocking", False):
@@ -4124,6 +4327,11 @@ class SupervisorExecutor:
             or task_state == "policy-required"
         )
         if task_state in {"input-required", "auth-required", "policy-required"}:
+            await self._reconcile_persisted_continuation(
+                state=state,
+                continuation_id=claimed_continuation.continuation_id,
+                status="open",
+            )
             return StepResult(
                 step_number=0,
                 agent_id=continuation.agent_id,
@@ -4148,6 +4356,11 @@ class SupervisorExecutor:
                 ingress_route="supervisor_observation",
                 private_input_prompt=response_text,
             )
+        await self._reconcile_persisted_continuation(
+            state=state,
+            continuation_id=claimed_continuation.continuation_id,
+            status="open" if failed else "resolved",
+        )
         return StepResult(
             step_number=0,
             agent_id=continuation.agent_id,
@@ -4250,10 +4463,12 @@ class SupervisorExecutor:
                     status_message=prompt,
                 )
             if awaiting_output is not None:
+                claimed = await self._ensure_input_continuation_claimed(
+                    state=state,
+                    continuation=continuation,
+                )
                 continued = await self._continue_agent_task_with_resolved_refs(
-                    claimed_continuation=continuation.model_copy(
-                        update={"status": "resuming"}
-                    ),
+                    claimed_continuation=claimed,
                     continuation_state=state,
                     awaiting_output=awaiting_output,
                     target=DelegateTarget(

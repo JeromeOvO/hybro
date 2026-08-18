@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
+from common.utils.time import utcnow
 from models.orchestration import PendingAgentContinuation, PlannedDelegateTarget
 
 
@@ -67,9 +69,20 @@ def claim_continuation(
 ) -> PendingAgentContinuation | None:
     if continuation.status != "open":
         return None
+    delivery_revision = continuation.delivery_revision + 1
+    outbound_message_id = (
+        "orchestration-continuation-"
+        + hashlib.sha256(
+            f"{continuation.continuation_id}:{delivery_revision}".encode()
+        ).hexdigest()
+    )
     return continuation.model_copy(
         update={
             "status": "resuming",
+            "delivery_revision": delivery_revision,
+            "outbound_message_id": outbound_message_id,
+            "delivery_started_at": utcnow(),
+            "delivery_error": None,
             "attempted_resource_fingerprints": list(
                 dict.fromkeys(
                     [
@@ -86,12 +99,39 @@ def reconcile_continuation(
     continuation: PendingAgentContinuation,
     *,
     status: str,
+    response_snapshot: dict | None = None,
+    delivery_error: str | None = None,
 ) -> PendingAgentContinuation:
-    if status not in {"open", "resolved", "abandoned"}:
+    allowed = {
+        "open",
+        "delivery_uncertain",
+        "acknowledged",
+        "projected",
+        "permanent_failure",
+        "resolved",
+        "abandoned",
+    }
+    if status not in allowed:
         raise ValueError(f"unsupported continuation status: {status}")
     if continuation.status in {"resolved", "abandoned"}:
         return continuation
-    return continuation.model_copy(update={"status": status})
+    updates = {
+        "status": status,
+        "updated_at": utcnow(),
+        "delivery_error": delivery_error,
+    }
+    if status == "open":
+        updates.update(
+            outbound_message_id=None,
+            response_snapshot=None,
+            delivery_started_at=None,
+            delivery_acknowledged_at=None,
+        )
+    if response_snapshot is not None:
+        updates["response_snapshot"] = response_snapshot
+    if status == "acknowledged":
+        updates["delivery_acknowledged_at"] = utcnow()
+    return continuation.model_copy(update=updates)
 
 
 def _rejected(

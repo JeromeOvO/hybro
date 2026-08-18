@@ -45,6 +45,16 @@ legacy group metadata. This is an intentionally destructive schema change. **Wip
 the runtime MongoDB database before starting this version**; no backfill or legacy
 readiness path is supported.
 
+## Supervisor A2A continuation journal
+
+Supervisor resource recovery and post-answer continuation use the durable
+`PendingAgentContinuation` inventory. A stable outbound message ID and delivery
+revision are persisted before send. The response snapshot is persisted before Run
+projection. Worker loss or ambiguous send failures move the continuation to
+`delivery_uncertain`; recovery inspects the authoritative remote task and never
+blindly resends. Interactive follow-ups reopen the journal at a new delivery
+revision, while terminal responses resolve it.
+
 ## Continuation and failure invariants
 
 Hybro treats the remote A2A `Task.id` and `Task.contextId` returned by the agent as

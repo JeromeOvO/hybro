@@ -678,6 +678,7 @@ def _claimed_continuation() -> PendingAgentContinuation:
         a2a_task_id="task-1",
         a2a_context_id="ctx-1",
         status="resuming",
+        outbound_message_id="orchestration-continuation-test",
     )
 
 
@@ -9862,8 +9863,9 @@ async def test_agent_input_required_resumes_same_a2a_task_after_answer():
 @pytest.mark.asyncio
 async def test_agent_input_required_nonblocking_reply_remains_paused():
     user_message = _state_unification_user_message(message_id="msg-1")
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
     )
@@ -9889,8 +9891,11 @@ async def test_agent_input_required_nonblocking_reply_remains_paused():
         a2a_context_id="ctx-1",
     )
 
+    state = await store.create_run(
+        _run_state(pending_agent_continuations=[continuation])
+    )
     resumed = await executor._resume_agent_continuation_after_hitl_answer(
-        state=_run_state(),
+        state=state,
         continuation=continuation,
         answer="$2M",
         user_message=user_message,
@@ -10377,8 +10382,11 @@ async def test_same_agent_retry_continues_existing_input_required_task():
         ],
     )
 
+    state.pending_agent_continuations = [_claimed_continuation()]
+    state = await store.create_run(state)
     result = await executor._continue_agent_task_with_resolved_refs(
         claimed_continuation=_claimed_continuation(),
+        continuation_state=state,
         awaiting_output=state.agent_outputs[0],
         target=DelegateTarget(agent_id="agent-1", agent_name="Agent One", task="retry"),
         resolved_payload=resolved_payload,
@@ -10391,14 +10399,16 @@ async def test_same_agent_retry_continues_existing_input_required_task():
         task_id="task-1",
         context_id="ctx-1",
         user_input="Projected input",
+        outbound_message_id="orchestration-continuation-test",
     )
 
 
 @pytest.mark.asyncio
 async def test_same_agent_retry_nonblocking_reply_remains_paused():
     user_message = _state_unification_user_message(message_id="message-1")
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
     )
@@ -10413,9 +10423,13 @@ async def test_same_agent_retry_nonblocking_reply_remains_paused():
             )
         )
     )
+    state = await store.create_run(
+        _run_state(pending_agent_continuations=[_claimed_continuation()])
+    )
 
     result = await executor._continue_agent_task_with_resolved_refs(
         claimed_continuation=_claimed_continuation(),
+        continuation_state=state,
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -10505,8 +10519,9 @@ async def test_same_agent_retry_that_still_needs_input_requires_hitl():
         user_id="user-1",
         message_content=MessageContent(message_text="Use uploaded PDF"),
     )
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
     )
@@ -10521,8 +10536,12 @@ async def test_same_agent_retry_that_still_needs_input_requires_hitl():
             )
         )
     )
+    state = await store.create_run(
+        _run_state(pending_agent_continuations=[_claimed_continuation()])
+    )
     result = await executor._continue_agent_task_with_resolved_refs(
         claimed_continuation=_claimed_continuation(),
+        continuation_state=state,
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -10561,8 +10580,9 @@ async def test_continuation_without_state_or_output_stays_awaiting_input():
         user_id="user-1",
         message_content=MessageContent(message_text="Use uploaded PDF"),
     )
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
     )
@@ -10577,9 +10597,13 @@ async def test_continuation_without_state_or_output_stays_awaiting_input():
             )
         )
     )
+    state = await store.create_run(
+        _run_state(pending_agent_continuations=[_claimed_continuation()])
+    )
 
     result = await executor._continue_agent_task_with_resolved_refs(
         claimed_continuation=_claimed_continuation(),
+        continuation_state=state,
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -11022,7 +11046,7 @@ async def test_failed_continuation_reply_reopens_persisted_claim(reply_result):
 
 
 @pytest.mark.asyncio
-async def test_exceptional_continuation_reply_reopens_persisted_claim():
+async def test_exceptional_continuation_reply_marks_delivery_uncertain():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -11069,7 +11093,117 @@ async def test_exceptional_continuation_reply_reopens_persisted_claim():
 
     persisted = await store.get_run("run-1")
     assert persisted is not None
-    assert persisted.pending_agent_continuations[0].status == "open"
+    assert persisted.pending_agent_continuations[0].status == "delivery_uncertain"
+
+
+@pytest.mark.asyncio
+async def test_stale_resuming_continuation_becomes_uncertain_without_resend():
+    user_message = _state_unification_user_message(message_id="msg-1")
+    store = InMemoryOrchestrationRunStore()
+    claimed = _claimed_continuation()
+    state = await store.create_run(_run_state(pending_agent_continuations=[claimed]))
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    reply_to_task = AsyncMock()
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task)
+    )
+
+    recovered = await executor._ensure_input_continuation_claimed(
+        state=state,
+        continuation=claimed,
+    )
+
+    assert recovered is not None
+    assert recovered.status == "delivery_uncertain"
+    reply_to_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_projected_continuation_snapshot_replays_without_remote_send():
+    user_message = _state_unification_user_message(message_id="msg-1")
+    store = InMemoryOrchestrationRunStore()
+    projected = _claimed_continuation().model_copy(
+        update={
+            "status": "projected",
+            "response_snapshot": {
+                "blocking": True,
+                "task_state": "completed",
+                "response_text": "Recovered response",
+            },
+        }
+    )
+    state = await store.create_run(_run_state(pending_agent_continuations=[projected]))
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    reply_to_task = AsyncMock()
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task)
+    )
+
+    result = await executor._deliver_claimed_continuation(
+        state=state,
+        continuation=projected,
+        user_input="must not send",
+    )
+
+    assert result["response_text"] == "Recovered response"
+    reply_to_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_uncertain_continuation_inspects_remote_without_resend(monkeypatch):
+    from common.types import Message, MessageRole, Part, Task, TaskStatus, TextPart
+
+    user_message = _state_unification_user_message(message_id="msg-1")
+    store = InMemoryOrchestrationRunStore()
+    uncertain = _claimed_continuation().model_copy(
+        update={"status": "delivery_uncertain"}
+    )
+    state = await store.create_run(_run_state(pending_agent_continuations=[uncertain]))
+    executor = _executor(
+        store=store,
+        planner=RecordingPlanner(),
+        user_message=user_message,
+    )
+    executor.agent_dispatcher.resolve_agent = AsyncMock(
+        return_value=SimpleNamespace(agent_card={"url": "http://agent"})
+    )
+    reply_to_task = AsyncMock()
+    executor.hitl_coordinator = SimpleNamespace(
+        agent_reply=SimpleNamespace(reply_to_task=reply_to_task)
+    )
+    remote_task = Task(
+        id="task-1",
+        contextId="ctx-1",
+        status=TaskStatus(
+            state="completed",
+            message=Message(
+                role=MessageRole.AGENT,
+                messageId="remote-message",
+                parts=[Part(root=TextPart(text="Recovered remotely"))],
+            ),
+        ),
+    )
+    fetch = AsyncMock(return_value=remote_task)
+    monkeypatch.setattr("a2a_adapter.remote_task.fetch_remote_task", fetch)
+
+    recovered = await executor._ensure_input_continuation_claimed(
+        state=state,
+        continuation=uncertain,
+    )
+
+    assert recovered is not None
+    assert recovered.status == "projected"
+    assert recovered.response_snapshot["response_text"] == "Recovered remotely"
+    fetch.assert_awaited_once()
+    reply_to_task.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -11362,8 +11496,9 @@ async def test_plain_continuation_preserves_auth_required_classification():
         user_id="user-1",
         message_content=MessageContent(message_text="Use uploaded PDF"),
     )
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
     )
@@ -11378,9 +11513,13 @@ async def test_plain_continuation_preserves_auth_required_classification():
             )
         )
     )
+    state = await store.create_run(
+        _run_state(pending_agent_continuations=[_claimed_continuation()])
+    )
 
     result = await executor._continue_agent_task_with_resolved_refs(
         claimed_continuation=_claimed_continuation(),
+        continuation_state=state,
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",
@@ -11431,8 +11570,9 @@ async def test_plain_continuation_preserves_policy_required_classification():
         user_id="user-1",
         message_content=MessageContent(message_text="Use uploaded PDF"),
     )
+    store = InMemoryOrchestrationRunStore()
     executor = _executor(
-        store=InMemoryOrchestrationRunStore(),
+        store=store,
         planner=RecordingPlanner(),
         user_message=user_message,
     )
@@ -11448,9 +11588,13 @@ async def test_plain_continuation_preserves_policy_required_classification():
             )
         )
     )
+    state = await store.create_run(
+        _run_state(pending_agent_continuations=[_claimed_continuation()])
+    )
 
     result = await executor._continue_agent_task_with_resolved_refs(
         claimed_continuation=_claimed_continuation(),
+        continuation_state=state,
         awaiting_output=AgentOutputRecord(
             agent_message_id="agent-msg-1",
             agent_id="agent-1",

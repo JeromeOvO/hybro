@@ -553,7 +553,22 @@ class PendingAgentContinuation(BaseModel):
     a2a_task_id: str
     a2a_context_id: str
     attempted_resource_fingerprints: list[str] = Field(default_factory=list)
-    status: Literal["open", "resuming", "resolved", "abandoned"] = "open"
+    status: Literal[
+        "open",
+        "resuming",
+        "delivery_uncertain",
+        "acknowledged",
+        "projected",
+        "permanent_failure",
+        "resolved",
+        "abandoned",
+    ] = "open"
+    delivery_revision: int = Field(default=0, ge=0)
+    outbound_message_id: str | None = None
+    response_snapshot: dict[str, Any] | None = None
+    delivery_error: str | None = None
+    delivery_started_at: datetime | None = None
+    delivery_acknowledged_at: datetime | None = None
     updated_at: datetime = Field(default_factory=utcnow)
 
 

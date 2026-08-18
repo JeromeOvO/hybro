@@ -546,7 +546,21 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         ],
         outcomes=_stable_model_list(outcome_history.outcomes),
         goal_progress=_stable_model_list(run_state.goal_progress),
-        continuations=_stable_model_list(run_state.pending_agent_continuations),
+        continuations=[
+            {
+                "continuation_id": item.continuation_id,
+                "source_intent_id": item.source_intent_id,
+                "source_agent_message_id": item.source_agent_message_id,
+                "agent_id": item.agent_id,
+                "goal_family_fingerprint": item.goal_family_fingerprint,
+                "goal_revision_fingerprint": item.goal_revision_fingerprint,
+                "status": item.status,
+                "attempted_resource_fingerprints": list(
+                    item.attempted_resource_fingerprints
+                ),
+            }
+            for item in run_state.pending_agent_continuations
+        ],
         dispositions=_stable_model_list(run_state.goal_family_dispositions),
         blockers=_stable_model_list(run_state.blockers),
         attempt_chain_views=_attempt_chain_views(outcome_history),
