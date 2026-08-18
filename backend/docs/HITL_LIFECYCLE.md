@@ -11,6 +11,30 @@ observations remain private runtime data on
 `execution.dispatch.agent_event.AgentEvent` and are not fields on public delivery
 DTOs.
 
+## R2a typed A2A interaction metadata foundation
+
+Remote agents may describe an interactive status with a strict, versioned metadata
+contract at exactly one location: `Task.status.message.metadata` or
+`TaskStatusUpdateEvent.status.message.metadata`. The namespace key is
+`hybro.ai/a2a/interaction`; its value has integer `schema_version: 1`, a bounded
+nonblank remote `interaction_id`, and 1–100 unique `HITLQuestionSpec` questions.
+Unknown fields and malformed or duplicate inventories are invalid. Metadata at the
+task, event, status, part, artifact, or history levels is not interpreted as this
+contract.
+
+Execution classifies an accepted location as `typed`, `untyped` (the namespace is
+absent), or `invalid` (the namespace is present but does not validate). Remote
+metadata never supplies authoritative A2A task or context identity: those values
+remain bound from trusted transport fields. Raw prompts, metadata, parser details,
+and typed specs are private observations. The durable observation inventory is
+embedded only in private `OrchestrationRunState` storage and is excluded from
+public Run, RunEvent, delivery, and SSE projections.
+
+This milestone does not change pre-router writes or interaction behavior. Those
+routing and behavior changes are deferred to R2b. Supervisor delegated child
+messages do, however, persist their owning orchestration `run_id` before dispatch;
+hub relay envelopes preserve that lineage.
+
 ## R1 persisted aggregate migration
 
 R1 makes the persisted interaction and its immutable `HITLRouteSnapshot` the sole

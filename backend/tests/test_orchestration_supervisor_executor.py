@@ -2213,6 +2213,7 @@ async def test_run_delegate_path_publishes_exact_dispatched_task(
     ].args[0]
     processor_call = executor.agent_message_processor.process_single_message.await_args
     assert delegated_message.message_id == intent.planned_agent_message_id
+    assert delegated_message.run_id == saved.run_id
     assert delegated_message.message_content.message_text == public_task_label
     assert delegated_message.task_content == public_task_label
     assert delegated_message.extend_info == {
@@ -8111,6 +8112,7 @@ async def test_run_reentry_replays_planned_intent_without_created_message():
     replayed_message = executor.message_writer.add_room_agent_message.await_args_list[
         1
     ].args[0]
+    assert replayed_message.run_id == state.run_id
     assert replayed_message.extend_info["public_task_label"] == "Requesting Agent One"
     assert replayed_message.extend_info["public_dispatch_text"]
     replayed_call = executor.agent_message_processor.process_single_message.await_args
@@ -8175,11 +8177,15 @@ async def test_run_replay_waits_when_planned_message_already_exists():
     )
     existing_message = SimpleNamespace(
         message_id="message-1:step-1:target-1:message",
+        run_id=None,
         last_notified_state="working",
         message_content=SimpleNamespace(message_text=""),
     )
     executor.message_reader.get_room_agent_message_by_message_id = AsyncMock(
         side_effect=[None, existing_message]
+    )
+    executor.message_writer.update_room_agent_message_by_message_id = AsyncMock(
+        return_value=True
     )
 
     result = await executor.run(
@@ -8198,6 +8204,11 @@ async def test_run_replay_waits_when_planned_message_already_exists():
     state = await store.get_run("message-1")
     assert state is not None
     assert state.status == OrchestrationStatus.WAITING_AGENT
+    assert existing_message.run_id == "message-1"
+    executor.message_writer.update_room_agent_message_by_message_id.assert_awaited_once_with(
+        existing_message.message_id,
+        existing_message,
+    )
 
 
 @pytest.mark.core

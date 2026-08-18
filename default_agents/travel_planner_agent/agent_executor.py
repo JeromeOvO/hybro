@@ -15,6 +15,7 @@ from a2a.types import (
 )
 from a2a.utils import new_text_artifact
 from agent import TravelPlannerAgent
+from interaction_metadata import build_input_required_metadata
 
 
 def _extract_text_from_message(msg: Message) -> str:
@@ -118,6 +119,11 @@ class TravelPlannerAgentExecutor(AgentExecutor):
                 messageId=uuid.uuid4().hex,
                 role=Role.agent,
                 parts=[Part(root=TextPart(text=final_text))],
+                metadata=(
+                    build_input_required_metadata(context.task_id, final_text)
+                    if is_input_required
+                    else None
+                ),
             )
         final_state = (
             TaskState.input_required if is_input_required else TaskState.completed

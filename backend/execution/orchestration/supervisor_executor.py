@@ -2737,6 +2737,23 @@ class SupervisorExecutor:
             msg = await self.message_reader.get_room_agent_message_by_message_id(
                 intent.planned_agent_message_id
             )
+            if msg is not None:
+                if msg.run_id not in {None, state.run_id}:
+                    raise RuntimeError(
+                        "existing agent message belongs to a different "
+                        "orchestration run"
+                    )
+                if msg.run_id is None:
+                    msg.run_id = state.run_id
+                    lineage_saved = await self.message_writer.update_room_agent_message_by_message_id(
+                        msg.message_id,
+                        msg,
+                    )
+                    if not lineage_saved:
+                        raise RuntimeError(
+                            "failed to persist orchestration run lineage on "
+                            "existing agent message"
+                        )
             if msg is None and intent.status == "planned":
                 replay_intents.append(intent)
             else:
@@ -7738,6 +7755,12 @@ class SupervisorExecutor:
         original_attachments: list | None = None,
     ) -> list[StepResult]:
         """Dispatch one or more agents, concurrently if multiple targets."""
+        if run_state is None and planned_message_ids:
+            run_state = (
+                await self.orchestration_run_store.get_latest_by_user_message_id(
+                    user_message_id
+                )
+            )
         valid_ids = {a.agent_id for a in agent_registry}
         logger.info(
             "supervisor_dispatch_targets_started room_id=%s user_message_id=%s "
@@ -8038,7 +8061,9 @@ class SupervisorExecutor:
                     else []
                 )
 
-                # Create RoomAgentMessage only after validation passes
+                # Create RoomAgentMessage only after validation passes. Durable
+                # orchestration ownership is attached before any write or dispatch,
+                # including replay/recovery calls through this shared path.
                 message = self.room_runtime.create_agent_message(
                     room_id=room_id,
                     related_message_id=user_message_id,
@@ -8052,6 +8077,8 @@ class SupervisorExecutor:
                         user_message_id
                     ),
                 )
+                if run_state is not None:
+                    message.run_id = run_state.run_id
                 preflight_failure: dict[str, str | None] | None = None
                 if isinstance(message.extend_info, Mapping):
                     preflight_failure = _normalize_attachment_preflight_failure(
@@ -8091,6 +8118,27 @@ class SupervisorExecutor:
                         )
                     )
                     if existing is not None:
+                        if run_state is None:
+                            raise RuntimeError(
+                                "existing planned agent message has no orchestration "
+                                "run state"
+                            )
+                        if existing.run_id not in {None, run_state.run_id}:
+                            raise RuntimeError(
+                                "existing agent message belongs to a different "
+                                "orchestration run"
+                            )
+                        if existing.run_id is None:
+                            existing.run_id = run_state.run_id
+                            lineage_saved = await self.message_writer.update_room_agent_message_by_message_id(
+                                existing.message_id,
+                                existing,
+                            )
+                            if not lineage_saved:
+                                raise RuntimeError(
+                                    "failed to persist orchestration run lineage "
+                                    "on existing agent message"
+                                )
                         terminal_result = self._step_result_from_existing_agent_message(
                             existing,
                             target=target,

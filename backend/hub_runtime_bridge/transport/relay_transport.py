@@ -9,6 +9,7 @@ def dispatch_command_to_event(command: HubDispatchCommand) -> dict:
         "room_id": command.room_id,
         "user_message_id": command.user_message_id,
         "agent_message_id": command.agent_message_id,
+        "run_id": command.run_id,
         "agent_id": command.agent_id,
         "local_agent_id": command.local_agent_id,
         "message": command.payload,

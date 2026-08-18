@@ -5,6 +5,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+HYBRO_A2A_INTERACTION_METADATA_KEY = "hybro.ai/a2a/interaction"
+
 
 class TaskStateCategory(Enum):
     PENDING = "pending"
@@ -130,6 +132,7 @@ def get_retry_after_seconds(state: Any) -> int | None:
 __all__ = [
     "CommonTaskState",
     "FAILURE_STATES",
+    "HYBRO_A2A_INTERACTION_METADATA_KEY",
     "INTERACTIVE_STATES",
     "NON_TERMINAL_STATES",
     "PENDING_STATES",

@@ -11,7 +11,14 @@ import json
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import ConfigDict, Field, StrictBool, StringConstraints, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from common.dto.base import FrozenDTO
 
@@ -139,7 +146,7 @@ class HITLQuestionSpec(_HITLContract):
     interaction_kind: HITLInteractionKind
     prompt: _Prompt
     answer_kind: HITLAnswerKind
-    required: bool = True
+    required: StrictBool = True
     choices: list[_NonBlankId] | None = Field(
         default=None, min_length=2, max_length=100
     )
@@ -189,6 +196,30 @@ class HITLQuestionSpec(_HITLContract):
             inventory = set(self.choices or ())
             if not set(answer.answer.choices).issubset(inventory):
                 raise ValueError("answer choices are not in the question inventory")
+
+
+class A2AInteractionSpec(_HITLContract):
+    """Typed interaction advertised by a remote agent in A2A message metadata."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_version: Literal[1]
+    interaction_id: _NonBlankId
+    questions: list[HITLQuestionSpec] = Field(min_length=1, max_length=100)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def validate_strict_schema_version(cls, value: object) -> object:
+        if type(value) is not int or value != 1:
+            raise ValueError("schema_version must be the integer literal 1")
+        return value
+
+    @model_validator(mode="after")
+    def validate_unique_question_ids(self) -> Self:
+        question_ids = [question.question_id for question in self.questions]
+        if len(set(question_ids)) != len(question_ids):
+            raise ValueError("question_id values must be unique")
+        return self
 
 
 class HITLQuestionAnswer(_HITLContract):
@@ -268,6 +299,7 @@ def _is_provisional_identifier(value: str) -> bool:
 
 
 __all__ = [
+    "A2AInteractionSpec",
     "HITLAnswer",
     "HITLAnswerKind",
     "HITLApplicationRoute",

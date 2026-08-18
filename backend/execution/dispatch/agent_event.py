@@ -11,6 +11,12 @@ from collections.abc import Mapping
 from dataclasses import InitVar, dataclass
 from typing import Literal
 
+from common.dto.hitl import A2AInteractionSpec
+from execution.dispatch.a2a_interaction import (
+    A2AInteractionDisposition,
+    freeze_interaction_metadata,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AgentInputObservation:
@@ -26,9 +32,30 @@ class AgentInputObservation:
     task_id: str
     context_id: str
     observed_state: str
+    interaction_spec: A2AInteractionSpec | None = None
+    parser_disposition: A2AInteractionDisposition = A2AInteractionDisposition.UNTYPED
+    parser_error: str | None = None
     schema_version: Literal[1] = 1
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "interaction_metadata",
+            freeze_interaction_metadata(self.interaction_metadata),
+        )
+        if self.parser_disposition == A2AInteractionDisposition.TYPED:
+            if self.interaction_spec is None:
+                raise ValueError("typed observation requires interaction_spec")
+            if self.parser_error is not None:
+                raise ValueError("typed observation cannot include parser_error")
+        elif self.interaction_spec is not None:
+            raise ValueError("only typed observation may include interaction_spec")
+        if self.parser_disposition == A2AInteractionDisposition.INVALID:
+            if not self.parser_error:
+                raise ValueError("invalid observation requires parser_error")
+        elif self.parser_error is not None:
+            raise ValueError("only invalid observation may include parser_error")
+
         for field_name in ("task_id", "context_id"):
             value = getattr(self, field_name)
             normalized = value.strip().casefold()
@@ -99,7 +126,7 @@ class AgentEvent:
     # Flow control
     skip_persist: bool = False
     files_materialized: bool = False
-    details: str | None = None
+    details: dict[str, object] | str | None = None
     created_at: str | None = None
     emit_processing_status: bool = True
     retry_on_finalization_conflict: bool = False

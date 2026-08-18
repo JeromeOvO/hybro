@@ -11,12 +11,14 @@ from uuid import uuid4
 from pydantic import (
     AliasChoices,
     BaseModel,
+    ConfigDict,
     Field,
     computed_field,
     field_validator,
     model_validator,
 )
 
+from common.dto.hitl import A2AInteractionSpec
 from common.utils.time import utcnow
 
 ORCHESTRATION_RUN_SCHEMA_VERSION = 2
@@ -417,6 +419,93 @@ class DispatchIntent(BaseModel):
     )
 
 
+class AgentInputObservationRecord(BaseModel):
+    """Private durable inventory of one remote interactive observation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str = ""
+    classification: Literal["typed", "untyped", "invalid"]
+    raw_prompt: str
+    raw_metadata: dict[str, Any] = Field(default_factory=dict)
+    interaction_spec: A2AInteractionSpec | None = None
+    parser_error: str | None = None
+    observed_state: str
+    authoritative_task_id: str
+    authoritative_context_id: str
+    agent_id: str
+    agent_message_id: str
+
+    @model_validator(mode="after")
+    def validate_private_observation(  # noqa: C901
+        self,
+    ) -> AgentInputObservationRecord:
+        if self.classification == "typed":
+            if self.interaction_spec is None:
+                raise ValueError("typed observation requires interaction_spec")
+            if self.parser_error is not None:
+                raise ValueError("typed observation cannot include parser_error")
+        elif self.interaction_spec is not None:
+            raise ValueError("only typed observations may include interaction_spec")
+
+        if self.classification == "invalid":
+            if not self.parser_error:
+                raise ValueError("invalid observation requires parser_error")
+        elif self.parser_error is not None:
+            raise ValueError("only invalid observations may include parser_error")
+
+        for field_name in (
+            "observed_state",
+            "authoritative_task_id",
+            "authoritative_context_id",
+            "agent_id",
+            "agent_message_id",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field_name} must be nonblank")
+
+        for field_name in ("authoritative_task_id", "authoritative_context_id"):
+            normalized = getattr(self, field_name).strip().casefold()
+            if normalized in {
+                "pending",
+                "provisional",
+                "unknown",
+            } or normalized.startswith(("pending-", "relay-pending-", "provisional-")):
+                raise ValueError(f"{field_name} must be authoritative")
+
+        identity = {
+            "classification": self.classification,
+            "raw_prompt": self.raw_prompt,
+            "raw_metadata": self.raw_metadata,
+            "interaction_spec": (
+                self.interaction_spec.model_dump(mode="json")
+                if self.interaction_spec is not None
+                else None
+            ),
+            "parser_error": self.parser_error,
+            "observed_state": self.observed_state,
+            "authoritative_task_id": self.authoritative_task_id,
+            "authoritative_context_id": self.authoritative_context_id,
+            "agent_id": self.agent_id,
+            "agent_message_id": self.agent_message_id,
+        }
+        canonical = json.dumps(
+            identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        )
+        expected_id = (
+            f"agent-input-observation:{hashlib.sha256(canonical.encode()).hexdigest()}"
+        )
+        if self.observation_id and self.observation_id != expected_id:
+            raise ValueError("observation_id does not match deterministic identity")
+        self.observation_id = expected_id
+        return self
+
+
 class AgentOutputRecord(BaseModel):
     agent_message_id: str
     agent_id: str
@@ -511,6 +600,11 @@ class OrchestrationRunState(BaseModel):
         ),
     )
     agent_outputs: list[AgentOutputRecord] = Field(default_factory=list)
+    # Private durable data. Public Run/RunEvent/SSE projections must remain
+    # explicit and must never serialize this inventory.
+    private_agent_input_observations: list[AgentInputObservationRecord] = Field(
+        default_factory=list
+    )
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     completion_criteria: list[dict[str, Any]] = Field(default_factory=list)
     dispatch_intents: list[DispatchIntent] = Field(default_factory=list)
