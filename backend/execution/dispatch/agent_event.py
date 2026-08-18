@@ -7,8 +7,42 @@ their transport-specific events into ``AgentEvent`` before delegating to
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import InitVar, dataclass
 from typing import Literal
+
+
+@dataclass(frozen=True, slots=True)
+class AgentInputObservation:
+    """Private runtime evidence observed on an agent input-required event.
+
+    The raw prompt and transport metadata can contain sensitive or untrusted
+    content.  They are retained only for runtime classification and must not be
+    copied into public delivery DTOs.
+    """
+
+    raw_prompt: str
+    interaction_metadata: Mapping[str, object]
+    task_id: str
+    context_id: str
+    observed_state: str
+    schema_version: Literal[1] = 1
+
+    def __post_init__(self) -> None:
+        for field_name in ("task_id", "context_id"):
+            value = getattr(self, field_name)
+            normalized = value.strip().casefold()
+            if (
+                not normalized
+                or normalized
+                in {
+                    "pending",
+                    "provisional",
+                    "unknown",
+                }
+                or normalized.startswith(("pending-", "relay-pending-", "provisional-"))
+            ):
+                raise ValueError(f"{field_name} must be authoritative")
 
 
 @dataclass
@@ -71,3 +105,17 @@ class AgentEvent:
     retry_on_finalization_conflict: bool = False
     finalization_recovery_id: str | None = None
     end_turn: bool = False
+
+    # InitVar keeps private evidence out of dataclasses.asdict(). Public delivery
+    # translation must also remain explicit rather than serializing AgentEvent.
+    input_observation: InitVar[AgentInputObservation | None] = None
+
+    def __post_init__(
+        self,
+        input_observation: AgentInputObservation | None,
+    ) -> None:
+        self._input_observation = input_observation
+
+    @property
+    def private_input_observation(self) -> AgentInputObservation | None:
+        return self._input_observation

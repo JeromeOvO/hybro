@@ -1,5 +1,16 @@
 # HITL lifecycle
 
+## R0 contract foundation
+
+`common/dto/hitl.py` defines the dependency-neutral contracts for the next HITL
+lifecycle without changing current routes or payloads. It separates questionnaire,
+authorization, and policy interactions; models answers as a strict discriminated
+union; treats cancellation as a version-fenced command; and captures immutable,
+route-validated application snapshots with canonical fingerprints. Raw agent input
+observations remain private runtime data on
+`execution.dispatch.agent_event.AgentEvent` and are not fields on public delivery
+DTOs.
+
 ## Continuation and failure invariants
 
 Hybro treats the remote A2A `Task.id` and `Task.contextId` returned by the agent as
