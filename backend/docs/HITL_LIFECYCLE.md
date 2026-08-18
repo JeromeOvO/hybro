@@ -45,6 +45,14 @@ legacy group metadata. This is an intentionally destructive schema change. **Wip
 the runtime MongoDB database before starting this version**; no backfill or legacy
 readiness path is supported.
 
+## Repeated input-required
+
+For Supervisor-owned runs, a remote continuation that asks for more input is
+persisted as private execution evidence and returned to the Planner. The HITL
+service does not create a follow-up user interaction from Agent prose or typed
+metadata. Direct conversation mode may create a subsequent typed interaction,
+but only from the strict A2A interaction contract.
+
 ## Typed file handoff
 
 File requirements are not questionnaire interactions. Only the validated Planner

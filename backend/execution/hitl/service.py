@@ -1041,9 +1041,23 @@ class HITLService:
                     "a2a_task_id": authoritative_task_id,
                     "a2a_context_id": authoritative_context_id,
                 }
+            if request.orchestration_run_id:
+                return {
+                    "blocking": True,
+                    "task_state": task_state,
+                    "response_text": "Agent requested additional input.",
+                    "resume_execution": True,
+                    "agent_input_required_private": True,
+                    "agent_id": request.agent_id,
+                    "agent_name": request.agent_name,
+                    "display_message_id": request.display_message_id,
+                    "continuation_message_id": request.continuation_message_id,
+                    "a2a_task_id": authoritative_task_id,
+                    "a2a_context_id": authoritative_context_id,
+                }
             logger.info(
-                "hitl: blocking reply returned input_required for %s — "
-                "creating new HITL request (not resuming queue)",
+                "hitl: direct continuation returned typed input_required for %s — "
+                "creating the next interaction",
                 request.continuation_message_id,
             )
             followup_interaction_id = deterministic_interaction_id(

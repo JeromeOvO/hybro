@@ -233,7 +233,7 @@ async def test_successful_reply_returns_rotated_authoritative_continuation_ids()
         agent_id="agent-1",
         agent_name="Agent",
         display_message_id="agent-message-1",
-        orchestration_run_id="run-1",
+        orchestration_run_id=None,
         agent_prompt_hash=None,
         prompt="What is the insured email address?",
     )
@@ -365,8 +365,11 @@ async def test_followup_without_interactive_state_fails_without_new_interaction(
 
 
 @pytest.mark.asyncio
-async def test_safe_followup_creates_new_interaction_with_rotated_route():
-    request = _agent_hitl_request(prompt="Where do you want to go?")
+async def test_direct_safe_followup_creates_new_interaction_with_rotated_route():
+    request = _agent_hitl_request(
+        prompt="Where do you want to go?",
+        orchestration_run_id=None,
+    )
     service = HITLService()
     service._persistence = SimpleNamespace(reset_last_notified_state=AsyncMock())
     service._agent_reply = SimpleNamespace(
@@ -395,6 +398,35 @@ async def test_safe_followup_creates_new_interaction_with_rotated_route():
     assert kwargs["questions"][0]["prompt"] == "What is your budget?"
     assert kwargs["route_snapshot"].task_id == "task-2"
     assert kwargs["route_snapshot"].context_id == "context-2"
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_typed_followup_returns_to_planner_without_new_interaction():
+    request = _agent_hitl_request(prompt="Where do you want to go?")
+    service = HITLService()
+    service._persistence = SimpleNamespace(reset_last_notified_state=AsyncMock())
+    service._agent_reply = SimpleNamespace(
+        reply_to_task=AsyncMock(
+            return_value={
+                "blocking": True,
+                "task_state": "input-required",
+                "response_text": "PRIVATE_SENTINEL_followup_prose",
+                "task_id": "task-2",
+                "context_id": "context-2",
+                "_interaction_spec": _interaction_spec_payload(
+                    "What is your budget?", interaction_id="followup-typed"
+                ),
+            }
+        )
+    )
+    service.request_interaction = AsyncMock()
+
+    result = await service._handle_agent_response(request, "Paris")
+
+    assert result["resume_execution"] is True
+    assert result["agent_input_required_private"] is True
+    assert result["response_text"] == "Agent requested additional input."
+    service.request_interaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
