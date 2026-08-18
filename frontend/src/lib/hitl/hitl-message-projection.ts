@@ -19,6 +19,7 @@ export type PendingHitlProjectionInput = {
   expiresAt: string | null | undefined
   interactionId?: string | null
   interactionStatus?: string | null
+  interactionVersion?: number | null
   applicationStatus?: string | null
   applicationError?: string | null
   groupId: string | null | undefined
@@ -82,6 +83,7 @@ export function buildPendingHitlIncomingMessage(
     hitlResolved: false,
     hitlInteractionId: input.interactionId ?? input.groupId ?? input.requestId,
     hitlInteractionStatus: input.interactionStatus ?? 'open',
+    hitlInteractionVersion: input.interactionVersion ?? undefined,
     hitlApplicationStatus: input.applicationStatus ?? undefined,
     hitlGroupId: input.groupId ?? null,
     hitlGroupTotal: input.groupTotal ?? null,

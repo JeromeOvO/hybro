@@ -145,6 +145,7 @@ class HITLRequest(FrozenDTO):
     choices: list[str] | None = None
     interaction_id: str | None = None
     interaction_status: str | None = None
+    interaction_version: int | None = None
     application_status: str | None = None
     application_error: str | None = None
     group_id: str | None = None

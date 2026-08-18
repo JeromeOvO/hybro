@@ -170,6 +170,7 @@ class HITLRequestEvent(DeliveryEventBase):
     source_step_id: str | None = None
     interaction_id: str | None = None
     interaction_status: str | None = None
+    interaction_version: int | None = None
     application_status: str | None = None
     group_id: str | None = None
     group_total: int | None = None
@@ -186,6 +187,7 @@ class HITLResolvedEvent(DeliveryEventBase):
     status: str = "resolved"
     interaction_id: str | None = None
     interaction_status: str | None = None
+    interaction_version: int | None = None
     application_status: str | None = None
     error_message: str | None = None
     related_message_id: str | None = None

@@ -40,6 +40,7 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         orchestration_run_id=getattr(request, "orchestration_run_id", None),
         interaction_id=getattr(request, "interaction_id", None),
         interaction_status=_enum_value(getattr(request, "interaction_status", None)),
+        interaction_version=getattr(request, "interaction_version", None),
         application_status=getattr(request, "application_status", None),
         application_error=getattr(request, "application_error", None),
         group_id=(request.interaction_id if request.question_count > 1 else None),

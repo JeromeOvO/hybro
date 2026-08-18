@@ -19,6 +19,7 @@ export interface HitlPendingRequest {
   created_at: string
   interaction_id?: string | null
   interaction_status?: string | null
+  interaction_version?: number | null
   application_status?: string | null
   application_error?: string | null
   group_id?: string | null

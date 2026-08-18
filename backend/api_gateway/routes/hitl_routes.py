@@ -59,6 +59,7 @@ _PUBLIC_PENDING_HITL_FIELDS = {
     "expires_at",
     "interaction_id",
     "interaction_status",
+    "interaction_version",
     "application_status",
     "application_error",
     "group_id",

@@ -178,6 +178,7 @@ export type HITLInputRequestedData = {
   source_step_id?: string | null
   interaction_id?: string | null
   interaction_status?: string | null
+  interaction_version?: number | null
   application_status?: string | null
   group_id?: string | null
   group_total?: number | null
@@ -200,6 +201,7 @@ export type HITLStatusUpdateData = {
   source_step_id?: string | null
   interaction_id?: string | null
   interaction_status?: string | null
+  interaction_version?: number | null
   application_status?: string | null
   group_id?: string | null
   group_total?: number | null

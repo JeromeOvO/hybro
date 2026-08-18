@@ -6,22 +6,12 @@ const GENERIC_PROMPT = /^the agent needs additional information\.?$/i
 function deriveLifecycleState(entity: MessageEntity, question: string): HitlLifecycleState {
   const interaction = entity.hitlInteractionStatus
   const application = entity.hitlApplicationStatus
-  const error = entity.taskError ?? entity.taskStatusMessage ?? ''
-  const normalizedError = error.toLowerCase()
-
   if (entity.taskStatus === 'canceled' || interaction === 'canceled') return 'canceled'
-  if (interaction === 'expired' || normalizedError.includes('expired')) return 'expired'
+  if (interaction === 'expired') return 'expired'
   if (
-    interaction === 'delivery_uncertain' ||
-    application === 'delivery_uncertain' ||
-    normalizedError.includes('uncertain') ||
-    normalizedError.includes('may have been delivered')
+    interaction === 'delivery_uncertain'
+    || application === 'delivery_uncertain'
   ) return 'delivery_uncertain'
-  if (
-    normalizedError.includes('did not acknowledge') ||
-    normalizedError.includes('stopped responding') ||
-    normalizedError.includes('agent timeout')
-  ) return 'agent_timeout'
   if (
     interaction === 'applying' ||
     interaction === 'answers_recorded' ||
@@ -29,7 +19,6 @@ function deriveLifecycleState(entity: MessageEntity, question: string): HitlLife
   ) return 'applying'
   if (
     interaction === 'failed' ||
-    Boolean(entity.taskError) ||
     !question.trim() ||
     GENERIC_PROMPT.test(question.trim()) ||
     entity.hitlPromptType === 'unknown'

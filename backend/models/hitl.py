@@ -191,6 +191,7 @@ class HITLRequest(BaseModel):
 
     # Public lifecycle projection metadata (not routing authority).
     interaction_status: HITLInteractionStatus | None = None
+    interaction_version: int | None = Field(default=None, ge=1)
     application_status: str | None = None
     application_error: str | None = None
 

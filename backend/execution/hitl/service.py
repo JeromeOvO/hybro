@@ -797,6 +797,7 @@ class HITLService:
                         request_id=request.request_id,
                     )
                 request.interaction_status = HITLInteractionStatus.OPEN
+                request.interaction_version = int(interaction.get("version") or 1)
                 request.application_status = HITLInteractionStatus.OPEN.value
                 await self._emit_hitl_event(
                     room_id=request.room_id,
@@ -1329,6 +1330,7 @@ class HITLService:
                     continue
                 enriched = dict(document)
                 enriched["interaction_status"] = interaction.get("status")
+                enriched["interaction_version"] = interaction.get("version")
                 enriched["application_status"] = interaction.get("status")
                 enriched["application_error"] = interaction.get("application_error")
                 public.append(_public_hitl_request_from_doc(enriched))
@@ -2035,6 +2037,7 @@ class HITLService:
                             request.interaction_status,
                         )
                     ),
+                    interaction_version=request.interaction_version,
                     application_status=request.application_status,
                     group_id=(
                         request.interaction_id if request.question_count > 1 else None
@@ -2070,6 +2073,7 @@ class HITLService:
                         request.interaction_status, "value", request.interaction_status
                     )
                 ),
+                interaction_version=request.interaction_version,
                 application_status=request.application_status,
                 related_message_id=data["related_message_id"],
                 error_message=error,

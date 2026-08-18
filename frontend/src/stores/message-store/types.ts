@@ -90,6 +90,7 @@ export interface MessageEntity {
   hitlResolved?: boolean
   hitlInteractionId?: string
   hitlInteractionStatus?: string
+  hitlInteractionVersion?: number
   hitlApplicationStatus?: string
   hitlGroupId?: string | null
   hitlGroupTotal?: number | null
@@ -171,6 +172,7 @@ export interface IncomingMessage {
   hitlResolved?: boolean
   hitlInteractionId?: string
   hitlInteractionStatus?: string
+  hitlInteractionVersion?: number
   hitlApplicationStatus?: string
   hitlGroupId?: string | null
   hitlGroupTotal?: number | null

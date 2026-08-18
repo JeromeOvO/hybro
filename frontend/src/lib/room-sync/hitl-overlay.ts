@@ -41,6 +41,7 @@ export async function overlayPendingHitlRequests(
       expiresAt: req.expires_at,
       interactionId: req.interaction_id,
       interactionStatus: req.interaction_status,
+      interactionVersion: req.interaction_version,
       applicationStatus: req.application_status,
       applicationError: req.application_error,
       groupId: req.group_id,

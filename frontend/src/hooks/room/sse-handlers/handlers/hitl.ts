@@ -15,7 +15,7 @@ export async function handleHitlRequest(
   const {
     request_id, message_id, source, prompt, prompt_type, choices,
     agent_name, agent_id, step_number, total_steps, expires_at,
-    interaction_id, interaction_status, application_status,
+    interaction_id, interaction_status, interaction_version, application_status,
     group_id, group_total, group_index, related_message_id,
   } = sseMessage.data
 
@@ -93,6 +93,7 @@ export async function handleHitlRequest(
     expiresAt: expires_at,
     interactionId: interaction_id,
     interactionStatus: interaction_status,
+    interactionVersion: interaction_version,
     applicationStatus: application_status,
     groupId: group_id,
     groupTotal: group_total,
@@ -124,6 +125,7 @@ export function handleHitlResponse(
     error_message,
     interaction_id,
     interaction_status,
+    interaction_version,
     application_status,
     client_request_id,
   } = sseMessage.data
@@ -175,6 +177,7 @@ export function handleHitlResponse(
     hitlResolved: resolved,
     hitlInteractionId: interaction_id ?? entity.hitlInteractionId,
     hitlInteractionStatus: interaction_status ?? entity.hitlInteractionStatus ?? hitlStatus,
+    hitlInteractionVersion: interaction_version ?? entity.hitlInteractionVersion,
     hitlApplicationStatus: application_status ?? entity.hitlApplicationStatus ?? hitlStatus,
     clientRequestId: client_request_id ?? entity.clientRequestId,
     taskStatus: resolvedTaskStatus,
