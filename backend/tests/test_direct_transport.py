@@ -11,7 +11,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from common.a2a_constants import CommonTaskState
+from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY, CommonTaskState
+from common.dto.hitl import A2AInteractionSpec
 from common.types import (
     Artifact,
     FileContent,
@@ -26,7 +27,16 @@ from common.types import (
     TaskStatusUpdateEvent,
     TextPart,
 )
-from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.a2a_interaction import (
+    input_observation_from_a2a,
+)
+from execution.dispatch.agent_event import AgentEvent, AgentInputObservation
+from execution.dispatch.agent_ingress_router import (
+    SUPERVISOR_BLOCKER_SUMMARY,
+    UNSUPPORTED_INTERACTION_CODE,
+    AgentIngressDecision,
+    AgentIngressRoute,
+)
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports import direct as direct_module
@@ -337,10 +347,79 @@ class TestParseSyncFallbackResponse:
 # =============================================================================
 
 
+def _interaction_observation(
+    *,
+    raw_prompt: str = "PRIVATE_SENTINEL_interactive_prompt",
+    typed_prompt: str | None = None,
+    state: TaskState = TaskState.input_required,
+) -> AgentInputObservation:
+    metadata = None
+    if typed_prompt is not None:
+        spec = A2AInteractionSpec.model_validate(
+            {
+                "schema_version": 1,
+                "interaction_id": "interaction-1",
+                "questions": [
+                    {
+                        "question_id": "question-1",
+                        "interaction_kind": "questionnaire",
+                        "prompt": typed_prompt,
+                        "answer_kind": "text",
+                    }
+                ],
+            }
+        )
+        metadata = {HYBRO_A2A_INTERACTION_METADATA_KEY: spec.model_dump()}
+    task = Task(
+        id="remote-task-1",
+        contextId="remote-context-1",
+        status=TaskStatus(
+            state=state,
+            message=Message(
+                role=MessageRole.AGENT,
+                messageId="remote-status-message",
+                parts=[Part(root=TextPart(text=raw_prompt))],
+                metadata=metadata,
+            ),
+        ),
+    )
+    return input_observation_from_a2a(task)
+
+
+def _decision_for(
+    observation: AgentInputObservation | None,
+    *,
+    route: AgentIngressRoute = AgentIngressRoute.UNSUPPORTED,
+) -> AgentIngressDecision:
+    return AgentIngressDecision(
+        route=route,
+        message_id="msg-1",
+        room_id="room-1",
+        agent_id="agent-1",
+        task_id=observation.task_id if observation else "missing-authoritative-task",
+        context_id=(
+            observation.context_id if observation else "missing-authoritative-context"
+        ),
+        observed_state=observation.observed_state if observation else "input-required",
+        interaction_spec=(
+            observation.interaction_spec
+            if route == AgentIngressRoute.CONVERSATION_TYPED and observation
+            else None
+        ),
+        error_code=(
+            UNSUPPORTED_INTERACTION_CODE
+            if route == AgentIngressRoute.UNSUPPORTED
+            else None
+        ),
+    )
+
+
 def _make_processor(**overrides):
     """Create a DirectTransport with mocked dependencies, bypassing __init__."""
     proc = object.__new__(DirectTransport)
-    proc.response_handler = overrides.get("response_handler", MagicMock())
+    default_handler = MagicMock()
+    default_handler.decide_interactive = AsyncMock(return_value=_decision_for(None))
+    proc.response_handler = overrides.get("response_handler", default_handler)
     proc.tsm = overrides.get("tsm", MagicMock())
     proc.delivery = overrides.get("delivery", MagicMock())
     proc.a2a_transport = overrides.get("a2a_transport", MagicMock())
@@ -853,7 +932,7 @@ class TestInteractivePromptProjection:
 
 class TestHandleStreamStatusUpdatePrivacy:
     @pytest.mark.asyncio
-    async def test_interactive_status_update_emits_public_label_not_remote_prompt(self):
+    async def test_interactive_status_update_suppresses_early_notify_and_prompt(self):
         private_prompt = "PRIVATE_SENTINEL_streaming_interactive_prompt"
         public_label = "Requesting Claims Agent"
         proc = _make_processor()
@@ -871,28 +950,31 @@ class TestHandleStreamStatusUpdatePrivacy:
             user_message_id="msg-1",
             send_sse=True,
         )
-        result = MagicMock(
+        result = TaskStatusUpdateEvent(
+            taskId="remote-task-1",
+            contextId="remote-context-1",
             status=TaskStatus(
                 state=TaskState.input_required,
                 message=Message(
                     role=MessageRole.AGENT,
                     parts=[Part(root=TextPart(text=private_prompt))],
-                    message_id="remote-status-message",
+                    messageId="remote-status-message",
                 ),
             ),
             final=False,
         )
+        private_context = {}
 
         await proc._handle_stream_status_update(
             result,
             ctx,
             MessageStreamingState(),
+            interactive_status_context=private_context,
         )
 
-        proc.tsm.notify_task.assert_awaited_once()
-        notify_kwargs = proc.tsm.notify_task.await_args.kwargs
-        assert notify_kwargs["status_message"] is None
-        assert private_prompt not in repr(notify_kwargs)
+        proc.tsm.notify_task.assert_not_awaited()
+        assert private_context["input_observation"].raw_prompt == private_prompt
+        assert private_prompt not in repr(proc.tsm.notify_task.await_args_list)
         persisted_task = current_message.message_content.message_task
         assert persisted_task.status.message is None
 
@@ -2016,9 +2098,8 @@ class TestHandleSyncResponseInteractive:
         assert text is None
         assert paused == current_message.message_id
         assert agent_task_id == "real-agent-task-abc123"
-        notify_kwargs = proc.tsm.notify_task.await_args.kwargs
-        assert notify_kwargs["status_message"] == "Please approve."
-        assert notify_kwargs["status_message"] == "Please approve."
+        proc.tsm.notify_task.assert_not_awaited()
+        assert "Please approve." not in repr(proc.tsm.notify_task.await_args_list)
 
     @pytest.mark.asyncio
     async def test_no_task_tracking_interactive_does_not_persist_remote_prompt(self):
@@ -2410,8 +2491,17 @@ class TestDispatchInteractive:
     """dispatch() maps interactive task states to AWAITING_INPUT for HITL."""
 
     @pytest.mark.asyncio
-    async def test_dispatch_auth_required_returns_awaiting_input_with_prompt(self):
+    async def test_dispatch_typed_auth_returns_private_observation_and_decision(self):
         proc = _make_processor()
+        observation = _interaction_observation(
+            raw_prompt="PRIVATE_SENTINEL_auth_prompt",
+            typed_prompt="Authorize access?",
+            state=TaskState.auth_required,
+        )
+        decision = _decision_for(
+            observation, route=AgentIngressRoute.CONVERSATION_TYPED
+        )
+        proc.response_handler.decide_interactive = AsyncMock(return_value=decision)
         message = _make_room_agent_message()
         task = message.message_content.message_task
         assert task is not None
@@ -2423,9 +2513,12 @@ class TestDispatchInteractive:
         )
 
         proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
-        proc.handle_sync_response = AsyncMock(
-            return_value=(True, None, message.message_id, "agent-task-auth")
-        )
+
+        async def handle_sync_response(*_args, **kwargs):
+            kwargs["interactive_status_context"]["input_observation"] = observation
+            return True, None, message.message_id, observation.task_id
+
+        proc.handle_sync_response = AsyncMock(side_effect=handle_sync_response)
 
         agent = MagicMock()
         agent.agent_card = MagicMock()
@@ -2441,8 +2534,11 @@ class TestDispatchInteractive:
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
         assert result.message_id == message.message_id
-        assert result.a2a_task_id == "agent-task-auth"
-        assert result.status_message == "Authentication required"
+        assert result.a2a_task_id == observation.task_id
+        assert result.a2a_context_id == observation.context_id
+        assert result.status_message == SUPERVISOR_BLOCKER_SUMMARY
+        assert result.input_observation is observation
+        assert result.ingress_decision is decision
 
     @pytest.mark.asyncio
     async def test_dispatch_keeps_internal_contract_for_execution_only(self):
@@ -2454,13 +2550,14 @@ class TestDispatchInteractive:
         task.context_id = "agent-context-contract"
         task.status.state = TaskState.input_required
         internal_prompt = "Send JSON or a DataPart containing client.name."
+        observation = _interaction_observation(raw_prompt=internal_prompt)
+        decision = _decision_for(observation)
+        proc.response_handler.decide_interactive = AsyncMock(return_value=decision)
         proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
 
         async def handle_sync_response(*_args, **kwargs):
-            status_context = kwargs["interactive_status_context"]
-            status_context["raw_status_message"] = internal_prompt
-            status_context["status_message"] = None
-            return True, None, message.message_id, "agent-task-contract"
+            kwargs["interactive_status_context"]["input_observation"] = observation
+            return True, None, message.message_id, observation.task_id
 
         proc.handle_sync_response = AsyncMock(side_effect=handle_sync_response)
         agent = MagicMock()
@@ -2476,14 +2573,13 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message == internal_prompt
-        assert (
-            proc._public_interactive_status_message(MagicMock(), internal_prompt)
-            is None
-        )
+        assert result.status_message == SUPERVISOR_BLOCKER_SUMMARY
+        assert result.ingress_decision.route == AgentIngressRoute.UNSUPPORTED
+        assert result.input_observation.raw_prompt == internal_prompt
+        assert internal_prompt not in result.status_message
 
     @pytest.mark.asyncio
-    async def test_dispatch_file_prompt_sets_explicit_end_turn_outcome(self):
+    async def test_dispatch_file_prose_is_unsupported_not_file_turn(self):
         proc = _make_processor()
         message = _make_room_agent_message()
         task = message.message_content.message_task
@@ -2501,13 +2597,15 @@ class TestDispatchInteractive:
                 )
             ],
         )
+        file_prompt = "Please upload the signed PDF in a new message."
+        observation = _interaction_observation(raw_prompt=file_prompt)
+        decision = _decision_for(observation)
+        proc.response_handler.decide_interactive = AsyncMock(return_value=decision)
         proc.a2a_transport.has_streaming_capability = MagicMock(return_value=False)
 
         async def handle_sync_response(*_args, **kwargs):
-            kwargs["interactive_status_context"]["status_message"] = (
-                "Please upload the signed PDF in a new message."
-            )
-            return True, None, message.message_id, "agent-task-upload"
+            kwargs["interactive_status_context"]["input_observation"] = observation
+            return True, None, message.message_id, observation.task_id
 
         proc.handle_sync_response = AsyncMock(side_effect=handle_sync_response)
         agent = MagicMock()
@@ -2523,12 +2621,12 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.end_turn is True
-        assert result.a2a_task_id == "agent-task-upload"
-        assert result.a2a_context_id == "agent-context-upload"
+        assert result.end_turn is False
+        assert result.ingress_decision.route == AgentIngressRoute.UNSUPPORTED
+        assert file_prompt not in result.status_message
 
     @pytest.mark.asyncio
-    async def test_dispatch_auth_required_without_message_uses_default_prompt(self):
+    async def test_dispatch_without_observation_is_safe_unsupported(self):
         proc = _make_processor()
         message = _make_room_agent_message()
         task = message.message_content.message_task
@@ -2554,10 +2652,12 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message == "Authentication required"
+        assert result.status_message == SUPERVISOR_BLOCKER_SUMMARY
+        assert result.input_observation is None
+        assert result.ingress_decision.route == AgentIngressRoute.UNSUPPORTED
 
     @pytest.mark.asyncio
-    async def test_dispatch_requires_auth_without_status_returns_awaiting_input(self):
+    async def test_dispatch_requires_auth_without_status_returns_safe_unsupported(self):
         private_prompt = "PRIVATE_SENTINEL_direct_auth_prompt"
         proc = _make_processor()
         message = _make_room_agent_message()
@@ -2606,10 +2706,10 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message == "Authentication required"
-        assert private_prompt not in json.dumps(
-            result.__dict__, sort_keys=True, default=str
-        )
+        assert result.status_message == SUPERVISOR_BLOCKER_SUMMARY
+        assert result.ingress_decision.route == AgentIngressRoute.UNSUPPORTED
+        assert result.input_observation is None
+        assert private_prompt not in result.status_message
         assert not hasattr(proc, "_internal_interactive_status_messages")
         task = message.message_content.message_task
         assert task is not None
@@ -2688,10 +2788,10 @@ class TestDispatchInteractive:
         result = await proc.dispatch(ctx, message)
 
         assert result.status == ProcessingStatus.AWAITING_INPUT
-        assert result.status_message is None
-        assert private_prompt not in json.dumps(
-            result.__dict__, sort_keys=True, default=str
-        )
+        assert result.status_message == SUPERVISOR_BLOCKER_SUMMARY
+        assert result.ingress_decision.route == AgentIngressRoute.UNSUPPORTED
+        assert result.input_observation.raw_prompt == private_prompt
+        assert private_prompt not in result.status_message
         persisted_task = proc._task_updater.update_task_on_message.await_args.args[1]
         persisted_json = json.dumps(persisted_task, sort_keys=True)
         in_memory_json = message.message_content.message_task.model_dump_json()

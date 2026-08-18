@@ -33,13 +33,17 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.dispatch.a2a_interaction import input_observation_from_a2a
+from execution.dispatch.agent_ingress_router import (
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+)
 from execution.hitl.delivery import (
     HITLDeliveryDisposition,
     HITLDeliveryError,
     HITLDeliveryPhase,
     HITLDeliveryResult,
 )
-from execution.hitl.public_prompt import concrete_agent_input_prompt
 from models.error import A2AServiceError
 
 logger = get_logger(__name__)
@@ -352,9 +356,6 @@ class A2ATaskTrackingService:
 
         task_result = facade_result_to_model(response)
         task_obj = task_result if getattr(task_result, "kind", None) == "task" else None
-        raw_status_text = (
-            _extract_status_message(task_obj) if task_obj and task_obj.status else None
-        )
         response_text = _extract_reply_response_text(task_result)
         projected_response_text: str | None = None
         public_status_text: str | None = None
@@ -404,16 +405,24 @@ class A2ATaskTrackingService:
             task_state = _state_value(task_obj.status.state)
 
         error_code = None
+        interaction_spec = None
         if is_interactive_state(task_state):
-            response_text = concrete_agent_input_prompt(raw_status_text)
-            if response_text is None:
+            observation = input_observation_from_a2a(task_obj)
+            interaction_spec = observation.interaction_spec if observation else None
+            if interaction_spec is None:
                 task_state = "failed"
-                error_code = "invalid_interactive_prompt"
-                response_text = _PUBLIC_SAFE_STATUS_TEXT["failed"]
+                error_code = UNSUPPORTED_INTERACTION_CODE
+                response_text = UNSUPPORTED_INTERACTION_MESSAGE
                 await self._persist_failed_continuation_task(
                     message_id,
                     task_obj.id if task_obj else task_id,
                     task_obj.context_id if task_obj else context_id,
+                    error_message=UNSUPPORTED_INTERACTION_MESSAGE,
+                    error_code=UNSUPPORTED_INTERACTION_CODE,
+                )
+            else:
+                response_text = "\n\n".join(
+                    question.prompt for question in interaction_spec.questions
                 )
         elif task_obj:
             response_text = projected_response_text or public_status_text
@@ -429,6 +438,8 @@ class A2ATaskTrackingService:
             result["context_id"] = task_obj.context_id
         if error_code:
             result["error_code"] = error_code
+        if interaction_spec is not None:
+            result["_interaction_spec"] = interaction_spec.model_dump(mode="json")
         if outbound_message_id is not None:
             return HITLDeliveryResult(result).to_dict()
         return result
@@ -576,20 +587,13 @@ class A2ATaskTrackingService:
             )
 
         projected_data = public_persisted_task_data(task)
-        status_message = _extract_status_message(task)
         if state in INTERACTIVE_STATES:
-            concrete_prompt = concrete_agent_input_prompt(status_message)
-            if concrete_prompt is None:
-                await self._persist_failed_continuation_task(
-                    message_id, task.id, task.context_id
-                )
-                raise A2AServiceError(
-                    "Agent requested input without a concrete question"
-                )
+            # Persist only state and authoritative IDs.  Raw status text and
+            # metadata remain in the private observation until ingress routing.
+            observation = input_observation_from_a2a(task)
             await self._tracking_store.update_task_on_message(
                 message_id,
                 projected_data,
-                message_text=concrete_prompt,
             )
             return {
                 "type": "task",
@@ -599,7 +603,7 @@ class A2ATaskTrackingService:
                 "status": _state_value(state),
                 "requires_input": state == TaskState.input_required,
                 "requires_auth": state == TaskState.auth_required,
-                "message": concrete_prompt,
+                "_input_observation": observation,
             }
 
         await self._tracking_store.update_task_on_message(message_id, projected_data)
@@ -675,6 +679,9 @@ class A2ATaskTrackingService:
         message_id: str,
         task_id: str,
         context_id: str,
+        *,
+        error_message: str = _PUBLIC_SAFE_STATUS_TEXT["failed"],
+        error_code: str | None = None,
     ) -> None:
         failed_task = Task(
             id=task_id,
@@ -683,17 +690,16 @@ class A2ATaskTrackingService:
                 state=TaskState.failed,
                 message=Message(
                     role=Role.AGENT,
-                    parts=[
-                        Part(root=TextPart(text=_PUBLIC_SAFE_STATUS_TEXT["failed"]))
-                    ],
+                    parts=[Part(root=TextPart(text=error_message))],
                     message_id=str(uuid4()),
                 ),
             ),
+            metadata=({"error_code": error_code} if error_code else None),
         )
         await self._tracking_store.update_task_on_message(
             message_id,
             public_persisted_task_data(failed_task),
-            message_text=_PUBLIC_SAFE_STATUS_TEXT["failed"],
+            message_text=error_message,
         )
 
     async def _persist_failed_task(

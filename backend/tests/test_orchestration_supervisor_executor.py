@@ -8925,7 +8925,7 @@ async def test_direct_file_upload_result_propagates_end_turn_without_hitl():
 
 
 @pytest.mark.asyncio
-async def test_plain_input_required_creates_direct_agent_hitl_when_guardrails_disabled():
+async def test_supervisor_observation_replans_without_hitl_when_guardrails_disabled():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -8944,6 +8944,11 @@ async def test_plain_input_required_creates_direct_agent_hitl_when_guardrails_di
             reasoning="ask broker",
             targets=[PlannedDelegateTarget(agent_id="agent-1", task="Read input")],
         ),
+        PlannerAction(
+            action=PlannerActionType.FAIL,
+            reasoning="stop after private blocker",
+            failure_reason="test stop",
+        ),
     )
     store = InMemoryOrchestrationRunStore()
     executor = _executor(
@@ -8959,7 +8964,11 @@ async def test_plain_input_required_creates_direct_agent_hitl_when_guardrails_di
             message_id="agent-msg-1",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
-            status_message="Need the selected text projection.",
+            status_message="Agent requested additional input.",
+            input_observation=SimpleNamespace(
+                raw_prompt="Need the selected text projection."
+            ),
+            ingress_decision=SimpleNamespace(route="supervisor_observation"),
         )
     )
     executor.hitl_coordinator = SimpleNamespace(
@@ -8979,13 +8988,13 @@ async def test_plain_input_required_creates_direct_agent_hitl_when_guardrails_di
         user_message=user_message,
     )
 
-    assert result.status == RunStatus.AWAITING_INPUT
-    executor.hitl_coordinator.request_interaction.assert_awaited_once()
-    hitl_kwargs = executor.hitl_coordinator.request_interaction.await_args.kwargs
-    assert hitl_kwargs["public_source"] == "agent"
-    assert hitl_kwargs["questions"][0]["prompt"] == "Need the selected text projection."
-    assert result.run_state.pending_hitl_request_ids == ["hitl-agent-1"]
-    assert len(planner.contexts) == 1
+    assert result.status == RunStatus.FAILED
+    executor.hitl_coordinator.request_interaction.assert_not_awaited()
+    assert result.run_state.pending_hitl_request_ids == []
+    assert len(planner.contexts) == 2
+    assert "Need the selected text projection." not in str(
+        planner.contexts[1].state_context.model_dump(mode="json")
+    )
 
 
 @pytest.mark.asyncio
@@ -9948,7 +9957,9 @@ async def test_agent_input_required_nested_reply_remains_awaiting_input():
     )
 
     assert resumed.status == StepStatus.AWAITING_INPUT
-    assert resumed.status_message == "What is the employee count?"
+    assert resumed.status_message == "Agent requested additional input."
+    assert resumed.private_input_prompt == "What is the employee count?"
+    assert resumed.ingress_route == "supervisor_observation"
     assert resumed.interactive_state == "input-required"
     assert follow_up_ids == {"agent-msg-1"}
 
@@ -10099,12 +10110,14 @@ async def test_hitl_answer_follow_up_input_required_stays_awaiting_input():
     assert result.agent_message_id == "agent-msg-1"
     assert result.a2a_task_id == "task-1"
     assert result.a2a_context_id == "ctx-1"
-    assert result.status_message == "Need coverage limit too."
+    assert result.status_message == "Agent requested additional input."
+    assert result.private_input_prompt == "Need coverage limit too."
+    assert result.ingress_route == "supervisor_observation"
     assert result.end_turn is False
 
 
 @pytest.mark.asyncio
-async def test_hitl_answer_file_follow_up_ends_turn_without_second_hitl():
+async def test_hitl_answer_file_prose_is_unsupported_not_end_turn():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -10146,8 +10159,11 @@ async def test_hitl_answer_file_follow_up_ends_turn_without_second_hitl():
             reply_to_task=AsyncMock(
                 return_value={
                     "blocking": True,
-                    "task_state": "input-required",
-                    "response_text": prompt,
+                    "task_state": "failed",
+                    "response_text": (
+                        "The agent requested an unsupported interaction."
+                    ),
+                    "error_code": "unsupported_interaction",
                 }
             )
         ),
@@ -10174,37 +10190,12 @@ async def test_hitl_answer_file_follow_up_ends_turn_without_second_hitl():
         answer="ACME",
         user_message=user_message,
     )
-    completed, status = await executor._run_agent_awaiting_input_action(
-        state=state,
-        results=[follow_up],
-        awaiting=[follow_up],
-        trajectory=SupervisorTrajectory(),
-        agent_registry=[],
-        room_config=RoomConfig(),
-        room_id="room-1",
-        user_message_id="msg-1",
-        message_text="Prepare the submission",
-        conversation_context=None,
-        request_user_id="user-1",
-        quoted_text=None,
-    )
-
-    assert follow_up.end_turn is True
-    assert status == RunStatus.COMPLETED
-    assert completed.status == OrchestrationStatus.COMPLETED
-    assert completed.final_source_message_id == "sys-msg-1"
+    assert follow_up.status == StepStatus.FAILED
+    assert follow_up.success is False
+    assert follow_up.end_turn is False
+    assert follow_up.error_code == "unsupported_interaction"
+    assert prompt not in (follow_up.response_text or "")
     executor.hitl_coordinator.request_interaction.assert_not_awaited()
-    summary = await executor.message_reader.get_room_agent_message_by_message_id(
-        "sys-msg-1"
-    )
-    assert summary.message_content.message_text == prompt
-    persisted_agent = (
-        await executor.message_reader.get_room_agent_message_by_message_id(
-            "agent-msg-1"
-        )
-    )
-    assert persisted_agent.message_content.message_task.status.state == "completed"
-    assert persisted_agent.message_content.message_task.metadata["end_turn"] is True
 
 
 @pytest.mark.asyncio
@@ -10256,7 +10247,9 @@ async def test_hitl_answer_policy_follow_up_preserves_same_a2a_task_context():
     assert result.a2a_context_id == "ctx-1"
     assert result.interactive_state == "policy-required"
     assert result.requires_policy is True
-    assert result.status_message == "Please approve the required policy."
+    assert result.status_message == "Agent requested additional input."
+    assert result.private_input_prompt == "Please approve the required policy."
+    assert result.ingress_route == "supervisor_observation"
 
 
 @pytest.mark.parametrize(
@@ -10554,7 +10547,9 @@ async def test_same_agent_retry_that_still_needs_input_requires_hitl():
     assert result is not None
     assert result.status == StepStatus.AWAITING_INPUT
     assert result.paused_message_id == "agent-msg-1"
-    assert result.status_message == "Still need the broker submission pack."
+    assert result.status_message == "Agent requested additional input."
+    assert result.private_input_prompt == "Still need the broker submission pack."
+    assert result.ingress_route == "supervisor_observation"
     assert SupervisorExecutor._awaiting_result_requires_hitl(result) is False
 
 
@@ -10613,7 +10608,9 @@ async def test_continuation_without_state_or_output_stays_awaiting_input():
 
     assert result is not None
     assert result.status == StepStatus.AWAITING_INPUT
-    assert result.status_message == "Need the broker submission pack."
+    assert result.status_message == "Agent requested additional input."
+    assert result.private_input_prompt == "Need the broker submission pack."
+    assert result.ingress_route == "supervisor_observation"
     assert result.interactive_state == "input-required"
 
 

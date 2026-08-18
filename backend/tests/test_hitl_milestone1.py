@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
 from common.types import Message, Part, Task, TaskState, TaskStatus, TextPart
 from common.types import MessageRole as Role
 from execution.hitl.adapters import HITLTerminalLifecycleAdapter
@@ -15,6 +16,24 @@ from models.orchestration import OrchestrationRunState, OrchestrationStatus
 from models.run import RunState
 
 
+def _interaction_spec_payload(
+    *prompts: str, interaction_id: str = "interaction-typed"
+) -> dict:
+    return {
+        "schema_version": 1,
+        "interaction_id": interaction_id,
+        "questions": [
+            {
+                "question_id": f"question-{index}",
+                "interaction_kind": "questionnaire",
+                "prompt": prompt,
+                "answer_kind": "text",
+            }
+            for index, prompt in enumerate(prompts, start=1)
+        ],
+    }
+
+
 def _interactive_task(*, prompt: str = "What is the insured email address?") -> Task:
     return Task(
         id="remote-task-1",
@@ -25,13 +44,18 @@ def _interactive_task(*, prompt: str = "What is the insured email address?") -> 
                 role=Role.AGENT,
                 message_id="remote-message-1",
                 parts=[Part(root=TextPart(text=prompt))],
+                metadata={
+                    HYBRO_A2A_INTERACTION_METADATA_KEY: _interaction_spec_payload(
+                        prompt
+                    )
+                },
             ),
         ),
     )
 
 
 @pytest.mark.asyncio
-async def test_interactive_task_persists_authoritative_remote_ids_and_prompt():
+async def test_interactive_task_persists_ids_but_keeps_prompt_in_private_observation():
     store = MagicMock()
     store.update_task_on_message = AsyncMock(return_value=True)
     service = A2ATaskTrackingService(store)
@@ -48,7 +72,12 @@ async def test_interactive_task_persists_authoritative_remote_ids_and_prompt():
     assert persisted["contextId"] == "remote-context-1"
     assert result["task_id"] == "remote-task-1"
     assert result["context_id"] == "remote-context-1"
-    assert result["message"] == "What is the insured email address?"
+    assert "message" not in result
+    observation = result["_input_observation"]
+    assert observation.task_id == "remote-task-1"
+    assert observation.context_id == "remote-context-1"
+    assert observation.raw_prompt == "What is the insured email address?"
+    assert "What is the insured email address?" not in str(persisted)
 
 
 @pytest.mark.asyncio
@@ -328,7 +357,10 @@ async def test_followup_without_interactive_state_fails_without_new_interaction(
     result = await service._handle_agent_response(request, "answer")
 
     assert result["routing_failed"] is True
-    assert result["error_code"] == "invalid_interactive_prompt"
+    assert result["error_code"] == "unsupported_interaction"
+    assert result["response_text"] == (
+        "The agent requested an unsupported interaction."
+    )
     service.request_interaction.assert_not_awaited()
 
 
@@ -342,9 +374,12 @@ async def test_safe_followup_creates_new_interaction_with_rotated_route():
             return_value={
                 "blocking": True,
                 "task_state": "input-required",
-                "response_text": "What is your budget?",
+                "response_text": "PRIVATE_SENTINEL_followup_prose",
                 "task_id": "task-2",
                 "context_id": "context-2",
+                "_interaction_spec": _interaction_spec_payload(
+                    "What is your budget?", interaction_id="followup-typed"
+                ),
             }
         )
     )
@@ -372,7 +407,11 @@ async def test_unchanged_followup_returns_control_without_new_interaction():
             return_value={
                 "blocking": True,
                 "task_state": "input-required",
-                "response_text": " Please provide the complete submission. ",
+                "response_text": "PRIVATE_SENTINEL_repeated_prose",
+                "_interaction_spec": _interaction_spec_payload(
+                    "Please provide the complete submission.",
+                    interaction_id="repeated-typed",
+                ),
             }
         )
     )

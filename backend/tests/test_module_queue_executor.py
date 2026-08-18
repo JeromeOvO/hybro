@@ -18,7 +18,16 @@ import pytest
 from a2a_adapter.task_status import coerce_task_state
 from common.a2a_constants import SSEProcessingStatus
 from common.dto import MessageCommitted
+from common.dto.hitl import A2AInteractionSpec
 from common.utils.cancellation import CancellationToken
+from execution.dispatch.a2a_interaction import A2AInteractionDisposition
+from execution.dispatch.agent_event import AgentInputObservation
+from execution.dispatch.agent_ingress_router import (
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+    AgentIngressDecision,
+    AgentIngressRoute,
+)
 from execution.orchestration.file_turn import persist_file_turn_task
 from execution.orchestration.queue_executor import (
     QueueExecutor,
@@ -96,6 +105,61 @@ def test_constructor_requires_internal_event_publisher():
 # =============================================================================
 
 
+def _queue_interaction(
+    *, raw_prompt: str, typed_prompts: tuple[str, ...] = ()
+) -> tuple[AgentInputObservation, AgentIngressDecision]:
+    spec = (
+        A2AInteractionSpec.model_validate(
+            {
+                "schema_version": 1,
+                "interaction_id": "interaction-1",
+                "questions": [
+                    {
+                        "question_id": f"question-{index}",
+                        "interaction_kind": "questionnaire",
+                        "prompt": prompt,
+                        "answer_kind": "text",
+                    }
+                    for index, prompt in enumerate(typed_prompts, start=1)
+                ],
+            }
+        )
+        if typed_prompts
+        else None
+    )
+    observation = AgentInputObservation(
+        raw_prompt=raw_prompt,
+        interaction_metadata=(
+            {"hybro.a2a.interaction": spec.model_dump()} if spec else {}
+        ),
+        task_id="remote-task-1",
+        context_id="remote-context-1",
+        observed_state="input-required",
+        interaction_spec=spec,
+        parser_disposition=(
+            A2AInteractionDisposition.TYPED
+            if spec
+            else A2AInteractionDisposition.UNTYPED
+        ),
+    )
+    route = (
+        AgentIngressRoute.CONVERSATION_TYPED if spec else AgentIngressRoute.UNSUPPORTED
+    )
+    decision = AgentIngressDecision(
+        route=route,
+        message_id="paused-msg",
+        room_id="room-1",
+        agent_id="a1",
+        task_id=observation.task_id,
+        context_id=observation.context_id,
+        observed_state=observation.observed_state,
+        interaction_spec=spec,
+        error_code=(UNSUPPORTED_INTERACTION_CODE if not spec else None),
+        public_error=(UNSUPPORTED_INTERACTION_MESSAGE if not spec else None),
+    )
+    return observation, decision
+
+
 def _make_queue_executor():
     qe = object.__new__(QueueExecutor)
     qe.rate_limit_service = MagicMock()
@@ -136,6 +200,10 @@ def _make_queue_executor():
     qe.agent_dispatcher = MagicMock()
     qe._agent_message_processor = MagicMock()
     qe.response_handler = MagicMock()
+    _, unsupported = _queue_interaction(raw_prompt="private untyped prompt")
+    qe.response_handler.decide_interactive = AsyncMock(return_value=unsupported)
+    qe.response_handler.project_conversation_interactive = AsyncMock()
+    qe.response_handler.project_unsupported_interactive = AsyncMock()
     qe.response_handler.notify_task_update = AsyncMock(return_value=True)
     qe.hitl_coordinator = MagicMock()
     return qe
@@ -754,16 +822,13 @@ class TestProcessQueue:
         assert qe._process_single_message.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_file_upload_instruction_completes_turn_without_hitl_or_continuation(
+    async def test_file_upload_prose_fails_unsupported_without_hitl_or_continuation(
         self,
     ):
         qe = _make_queue_executor()
-        message_content = SimpleNamespace(
-            message_text="",
-            message_task=SimpleNamespace(
-                status=SimpleNamespace(state="input-required"), metadata={}
-            ),
-        )
+        file_prompt = "Please upload the signed PDF in a new message."
+        observation, decision = _queue_interaction(raw_prompt=file_prompt)
+        qe.response_handler.decide_interactive = AsyncMock(return_value=decision)
         msg = MagicMock(
             message_id="msg-upload",
             step_number=1,
@@ -771,10 +836,8 @@ class TestProcessQueue:
             extend_info=None,
             agent_id="a1",
             user_id="u1",
-            message_content=message_content,
         )
-        queued_follow_up = MagicMock(message_id="msg-follow-up")
-        queue = deque([msg, queued_follow_up])
+        queue = deque([msg, MagicMock(message_id="msg-follow-up")])
         agent = MagicMock()
         agent.agent_id = "a1"
         agent.agent_card = MagicMock()
@@ -784,44 +847,21 @@ class TestProcessQueue:
             return_value=ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="msg-upload",
-                status_message="Please upload the signed PDF in a new message.",
+                input_observation=observation,
+                ingress_decision=decision,
                 end_turn=True,
             )
-        )
-        qe.message_reader.get_room_agent_message_by_message_id = AsyncMock(
-            return_value=msg
-        )
-
-        async def update_task(_message_id, state, **kwargs):
-            message_content.message_task.status.state = state
-            message_content.message_task.metadata = kwargs["task_metadata"]
-            message_content.message_text = kwargs["message_text"]
-            return True, kwargs["message_text"]
-
-        qe.message_writer.update_task_state_on_message = AsyncMock(
-            side_effect=update_task
         )
         qe.hitl_coordinator.request_interaction = AsyncMock()
         qe.continuation_store.save_continuation_on_message = AsyncMock()
 
         result = await qe.process_queue(queue, "room-1", "umsg-1")
 
-        assert result.result == QueueResult.COMPLETED
-        assert message_content.message_text == (
-            "Please upload the signed PDF in a new message."
-        )
-        qe.message_writer.update_task_state_on_message.assert_awaited_once_with(
-            "msg-upload",
-            "completed",
-            message_text="Please upload the signed PDF in a new message.",
-            task_metadata={"end_turn": True},
-        )
-        qe.delivery.send_task_update.assert_awaited_once_with(
-            room_id="room-1",
-            message_id="msg-upload",
-            status="completed",
-            agent_id="a1",
-            agent_name="TestAgent",
+        assert result.result == QueueResult.FAILED
+        assert result.error_code == UNSUPPORTED_INTERACTION_CODE
+        qe.response_handler.project_unsupported_interactive.assert_awaited_once()
+        assert file_prompt not in repr(
+            qe.response_handler.project_unsupported_interactive.await_args.kwargs
         )
         qe.hitl_coordinator.request_interaction.assert_not_awaited()
         qe.continuation_store.save_continuation_on_message.assert_not_awaited()
@@ -1113,11 +1153,16 @@ class TestProcessQueue:
         qe.cancellation_control.clear_cancellation.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_process_queue_records_before_awaiting_input_send(self):
-        """HITL AWAITING_INPUT records before the frontend pause status."""
+    async def test_process_queue_saves_continuation_before_typed_public_projection(
+        self,
+    ):
         qe = _make_queue_executor()
         order: list[str] = []
         private_prompt = "PRIVATE_SENTINEL_queue_remote_prompt"
+        observation, decision = _queue_interaction(
+            raw_prompt=private_prompt,
+            typed_prompts=("First typed question?", "Second typed question?"),
+        )
 
         msg = MagicMock(
             message_id="msg-1",
@@ -1138,30 +1183,122 @@ class TestProcessQueue:
             return_value=ProcessingResult(
                 ProcessingStatus.AWAITING_INPUT,
                 message_id="paused-msg",
-                status_message=private_prompt,
+                input_observation=observation,
+                ingress_decision=decision,
+            )
+        )
+        qe._queue_next_messages = AsyncMock()
+        qe._save_continuation = AsyncMock(
+            side_effect=lambda **_kwargs: order.append("continuation")
+        )
+        qe.response_handler.project_conversation_interactive = AsyncMock(
+            side_effect=lambda *_args, **_kwargs: order.append("projection") or True
+        )
+        qe.message_writer.cancel_descendants = AsyncMock()
+
+        result = await qe.process_queue(queue, "room-1", "umsg-1")
+
+        assert result.result == QueueResult.PAUSED
+        assert order == ["continuation", "projection"]
+        qe._save_continuation.assert_awaited_once()
+        qe.response_handler.project_conversation_interactive.assert_awaited_once()
+        projection_args = (
+            qe.response_handler.project_conversation_interactive.await_args
+        )
+        assert [
+            question.prompt
+            for question in projection_args.args[1].interaction_spec.questions
+        ] == ["First typed question?", "Second typed question?"]
+        assert private_prompt not in repr(projection_args)
+        qe.delivery.send_processing_status.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_typed_interaction_projection_failure_terminalizes_queue(self):
+        qe = _make_queue_executor()
+        observation, decision = _queue_interaction(
+            raw_prompt="PRIVATE_SENTINEL",
+            typed_prompts=("Typed question?",),
+        )
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
+        )
+        agent = MagicMock(agent_id="a1")
+        agent.agent_card = MagicMock(name="Agent")
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(
+                ProcessingStatus.AWAITING_INPUT,
+                message_id="paused-msg",
+                input_observation=observation,
+                ingress_decision=decision,
             )
         )
         qe._queue_next_messages = AsyncMock()
         qe._save_continuation = AsyncMock()
-        qe.message_writer.cancel_descendants = AsyncMock()
-        emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
-        qe.bind_execution_event_deps(emit)
-        hitl_service = MagicMock()
-        hitl_service.request_interaction = AsyncMock(
-            return_value=SimpleNamespace(request_id="hitl-1")
+        qe.response_handler.project_conversation_interactive = AsyncMock(
+            return_value=False
         )
+        qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+            return_value={"room_id": "room-1"}
+        )
+        qe.message_writer.cancel_descendants = AsyncMock()
 
-        qe.hitl_coordinator = hitl_service
-        result = await qe.process_queue(queue, "room-1", "umsg-1")
+        result = await qe.process_queue(deque([msg]), "room-1", "umsg-1")
 
         assert result.result == QueueResult.FAILED
-        hitl_service.request_interaction.assert_not_awaited()
-        assert private_prompt not in repr(
-            hitl_service.request_interaction.await_args_list
+        assert result.error_code == "unsupported_interaction"
+        qe.continuation_store.get_and_clear_continuation_on_message.assert_awaited_once_with(
+            "paused-msg"
         )
-        emit.assert_not_awaited()
-        qe.delivery.send_processing_status.assert_not_called()
-        assert order == []
+
+    @pytest.mark.asyncio
+    async def test_typed_interaction_projection_exception_terminalizes_queue(self):
+        qe = _make_queue_executor()
+        observation, decision = _queue_interaction(
+            raw_prompt="PRIVATE_SENTINEL",
+            typed_prompts=("Typed question?",),
+        )
+        msg = MagicMock(
+            message_id="msg-1",
+            step_number=1,
+            total_steps=1,
+            extend_info=None,
+            agent_id="a1",
+            user_id="u1",
+        )
+        agent = MagicMock(agent_id="a1")
+        agent.agent_card = MagicMock(name="Agent")
+        qe._resolve_agent_for_message = AsyncMock(return_value=agent)
+        qe._process_single_message = AsyncMock(
+            return_value=ProcessingResult(
+                ProcessingStatus.AWAITING_INPUT,
+                message_id="paused-msg",
+                input_observation=observation,
+                ingress_decision=decision,
+            )
+        )
+        qe._queue_next_messages = AsyncMock()
+        qe._save_continuation = AsyncMock()
+        qe.response_handler.project_conversation_interactive = AsyncMock(
+            side_effect=RuntimeError("projection failed")
+        )
+        qe.continuation_store.get_and_clear_continuation_on_message = AsyncMock(
+            return_value={"room_id": "room-1"}
+        )
+        qe.message_writer.cancel_descendants = AsyncMock()
+
+        result = await qe.process_queue(deque([msg]), "room-1", "umsg-1")
+
+        assert result.result == QueueResult.FAILED
+        assert result.error_code == "interaction_projection_failed"
+        qe.continuation_store.get_and_clear_continuation_on_message.assert_awaited_once_with(
+            "paused-msg"
+        )
 
     @pytest.mark.asyncio
     async def test_queue_cancellation_leaves_tombstone_for_finalizer(self):

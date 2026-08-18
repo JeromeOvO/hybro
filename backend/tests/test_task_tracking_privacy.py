@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
 from common.a2a_task_projection import public_persisted_task_data
 from common.observability.logging import StructuredFormatter
 from common.types import (
@@ -21,6 +22,24 @@ from common.types import (
 )
 from execution.task_tracking import A2ATaskTrackingService
 from models.room import MessageContent, RoomAgentMessage
+
+
+def _typed_interaction_metadata(*prompts: str) -> dict:
+    return {
+        HYBRO_A2A_INTERACTION_METADATA_KEY: {
+            "schema_version": 1,
+            "interaction_id": "typed-interaction",
+            "questions": [
+                {
+                    "question_id": f"question-{index}",
+                    "interaction_kind": "questionnaire",
+                    "prompt": prompt,
+                    "answer_kind": "text",
+                }
+                for index, prompt in enumerate(prompts, start=1)
+            ],
+        }
+    }
 
 
 def _message(role: MessageRole, text: str) -> Message:
@@ -773,15 +792,17 @@ async def test_blocking_hitl_reply_uses_projected_task_for_public_response_text(
     assert persisted["status"]["state"] == "failed"
     assert persisted.get("history") in (None, [])
     assert persisted.get("artifacts") in (None, [])
-    assert update_kwargs["message_text"] == "Task failed"
+    assert update_kwargs["message_text"] == (
+        "The agent requested an unsupported interaction."
+    )
     assert result == {
         "status": "failed",
         "blocking": True,
         "task_state": "failed",
-        "response_text": "Task failed",
+        "response_text": "The agent requested an unsupported interaction.",
         "task_id": "remote-task",
         "context_id": "remote-context",
-        "error_code": "invalid_interactive_prompt",
+        "error_code": "unsupported_interaction",
     }
     assert private_sentinel not in json.dumps(persisted)
     assert private_sentinel not in json.dumps(update_kwargs)
@@ -837,7 +858,13 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
                     "kind": "message",
                     "messageId": "safe-status",
                     "role": "agent",
-                    "parts": [{"kind": "text", "text": safe_question}],
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "PRIVATE_SENTINEL_typed_followup_prose",
+                        }
+                    ],
+                    "metadata": _typed_interaction_metadata(safe_question),
                 },
             },
         },
@@ -866,6 +893,20 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
         "response_text": safe_question,
         "task_id": "remote-task",
         "context_id": "remote-context",
+        "_interaction_spec": {
+            "schema_version": 1,
+            "interaction_id": "typed-interaction",
+            "questions": [
+                {
+                    "question_id": "question-1",
+                    "interaction_kind": "questionnaire",
+                    "prompt": safe_question,
+                    "answer_kind": "text",
+                    "required": True,
+                    "choices": None,
+                }
+            ],
+        },
     }
 
 
@@ -943,10 +984,10 @@ async def test_blocking_hitl_reply_with_user_role_status_message_does_not_leak_i
         "status": "failed",
         "blocking": True,
         "task_state": "failed",
-        "response_text": "Task failed",
+        "response_text": "The agent requested an unsupported interaction.",
         "task_id": "remote-task",
         "context_id": "remote-context",
-        "error_code": "invalid_interactive_prompt",
+        "error_code": "unsupported_interaction",
     }
 
 

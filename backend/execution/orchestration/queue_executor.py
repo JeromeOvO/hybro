@@ -19,20 +19,13 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from common.a2a_constants import SSEProcessingStatus
-from common.dto import (
-    HITLApplicationRoute,
-    HITLEvidenceOrigin,
-    HITLPublicSource,
-    HITLRouteSnapshot,
-)
 from common.message_commit_events import publish_message_committed
 from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from execution.dispatch.agent_dispatcher import AgentDispatcher
+from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.agent_ingress_router import AgentIngressRoute
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
-from execution.hitl.public_prompt import concrete_agent_input_prompt
-from execution.hitl.validation import deterministic_interaction_id
-from execution.orchestration.file_turn import persist_file_turn_task
 from execution.state.task_state_manager import TaskStateManager
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
 from models.processing import ProcessingResult, ProcessingStatus
@@ -471,113 +464,85 @@ class QueueExecutor:
                     break
 
                 elif result.status == ProcessingStatus.AWAITING_INPUT:
-                    agent_hitl_prompt = concrete_agent_input_prompt(
-                        result.status_message
+                    event = AgentEvent(
+                        kind="interactive",
+                        message_id=result.message_id or current_message.message_id,
+                        room_id=room_id,
+                        agent_id=current_message.agent_id or "",
+                        state=result.interactive_state or "input-required",
+                        task_id=result.a2a_task_id,
+                        context_id=result.a2a_context_id,
+                        input_observation=result.input_observation,
                     )
-                    if agent_hitl_prompt is None:
+                    decision = result.ingress_decision or (
+                        await self.response_handler.decide_interactive(event)
+                    )
+                    if decision.route == AgentIngressRoute.UNSUPPORTED:
+                        await self.response_handler.project_unsupported_interactive(
+                            event, decision
+                        )
                         queue_result = QueueResult.FAILED
-                        failure_error = "invalid_interactive_prompt"
+                        failure_error = decision.public_error
+                        failure_code = decision.error_code
                         break
-                    if result.end_turn:
-                        await persist_file_turn_task(
-                            message_writer=self.message_writer,
-                            message_reader=self.message_reader,
-                            delivery=self.delivery,
-                            room_id=room_id,
-                            message_id=current_message.message_id,
-                            state="completed",
-                            message_text=agent_hitl_prompt,
-                            task_metadata={"end_turn": True},
-                            agent_id=current_message.agent_id,
-                            agent_name=(agent.agent_card.name if agent else "Agent"),
-                        )
-                        await self._publish_agent_message_committed(
-                            room_id=room_id,
-                            agent_id=current_message.agent_id,
-                            agent_name=(agent.agent_card.name if agent else "Agent"),
-                            was_successful=True,
-                            message_id=current_message.message_id,
-                        )
+                    if decision.route == AgentIngressRoute.SUPERVISOR_OBSERVATION:
                         message_queue.clear()
                         last_popped.clear()
-                        queue_result = QueueResult.COMPLETED
+                        queue_result = QueueResult.PAUSED
                         break
 
-                    # Agent returned input_required — create HITL request
-                    # so the frontend shows an input form, then pause the
-                    # queue exactly like PAUSED.
                     if not is_direct_chat:
                         await self._queue_next_messages(
                             current_message, message_queue, room_id
                         )
-                    if result.message_id:
-                        await self._save_continuation(
-                            message_id=result.message_id,
-                            message_queue=message_queue,
-                            room_id=room_id,
+                    if not result.message_id:
+                        await self.response_handler.project_unsupported_interactive(
+                            event, decision
+                        )
+                        queue_result = QueueResult.FAILED
+                        failure_error = (
+                            "The agent requested an unsupported interaction."
+                        )
+                        failure_code = "unsupported_interaction"
+                        break
+                    # The queue continuation is durable before the R1 aggregate
+                    # and every public task/message/SSE projection.
+                    await self._save_continuation(
+                        message_id=result.message_id,
+                        message_queue=message_queue,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        request_user_id=request_user_id,
+                        current_agent=agent,
+                    )
+                    try:
+                        projected = await self.response_handler.project_conversation_interactive(
+                            event,
+                            decision,
                             user_message_id=user_message_id,
-                            request_user_id=request_user_id,
-                            current_agent=agent,
                         )
-                        if self.hitl_coordinator is None:
-                            raise RuntimeError("HITL coordinator has not been bound")
-                        interaction_id = deterministic_interaction_id(
-                            event_identity=result.message_id,
-                            round_identity=(
-                                f"{result.a2a_task_id}:{result.a2a_context_id}"
-                            ),
-                        )
-                        hitl_requests = await self.hitl_coordinator.request_interaction(
-                            room_id=room_id,
-                            user_message_id=user_message_id,
-                            interaction_id=interaction_id,
-                            application_route=HITLApplicationRoute.A2A_RESUME,
-                            public_source=HITLPublicSource.AGENT,
-                            evidence_origin=HITLEvidenceOrigin.AGENT,
-                            route_snapshot=HITLRouteSnapshot(
-                                route=HITLApplicationRoute.A2A_RESUME,
-                                task_id=result.a2a_task_id,
-                                context_id=result.a2a_context_id,
-                                continuation_message_id=result.message_id,
-                                agent_id=current_message.agent_id,
-                            ),
-                            questions=[
-                                {
-                                    "prompt": agent_hitl_prompt,
-                                    **(
-                                        {"prompt_type": "authentication"}
-                                        if result.requires_auth
-                                        or result.interactive_state == "auth-required"
-                                        else {}
-                                    ),
-                                    "agent_id": current_message.agent_id,
-                                    "agent_name": (
-                                        agent.agent_card.name if agent else None
-                                    ),
-                                    "continuation_message_id": result.message_id,
-                                    "display_message_id": current_message.message_id,
-                                }
-                            ],
-                        )
-                        hitl_req = hitl_requests[0] if hitl_requests else None
-                        if hitl_req is None:
-                            logger.warning(
-                                "QueueExecutor: Max HITL rounds exceeded "
-                                "for message %s — failing queue",
-                                result.message_id,
-                            )
-                            queue_result = QueueResult.FAILED
-                            break
-                        await self._emit_processing_status(
-                            room_id=room_id,
-                            status=SSEProcessingStatus.AWAITING_INPUT,
-                            message_id=user_message_id,
-                            lifecycle_message_id=user_message_id,
-                        )
-                        logger.info(
-                            "QueueExecutor: Queue paused for HITL on message %s",
+                    except Exception:
+                        logger.exception(
+                            "QueueExecutor: typed interaction projection failed for %s",
                             result.message_id,
                         )
+                        await self.continuation_store.get_and_clear_continuation_on_message(
+                            result.message_id
+                        )
+                        queue_result = QueueResult.FAILED
+                        failure_error = "Failed to create the agent interaction."
+                        failure_code = "interaction_projection_failed"
+                        break
+                    if not projected:
+                        await self.continuation_store.get_and_clear_continuation_on_message(
+                            result.message_id
+                        )
+                        queue_result = QueueResult.FAILED
+                        failure_error = decision.public_error or (
+                            "The agent requested an unsupported interaction."
+                        )
+                        failure_code = decision.error_code or "unsupported_interaction"
+                        break
                     message_queue.clear()
                     last_popped.clear()
                     queue_result = QueueResult.PAUSED

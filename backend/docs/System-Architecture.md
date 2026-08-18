@@ -1,5 +1,24 @@
 # System Architecture
 
+## Typed interactive agent ingress
+
+All remote `input-required`/interactive events now cross a single
+`AgentIngressRouter` boundary before any public task, message, artifact, or SSE
+projection. Transports capture a private `AgentInputObservation` directly from
+an authoritative A2A `Task` or `TaskStatusUpdateEvent`; only
+`status.message.metadata["hybro.ai/a2a/interaction"]` is parsed as the typed
+contract.
+
+The router resolves ownership exclusively from the persisted
+`RoomAgentMessage.run_id`. A verified Supervisor dispatch CAS-appends an
+idempotent private observation to `OrchestrationRunState` and re-enters normal
+recovery without exposing the remote prompt. Conversation-owned typed events
+first persist their queue continuation, then materialize one R1 A2A-resume
+interaction aggregate, and only then project its typed question inventory.
+Absent or invalid typed metadata fails with `unsupported_interaction` and the
+fixed public message `The agent requested an unsupported interaction.`
+
+
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
 currently present in this repository.

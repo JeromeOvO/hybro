@@ -420,7 +420,12 @@ class MongoOrchestrationRunStore:
 
 
 def _copy_state(state: OrchestrationRunState) -> OrchestrationRunState:
-    return state.model_copy(deep=True)
+    try:
+        return state.model_copy(deep=True)
+    except TypeError:
+        # Frozen typed interaction inventories intentionally reject deepcopy
+        # mutation. Round-trip validation still returns an isolated state.
+        return OrchestrationRunState.model_validate(state.model_dump(mode="python"))
 
 
 def _copy_event(event: OrchestrationRunEvent) -> OrchestrationRunEvent:

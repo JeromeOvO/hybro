@@ -1432,6 +1432,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_notification_store=task_notification_store,
                     task_notification_impl=_notify_task_update_impl,
                     room_files=file_storage,
+                    agent_ingress_router=(
+                        execution_room_message_center.agent_ingress_router
+                    ),
                 )
                 handler.bind_execution_event_deps(emit_room_processing_status)
                 return WebhookTransport(

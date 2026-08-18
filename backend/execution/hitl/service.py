@@ -29,8 +29,13 @@ from common.dto import (
     HITLResolvedEvent,
     HITLRouteSnapshot,
 )
+from common.dto.hitl import A2AInteractionSpec, HITLAnswerKind, HITLInteractionKind
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.dispatch.agent_ingress_router import (
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+)
 from execution.hitl.exceptions import (
     ContinuationLostError,
     HITLNotFoundError,
@@ -95,6 +100,18 @@ def _short_prompt_hash(prompt: str | None) -> str:
 
 def _normalized_prompt(prompt: str | None) -> str:
     return " ".join(str(prompt or "").split()).strip().casefold()
+
+
+def _prompt_type_for_typed_question(question: Any) -> HITLPromptType:
+    if question.interaction_kind == HITLInteractionKind.AUTH_CHALLENGE:
+        return HITLPromptType.AUTHENTICATION
+    if question.interaction_kind == HITLInteractionKind.POLICY_DECISION:
+        return HITLPromptType.APPROVAL
+    return {
+        HITLAnswerKind.SINGLE_CHOICE: HITLPromptType.SINGLE_CHOICE,
+        HITLAnswerKind.MULTI_CHOICE: HITLPromptType.MULTI_CHOICE,
+        HITLAnswerKind.CONFIRMATION: HITLPromptType.CONFIRMATION,
+    }.get(question.answer_kind, HITLPromptType.TEXT)
 
 
 def _prompt_hash(prompt: str | None) -> str | None:
@@ -181,9 +198,6 @@ def _public_hitl_request_from_doc(document: dict[str, Any]) -> HITLRequest:
     data = {key: value for key, value in document.items() if key != "_id"}
     if data.get("public_source") == HITLPublicSource.AGENT.value:
         data["prompt"] = concrete_agent_input_prompt(data.get("prompt"))
-        if data.get("prompt_type") != HITLPromptType.AUTHENTICATION.value:
-            data["prompt_type"] = HITLPromptType.TEXT
-        data["choices"] = None
     return HITLRequest(**data)
 
 
@@ -310,12 +324,6 @@ class HITLService:
                 if concrete_prompt is None:
                     raise ValueError(f"question {index} requires a concrete prompt")
                 question["prompt"] = concrete_prompt
-                question["prompt_type"] = (
-                    HITLPromptType.AUTHENTICATION
-                    if question["prompt_type"] == HITLPromptType.AUTHENTICATION
-                    else HITLPromptType.TEXT
-                )
-                question["choices"] = None
                 question["agent_id"] = (
                     question.get("agent_id") or route_snapshot.agent_id
                 )
@@ -462,13 +470,7 @@ class HITLService:
                 )
                 return None
             prompt = concrete_prompt
-            prompt_type = (
-                HITLPromptType.AUTHENTICATION
-                if getattr(prompt_type, "value", prompt_type)
-                == HITLPromptType.AUTHENTICATION.value
-                else HITLPromptType.TEXT
-            )
-            choices = None
+            prompt_type = HITLPromptType(prompt_type)
         resolved_display_message_id = display_message_id
         if source == "agent" and resolved_display_message_id is None:
             resolved_display_message_id = continuation_message_id
@@ -607,7 +609,7 @@ class HITLService:
                     "prompt": prompt,
                     "agent_prompt_hash": agent_prompt_hash,
                     "prompt_type": getattr(prompt_type, "value", prompt_type),
-                    "choices": None,
+                    "choices": choices,
                     "a2a_task_id": a2a_task_id,
                     "a2a_context_id": a2a_context_id,
                 }
@@ -982,19 +984,25 @@ class HITLService:
         # answer.  Without this, multi-round blocking HITL conversations get
         # stuck after the second prompt.
         if task_state in ("input-required", "auth-required", "policy-required"):
-            public_response_text = concrete_agent_input_prompt(response_text)
-            if public_response_text is None:
+            try:
+                interaction_spec = A2AInteractionSpec.model_validate(
+                    reply_result.get("_interaction_spec")
+                )
+            except (TypeError, ValueError):
                 return {
                     "blocking": True,
                     "task_state": "failed",
-                    "response_text": "Task failed",
+                    "response_text": UNSUPPORTED_INTERACTION_MESSAGE,
                     "resume_execution": True,
                     "routing_failed": True,
-                    "error_code": "invalid_interactive_prompt",
+                    "error_code": UNSUPPORTED_INTERACTION_CODE,
                     "a2a_task_id": authoritative_task_id,
                     "a2a_context_id": authoritative_context_id,
                 }
-            response_prompt_hash = _prompt_hash(response_text)
+            public_response_text = "\n\n".join(
+                question.prompt for question in interaction_spec.questions
+            )
+            response_prompt_hash = _prompt_hash(public_response_text)
             same_raw_agent_prompt = bool(
                 request.agent_prompt_hash
                 and response_prompt_hash
@@ -1040,7 +1048,9 @@ class HITLService:
             )
             followup_interaction_id = deterministic_interaction_id(
                 event_identity=request.continuation_message_id or request.request_id,
-                round_identity=f"{request.interaction_id}:followup",
+                round_identity=(
+                    f"{request.interaction_id}:followup:{interaction_spec.interaction_id}"
+                ),
             )
             new_requests = await self.request_interaction(
                 room_id=request.room_id,
@@ -1058,17 +1068,15 @@ class HITLService:
                 ),
                 questions=[
                     {
-                        "prompt": public_response_text,
-                        "prompt_type": (
-                            HITLPromptType.AUTHENTICATION
-                            if task_state == "auth-required"
-                            else HITLPromptType.TEXT
-                        ),
+                        "prompt": question.prompt,
+                        "prompt_type": _prompt_type_for_typed_question(question),
+                        "choices": list(question.choices) if question.choices else None,
                         "agent_id": request.agent_id,
                         "agent_name": request.agent_name,
                         "continuation_message_id": request.continuation_message_id,
                         "display_message_id": request.display_message_id,
                     }
+                    for question in interaction_spec.questions
                 ],
                 orchestration_run_id=request.orchestration_run_id,
             )
@@ -1081,6 +1089,10 @@ class HITLService:
                 raise HITLRoutingFailedError(
                     "failed to create follow-up HITL request; "
                     "the original HITL request remains pending for retry"
+                )
+            if not new_requests or len(new_requests) != len(interaction_spec.questions):
+                raise HITLRoutingFailedError(
+                    "failed to materialize the complete follow-up HITL interaction"
                 )
             new_request = new_requests[0]
             return {
@@ -1592,6 +1604,52 @@ class HITLService:
         if interaction is None:
             raise HITLRoutingFailedError("Persisted HITL interaction is missing")
         await self.reconcile_terminal_interaction(interaction)
+
+    async def cancel_interaction(
+        self,
+        interaction_id: str,
+        room_id: str,
+        *,
+        failure_reason: str,
+    ) -> bool:
+        """Fail-closed compensation for an interaction creation/projection error."""
+
+        if self._lifecycle is None:
+            raise HITLRoutingFailedError("HITL lifecycle persistence is required")
+        interaction = await self._lifecycle.get_interaction_strict(interaction_id)
+        if interaction is None:
+            return False
+        if interaction.get("room_id") != room_id:
+            raise HITLRoomMismatchError("Room mismatch")
+        terminal = await self._lifecycle.terminalize_interaction(
+            interaction_id,
+            expected_statuses=[
+                HITLInteractionStatus.MATERIALIZING.value,
+                HITLInteractionStatus.OPEN.value,
+                HITLInteractionStatus.PARTIALLY_ANSWERED.value,
+                HITLInteractionStatus.ANSWERS_RECORDED.value,
+            ],
+            status=HITLInteractionStatus.FAILED.value,
+            reason=failure_reason,
+            member_status=HITLStatus.CANCELED.value,
+            owning_run_terminal_status="failed",
+        )
+        if terminal is None:
+            terminal = await self._lifecycle.get_interaction_strict(interaction_id)
+        if terminal is None:
+            return False
+        if terminal.get("status") == HITLInteractionStatus.FAILED.value:
+            try:
+                await self.reconcile_terminal_interaction(terminal)
+            except (HITLRoutingFailedError, RuntimeError):
+                # A MATERIALIZING aggregate may not have every member yet. Its
+                # terminal aggregate state is still sufficient to prevent opening.
+                logger.warning(
+                    "HITL interaction compensation awaits member reconciliation",
+                    extra={"interaction_id": interaction_id},
+                )
+            return True
+        return False
 
     async def cancel_request(
         self,

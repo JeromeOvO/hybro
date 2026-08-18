@@ -2035,6 +2035,55 @@ def test_hub_agent_response_adapter_normalizes_interactive_state():
     assert agent_event.state == "input-required"
 
 
+def test_hub_agent_response_adapter_keeps_structured_interactive_prompt_private():
+    sentinel = "PRIVATE_SENTINEL_relay_interactive_prompt"
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=False,
+        timestamp=utcnow(),
+        payload={
+            "event_type": "input_required",
+            "message_id": "msg-1",
+            "state": "input_required",
+            "context_id": "context-1",
+            "_a2a_status": {
+                "state": "input-required",
+                "message": {
+                    "role": "agent",
+                    "messageId": "remote-status",
+                    "parts": [{"kind": "text", "text": sentinel}],
+                    "metadata": {
+                        "hybro.ai/a2a/interaction": {
+                            "schema_version": 1,
+                            "interaction_id": "interaction-1",
+                            "questions": [
+                                {
+                                    "question_id": "question-1",
+                                    "interaction_kind": "questionnaire",
+                                    "prompt": "Typed relay question?",
+                                    "answer_kind": "text",
+                                }
+                            ],
+                        }
+                    },
+                },
+            },
+        },
+    )
+
+    agent_event = hub_agent_response_internal_to_agent_event(event)
+
+    assert agent_event.kind == "interactive"
+    assert agent_event.text == ""
+    observation = agent_event.private_input_observation
+    assert observation.raw_prompt == sentinel
+    assert observation.interaction_spec.questions[0].prompt == "Typed relay question?"
+    assert sentinel not in repr(agent_event)
+
+
 def test_hub_agent_response_adapter_normalizes_legacy_processing_input_required_state():
     event = HubAgentResponseInternal(
         hub_id="hub-1",

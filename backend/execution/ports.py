@@ -46,6 +46,14 @@ class HITLCoordinator(Protocol):
 
     async def cancel_request(self, request_id: str, room_id: str) -> None: ...
 
+    async def cancel_interaction(
+        self,
+        interaction_id: str,
+        room_id: str,
+        *,
+        failure_reason: str,
+    ) -> bool: ...
+
 
 class HITLPersistencePort(Protocol):
     async def count_hitl_requests_for_message(self, message_id: str) -> int: ...
@@ -398,6 +406,13 @@ class AgentTaskNotificationPort(Protocol):
 
 class AgentResponseHandlerPort(Protocol):
     async def handle(self, event: Any) -> None: ...
+    async def decide_interactive(self, event: Any) -> Any: ...
+    async def project_conversation_interactive(
+        self, event: Any, decision: Any, *, user_message_id: str
+    ) -> None: ...
+    async def project_unsupported_interactive(
+        self, event: Any, decision: Any
+    ) -> None: ...
 
 
 class HITLDeliveryPort(Protocol):

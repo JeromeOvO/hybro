@@ -47,6 +47,7 @@ from common.utils.artifact_delivery import (
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from execution.dispatch.agent_ingress_router import SUPERVISOR_BLOCKER_SUMMARY
 from execution.hitl.public_prompt import (
     is_file_upload_request,
     is_internal_agent_contract_prompt,
@@ -2527,6 +2528,7 @@ class SupervisorExecutor:
             ]
 
         if awaiting:
+            self._hydrate_private_input_observations(state, awaiting)
             (
                 state,
                 results,
@@ -2548,14 +2550,19 @@ class SupervisorExecutor:
             hitl_candidates = [
                 result
                 for result in awaiting
-                if self._awaiting_result_requires_hitl(result)
-                or result.agent_message_id in follow_up_hitl_message_ids
-                or self._is_plain_a2a_input_result(result)
+                if result.ingress_route != "supervisor_observation"
+                and (
+                    self._awaiting_result_requires_hitl(result)
+                    or result.agent_message_id in follow_up_hitl_message_ids
+                    or self._is_plain_a2a_input_result(result)
+                )
             ]
             if not self.guardrails_enabled:
-                # Preserve live-dispatch behavior while keeping recovery
-                # scoped to input requests that actually require user action.
-                hitl_candidates = awaiting
+                hitl_candidates = [
+                    result
+                    for result in awaiting
+                    if result.ingress_route != "supervisor_observation"
+                ]
             hitl_required = [
                 result
                 for result in hitl_candidates
@@ -2828,6 +2835,7 @@ class SupervisorExecutor:
             result for result in results if result.status == StepStatus.AWAITING_INPUT
         ]
         if awaiting:
+            self._hydrate_private_input_observations(state, awaiting)
             (
                 state,
                 results,
@@ -2848,7 +2856,8 @@ class SupervisorExecutor:
             hitl_required = [
                 result
                 for result in awaiting
-                if (
+                if result.ingress_route != "supervisor_observation"
+                and (
                     self._awaiting_result_requires_hitl(result)
                     or result.agent_message_id in follow_up_hitl_message_ids
                     or self._is_plain_a2a_input_result(result)
@@ -3225,7 +3234,9 @@ class SupervisorExecutor:
                 paused_message_id=awaiting_output.agent_message_id,
                 a2a_task_id=awaiting_output.a2a_task_id,
                 a2a_context_id=awaiting_output.a2a_context_id,
-                status_message=awaiting_output.status_message,
+                status_message=SUPERVISOR_BLOCKER_SUMMARY,
+                ingress_route="supervisor_observation",
+                private_input_prompt=awaiting_output.status_message,
             )
         if not task_state:
             task_state = "completed" if response_text.strip() else "input-required"
@@ -3252,8 +3263,10 @@ class SupervisorExecutor:
                 paused_message_id=awaiting_output.agent_message_id,
                 a2a_task_id=awaiting_output.a2a_task_id,
                 a2a_context_id=awaiting_output.a2a_context_id,
-                status_message=status_message,
+                status_message=SUPERVISOR_BLOCKER_SUMMARY,
                 interactive_state=interactive_state,
+                ingress_route="supervisor_observation",
+                private_input_prompt=status_message,
                 requires_auth=task_state == "auth-required",
                 requires_policy=requires_policy,
             )
@@ -3630,9 +3643,26 @@ class SupervisorExecutor:
         return saved
 
     @staticmethod
+    def _hydrate_private_input_observations(
+        state: OrchestrationRunState,
+        awaiting: list[StepResult],
+    ) -> None:
+        observations = {
+            observation.agent_message_id: observation
+            for observation in state.private_agent_input_observations
+        }
+        for result in awaiting:
+            observation = observations.get(result.agent_message_id or "")
+            if observation is None:
+                continue
+            result.ingress_route = "supervisor_observation"
+            result.private_input_prompt = observation.raw_prompt
+
+    @staticmethod
     def _extract_input_required_prompt(result: StepResult) -> str:
         return (
-            result.response_text
+            result.private_input_prompt
+            or result.response_text
             or result.status_message
             or result.task
             or "The agent needs additional information."
@@ -4106,13 +4136,17 @@ class SupervisorExecutor:
                 paused_message_id=continuation.source_agent_message_id,
                 a2a_task_id=continuation.a2a_task_id,
                 a2a_context_id=continuation.a2a_context_id,
-                status_message=response_text,
+                status_message=SUPERVISOR_BLOCKER_SUMMARY,
                 interactive_state=(
                     "policy-required" if requires_policy else task_state
                 ),
                 requires_auth=task_state == "auth-required",
                 requires_policy=requires_policy,
-                end_turn=is_file_upload_request(response_text),
+                # Remote prose is private recovery evidence, never a public HITL
+                # or platform file-turn instruction.
+                end_turn=False,
+                ingress_route="supervisor_observation",
+                private_input_prompt=response_text,
             )
         return StepResult(
             step_number=0,
@@ -4122,6 +4156,8 @@ class SupervisorExecutor:
             response_text=response_text,
             success=not failed,
             status=StepStatus.FAILED if failed else StepStatus.SUCCESS,
+            error_message=response_text if failed else None,
+            error_code=(reply_result.get("error_code") if failed else None),
             agent_message_id=continuation.source_agent_message_id,
             a2a_task_id=continuation.a2a_task_id,
             a2a_context_id=continuation.a2a_context_id,
@@ -8303,6 +8339,16 @@ class SupervisorExecutor:
                         requires_auth=result.requires_auth,
                         requires_policy=result.requires_policy,
                         end_turn=result.end_turn,
+                        ingress_route=getattr(
+                            getattr(result, "ingress_decision", None),
+                            "route",
+                            None,
+                        ),
+                        private_input_prompt=getattr(
+                            getattr(result, "input_observation", None),
+                            "raw_prompt",
+                            None,
+                        ),
                     )
 
                 if (

@@ -22,6 +22,7 @@ from common.dto import (
 )
 from common.observability import bind_log_context, traced_create_task
 from common.protocols import EventPublisher
+from common.types import Task, TaskStatusUpdateEvent
 from common.utils.logger import get_logger
 from execution.cancellation.finalizer import (
     CancellationFinalizationResult,
@@ -32,6 +33,7 @@ from execution.cancellation.ports import (
     CancellationMessageReaderPort,
 )
 from execution.cancellation.service import CancellationService
+from execution.dispatch.a2a_interaction import input_observation_from_a2a
 from execution.dispatch.agent_event import AgentEvent
 from execution.events import emit_room_processing_status
 from execution.hitl.translators import (
@@ -371,6 +373,38 @@ def _hub_payload_lifecycle_message_id(kind: str, payload: dict[str, Any]) -> str
     return value
 
 
+def _hub_interactive_observation(
+    event: HubAgentResponseInternal,
+    payload: dict[str, Any],
+):
+    task_payload = payload.get("task")
+    if isinstance(task_payload, dict):
+        source = Task.model_validate(task_payload)
+        if source.id != event.task_id:
+            raise ValueError("Hub interactive Task id conflicts with event.task_id")
+    else:
+        update_payload = payload.get("status_update")
+        if isinstance(update_payload, dict):
+            source = TaskStatusUpdateEvent.model_validate(update_payload)
+        else:
+            status_payload = payload.get("_a2a_status")
+            if not isinstance(status_payload, dict):
+                return None
+            if not payload.get("context_id"):
+                return None
+            source = TaskStatusUpdateEvent.model_validate(
+                {
+                    "taskId": event.task_id,
+                    "contextId": payload.get("context_id"),
+                    "status": status_payload,
+                    "final": False,
+                }
+            )
+        if source.task_id != event.task_id:
+            raise ValueError("Hub status task id conflicts with event.task_id")
+    return input_observation_from_a2a(source)
+
+
 def hub_agent_response_internal_to_agent_event(
     event: HubAgentResponseInternal,
 ) -> AgentEvent:
@@ -378,6 +412,9 @@ def hub_agent_response_internal_to_agent_event(
     kind = _hub_payload_kind(payload)
     _validate_hub_event_consistency(event, kind, payload)
     _validate_hub_payload_for_kind(kind, payload)
+    observation = (
+        _hub_interactive_observation(event, payload) if kind == "interactive" else None
+    )
     return AgentEvent(
         kind=kind,
         room_id=event.room_id,
@@ -385,7 +422,11 @@ def hub_agent_response_internal_to_agent_event(
         agent_id=event.agent_id,
         task_id=event.task_id,
         turn_id=_optional_hub_str(payload, "turn_id"),
-        text=_optional_hub_str(payload, "text", default="") or "",
+        text=(
+            ""
+            if kind == "interactive"
+            else _optional_hub_str(payload, "text", default="") or ""
+        ),
         state=_hub_payload_state(kind, payload),
         parts=_optional_hub_list_of_dicts(payload, "parts"),
         artifacts=_optional_hub_list_of_dicts(payload, "artifacts"),
@@ -409,6 +450,7 @@ def hub_agent_response_internal_to_agent_event(
             payload, "files_materialized", default=False
         ),
         details=_agent_event_details(_thaw_hub_payload_value(payload.get("details"))),
+        input_observation=observation,
     )
 
 

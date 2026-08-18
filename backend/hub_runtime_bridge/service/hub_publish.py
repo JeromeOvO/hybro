@@ -225,12 +225,7 @@ def normalize_hub_publish_payload(
     elif event_type == "artifact_update":
         _normalize_artifact_update_payload(payload)
     elif event_type == "task_interactive":
-        status = payload.get("state") or payload.get("status") or "input-required"
-        payload["state"] = str(status)
-        payload.setdefault(
-            "text",
-            str(payload.get("status_text") or payload.get("prompt") or ""),
-        )
+        _normalize_interactive_payload(payload)
     elif event_type == "processing_status":
         status = payload.get("state") or payload.get("status") or "completed"
         normalized = LEGACY_PROCESSING_STATUS_VALUE_MAP.get(str(status), str(status))
@@ -375,11 +370,15 @@ def _first_hub_file_value(sources: list[dict], *keys: str):
 
 
 def _normalize_task_status_payload(payload: dict) -> None:
+    raw_status = payload.get("status")
+    status_value = (
+        raw_status.get("state") if isinstance(raw_status, dict) else raw_status
+    )
     try:
-        state = CommonTaskState(payload.get("state") or payload.get("status") or "")
+        state = CommonTaskState(payload.get("state") or status_value or "")
     except ValueError:
         payload["kind"] = "status_update"
-        status = payload.get("state") or payload.get("status")
+        status = payload.get("state") or status_value
         if status:
             payload["state"] = str(status)
         return
@@ -399,10 +398,37 @@ def _normalize_task_status_payload(payload: dict) -> None:
             payload.setdefault("text", status_text)
     elif state in INTERACTIVE_STATES:
         payload["kind"] = "interactive"
-        payload.setdefault("text", status_text)
+        _normalize_interactive_payload(payload)
     else:
         payload["kind"] = "status_update"
         payload.setdefault("text", status_text)
+
+
+def _normalize_interactive_payload(payload: dict) -> None:
+    """Keep relay prompt evidence in a private A2A status envelope."""
+
+    raw_status = payload.get("status")
+    if isinstance(raw_status, dict):
+        private_status = dict(raw_status)
+        status = payload.get("state") or private_status.get("state")
+    else:
+        status = payload.get("state") or raw_status
+        private_status = {"state": status or "input-required"}
+        raw_prompt = payload.get("status_text") or payload.get("prompt")
+        if isinstance(raw_prompt, str) and raw_prompt:
+            message: dict = {
+                "role": "agent",
+                "messageId": f"relay-interactive:{payload.get('task_id', '')}",
+                "parts": [{"kind": "text", "text": raw_prompt}],
+            }
+            interaction_metadata = payload.get("interaction_metadata")
+            if isinstance(interaction_metadata, dict):
+                message["metadata"] = dict(interaction_metadata)
+            private_status["message"] = message
+    payload["_a2a_status"] = private_status
+    payload["state"] = str(status or "input-required")
+    # Interactive prose never occupies the public AgentEvent text field.
+    payload["text"] = ""
 
 
 def is_terminal_hub_publish_event(payload: dict, raw_data: dict) -> bool:

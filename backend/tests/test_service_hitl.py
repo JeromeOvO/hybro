@@ -14,9 +14,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.dto.hitl import HITLPublicSource
 from execution.hitl.service import HITLService
 from models.hitl import (
     HITLEventType,
+    HITLPromptType,
     HITLStatus,
 )
 
@@ -92,6 +94,38 @@ def test_infer_prompt_type_detects_approve_reject():
     from execution.hitl.detector import infer_prompt_type
 
     assert infer_prompt_type("Approve or reject this action").value == "confirmation"
+
+
+@pytest.mark.parametrize(
+    ("prompt_type", "choices"),
+    [
+        (HITLPromptType.SINGLE_CHOICE, ["a", "b"]),
+        (HITLPromptType.MULTI_CHOICE, ["a", "b"]),
+        (HITLPromptType.CONFIRMATION, None),
+        (HITLPromptType.APPROVAL, None),
+        (HITLPromptType.AUTHENTICATION, None),
+    ],
+)
+def test_agent_pending_hydration_preserves_typed_controls(
+    sample_hitl_request,
+    prompt_type,
+    choices,
+):
+    from execution.hitl.service import _public_hitl_request_from_doc
+
+    doc = sample_hitl_request.model_copy(
+        update={
+            "public_source": HITLPublicSource.AGENT,
+            "prompt": "Typed question?",
+            "prompt_type": prompt_type,
+            "choices": choices,
+        }
+    ).model_dump(mode="python")
+
+    hydrated = _public_hitl_request_from_doc(doc)
+
+    assert hydrated.prompt_type == prompt_type
+    assert hydrated.choices == choices
 
 
 def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request):

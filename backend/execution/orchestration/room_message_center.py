@@ -27,6 +27,7 @@ from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
 from execution.dispatch.agent_dispatcher import AgentDispatcher
+from execution.dispatch.agent_ingress_router import AgentIngressRouter
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.direct import DirectTransport
@@ -297,6 +298,10 @@ class RoomMessageCenter:
                 self.message_reader.get_room_agent_message_by_message_id
             ),
         )
+        self.agent_ingress_router = AgentIngressRouter(
+            message_reader=self.message_reader,
+            orchestration_run_store=self.orchestration_run_store,
+        )
         self.agent_response_handler = AgentResponseHandler(
             message_writer=self.message_writer,
             task_writer=self.message_writer,
@@ -311,6 +316,7 @@ class RoomMessageCenter:
             task_notification_store=self.task_notification_store,
             task_notification_impl=task_notification_impl,
             room_files=room_files,
+            agent_ingress_router=self.agent_ingress_router,
         )
 
         # DirectTransport contains all streaming/sync response processing
