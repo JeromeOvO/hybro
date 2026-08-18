@@ -45,6 +45,14 @@ legacy group metadata. This is an intentionally destructive schema change. **Wip
 the runtime MongoDB database before starting this version**; no backfill or legacy
 readiness path is supported.
 
+## Typed file handoff
+
+File requirements are not questionnaire interactions. Only the validated Planner
+`request_file_handoff` action may enter the durable `FINALIZING` file-turn path.
+Remote prose and legacy `end_turn` flags cannot finalize a Run. The typed action
+checkpoints the instruction, cancels sibling work, converges child/root lifecycle,
+and restores the normal Composer for a new message.
+
 ## Supervisor A2A continuation journal
 
 Supervisor resource recovery and post-answer continuation use the durable

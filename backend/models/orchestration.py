@@ -83,6 +83,7 @@ class PlannerActionType(StrEnum):
     DELEGATE = "delegate"
     PLATFORM_ANSWER = "platform_answer"
     ASK_USER = "ask_user"
+    REQUEST_FILE_HANDOFF = "request_file_handoff"
     COMPLETE = "complete"
     FAIL = "fail"
 
@@ -386,6 +387,7 @@ class PlannerAction(BaseModel):
     targets: list[PlannedDelegateTarget] = Field(default_factory=list)
     questions: list[PlannerQuestion] = Field(default_factory=list)
     synthesis_instruction: str | None = None
+    file_prompt: str | None = None
     failure_reason: str | None = None
     completion_evidence: CompletionEvidence | None = None
 

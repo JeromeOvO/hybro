@@ -3530,7 +3530,7 @@ async def test_run_ask_user_creates_hitl_prompt_and_continuation():
 
 
 @pytest.mark.asyncio
-async def test_run_ask_user_file_blocker_ends_turn_without_hitl_or_continuation():
+async def test_typed_file_handoff_ends_turn_without_hitl_or_continuation():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -3546,12 +3546,9 @@ async def test_run_ask_user_file_blocker_ends_turn_without_hitl_or_continuation(
     upload_prompt = "Please upload the signed PDF in a new message."
     planner = RecordingPlanner(
         PlannerAction(
-            action=PlannerActionType.ASK_USER,
+            action=PlannerActionType.REQUEST_FILE_HANDOFF,
             reasoning="need the source document",
-            questions=[
-                {"prompt": "Which account?", "prompt_type": "text"},
-                {"prompt": upload_prompt},
-            ],
+            file_prompt=upload_prompt,
         )
     )
     store = InMemoryOrchestrationRunStore()
@@ -3585,10 +3582,7 @@ async def test_run_ask_user_file_blocker_ends_turn_without_hitl_or_continuation(
     assert result.run_state.open_questions == []
     executor.hitl_coordinator.request_interaction.assert_not_awaited()
     executor._checkpoint_interrupt.assert_not_awaited()
-    expected_copy = (
-        f"{upload_prompt}\n\nIn the same new message, please also answer:\n"
-        "- Which account?"
-    )
+    expected_copy = upload_prompt
     summary_id = result.run_state.summary_message_id
     summary_message = (
         await executor.message_reader.get_room_agent_message_by_message_id(summary_id)
@@ -5977,7 +5971,7 @@ async def test_ingest_orchestration_results_persists_one_idempotent_outcome():
 
 
 @pytest.mark.asyncio
-async def test_agent_file_upload_prompt_completes_orchestration_without_hitl():
+async def test_legacy_agent_end_turn_flag_is_not_terminal_authority():
     store = InMemoryOrchestrationRunStore()
     user_message = RoomUserMessage(
         room_id="room-1",
@@ -6053,40 +6047,10 @@ async def test_agent_file_upload_prompt_completes_orchestration_without_hitl():
         quoted_text=None,
     )
 
-    assert run_status == RunStatus.COMPLETED
-    assert completed.status == OrchestrationStatus.COMPLETED
-    assert completed.pending_hitl_request_ids == []
-    assert completed.pending_agent_continuations == []
-    assert completed.steps_used == 1
-    assert completed.active_dispatches == []
-    assert completed.dispatch_intents[0].status == StepStatus.SUCCESS.value
-    assert completed.finalization_mode == FinalizationMode.PLATFORM.value
-    assert completed.final_source_message_id == completed.summary_message_id
-    assert completed.finalization_committed_at is not None
-    output = next(
-        item
-        for item in completed.agent_outputs
-        if item.agent_message_id == "agent-msg-upload"
-    )
-    assert output.status == StepStatus.SUCCESS.value
-    assert completed.file_turn["child_message_id"] == "agent-msg-upload"
+    assert run_status == RunStatus.AWAITING_INPUT
+    assert completed.status != OrchestrationStatus.COMPLETED
+    assert completed.file_turn is None
     assert awaiting.status == StepStatus.AWAITING_INPUT
-    executor.hitl_coordinator.request_interaction.assert_not_awaited()
-    persisted_message = (
-        await executor.message_reader.get_room_agent_message_by_message_id(
-            "agent-msg-upload"
-        )
-    )
-    assert persisted_message.message_content.message_text == ""
-    assert persisted_message.message_content.message_task.status.state == "completed"
-    assert persisted_message.message_content.message_task.metadata["end_turn"] is True
-    executor.delivery.send_task_update.assert_any_await(
-        room_id="room-1",
-        message_id="agent-msg-upload",
-        status="completed",
-        agent_id="agent-1",
-        agent_name="Agent One",
-    )
 
 
 @pytest.mark.asyncio
@@ -8873,7 +8837,7 @@ async def test_input_required_replans_without_user_facing_awaiting_input():
 
 
 @pytest.mark.asyncio
-async def test_direct_file_upload_result_propagates_end_turn_without_hitl():
+async def test_raw_agent_end_turn_requires_typed_planner_file_handoff():
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="message-1",
@@ -8886,11 +8850,17 @@ async def test_direct_file_upload_result_propagates_end_turn_without_hitl():
             "client_request_id": "client-1",
         },
     )
+    typed_file_prompt = "Upload the signed form in a new message."
     planner = RecordingPlanner(
         PlannerAction(
             action=PlannerActionType.DELEGATE,
             reasoning="ask broker",
             targets=[PlannedDelegateTarget(agent_id="agent-1", task="Review form")],
+        ),
+        PlannerAction(
+            action=PlannerActionType.REQUEST_FILE_HANDOFF,
+            reasoning="the signed source file is required",
+            file_prompt=typed_file_prompt,
         ),
     )
     store = InMemoryOrchestrationRunStore()
@@ -8901,8 +8871,12 @@ async def test_direct_file_upload_result_propagates_end_turn_without_hitl():
             message_id="message-1:step-1:target-1:message",
             a2a_task_id="task-1",
             a2a_context_id="ctx-1",
-            status_message="Please upload the signed PDF in a new message.",
+            status_message="Agent requested additional input.",
             end_turn=True,
+            input_observation=SimpleNamespace(
+                raw_prompt="Please upload the signed PDF in a new message."
+            ),
+            ingress_decision=SimpleNamespace(route="supervisor_observation"),
         )
     )
     executor.hitl_coordinator = SimpleNamespace(request_interaction=AsyncMock())
@@ -8918,9 +8892,7 @@ async def test_direct_file_upload_result_propagates_end_turn_without_hitl():
     )
 
     assert result.status == RunStatus.COMPLETED
-    assert result.run_state.file_turn["prompt"] == (
-        "Please upload the signed PDF in a new message."
-    )
+    assert result.run_state.file_turn["prompt"] == typed_file_prompt
     assert result.run_state.pending_hitl_request_ids == []
     executor.hitl_coordinator.request_interaction.assert_not_awaited()
 

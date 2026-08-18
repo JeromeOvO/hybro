@@ -101,6 +101,8 @@ class PlannerActionValidator:
             )
         if action.action == PlannerActionType.PLATFORM_ANSWER:
             _validate_platform_answer(action, run_state=run_state)
+        if action.action == PlannerActionType.REQUEST_FILE_HANDOFF:
+            _validate_file_handoff(action, run_state=run_state)
         if action.action == PlannerActionType.FAIL and run_state is not None:
             _validate_fail_action(action, run_state=run_state)
         if action.action != PlannerActionType.COMPLETE:
@@ -579,6 +581,7 @@ def _validate_step_budget(
         PlannerActionType.PLATFORM_ANSWER,
         PlannerActionType.COMPLETE,
         PlannerActionType.ASK_USER,
+        PlannerActionType.REQUEST_FILE_HANDOFF,
         PlannerActionType.FAIL,
     ):
         raise PlannerActionValidationError(
@@ -862,6 +865,28 @@ def _validate_terminal_output(
     if action.action == PlannerActionType.COMPLETE and not has_agent_output:
         raise PlannerActionValidationError(
             f"planner action {action.action.value!r} requires agent output"
+        )
+
+
+def _validate_file_handoff(
+    action: PlannerAction,
+    *,
+    run_state: OrchestrationRunState | None,
+) -> None:
+    if not (action.file_prompt or "").strip():
+        raise PlannerActionValidationError(
+            "request_file_handoff requires file_prompt",
+            code="file_handoff_prompt_missing",
+        )
+    if action.questions:
+        raise PlannerActionValidationError(
+            "request_file_handoff must not contain questionnaire questions",
+            code="file_handoff_questions_forbidden",
+        )
+    if run_state is not None and run_state.pending_hitl_request_ids:
+        raise PlannerActionValidationError(
+            "request_file_handoff is blocked by pending HITL",
+            code="file_handoff_pending_hitl",
         )
 
 

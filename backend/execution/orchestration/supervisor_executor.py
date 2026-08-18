@@ -49,7 +49,6 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.dispatch.agent_ingress_router import SUPERVISOR_BLOCKER_SUMMARY
 from execution.hitl.public_prompt import (
-    is_file_upload_request,
     is_internal_agent_contract_prompt,
     public_agent_input_prompt,
 )
@@ -1746,6 +1745,23 @@ class SupervisorExecutor:
                         token=token,
                     )
 
+                case PlannerActionType.REQUEST_FILE_HANDOFF:
+                    await self._emit_supervisor_stage(
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        client_request_id=state.client_request_id,
+                        details="A file is needed to continue in a new message.",
+                        stage="awaiting_file",
+                    )
+                    return await self._complete_supervisor_file_upload_turn(
+                        state=state,
+                        prompt=(planner_action.file_prompt or "").strip(),
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        request_user_id=request_user_id,
+                        step_number=state.steps_used + 1,
+                    )
+
                 case PlannerActionType.ASK_USER:
                     await self._emit_supervisor_stage(
                         room_id=room_id,
@@ -2470,21 +2486,6 @@ class SupervisorExecutor:
         entry.results = results
         entry.completed_at = utcnow()
 
-        end_turn_result = next(
-            (result for result in results if result.end_turn),
-            None,
-        )
-        if end_turn_result is not None:
-            return await self._complete_agent_file_upload_turn(
-                state=state,
-                results=results,
-                result=end_turn_result,
-                prompt=(
-                    end_turn_result.status_message or end_turn_result.response_text
-                ),
-                trajectory=trajectory,
-            )
-
         blocker_available_resource_refs = set(resource_fingerprints)
         blocker_attempted_agent_ids = self._attempted_agent_ids_for_blocker_context(
             state,
@@ -2814,21 +2815,6 @@ class SupervisorExecutor:
 
         if not results:
             return state, None
-
-        end_turn_result = next(
-            (result for result in results if result.end_turn),
-            None,
-        )
-        if end_turn_result is not None:
-            return await self._complete_agent_file_upload_turn(
-                state=state,
-                results=results,
-                result=end_turn_result,
-                prompt=(
-                    end_turn_result.status_message or end_turn_result.response_text
-                ),
-                trajectory=trajectory,
-            )
 
         paused = [result for result in results if result.status == StepStatus.PAUSED]
         awaiting = [
@@ -4434,8 +4420,6 @@ class SupervisorExecutor:
         user_message,
     ) -> StepResult:
         prompt = self._extract_input_required_prompt(result)
-        if result.end_turn:
-            return result
         continuation = self._find_or_create_pending_continuation(state, result)
         if self._awaiting_result_requires_hitl(result):
             return result
@@ -4757,14 +4741,6 @@ class SupervisorExecutor:
             awaiting_result.agent_message_id or awaiting_result.paused_message_id
         )
         hitl_prompt = awaiting_result.status_message or ""
-        if awaiting_result.end_turn:
-            return await self._complete_agent_file_upload_turn(
-                state=state,
-                results=results,
-                result=awaiting_result,
-                prompt=hitl_prompt,
-                trajectory=trajectory,
-            )
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
         if not continuation_message_id:
@@ -5068,10 +5044,6 @@ class SupervisorExecutor:
         request_user_id: str | None,
         step_number: int,
     ) -> SupervisorRunResult:
-        if state.active_dispatches:
-            raise RuntimeError(
-                "cannot end a supervisor clarification turn with active dispatches"
-            )
         state = await self._checkpoint_file_turn_finalization(
             state=state,
             prompt=prompt,
@@ -5124,38 +5096,6 @@ class SupervisorExecutor:
                 choices=action.choices,
             )
         ]
-        upload_question = next(
-            (
-                question
-                for question in questions
-                if is_file_upload_request(
-                    question.prompt,
-                    prompt_type=question.prompt_type,
-                )
-            ),
-            None,
-        )
-        if upload_question is not None:
-            remaining_questions = [
-                question.prompt
-                for question in questions
-                if question is not upload_question and question.prompt.strip()
-            ]
-            upload_copy = upload_question.prompt
-            if remaining_questions:
-                upload_copy = (
-                    f"{upload_copy}\n\nIn the same new message, please also answer:\n"
-                    + "\n".join(f"- {question}" for question in remaining_questions)
-                )
-            trajectory.status = TrajectoryStatus.COMPLETED
-            return await self._complete_supervisor_file_upload_turn(
-                state=state,
-                prompt=upload_copy,
-                room_id=room_id,
-                user_message_id=user_message_id,
-                request_user_id=request_user_id,
-                step_number=step_number,
-            )
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
         group_id = (
