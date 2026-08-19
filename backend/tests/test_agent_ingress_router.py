@@ -216,3 +216,57 @@ async def test_supervisor_dispatch_mismatch_fails_closed_without_private_append(
     assert decision.route == AgentIngressRoute.UNSUPPORTED
     assert saved is not None
     assert saved.private_agent_input_observations == []
+
+
+@pytest.mark.asyncio
+async def test_run_state_deepcopy_with_typed_observation_does_not_raise():
+    """Regression: _save_orchestration_state model_copy(deep=True) must work
+    when the run state carries a typed private input observation whose spec is
+    a FrozenDTO with frozen containers."""
+    from copy import deepcopy
+
+    store = InMemoryOrchestrationRunStore()
+    intent = DispatchIntent(
+        step_id="step-1",
+        step_target_id="target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-message",
+        agent_id="agent-1",
+        task="delegate",
+        task_hash="hash",
+    )
+    await store.create_run(
+        OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="user-message",
+            goal="goal",
+            candidate_agent_ids=["agent-1"],
+            dispatch_intents=[intent],
+        )
+    )
+    router = AgentIngressRouter(
+        message_reader=_Reader(_message(run_id="run-1")),
+        orchestration_run_store=store,
+    )
+    await router.decide(
+        message_id="agent-message",
+        room_id="room-1",
+        agent_id="agent-1",
+        observation=input_observation_from_a2a(_task(_typed_metadata())),
+    )
+    saved = await store.get_run("run-1")
+    assert saved is not None
+    assert len(saved.private_agent_input_observations) == 1
+
+    copied = saved.model_copy(deep=True)
+    assert copied is not saved
+    observation = copied.private_agent_input_observations[0]
+    assert observation.interaction_spec is not None
+    assert observation.interaction_spec.questions[0].prompt == "First typed question?"
+    # Immutability is preserved after the copy.
+    with pytest.raises(TypeError):
+        observation.interaction_spec.questions.append("sneaky")
+
+    serialized = deepcopy(saved)
+    assert serialized.private_agent_input_observations[0].interaction_spec is not None

@@ -12960,3 +12960,122 @@ def test_step_result_from_persisted_message_extracts_artifact_text():
     assert result is not None
     assert result.response_text == "Once upon a robot story."
     assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_resolved_supervisor_answer_matches_continuation_by_blocker_evidence():
+    state = _run_state(
+        status=OrchestrationStatus.RUNNING,
+        blockers=[
+            BlockerRecord(
+                key="agent_blocker:agent-1:agent_input_required",
+                description="Agent requested additional input.",
+                source="agent",
+                evidence_refs=["agent-msg-1", "agent-msg-1:awaiting_input"],
+                validation_status="validated",
+                claimed_user_only=True,
+                validated_user_only=True,
+            )
+        ],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "resolved",
+                "resolved": True,
+                "answer": "Two adults, Tokyo, October.",
+                "blocker_keys": ["agent_blocker:agent-1:agent_input_required"],
+            }
+        ],
+        pending_agent_continuations=[
+            _claimed_continuation().model_copy(update={"status": "open"})
+        ],
+    )
+
+    answer = SupervisorExecutor._resolved_supervisor_answer_for_continuation(
+        state,
+        state.pending_agent_continuations[0],
+    )
+
+    assert answer == "Two adults, Tokyo, October."
+
+    state.open_questions[0]["continuation_resumed"] = True
+    assert (
+        SupervisorExecutor._resolved_supervisor_answer_for_continuation(
+            state,
+            state.pending_agent_continuations[0],
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_answered_supervisor_continuation_resumes_through_delivery():
+    store = InMemoryOrchestrationRunStore()
+    user_message = RoomUserMessage(
+        room_id="room-1",
+        user_id="user-1",
+        message_content=MessageContent(message_text="Plan a trip"),
+        message_id="msg-1",
+    )
+    state = await store.create_run(
+        _run_state(
+            status=OrchestrationStatus.RUNNING,
+            state_version=2,
+            blockers=[
+                BlockerRecord(
+                    key="agent_blocker:agent-1:agent_input_required",
+                    description="Agent requested additional input.",
+                    source="agent",
+                    evidence_refs=["agent-msg-1", "agent-msg-1:awaiting_input"],
+                    validation_status="validated",
+                    claimed_user_only=True,
+                    validated_user_only=True,
+                )
+            ],
+            open_questions=[
+                {
+                    "request_id": "hitl-1",
+                    "source": "supervisor",
+                    "status": "resolved",
+                    "resolved": True,
+                    "answer": "Two adults, Tokyo, October.",
+                    "blocker_keys": ["agent_blocker:agent-1:agent_input_required"],
+                }
+            ],
+            pending_agent_continuations=[
+                _claimed_continuation().model_copy(update={"status": "open"})
+            ],
+        )
+    )
+    executor = _executor(
+        store=store, planner=RecordingPlanner(), user_message=user_message
+    )
+    executor._deliver_claimed_continuation = AsyncMock(
+        return_value={
+            "blocking": True,
+            "task_state": "completed",
+            "response_text": "Here is your Tokyo itinerary.",
+        }
+    )
+
+    (
+        resumed,
+        matched_question,
+    ) = await executor._try_resume_answered_supervisor_continuation(
+        state=state,
+        user_message=user_message,
+    )
+
+    assert matched_question["request_id"] == "hitl-1"
+    assert resumed.status == StepStatus.SUCCESS
+    assert resumed.response_text == "Here is your Tokyo itinerary."
+    executor._deliver_claimed_continuation.assert_awaited_once()
+    delivered_continuation = executor._deliver_claimed_continuation.await_args.kwargs[
+        "continuation"
+    ]
+    assert delivered_continuation.continuation_id == "cont-1"
+    assert (
+        executor._deliver_claimed_continuation.await_args.kwargs["user_input"]
+        == "Two adults, Tokyo, October."
+    )

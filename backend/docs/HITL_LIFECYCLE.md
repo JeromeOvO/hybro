@@ -71,6 +71,13 @@ projection. Worker loss or ambiguous send failures move the continuation to
 blindly resends. Interactive follow-ups reopen the journal at a new delivery
 revision, while terminal responses resolve it.
 
+A prose delegate with no declared output obligations that awaits user input has
+its `agent_input_required` blocker promoted to a validated user-only blocker so
+the Planner can emit a legal ASK_USER. When the recorded answer resolves that
+blocker, the executor resumes the blocked continuation through the journal with
+the answer instead of planning a fresh delegate; the persisted state is reloaded
+after the claim so the ingest save never conflicts with the claim's version bump.
+
 ## Continuation and failure invariants
 
 Hybro treats the remote A2A `Task.id` and `Task.contextId` returned by the agent as
@@ -143,3 +150,26 @@ replays incomplete run projection and request/UI projection. Required request ID
 ordered group indices, plaintext-answer digests, and aggregate answer references are
 verified before any external effect. Group-open projection is ordered and uses
 per-request durable claim/completion markers so a crash can replay every member.
+
+## Interaction-first frontend (R7)
+
+The Composer is taken over only while an authoritative interaction is active.
+`frontend/src/lib/hitl/interaction-controller.ts` is a pure reducer; the React hook
+wraps it for question navigation, drafts, Review, and atomic batch submission. Every
+public DTO, delivery event, and SSE frame carries the aggregate `interaction_version`;
+the message-store upsert is version-fenced and rejects stale rollbacks, so lifecycle
+states are derived from the aggregate instead of error-string matching.
+
+## Legacy path removal (R8)
+
+Prose-based HITL inference is gone: no prompt-type detector, no file-upload prose
+sniffing, and `file` is not a `HITLPromptType`. The old
+`POST /rooms/{room_id}/hitl/respond` route and the legacy facade/protocol
+`create_hitl_request`, `resolve_hitl`, and `cancel_hitl` methods are deleted. Group
+metadata keys (`group_id`, `group_total`, `group_index`) were replaced everywhere by
+`interaction_id`, `question_count`, and `question_index`. Cancellation is a
+version-fenced command via
+`POST /rooms/{room_id}/hitl/interactions/{interaction_id}/cancel` carrying
+`HITLCancelCommand`; only `open`/`partially_answered` (and member-less
+`materializing`) interactions are cancelable, and the response echoes the aggregate's
+post-cancel version. `backend/openapi.json` is regenerated to match.

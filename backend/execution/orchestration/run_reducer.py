@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from common.utils.time import utcnow
+from execution.orchestration.blocker_resolver import (
+    validate_hitl_answered_blockers,
+)
 from models.orchestration import (
     TERMINAL_DISPATCH_STATUSES,
     TERMINAL_ORCHESTRATION_STATUSES,
@@ -315,14 +318,23 @@ def record_hitl_resolution(  # noqa: C901
             }
         )
 
-    updated.facts.append(
-        {
-            "fact_id": f"{updated.run_id}:hitl-reply:{updated.state_version + 1}",
-            "source": "hitl_user_reply",
-            "text": response,
-            "request_ids": [request_id],
-            "created_at": resolved_at,
-        }
+    answer_fact = {
+        "fact_id": f"{updated.run_id}:hitl-reply:{updated.state_version + 1}",
+        "source": "hitl_user_reply",
+        "text": response,
+        "request_ids": [request_id],
+        "created_at": resolved_at,
+    }
+    updated.facts.append(answer_fact)
+
+    # Resolve validated user-only blockers that the recorded answer satisfies.
+    # This is the counterpart of the pre-answer promotion in the blocker
+    # resolver and lets the executor resume the blocked agent continuation
+    # through the durable command journal instead of re-asking the user.
+    validate_hitl_answered_blockers(
+        updated,
+        resolved_request_ids={request_id},
+        answer_fact=answer_fact,
     )
 
     _record_agent_no_progress(

@@ -1127,6 +1127,77 @@ class SupervisorExecutor:
                 state,
                 self._state_run_result(status=RunStatus.FAILED, state=state),
             )
+        if (
+            state.status == OrchestrationStatus.RUNNING
+            and state.pending_agent_continuations
+            and not self._has_open_pending_hitl(state)
+        ):
+            resumed_entry = await self._try_resume_answered_supervisor_continuation(
+                state=state,
+                user_message=user_message,
+            )
+            if resumed_entry is not None:
+                resumed, matched_question = resumed_entry
+                # The continuation claim inside the resume persisted a newer
+                # state revision. Reload before ingesting so the ingest save
+                # does not conflict with the claim's version bump.
+                latest_state = await self.orchestration_run_store.get_run(state.run_id)
+                if latest_state is not None:
+                    state = latest_state
+                for question in state.open_questions:
+                    if isinstance(question, dict) and question.get(
+                        "request_id"
+                    ) == matched_question.get("request_id"):
+                        question["continuation_resumed"] = True
+                        break
+                resumed_continuation = next(
+                    (
+                        continuation
+                        for continuation in state.pending_agent_continuations
+                        if continuation.source_agent_message_id
+                        == resumed.agent_message_id
+                    ),
+                    None,
+                )
+                source_intent = next(
+                    (
+                        intent
+                        for intent in state.dispatch_intents
+                        if resumed_continuation is not None
+                        and intent.dispatch_intent_id
+                        == resumed_continuation.source_intent_id
+                    ),
+                    None,
+                )
+                attempted_agent_ids = self._attempted_agent_ids_for_blocker_context(
+                    state,
+                    current_agent_ids={resumed.agent_id},
+                )
+                state = await self._ingest_orchestration_results(
+                    state,
+                    [resumed],
+                    status=OrchestrationStatus.RUNNING,
+                    advance_step=False,
+                    available_resource_refs=(
+                        set(
+                            self._orchestration_selected_resource_fingerprints(
+                                state, source_intent
+                            )
+                        )
+                        if source_intent is not None
+                        else set()
+                    ),
+                    attempted_agent_ids=attempted_agent_ids,
+                    eligible_alternate_agent_ids=(
+                        self._eligible_alternate_agent_ids_for_blocker_context(
+                            state=state,
+                            agent_registry=agent_registry,
+                            attempted_agent_ids=attempted_agent_ids,
+                        )
+                    ),
+                    conditional_result_viable=False,
+                )
+
         if state.status == OrchestrationStatus.AWAITING_USER and (
             self._has_open_pending_hitl(state)
             or self._has_recoverable_supervisor_hitl_question(state)
@@ -4249,6 +4320,80 @@ class SupervisorExecutor:
                 else []
             ),
         )
+
+    @staticmethod
+    def _resolved_supervisor_answer_for_continuation(
+        state: OrchestrationRunState,
+        continuation: PendingAgentContinuation,
+    ) -> str | None:
+        """Match a resolved supervisor ASK_USER question to the continuation of
+        the blocked agent intent, returning the recorded user answer."""
+        source_message_id = continuation.source_agent_message_id
+        relevant_blocker_keys = {
+            blocker.key
+            for blocker in state.blockers
+            if source_message_id in set(blocker.evidence_refs)
+        }
+        if not relevant_blocker_keys:
+            return None
+        for question in state.open_questions:
+            if not isinstance(question, Mapping):
+                continue
+            if question.get("resolved") is not True:
+                continue
+            if question.get("continuation_resumed") is True:
+                continue
+            answer = question.get("answer")
+            if not isinstance(answer, str) or not answer.strip():
+                continue
+            if relevant_blocker_keys & set(question.get("blocker_keys") or []):
+                return answer
+        return None
+
+    async def _try_resume_answered_supervisor_continuation(
+        self,
+        *,
+        state: OrchestrationRunState,
+        user_message,
+    ) -> tuple[StepResult, dict] | None:
+        """After a supervisor ASK_USER answer, resume the pending continuation
+        of the blocked agent intent through the durable command journal instead
+        of consulting the planner for a fresh delegate. Returns the resumed
+        StepResult and the matched question entry."""
+        open_continuations = [
+            continuation
+            for continuation in state.pending_agent_continuations
+            if continuation.status == "open"
+        ]
+        for continuation in open_continuations:
+            matched_question = next(
+                (
+                    question
+                    for question in state.open_questions
+                    if isinstance(question, Mapping)
+                    and question.get("resolved") is True
+                    and question.get("continuation_resumed") is not True
+                    and isinstance(question.get("answer"), str)
+                    and question.get("answer")
+                    and self._resolved_supervisor_answer_for_continuation(
+                        state,
+                        continuation,
+                    )
+                    is not None
+                ),
+                None,
+            )
+            if matched_question is None:
+                continue
+            answer = str(matched_question["answer"])
+            resumed = await self._resume_agent_continuation_after_hitl_answer(
+                state=state,
+                continuation=continuation,
+                answer=answer,
+                user_message=user_message,
+            )
+            return resumed, dict(matched_question)
+        return None
 
     async def _resume_agent_continuation_after_hitl_answer(
         self,
