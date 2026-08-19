@@ -499,6 +499,7 @@ class TestRepositoryStoreHITL:
                 [("interaction_id", 1), ("question_index", 1)],
                 {
                     "unique": True,
+                    "name": "uq_hitl_interaction_question",
                     "partialFilterExpression": {
                         "interaction_id": {"$type": "string"},
                     },

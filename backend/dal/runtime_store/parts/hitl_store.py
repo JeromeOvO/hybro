@@ -690,6 +690,7 @@ class HITLRuntimeStorePart:
                 (("interaction_id", 1), ("question_index", 1)),
                 {
                     "unique": True,
+                    "name": "uq_hitl_interaction_question",
                     "partialFilterExpression": {
                         "interaction_id": {"$type": "string"},
                     },
@@ -717,7 +718,11 @@ class HITLRuntimeStorePart:
                         await self._hitl_requests.create_index(list(keys), **kwargs)
                         continue
                     except Exception:
-                        pass
+                        logger.error(
+                            "Failed to recreate non-critical HITL index after conflict: %s",
+                            index_name,
+                            exc_info=True,
+                        )
                 logger.error(
                     "Failed to create non-critical HITL index",
                     extra={"index_keys": list(keys), "index_options": kwargs},
@@ -770,7 +775,11 @@ class HITLRuntimeStorePart:
                         await self._hitl_requests.create_index(keys, **kwargs)
                         continue
                     except Exception:
-                        pass
+                        logger.error(
+                            "Failed to recreate critical HITL index after conflict: %s",
+                            index_name,
+                            exc_info=True,
+                        )
                 logger.error(
                     "Failed to create critical HITL unique index",
                     extra={"index_name": kwargs["name"]},
