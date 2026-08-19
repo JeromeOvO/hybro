@@ -151,9 +151,12 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "agent_id", event.agent_id)
         _add_optional(data, "agent_name", event.agent_name)
         _add_optional(data, "source_step_id", event.source_step_id)
-        _add_optional(data, "group_id", event.group_id)
-        _add_optional(data, "group_total", event.group_total)
-        _add_optional(data, "group_index", event.group_index)
+        _add_optional(data, "interaction_id", event.interaction_id)
+        _add_optional(data, "interaction_status", event.interaction_status)
+        _add_optional(data, "interaction_version", event.interaction_version)
+        _add_optional(data, "application_status", event.application_status)
+        data["question_count"] = event.question_count
+        data["question_index"] = event.question_index
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
@@ -166,6 +169,12 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
             "source": event.source,
             "status": event.status,
         }
+        _add_optional(data, "interaction_id", event.interaction_id)
+        _add_optional(data, "interaction_status", event.interaction_status)
+        _add_optional(data, "interaction_version", event.interaction_version)
+        _add_optional(data, "application_status", event.application_status)
+        data["question_count"] = event.question_count
+        data["question_index"] = event.question_index
         _add_optional(data, "error_message", event.error_message)
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)

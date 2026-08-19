@@ -14,9 +14,14 @@ import json
 from typing import TYPE_CHECKING, Any, Protocol
 
 from a2a_adapter.task_status import coerce_task_state
-from common.a2a_constants import is_interactive_state
 from common.a2a_task_projection import public_artifact_data, public_part_data
 from common.config.settings import settings
+from common.dto import (
+    HITLApplicationRoute,
+    HITLEvidenceOrigin,
+    HITLPublicSource,
+    HITLRouteSnapshot,
+)
 from common.observability import traced_create_task
 from common.utils.a2a_helpers import (
     extract_text_from_artifact_dicts,
@@ -31,6 +36,14 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.logger import get_logger
 from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.agent_ingress_router import (
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+    AgentIngressDecision,
+    AgentIngressRoute,
+    AgentIngressRouter,
+)
+from execution.hitl.validation import deterministic_interaction_id
 from execution.orchestration.result_ingestor import AgentResultRead
 from execution.task_tracking import resolve_public_task_label
 
@@ -59,6 +72,7 @@ class ResponseTaskWriter(Protocol):
         artifacts: list[dict] | None = None,
         task_id: str | None = None,
         context_id: str | None = None,
+        task_metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None]: ...
 
 
@@ -106,7 +120,6 @@ _PUBLIC_TERMINAL_ERRORS = {
     "canceled": "Task was canceled",
     "expired": "Task expired",
 }
-_GENERIC_AGENT_INPUT_PROMPT = "The agent needs additional information."
 
 
 def _safe_terminal_error(status: str | None) -> str:
@@ -291,6 +304,7 @@ class AgentResponseHandler:
         task_notification_store: TaskNotificationStorePort | None = None,
         task_notification_impl=None,
         room_files=None,
+        agent_ingress_router: AgentIngressRouter | None = None,
     ) -> None:
         self._message_writer = message_writer
         self._task_writer = task_writer
@@ -308,6 +322,10 @@ class AgentResponseHandler:
         self._task_notification_store = task_notification_store
         self._task_notification_impl = task_notification_impl
         self._room_files = room_files
+        self._agent_ingress_router = agent_ingress_router or AgentIngressRouter(
+            message_reader=client_request_resolver,
+            orchestration_run_store=None,
+        )
         self._processing_status_emitter = None
 
     def bind_execution_event_deps(self, processing_status_emitter) -> None:
@@ -867,14 +885,18 @@ class AgentResponseHandler:
         ) = await self._project_completed_output(e)
         platform_state = "failed" if delivery_failed else "completed"
         platform_error = OUTPUT_DELIVERY_FAILURE_MESSAGE if delivery_failed else None
-        task_metadata = (
-            {
+        task_metadata = None
+        if delivery_failed:
+            task_metadata = {
                 "output_failure_code": OUTPUT_DELIVERY_FAILURE_CODE,
                 "remote_task_state": "completed",
             }
-            if delivery_failed
-            else None
-        )
+        elif e.end_turn:
+            task_metadata = {
+                "end_turn": True,
+                "remote_task_id": e.task_id,
+                "remote_context_id": e.context_id,
+            }
 
         finalization_token, fenced = await self._begin_terminal_finalization(
             e, platform_state
@@ -976,10 +998,18 @@ class AgentResponseHandler:
             isinstance(e.details, dict)
             and e.details.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
         )
+        unsupported_interaction = bool(
+            isinstance(e.details, dict)
+            and e.details.get("error_code") == UNSUPPORTED_INTERACTION_CODE
+        )
         error = (
             OUTPUT_DELIVERY_FAILURE_MESSAGE
             if output_failure
-            else _safe_terminal_error(source_state)
+            else (
+                UNSUPPORTED_INTERACTION_MESSAGE
+                if unsupported_interaction
+                else _safe_terminal_error(source_state)
+            )
         )
         task_metadata = (
             {
@@ -987,7 +1017,11 @@ class AgentResponseHandler:
                 "remote_task_state": "completed",
             }
             if output_failure
-            else None
+            else (
+                {"error_code": UNSUPPORTED_INTERACTION_CODE}
+                if unsupported_interaction
+                else None
+            )
         )
         e.text = ""
         e.error_text = error
@@ -1054,7 +1088,15 @@ class AgentResponseHandler:
                 text=None,
                 artifacts=[],
                 error=error,
-                error_code=(OUTPUT_DELIVERY_FAILURE_CODE if output_failure else None),
+                error_code=(
+                    OUTPUT_DELIVERY_FAILURE_CODE
+                    if output_failure
+                    else (
+                        UNSUPPORTED_INTERACTION_CODE
+                        if unsupported_interaction
+                        else None
+                    )
+                ),
             ),
         )
         await self._run_finalization_step(
@@ -1374,70 +1416,116 @@ class AgentResponseHandler:
             maintainer.cancel()
             await asyncio.gather(maintainer, return_exceptions=True)
 
-    async def _on_interactive(self, e: AgentEvent) -> None:
-        state = e.state or "input-required"
-        prompt = _GENERIC_AGENT_INPUT_PROMPT
-        e.text = ""
-        e.details = None
-        e.parts = None
-        e.artifacts = None
-        if not e.skip_persist:
-            await self._task_writer.update_task_state_on_message(
-                e.message_id,
-                state,
-                message_text=None,
-                task_id=e.task_id,
-                context_id=e.context_id,
-            )
-
-        # For async transports (relay, webhook) the queue has already moved
-        # to PAUSED before this callback fires, so QueueExecutor never sees
-        # AWAITING_INPUT.  Create the HITL request here when a continuation
-        # is already saved (indicates an async callback, not inline dispatch).
-        if is_interactive_state(state):
-            await self._maybe_create_hitl_for_async_interactive(e, prompt=prompt)
-
-        await self._notify(
-            e,
-            coerce_task_state(state),
-            emit_processing_status=not is_interactive_state(state),
+    async def decide_interactive(self, e: AgentEvent) -> AgentIngressDecision:
+        return await self._agent_ingress_router.decide(
+            message_id=e.message_id,
+            room_id=e.room_id,
+            agent_id=e.agent_id,
+            observation=e.private_input_observation,
         )
 
-    async def _maybe_create_hitl_for_async_interactive(
-        self,
-        e: AgentEvent,
-        *,
-        prompt: str | None = None,
-    ) -> None:
-        """Create HITL request for async transports (relay / webhook).
+    async def _on_interactive(self, e: AgentEvent) -> None:
+        decision = await self.decide_interactive(e)
+        if decision.route == AgentIngressRoute.SUPERVISOR_OBSERVATION:
+            if not e.skip_persist:
+                await self._task_writer.update_task_state_on_message(
+                    e.message_id,
+                    decision.observed_state,
+                    task_id=decision.task_id,
+                    context_id=decision.context_id,
+                )
+            # The durable private observation precedes this recovery trigger.
+            await self._resume_orchestration_event(e, "")
+            return
+        if decision.route == AgentIngressRoute.UNSUPPORTED:
+            await self.project_unsupported_interactive(e, decision)
+            return
 
-        Only acts when a pending_continuation already exists on the message,
-        which proves this is an async callback — not an inline direct dispatch
-        where QueueExecutor handles HITL creation itself.
-        """
         continuation = (
             await self._continuation_store.get_pending_continuation_on_message(
                 e.message_id
             )
         )
-        if not continuation:
-            # Durable supervisor runs do not serialize message continuations.
-            # Re-enter from the committed agent message so the canonical run
-            # can ingest the interactive state and create its HITL request.
-            await self._resume_orchestration_event(e, "")
+        if continuation is None:
+            # Inline direct dispatch is projected by QueueExecutor only after it
+            # durably saves the queue continuation.
+            if e.skip_persist:
+                return
+            await self.project_unsupported_interactive(e, decision)
+            return
+        await self.project_conversation_interactive(
+            e,
+            decision,
+            user_message_id=str(continuation.get("user_message_id") or ""),
+        )
+
+    async def project_unsupported_interactive(
+        self,
+        e: AgentEvent,
+        decision: AgentIngressDecision,
+    ) -> None:
+        e.kind = "error"
+        e.state = "failed"
+        e.text = ""
+        e.error_text = UNSUPPORTED_INTERACTION_MESSAGE
+        e.details = {"error_code": UNSUPPORTED_INTERACTION_CODE}
+        e.parts = None
+        e.artifacts = None
+        e.task_id = decision.task_id
+        e.context_id = decision.context_id
+        await self._on_error(e)
+
+    async def project_conversation_interactive(
+        self,
+        e: AgentEvent,
+        decision: AgentIngressDecision,
+        *,
+        user_message_id: str,
+    ) -> bool:
+        if not user_message_id:
+            await self.project_unsupported_interactive(e, decision)
+            return False
+        return await self._maybe_create_hitl_for_async_interactive(
+            e,
+            decision=decision,
+            user_message_id=user_message_id,
+        )
+
+    async def _compensate_interaction_projection(
+        self,
+        interaction_id: str,
+        room_id: str,
+    ) -> None:
+        cancel_interaction = getattr(
+            self.hitl_coordinator,
+            "cancel_interaction",
+            None,
+        )
+        if not callable(cancel_interaction):
+            raise RuntimeError("HITL coordinator cannot compensate an interaction")
+        compensated = await cancel_interaction(
+            interaction_id,
+            room_id,
+            failure_reason="Agent interaction projection failed",
+        )
+        if not compensated:
+            # No durable aggregate existed yet; there is nothing to expose.
             return
 
+    async def _maybe_create_hitl_for_async_interactive(
+        self,
+        e: AgentEvent,
+        *,
+        decision: AgentIngressDecision,
+        user_message_id: str,
+    ) -> bool:
+        """Materialize the typed aggregate before any public projection."""
         if self.hitl_coordinator is None:
             raise RuntimeError("HITL coordinator has not been bound")
-
-        user_message_id = continuation.get("user_message_id", "")
-        if not user_message_id:
-            logger.warning(
-                "_maybe_create_hitl_for_async_interactive: no user_message_id "
-                "in continuation for %s",
-                e.message_id,
-            )
-            return
+        spec = decision.interaction_spec
+        if spec is None:
+            await self.project_unsupported_interactive(e, decision)
+            return False
 
         msg = await self._client_request_resolver.get_room_agent_message_by_message_id(
             e.message_id
@@ -1451,30 +1539,104 @@ class AgentResponseHandler:
             except Exception:
                 logger.debug("agent name lookup failed", exc_info=True)
 
-        hitl_req = await self.hitl_coordinator.request_input(
-            room_id=e.room_id,
-            user_message_id=user_message_id,
-            source="agent",
-            prompt=prompt or _GENERIC_AGENT_INPUT_PROMPT,
-            agent_id=e.agent_id,
-            agent_name=agent_name,
-            a2a_task_id=e.task_id,
-            a2a_context_id=e.context_id,
-            continuation_message_id=e.message_id,
-            display_message_id=msg.message_id if msg else e.message_id,
+        prompt_type_by_answer_kind = {
+            "single_choice": "single_choice",
+            "multi_choice": "multi_choice",
+            "confirmation": "confirmation",
+        }
+        questions = [
+            {
+                "prompt": question.prompt,
+                "prompt_type": (
+                    "authentication"
+                    if question.interaction_kind.value == "auth_challenge"
+                    else "approval"
+                    if question.interaction_kind.value == "policy_decision"
+                    else prompt_type_by_answer_kind.get(
+                        question.answer_kind.value,
+                        "text",
+                    )
+                ),
+                **({"choices": list(question.choices)} if question.choices else {}),
+                "agent_id": e.agent_id,
+                "agent_name": agent_name,
+                "continuation_message_id": e.message_id,
+                "display_message_id": msg.message_id if msg else e.message_id,
+            }
+            for question in spec.questions
+        ]
+        interaction_id = deterministic_interaction_id(
+            event_identity=e.message_id,
+            round_identity=(
+                f"{decision.task_id}:{decision.context_id}:{spec.interaction_id}"
+            ),
         )
-        if hitl_req:
+        try:
+            hitl_requests = await self.hitl_coordinator.request_interaction(
+                room_id=e.room_id,
+                user_message_id=user_message_id,
+                interaction_id=interaction_id,
+                application_route=HITLApplicationRoute.A2A_RESUME,
+                public_source=HITLPublicSource.AGENT,
+                evidence_origin=HITLEvidenceOrigin.AGENT,
+                route_snapshot=HITLRouteSnapshot(
+                    route=HITLApplicationRoute.A2A_RESUME,
+                    task_id=decision.task_id,
+                    context_id=decision.context_id,
+                    continuation_message_id=e.message_id,
+                    agent_id=e.agent_id,
+                ),
+                questions=questions,
+            )
+        except Exception:
+            await self._compensate_interaction_projection(
+                interaction_id,
+                e.room_id,
+            )
+            raise
+        if not hitl_requests or len(hitl_requests) != len(spec.questions):
+            await self._compensate_interaction_projection(
+                interaction_id,
+                e.room_id,
+            )
+            await self.project_unsupported_interactive(e, decision)
+            return False
+
+        try:
+            public_prompt = "\n\n".join(question.prompt for question in spec.questions)
+            e.text = public_prompt
+            e.state = decision.observed_state
+            e.task_id = decision.task_id
+            e.context_id = decision.context_id
+            e.details = None
+            e.parts = None
+            e.artifacts = None
+            if not e.skip_persist:
+                await self._task_writer.update_task_state_on_message(
+                    e.message_id,
+                    decision.observed_state,
+                    message_text=public_prompt,
+                    task_id=decision.task_id,
+                    context_id=decision.context_id,
+                )
+            await self._notify(
+                e,
+                coerce_task_state(decision.observed_state),
+                emit_processing_status=False,
+            )
             await self._emit_processing_status(
                 room_id=e.room_id,
                 status="awaiting_input",
                 message_id=user_message_id,
                 lifecycle_message_id=user_message_id,
             )
-            logger.info(
-                "Created HITL request %s for async interactive event on %s",
-                hitl_req.request_id,
-                e.message_id,
+            return True
+        except Exception:
+            await self._compensate_interaction_projection(
+                interaction_id,
+                e.room_id,
             )
+            raise
 
     async def _on_submitted(self, e: AgentEvent) -> None:
         client_request_id = await self._resolve_client_request_id(e)
@@ -1864,6 +2026,8 @@ class AgentResponseHandler:
                 artifacts=artifacts or [],
                 error=error,
                 error_code=error_code,
+                a2a_task_id=e.task_id,
+                a2a_context_id=e.context_id,
             )
             maybe_result = service.ingest_agent_result(result)
             if inspect.isawaitable(maybe_result):
@@ -1891,6 +2055,7 @@ class AgentResponseHandler:
             event.message_id,
             response_text,
             failed=failed,
+            end_turn=event.end_turn,
         )
 
     async def _resume_orchestration(
@@ -1899,12 +2064,61 @@ class AgentResponseHandler:
         response_text: str,
         *,
         failed: bool = False,
+        end_turn: bool = False,
     ) -> None:
-        try:
-            await self._rmc.resume_queue_from_continuation(
-                message_id=message_id,
-                task_result_text=response_text if not failed else None,
-                failed=failed,
+        resume_kwargs = {
+            "message_id": message_id,
+            "task_result_text": response_text if not failed else None,
+            "failed": failed,
+        }
+        if end_turn:
+            resume_kwargs["end_turn"] = True
+        resumed = await self._rmc.resume_queue_from_continuation(**resume_kwargs)
+        if resumed is not False:
+            return
+        continuation = (
+            await self._continuation_store.get_pending_continuation_on_message(
+                message_id
             )
-        except Exception:
-            logger.exception("Failed to resume orchestration for %s", message_id)
+        )
+        supervisor = getattr(self._rmc, "supervisor_executor", None)
+        run_store = getattr(supervisor, "orchestration_run_store", None)
+        if continuation:
+            run_id = (
+                continuation.get("orchestration_run_id")
+                if isinstance(continuation, dict)
+                else None
+            )
+            run = await run_store.get_run(run_id) if run_id and run_store else None
+            run_status = getattr(getattr(run, "status", None), "value", None)
+            if run_status in {"completed", "failed", "canceled", "budget_exhausted"}:
+                return
+            raise RuntimeError(f"failed to resume orchestration for {message_id}")
+
+        message = (
+            await self._client_request_resolver.get_room_agent_message_by_message_id(
+                message_id
+            )
+        )
+        if message is None or run_store is None:
+            return
+        extend_info = getattr(message, "extend_info", None)
+        run_id = (
+            extend_info.get("orchestration_run_id")
+            if isinstance(extend_info, dict)
+            else None
+        )
+        if run_id:
+            run = await run_store.get_run(run_id)
+        else:
+            user_message_id = getattr(message, "related_message_id", None)
+            run = (
+                await run_store.get_latest_by_user_message_id(user_message_id)
+                if user_message_id
+                else None
+            )
+        if run is None:
+            return
+        run_status = getattr(getattr(run, "status", None), "value", None)
+        if run_status not in {"completed", "failed", "canceled", "budget_exhausted"}:
+            raise RuntimeError(f"failed to resume orchestration for {message_id}")

@@ -18,9 +18,9 @@ _TRUSTED_LOCAL_HITL_METADATA_KEYS = frozenset(
         "hitl_choices",
         "hitl_a2a_task_id",
         "hitl_a2a_context_id",
-        "hitl_group_id",
-        "hitl_group_total",
-        "hitl_group_index",
+        "hitl_interaction_id",
+        "hitl_question_count",
+        "hitl_question_index",
         "user_answer",
     }
 )

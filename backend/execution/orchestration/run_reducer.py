@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from common.utils.time import utcnow
+from execution.orchestration.blocker_resolver import (
+    validate_hitl_answered_blockers,
+)
 from models.orchestration import (
     TERMINAL_DISPATCH_STATUSES,
     TERMINAL_ORCHESTRATION_STATUSES,
@@ -221,13 +224,63 @@ def _record_agent_no_progress(
     )
 
 
-def record_hitl_resolution(
+def record_hitl_terminalization(
+    state: OrchestrationRunState,
+    *,
+    request_id: str,
+    terminal_status: str,
+    reason: str,
+) -> OrchestrationRunState:
+    """Terminate an owning run when its required human interaction ends."""
+    updated = state.model_copy(deep=True)
+    if updated.status in TERMINAL_ORCHESTRATION_STATUSES:
+        return updated
+
+    resolved_at = utcnow().isoformat()
+    updated.pending_hitl_request_ids.clear()
+    for question in updated.open_questions:
+        if not isinstance(question, dict):
+            continue
+        if question.get("status") not in {"open", "creating"}:
+            continue
+        question["status"] = terminal_status
+        question["resolved"] = True
+        question["resolved_at"] = resolved_at
+        question["terminal_reason"] = reason
+    updated.pending_agent_continuations.clear()
+    updated.active_dispatches.clear()
+    updated.status = (
+        OrchestrationStatus.CANCELED
+        if terminal_status == "canceled"
+        else OrchestrationStatus.FAILED
+    )
+    updated.terminal_reason = reason
+    updated.decision_log.append(
+        {
+            "code": f"hitl_{terminal_status}",
+            "request_id": request_id,
+            "reason": reason,
+            "created_at": resolved_at,
+        }
+    )
+    return _bump(updated)
+
+
+def record_hitl_resolution(  # noqa: C901
     state: OrchestrationRunState,
     *,
     request_id: str,
     response: str,
     hitl_result: dict,
 ) -> OrchestrationRunState:
+    if any(
+        isinstance(question, dict)
+        and question.get("request_id") == request_id
+        and question.get("resolved") is True
+        for question in state.open_questions
+    ):
+        return state.model_copy(deep=True)
+
     updated = state.model_copy(deep=True)
     resolved_at = utcnow().isoformat()
     followup_request_id = hitl_result.get("followup_hitl_request_id")
@@ -265,14 +318,23 @@ def record_hitl_resolution(
             }
         )
 
-    updated.facts.append(
-        {
-            "fact_id": f"{updated.run_id}:hitl-reply:{updated.state_version + 1}",
-            "source": "hitl_user_reply",
-            "text": response,
-            "request_ids": [request_id],
-            "created_at": resolved_at,
-        }
+    answer_fact = {
+        "fact_id": f"{updated.run_id}:hitl-reply:{updated.state_version + 1}",
+        "source": "hitl_user_reply",
+        "text": response,
+        "request_ids": [request_id],
+        "created_at": resolved_at,
+    }
+    updated.facts.append(answer_fact)
+
+    # Resolve validated user-only blockers that the recorded answer satisfies.
+    # This is the counterpart of the pre-answer promotion in the blocker
+    # resolver and lets the executor resume the blocked agent continuation
+    # through the durable command journal instead of re-asking the user.
+    validate_hitl_answered_blockers(
+        updated,
+        resolved_request_ids={request_id},
+        answer_fact=answer_fact,
     )
 
     _record_agent_no_progress(

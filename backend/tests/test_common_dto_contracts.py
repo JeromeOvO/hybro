@@ -304,3 +304,62 @@ def test_create_room_request_payloads_are_frozen():
     assert type(request.extend_info).__name__ == "FrozenDict"
     with pytest.raises(TypeError):
         request.extend_info["a"] = 2
+
+
+def test_frozen_containers_support_deepcopy_without_losing_immutability():
+    """Deepcopy must not raise through FrozenDict/FrozenList mutators."""
+    from copy import deepcopy
+
+    from common.dto.base import FrozenDict, FrozenList
+
+    frozen_dict = FrozenDict({"nested": FrozenList([1, 2])})
+    copied = deepcopy(frozen_dict)
+    assert copied == frozen_dict
+    assert isinstance(copied, FrozenDict)
+    assert isinstance(copied["nested"], FrozenList)
+    assert copied is not frozen_dict
+    assert copied["nested"] is not frozen_dict["nested"]
+    with pytest.raises(TypeError):
+        copied["nested"].append(3)
+
+
+def test_frozen_dto_deepcopy_is_isolated_and_still_immutable():
+    """Frozen DTO deep copies must succeed (pydantic model_copy(deep=True))
+    and produce an equal, independent, still-immutable instance."""
+    from copy import deepcopy
+
+    request = CreateRoomRequest(
+        owner_id="u1",
+        owner_name="User",
+        room_name="Room",
+        membership_seed=MembershipSeed(mode="manual"),
+        extend_info={"a": 1},
+    )
+    copied = deepcopy(request)
+    assert copied is not request
+    assert copied == request
+    assert type(copied.extend_info).__name__ == "FrozenDict"
+    with pytest.raises(TypeError):
+        copied.extend_info["a"] = 2
+    with pytest.raises(PydanticValidationError):
+        copied.owner_id = "u2"
+
+
+def test_frozen_dto_model_copy_deep_true_does_not_raise():
+    """pydantic invokes __deepcopy__() without a memo argument; deep copies of
+    FrozenDTOs must keep working through model_copy(deep=True)."""
+    request = CreateRoomRequest(
+        owner_id="u1",
+        owner_name="User",
+        room_name="Room",
+        membership_seed=MembershipSeed(mode="manual"),
+        extend_info={"a": 1},
+    )
+
+    copied = request.model_copy(deep=True)
+
+    assert copied is not request
+    assert copied == request
+    assert type(copied.extend_info).__name__ == "FrozenDict"
+    with pytest.raises(TypeError):
+        copied.extend_info["a"] = 2

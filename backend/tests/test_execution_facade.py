@@ -32,7 +32,6 @@ from models.orchestration import (
     OrchestrationEventType,
     OrchestrationRunState,
     OrchestrationStatus,
-    PendingAgentContinuation,
 )
 from models.response import RoomCenterUserMessageResponse
 from models.run import RunState
@@ -69,10 +68,12 @@ def _make_facade(**overrides):
     room_center.update_user_message_orchestration_status = AsyncMock(return_value=True)
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_manager = SimpleNamespace(
-        request_input=AsyncMock(),
+        request_interaction=AsyncMock(),
         handle_response=AsyncMock(),
+        handle_batch_response=AsyncMock(),
         get_pending_requests=AsyncMock(return_value=[]),
         cancel_request=AsyncMock(return_value=None),
+        cancel_interaction_by_user=AsyncMock(return_value=6),
     )
     run_lifecycle = SimpleNamespace(
         heal_diverged_runs=AsyncMock(return_value=2),
@@ -1116,226 +1117,6 @@ async def test_start_orchestration_skips_when_ack_disables_dispatch():
 
 
 @pytest.mark.core
-@pytest.mark.asyncio
-async def test_resolve_hitl_updates_orchestration_state_after_successful_response():
-    hitl_manager = MagicMock()
-    hitl_manager.handle_response = AsyncMock(
-        return_value={
-            "request_id": "hitl-1",
-            "status": "resolved",
-            "room_id": "room-1",
-            "user_message_id": "msg-1",
-            "orchestration_run_id": "run-1",
-            "source": "supervisor",
-            "response": "annual revenue is $2M",
-        }
-    )
-    hitl_manager.request_input = AsyncMock()
-    hitl_manager.get_pending_requests = AsyncMock(return_value=[])
-    hitl_manager.cancel_request = AsyncMock(return_value=None)
-    run_store = InMemoryOrchestrationRunStore()
-    await run_store.create_run(
-        OrchestrationRunState(
-            run_id="run-1",
-            room_id="room-1",
-            user_message_id="msg-1",
-            goal="Get quote",
-            candidate_agent_ids=["agent-1"],
-            status=OrchestrationStatus.AWAITING_USER,
-            pending_hitl_request_ids=["hitl-1"],
-            open_questions=[{"request_id": "hitl-1", "status": "open"}],
-        )
-    )
-    facade, deps = _make_facade(
-        hitl_manager=hitl_manager,
-        orchestration_run_store=run_store,
-    )
-    recovery_started = asyncio.Event()
-    release_recovery = asyncio.Event()
-
-    async def process_recovery(_request):
-        recovery_started.set()
-        await release_recovery.wait()
-
-    deps["room_message_center"].process_room_user_message.side_effect = process_recovery
-
-    result = await asyncio.wait_for(
-        facade.resolve_hitl(
-            room_id="room-1",
-            request_id="hitl-1",
-            response="annual revenue is $2M",
-            responder_id="user-1",
-        ),
-        timeout=1.0,
-    )
-    await asyncio.wait_for(recovery_started.wait(), timeout=1.0)
-
-    saved = await run_store.get_run("run-1")
-    assert result.request_id == "hitl-1"
-    assert saved is not None
-    assert "hitl-1" not in saved.pending_hitl_request_ids
-    assert saved.open_questions[-1]["status"] == "resolved"
-    assert saved.open_questions[-1]["answer"] == "annual revenue is $2M"
-    assert saved.status == OrchestrationStatus.RUNNING
-    assert len(facade._inflight) == 1
-    deps["room_message_center"].process_room_user_message.assert_awaited_once()
-    resumed_request = deps[
-        "room_message_center"
-    ].process_room_user_message.await_args.args[0]
-    assert resumed_request.room_id == "room-1"
-    assert resumed_request.room_user_message_id == "msg-1"
-    assert resumed_request.is_recovery is True
-    assert resumed_request.reuse_processing_claim is True
-    release_recovery.set()
-    await asyncio.gather(*facade._inflight)
-
-
-@pytest.mark.asyncio
-async def test_resolve_hitl_raises_after_repeated_run_store_conflicts():
-    hitl_manager = MagicMock()
-    hitl_manager.handle_response = AsyncMock(
-        return_value={
-            "request_id": "hitl-1",
-            "status": "resolved",
-            "room_id": "room-1",
-            "user_message_id": "msg-1",
-            "orchestration_run_id": "run-1",
-            "source": "supervisor",
-            "response": "annual revenue is $2M",
-        }
-    )
-    state = OrchestrationRunState(
-        run_id="run-1",
-        room_id="room-1",
-        user_message_id="msg-1",
-        goal="Get quote",
-        candidate_agent_ids=["agent-1"],
-        status=OrchestrationStatus.AWAITING_USER,
-        pending_hitl_request_ids=["hitl-1"],
-        open_questions=[{"request_id": "hitl-1", "status": "open"}],
-    )
-    run_store = MagicMock()
-    run_store.get_run = AsyncMock(return_value=state)
-    run_store.save_state = AsyncMock(
-        side_effect=OrchestrationStoreConflict("concurrent update")
-    )
-    run_store.append_event = AsyncMock()
-    facade, deps = _make_facade(
-        hitl_manager=hitl_manager,
-        orchestration_run_store=run_store,
-    )
-
-    with pytest.raises(
-        OrchestrationStoreConflict, match="failed to record resolved HITL"
-    ):
-        await facade.resolve_hitl(
-            room_id="room-1",
-            request_id="hitl-1",
-            response="annual revenue is $2M",
-            responder_id="user-1",
-        )
-
-    assert run_store.save_state.await_count == 2
-    run_store.append_event.assert_not_awaited()
-    deps["room_message_center"].process_room_user_message.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_resolve_hitl_records_policy_followup_without_queue_resume():
-    hitl_manager = MagicMock()
-    hitl_manager.handle_response = AsyncMock(
-        return_value={
-            "request_id": "hitl-1",
-            "status": "resolved",
-            "room_id": "room-1",
-            "user_message_id": "msg-1",
-            "orchestration_run_id": "run-1",
-            "source": "agent",
-            "response": "I approve the policy exception.",
-            "followup_hitl_request_id": "hitl-2",
-            "followup_prompt": "Please approve the required policy.",
-            "task_state": "policy-required",
-            "agent_id": "agent-1",
-            "agent_name": "Agent One",
-            "display_message_id": "agent-msg-1",
-            "continuation_message_id": "agent-msg-1",
-            "a2a_task_id": "task-1",
-            "a2a_context_id": "ctx-1",
-        }
-    )
-    hitl_manager.request_input = AsyncMock()
-    hitl_manager.get_pending_requests = AsyncMock(return_value=[])
-    hitl_manager.cancel_request = AsyncMock(return_value=None)
-    run_store = InMemoryOrchestrationRunStore()
-    await run_store.create_run(
-        OrchestrationRunState(
-            run_id="run-1",
-            room_id="room-1",
-            user_message_id="msg-1",
-            goal="Get quote",
-            candidate_agent_ids=["agent-1"],
-            status=OrchestrationStatus.AWAITING_USER,
-            pending_hitl_request_ids=["hitl-1"],
-            open_questions=[
-                {
-                    "request_id": "hitl-1",
-                    "source": "agent",
-                    "status": "open",
-                    "a2a_task_id": "task-1",
-                    "a2a_context_id": "ctx-1",
-                }
-            ],
-            pending_agent_continuations=[
-                PendingAgentContinuation(
-                    continuation_id="cont-1",
-                    source_intent_id="intent-1",
-                    source_agent_message_id="agent-msg-1",
-                    agent_id="agent-1",
-                    goal_family_fingerprint="family-1",
-                    goal_revision_fingerprint="revision-1",
-                    a2a_task_id="task-1",
-                    a2a_context_id="ctx-1",
-                )
-            ],
-        )
-    )
-    facade, deps = _make_facade(
-        hitl_manager=hitl_manager,
-        orchestration_run_store=run_store,
-    )
-
-    await facade.resolve_hitl(
-        room_id="room-1",
-        request_id="hitl-1",
-        response="I approve the policy exception.",
-        responder_id="user-1",
-    )
-
-    saved = await run_store.get_run("run-1")
-    assert saved is not None
-    assert saved.status == OrchestrationStatus.AWAITING_USER
-    assert saved.pending_hitl_request_ids == ["hitl-2"]
-    old_question = next(
-        question
-        for question in saved.open_questions
-        if question.get("request_id") == "hitl-1"
-    )
-    next_question = next(
-        question
-        for question in saved.open_questions
-        if question.get("request_id") == "hitl-2"
-    )
-    assert old_question["status"] == "resolved"
-    assert old_question["answer"] == "I approve the policy exception."
-    assert next_question["status"] == "open"
-    assert next_question["source"] == "agent"
-    assert next_question["a2a_task_id"] == "task-1"
-    assert next_question["a2a_context_id"] == "ctx-1"
-    assert saved.pending_agent_continuations[-1].a2a_task_id == "task-1"
-    assert saved.pending_agent_continuations[-1].a2a_context_id == "ctx-1"
-    deps["room_message_center"].process_room_user_message.assert_not_called()
-
-
 @pytest.mark.core
 @pytest.mark.asyncio
 async def test_cancel_preserves_order_and_requested_by_user_id():
@@ -1785,43 +1566,36 @@ async def test_cancel_inflight_tasks_does_not_mark_task_that_completes_during_sh
 
 
 @pytest.mark.asyncio
-async def test_hitl_methods_delegate_and_translate():
+async def test_hitl_pending_and_cancel_delegate_and_translate():
     facade, deps = _make_facade()
     model_request = SimpleNamespace(
         request_id="req-1",
         room_id="room-1",
         user_message_id="user-msg-1",
-        source="agent",
+        public_source="agent",
+        interaction_id="interaction-1",
+        question_count=1,
+        question_index=0,
         prompt="Need input",
         prompt_type="text",
         status="pending",
         display_message_id="display-msg-1",
     )
-    deps["hitl_manager"].request_input.return_value = model_request
-    deps["hitl_manager"].handle_response.return_value = {
-        "status": "ok",
-        "request_id": "req-1",
-    }
     deps["hitl_manager"].get_pending_requests.return_value = [model_request]
 
-    created = await facade.create_hitl_request(
-        "room-1",
-        "user-msg-1",
-        "Need input",
-        "agent",
-        display_message_id="display-msg-1",
-    )
-    resolved = await facade.resolve_hitl("room-1", "req-1", "yes", "user-1")
     pending = await facade.get_pending_hitl("room-1")
-    canceled = await facade.cancel_hitl("room-1", "req-1")
+    canceled = await facade.cancel_hitl_interaction(
+        "room-1",
+        "interaction-1",
+        3,
+    )
 
-    assert created.message_id == "display-msg-1"
-    assert resolved.status == "ok"
     assert pending[0].message_id == "display-msg-1"
-    assert canceled is True
-    deps["hitl_manager"].cancel_request.assert_awaited_once_with(
-        "req-1",
-        room_id="room-1",
+    assert canceled == 6
+    deps["hitl_manager"].cancel_interaction_by_user.assert_awaited_once_with(
+        "interaction-1",
+        "room-1",
+        expected_version=3,
     )
 
 
@@ -2025,6 +1799,55 @@ def test_hub_agent_response_adapter_normalizes_interactive_state():
 
     assert agent_event.kind == "interactive"
     assert agent_event.state == "input-required"
+
+
+def test_hub_agent_response_adapter_keeps_structured_interactive_prompt_private():
+    sentinel = "PRIVATE_SENTINEL_relay_interactive_prompt"
+    event = HubAgentResponseInternal(
+        hub_id="hub-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        room_id="room-1",
+        is_terminal=False,
+        timestamp=utcnow(),
+        payload={
+            "event_type": "input_required",
+            "message_id": "msg-1",
+            "state": "input_required",
+            "context_id": "context-1",
+            "_a2a_status": {
+                "state": "input-required",
+                "message": {
+                    "role": "agent",
+                    "messageId": "remote-status",
+                    "parts": [{"kind": "text", "text": sentinel}],
+                    "metadata": {
+                        "hybro.ai/a2a/interaction": {
+                            "schema_version": 1,
+                            "interaction_id": "interaction-1",
+                            "questions": [
+                                {
+                                    "question_id": "question-1",
+                                    "interaction_kind": "questionnaire",
+                                    "prompt": "Typed relay question?",
+                                    "answer_kind": "text",
+                                }
+                            ],
+                        }
+                    },
+                },
+            },
+        },
+    )
+
+    agent_event = hub_agent_response_internal_to_agent_event(event)
+
+    assert agent_event.kind == "interactive"
+    assert agent_event.text == ""
+    observation = agent_event.private_input_observation
+    assert observation.raw_prompt == sentinel
+    assert observation.interaction_spec.questions[0].prompt == "Typed relay question?"
+    assert sentinel not in repr(agent_event)
 
 
 def test_hub_agent_response_adapter_normalizes_legacy_processing_input_required_state():

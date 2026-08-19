@@ -109,6 +109,33 @@ describe('applyUpsert', () => {
     })
   })
 
+  describe('HITL interaction versions', () => {
+    it('does not roll a terminal interaction back with an older event', () => {
+      const entities = {
+        'msg-1': makeEntity({
+          hitlRequestId: 'request-1',
+          hitlInteractionStatus: 'expired',
+          hitlInteractionVersion: 5,
+        }),
+      }
+
+      const result = applyUpsert(
+        entities,
+        ['msg-1'],
+        makeIncoming({
+          hitlRequestId: 'request-1',
+          hitlInteractionStatus: 'open',
+          hitlInteractionVersion: 4,
+        }),
+        'sse',
+      )
+
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].hitlInteractionStatus).toBe('expired')
+      expect(result!.entities['msg-1'].hitlInteractionVersion).toBe(5)
+    })
+  })
+
   describe('Rule 2: SSE wins over DB for non-terminal states', () => {
     it('rejects DB update when SSE entity is in working state and DB is also non-terminal', () => {
       const entities = {

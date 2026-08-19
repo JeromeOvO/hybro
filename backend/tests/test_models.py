@@ -374,6 +374,18 @@ class TestRoomMemoryModel:
 # =============================================================================
 
 
+def _hitl_identity(source: str) -> dict:
+    return {
+        "schema_version": 3,
+        "interaction_id": "interaction-1",
+        "question_index": 0,
+        "question_count": 1,
+        "application_route": ("a2a_resume" if source == "agent" else "supervisor_run"),
+        "public_source": source,
+        "evidence_origin": source,
+    }
+
+
 class TestHITLRequestModel:
     """Tests for HITLRequest model."""
 
@@ -382,7 +394,7 @@ class TestHITLRequestModel:
         request = HITLRequest(
             room_id="room-123",
             user_message_id="msg-456",
-            source="supervisor",
+            **_hitl_identity("supervisor"),
             prompt="Please clarify",
         )
 
@@ -395,7 +407,7 @@ class TestHITLRequestModel:
         request = HITLRequest(
             room_id="room-123",
             user_message_id="msg-456",
-            source="supervisor",
+            **_hitl_identity("supervisor"),
             prompt="Choose an option",
             prompt_type=HITLPromptType.CHOICE,
             choices=["Option A", "Option B", "Option C"],
@@ -409,13 +421,13 @@ class TestHITLRequestModel:
         request = HITLRequest(
             room_id="room-123",
             user_message_id="msg-456",
-            source="agent",
+            **_hitl_identity("agent"),
             prompt="Need more information",
             agent_id="agent-789",
             agent_name="TestAgent",
         )
 
-        assert request.source == "agent"
+        assert request.public_source.value == "agent"
         assert request.agent_id == "agent-789"
 
     def test_hitl_request_serialization(self):
@@ -423,7 +435,7 @@ class TestHITLRequestModel:
         request = HITLRequest(
             room_id="room-123",
             user_message_id="msg-456",
-            source="supervisor",
+            **_hitl_identity("supervisor"),
             prompt="Test prompt",
         )
 

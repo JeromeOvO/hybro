@@ -15,7 +15,8 @@ export async function handleHitlRequest(
   const {
     request_id, message_id, source, prompt, prompt_type, choices,
     agent_name, agent_id, step_number, total_steps, expires_at,
-    group_id, group_total, group_index, related_message_id,
+    interaction_id, interaction_status, interaction_version, application_status,
+    question_count, question_index, related_message_id,
   } = sseMessage.data
 
   if (!request_id || !message_id) return
@@ -90,9 +91,13 @@ export async function handleHitlRequest(
     agentName: resolvedAgentName,
     agentSource: ctx.getAgentSource(agent_id ?? undefined),
     expiresAt: expires_at,
-    groupId: group_id,
-    groupTotal: group_total,
-    groupIndex: group_index,
+    interactionId: interaction_id,
+    interactionStatus: interaction_status,
+    interactionVersion: interaction_version,
+    applicationStatus: application_status,
+    groupId: interaction_id,
+    groupTotal: question_count,
+    groupIndex: question_index,
     stepNumber: step_number,
     totalSteps: total_steps,
     relatedMessageId: related_message_id,
@@ -114,7 +119,16 @@ export function handleHitlResponse(
   sseMessage: RoomSSEFrameMap['hitl_response'],
   correlation: CorrelationResult,
 ): void {
-  const { request_id, status: hitlStatus, error_message } = sseMessage.data
+  const {
+    request_id,
+    status: hitlStatus,
+    error_message,
+    interaction_id,
+    interaction_status,
+    interaction_version,
+    application_status,
+    client_request_id,
+  } = sseMessage.data
   if (!request_id) return
 
   const store = useMessageStore.getState()
@@ -136,9 +150,9 @@ export function handleHitlResponse(
   }
 
   let resolvedTaskStatus = entity.taskStatus
-  let resolvedTaskError: string | null = null
+  let resolvedTaskError: string | null = entity.taskError ?? null
   let resolvedContent = entity.content
-  let resolved = true
+  const resolved = ['responded', 'resolved', 'expired', 'canceled'].includes(hitlStatus)
   if (hitlStatus === 'expired') {
     resolvedTaskStatus = 'failed' as TaskState
     resolvedTaskError = error_message || 'Request expired'
@@ -148,8 +162,9 @@ export function handleHitlResponse(
     resolvedTaskError = error_message || 'Request canceled'
     resolvedContent = error_message || entity.content
   } else if (hitlStatus === 'error') {
-    resolved = false
-    resolvedTaskError = error_message || 'Delivery failed — you can retry'
+    resolvedTaskError = error_message || 'Hybro could not route this response'
+  } else if (hitlStatus === 'responded' || hitlStatus === 'resolved') {
+    resolvedTaskError = null
   }
 
   store.upsertMessage({
@@ -160,6 +175,11 @@ export function handleHitlResponse(
     senderName: entity.senderName,
     timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
     hitlResolved: resolved,
+    hitlInteractionId: interaction_id ?? entity.hitlInteractionId,
+    hitlInteractionStatus: interaction_status ?? entity.hitlInteractionStatus ?? hitlStatus,
+    hitlInteractionVersion: interaction_version ?? entity.hitlInteractionVersion,
+    hitlApplicationStatus: application_status ?? entity.hitlApplicationStatus ?? hitlStatus,
+    clientRequestId: client_request_id ?? entity.clientRequestId,
     taskStatus: resolvedTaskStatus,
     taskError: resolvedTaskError,
   }, 'sse')

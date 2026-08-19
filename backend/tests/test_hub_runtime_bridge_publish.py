@@ -381,19 +381,61 @@ def test_normalized_agent_response_preserves_text_part_metadata() -> None:
     ]
 
 
-def test_normalized_interactive_event_preserves_prompt_text() -> None:
+def test_normalized_interactive_event_keeps_prompt_in_private_status() -> None:
+    private_prompt = "PRIVATE_SENTINEL_relay_prompt"
     payload = normalize_hub_publish_payload(
         "task_interactive",
         "msg-1",
         {
             "task_id": "task-1",
-            "status_text": "Need approval",
+            "status_text": private_prompt,
         },
         task_id="task-1",
     )
 
     assert payload["state"] == "input-required"
-    assert payload["text"] == "Need approval"
+    assert payload["text"] == ""
+    assert payload["_a2a_status"]["message"]["parts"][0]["text"] == private_prompt
+
+
+def test_normalized_structured_relay_interactive_preserves_typed_private_status() -> (
+    None
+):
+    private_prompt = "PRIVATE_SENTINEL_structured_relay_prompt"
+    typed_metadata = {
+        "hybro.ai/a2a/interaction": {
+            "schema_version": 1,
+            "interaction_id": "interaction-1",
+            "questions": [
+                {
+                    "question_id": "question-1",
+                    "interaction_kind": "questionnaire",
+                    "prompt": "Which option?",
+                    "answer_kind": "single_choice",
+                    "choices": ["A", "B"],
+                }
+            ],
+        }
+    }
+    status = {
+        "state": "input-required",
+        "message": {
+            "role": "agent",
+            "messageId": "remote-status",
+            "parts": [{"kind": "text", "text": private_prompt}],
+            "metadata": typed_metadata,
+        },
+    }
+
+    payload = normalize_hub_publish_payload(
+        "task_interactive",
+        "msg-1",
+        {"task_id": "task-1", "context_id": "context-1", "status": status},
+        task_id="task-1",
+    )
+
+    assert payload["text"] == ""
+    assert payload["_a2a_status"] == status
 
 
 def test_normalized_processing_status_backfills_legacy_status_key() -> None:

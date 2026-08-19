@@ -5,6 +5,40 @@ from unittest.mock import MagicMock
 from langchain_core.messages import AIMessageChunk
 
 from travel_planner_agent.agent import TravelPlannerAgent
+from travel_planner_agent.interaction_metadata import (
+    HYBRO_A2A_INTERACTION_METADATA_KEY,
+    build_input_required_metadata,
+)
+
+
+def test_input_required_metadata_is_exact_typed_and_stable():
+    first = build_input_required_metadata(
+        "remote-task-1", "Where do you want to go?"
+    )
+    repeated = build_input_required_metadata(
+        "remote-task-1", "Where do you want to go?"
+    )
+    changed = build_input_required_metadata(
+        "remote-task-1", "How many days will you stay?"
+    )
+
+    assert first == repeated
+    assert first != changed
+    assert set(first) == {HYBRO_A2A_INTERACTION_METADATA_KEY}
+    spec = first[HYBRO_A2A_INTERACTION_METADATA_KEY]
+    assert set(spec) == {"schema_version", "interaction_id", "questions"}
+    assert spec["schema_version"] == 1
+    assert spec["interaction_id"].startswith("travel-planner:")
+    assert spec["questions"] == [
+        {
+            "question_id": spec["questions"][0]["question_id"],
+            "interaction_kind": "questionnaire",
+            "prompt": "Where do you want to go?",
+            "answer_kind": "text",
+            "required": True,
+        }
+    ]
+    assert spec["questions"][0]["question_id"].startswith("travel-details:")
 
 
 @pytest.mark.asyncio

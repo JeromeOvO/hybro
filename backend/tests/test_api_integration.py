@@ -38,6 +38,8 @@ def integration_app(integration_user):
     """App with auth overrides -- only mock authentication, not business logic."""
     from main import app
 
+    original_overrides = dict(app.dependency_overrides)
+
     async def _mock_auth():
         return integration_user
 
@@ -52,6 +54,7 @@ def integration_app(integration_user):
     yield app
 
     app.dependency_overrides.clear()
+    app.dependency_overrides.update(original_overrides)
 
 
 @pytest.fixture

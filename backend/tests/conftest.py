@@ -24,6 +24,7 @@ from a2a.types import (
 )
 
 from common.auth import ClerkUser
+from common.dto.hitl import HITLApplicationRoute, HITLEvidenceOrigin, HITLPublicSource
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.memory import (
@@ -382,10 +383,16 @@ def sample_room_memory(sample_room) -> RoomMemory:
 def sample_hitl_request(sample_room, sample_user_message) -> HITLRequest:
     """Create a sample HITL request."""
     return HITLRequest(
+        schema_version=3,
         request_id="test-hitl-req-001",
+        interaction_id="test-hitl-req-001",
+        question_index=0,
+        question_count=1,
         room_id=sample_room.room_id,
         user_message_id=sample_user_message.message_id,
-        source="supervisor",
+        application_route=HITLApplicationRoute.SUPERVISOR_RUN,
+        public_source=HITLPublicSource.SUPERVISOR,
+        evidence_origin=HITLEvidenceOrigin.SUPERVISOR,
         prompt="Could you please clarify what you mean?",
         prompt_type=HITLPromptType.TEXT,
         status=HITLStatus.PENDING,
@@ -434,9 +441,8 @@ def mock_hitl_service():
     mock.get_pending_requests = AsyncMock(return_value=[])
     mock.cancel_request = AsyncMock()
     mock.cancel_requests_for_message = AsyncMock()
-    mock.resolve_hitl = AsyncMock()
     mock.get_pending_hitl = AsyncMock(return_value=[])
-    mock.cancel_hitl = AsyncMock()
+    mock.cancel_hitl_interaction = AsyncMock(return_value=1)
     return mock
 
 

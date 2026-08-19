@@ -33,7 +33,17 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from execution.hitl.public_prompt import safe_agent_input_prompt
+from execution.dispatch.a2a_interaction import input_observation_from_a2a
+from execution.dispatch.agent_ingress_router import (
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+)
+from execution.hitl.delivery import (
+    HITLDeliveryDisposition,
+    HITLDeliveryError,
+    HITLDeliveryPhase,
+    HITLDeliveryResult,
+)
 from models.error import A2AServiceError
 
 logger = get_logger(__name__)
@@ -208,7 +218,7 @@ class A2ATaskTrackingService:
 
         raise A2AServiceError(f"Unexpected response kind: {result.kind}")
 
-    async def reply_to_task(
+    async def reply_to_task(  # noqa: C901
         self,
         *,
         message_id: str,
@@ -219,6 +229,7 @@ class A2ATaskTrackingService:
         push_notification_timeout: float,
         default_request_timeout: float,
         send_hitl_reply: SendHitlReplyCall,
+        outbound_message_id: str | None = None,
     ) -> dict[str, Any]:
         msg = await self._tracking_store.get_room_agent_message_by_message_id(
             message_id
@@ -253,28 +264,98 @@ class A2ATaskTrackingService:
             default_request_timeout if hitl_blocking else push_notification_timeout
         )
 
-        response = await send_hitl_reply(
-            agent_url,
-            _build_hitl_reply_message(
-                task_id=task_id,
-                context_id=context_id,
-                user_input=user_input,
-            ),
-            agent_id=msg.agent_id,
-            push_notification_config=push_config,
-            blocking=hitl_blocking,
-            timeout=hitl_timeout,
-        )
+        try:
+            response = await send_hitl_reply(
+                agent_url,
+                _build_hitl_reply_message(
+                    task_id=task_id,
+                    context_id=context_id,
+                    user_input=user_input,
+                    message_id=outbound_message_id,
+                ),
+                agent_id=msg.agent_id,
+                push_notification_config=push_config,
+                blocking=hitl_blocking,
+                timeout=hitl_timeout,
+            )
+        except Exception as exc:
+            logger.warning(
+                "hitl_reply_transport_failed",
+                extra={"message_id": message_id, "error_type": type(exc).__name__},
+            )
+            # Journal-owned delivery must preserve uncertainty. The coordinator
+            # records a definite pre-send failure or DELIVERY_UNCERTAIN and decides
+            # whether retry is safe; legacy callers retain their failed projection.
+            if outbound_message_id is not None:
+                error_name = type(exc).__name__
+                is_timeout = isinstance(exc, TimeoutError) or "Timeout" in error_name
+                is_connect = isinstance(
+                    exc, (ConnectionError, ConnectionRefusedError)
+                ) or error_name in {"ConnectError", "ConnectionRefusedError"}
+                response = getattr(exc, "response", None)
+                status_code = getattr(response, "status_code", None)
+                is_protocol_rejection = (
+                    "JSONRPC" in error_name
+                    or "Protocol" in error_name
+                    or (isinstance(status_code, int) and 400 <= status_code < 500)
+                )
+                if is_protocol_rejection:
+                    raise HITLDeliveryError(
+                        str(exc),
+                        disposition=HITLDeliveryDisposition.PERMANENT,
+                        phase=HITLDeliveryPhase.REMOTE_RESPONSE,
+                        error_code="a2a_protocol_rejection",
+                    ) from exc
+                if is_connect and not is_timeout:
+                    raise HITLDeliveryError(
+                        str(exc),
+                        disposition=HITLDeliveryDisposition.RETRYABLE,
+                        phase=HITLDeliveryPhase.PRE_SEND,
+                        error_code="connect_failed",
+                    ) from exc
+                raise HITLDeliveryError(
+                    str(exc),
+                    disposition=HITLDeliveryDisposition.DELIVERY_UNCERTAIN,
+                    phase=HITLDeliveryPhase.IN_FLIGHT,
+                    error_code="delivery_uncertain",
+                ) from exc
+            await self._persist_failed_continuation_task(
+                message_id, task_id, context_id
+            )
+            return {
+                "status": "failed",
+                "blocking": True,
+                "task_state": "failed",
+                "response_text": _PUBLIC_SAFE_STATUS_TEXT["failed"],
+                "task_id": task_id,
+                "context_id": context_id,
+                "error_code": "a2a_transport_error",
+            }
 
-        task_result = (
-            facade_result_to_model(response)
-            if response.get("kind") != "error"
-            else None
-        )
+        if response.get("kind") == "error":
+            if outbound_message_id is not None:
+                error = response.get("error") or {}
+                raise HITLDeliveryError(
+                    str(error.get("message") or "A2A protocol rejected continuation"),
+                    disposition=HITLDeliveryDisposition.PERMANENT,
+                    phase=HITLDeliveryPhase.REMOTE_RESPONSE,
+                    error_code="a2a_protocol_rejection",
+                )
+            await self._persist_failed_continuation_task(
+                message_id, task_id, context_id
+            )
+            return {
+                "status": "failed",
+                "blocking": True,
+                "task_state": "failed",
+                "response_text": _PUBLIC_SAFE_STATUS_TEXT["failed"],
+                "task_id": task_id,
+                "context_id": context_id,
+                "error_code": "a2a_protocol_error",
+            }
+
+        task_result = facade_result_to_model(response)
         task_obj = task_result if getattr(task_result, "kind", None) == "task" else None
-        raw_status_text = (
-            _extract_status_message(task_obj) if task_obj and task_obj.status else None
-        )
         response_text = _extract_reply_response_text(task_result)
         projected_response_text: str | None = None
         public_status_text: str | None = None
@@ -297,11 +378,18 @@ class A2ATaskTrackingService:
             projected_response_text = _extract_reply_response_text(
                 _task_model_for_internal_projection(projected_task_data)
             )
-            await self._tracking_store.update_task_on_message(
+            persisted = await self._tracking_store.update_task_on_message(
                 message_id,
                 projected_task_data,
                 message_text=public_status_text or projected_response_text,
             )
+            if outbound_message_id is not None and not persisted:
+                raise HITLDeliveryError(
+                    "Remote response was received but local task persistence failed",
+                    disposition=HITLDeliveryDisposition.DELIVERY_UNCERTAIN,
+                    phase=HITLDeliveryPhase.POST_SEND_PERSISTENCE,
+                    error_code="post_send_persistence_failed",
+                )
 
         logger.info(
             "hitl_reply_to_task_sent",
@@ -316,17 +404,45 @@ class A2ATaskTrackingService:
         if task_obj and task_obj.status:
             task_state = _state_value(task_obj.status.state)
 
+        error_code = None
+        interaction_spec = None
         if is_interactive_state(task_state):
-            response_text = safe_agent_input_prompt(raw_status_text)
+            observation = input_observation_from_a2a(task_obj)
+            interaction_spec = observation.interaction_spec if observation else None
+            if interaction_spec is None:
+                task_state = "failed"
+                error_code = UNSUPPORTED_INTERACTION_CODE
+                response_text = UNSUPPORTED_INTERACTION_MESSAGE
+                await self._persist_failed_continuation_task(
+                    message_id,
+                    task_obj.id if task_obj else task_id,
+                    task_obj.context_id if task_obj else context_id,
+                    error_message=UNSUPPORTED_INTERACTION_MESSAGE,
+                    error_code=UNSUPPORTED_INTERACTION_CODE,
+                )
+            else:
+                response_text = "\n\n".join(
+                    question.prompt for question in interaction_spec.questions
+                )
         elif task_obj:
             response_text = projected_response_text or public_status_text
 
-        return {
-            "status": "sent",
-            "blocking": hitl_blocking,
+        result = {
+            "status": "failed" if error_code else "sent",
+            "blocking": True if error_code else hitl_blocking,
             "task_state": task_state,
             "response_text": response_text,
         }
+        if task_obj:
+            result["task_id"] = task_obj.id
+            result["context_id"] = task_obj.context_id
+        if error_code:
+            result["error_code"] = error_code
+        if interaction_spec is not None:
+            result["_interaction_spec"] = interaction_spec.model_dump(mode="json")
+        if outbound_message_id is not None:
+            return HITLDeliveryResult(result).to_dict()
+        return result
 
     async def _resolve_reply_agent_target(
         self,
@@ -470,21 +586,32 @@ class A2ATaskTrackingService:
                 room_id=room_id,
             )
 
+        projected_data = public_persisted_task_data(task)
         if state in INTERACTIVE_STATES:
+            # Persist only state and authoritative IDs.  Raw status text and
+            # metadata remain in the private observation until ingress routing.
+            observation = input_observation_from_a2a(task)
+            await self._tracking_store.update_task_on_message(
+                message_id,
+                projected_data,
+            )
             return {
                 "type": "task",
                 "message_id": message_id,
                 "task_id": task.id,
+                "context_id": task.context_id,
                 "status": _state_value(state),
                 "requires_input": state == TaskState.input_required,
                 "requires_auth": state == TaskState.auth_required,
-                "message": _extract_status_message(task),
+                "_input_observation": observation,
             }
 
+        await self._tracking_store.update_task_on_message(message_id, projected_data)
         return {
             "type": "task",
             "message_id": message_id,
             "task_id": task.id,
+            "context_id": task.context_id,
             "status": _state_value(state),
             "agent_name": agent_name,
         }
@@ -547,6 +674,34 @@ class A2ATaskTrackingService:
                 resp["error"] = f"Task {_state_value(state)}"
         return resp
 
+    async def _persist_failed_continuation_task(
+        self,
+        message_id: str,
+        task_id: str,
+        context_id: str,
+        *,
+        error_message: str = _PUBLIC_SAFE_STATUS_TEXT["failed"],
+        error_code: str | None = None,
+    ) -> None:
+        failed_task = Task(
+            id=task_id,
+            context_id=context_id,
+            status=TaskStatus(
+                state=TaskState.failed,
+                message=Message(
+                    role=Role.AGENT,
+                    parts=[Part(root=TextPart(text=error_message))],
+                    message_id=str(uuid4()),
+                ),
+            ),
+            metadata=({"error_code": error_code} if error_code else None),
+        )
+        await self._tracking_store.update_task_on_message(
+            message_id,
+            public_persisted_task_data(failed_task),
+            message_text=error_message,
+        )
+
     async def _persist_failed_task(
         self,
         message_id: str,
@@ -608,7 +763,8 @@ def _is_trusted_local_hitl_request(
     if (
         request.get("request_id") != request_id
         or request.get("room_id") != room_id
-        or request.get("source") != "agent"
+        or request.get("public_source") != "agent"
+        or request.get("application_route") != "a2a_resume"
     ):
         return False
     projected_message_id = request.get("display_message_id") or request.get(
@@ -637,13 +793,14 @@ def _trusted_metadata_from_hitl_request(request: dict[str, Any]) -> dict[str, An
             request.get("prompt_type"), "value", request.get("prompt_type")
         ),
     }
+    question_count = int(request.get("question_count") or 1)
     optional_fields = {
         "hitl_choices": request.get("choices"),
         "hitl_a2a_task_id": request.get("a2a_task_id"),
         "hitl_a2a_context_id": request.get("a2a_context_id"),
-        "hitl_group_id": request.get("group_id"),
-        "hitl_group_total": request.get("group_total"),
-        "hitl_group_index": request.get("group_index"),
+        "hitl_interaction_id": request.get("interaction_id"),
+        "hitl_question_count": question_count,
+        "hitl_question_index": int(request.get("question_index") or 0),
         "user_answer": request.get("user_input"),
     }
     trusted.update(
@@ -717,15 +874,15 @@ def _build_hitl_reply_message(
     task_id: str,
     context_id: str,
     user_input: str,
+    message_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": "message",
         "role": "user",
         "parts": [{"kind": "text", "text": user_input}],
-        "messageId": str(uuid4()),
+        "messageId": message_id or str(uuid4()),
         "taskId": task_id,
         "contextId": context_id,
-        "referenceTaskIds": [task_id],
     }
 
 

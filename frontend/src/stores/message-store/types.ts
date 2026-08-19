@@ -88,6 +88,10 @@ export interface MessageEntity {
   hitlChoices?: string[] | null
   hitlExpiresAt?: string
   hitlResolved?: boolean
+  hitlInteractionId?: string
+  hitlInteractionStatus?: string
+  hitlInteractionVersion?: number
+  hitlApplicationStatus?: string
   hitlGroupId?: string | null
   hitlGroupTotal?: number | null
   hitlGroupIndex?: number | null
@@ -166,6 +170,10 @@ export interface IncomingMessage {
   hitlChoices?: string[] | null
   hitlExpiresAt?: string
   hitlResolved?: boolean
+  hitlInteractionId?: string
+  hitlInteractionStatus?: string
+  hitlInteractionVersion?: number
+  hitlApplicationStatus?: string
   hitlGroupId?: string | null
   hitlGroupTotal?: number | null
   hitlGroupIndex?: number | null

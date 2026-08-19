@@ -1149,7 +1149,7 @@ class TestStaleTaskCheckerSemaphore:
             error="failed",
         )
 
-        cancel.assert_awaited_once_with("user-msg-1")
+        cancel.assert_awaited_once_with("user-msg-1", failure_reason="failed")
 
 
 # =============================================================================

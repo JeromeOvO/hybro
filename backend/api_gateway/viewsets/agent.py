@@ -67,7 +67,7 @@ class AgentViewSet(viewset.ViewSet):
             if isinstance(agent_card, BaseModel):
                 agent_card = agent_card.model_dump(mode="json")
                 value["agent_card"] = agent_card
-            if isinstance(agent_card, dict) and "url" in agent_card:
+            if isinstance(agent_card, dict) and "url" in agent_card and public_url:
                 agent_card["url"] = public_url
         return value
 

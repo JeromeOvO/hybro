@@ -34,7 +34,6 @@ from common.auth import ClerkUser
 from common.dto import ExecutionAck
 from common.dto.agent import AgentInfo
 from models.agent import Agent, AgentStatus
-from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.response import (
     AgentCenterResponse,
     RoomCenterRoomMessageResponse,
@@ -409,100 +408,6 @@ class TestAgentLifecycleFlow:
 
 # =============================================================================
 # HITL Flow Tests
-# =============================================================================
-
-
-class TestHITLFlow:
-    """Flow tests for HITL request_input -> get_pending -> cancel."""
-
-    @pytest.mark.asyncio
-    async def test_complete_hitl_flow(self):
-        """request_input -> get_pending_requests -> cancel_request."""
-        from execution.hitl.factory import create_hitl_service
-
-        room_id = "hitl-flow-room"
-        msg_id = "hitl-flow-msg"
-        req_id = "hitl-flow-req"
-
-        mock_req = HITLRequest(
-            request_id=req_id,
-            room_id=room_id,
-            user_message_id=msg_id,
-            source="supervisor",
-            prompt="Clarify please",
-            prompt_type=HITLPromptType.TEXT,
-            status=HITLStatus.PENDING,
-        )
-
-        mock_db = MagicMock()
-        mock_db.create_hitl_request = AsyncMock(return_value=True)
-        mock_db.count_hitl_requests_for_message = AsyncMock(return_value=0)
-        mock_db.get_pending_hitl_requests = AsyncMock(
-            return_value=[mock_req.model_dump(mode="json")]
-        )
-        mock_db.get_hitl_request = AsyncMock(
-            return_value=mock_req.model_dump(mode="json")
-        )
-        mock_db.cas_update_hitl_request = AsyncMock(return_value=True)
-        mock_db.update_hitl_request = AsyncMock(return_value=True)
-
-        mock_delivery = MagicMock()
-        mock_delivery.emit = AsyncMock()
-
-        svc = create_hitl_service(
-            persistence=mock_db,
-            delivery=mock_delivery,
-        )
-
-        # Step 1: request_input
-        created = await svc.request_input(
-            room_id=room_id,
-            user_message_id=msg_id,
-            source="supervisor",
-            prompt="Clarify please",
-        )
-        assert created is not None
-        assert created.status == HITLStatus.PENDING
-        mock_delivery.emit.assert_awaited_once()
-
-        # Step 2: get_pending_requests
-        pending = await svc.get_pending_requests(room_id)
-        assert len(pending) == 1
-        assert pending[0].request_id == req_id
-
-        # Step 3: cancel_request
-        await svc.cancel_request(req_id, room_id=room_id)
-        mock_db.cas_update_hitl_request.assert_awaited_once_with(
-            req_id,
-            expected_status=HITLStatus.PENDING.value,
-            status=HITLStatus.CANCELED.value,
-            cancellation_reconciled=False,
-        )
-
-    @pytest.mark.asyncio
-    async def test_hitl_max_rounds_enforcement(self):
-        """Should return None when max rounds exceeded."""
-        from execution.hitl.factory import create_hitl_service
-        from execution.hitl.service import MAX_HITL_ROUNDS
-
-        mock_db = MagicMock()
-        mock_db.count_hitl_requests_for_message = AsyncMock(
-            return_value=MAX_HITL_ROUNDS,
-        )
-        svc = create_hitl_service(persistence=mock_db)
-
-        result = await svc.request_input(
-            room_id="r",
-            user_message_id="m",
-            source="supervisor",
-            prompt="x",
-            continuation_message_id="c",
-        )
-        assert result is None
-
-
-# =============================================================================
-# A2A Task Flow Tests
 # =============================================================================
 
 

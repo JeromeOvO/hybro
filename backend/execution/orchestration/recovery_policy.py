@@ -103,7 +103,10 @@ def _ask_user_action_for_validated_blockers(
         reasoning=reasoning,
         questions=[
             PlannerQuestion(
-                prompt="\n".join(blocker.description for blocker in sorted_blockers),
+                prompt="\n".join(
+                    _question_prompt_for_blocker(state, blocker)
+                    for blocker in sorted_blockers
+                ),
                 reason="blocker",
                 blocker_keys=blocker_keys,
                 required_obligation_keys=required_obligation_keys,
@@ -111,6 +114,26 @@ def _ask_user_action_for_validated_blockers(
             )
         ],
     )
+
+
+def _question_prompt_for_blocker(
+    state: OrchestrationRunState,
+    blocker: BlockerRecord,
+) -> str:
+    """Prefer the agent's actual private question text for input-required
+    blockers so the generated questionnaire reads the real question."""
+    if blocker.key.endswith(":agent_input_required"):
+        evidence_refs = set(blocker.evidence_refs)
+        for observation in state.private_agent_input_observations:
+            raw_prompt = getattr(observation, "raw_prompt", None)
+            if not isinstance(raw_prompt, str) or not raw_prompt.strip():
+                continue
+            if (
+                observation.agent_message_id in evidence_refs
+                or f"{observation.agent_message_id}:awaiting_input" in evidence_refs
+            ):
+                return raw_prompt.strip()
+    return blocker.description
 
 
 def _has_completable_agent_progress(state: OrchestrationRunState) -> bool:

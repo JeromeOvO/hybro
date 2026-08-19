@@ -343,13 +343,35 @@
         }
       }
     },
+    "/api/v1/local-agents/discovery": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Discover Local Agents",
+        "description": "Discover A2A agents running on the Docker host.",
+        "operationId": "discover_local_agents_api_v1_local_agents_discovery_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalAgentDiscoveryResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/registerAgent": {
       "post": {
         "tags": [
           "agent"
         ],
         "summary": "Register Agent",
-        "description": "Register a new agent - PROTECTED (requires authentication)",
+        "description": "Register a new agent - PROTECTED (Clerk user or default-agent registrar service token)",
         "operationId": "register_agent_api_v1_agent_registerAgent_post",
         "responses": {
           "200": {
@@ -826,7 +848,7 @@
           "room"
         ],
         "summary": "Inquiry Active Runs",
-        "description": "List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting.",
+        "description": "List non-terminal orchestration runs for a room \u2014 same auth as inquiryRoomSetting.",
         "operationId": "inquiry_active_runs_api_v1_roomCenter_inquiryActiveRuns_post",
         "responses": {
           "200": {
@@ -853,6 +875,156 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/history": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Get Room History",
+        "operationId": "get_room_history_api_v1_roomCenter_history_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/history/{room_id}": {
+      "patch": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Update Room History Item",
+        "operationId": "update_room_history_item_api_v1_roomCenter_history__room_id__patch",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomHistoryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomHistoryItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Delete Room History Item",
+        "operationId": "delete_room_history_item_api_v1_roomCenter_history__room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/roomCenter/history/pinned-order": {
+      "put": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Reorder Pinned Rooms",
+        "operationId": "reorder_pinned_rooms_api_v1_roomCenter_history_pinned_order_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PinnedRoomOrderUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -981,15 +1153,15 @@
         }
       }
     },
-    "/api/v1/rooms/{room_id}/hitl/respond": {
+    "/api/v1/rooms/{room_id}/hitl/respond-batch": {
       "post": {
         "tags": [
           "hitl",
           "hitl"
         ],
-        "summary": "Respond To Hitl Request",
-        "description": "User responds to an HITL prompt.",
-        "operationId": "respond_to_hitl_request_api_v1_rooms__room_id__hitl_respond_post",
+        "summary": "Respond To Hitl Interaction",
+        "description": "Atomically submit every required answer for one interaction.",
+        "operationId": "respond_to_hitl_interaction_api_v1_rooms__room_id__hitl_respond_batch_post",
         "parameters": [
           {
             "name": "room_id",
@@ -1006,7 +1178,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/HITLResponseRequest"
+                "$ref": "#/components/schemas/HITLBatchResponseRequest"
               }
             }
           }
@@ -1075,15 +1247,15 @@
         }
       }
     },
-    "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel": {
+    "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel": {
       "post": {
         "tags": [
           "hitl",
           "hitl"
         ],
-        "summary": "Cancel Hitl Request",
-        "description": "Cancel a pending HITL request.",
-        "operationId": "cancel_hitl_request_api_v1_rooms__room_id__hitl__request_id__cancel_post",
+        "summary": "Cancel Hitl Interaction",
+        "description": "Cancel one complete interaction with optimistic version fencing.",
+        "operationId": "cancel_hitl_interaction_api_v1_rooms__room_id__hitl_interactions__interaction_id__cancel_post",
         "parameters": [
           {
             "name": "room_id",
@@ -1095,15 +1267,25 @@
             }
           },
           {
-            "name": "request_id",
+            "name": "interaction_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Request Id"
+              "title": "Interaction Id"
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HITLCancelCommand"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2990,6 +3172,15 @@
         ],
         "title": "DataPart"
       },
+      "DiscoveryTrigger": {
+        "type": "string",
+        "enum": [
+          "startup",
+          "scheduled",
+          "manual"
+        ],
+        "title": "DiscoveryTrigger"
+      },
       "FileContent": {
         "properties": {
           "name": {
@@ -3040,40 +3231,12 @@
         "type": "object",
         "title": "FileContent"
       },
-      "FilePart": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "file",
-            "title": "Kind",
-            "default": "file"
-          },
-          "file": {
-            "$ref": "#/components/schemas/FileContent"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          }
-        },
-        "type": "object",
-        "required": [
-          "file"
-        ],
-        "title": "FilePart"
-      },
-      "HITLResponseRequest": {
+      "HITLBatchAnswer": {
         "properties": {
           "request_id": {
             "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
             "title": "Request Id"
           },
           "user_input": {
@@ -3088,8 +3251,88 @@
           "request_id",
           "user_input"
         ],
-        "title": "HITLResponseRequest",
-        "description": "REST request body for POST /rooms/{room_id}/hitl/respond."
+        "title": "HITLBatchAnswer",
+        "description": "One answer in an atomic questionnaire submission."
+      },
+      "HITLBatchResponseRequest": {
+        "properties": {
+          "interaction_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Interaction Id"
+          },
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/HITLBatchAnswer"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Answers"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "interaction_id",
+          "answers"
+        ],
+        "title": "HITLBatchResponseRequest",
+        "description": "Submit every required answer for one durable HITL interaction."
+      },
+      "HITLCancelCommand": {
+        "properties": {
+          "interaction_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Interaction Id"
+          },
+          "expected_interaction_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Interaction Version"
+          },
+          "client_request_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Client Request Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "interaction_id",
+          "expected_interaction_version",
+          "client_request_id"
+        ],
+        "title": "HITLCancelCommand"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3299,6 +3542,53 @@
         ],
         "title": "HubStatusResponse"
       },
+      "LocalAgentDiscoveryResult": {
+        "properties": {
+          "trigger": {
+            "$ref": "#/components/schemas/DiscoveryTrigger"
+          },
+          "open_ports": {
+            "type": "integer",
+            "title": "Open Ports",
+            "default": 0
+          },
+          "agents_found": {
+            "type": "integer",
+            "title": "Agents Found",
+            "default": 0
+          },
+          "agents_added": {
+            "type": "integer",
+            "title": "Agents Added",
+            "default": 0
+          },
+          "agents_reactivated": {
+            "type": "integer",
+            "title": "Agents Reactivated",
+            "default": 0
+          },
+          "agents_deactivated": {
+            "type": "integer",
+            "title": "Agents Deactivated",
+            "default": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 0
+          },
+          "reused_running_discovery": {
+            "type": "boolean",
+            "title": "Reused Running Discovery",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "trigger"
+        ],
+        "title": "LocalAgentDiscoveryResult"
+      },
       "Message": {
         "properties": {
           "role": {
@@ -3483,7 +3773,7 @@
             "$ref": "#/components/schemas/TextPart"
           },
           {
-            "$ref": "#/components/schemas/FilePart"
+            "$ref": "#/components/schemas/RoomArtifactPart"
           },
           {
             "$ref": "#/components/schemas/DataPart"
@@ -3495,10 +3785,27 @@
           "propertyName": "kind",
           "mapping": {
             "data": "#/components/schemas/DataPart",
-            "file": "#/components/schemas/FilePart",
+            "file": "#/components/schemas/RoomArtifactPart",
             "text": "#/components/schemas/TextPart"
           }
         }
+      },
+      "PinnedRoomOrderUpdate": {
+        "properties": {
+          "room_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Room Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_ids"
+        ],
+        "title": "PinnedRoomOrderUpdate"
       },
       "QuoteSourceKind": {
         "type": "string",
@@ -3541,6 +3848,41 @@
           "user_id"
         ],
         "title": "RegisterHubResponse"
+      },
+      "RoomArtifactPart": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "file",
+            "title": "Kind",
+            "default": "file"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileContent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "title": "RoomArtifactPart",
+        "description": "Application file projection; wire content is optional after materialization."
       },
       "RoomCenterUserMessageResponse": {
         "properties": {
@@ -3691,6 +4033,97 @@
           "success"
         ],
         "title": "RoomCenterUserMessageResponse"
+      },
+      "RoomHistoryItem": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Activity At"
+          },
+          "is_pinned": {
+            "type": "boolean",
+            "title": "Is Pinned",
+            "default": false
+          },
+          "pin_order": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pin Order"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "idle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "title",
+          "last_activity_at"
+        ],
+        "title": "RoomHistoryItem"
+      },
+      "RoomHistoryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoomHistoryItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "RoomHistoryResponse"
+      },
+      "RoomHistoryUpdate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "is_pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Pinned"
+          }
+        },
+        "type": "object",
+        "title": "RoomHistoryUpdate"
       },
       "RoomUserMessage": {
         "properties": {

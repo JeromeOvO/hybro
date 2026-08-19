@@ -739,3 +739,13 @@ def resolve_terminal_sse_content(
     if _state_value(state) == CommonTaskState.COMPLETED.value and stored:
         return stored
     return stored or extracted
+
+
+def is_authoritative_a2a_id(value: Any) -> bool:
+    """True when a task/context identifier is a remote authority, not a
+    provisional local dispatch placeholder like ``pending-*``."""
+    return bool(
+        isinstance(value, str)
+        and value.strip()
+        and not value.startswith(("pending-", "relay-pending-"))
+    )

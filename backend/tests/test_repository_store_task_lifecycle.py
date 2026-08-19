@@ -3,11 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from common.a2a_constants import TERMINAL_STATES
 from dal.runtime_store import RuntimeRepositoryStore
+from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
 
 
 class FakeMongo:
@@ -112,6 +114,57 @@ def _store(
         room_repository=object(),
         message_repository=object(),
         agent_repository=object(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_message_store_persists_task_metadata_on_task_state_update():
+    repository = SimpleNamespace(
+        update_agent_message_if_not_terminal=AsyncMock(return_value=True)
+    )
+    store = MessageRuntimeStorePart(
+        room_agent_messages=object(),
+        room_user_messages=object(),
+        message_repository=repository,
+    )
+
+    updated, _ = await store.update_task_state_on_message(
+        "message-1",
+        "completed",
+        message_text="done",
+        artifacts=[],
+        task_metadata={"end_turn": True},
+    )
+
+    assert updated is True
+    updates = repository.update_agent_message_if_not_terminal.await_args.args[1]
+    assert updates["message_content.message_task.metadata"] == {"end_turn": True}
+
+
+@pytest.mark.asyncio
+async def test_repository_store_forwards_task_metadata_on_task_state_update():
+    delegate = SimpleNamespace(
+        update_task_state_on_message=AsyncMock(return_value=(True, "done"))
+    )
+    store = object.__new__(RuntimeRepositoryStore)
+    store._message_part = delegate
+
+    result = await store.update_task_state_on_message(
+        "message-1",
+        "completed",
+        message_text="done",
+        task_metadata={"end_turn": True},
+    )
+
+    assert result == (True, "done")
+    delegate.update_task_state_on_message.assert_awaited_once_with(
+        "message-1",
+        "completed",
+        message_text="done",
+        artifacts=None,
+        task_id=None,
+        context_id=None,
+        task_metadata={"end_turn": True},
     )
 
 
@@ -346,21 +399,14 @@ class TestRepositoryStoreHITL:
 
         assert pending == [{"request_id": "h1"}]
         assert hitl_requests.insert_one_calls == [{"request_id": "h1"}]
-        assert hitl_requests.find_calls == [
-            (
-                {
-                    "user_message_id": "u1",
-                    "$or": [
-                        {"status": "pending"},
-                        {
-                            "status": "canceled",
-                            "cancellation_reconciled": {"$ne": True},
-                        },
-                    ],
-                },
-                {"limit": 50},
-            )
-        ]
+        assert len(hitl_requests.find_calls) == 1
+        query, options = hitl_requests.find_calls[0]
+        assert query["$and"][0] == {
+            "user_message_id": "u1",
+            "status": "pending",
+        }
+        assert {"expires_at": None} in query["$and"][1]["$or"]
+        assert options == {"exhaust": True}
 
     @pytest.mark.asyncio
     async def test_persists_and_clears_hitl_request_id_on_display_message(self):
@@ -422,39 +468,6 @@ class TestRepositoryStoreHITL:
         )
 
     @pytest.mark.asyncio
-    async def test_group_routing_claim_release_and_count_shapes(self):
-        hitl_requests = RecordingCollection([_result(1), _result(1), 2])
-        store = _store(hitl_collection=hitl_requests)
-
-        assert await store.claim_hitl_group_routing("group-1", "claim-1")
-        assert await store.release_hitl_group_routing("group-1", "claim-1")
-        count = await store.count_pending_in_hitl_group("group-1")
-
-        assert count == 2
-        assert hitl_requests.update_one_calls[0][0] == {
-            "group_id": "group-1",
-            "group_index": 0,
-            "group_routing_claim_id": {"$exists": False},
-        }
-        assert (
-            hitl_requests.update_one_calls[0][1]["$set"]["group_routing_claim_id"]
-            == "claim-1"
-        )
-        assert hitl_requests.update_one_calls[1] == (
-            {"group_id": "group-1", "group_routing_claim_id": "claim-1"},
-            {
-                "$unset": {
-                    "group_routing_claim_id": "",
-                    "group_routing_claimed_at": "",
-                }
-            },
-            {},
-        )
-        assert hitl_requests.count_calls == [
-            {"group_id": "group-1", "status": {"$in": ["pending", "processing"]}}
-        ]
-
-    @pytest.mark.asyncio
     async def test_stale_processing_iterator_and_indexes_use_hitl_collection(self):
         docs = [{"request_id": "h1"}]
         hitl_requests = RecordingCollection([docs])
@@ -479,13 +492,8 @@ class TestRepositoryStoreHITL:
             ([("expires_at", 1), ("status", 1)], {}),
             ([("user_message_id", 1), ("status", 1)], {}),
             (
-                [
-                    ("group_id", 1),
-                    ("status", 1),
-                    ("group_index", 1),
-                    ("request_id", 1),
-                ],
-                {},
+                [("interaction_id", 1), ("question_index", 1)],
+                {"unique": True},
             ),
             ([("continuation_message_id", 1)], {}),
             (
@@ -495,7 +503,7 @@ class TestRepositoryStoreHITL:
                     "name": "uq_pending_hitl_display_message",
                     "partialFilterExpression": {
                         "status": "pending",
-                        "source": "agent",
+                        "public_source": "agent",
                         "display_message_id": {"$type": "string"},
                     },
                 },
@@ -507,7 +515,7 @@ class TestRepositoryStoreHITL:
                     "name": "uq_pending_hitl_continuation_message",
                     "partialFilterExpression": {
                         "status": "pending",
-                        "source": "agent",
+                        "public_source": "agent",
                         "continuation_message_id": {"$type": "string"},
                     },
                 },

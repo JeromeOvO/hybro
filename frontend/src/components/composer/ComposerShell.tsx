@@ -4,7 +4,7 @@ import React from 'react'
 import { useMessageStore } from '@/stores/message-store'
 import { selectComposerState } from '@/lib/selectors/select-composer-state'
 import type { PendingHitl, ComposerState } from '@/lib/selectors/conversation-types'
-import { HitlResponseBar, type HitlPromptView } from './HitlResponseBar'
+import { HitlResponseBar, type HitlBatchAnswer, type HitlPromptView } from './HitlResponseBar'
 import {
   RoomChatInput,
   type RoomChatInputAgent,
@@ -17,15 +17,16 @@ import type { ChatMode } from '@/lib/types/chat-mode'
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
     hitlId: hitl.hitlId,
-    turnId: hitl.messageId,
-    ts: Date.now(),
     source: hitl.source,
     agentName: hitl.agentName,
     prompt: hitl.question,
     promptType: hitl.promptType,
     choices: hitl.choices,
-    groupId: hitl.groupId,
-    groupTotal: hitl.groupTotal,
+    interactionId: hitl.interactionId,
+    lifecycleState: hitl.lifecycleState,
+    errorMessage: hitl.errorMessage,
+    clientRequestId: hitl.clientRequestId,
+    answer: hitl.answer,
     groupIndex: hitl.groupIndex,
   }
 }
@@ -34,7 +35,9 @@ export interface ComposerShellAdapter {
   roomId: string
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
-  onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
+  onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
+  onCancelHitl: (requestId: string) => Promise<void>
+  onRefreshHitl: () => Promise<void>
   onChatModeChange?: (mode: ChatMode) => void
   isSending: boolean
   isProcessing: boolean
@@ -65,6 +68,32 @@ interface ComposerShellProps {
   adapter: ComposerShellAdapter
 }
 
+function samePendingHitl(left: PendingHitl, right: PendingHitl | undefined): boolean {
+  if (!right) return false
+  return (
+    left.hitlId === right.hitlId
+    && left.source === right.source
+    && left.agentName === right.agentName
+    && left.question === right.question
+    && left.promptType === right.promptType
+    && left.messageId === right.messageId
+    && left.interactionId === right.interactionId
+    && left.interactionStatus === right.interactionStatus
+    && left.applicationStatus === right.applicationStatus
+    && left.lifecycleState === right.lifecycleState
+    && left.errorMessage === right.errorMessage
+    && left.expiresAt === right.expiresAt
+    && left.clientRequestId === right.clientRequestId
+    && left.groupId === right.groupId
+    && left.groupTotal === right.groupTotal
+    && left.groupIndex === right.groupIndex
+    && left.isAnswered === right.isAnswered
+    && left.answer === right.answer
+    && left.choices?.length === right.choices?.length
+    && (left.choices ?? []).every((choice, index) => choice === right.choices?.[index])
+  )
+}
+
 function useComposerState(roomId: string): ComposerState {
   const prev = React.useRef<ComposerState>({ mode: 'normal', isProcessing: false, pendingHitls: [] })
   return useMessageStore(s => {
@@ -73,7 +102,7 @@ function useComposerState(roomId: string): ComposerState {
       prev.current.mode === next.mode &&
       prev.current.isProcessing === next.isProcessing &&
       prev.current.pendingHitls.length === next.pendingHitls.length &&
-      prev.current.pendingHitls.every((h, i) => h.hitlId === next.pendingHitls[i]?.hitlId && h.isAnswered === next.pendingHitls[i]?.isAnswered)
+      prev.current.pendingHitls.every((hitl, index) => samePendingHitl(hitl, next.pendingHitls[index]))
     ) {
       return prev.current
     }
@@ -87,19 +116,35 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   const isHitlMode = composerState.mode === 'hitl_responding'
   const isProcessing = composerState.isProcessing || adapter.isProcessing
 
-  const hitlBar = composerState.pendingHitls.length > 0 ? (
-    <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
-      <HitlResponseBar
-        hitls={composerState.pendingHitls.map(toHitlPromptView)}
-        onSubmit={adapter.onRespondToHitl}
-      />
-    </div>
-  ) : undefined
+  const firstHitl = composerState.pendingHitls[0]
+  const activeInteractionId = firstHitl?.interactionId
+  const activeHitls = activeInteractionId
+    ? composerState.pendingHitls.filter(hitl => hitl.interactionId === activeInteractionId)
+    : []
+
+  if (isHitlMode && activeHitls.length > 0) {
+    const queuedCount = composerState.pendingHitls.length - activeHitls.length
+    return (
+      <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
+        {queuedCount > 0 ? (
+          <div className="conversation-hitl-queue-note" data-testid="hitl-queue-note">
+            {queuedCount === 1
+              ? '1 more input request is queued after this one.'
+              : `${queuedCount} more input requests are queued after this one.`}
+          </div>
+        ) : null}
+        <HitlResponseBar
+          hitls={activeHitls.map(toHitlPromptView)}
+          onSubmit={adapter.onRespondToHitlBatch}
+          onCancel={adapter.onCancelHitl}
+          onRefresh={adapter.onRefreshHitl}
+        />
+      </div>
+    )
+  }
 
   return (
-    <>
-      {hitlBar}
-      <RoomChatInput
+    <RoomChatInput
         onSubmit={adapter.onSendMessage}
         disableSend={adapter.isSending || isProcessing || isHitlMode}
         sending={adapter.isSending}
@@ -125,6 +170,5 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
         externalValue={adapter.externalValue}
         onExternalValueConsumed={adapter.onExternalValueConsumed}
       />
-    </>
   )
 }

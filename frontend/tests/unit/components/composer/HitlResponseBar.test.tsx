@@ -1,44 +1,162 @@
-import { afterEach, describe, it, expect, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { HitlResponseBar, type HitlPromptView } from '@/components/composer/HitlResponseBar'
 
 const baseHitl: HitlPromptView = {
   hitlId: 'hitl-1',
-  turnId: 'turn-1',
-  ts: 1,
+  interactionId: 'interaction-1',
   source: 'agent',
   agentName: 'HITL Mock Agent',
   prompt: 'Human approval required.',
-  promptType: 'confirmation',
+  promptType: 'approval',
+  lifecycleState: 'open',
+}
+
+function renderBar(hitls: HitlPromptView[], onSubmit = vi.fn().mockResolvedValue(undefined)) {
+  return render(
+    <HitlResponseBar
+      hitls={hitls}
+      onSubmit={onSubmit}
+      onCancel={vi.fn().mockResolvedValue(undefined)}
+      onRefresh={vi.fn().mockResolvedValue(undefined)}
+    />,
+  )
 }
 
 describe('HitlResponseBar', () => {
-  afterEach(() => {
-    cleanup()
+  afterEach(cleanup)
+
+  it('uses one-question focus, preserves drafts by request id, and reviews a batch', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([
+      { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
+      { ...baseHitl, hitlId: 'hitl-2', prompt: 'Renewal date?', promptType: 'date', groupIndex: 1 },
+    ], onSubmit)
+
+    expect(screen.getByText('Question 1 of 2')).toBeDefined()
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Acme' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByText('Renewal date?')).toBeDefined()
+
+    fireEvent.change(document.querySelector('input[type="date"]') as HTMLInputElement, { target: { value: '2027-01-02' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value).toBe('Acme')
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
+
+    expect(screen.getByText('Review before sending')).toBeDefined()
+    expect(screen.getByText('Acme')).toBeDefined()
+    expect(screen.getByText('2027-01-02')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [
+        { requestId: 'hitl-1', answer: 'Acme' },
+        { requestId: 'hitl-2', answer: '2027-01-02' },
+      ],
+      undefined,
+    ))
+    expect(await screen.findByText('Applying your answers')).toBeDefined()
   })
 
-  it('renders confirmation actions as a vertical stack', () => {
-    render(<HitlResponseBar hitls={[baseHitl]} onSubmit={vi.fn()} />)
-
-    const actions = screen.getByTestId('hitl-actions')
-    const approve = screen.getByRole('button', { name: 'Approve' })
-    const reject = screen.getByRole('button', { name: 'Reject' })
-
-    expect(actions.className).toContain('conversation-hitl-actions')
-    expect(approve.className).toContain('conversation-hitl-option-button')
-    expect(reject.className).toContain('conversation-hitl-option-button')
-  })
-
-  it('renders choice actions with the same vertical option button style', () => {
-    render(
+  it('renders accessible single and multi-choice controls', () => {
+    const { rerender } = render(
       <HitlResponseBar
-        hitls={[{ ...baseHitl, promptType: 'choice', choices: ['Use latest data', 'Use cached data'] }]}
+        hitls={[{ ...baseHitl, promptType: 'single_choice', choices: ['Use latest data', 'Use cached data'] }]}
+        onSubmit={vi.fn()}
+      />,
+    )
+    const latest = screen.getByRole('radio', { name: 'Use latest data' })
+    fireEvent.click(latest)
+    expect((latest as HTMLInputElement).checked).toBe(true)
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'multi_choice', choices: ['Email', 'Phone'] }]}
+        onSubmit={vi.fn()}
+      />,
+    )
+    const email = screen.getByRole('checkbox', { name: 'Email' })
+    fireEvent.click(email)
+    expect((email as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('never asks for authentication secrets in free text', () => {
+    renderBar([{ ...baseHitl, prompt: 'Sign in to the carrier', promptType: 'authentication' }])
+
+    expect(screen.getByText(/Never paste passwords/)).toBeDefined()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.getByRole('radio', { name: 'Authentication complete' })).toBeDefined()
+  })
+
+  it('renders generic prompts and delivery uncertainty as recovery states', () => {
+    const { rerender } = renderBar([{
+      ...baseHitl,
+      prompt: 'The agent needs additional information.',
+      promptType: 'text',
+    }])
+    expect(screen.getByText('This input request cannot be answered')).toBeDefined()
+    expect(screen.queryByPlaceholderText('Type your answer…')).toBeNull()
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, lifecycleState: 'delivery_uncertain' }]}
+        onSubmit={vi.fn()}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+    expect(screen.getByText('Checking whether your answers were received')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Check status' })).toBeDefined()
+  })
+})
+
+
+describe('HitlResponseBar server lifecycle reconciliation', () => {
+  it('leaves applying when the authoritative lifecycle reports failed', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'open' }]}
+        onSubmit={onSubmit}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Ok' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    expect(await screen.findByText('Applying your answers')).toBeDefined()
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'expired' }]}
+        onSubmit={onSubmit}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(await screen.findByText('Input request expired')).toBeDefined()
+    expect(screen.queryByText('Applying your answers')).toBeNull()
+  })
+
+  it('clears stale local recovery state when the server returns to open', async () => {
+    const { rerender } = render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'routing_failed' }]}
+        onSubmit={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('This input request cannot be answered')).toBeDefined()
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'open' }]}
         onSubmit={vi.fn()}
       />,
     )
 
-    expect(screen.getByTestId('hitl-actions').className).toContain('conversation-hitl-actions')
-    expect(screen.getByRole('button', { name: 'Use latest data' }).className).toContain('conversation-hitl-option-button')
-    expect(screen.getByRole('button', { name: 'Use cached data' }).className).toContain('conversation-hitl-option-button')
+    expect(await screen.findByPlaceholderText('Type your answer…')).toBeDefined()
   })
 })

@@ -8,6 +8,7 @@ Mid-stream content stays in memory until terminal finalization.
 """
 
 import asyncio
+import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -55,10 +56,14 @@ from common.utils.artifact_delivery import (
 )
 from common.utils.cancellation import CancellationError, CancellationToken
 from common.utils.logger import get_logger
-from execution.dispatch.agent_event import AgentEvent
+from execution.dispatch.a2a_interaction import input_observation_from_a2a
+from execution.dispatch.agent_event import AgentEvent, AgentInputObservation
+from execution.dispatch.agent_ingress_router import SUPERVISOR_BLOCKER_SUMMARY
 from execution.dispatch.dispatch_middleware import DispatchContext
 from execution.dispatch.transports.base import AgentTransport
-from execution.hitl.public_prompt import safe_agent_input_prompt
+from execution.hitl.public_prompt import (
+    concrete_agent_input_prompt,
+)
 from execution.state.task_state_manager import (
     TaskStateManager,
     get_task,
@@ -226,6 +231,12 @@ class DirectTransport(AgentTransport):
             and task_metadata.get("output_failure_code") == OUTPUT_DELIVERY_FAILURE_CODE
         )
 
+        # Interactive ingress is routed once authoritative private evidence is
+        # available and is projected only by QueueExecutor/ResponseHandler after
+        # that decision.  Never emit this early terminal-style callback.
+        if kind == "interactive":
+            return
+
         await self.response_handler.handle(
             AgentEvent(
                 kind=kind,
@@ -278,7 +289,7 @@ class DirectTransport(AgentTransport):
         full_response_text = ""
         paused_message_id = None
         agent_task_id = None
-        interactive_status_context: dict[str, str | None] = {}
+        interactive_status_context: dict[str, Any] = {}
         if support_streaming:
             try:
                 (
@@ -360,55 +371,30 @@ class DirectTransport(AgentTransport):
                         status_message=failure_code,
                     )
                 if status == ProcessingStatus.AWAITING_INPUT:
-                    task = get_task(message)
-                    task_data = (
-                        public_persisted_task_data(Task.model_validate(task))
-                        if task and hasattr(task, "model_dump")
-                        else {}
+                    observation = interactive_status_context.get("input_observation")
+                    decision = await self._decide_interactive(
+                        message=message,
+                        room_id=room_id,
+                        observation=(
+                            observation
+                            if isinstance(observation, AgentInputObservation)
+                            else None
+                        ),
                     )
-                    status_value = (
-                        state_str(task.status.state) if task and task.status else None
-                    )
-                    if status_value == CommonTaskState.AUTH_REQUIRED.value:
-                        status_msg = "Authentication required"
-                    else:
-                        status_msg = interactive_status_context.get(
-                            "status_message"
-                        ) or (
-                            self._public_interactive_status_message(
-                                ProcessingContext(
-                                    room_id=room_id,
-                                    current_message=message,
-                                    agent_card=agent.agent_card,
-                                    user_message_id=user_message_id,
-                                )
-                            )
-                        )
                     return ProcessingResult(
                         ProcessingStatus.AWAITING_INPUT,
                         response_text="",
                         message_id=message.message_id,
-                        a2a_task_id=(
-                            task_data.get("id")
-                            or (task.id if task and hasattr(task, "id") else None)
+                        a2a_task_id=decision.task_id,
+                        a2a_context_id=decision.context_id,
+                        status_message=SUPERVISOR_BLOCKER_SUMMARY,
+                        interactive_state=decision.observed_state,
+                        input_observation=(
+                            observation
+                            if isinstance(observation, AgentInputObservation)
+                            else None
                         ),
-                        a2a_context_id=(
-                            task.context_id
-                            if task and hasattr(task, "context_id")
-                            else task_data.get("contextId")
-                        ),
-                        status_message=status_msg,
-                        interactive_state=status_value,
-                        requires_auth=(
-                            status_value == CommonTaskState.AUTH_REQUIRED.value
-                            if status_value
-                            else False
-                        ),
-                        requires_policy=bool(
-                            status_value == CommonTaskState.POLICY_REQUIRED.value
-                            or (task_data.get("metadata") or {}).get("requires_policy")
-                            or (task_data.get("metadata") or {}).get("policy_required")
-                        ),
+                        ingress_decision=decision,
                     )
                 return ProcessingResult(status, full_response_text)
         else:
@@ -446,6 +432,16 @@ class DirectTransport(AgentTransport):
                 )
 
         if full_response_text is None and paused_message_id:
+            maybe_refreshed = self._message_reader.get_room_agent_message_by_message_id(
+                message.message_id
+            )
+            refreshed_message = (
+                await maybe_refreshed
+                if inspect.isawaitable(maybe_refreshed)
+                else maybe_refreshed
+            )
+            if isinstance(refreshed_message, RoomAgentMessage):
+                message = refreshed_message
             task = get_task(message)
             if task and task.status and is_interactive_state(task.status.state):
                 logger.info(
@@ -453,43 +449,30 @@ class DirectTransport(AgentTransport):
                     task.status.state,
                     paused_message_id,
                 )
-                task_data = (
-                    public_persisted_task_data(Task.model_validate(task))
-                    if hasattr(task, "model_dump")
-                    else {}
+                observation = interactive_status_context.get("input_observation")
+                decision = await self._decide_interactive(
+                    message=message,
+                    room_id=room_id,
+                    observation=(
+                        observation
+                        if isinstance(observation, AgentInputObservation)
+                        else None
+                    ),
                 )
-                status_value = state_str(task.status.state)
-                if status_value == CommonTaskState.AUTH_REQUIRED.value:
-                    status_msg = "Authentication required"
-                else:
-                    status_msg = interactive_status_context.get("status_message") or (
-                        self._public_interactive_status_message(
-                            ProcessingContext(
-                                room_id=room_id,
-                                current_message=message,
-                                agent_card=agent.agent_card,
-                                user_message_id=user_message_id,
-                            )
-                        )
-                    )
                 return ProcessingResult(
                     ProcessingStatus.AWAITING_INPUT,
                     response_text="",
                     message_id=paused_message_id,
-                    a2a_task_id=agent_task_id
-                    or task_data.get("id")
-                    or (task.id if hasattr(task, "id") else None),
-                    a2a_context_id=task.context_id
-                    if hasattr(task, "context_id")
-                    else task_data.get("contextId"),
-                    status_message=status_msg,
-                    interactive_state=status_value,
-                    requires_auth=(status_value == CommonTaskState.AUTH_REQUIRED.value),
-                    requires_policy=bool(
-                        status_value == CommonTaskState.POLICY_REQUIRED.value
-                        or (task_data.get("metadata") or {}).get("requires_policy")
-                        or (task_data.get("metadata") or {}).get("policy_required")
+                    a2a_task_id=decision.task_id,
+                    a2a_context_id=decision.context_id,
+                    status_message=SUPERVISOR_BLOCKER_SUMMARY,
+                    interactive_state=decision.observed_state,
+                    input_observation=(
+                        observation
+                        if isinstance(observation, AgentInputObservation)
+                        else None
                     ),
+                    ingress_decision=decision,
                 )
 
             logger.info(
@@ -656,17 +639,29 @@ class DirectTransport(AgentTransport):
         self,
         ctx: ProcessingContext,
         raw_status_message: str | None = None,
-    ) -> str:
-        if raw_status_message:
-            safe_prompt = safe_agent_input_prompt(raw_status_message)
-            if safe_prompt:
-                return safe_prompt
-        agent_name = getattr(ctx.agent_card, "name", None)
-        return self._public_task_label(
-            ctx.current_message,
-            agent_name
-            if isinstance(agent_name, str)
-            else ctx.current_message.agent_id or "agent",
+    ) -> str | None:
+        del ctx
+        return concrete_agent_input_prompt(raw_status_message)
+
+    async def _decide_interactive(
+        self,
+        *,
+        message: RoomAgentMessage,
+        room_id: str,
+        observation: AgentInputObservation | None,
+    ):
+        return await self.response_handler.decide_interactive(
+            AgentEvent(
+                kind="interactive",
+                message_id=message.message_id,
+                room_id=room_id,
+                agent_id=message.agent_id or "",
+                state=(observation.observed_state if observation else "input-required"),
+                task_id=observation.task_id if observation else None,
+                context_id=observation.context_id if observation else None,
+                skip_persist=True,
+                input_observation=observation,
+            )
         )
 
     def _materialize_message_as_response_artifact(
@@ -953,7 +948,7 @@ class DirectTransport(AgentTransport):
         send_sse: bool = False,
         step_number: int | None = None,
         total_steps: int | None = None,
-        interactive_status_context: dict[str, str | None] | None = None,
+        interactive_status_context: dict[str, Any] | None = None,
     ) -> tuple[ProcessingStatus, str]:
         """Handle streaming responses from an agent for a room message."""
         _task_info, ctx = await self._setup_tracking_context(
@@ -992,7 +987,10 @@ class DirectTransport(AgentTransport):
                         result, ctx, streaming_state
                     )
                 case "task":
-                    self._handle_stream_task_event(result)
+                    self._handle_stream_task_event(
+                        result,
+                        interactive_status_context=interactive_status_context,
+                    )
                 case "status-update":
                     await self._handle_stream_status_update(
                         result,
@@ -1163,12 +1161,24 @@ class DirectTransport(AgentTransport):
         return coerced
 
     @staticmethod
-    def _handle_stream_task_event(result) -> None:
-        """Handle a 'task' event during streaming (log only)."""
+    def _handle_stream_task_event(
+        result: Task,
+        *,
+        interactive_status_context: dict[str, Any] | None = None,
+    ) -> None:
+        """Capture private evidence from a full streaming Task event."""
         status = result.status
         logger.debug(
             "DirectTransport: Task event: %s", status.state if status else "no status"
         )
+        if (
+            status is not None
+            and is_interactive_state(status.state)
+            and interactive_status_context is not None
+        ):
+            interactive_status_context["input_observation"] = (
+                input_observation_from_a2a(result)
+            )
 
     async def _handle_stream_status_update(
         self,
@@ -1176,7 +1186,7 @@ class DirectTransport(AgentTransport):
         ctx: ProcessingContext,
         streaming_state: MessageStreamingState,
         *,
-        interactive_status_context: dict[str, str | None] | None = None,
+        interactive_status_context: dict[str, Any] | None = None,
     ) -> None:
         """Handle a 'status-update' event during streaming."""
         state = result.status.state
@@ -1195,6 +1205,10 @@ class DirectTransport(AgentTransport):
         a2a_status_message_text: str | None = None
         if result.status.message:
             a2a_status_message_text = get_text_from_message(result.status.message)
+        if is_interactive_state(state) and interactive_status_context is not None:
+            interactive_status_context["input_observation"] = (
+                input_observation_from_a2a(result)
+            )
         if (
             is_final
             and state_str(state) == CommonTaskState.COMPLETED.value
@@ -1276,21 +1290,8 @@ class DirectTransport(AgentTransport):
                     result.task_id,
                 )
 
-        if ctx.send_sse and a2a_status_message_text:
-            if is_interactive_state(state):
-                if interactive_status_context is not None:
-                    interactive_status_context["status_message"] = (
-                        self._public_interactive_status_message(
-                            ctx, a2a_status_message_text
-                        )
-                    )
-            await self.tsm.notify_task(
-                ctx,
-                state,
-                status_message=self._public_interactive_status_message(
-                    ctx, a2a_status_message_text
-                ),
-            )
+        if ctx.send_sse and a2a_status_message_text and not is_interactive_state(state):
+            await self.tsm.notify_task(ctx, state)
 
     async def _handle_stream_artifact_update(
         self,
@@ -1749,6 +1750,9 @@ class DirectTransport(AgentTransport):
                 "status": state_value,
             }
             if is_interactive_state(state):
+                parsed["context_id"] = result.context_id
+                if result.id and result.context_id:
+                    parsed["_input_observation"] = input_observation_from_a2a(result)
                 parsed["requires_input"] = (
                     state_value == CommonTaskState.INPUT_REQUIRED.value
                 )
@@ -1798,7 +1802,7 @@ class DirectTransport(AgentTransport):
         token: CancellationToken | None = None,
         step_number: int | None = None,
         total_steps: int | None = None,
-        interactive_status_context: dict[str, str | None] | None = None,
+        interactive_status_context: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Handle synchronous (non-streaming) response from an agent.
 
@@ -1982,7 +1986,7 @@ class DirectTransport(AgentTransport):
         *,
         step_number: int | None = None,
         total_steps: int | None = None,
-        interactive_status_context: dict[str, str | None] | None = None,
+        interactive_status_context: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """
         Process the parsed sync response (message or task type).
@@ -2164,40 +2168,12 @@ class DirectTransport(AgentTransport):
         # Handle "task" response (async path)
         if response.get("type") == "task":
             status = self._resolve_task_response_status(response)
-            raw_status_message = response.get("message")
-            if is_interactive_state(status):
-                if interactive_status_context is not None:
-                    interactive_status_context["status_message"] = (
-                        self._public_interactive_status_message(
-                            ctx,
-                            raw_status_message
-                            if isinstance(raw_status_message, str)
-                            else None,
-                        )
-                    )
-            if task_info:
-                await self.tsm.notify_task(
-                    ctx,
-                    status,
-                    requires_input=(
-                        response.get("requires_input", False)
-                        or status == CommonTaskState.INPUT_REQUIRED
-                    ),
-                    requires_auth=(
-                        response.get("requires_auth", False)
-                        or status == CommonTaskState.AUTH_REQUIRED
-                    ),
-                    status_message=(
-                        self._public_interactive_status_message(
-                            ctx,
-                            raw_status_message
-                            if isinstance(raw_status_message, str)
-                            else None,
-                        )
-                        if raw_status_message
-                        else None
-                    ),
-                )
+            if is_interactive_state(status) and interactive_status_context is not None:
+                observation = response.get("_input_observation")
+                if isinstance(observation, AgentInputObservation):
+                    interactive_status_context["input_observation"] = observation
+            if task_info and not is_interactive_state(status):
+                await self.tsm.notify_task(ctx, status)
 
             # Interactive states (input-required / auth-required) are already
             # final for this dispatch cycle regardless of push capability.
@@ -2205,8 +2181,11 @@ class DirectTransport(AgentTransport):
             if is_interactive_state(status):
                 task_obj = get_task(current_message)
                 if task_obj and task_obj.status:
+                    task_obj.id = response.get("task_id") or task_obj.id
+                    task_obj.context_id = (
+                        response.get("context_id") or task_obj.context_id
+                    )
                     task_obj.status.state = coerce_task_state(status)
-                    task_obj.status.message = None
                 if not task_info:
                     current_message.agent_url = (
                         current_message.agent_url or self._agent_card_url(agent_card)
@@ -2300,7 +2279,7 @@ class DirectTransport(AgentTransport):
         *,
         step_number: int | None = None,
         total_steps: int | None = None,
-        interactive_status_context: dict[str, str | None] | None = None,
+        interactive_status_context: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None, str | None, str | None]:
         """Finalize a polled task that reached a terminal state."""
         public_message_text = extract_public_completed_status_text(completed_task)
@@ -2366,14 +2345,9 @@ class DirectTransport(AgentTransport):
         # and return paused_message_id so the dispatch method detects it
         # and triggers HITL.
         if state in INTERACTIVE_STATES:
-            raw_status_message = (
-                get_text_from_message(completed_task.status.message)
-                if completed_task.status.message
-                else None
-            )
             if interactive_status_context is not None:
-                interactive_status_context["status_message"] = (
-                    self._public_interactive_status_message(ctx, raw_status_message)
+                interactive_status_context["input_observation"] = (
+                    input_observation_from_a2a(completed_task)
                 )
             if task_info:
                 await self._task_updater.update_task_on_message(

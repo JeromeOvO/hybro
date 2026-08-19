@@ -15,7 +15,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from execution.dispatch.agent_event import AgentEvent
+from common.dto.hitl import A2AInteractionSpec
+from execution.dispatch.a2a_interaction import A2AInteractionDisposition
+from execution.dispatch.agent_event import AgentEvent, AgentInputObservation
+from execution.dispatch.agent_ingress_router import (
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+    AgentIngressDecision,
+    AgentIngressRoute,
+)
 from execution.dispatch.response_handler import (
     AgentResponseHandler,
     ResponseTaskWriter,
@@ -46,12 +54,14 @@ def _make_handler(
     task_notifier=None,
     task_notification_impl=None,
     task_notification_store=None,
+    agent_ingress_router=None,
 ):
     if db is None:
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
         db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+        db.get_room_agent_message_by_message_id = AsyncMock(return_value=None)
     if sse is None:
         sse = MagicMock()
         sse.send_agent_response = AsyncMock()
@@ -78,6 +88,7 @@ def _make_handler(
         "hitl_coordinator": hitl_coordinator,
         "task_notifier": task_notifier,
         "task_notification_impl": task_notification_impl,
+        "agent_ingress_router": agent_ingress_router,
     }
     if task_notification_store is not None:
         kwargs["task_notification_store"] = task_notification_store
@@ -94,6 +105,60 @@ def _base_event(**overrides):
     )
     defaults.update(overrides)
     return defaults
+
+
+def _typed_interaction(
+    *prompts: str,
+    interaction_kind: str = "questionnaire",
+) -> tuple[AgentInputObservation, AgentIngressDecision]:
+    questions = [
+        {
+            "question_id": f"question-{index}",
+            "interaction_kind": interaction_kind,
+            "prompt": prompt,
+            "answer_kind": (
+                "authorization_result"
+                if interaction_kind == "auth_challenge"
+                else "text"
+            ),
+        }
+        for index, prompt in enumerate(prompts, start=1)
+    ]
+    spec = A2AInteractionSpec.model_validate(
+        {
+            "schema_version": 1,
+            "interaction_id": "interaction-1",
+            "questions": questions,
+        }
+    )
+    observation = AgentInputObservation(
+        raw_prompt="PRIVATE_SENTINEL_raw_agent_prompt",
+        interaction_metadata={"hybro.a2a.interaction": spec.model_dump()},
+        task_id="t-1",
+        context_id="c-1",
+        observed_state=(
+            "auth-required"
+            if interaction_kind == "auth_challenge"
+            else "input-required"
+        ),
+        interaction_spec=spec,
+        parser_disposition=A2AInteractionDisposition.TYPED,
+    )
+    decision = AgentIngressDecision(
+        route=AgentIngressRoute.CONVERSATION_TYPED,
+        message_id="msg-001",
+        room_id="room-001",
+        agent_id="agent-001",
+        task_id=observation.task_id,
+        context_id=observation.context_id,
+        observed_state=observation.observed_state,
+        interaction_spec=spec,
+    )
+    return observation, decision
+
+
+def _router_for(decision: AgentIngressDecision):
+    return SimpleNamespace(decide=AsyncMock(return_value=decision))
 
 
 @pytest.mark.asyncio
@@ -174,7 +239,7 @@ def test_processing_status_callback_has_no_required_post_emit_business_side_effe
         "update_task_state_on_message",
         "accumulate_artifact_on_message",
         "resume_queue_from_continuation",
-        "request_input",
+        "request_interaction",
     }
     post_emit = []
     for node in ast.walk(fn):
@@ -1747,6 +1812,123 @@ class TestCanceledEvent:
         )
 
 
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_after_continuation_is_consumed():
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    handler = _make_handler(rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_retries_for_nonterminal_durable_owner():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    db.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            related_message_id="user-message-1",
+            extend_info={},
+        )
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_latest_by_user_message_id = (
+        AsyncMock(return_value=SimpleNamespace(status=SimpleNamespace(value="running")))
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    with pytest.raises(RuntimeError, match="failed to resume orchestration"):
+        await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_for_terminal_durable_owner():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    db.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            related_message_id="user-message-1",
+            extend_info={},
+        )
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_latest_by_user_message_id = (
+        AsyncMock(
+            return_value=SimpleNamespace(status=SimpleNamespace(value="completed"))
+        )
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_when_durable_owner_is_absent():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(return_value=None)
+    db.get_room_agent_message_by_message_id = AsyncMock(
+        return_value=SimpleNamespace(
+            related_message_id="user-message-1",
+            extend_info={},
+        )
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_latest_by_user_message_id = (
+        AsyncMock(return_value=None)
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_retries_when_false_leaves_continuation_open():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(
+        return_value={"orchestration_run_id": "run-1"}
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_run = AsyncMock(
+        return_value=SimpleNamespace(status=SimpleNamespace(value="running"))
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    with pytest.raises(RuntimeError, match="failed to resume orchestration"):
+        await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_accepts_false_for_terminal_owner():
+    db = MagicMock()
+    db.get_pending_continuation_on_message = AsyncMock(
+        return_value={"orchestration_run_id": "run-1"}
+    )
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(return_value=False)
+    rmc.supervisor_executor.orchestration_run_store.get_run = AsyncMock(
+        return_value=SimpleNamespace(status=SimpleNamespace(value="completed"))
+    )
+    handler = _make_handler(db=db, rmc=rmc)
+
+    await handler._resume_orchestration("msg-001", "answer")
+
+
+@pytest.mark.asyncio
+async def test_resume_orchestration_propagates_exception():
+    rmc = MagicMock()
+    rmc.resume_queue_from_continuation = AsyncMock(
+        side_effect=RuntimeError("lock unavailable")
+    )
+    handler = _make_handler(rmc=rmc)
+
+    with pytest.raises(RuntimeError, match="lock unavailable"):
+        await handler._resume_orchestration("msg-001", "answer")
+
+
 # =============================================================================
 # Interactive events
 # =============================================================================
@@ -1754,43 +1936,99 @@ class TestCanceledEvent:
 
 class TestInteractiveEvent:
     @pytest.mark.asyncio
-    async def test_persists_interactive(self):
-        h = _make_handler()
+    @pytest.mark.parametrize(
+        "raw_prompt",
+        [
+            "need input",
+            "Please upload the signed PDF in a new message.",
+            "Please attach the source document in a new message.",
+        ],
+    )
+    async def test_untyped_prose_is_fixed_unsupported_without_hitl(self, raw_prompt):
+        hitl = SimpleNamespace(request_interaction=AsyncMock())
+        h = _make_handler(hitl_coordinator=hitl)
         event = AgentEvent(
             kind="interactive",
             **_base_event(),
-            text="need input",
+            text=raw_prompt,
             state="input-required",
             task_id="t-1",
             context_id="c-1",
         )
 
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(
-                "execution.dispatch.response_handler.AgentResponseHandler._notify",
-                AsyncMock(return_value=True),
-            )
-            await h.handle(event)
+        await h.handle(event)
 
+        hitl.request_interaction.assert_not_awaited()
         h._message_writer.update_task_state_on_message.assert_awaited_once_with(
             "msg-001",
-            "input-required",
-            message_text=None,
-            task_id="t-1",
-            context_id="c-1",
+            "failed",
+            message_text=UNSUPPORTED_INTERACTION_MESSAGE,
+            task_metadata={"error_code": UNSUPPORTED_INTERACTION_CODE},
+        )
+        assert raw_prompt not in repr(
+            h._message_writer.update_task_state_on_message.await_args_list
         )
         h._rmc.resume_queue_from_continuation.assert_awaited_once_with(
             message_id="msg-001",
-            task_result_text="",
-            failed=False,
+            task_result_text=None,
+            failed=True,
         )
 
     @pytest.mark.asyncio
-    async def test_async_interactive_prompt_only_reaches_hitl_not_persistence_or_notify(
+    async def test_supervisor_observation_precedes_recovery_without_hitl(self):
+        order: list[str] = []
+        observation, _ = _typed_interaction("Typed private supervisor question?")
+        decision = AgentIngressDecision(
+            route=AgentIngressRoute.SUPERVISOR_OBSERVATION,
+            message_id="msg-001",
+            room_id="room-001",
+            agent_id="agent-001",
+            task_id=observation.task_id,
+            context_id=observation.context_id,
+            observed_state=observation.observed_state,
+            orchestration_run_id="run-1",
+        )
+        router = SimpleNamespace(
+            decide=AsyncMock(
+                side_effect=lambda **_kwargs: order.append("observation") or decision
+            )
+        )
+        rmc = MagicMock()
+        rmc.resume_queue_from_continuation = AsyncMock(
+            side_effect=lambda **_kwargs: order.append("recovery") or True
+        )
+        hitl = SimpleNamespace(request_interaction=AsyncMock())
+        h = _make_handler(
+            rmc=rmc,
+            hitl_coordinator=hitl,
+            agent_ingress_router=router,
+        )
+
+        await h.handle(
+            AgentEvent(
+                kind="interactive",
+                **_base_event(),
+                input_observation=observation,
+            )
+        )
+
+        assert order == ["observation", "recovery"]
+        hitl.request_interaction.assert_not_awaited()
+        h._message_writer.update_task_state_on_message.assert_awaited_once_with(
+            "msg-001",
+            "input-required",
+            task_id="t-1",
+            context_id="c-1",
+        )
+        assert observation.raw_prompt not in repr(
+            h._message_writer.update_task_state_on_message.await_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_untyped_async_prompt_reaches_no_public_writer_or_notify(
         self,
     ):
         private_prompt = "PRIVATE_SENTINEL_async_interactive_prompt"
-        generic_prompt = "The agent needs additional information."
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
@@ -1803,7 +2041,9 @@ class TestInteractiveEvent:
         )
         db.get_room_by_room_id = AsyncMock(return_value=None)
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-001")]
+            )
         )
         h = _make_handler(
             db=db,
@@ -1825,19 +2065,22 @@ class TestInteractiveEvent:
 
         await h.handle(event)
 
-        hitl.request_input.assert_awaited_once()
-        assert hitl.request_input.await_args.kwargs["prompt"] == generic_prompt
-        assert private_prompt not in repr(hitl.request_input.await_args.kwargs)
-        persisted_kwargs = db.update_task_state_on_message.await_args.kwargs
-        assert persisted_kwargs["message_text"] is None
-        notify_payload = mock_impl.await_args.kwargs
-        assert private_prompt not in repr(notify_payload)
-        emitter_payload = emitter.await_args.kwargs
-        assert private_prompt not in json.dumps(emitter_payload, sort_keys=True)
+        hitl.request_interaction.assert_not_awaited()
+        persisted_payload = repr(db.update_task_state_on_message.await_args_list)
+        assert private_prompt not in persisted_payload
+        notify_payload = repr(mock_impl.await_args_list)
+        assert private_prompt not in notify_payload
+        emitter_payload = repr(emitter.await_args_list)
+        assert private_prompt not in emitter_payload
 
     @pytest.mark.asyncio
-    async def test_creates_hitl_request_for_async_interactive_continuation(self):
+    async def test_creates_typed_multi_question_aggregate_before_public_projection(
+        self,
+    ):
         call_order = []
+        observation, decision = _typed_interaction(
+            "First typed question?", "Second typed question?"
+        )
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
@@ -1853,9 +2096,13 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(
+            request_interaction=AsyncMock(
                 side_effect=lambda **_kwargs: (
-                    call_order.append("hitl") or SimpleNamespace(request_id="hitl-001")
+                    call_order.append("hitl")
+                    or [
+                        SimpleNamespace(request_id="hitl-001"),
+                        SimpleNamespace(request_id="hitl-002"),
+                    ]
                 )
             )
         )
@@ -1867,14 +2114,16 @@ class TestInteractiveEvent:
             hitl_coordinator=hitl,
             task_notification_impl=mock_impl,
             task_notification_store=db,
+            agent_ingress_router=_router_for(decision),
         )
         event = AgentEvent(
             kind="interactive",
             **_base_event(),
-            text="need input",
-            state="input-required",
-            task_id="t-1",
-            context_id="c-1",
+            text=observation.raw_prompt,
+            state=observation.observed_state,
+            task_id=observation.task_id,
+            context_id=observation.context_id,
+            input_observation=observation,
         )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
@@ -1887,18 +2136,21 @@ class TestInteractiveEvent:
         assert task_update_call["message_id"] == "msg-001"
         assert task_update_call["emit_processing_status"] is False
 
-        hitl.request_input.assert_awaited_once_with(
-            room_id="room-001",
-            user_message_id="user-msg-001",
-            source="agent",
-            prompt="The agent needs additional information.",
-            agent_id="agent-001",
-            agent_name="Agent X",
-            a2a_task_id="t-1",
-            a2a_context_id="c-1",
-            continuation_message_id="msg-001",
-            display_message_id="display-msg-001",
+        hitl.request_interaction.assert_awaited_once()
+        hitl_kwargs = hitl.request_interaction.await_args.kwargs
+        assert hitl_kwargs["application_route"] == "a2a_resume"
+        assert hitl_kwargs["route_snapshot"].task_id == "t-1"
+        assert [question["prompt"] for question in hitl_kwargs["questions"]] == [
+            "First typed question?",
+            "Second typed question?",
+        ]
+        assert hitl_kwargs["questions"][0]["agent_name"] == "Agent X"
+        public_payloads = repr(
+            db.update_task_state_on_message.await_args_list
+            + mock_impl.await_args_list
+            + emitter.await_args_list
         )
+        assert observation.raw_prompt not in public_payloads
         emitter.assert_awaited_once_with(
             room_id="room-001",
             status="awaiting_input",
@@ -1913,6 +2165,9 @@ class TestInteractiveEvent:
 
     @pytest.mark.asyncio
     async def test_creates_hitl_request_for_async_auth_required_continuation(self):
+        observation, decision = _typed_interaction(
+            "Please authenticate.", interaction_kind="auth_challenge"
+        )
         mock_impl = AsyncMock(return_value=True)
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
@@ -1928,21 +2183,25 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(room_agent_set={"agent-001": "Agent X"})
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-001")]
+            )
         )
         h = _make_handler(
             db=db,
             hitl_coordinator=hitl,
             task_notification_impl=mock_impl,
             task_notification_store=db,
+            agent_ingress_router=_router_for(decision),
         )
         event = AgentEvent(
             kind="interactive",
             **_base_event(),
-            text="Please authenticate.",
-            state="auth-required",
-            task_id="t-1",
-            context_id="c-1",
+            text=observation.raw_prompt,
+            state=observation.observed_state,
+            task_id=observation.task_id,
+            context_id=observation.context_id,
+            input_observation=observation,
         )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
@@ -1952,18 +2211,10 @@ class TestInteractiveEvent:
         mock_impl.assert_awaited_once()
         task_update_call = mock_impl.call_args.kwargs
         assert task_update_call["emit_processing_status"] is False
-        hitl.request_input.assert_awaited_once_with(
-            room_id="room-001",
-            user_message_id="user-msg-001",
-            source="agent",
-            prompt="The agent needs additional information.",
-            agent_id="agent-001",
-            agent_name="Agent X",
-            a2a_task_id="t-1",
-            a2a_context_id="c-1",
-            continuation_message_id="msg-001",
-            display_message_id="display-msg-001",
-        )
+        hitl.request_interaction.assert_awaited_once()
+        hitl_kwargs = hitl.request_interaction.await_args.kwargs
+        assert hitl_kwargs["route_snapshot"].context_id == "c-1"
+        assert hitl_kwargs["questions"][0]["prompt_type"] == "authentication"
         emitter.assert_awaited_once_with(
             room_id="room-001",
             status="awaiting_input",
@@ -1979,6 +2230,7 @@ class TestInteractiveEvent:
     async def test_reuses_existing_async_pending_hitl_request_for_reprojection_and_sse(
         self,
     ):
+        observation, decision = _typed_interaction("Typed question?")
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
@@ -1998,20 +2250,25 @@ class TestInteractiveEvent:
             return_value=SimpleNamespace(message_id="display-msg-001")
         )
         hitl = SimpleNamespace(
-            request_input=AsyncMock(
-                return_value=SimpleNamespace(request_id="hitl-existing")
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-existing")]
             )
         )
-        h = _make_handler(db=db, hitl_coordinator=hitl)
+        h = _make_handler(
+            db=db,
+            hitl_coordinator=hitl,
+            agent_ingress_router=_router_for(decision),
+        )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
             kind="interactive",
             **_base_event(),
-            text="need input",
-            state="input-required",
-            task_id="t-1",
-            context_id="c-1",
+            text=observation.raw_prompt,
+            state=observation.observed_state,
+            task_id=observation.task_id,
+            context_id=observation.context_id,
+            input_observation=observation,
         )
 
         with pytest.MonkeyPatch.context() as mp:
@@ -2021,22 +2278,52 @@ class TestInteractiveEvent:
             )
             await h.handle(event)
 
-        hitl.request_input.assert_awaited_once_with(
-            room_id="room-001",
-            user_message_id="user-msg-001",
-            source="agent",
-            prompt="The agent needs additional information.",
-            agent_id="agent-001",
-            agent_name=None,
-            a2a_task_id="t-1",
-            a2a_context_id="c-1",
-            continuation_message_id="msg-001",
-            display_message_id="display-msg-001",
-        )
+        hitl.request_interaction.assert_awaited_once()
+        hitl_kwargs = hitl.request_interaction.await_args.kwargs
+        assert hitl_kwargs["questions"][0]["display_message_id"] == ("display-msg-001")
         emitter.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_interaction_creation_failure_compensates_by_aggregate_id(self):
+        observation, decision = _typed_interaction("Typed question?")
+        db = MagicMock()
+        db.get_room_agent_message_by_message_id = AsyncMock(
+            return_value=SimpleNamespace(message_id="display-msg-001")
+        )
+        db.get_room_by_room_id = AsyncMock(return_value=None)
+        hitl = SimpleNamespace(
+            request_interaction=AsyncMock(side_effect=RuntimeError("write failed")),
+            cancel_interaction=AsyncMock(return_value=True),
+        )
+        h = _make_handler(
+            db=db,
+            hitl_coordinator=hitl,
+            agent_ingress_router=_router_for(decision),
+        )
+        event = AgentEvent(
+            kind="interactive",
+            **_base_event(),
+            state=observation.observed_state,
+            input_observation=observation,
+        )
+
+        with pytest.raises(RuntimeError, match="write failed"):
+            await h.project_conversation_interactive(
+                event,
+                decision,
+                user_message_id="user-msg-001",
+            )
+
+        hitl.cancel_interaction.assert_awaited_once()
+        cancel_args = hitl.cancel_interaction.await_args
+        assert cancel_args.args[1] == "room-001"
+        assert cancel_args.kwargs["failure_reason"] == (
+            "Agent interaction projection failed"
+        )
+
+    @pytest.mark.asyncio
     async def test_logs_agent_name_lookup_failure_without_blocking_hitl(self):
+        observation, decision = _typed_interaction("Typed question?")
         db = MagicMock()
         db.update_task_state_on_message = AsyncMock(return_value=(True, None))
         db.accumulate_artifact_on_message = AsyncMock(return_value=True)
@@ -2049,18 +2336,25 @@ class TestInteractiveEvent:
         )
         db.get_room_by_room_id = AsyncMock(side_effect=RuntimeError("db down"))
         hitl = SimpleNamespace(
-            request_input=AsyncMock(return_value=SimpleNamespace(request_id="hitl-001"))
+            request_interaction=AsyncMock(
+                return_value=[SimpleNamespace(request_id="hitl-001")]
+            )
         )
-        h = _make_handler(db=db, hitl_coordinator=hitl)
+        h = _make_handler(
+            db=db,
+            hitl_coordinator=hitl,
+            agent_ingress_router=_router_for(decision),
+        )
         emitter = AsyncMock()
         h.bind_execution_event_deps(emitter)
         event = AgentEvent(
             kind="interactive",
             **_base_event(),
-            text="need input",
-            state="input-required",
-            task_id="t-1",
-            context_id="c-1",
+            text=observation.raw_prompt,
+            state=observation.observed_state,
+            task_id=observation.task_id,
+            context_id=observation.context_id,
+            input_observation=observation,
         )
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
@@ -2072,8 +2366,11 @@ class TestInteractiveEvent:
             await h.handle(event)
 
         debug.assert_called_once_with("agent name lookup failed", exc_info=True)
-        hitl.request_input.assert_awaited_once()
-        assert hitl.request_input.call_args.kwargs["agent_name"] is None
+        hitl.request_interaction.assert_awaited_once()
+        assert (
+            hitl.request_interaction.call_args.kwargs["questions"][0]["agent_name"]
+            is None
+        )
         emitter.assert_awaited_once()
         h._delivery.send_processing_status.assert_not_awaited()
 
@@ -2306,7 +2603,7 @@ class TestProcessingStatusEvent:
 
 class TestResumeOrchestrationErrorHandling:
     @pytest.mark.asyncio
-    async def test_resume_exception_does_not_propagate(self):
+    async def test_resume_exception_keeps_terminal_finalization_retryable(self):
         rmc = MagicMock()
         rmc.resume_queue_from_continuation = AsyncMock(side_effect=RuntimeError("boom"))
         h = _make_handler(rmc=rmc)
@@ -2321,8 +2618,8 @@ class TestResumeOrchestrationErrorHandling:
                 "execution.dispatch.response_handler.AgentResponseHandler._notify",
                 AsyncMock(return_value=True),
             )
-            # Should not raise despite resume failure
-            await h.handle(event)
+            with pytest.raises(RuntimeError, match="boom"):
+                await h.handle(event)
 
 
 # =============================================================================

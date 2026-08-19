@@ -831,13 +831,30 @@ class TestWebhookTransportNormalize:
         event = wt._task_to_event(task, msg)
         assert event.kind == "canceled"
 
-    def test_interactive_task(self):
+    def test_interactive_task_keeps_raw_prompt_private(self):
+        sentinel = "PRIVATE_SENTINEL_webhook_interactive_prompt"
         wt = _make_webhook_transport()
         msg = _make_tracked_message()
-        task = self._make_task("input-required")
+        task = Task(
+            id="task-001",
+            context_id="ctx-001",
+            status=TaskStatus(
+                state=TaskState.input_required,
+                message=Message(
+                    role=Role.agent,
+                    parts=[Part(root=TextPart(text=sentinel))],
+                    message_id="remote-interactive-status",
+                ),
+            ),
+        )
+
         event = wt._task_to_event(task, msg)
+
         assert event.kind == "interactive"
         assert event.state == "input-required"
+        assert event.text == ""
+        assert event.private_input_observation.raw_prompt == sentinel
+        assert sentinel not in repr(event)
 
     def test_working_task(self):
         wt = _make_webhook_transport()

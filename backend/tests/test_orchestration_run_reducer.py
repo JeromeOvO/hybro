@@ -211,3 +211,51 @@ def test_record_hitl_no_progress_adds_canonical_fact_and_replan_signal():
     assert updated.facts[-1]["source"] == "hitl_user_reply"
     assert updated.facts[-1]["text"] == '{"client":{"name":"Acme"}}'
     assert updated.decision_log[-1]["code"] == "agent_repeated_input_required"
+
+
+def test_record_hitl_resolution_resolves_answered_validated_blocker():
+    from execution.orchestration.run_reducer import record_hitl_resolution
+
+    state = _state(
+        status=OrchestrationStatus.AWAITING_USER,
+        pending_hitl_request_ids=["hitl-1"],
+        blockers=[
+            {
+                "key": "agent_blocker:agent-1:agent_input_required",
+                "description": "Agent requested additional input.",
+                "blocked_output_keys": [],
+                "source": "agent",
+                "evidence_refs": ["agent-msg-1"],
+                "claimed_user_only": True,
+                "validation_status": "validated",
+                "status": "open",
+                "resolution_attempts": [],
+                "validated_user_only": True,
+            }
+        ],
+        open_questions=[
+            {
+                "request_id": "hitl-1",
+                "source": "supervisor",
+                "status": "open",
+                "prompt": "Agent requested additional input.",
+                "blocker_keys": ["agent_blocker:agent-1:agent_input_required"],
+                "blocker_obligations": {
+                    "agent_blocker:agent-1:agent_input_required": []
+                },
+            }
+        ],
+    )
+
+    updated = record_hitl_resolution(
+        state,
+        request_id="hitl-1",
+        response="A one-week trip to Tokyo for two adults.",
+        hitl_result={"source": "supervisor"},
+    )
+
+    assert updated.facts[-1]["source"] == "hitl_user_reply"
+    assert updated.blockers[0].status == "resolved"
+    assert updated.facts[-1]["fact_id"] in updated.blockers[0].evidence_refs
+    assert updated.open_questions[0]["resolved"] is True
+    assert updated.open_questions[0]["answer"].startswith("A one-week trip")

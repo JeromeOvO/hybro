@@ -30,11 +30,12 @@ from common.a2a_constants import (
     normalize_task_state_value,
 )
 from common.protocols import JsonMap, JsonValue  # noqa: F401
+from common.types import Task
 from common.utils.a2a_helpers import (
-    extract_error_message,
     extract_parts_from_artifacts,
 )
 from common.utils.logger import get_logger
+from execution.dispatch.a2a_interaction import input_observation_from_a2a
 from execution.dispatch.agent_event import AgentEvent
 from execution.dispatch.transports.base import AgentTransport
 from execution.task_tracking import extract_public_completed_status_text
@@ -285,11 +286,17 @@ class WebhookTransport(AgentTransport):
             )
 
         if state in INTERACTIVE_STATES:
+            observation_source = (
+                task
+                if isinstance(task, Task)
+                else Task.model_validate(task.model_dump())
+            )
             return AgentEvent(
                 kind="interactive",
                 **base,
-                text=text or extract_error_message(task) or "",
+                text="",
                 state=state_value,
+                input_observation=input_observation_from_a2a(observation_source),
             )
 
         if is_terminal_state(state):

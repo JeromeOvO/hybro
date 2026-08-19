@@ -24,6 +24,10 @@ class HITLConflictError(HITLError):
     pass
 
 
+class HITLExpiredError(HITLError):
+    pass
+
+
 class HITLRoomMismatchError(HITLError):
     pass
 
@@ -54,10 +58,21 @@ class HITLRoutingFailedError(HITLError):
     pass
 
 
+class HITLDeliveryUncertainError(HITLError):
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            code="HITL_DELIVERY_UNCERTAIN",
+            details={"lifecycle_state": "delivery_uncertain"},
+        )
+
+
 __all__ = [
     "ContinuationLostError",
     "HITLConflictError",
     "HITLContinuationLostError",
+    "HITLDeliveryUncertainError",
+    "HITLExpiredError",
     "HITLError",
     "HITLNotFoundError",
     "HITLRoomMismatchError",

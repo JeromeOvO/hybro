@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { AnySSEFrame } from '@/lib/types/sse'
+import { ApiError } from '@/lib/api-client'
 import {
   resetPendingTurnBufferForTests,
   resolveClientRequestMessageId,
@@ -21,7 +22,6 @@ const capturedOnMessage = (msg: AnySSEFrame) => {
   if (!cb) throw new Error('capturedOnMessage is not defined')
   return cb(msg)
 }
-let mockSseConnected = true
 
 vi.mock('@/hooks/useRoomSSE', () => ({
   useRoomSSE: vi.fn((opts: { onMessage?: (msg: AnySSEFrame) => void }) => {
@@ -51,7 +51,7 @@ vi.mock('@/lib/api/sse', () => ({
 }))
 
 vi.mock('@/lib/api/hitl', () => ({
-  respondToHitl: vi.fn().mockResolvedValue({ status: 'ok', request_id: 'req-1' }),
+  respondToHitlBatch: vi.fn().mockResolvedValue({ status: 'applied', request_id: 'req-1' }),
   fetchPendingHitlRequests: vi.fn().mockResolvedValue({ requests: [] }),
 }))
 
@@ -100,7 +100,6 @@ describe('useRoomWebhook HITL SSE handling', () => {
     vi.clearAllMocks();
     (globalThis as any).capturedOnMessage = undefined;
     (globalThis as any).mockSseConnected = true;
-    mockSseConnected = true
     resetPendingTurnBufferForTests()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
@@ -570,6 +569,77 @@ describe('useRoomWebhook HITL SSE handling', () => {
     })
   })
 
+  describe('respondToHitlBatch', () => {
+    it('correlates the resumed processing log after an applied batch', async () => {
+      const hook = await mountHook()
+      useMessageStore.getState().upsertMessage({
+        id: 'user-batch-root',
+        roomId: 'room-1',
+        messageType: 'user',
+        content: 'Need details',
+        senderName: 'Test',
+        timestamp: '2026-06-04T01:00:00.000Z',
+        clientRequestId: 'client-batch',
+      }, 'db')
+      for (const [index, requestId] of ['req-batch-1', 'req-batch-2'].entries()) {
+        useMessageStore.getState().upsertMessage({
+          id: `hitl-batch-${index}`,
+          roomId: 'room-1',
+          messageType: 'agent',
+          content: `Question ${index + 1}`,
+          senderName: 'HYBRO AI',
+          timestamp: `2026-06-04T01:00:0${index + 1}.000Z`,
+          relatedMessageId: 'user-batch-root',
+          clientRequestId: 'client-batch',
+          hitlRequestId: requestId,
+          hitlInteractionId: 'interaction-batch',
+          hitlPrompt: `Question ${index + 1}`,
+          hitlPromptType: 'text',
+          hitlResolved: false,
+        }, 'db')
+      }
+
+      await act(async () => {
+        await hook.result.current.respondToHitlBatch(
+          'interaction-batch',
+          [
+            { requestId: 'req-batch-1', answer: 'First' },
+            { requestId: 'req-batch-2', answer: 'Second' },
+          ],
+          'client-batch',
+        )
+      })
+
+      const user = useMessageStore.getState().entities['user-batch-root']
+      expect(user.processingStatusLogs?.map(entry => entry.message)).toEqual([
+        'Thinking...',
+        'Applying your answers…',
+      ])
+      expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
+      expect(useMessageStore.getState().entities['hitl-batch-0'].hitlResolved).toBe(true)
+      expect(useMessageStore.getState().entities['hitl-batch-1'].hitlResolved).toBe(true)
+    })
+
+    it.each([409, 410])('reconciles batch response status %s', async status => {
+      const hook = await mountHook()
+      const hitlApi = await import('@/lib/api/hitl')
+      vi.mocked(hitlApi.respondToHitlBatch).mockRejectedValueOnce(
+        new ApiError(status, 'Batch changed'),
+      )
+      const roomApi = await import('@/lib/api/room')
+      const reconcile = vi.mocked(roomApi.inquiryRoomMessagesByRoomId)
+      reconcile.mockClear()
+
+      await expect(hook.result.current.respondToHitlBatch(
+        'interaction-batch',
+        [{ requestId: 'req-batch-1', answer: 'First' }],
+        'client-batch',
+      )).rejects.toMatchObject({ status })
+
+      expect(reconcile).toHaveBeenCalled()
+    })
+  })
+
   describe('SSE reconnect catch-up', () => {
     it('restores pending HITL requests when SSE reconnects', async () => {
       const { fetchPendingHitlRequests } = await import('@/lib/api/hitl')
@@ -593,11 +663,11 @@ describe('useRoomWebhook HITL SSE handling', () => {
       })
 
       // Start disconnected so the reconnect transition triggers the catch-up
-      mockSseConnected = false
+      ;(globalThis as any).mockSseConnected = false
       const { rerender } = await mountHook()
 
       // Simulate SSE reconnecting
-      mockSseConnected = true
+      ;(globalThis as any).mockSseConnected = true
       await act(async () => {
         rerender()
       })
@@ -638,10 +708,10 @@ describe('useRoomWebhook HITL SSE handling', () => {
       const mockFetch = vi.mocked(fetchPendingHitlRequests)
       mockFetch.mockResolvedValueOnce({ requests: [] })
 
-      mockSseConnected = false
+      ;(globalThis as any).mockSseConnected = false
       const { rerender } = await mountHook()
 
-      mockSseConnected = true
+      ;(globalThis as any).mockSseConnected = true
       await act(async () => {
         rerender()
       })
@@ -659,10 +729,10 @@ describe('useRoomWebhook HITL SSE handling', () => {
       const mockFetch = vi.mocked(fetchPendingHitlRequests)
       mockFetch.mockRejectedValueOnce(new Error('Network failure'))
 
-      mockSseConnected = false
+      ;(globalThis as any).mockSseConnected = false
       const { rerender } = await mountHook()
 
-      mockSseConnected = true
+      ;(globalThis as any).mockSseConnected = true
       await act(async () => {
         rerender()
       })
@@ -676,345 +746,4 @@ describe('useRoomWebhook HITL SSE handling', () => {
     })
   })
 
-  describe('respondToHitlRequest optimistic revert', () => {
-    it('reverts hitlResolved on API failure', async () => {
-      // Override the hitl mock for this test before mounting
-      const hitlMod = await import('@/lib/api/hitl')
-      const mockRespond = vi.mocked(hitlMod.respondToHitl)
-
-      const hookResult = await mountHook()
-
-      // Seed a HITL entity via SSE
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_request',
-          data: {
-            request_id: 'req-revert',
-            message_id: 'msg-revert',
-            prompt: 'Pick a date',
-            prompt_type: 'text',
-            agent_name: 'Agent',
-          },
-        }))
-      })
-
-      const entityBefore = useMessageStore.getState().entities['msg-revert']
-      expect(entityBefore.hitlResolved).toBe(false)
-
-      // Make the API call fail
-      mockRespond.mockRejectedValueOnce(new Error('Server error'))
-
-      // Call respondToHitlRequest — should set optimistic then revert
-      let caughtError: Error | null = null
-      await act(async () => {
-        try {
-          await hookResult.result.current.respondToHitlRequest('req-revert', 'my reply')
-        } catch (e) {
-          caughtError = e as Error
-        }
-      })
-
-      expect(caughtError).not.toBeNull()
-      expect((caughtError as unknown as Error).message).toBe('Server error')
-
-      // Entity should be reverted to hitlResolved: false
-      const entityAfter = useMessageStore.getState().entities['msg-revert']
-      expect(entityAfter.hitlResolved).toBe(false)
-    })
-
-    it('keeps hitlResolved true on API success', async () => {
-      const hookResult = await mountHook()
-
-      // Seed a HITL entity via SSE
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_request',
-          data: {
-            request_id: 'req-success',
-            message_id: 'msg-success',
-            prompt: 'Confirm?',
-            prompt_type: 'confirmation',
-            agent_name: 'Agent',
-          },
-        }))
-      })
-
-      // Call respondToHitlRequest — API mock defaults to success
-      await act(async () => {
-        await hookResult.result.current.respondToHitlRequest('req-success', 'approved')
-      })
-
-      const entity = useMessageStore.getState().entities['msg-success']
-      expect(entity.hitlResolved).toBe(true)
-    })
-
-    it('uses the live user processing log instead of the old placeholder after the final HITL answer', async () => {
-      const hookResult = await mountHook()
-
-      useMessageStore.getState().upsertMessage({
-        id: 'user-hitl-root',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Need clarification',
-        senderName: 'Test',
-        timestamp: new Date().toISOString(),
-        clientRequestId: 'req-hitl-turn',
-      }, 'optimistic')
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_request',
-          data: {
-            request_id: 'req-live-log',
-            message_id: 'msg-live-log',
-            prompt: 'Which region?',
-            prompt_type: 'text',
-            agent_name: 'Agent',
-            related_message_id: 'user-hitl-root',
-            client_request_id: 'req-hitl-turn',
-          },
-        }))
-      })
-
-      await act(async () => {
-        await hookResult.result.current.respondToHitlRequest('req-live-log', 'North America')
-      })
-
-      const userEntity = useMessageStore.getState().entities['user-hitl-root']
-      expect(userEntity.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-        'Thinking...',
-        'Processing your input...',
-      ])
-      expect(useMessageStore.getState().entities['processing-placeholder-room-1']).toBeUndefined()
-    })
-
-    it('handles correlated processing_status after HITL resume without waiting for a new send flush', async () => {
-      const hookResult = await mountHook()
-
-      useMessageStore.getState().upsertMessage({
-        id: 'user-hitl-resume',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Resume after HITL',
-        senderName: 'Test',
-        timestamp: new Date().toISOString(),
-        clientRequestId: 'req-hitl-resume',
-      }, 'optimistic')
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_request',
-          data: {
-            request_id: 'req-resume-terminal',
-            message_id: 'msg-resume-terminal',
-            prompt: 'Continue?',
-            prompt_type: 'confirmation',
-            agent_name: 'Agent',
-            related_message_id: 'user-hitl-resume',
-            client_request_id: 'req-hitl-resume',
-          },
-        }))
-      })
-
-      await act(async () => {
-        await hookResult.result.current.respondToHitlRequest('req-resume-terminal', 'yes')
-      })
-
-      expect(useMessageStore.getState().entities['user-hitl-resume'].processingStatusLogs).toHaveLength(2)
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'processing_status',
-          data: {
-            status: 'completed',
-            message_id: 'user-hitl-resume',
-            client_request_id: 'req-hitl-resume',
-            details: null,
-          },
-        }))
-      })
-
-      const userEntity = useMessageStore.getState().entities['user-hitl-resume']
-      expect(userEntity.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-        'Thinking...',
-        'Processing your input...',
-      ])
-      expect(userEntity.turnTerminalStatus).toBe('completed')
-    })
-
-    it('does not let stale HITL input clear a different restored active user turn', async () => {
-      const { resolveClientRequestMessageId } = await import('@/hooks/room/sse-handlers/pending-turn-buffer')
-      await mountHook()
-
-      useMessageStore.getState().upsertMessage({
-        id: 'msg-old',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Old turn',
-        senderName: 'Test',
-        timestamp: '2026-06-04T01:00:00.000Z',
-        clientRequestId: 'req-old-hitl',
-      }, 'optimistic')
-      useMessageStore.getState().upsertMessage({
-        id: 'msg-new',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Restored active turn',
-        senderName: 'Test',
-        timestamp: '2026-06-04T01:01:00.000Z',
-        clientRequestId: 'req-new-hitl',
-        processingStatusLogs: [
-          {
-            id: 'processing-log-new',
-            message: 'Thinking...',
-            timestamp: '2026-06-04T01:01:01.000Z',
-          },
-        ],
-      }, 'optimistic')
-
-      useRoomUiStore.getState().setProcessing('room-1', true)
-      resolveClientRequestMessageId('req-new-hitl', 'msg-new')
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'processing_status',
-          data: {
-            status: 'processing',
-            message_id: 'msg-new',
-            client_request_id: 'req-new-hitl',
-            details: { message: 'Working' },
-          },
-        }))
-      })
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_request',
-          data: {
-            request_id: 'req-stale-hitl',
-            message_id: 'hitl-stale',
-            prompt: 'Old question',
-            prompt_type: 'text',
-            related_message_id: 'msg-old',
-            client_request_id: 'req-old-hitl',
-          },
-        }))
-      })
-
-      expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-        'Thinking...',
-        'Working',
-      ])
-      expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
-    })
-
-    it('handles processing_status after overlay-restored HITL answer even when the HITL entity has no clientRequestId', async () => {
-      const hookResult = await mountHook()
-
-      useMessageStore.getState().upsertMessage({
-        id: 'user-overlay-root',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Overlay root',
-        senderName: 'Test',
-        timestamp: '2026-06-04T01:00:00.000Z',
-      }, 'optimistic')
-      useMessageStore.getState().upsertMessage({
-        id: 'overlay-hitl',
-        roomId: 'room-1',
-        messageType: 'agent',
-        content: 'Continue?',
-        senderName: 'Agent',
-        timestamp: '2026-06-04T01:00:01.000Z',
-        taskStatus: 'input-required',
-        hitlRequestId: 'req-overlay-no-cr',
-        hitlPrompt: 'Continue?',
-        hitlResolved: false,
-        relatedMessageId: 'user-overlay-root',
-      }, 'sse')
-
-      await act(async () => {
-        await hookResult.result.current.respondToHitlRequest('req-overlay-no-cr', 'yes')
-      })
-
-      useRoomUiStore.getState().setProcessing('room-1', true)
-      resolveClientRequestMessageId('req-new-after-overlay', 'user-overlay-root')
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'processing_status',
-          data: {
-            status: 'completed',
-            message_id: 'agent-task-after-overlay',
-            related_message_id: 'user-overlay-root',
-            client_request_id: 'req-new-after-overlay',
-            details: null,
-          },
-        }))
-      })
-
-      expect(useMessageStore.getState().entities['user-overlay-root'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-        'Thinking...',
-        'Processing your input...',
-      ])
-      expect(useMessageStore.getState().entities['user-overlay-root'].turnTerminalStatus).toBe('completed')
-      expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(false)
-    })
-
-    it('accepts a new backend clientRequestId after HITL answer when relatedMessageId points to the active user turn', async () => {
-      const hookResult = await mountHook()
-
-      useMessageStore.getState().upsertMessage({
-        id: 'user-hitl-new-client',
-        roomId: 'room-1',
-        messageType: 'user',
-        content: 'Resume with new backend request id',
-        senderName: 'Test',
-        timestamp: '2026-06-04T01:00:00.000Z',
-        clientRequestId: 'req-hitl-old-client',
-      }, 'optimistic')
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'hitl_request',
-          data: {
-            request_id: 'req-hitl-new-client',
-            message_id: 'msg-hitl-new-client',
-            prompt: 'Continue?',
-            prompt_type: 'confirmation',
-            agent_name: 'Agent',
-            related_message_id: 'user-hitl-new-client',
-            client_request_id: 'req-hitl-old-client',
-          },
-        }))
-      })
-
-      await act(async () => {
-        await hookResult.result.current.respondToHitlRequest('req-hitl-new-client', 'yes')
-      })
-
-      expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
-      resolveClientRequestMessageId('req-hitl-new-client-from-backend', 'user-hitl-new-client')
-
-      await act(async () => {
-        await capturedOnMessage!(makeSSEMessage({
-          type: 'processing_status',
-          data: {
-            status: 'completed',
-            message_id: 'agent-task-new-client',
-            related_message_id: 'user-hitl-new-client',
-            client_request_id: 'req-hitl-new-client-from-backend',
-            details: null,
-          },
-        }))
-      })
-
-      expect(useMessageStore.getState().entities['user-hitl-new-client'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-        'Thinking...',
-        'Processing your input...',
-      ])
-      expect(useMessageStore.getState().entities['user-hitl-new-client'].turnTerminalStatus).toBe('completed')
-      expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(false)
-    })
-  })
 })

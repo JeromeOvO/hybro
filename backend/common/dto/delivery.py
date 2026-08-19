@@ -168,9 +168,12 @@ class HITLRequestEvent(DeliveryEventBase):
     agent_id: str | None = None
     agent_name: str | None = None
     source_step_id: str | None = None
-    group_id: str | None = None
-    group_total: int | None = None
-    group_index: int | None = None
+    interaction_id: str | None = None
+    interaction_status: str | None = None
+    interaction_version: int | None = None
+    application_status: str | None = None
+    question_count: int = 1
+    question_index: int = 0
     related_message_id: str | None = None
     client_request_id: str | None = None
 
@@ -181,6 +184,12 @@ class HITLResolvedEvent(DeliveryEventBase):
     message_id: str
     source: str
     status: str = "resolved"
+    interaction_id: str | None = None
+    interaction_status: str | None = None
+    interaction_version: int | None = None
+    application_status: str | None = None
+    question_count: int = 1
+    question_index: int = 0
     error_message: str | None = None
     related_message_id: str | None = None
     client_request_id: str | None = None

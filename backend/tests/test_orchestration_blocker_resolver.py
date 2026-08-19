@@ -762,3 +762,124 @@ def test_insufficient_markers_do_not_match_inside_other_words():
     )
 
     assert state.blockers[0].status == "resolved"
+
+
+def test_promotes_agent_input_required_blocker_when_no_output_obligations():
+    """A prose delegate awaiting user input has no declared output obligations;
+    its agent_input_required blocker must still become a validated user-only
+    blocker so a post-dispatch ASK_USER can reference it."""
+    blocker = BlockerRecord(
+        key="agent_blocker:planner-agent:agent_input_required",
+        description="Agent requested additional input.",
+        source="agent",
+        evidence_refs=[
+            "agent-msg-1",
+            "agent-msg-1:awaiting_input",
+        ],
+        validation_status="candidate",
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="planner-agent",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        remaining_required_obligations=[],
+        changed_artifact_keys=[],
+    )
+
+    updated_state, updated_outcome = resolve_agent_observed_blockers(
+        _state([blocker]),
+        intent=_intent().model_copy(update={"planned_agent_message_id": "agent-msg-1"}),
+        outcome=outcome,
+        available_resource_refs=set(),
+        attempted_agent_ids={"planner-agent"},
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert updated_outcome.status == "blocked"
+    assert updated_outcome.blockers[0].key.endswith(":agent_input_required")
+    assert updated_state.blockers[0].claimed_user_only is True
+    assert updated_state.blockers[0].validated_user_only is True
+    assert updated_state.blockers[0].validation_status == "validated"
+
+
+def test_does_not_promote_agent_input_required_blocker_without_awaiting_evidence():
+    blocker = BlockerRecord(
+        key="agent_blocker:planner-agent:agent_input_required",
+        description="Agent requested additional input.",
+        source="agent",
+        evidence_refs=["agent-msg-other"],
+        validation_status="candidate",
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="planner-agent",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        remaining_required_obligations=[],
+        changed_artifact_keys=[],
+    )
+
+    state = _state([blocker])
+    updated_state, updated_outcome = resolve_agent_observed_blockers(
+        state,
+        intent=_intent(),
+        outcome=outcome,
+        available_resource_refs=set(),
+        attempted_agent_ids=set(),
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert updated_outcome.status == "partial"
+    assert updated_state is state
+    assert updated_state.blockers[0].claimed_user_only is False
+
+
+def test_promotes_agent_input_required_blocker_when_outputs_are_declared():
+    """Even when the Planner declared required outputs, an agent awaiting user
+    input blocks every required output until the user answers; promote the
+    blocker so a post-dispatch ASK_USER passes the structural validator."""
+    blocker = BlockerRecord(
+        key="agent_blocker:planner-agent:agent_input_required",
+        description="Agent requested additional input.",
+        source="agent",
+        evidence_refs=[
+            "agent-msg-1",
+            "agent-msg-1:awaiting_input",
+        ],
+        validation_status="candidate",
+    )
+    outcome = DelegationOutcomeRecord(
+        outcome_id="outcome-1",
+        dispatch_intent_id="intent-1",
+        agent_id="planner-agent",
+        goal_family_fingerprint="family-1",
+        goal_revision_fingerprint="revision-1",
+        attempt_fingerprint="attempt-1",
+        status="partial",
+        remaining_required_obligations=["trip_plan:$present"],
+        changed_artifact_keys=[],
+    )
+
+    updated_state, updated_outcome = resolve_agent_observed_blockers(
+        _state([blocker]),
+        intent=_intent().model_copy(update={"planned_agent_message_id": "agent-msg-1"}),
+        outcome=outcome,
+        available_resource_refs=set(),
+        attempted_agent_ids={"planner-agent"},
+        eligible_alternate_agent_ids=set(),
+        conditional_result_viable=False,
+    )
+
+    assert updated_outcome.status == "blocked"
+    assert updated_state.blockers[0].claimed_user_only is True
+    assert updated_state.blockers[0].validation_status == "validated"
+    assert updated_state.blockers[0].blocked_output_keys == ["trip_plan"]

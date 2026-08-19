@@ -68,6 +68,7 @@ const EMPTY_RESULT: HydrateRoomResult = {
   appliedCount: 0,
   pendingHitlCount: 0,
   fetchFailed: false,
+  hitlFetchFailed: false,
 }
 
 /**
@@ -93,7 +94,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
       return { ...EMPTY_RESULT, pendingHitlCount: pending.size }
     } catch (err) {
       console.error('[HITL] overlay failed:', err)
-      return { ...EMPTY_RESULT }
+      return { ...EMPTY_RESULT, hitlFetchFailed: true }
     }
   }
 
@@ -117,6 +118,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
         appliedCount: 0,
         pendingHitlCount: 0,
         fetchFailed: false,
+        hitlFetchFailed: false,
       }
     }
 
@@ -134,6 +136,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
     }
 
     let pendingHitlCount = 0
+    let hitlFetchFailed = false
     if (phase === 'initial' && options.hitlRequestIndex) {
       try {
         const hydratedIds = new Set(filtered.map(m => m.id))
@@ -147,6 +150,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
         })
         pendingHitlCount = pending.size
       } catch (hitlErr) {
+        hitlFetchFailed = true
         console.error('[HITL] Failed to overlay HITL state during hydration:', hitlErr)
       }
     }
@@ -157,6 +161,7 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
       appliedCount: applyResult.appliedCount,
       pendingHitlCount,
       fetchFailed: false,
+      hitlFetchFailed,
     }
   } catch (error) {
     console.error(`❌ [room-sync] ${phase} failed for room ${roomId}:`, error)

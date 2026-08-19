@@ -64,6 +64,7 @@ class RelayToHubEvent(BaseModel):
     room_id: str | None = None
     user_message_id: str | None = None
     agent_message_id: str | None = None
+    run_id: str | None = None
     agent_id: str | None = None
     local_agent_id: str | None = None
     message: dict | None = None  # A2A Message payload

@@ -185,7 +185,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   )
 
   // Room actions
-  const { cancelProcessing, respondToHitlRequest, updateRoomSettings, refreshMessages, toggleSSE } = useRoomActions(
+  const {
+    cancelProcessing,
+    respondToHitlBatch,
+    cancelHitlRequest,
+    updateRoomSettings,
+    refreshMessages,
+    toggleSSE,
+  } = useRoomActions(
     roomId, room, getToken, lifecycle, hitlRequestIndex, roomQuery,
     reconcileWithDb, setCancelling, setUpdatingRoom,
     sseEnabled, setSseEnabled,
@@ -212,7 +219,8 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     // Actions
     sendUserMessage,
     cancelProcessing,
-    respondToHitlRequest,
+    respondToHitlBatch,
+    cancelHitlRequest,
     updateRoomSettings,
     refreshMessages,
     refreshRoomSetting,

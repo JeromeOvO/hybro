@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { handleHitlRequest } from '@/hooks/room/sse-handlers/handlers/hitl'
+import { handleHitlRequest, handleHitlResponse } from '@/hooks/room/sse-handlers/handlers/hitl'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
 
@@ -77,6 +77,8 @@ describe('handleHitlRequest', () => {
           agent_name: 'Agent',
           prompt: 'Need stale input',
           prompt_type: 'text',
+          question_count: 1,
+          question_index: 0,
         },
       },
       { shouldDrop: false, shouldBuffer: false },
@@ -90,5 +92,91 @@ describe('handleHitlRequest', () => {
       hitlRequestId: 'old-hitl',
       taskStatus: 'input-required',
     })
+  })
+
+  it('preserves auth semantics and same-request nonterminal transitions', async () => {
+    const lifecycle = makeLifecycle()
+    const timestamp = new Date().toISOString()
+    const index = { current: new Map<string, string>() }
+    const ctx = {
+      roomId: 'room-1',
+      lifecycle,
+      getAgentName: async () => 'Auth Agent',
+      getAgentSource: () => undefined,
+      reconcileWithDb: async () => {},
+      hitlRequestIndex: index,
+      setCancelling: () => {},
+    }
+
+    await handleHitlRequest(ctx, {
+      type: 'hitl_request',
+      room_id: 'room-1',
+      timestamp,
+      data: {
+        request_id: 'auth-hitl',
+        message_id: 'auth-message',
+        client_request_id: 'client-1',
+        source: 'agent',
+        prompt: 'Authenticate with the carrier',
+        prompt_type: 'authentication',
+        interaction_id: 'interaction-1',
+        interaction_status: 'open',
+        question_count: 1,
+        question_index: 0,
+      },
+    }, { shouldDrop: false, shouldBuffer: false })
+
+    expect(useMessageStore.getState().entities['auth-message']).toMatchObject({
+      hitlPromptType: 'authentication',
+      clientRequestId: 'client-1',
+      hitlResolved: false,
+    })
+
+    handleHitlResponse(ctx, {
+      type: 'hitl_response',
+      room_id: 'room-1',
+      timestamp,
+      data: {
+        request_id: 'auth-hitl',
+        message_id: 'auth-message',
+        source: 'agent',
+        status: 'answer_recorded',
+        interaction_id: 'interaction-1',
+        interaction_status: 'applying',
+        application_status: 'applying',
+        question_count: 1,
+        question_index: 0,
+        client_request_id: 'client-1',
+      },
+    }, { shouldDrop: false, shouldBuffer: false })
+
+    expect(useMessageStore.getState().entities['auth-message']).toMatchObject({
+      hitlResolved: false,
+      hitlInteractionStatus: 'applying',
+      hitlApplicationStatus: 'applying',
+      clientRequestId: 'client-1',
+    })
+    expect(index.current.get('auth-hitl')).toBe('auth-message')
+
+    handleHitlResponse(ctx, {
+      type: 'hitl_response',
+      room_id: 'room-1',
+      timestamp,
+      data: {
+        request_id: 'auth-hitl',
+        message_id: 'auth-message',
+        source: 'agent',
+        status: 'responded',
+        interaction_id: 'interaction-1',
+        interaction_status: 'applied',
+        application_status: 'applied',
+        question_count: 1,
+        question_index: 0,
+        client_request_id: 'client-1',
+      },
+    }, { shouldDrop: false, shouldBuffer: false })
+
+    expect(useMessageStore.getState().entities['auth-message'].hitlResolved).toBe(true)
+    expect(index.current.has('auth-hitl')).toBe(false)
   })
 })

@@ -266,30 +266,6 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_file_storage"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.files_routes",
-    "name": "download_file",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.FileStorage",
-    "path": "/api/v1/files/{file_id}/content",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
       "get_agent_service",
       "get_capability_issue_service",
       "get_current_user"
@@ -642,6 +618,30 @@
     ],
     "dependencies": [
       "get_current_user",
+      "get_file_storage"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.files_routes",
+    "name": "download_file",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "common.protocols.FileStorage",
+    "path": "/api/v1/files/{file_id}/content",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_hub_relay_service"
     ],
     "methods": [
@@ -900,6 +900,117 @@
     "response_model": null,
     "status_code": null,
     "streaming_response": null
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
+      "get_execution_engine",
+      "get_room_center"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.room_routes",
+    "name": "get_room_history",
+    "openapi_response_codes": [
+      "200"
+    ],
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "path": "/api/v1/roomCenter/history",
+    "response_class": null,
+    "response_model": "RoomHistoryResponse",
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.ExecutionEngine"
+    ]
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
+    ],
+    "methods": [
+      "PUT"
+    ],
+    "module": "api_gateway.routes.room_routes",
+    "name": "reorder_pinned_rooms",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "path": "/api/v1/roomCenter/history/pinned-order",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
+    ],
+    "methods": [
+      "DELETE"
+    ],
+    "module": "api_gateway.routes.room_routes",
+    "name": "delete_room_history_item",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "path": "/api/v1/roomCenter/history/{room_id}",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
+      "get_room_center",
+      "get_room_store"
+    ],
+    "methods": [
+      "PATCH"
+    ],
+    "module": "api_gateway.routes.room_routes",
+    "name": "update_room_history_item",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "path": "/api/v1/roomCenter/history/{room_id}",
+    "response_class": null,
+    "response_model": "RoomHistoryItem",
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomRouteReader"
+    ]
   },
   {
     "auth_dependencies": [
@@ -1174,6 +1285,34 @@
       "get_room_ownership_reader"
     ],
     "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.hitl_routes",
+    "name": "cancel_hitl_interaction",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "common.protocols.HITLManager",
+    "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomOwnershipReader"
+    ]
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
+    ],
+    "methods": [
       "GET"
     ],
     "module": "api_gateway.routes.hitl_routes",
@@ -1205,41 +1344,13 @@
       "POST"
     ],
     "module": "api_gateway.routes.hitl_routes",
-    "name": "respond_to_hitl_request",
+    "name": "respond_to_hitl_interaction",
     "openapi_response_codes": [
       "200",
       "422"
     ],
     "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/respond",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_hitl_manager",
-      "get_room_ownership_reader"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.hitl_routes",
-    "name": "cancel_hitl_request",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
+    "path": "/api/v1/rooms/{room_id}/hitl/respond-batch",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -1471,116 +1582,5 @@
     "response_model": null,
     "status_code": null,
     "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_execution_engine",
-      "get_room_center"
-    ],
-    "methods": [
-      "GET"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "get_room_history",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history",
-    "response_class": null,
-    "response_model": "RoomHistoryResponse",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.ExecutionEngine"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "methods": [
-      "PATCH"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "update_room_history_item",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history/{room_id}",
-    "response_class": null,
-    "response_model": "RoomHistoryItem",
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "methods": [
-      "PUT"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "reorder_pinned_rooms",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history/pinned-order",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "methods": [
-      "DELETE"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "delete_room_history_item",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history/{room_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
   }
 ]

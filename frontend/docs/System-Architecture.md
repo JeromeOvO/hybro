@@ -683,3 +683,25 @@ Debate is not a `ChatMode`, Room setting, request flag, or handled SSE event. Th
 ModeSelector retains one disabled `Debate (Coming Soon)` row as display-only UI;
 it has no selection handler and can never create a Debate request. Historical room
 `debateMode` metadata is ignored when selecting the Fast/Ultimate UI default.
+
+## HITL questionnaire composer
+
+An authoritative open HITL interaction replaces the normal room composer; the UI
+never stacks a second form over a disabled chat input. `selectPendingHitls` groups
+questions by durable `interaction_id`, and `HitlResponseBar` keeps drafts keyed by
+stable `request_id`, presents one question at a time, and requires a final review.
+The client submits the complete answer inventory to
+`POST /rooms/{room_id}/hitl/respond-batch`, preserving `client_request_id` for run
+correlation. A 409 is reconciled and surfaced rather than assumed successful; 410,
+delivery uncertainty, routing failure, timeout, and applying states remain explicit.
+The frontend has no single-request response pipeline; even singleton interactions
+use the batch endpoint. File-upload instructions arrive in the ordinary terminal
+HYBRO summary message, so they do not replace the composer. Historical `file` and
+`unknown` prompt records remain wire-compatible but share one unsupported-state
+renderer.
+
+Pending HITL hydration is authoritative only after a successful `/pending` read.
+`HydrateRoomResult.hitlFetchFailed` distinguishes a degraded read from a real empty
+set so existing input requests are not marked resolved during an outage. Resolved
+answers remain non-actionable timeline summaries sourced from durable message
+projection.

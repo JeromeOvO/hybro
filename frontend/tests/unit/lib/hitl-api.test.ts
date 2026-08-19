@@ -2,13 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../setup/msw-server'
 
-let respondToHitl: typeof import('@/lib/api/hitl').respondToHitl
 let fetchPendingHitlRequests: typeof import('@/lib/api/hitl').fetchPendingHitlRequests
+let respondToHitlBatch: typeof import('@/lib/api/hitl').respondToHitlBatch
+let cancelHitl: typeof import('@/lib/api/hitl').cancelHitl
 
 beforeEach(async () => {
   const mod = await import('@/lib/api/hitl')
-  respondToHitl = mod.respondToHitl
   fetchPendingHitlRequests = mod.fetchPendingHitlRequests
+  respondToHitlBatch = mod.respondToHitlBatch
+  cancelHitl = mod.cancelHitl
 })
 
 afterEach(() => {
@@ -16,36 +18,78 @@ afterEach(() => {
 })
 
 describe('HITL API Client', () => {
-  describe('respondToHitl', () => {
-    it('sends POST with request_id and user_input to room-scoped URL', async () => {
-      let capturedBody: any = null
-      let capturedUrl: string | null = null
+  describe('respondToHitlBatch', () => {
+    it('posts the complete interaction answer inventory with correlation', async () => {
+      let capturedBody: unknown
       server.use(
-        http.post('*/rooms/room-1/hitl/respond', async ({ request }) => {
-          capturedUrl = request.url
+        http.post('*/rooms/room-1/hitl/respond-batch', async ({ request }) => {
           capturedBody = await request.json()
-          return HttpResponse.json({ status: 'ok', request_id: 'req-1' })
-        })
+          return HttpResponse.json({
+            status: 'applied',
+            request_id: 'req-2',
+            interaction_id: 'interaction-1',
+          })
+        }),
       )
 
-      const result = await respondToHitl('room-1', 'req-1', '2024-2026')
-      expect(result.status).toBe('ok')
-      expect(result.request_id).toBe('req-1')
+      const result = await respondToHitlBatch(
+        'room-1',
+        'interaction-1',
+        [
+          { requestId: 'req-1', answer: 'Acme' },
+          { requestId: 'req-2', answer: '2027-01-01' },
+        ],
+        'client-1',
+      )
+
+      expect(result.status).toBe('applied')
       expect(capturedBody).toEqual({
-        request_id: 'req-1',
-        user_input: '2024-2026',
+        interaction_id: 'interaction-1',
+        answers: [
+          { request_id: 'req-1', user_input: 'Acme' },
+          { request_id: 'req-2', user_input: '2027-01-01' },
+        ],
+        client_request_id: 'client-1',
       })
-      expect(capturedUrl).toContain('/rooms/room-1/hitl/respond')
     })
 
-    it('throws on HTTP error', async () => {
+    it('surfaces batch HTTP errors', async () => {
       server.use(
-        http.post('*/rooms/room-1/hitl/respond', () => {
-          return new HttpResponse('Server Error', { status: 500 })
-        })
+        http.post('*/rooms/room-1/hitl/respond-batch', () => (
+          new HttpResponse('Conflict', { status: 409 })
+        )),
       )
 
-      await expect(respondToHitl('room-1', 'req-1', 'test')).rejects.toThrow()
+      await expect(respondToHitlBatch(
+        'room-1',
+        'interaction-1',
+        [{ requestId: 'req-1', answer: 'Acme' }],
+        undefined,
+      )).rejects.toThrow()
+    })
+  })
+
+  describe('cancelHitl', () => {
+    it('cancels the authoritative interaction with version fencing', async () => {
+      let capturedBody: unknown
+      server.use(
+        http.post('*/rooms/room-1/hitl/interactions/interaction-1/cancel', async ({ request }) => {
+          capturedBody = await request.json()
+          return HttpResponse.json({
+            status: 'canceled',
+            interaction_id: 'interaction-1',
+            interaction_version: 5,
+          })
+        }),
+      )
+
+      await cancelHitl('room-1', 'interaction-1', 4, 'cancel-1')
+
+      expect(capturedBody).toEqual({
+        interaction_id: 'interaction-1',
+        expected_interaction_version: 4,
+        client_request_id: 'cancel-1',
+      })
     })
   })
 

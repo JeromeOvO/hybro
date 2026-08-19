@@ -31,7 +31,7 @@ def resolve_agent_observed_blockers(
         outcome.remaining_required_obligations
     )
     if not required_output_keys:
-        return state, outcome
+        return _promote_user_only_input_blockers(state, intent, outcome)
 
     updated = state.model_copy(deep=True)
     validator = BlockerPolicyValidator()
@@ -48,6 +48,27 @@ def resolve_agent_observed_blockers(
         if blocker.source != "agent":
             continue
         if not set(blocker.evidence_refs) & evidence_refs:
+            continue
+        if blocker.key.endswith(":agent_input_required") and set(
+            blocker.evidence_refs
+        ) & {
+            intent.planned_agent_message_id,
+            f"{intent.planned_agent_message_id}:awaiting_input",
+        }:
+            # The completed agent itself declared it needs user input. That
+            # blocks every required output until the user answers, regardless
+            # of token matching or alternate-agent policy.
+            blocked_keys = sorted(required_output_keys)
+            replacement = blocker.model_copy(
+                update={
+                    "blocked_output_keys": blocked_keys,
+                    "claimed_user_only": True,
+                    "validation_status": "validated",
+                },
+                deep=True,
+            )
+            updated.blockers[index] = replacement
+            validated.append(replacement)
             continue
         blocked_keys = _matched_output_keys(
             blocker,
@@ -357,6 +378,54 @@ def _split_obligation(obligation: str) -> tuple[str, str | None]:
         output_key, field_key = obligation.split(":", 1)
         return output_key, field_key
     return obligation, None
+
+
+def _promote_user_only_input_blockers(
+    state: OrchestrationRunState,
+    intent: DispatchIntent,
+    outcome: DelegationOutcomeRecord,
+) -> tuple[OrchestrationRunState, DelegationOutcomeRecord]:
+    """A prose delegate may have no declared output obligations. When the
+    completed agent explicitly awaited user input, its `agent_input_required`
+    blocker is the only way forward and the agent itself claimed it is
+    user-only. Promote those blockers so a post-dispatch ASK_USER can
+    reference them under the structural validator (which skips the output-key
+    intersection in this case)."""
+    awaiting_evidence_refs = {
+        intent.planned_agent_message_id,
+        f"{intent.planned_agent_message_id}:awaiting_input",
+    }
+    promoted: list[BlockerRecord] = []
+    updated_state = state
+    for index, blocker in enumerate(updated_state.blockers):
+        if blocker.status != "open":
+            continue
+        if blocker.source != "agent":
+            continue
+        if not blocker.key.endswith(":agent_input_required"):
+            continue
+        if not set(blocker.evidence_refs) & awaiting_evidence_refs:
+            continue
+        if updated_state is state:
+            updated_state = state.model_copy(deep=True)
+        replacement = updated_state.blockers[index].model_copy(
+            update={
+                "claimed_user_only": True,
+                "validation_status": "validated",
+            },
+            deep=True,
+        )
+        updated_state.blockers[index] = replacement
+        promoted.append(replacement)
+    if not promoted:
+        return state, outcome
+    updated_outcome = outcome.model_copy(
+        update={
+            "status": "blocked",
+            "blockers": sorted(promoted, key=lambda item: item.key),
+        }
+    )
+    return updated_state, updated_outcome
 
 
 def _output_keys_from_obligations(obligations: list[str]) -> set[str]:

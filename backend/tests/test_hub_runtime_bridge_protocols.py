@@ -66,6 +66,7 @@ def test_hub_command_dtos_carry_current_relay_metadata() -> None:
         room_id="room",
         user_message_id="user-msg",
         agent_message_id="agent-msg",
+        run_id="run-1",
         payload={"role": "user"},
         task_id="relay-pending-1",
     )
@@ -82,6 +83,10 @@ def test_hub_command_dtos_carry_current_relay_metadata() -> None:
     failure = OfflineHubFailureCommand(room_id="room", agent_message_id="agent-msg")
 
     assert dispatch.task_id == "relay-pending-1"
+    from hub_runtime_bridge.transport.relay_transport import dispatch_command_to_event
+
+    assert dispatch.run_id == "run-1"
+    assert dispatch_command_to_event(dispatch)["run_id"] == "run-1"
     assert cancel.agent_message_id == "agent-msg"
     assert reply.reply_text == "ok"
     assert failure.error_text

@@ -26,10 +26,23 @@ from api_gateway.routes.agent_routes import (
     register_agent,
     update_agent,
 )
+from api_gateway.viewsets.agent import AgentViewSet
 from local_agents.models import DiscoveryTrigger, LocalAgentDiscoveryResult
 from models.agent import AgentStatus
 from models.request import AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
+
+
+def test_public_agent_mask_preserves_card_url_without_public_relay_url():
+    payload = {
+        "public_url": None,
+        "agent_card": {"url": "http://localhost:9060"},
+    }
+
+    masked = AgentViewSet()._mask_agent_payload(payload)
+
+    assert masked["agent_card"]["url"] == "http://localhost:9060"
+
 
 # =============================================================================
 # Local Agent Discovery Tests

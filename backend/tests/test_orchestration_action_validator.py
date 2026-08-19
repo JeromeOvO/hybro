@@ -328,12 +328,17 @@ def test_budget_exhaustion_rejects_delegate_but_allows_complete():
     )
 
 
-def test_budget_exhaustion_allows_synthesize_ask_user_and_fail():
+def test_budget_exhaustion_allows_terminal_user_actions_and_fail():
     synthesize = _action(PlannerActionType.COMPLETE)
     ask_user = PlannerAction(
         action=PlannerActionType.ASK_USER,
         reasoning="Need a user-only value",
         questions=[PlannerQuestion(prompt="What is the approved limit?")],
+    )
+    file_handoff = PlannerAction(
+        action=PlannerActionType.REQUEST_FILE_HANDOFF,
+        reasoning="Need the signed source file",
+        file_prompt="Upload the signed source file in a new message.",
     )
     fail = PlannerAction(
         action=PlannerActionType.FAIL,
@@ -351,7 +356,27 @@ def test_budget_exhaustion_allows_synthesize_ask_user_and_fail():
         is synthesize
     )
     assert _validate(ask_user, steps_used=8, step_budget=8) is ask_user
+    assert _validate(file_handoff, steps_used=8, step_budget=8) is file_handoff
     assert _validate(fail, steps_used=8, step_budget=8) is fail
+
+
+def test_file_handoff_requires_prompt_and_forbids_questions():
+    with pytest.raises(PlannerActionValidationError, match="file_prompt"):
+        _validate(
+            PlannerAction(
+                action=PlannerActionType.REQUEST_FILE_HANDOFF,
+                reasoning="missing prompt",
+            )
+        )
+    with pytest.raises(PlannerActionValidationError, match="must not contain"):
+        _validate(
+            PlannerAction(
+                action=PlannerActionType.REQUEST_FILE_HANDOFF,
+                reasoning="mixed controls",
+                file_prompt="Upload the file.",
+                questions=[PlannerQuestion(prompt="Also answer this")],
+            )
+        )
 
 
 def test_delegate_rejects_empty_targets():

@@ -1318,7 +1318,8 @@ class TestInquiryRoomMessages:
                     {
                         "request_id": "local-hitl-request",
                         "room_id": sample_room.room_id,
-                        "source": "agent",
+                        "public_source": "agent",
+                        "application_route": "a2a_resume",
                         "agent_id": "insurer-agent",
                         "display_message_id": local_message.message_id,
                         "continuation_message_id": local_message.message_id,
@@ -1335,13 +1336,14 @@ class TestInquiryRoomMessages:
                         {
                             "request_id": "local-supervisor-hitl-request",
                             "room_id": sample_room.room_id,
-                            "source": "supervisor",
+                            "public_source": "supervisor",
+                            "application_route": "supervisor_run",
                             "display_message_id": supervisor_message.message_id,
                             "prompt": "Which market should be prioritized?",
                             "prompt_type": "text",
-                            "group_id": "supervisor-group-1",
-                            "group_total": 2,
-                            "group_index": 0,
+                            "interaction_id": "supervisor-group-1",
+                            "question_count": 2,
+                            "question_index": 0,
                             "status": "responded",
                             "user_input": "California",
                         }
@@ -1373,11 +1375,13 @@ class TestInquiryRoomMessages:
         assert local_public.client_request_id == client_request_id
         assert local_public.message_content.message_task.metadata == {
             "hitl_request_id": "local-hitl-request",
-            "hitl_prompt": "The agent needs additional information.",
-            "hitl_prompt_type": "text",
-            "hitl_choices": None,
+            "hitl_prompt": "Choose the approved option",
+            "hitl_prompt_type": "choice",
+            "hitl_choices": ["Approve", "Reject"],
             "hitl_a2a_task_id": "local-hitl-task",
             "hitl_a2a_context_id": "local-hitl-context",
+            "hitl_question_count": 1,
+            "hitl_question_index": 0,
             "user_answer": "Approve",
         }
         assert local_public.extend_info == {
@@ -1389,9 +1393,9 @@ class TestInquiryRoomMessages:
             "hitl_prompt": "Which market should be prioritized?",
             "hitl_prompt_type": "text",
             "hitl_choices": None,
-            "hitl_group_id": "supervisor-group-1",
-            "hitl_group_total": 2,
-            "hitl_group_index": 0,
+            "hitl_interaction_id": "supervisor-group-1",
+            "hitl_question_count": 2,
+            "hitl_question_index": 0,
             "user_answer": "California",
         }
         assert supervisor_public.extend_info == {

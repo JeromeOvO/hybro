@@ -36,14 +36,11 @@ from models.supervisor import (
     ActionType,
     AgentProfile,
     ClarifyQuestion,
-    DelegateTarget,
     RoomConfig,
     RunStatus,
-    StepResult,
     StepStatus,
     SupervisorAction,
     SupervisorRunResult,
-    SupervisorTrajectory,
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -1123,7 +1120,7 @@ def test_transient_trajectory_preserves_a2a_metadata_from_agent_output():
     projected = trajectory.entries[0].results[0]
     assert projected.a2a_task_id == "task-1"
     assert projected.a2a_context_id == "ctx-1"
-    assert projected.status_message == "The agent needs additional information."
+    assert projected.status_message == "Provide the effective date."
 
 
 def test_orchestration_result_from_output_record_projects_completed_status_as_success():
@@ -1268,157 +1265,6 @@ def test_dispatch_targets_cancelled_error_handler_reraises():
         assert not any(isinstance(stmt, ast.Return) for stmt in handler.body)
 
 
-def test_supervisor_agent_hitl_request_passes_selected_message_ids():
-    source = (
-        _ROOT / "execution" / "orchestration" / "supervisor_executor.py"
-    ).read_text()
-    agent_hitl_anchor = "async def _run_agent_awaiting_input_action("
-    start = source.index(
-        "request = await self.hitl_coordinator.request_input(",
-        source.index(agent_hitl_anchor),
-    )
-    end = source.index("if request is None:", start)
-    request_call = source[start:end]
-
-    assert "continuation_message_id=continuation_message_id" in request_call
-    assert "display_message_id=display_message_id" in request_call
-    assert request_call.index(
-        "continuation_message_id=continuation_message_id"
-    ) < request_call.index("display_message_id=display_message_id")
-
-
-# =============================================================================
-# _log_and_return Tests
-# =============================================================================
-
-
-class TestLogAndReturn:
-    @pytest.mark.asyncio
-    async def test_returns_result_unchanged(self):
-        trajectory = SupervisorTrajectory()
-        result = SupervisorRunResult(status="completed", trajectory=trajectory)
-        se = _make_supervisor_executor()
-        returned = await se._log_and_return("room-1", trajectory, result)
-        assert returned is result
-        assert returned.status == "completed"
-
-
-# =============================================================================
-# CLARIFY cleanup compensation Tests
-# =============================================================================
-
-
-class TestClarifyCleanupCompensation:
-    """Tests that the CLARIFY handler cleans up HITL requests and messages
-    when _checkpoint_interrupt fails or request_input returns None mid-group."""
-
-    @pytest.fixture
-    def se(self):
-        return _make_supervisor_executor()
-
-    def _make_room_config(self):
-        cfg = MagicMock()
-        return cfg
-
-    @pytest.mark.asyncio
-    async def test_cancels_requests_when_checkpoint_interrupt_fails(self, se):
-        """If all questions are created but continuation save fails,
-        all HITL requests and messages must be cleaned up."""
-        from models.supervisor import (
-            ActionType,
-            ClarifyQuestion,
-            SupervisorAction,
-        )
-
-        hitl_mock = AsyncMock()
-        req_a = MagicMock(request_id="req-a")
-        req_b = MagicMock(request_id="req-b")
-        hitl_mock.request_input = AsyncMock(side_effect=[req_a, req_b])
-        hitl_mock.cancel_request = AsyncMock()
-
-        agent_msg = MagicMock(message_id="msg-agent-1")
-        se.room_runtime.create_agent_message.return_value = agent_msg
-        se.message_writer.add_room_agent_message = AsyncMock()
-        se.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
-
-        action = SupervisorAction(
-            action=ActionType.CLARIFY,
-            reasoning="need info",
-            questions=[
-                ClarifyQuestion(prompt="Q1?"),
-                ClarifyQuestion(prompt="Q2?"),
-            ],
-        )
-
-        se.supervisor_service.decide_next = AsyncMock(return_value=action)
-        se._checkpoint_interrupt = AsyncMock(return_value=False)
-
-        se.hitl_coordinator = hitl_mock
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="umsg-1",
-            message_text="Hello",
-            agent_registry=[],
-            room_config=self._make_room_config(),
-            request_user_id="user-1",
-        )
-
-        assert result.status == "failed"
-        assert hitl_mock.cancel_request.await_count == 2
-        hitl_mock.cancel_request.assert_any_await("req-a", "room-1")
-        hitl_mock.cancel_request.assert_any_await("req-b", "room-1")
-
-    @pytest.mark.asyncio
-    async def test_cancels_prior_requests_when_request_input_returns_none(self, se):
-        """If request_input returns None mid-group (e.g. max rounds),
-        previously created requests must be canceled."""
-        from models.supervisor import (
-            ActionType,
-            ClarifyQuestion,
-            SupervisorAction,
-        )
-
-        req_a = MagicMock()
-        req_a.request_id = "req-a"
-
-        hitl_mock = AsyncMock()
-        hitl_mock.request_input = AsyncMock(side_effect=[req_a, None])
-        hitl_mock.cancel_request = AsyncMock()
-
-        agent_msg = MagicMock(message_id="msg-agent-1")
-        se.room_runtime.create_agent_message.return_value = agent_msg
-        se.message_writer.add_room_agent_message = AsyncMock()
-        se.message_writer.delete_room_agent_message_by_message_id = AsyncMock()
-
-        action = SupervisorAction(
-            action=ActionType.CLARIFY,
-            reasoning="need info",
-            questions=[
-                ClarifyQuestion(prompt="Q1?"),
-                ClarifyQuestion(prompt="Q2?"),
-            ],
-        )
-
-        se.supervisor_service.decide_next = AsyncMock(return_value=action)
-
-        se.hitl_coordinator = hitl_mock
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="umsg-1",
-            message_text="Hello",
-            agent_registry=[],
-            room_config=self._make_room_config(),
-            request_user_id="user-1",
-        )
-
-        assert result.status == "failed"
-        assert hitl_mock.cancel_request.await_count == 1
-        hitl_mock.cancel_request.assert_awaited_once_with("req-a", "room-1")
-        assert (
-            se.message_writer.delete_room_agent_message_by_message_id.await_count == 2
-        )
-
-
 class TestProcessingStatusLifecycleOrder:
     @pytest.mark.asyncio
     async def test_stage_notification_records_before_send(self):
@@ -1483,122 +1329,6 @@ class TestProcessingStatusLifecycleOrder:
         se.delivery.send_processing_status.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_agent_awaiting_input_records_before_send(self):
-        se = _make_supervisor_executor()
-        order: list[str] = []
-        emit = AsyncMock(
-            side_effect=lambda *a, **k: (
-                order.append("emit") if k.get("status") == "awaiting_input" else None
-            )
-        )
-        se.bind_execution_event_deps(emit)
-        se.supervisor_service.decide_next = AsyncMock(
-            return_value=SupervisorAction(
-                action=ActionType.DELEGATE,
-                reasoning="ask agent",
-                targets=[
-                    DelegateTarget(
-                        agent_id="agent-1",
-                        agent_name="Agent",
-                        task="ask",
-                    )
-                ],
-            )
-        )
-        se._dispatch_targets = AsyncMock(
-            return_value=[
-                StepResult(
-                    step_number=1,
-                    agent_id="agent-1",
-                    agent_name="Agent",
-                    task="ask",
-                    response_text="",
-                    success=False,
-                    status=StepStatus.AWAITING_INPUT,
-                    paused_message_id="agent-msg-1",
-                    agent_message_id="agent-msg-1",
-                    status_message="Need input",
-                )
-            ]
-        )
-        se._checkpoint_interrupt = AsyncMock(return_value=True)
-        hitl_mock = AsyncMock()
-        hitl_mock.request_input = AsyncMock(
-            return_value=SimpleNamespace(request_id="hitl-1")
-        )
-
-        se.hitl_coordinator = hitl_mock
-        result = await se.run(
-            room_id="room-1",
-            user_message_id="msg-1",
-            message_text="hello",
-            agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent")],
-            room_config=RoomConfig(),
-        )
-
-        assert result.status == RunStatus.AWAITING_INPUT
-        assert order == ["emit"]
-        se.delivery.send_processing_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_agent_hitl_receives_orchestration_run_link(self):
-        se = _make_supervisor_executor()
-        se.bind_execution_event_deps(AsyncMock())
-        se.supervisor_service.decide_next = AsyncMock(
-            return_value=SupervisorAction(
-                action=ActionType.DELEGATE,
-                reasoning="ask agent",
-                targets=[
-                    DelegateTarget(
-                        agent_id="agent-1",
-                        agent_name="Agent",
-                        task="ask",
-                    )
-                ],
-            )
-        )
-        se._dispatch_targets = AsyncMock(
-            return_value=[
-                StepResult(
-                    step_number=1,
-                    agent_id="agent-1",
-                    agent_name="Agent",
-                    task="ask",
-                    response_text="",
-                    success=False,
-                    status=StepStatus.AWAITING_INPUT,
-                    paused_message_id="agent-msg-1",
-                    agent_message_id="agent-msg-1",
-                    status_message="Need input",
-                )
-            ]
-        )
-        se._checkpoint_interrupt = AsyncMock(return_value=True)
-        hitl_mock = AsyncMock()
-        hitl_mock.request_input = AsyncMock(
-            return_value=SimpleNamespace(request_id="hitl-1")
-        )
-        se.hitl_coordinator = hitl_mock
-        user_message = SimpleNamespace(
-            client_request_id="cr-1",
-            extend_info={
-                "orchestration_run_id": "run-msg-1",
-            },
-        )
-
-        await se.run(
-            room_id="room-1",
-            user_message_id="msg-1",
-            message_text="hello",
-            agent_registry=[AgentProfile(agent_id="agent-1", agent_name="Agent")],
-            room_config=RoomConfig(),
-            user_message=user_message,
-        )
-
-        call_kwargs = hitl_mock.request_input.await_args.kwargs
-        assert call_kwargs["orchestration_run_id"] == "run-msg-1"
-
-    @pytest.mark.asyncio
     async def test_supervisor_hitl_records_before_awaiting_input_send(self):
         se = _make_supervisor_executor()
         order: list[str] = []
@@ -1624,8 +1354,8 @@ class TestProcessingStatusLifecycleOrder:
         se.message_writer.add_room_agent_message = AsyncMock()
         se._checkpoint_interrupt = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
-        hitl_mock.request_input = AsyncMock(
-            return_value=SimpleNamespace(request_id="hitl-1")
+        hitl_mock.request_interaction = AsyncMock(
+            return_value=[SimpleNamespace(request_id="hitl-1")]
         )
 
         se.hitl_coordinator = hitl_mock
@@ -1661,8 +1391,8 @@ class TestProcessingStatusLifecycleOrder:
         se.message_writer.add_room_agent_message = AsyncMock()
         se._checkpoint_interrupt = AsyncMock(return_value=True)
         hitl_mock = AsyncMock()
-        hitl_mock.request_input = AsyncMock(
-            return_value=SimpleNamespace(request_id="hitl-1")
+        hitl_mock.request_interaction = AsyncMock(
+            return_value=[SimpleNamespace(request_id="hitl-1")]
         )
         se.hitl_coordinator = hitl_mock
         user_message = SimpleNamespace(
@@ -1681,5 +1411,5 @@ class TestProcessingStatusLifecycleOrder:
             user_message=user_message,
         )
 
-        call_kwargs = hitl_mock.request_input.await_args.kwargs
+        call_kwargs = hitl_mock.request_interaction.await_args.kwargs
         assert call_kwargs["orchestration_run_id"] == "run-msg-1"

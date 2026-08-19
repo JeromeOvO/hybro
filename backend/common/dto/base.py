@@ -1,10 +1,11 @@
+from copy import deepcopy as _deepcopy_value
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class FrozenDict(dict):
-    """Dict variant that rejects in-place mutation."""
+    """Dict variant that rejects in-place mutation but supports copying."""
 
     def _immutable(self, *args, **kwargs):
         raise TypeError("FrozenDict is immutable")
@@ -18,9 +19,23 @@ class FrozenDict(dict):
     update = _immutable
     __ior__ = _immutable
 
+    def __copy__(self) -> "FrozenDict":
+        return FrozenDict(self)
+
+    def __deepcopy__(self, memo: dict) -> "FrozenDict":
+        existing = memo.get(id(self))
+        if existing is not None:
+            return existing
+        result = FrozenDict(
+            (_deepcopy_value(key, memo), _deepcopy_value(value, memo))
+            for key, value in self.items()
+        )
+        memo[id(self)] = result
+        return result
+
 
 class FrozenList(list):
-    """List variant that rejects in-place mutation."""
+    """List variant that rejects in-place mutation but supports copying."""
 
     def _immutable(self, *args, **kwargs):
         raise TypeError("FrozenList is immutable")
@@ -37,6 +52,17 @@ class FrozenList(list):
     sort = _immutable
     __iadd__ = _immutable
     __imul__ = _immutable
+
+    def __copy__(self) -> "FrozenList":
+        return FrozenList(self)
+
+    def __deepcopy__(self, memo: dict) -> "FrozenList":
+        existing = memo.get(id(self))
+        if existing is not None:
+            return existing
+        result = FrozenList(_deepcopy_value(item, memo) for item in self)
+        memo[id(self)] = result
+        return result
 
 
 def _freeze_value(value: Any) -> Any:

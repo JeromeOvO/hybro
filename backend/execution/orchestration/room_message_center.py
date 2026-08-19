@@ -27,6 +27,7 @@ from common.utils.logger import get_logger
 from common.utils.summary_streaming import stream_summary_to_sse
 from common.utils.time import utcnow
 from execution.dispatch.agent_dispatcher import AgentDispatcher
+from execution.dispatch.agent_ingress_router import AgentIngressRouter
 from execution.dispatch.agent_message_processor import AgentMessageProcessor
 from execution.dispatch.response_handler import AgentResponseHandler
 from execution.dispatch.transports.direct import DirectTransport
@@ -297,6 +298,10 @@ class RoomMessageCenter:
                 self.message_reader.get_room_agent_message_by_message_id
             ),
         )
+        self.agent_ingress_router = AgentIngressRouter(
+            message_reader=self.message_reader,
+            orchestration_run_store=self.orchestration_run_store,
+        )
         self.agent_response_handler = AgentResponseHandler(
             message_writer=self.message_writer,
             task_writer=self.message_writer,
@@ -311,6 +316,7 @@ class RoomMessageCenter:
             task_notification_store=self.task_notification_store,
             task_notification_impl=task_notification_impl,
             room_files=room_files,
+            agent_ingress_router=self.agent_ingress_router,
         )
 
         # DirectTransport contains all streaming/sync response processing
@@ -2259,6 +2265,7 @@ class RoomMessageCenter:
         task_result_text: str | None = None,
         *,
         failed: bool = False,
+        end_turn: bool = False,
     ) -> bool:
         """Resume queue processing after a push notification task completes.
 
@@ -2271,6 +2278,8 @@ class RoomMessageCenter:
             failed: If True, the step that triggered the resume failed. The
                 orchestrator should treat this as an error rather than a
                 successful response.
+            end_turn: Discard queued follow-up work because the agent's normal
+                response asks for a file upload in a new user message.
 
         Returns ``True`` if the queue was resumed successfully.
         """
@@ -2382,9 +2391,15 @@ class RoomMessageCenter:
                 # E.g. another concurrent resume already processed it.
                 return False
 
+            if end_turn:
+                locked_continuation = dict(locked_continuation)
+                locked_continuation["remaining_queue"] = []
             try:
                 return await self._resume_continuation_locked(
-                    locked_continuation, message_id, task_result_text
+                    locked_continuation,
+                    message_id,
+                    task_result_text,
+                    failed=failed,
                 )
             except asyncio.CancelledError:
                 await asyncio.shield(
@@ -2527,6 +2542,8 @@ class RoomMessageCenter:
         continuation: dict,
         message_id: str,
         task_result_text: str | None,
+        *,
+        failed: bool = False,
     ) -> bool:
         """Inner resume path — caller MUST hold the per-room lock (if available)."""
 
@@ -2546,6 +2563,7 @@ class RoomMessageCenter:
         result = await self.queue_executor.resume_from_continuation(
             message_id,
             task_result_text,
+            failed=failed,
         )
 
         if not result.success:

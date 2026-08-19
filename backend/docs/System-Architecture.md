@@ -1,5 +1,24 @@
 # System Architecture
 
+## Typed interactive agent ingress
+
+All remote `input-required`/interactive events now cross a single
+`AgentIngressRouter` boundary before any public task, message, artifact, or SSE
+projection. Transports capture a private `AgentInputObservation` directly from
+an authoritative A2A `Task` or `TaskStatusUpdateEvent`; only
+`status.message.metadata["hybro.ai/a2a/interaction"]` is parsed as the typed
+contract.
+
+The router resolves ownership exclusively from the persisted
+`RoomAgentMessage.run_id`. A verified Supervisor dispatch CAS-appends an
+idempotent private observation to `OrchestrationRunState` and re-enters normal
+recovery without exposing the remote prompt. Conversation-owned typed events
+first persist their queue continuation, then materialize one R1 A2A-resume
+interaction aggregate, and only then project its typed question inventory.
+Absent or invalid typed metadata fails with `unsupported_interaction` and the
+fixed public message `The agent requested an unsupported interaction.`
+
+
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
 currently present in this repository.
@@ -211,7 +230,10 @@ unique Mongo index on `agent_groups.group_id` makes this idempotency guarantee
 atomic across processes and browser tabs; ordinary Team creation without a
 preset key keeps random IDs.
 
-Most frontend-facing routes use Clerk auth. Relay routes use API-key auth from
+Frontend-facing routes use Clerk auth when `AUTH_MODE=clerk`. In the default
+self-hosted `AUTH_MODE=mock` mode, `main.py` overrides every user-auth dependency,
+including the dual user/service dependency used by agent registration, with the
+stable local developer identity. Relay routes use API-key auth from
 `common.api_key_auth`.
 
 ### `common`
@@ -587,7 +609,21 @@ boundaries to plan, reduce, persist, and resume each versioned step.
 
 HITL records preserve the optional `orchestration_run_id` needed to resume the
 durable run. Delivery events and public SSE frames do not expose private
-orchestration linkage. Grouped cancellation or expiry terminalizes each pending
+orchestration linkage. File-upload blockers are not HITL: typed file questions,
+or conservative untyped prompts containing both an upload/attach verb and a
+file/PDF/document noun, become normal terminal agent or HYBRO messages asking
+the user to attach the file in a new turn. Supervisor clarification branches
+before any HITL request, interaction, or continuation artifacts are created;
+the normal terminal HYBRO message is then committed as the final source. Prompts
+that offer a text alternative or negate uploading remain ordinary HITL
+questions. Classification runs only at Supervisor ASK_USER, inline direct
+interactive results, and asynchronous interactive callbacks; completed prose is
+never reclassified. A transient `end_turn` signal reaches orchestration, which
+atomically checkpoints `FINALIZING` with one durable file-turn marker before
+side effects. Its idempotent finalizer writes the instruction into the
+preallocated HYBRO summary message, completes the selected child and HYBRO
+tasks, cancels active siblings, and completes the run. Recovery reruns the same
+finalizer after interruption. Grouped cancellation or expiry terminalizes each pending
 sibling while retaining its own run linkage metadata.
 
 `RoomMessageCenter` routes every durable orchestration envelope through
@@ -2034,3 +2070,26 @@ and cancels the local body if lease ownership is lost.
 
 Debate is not an execution mode. Legacy room `debateMode` metadata is ignored, and
 legacy active Debate orchestration is failed during recovery rather than resumed.
+
+### Durable HITL interaction application
+
+HITL uses three durable projections: `hitl_requests` for backward-compatible
+question APIs, `hitl_interactions` for questionnaire/deadline/application ownership,
+and `hitl_resume_commands` for fenced remote A2A continuation delivery. The stale
+task checker's existing leader lease also gates HITL lifecycle reconciliation.
+Remote delivery uncertainty is intentionally durable and is never blindly retried.
+
+The questionnaire endpoint `POST /rooms/{room_id}/hitl/respond-batch` requires an
+exact, duplicate-free answer inventory for the durable interaction. Request answers
+are CAS-recorded without invoking execution; only after the aggregate proves that
+all required answers and digests exist does the application coordinator claim one
+fenced application. Retrying a partially recorded batch repairs the same aggregate,
+and retrying an applied batch only replays idempotent projections. Individual
+`/respond` remains for compatibility and single-question clients.
+
+`GET /rooms/{room_id}/hitl/pending` uses the strict runtime-store read. Persistence
+failures propagate as an HTTP failure rather than an authoritative empty list, which
+prevents clients from hiding unresolved interactions during degraded hydration.
+Prompt schemas include text, textarea, single/multi choice, confirmation/approval,
+authentication guidance, date, and file capability signaling; clients must not use
+free text to collect credentials.

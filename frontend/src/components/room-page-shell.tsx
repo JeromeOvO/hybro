@@ -7,6 +7,7 @@ import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
 import { ConversationMessageList } from '@/components/conversation/ConversationMessageList'
 import { ComposerShell } from '@/components/composer/ComposerShell'
+import type { HitlBatchAnswer } from '@/components/composer/HitlResponseBar'
 import { useTextSelectionQuote } from '@/hooks/useTextSelectionQuote'
 import { AgentResponseDetailPane } from '@/components/conversation/AgentResponseDetailPane'
 import {
@@ -74,7 +75,9 @@ export interface TimelineAdapter {
   getToken?: () => Promise<string | null>
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
-  onRespondToHitl: (hitlId: string, answer: string) => Promise<void>
+  onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
+  onCancelHitl: (requestId: string) => Promise<void>
+  onRefreshHitl: () => Promise<void>
   onChatModeChange: (mode: ChatMode) => void
   isSending: boolean
   isProcessing: boolean

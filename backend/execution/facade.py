@@ -18,6 +18,7 @@ from common.dto import (
 )
 from common.observability import bind_log_context, traced_create_task
 from common.protocols import EventPublisher
+from common.types import Task, TaskStatusUpdateEvent
 from common.utils.logger import get_logger
 from execution.cancellation.finalizer import (
     CancellationFinalizationResult,
@@ -28,10 +29,10 @@ from execution.cancellation.ports import (
     CancellationMessageReaderPort,
 )
 from execution.cancellation.service import CancellationService
+from execution.dispatch.a2a_interaction import input_observation_from_a2a
 from execution.dispatch.agent_event import AgentEvent
 from execution.events import emit_room_processing_status
 from execution.hitl.translators import (
-    hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
     model_hitl_request_to_common,
 )
@@ -42,6 +43,7 @@ from execution.idempotency import (
 )
 from execution.orchestration.run_reducer import record_hitl_resolution
 from execution.orchestration.run_store import (
+    DuplicateEventIdConflict,
     OrchestrationRunStore,
     OrchestrationStoreConflict,
 )
@@ -171,14 +173,7 @@ class RoomMessageCenterPort(Protocol):
 
 
 class HITLServicePort(Protocol):
-    async def request_input(
-        self,
-        room_id: str,
-        user_message_id: str,
-        source: str,
-        prompt: str,
-        **kwargs: Any,
-    ) -> Any | None: ...
+    async def request_interaction(self, **kwargs: Any) -> list[Any] | None: ...
 
     async def handle_response(
         self,
@@ -186,6 +181,15 @@ class HITLServicePort(Protocol):
         request_id: str,
         user_input: str,
         user_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def handle_batch_response(
+        self,
+        room_id: str,
+        interaction_id: str,
+        answers: list[dict[str, str]],
+        user_id: str,
+        client_request_id: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def get_pending_requests(self, room_id: str) -> list[Any]: ...
@@ -363,6 +367,38 @@ def _hub_payload_lifecycle_message_id(kind: str, payload: dict[str, Any]) -> str
     return value
 
 
+def _hub_interactive_observation(
+    event: HubAgentResponseInternal,
+    payload: dict[str, Any],
+):
+    task_payload = payload.get("task")
+    if isinstance(task_payload, dict):
+        source = Task.model_validate(task_payload)
+        if source.id != event.task_id:
+            raise ValueError("Hub interactive Task id conflicts with event.task_id")
+    else:
+        update_payload = payload.get("status_update")
+        if isinstance(update_payload, dict):
+            source = TaskStatusUpdateEvent.model_validate(update_payload)
+        else:
+            status_payload = payload.get("_a2a_status")
+            if not isinstance(status_payload, dict):
+                return None
+            if not payload.get("context_id"):
+                return None
+            source = TaskStatusUpdateEvent.model_validate(
+                {
+                    "taskId": event.task_id,
+                    "contextId": payload.get("context_id"),
+                    "status": status_payload,
+                    "final": False,
+                }
+            )
+        if source.task_id != event.task_id:
+            raise ValueError("Hub status task id conflicts with event.task_id")
+    return input_observation_from_a2a(source)
+
+
 def hub_agent_response_internal_to_agent_event(
     event: HubAgentResponseInternal,
 ) -> AgentEvent:
@@ -370,6 +406,9 @@ def hub_agent_response_internal_to_agent_event(
     kind = _hub_payload_kind(payload)
     _validate_hub_event_consistency(event, kind, payload)
     _validate_hub_payload_for_kind(kind, payload)
+    observation = (
+        _hub_interactive_observation(event, payload) if kind == "interactive" else None
+    )
     return AgentEvent(
         kind=kind,
         room_id=event.room_id,
@@ -377,7 +416,11 @@ def hub_agent_response_internal_to_agent_event(
         agent_id=event.agent_id,
         task_id=event.task_id,
         turn_id=_optional_hub_str(payload, "turn_id"),
-        text=_optional_hub_str(payload, "text", default="") or "",
+        text=(
+            ""
+            if kind == "interactive"
+            else _optional_hub_str(payload, "text", default="") or ""
+        ),
         state=_hub_payload_state(kind, payload),
         parts=_optional_hub_list_of_dicts(payload, "parts"),
         artifacts=_optional_hub_list_of_dicts(payload, "artifacts"),
@@ -401,6 +444,7 @@ def hub_agent_response_internal_to_agent_event(
             payload, "files_materialized", default=False
         ),
         details=_agent_event_details(_thaw_hub_payload_value(payload.get("details"))),
+        input_observation=observation,
     )
 
 
@@ -952,49 +996,29 @@ class ExecutionFacade:
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         return await self._run_lifecycle.heal_diverged_runs(limit=limit)
 
-    async def create_hitl_request(
+    async def _record_and_schedule_resolved_hitl(
         self,
-        room_id: str,
-        user_message_id: str,
-        prompt: str,
-        source: str,
-        **kwargs: Any,
-    ) -> HITLRequest | None:
-        result = await self._hitl_manager.request_input(
-            room_id=room_id,
-            user_message_id=user_message_id,
-            source=source,
-            prompt=prompt,
-            **kwargs,
-        )
-        return model_hitl_request_to_common(result) if result is not None else None
-
-    async def resolve_hitl(
-        self,
-        room_id: str,
-        request_id: str,
+        *,
+        hitl_result: dict[str, Any],
         response: str,
-        responder_id: str,
-    ) -> HITLResponse:
-        result = await self._hitl_manager.handle_response(
-            room_id=room_id,
-            request_id=request_id,
-            user_input=response,
-            user_id=responder_id,
-        )
-        if hasattr(result, "model_dump"):
-            result = result.model_dump(mode="json")
+    ) -> OrchestrationRunState | None:
+        """Idempotently project answers and resume orchestration.
+
+        The HITL application coordinator journals and fences this callback. Keeping
+        scheduling inside the callback means recovery after a crash replays the
+        complete supervisor effect rather than only recording the answer.
+        """
         saved_state = await self._record_resolved_hitl_on_orchestration_run(
-            hitl_result=result,
+            hitl_result=hitl_result,
             response=response,
         )
         self._schedule_orchestration_after_hitl_if_needed(
             state=saved_state,
-            hitl_result=result,
+            hitl_result=hitl_result,
         )
-        return hitl_response_dict_to_common(result)
+        return saved_state
 
-    async def _record_resolved_hitl_on_orchestration_run(
+    async def _record_resolved_hitl_on_orchestration_run(  # noqa: C901
         self,
         *,
         hitl_result: dict[str, Any],
@@ -1008,45 +1032,67 @@ class ExecutionFacade:
             return None
         if not isinstance(request_id, str) or not request_id:
             return None
+        answer_records = hitl_result.get("answer_records")
+        if not isinstance(answer_records, list) or not answer_records:
+            answer_records = [{"request_id": request_id, "response": response}]
+        normalized_records = [
+            record
+            for record in answer_records
+            if isinstance(record, dict)
+            and isinstance(record.get("request_id"), str)
+            and isinstance(record.get("response"), str)
+        ]
+        if not normalized_records:
+            return None
 
         for _attempt in range(2):
             state = await self._orchestration_run_store.get_run(run_id)
             if state is None:
                 return None
             expected_version = state.state_version
-            updated = record_hitl_resolution(
-                state,
-                request_id=request_id,
-                response=response,
-                hitl_result=hitl_result,
-            )
-            try:
-                saved = await self._orchestration_run_store.save_state(
+            updated = state
+            for record in normalized_records:
+                updated = record_hitl_resolution(
                     updated,
-                    expected_version=expected_version,
+                    request_id=record["request_id"],
+                    response=record["response"],
+                    hitl_result=hitl_result,
+                )
+            try:
+                saved = (
+                    updated
+                    if updated.state_version == expected_version
+                    else await self._orchestration_run_store.save_state(
+                        updated,
+                        expected_version=expected_version,
+                    )
                 )
             except OrchestrationStoreConflict:
                 continue
 
+            interaction_id = hitl_result.get("interaction_id") or request_id
+            revision = hitl_result.get("application_revision") or 1
             try:
                 await self._orchestration_run_store.append_event(
                     OrchestrationRunEvent(
+                        event_id=f"hitl-resolved:{run_id}:{interaction_id}:{revision}",
                         run_id=saved.run_id,
                         room_id=saved.room_id,
                         type=OrchestrationEventType.HITL_RESOLVED,
                         state_version=saved.state_version,
                         payload={
-                            "request_ids": [request_id],
+                            "request_ids": [
+                                record["request_id"] for record in normalized_records
+                            ],
                             "answer_recorded": True,
                             "source": hitl_result.get("source"),
+                            "interaction_id": interaction_id,
+                            "application_revision": revision,
                         },
                     )
                 )
-            except Exception:
-                logger.debug(
-                    "Failed to append orchestration HITL resolution event",
-                    exc_info=True,
-                )
+            except DuplicateEventIdConflict:
+                pass
             return saved
 
         raise OrchestrationStoreConflict(
@@ -1096,13 +1142,57 @@ class ExecutionFacade:
             reason="hitl-resolved",
         )
 
+    async def resolve_hitl_batch(
+        self,
+        room_id: str,
+        interaction_id: str,
+        answers: list[dict[str, str]],
+        responder_id: str,
+        client_request_id: str | None = None,
+    ) -> HITLResponse:
+        result = await self._hitl_manager.handle_batch_response(
+            room_id=room_id,
+            interaction_id=interaction_id,
+            answers=answers,
+            user_id=responder_id,
+            client_request_id=client_request_id,
+        )
+        if hasattr(result, "model_dump"):
+            result = result.model_dump(mode="json")
+        result.setdefault("request_id", interaction_id)
+        result.setdefault("responder_id", responder_id)
+        if client_request_id:
+            result.setdefault("client_request_id", client_request_id)
+        if (
+            result.get("status") != "accepted"
+            and result.get("run_projection_status") != "applied"
+        ):
+            combined_response = "\n\n".join(
+                answer.get("user_input", "")
+                for answer in answers
+                if isinstance(answer.get("user_input"), str)
+            )
+            await self._record_and_schedule_resolved_hitl(
+                hitl_result=result,
+                response=combined_response,
+            )
+        return hitl_response_dict_to_common(result)
+
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
         requests = await self._hitl_manager.get_pending_requests(room_id)
         return [model_hitl_request_to_common(request) for request in requests]
 
-    async def cancel_hitl(self, room_id: str, request_id: str) -> bool:
-        result = await self._hitl_manager.cancel_request(request_id, room_id=room_id)
-        return hitl_cancel_none_to_success(result)
+    async def cancel_hitl_interaction(
+        self,
+        room_id: str,
+        interaction_id: str,
+        expected_version: int,
+    ) -> int:
+        return await self._hitl_manager.cancel_interaction_by_user(
+            interaction_id,
+            room_id,
+            expected_version=expected_version,
+        )
 
     async def handle_hub_agent_response(
         self,

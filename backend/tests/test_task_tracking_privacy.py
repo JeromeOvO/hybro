@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
 from common.a2a_task_projection import public_persisted_task_data
 from common.observability.logging import StructuredFormatter
 from common.types import (
@@ -21,6 +22,24 @@ from common.types import (
 )
 from execution.task_tracking import A2ATaskTrackingService
 from models.room import MessageContent, RoomAgentMessage
+
+
+def _typed_interaction_metadata(*prompts: str) -> dict:
+    return {
+        HYBRO_A2A_INTERACTION_METADATA_KEY: {
+            "schema_version": 1,
+            "interaction_id": "typed-interaction",
+            "questions": [
+                {
+                    "question_id": f"question-{index}",
+                    "interaction_kind": "questionnaire",
+                    "prompt": prompt,
+                    "answer_kind": "text",
+                }
+                for index, prompt in enumerate(prompts, start=1)
+            ],
+        }
+    }
 
 
 def _message(role: MessageRole, text: str) -> Message:
@@ -469,9 +488,9 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         "hitl_choices": [private_sentinel],
         "hitl_a2a_task_id": "spoofed-task",
         "hitl_a2a_context_id": "spoofed-context",
-        "hitl_group_id": "spoofed-group",
-        "hitl_group_total": 99,
-        "hitl_group_index": 98,
+        "hitl_interaction_id": "spoofed-group",
+        "hitl_question_count": 99,
+        "hitl_question_index": 98,
         "user_answer": private_sentinel,
     }
     authoritative_hitl_metadata = {
@@ -481,9 +500,9 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         "hitl_choices": ["Approve", "Reject"],
         "hitl_a2a_task_id": "remote-task",
         "hitl_a2a_context_id": "remote-context",
-        "hitl_group_id": "local-group",
-        "hitl_group_total": 2,
-        "hitl_group_index": 1,
+        "hitl_interaction_id": "local-group",
+        "hitl_question_count": 2,
+        "hitl_question_index": 1,
         "user_answer": "Approve",
     }
     existing_task = Task(
@@ -509,7 +528,8 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -517,9 +537,9 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
             "prompt": "Choose the approved public option",
             "prompt_type": "choice",
             "choices": ["Approve", "Reject"],
-            "group_id": "local-group",
-            "group_total": 2,
-            "group_index": 1,
+            "interaction_id": "local-group",
+            "question_count": 2,
+            "question_index": 1,
             "user_input": "Approve",
         }
     )
@@ -585,6 +605,8 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         "blocking": True,
         "task_state": "completed",
         "response_text": "Public final agent result",
+        "task_id": "remote-task",
+        "context_id": "remote-context",
     }
 
 
@@ -600,9 +622,9 @@ async def test_blocking_hitl_reply_drops_spoofed_existing_hitl_metadata():
             "hitl_prompt": private_sentinel,
             "hitl_prompt_type": "choice",
             "hitl_choices": [private_sentinel],
-            "hitl_group_id": private_sentinel,
-            "hitl_group_total": 2,
-            "hitl_group_index": 0,
+            "hitl_interaction_id": private_sentinel,
+            "hitl_question_count": 2,
+            "hitl_question_index": 0,
             "user_answer": private_sentinel,
         },
     )
@@ -619,7 +641,8 @@ async def test_blocking_hitl_reply_drops_spoofed_existing_hitl_metadata():
         return_value={
             "request_id": "spoofed-hitl-request",
             "room_id": "other-room",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "display_message_id": "agent-message-1",
             "prompt": private_sentinel,
         }
@@ -632,7 +655,8 @@ async def test_blocking_hitl_reply_drops_spoofed_existing_hitl_metadata():
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -705,7 +729,8 @@ async def test_blocking_hitl_reply_uses_projected_task_for_public_response_text(
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -764,24 +789,20 @@ async def test_blocking_hitl_reply_uses_projected_task_for_public_response_text(
 
     persisted = store.update_task_on_message.await_args.args[1]
     update_kwargs = store.update_task_on_message.await_args.kwargs
-    assert persisted["status"]["state"] == "input-required"
-    assert persisted["status"]["message"] is None
+    assert persisted["status"]["state"] == "failed"
     assert persisted.get("history") in (None, [])
     assert persisted.get("artifacts") in (None, [])
-    assert persisted["metadata"] == {
-        "hitl_request_id": "local-hitl-request",
-        "hitl_prompt": "Continue?",
-        "hitl_prompt_type": "text",
-        "hitl_choices": ["Continue"],
-        "hitl_a2a_task_id": "remote-task",
-        "hitl_a2a_context_id": "remote-context",
-    }
-    assert update_kwargs["message_text"] is None
+    assert update_kwargs["message_text"] == (
+        "The agent requested an unsupported interaction."
+    )
     assert result == {
-        "status": "sent",
+        "status": "failed",
         "blocking": True,
-        "task_state": "input-required",
-        "response_text": None,
+        "task_state": "failed",
+        "response_text": "The agent requested an unsupported interaction.",
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "error_code": "unsupported_interaction",
     }
     assert private_sentinel not in json.dumps(persisted)
     assert private_sentinel not in json.dumps(update_kwargs)
@@ -814,7 +835,8 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -836,7 +858,13 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
                     "kind": "message",
                     "messageId": "safe-status",
                     "role": "agent",
-                    "parts": [{"kind": "text", "text": safe_question}],
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "PRIVATE_SENTINEL_typed_followup_prose",
+                        }
+                    ],
+                    "metadata": _typed_interaction_metadata(safe_question),
                 },
             },
         },
@@ -863,6 +891,22 @@ async def test_blocking_hitl_reply_returns_safe_public_response_text_for_interac
         "blocking": True,
         "task_state": "input-required",
         "response_text": safe_question,
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "_interaction_spec": {
+            "schema_version": 1,
+            "interaction_id": "typed-interaction",
+            "questions": [
+                {
+                    "question_id": "question-1",
+                    "interaction_kind": "questionnaire",
+                    "prompt": safe_question,
+                    "answer_kind": "text",
+                    "required": True,
+                    "choices": None,
+                }
+            ],
+        },
     }
 
 
@@ -892,7 +936,8 @@ async def test_blocking_hitl_reply_with_user_role_status_message_does_not_leak_i
         return_value={
             "request_id": "local-hitl-request",
             "room_id": "room-1",
-            "source": "agent",
+            "public_source": "agent",
+            "application_route": "a2a_resume",
             "agent_id": "agent-1",
             "display_message_id": "agent-message-1",
             "a2a_task_id": "remote-task",
@@ -934,13 +979,15 @@ async def test_blocking_hitl_reply_with_user_role_status_message_does_not_leak_i
     )
 
     persisted = store.update_task_on_message.await_args.args[1]
-    assert persisted["status"]["state"] == "input-required"
-    assert persisted["status"]["message"] is None
+    assert persisted["status"]["state"] == "failed"
     assert result == {
-        "status": "sent",
+        "status": "failed",
         "blocking": True,
-        "task_state": "input-required",
-        "response_text": None,
+        "task_state": "failed",
+        "response_text": "The agent requested an unsupported interaction.",
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "error_code": "unsupported_interaction",
     }
 
 

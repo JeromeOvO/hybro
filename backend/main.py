@@ -169,6 +169,7 @@ if settings.auth_mode == "mock":
     from common.auth import (
         ClerkUser,
         get_current_user,
+        get_current_user_or_service,
         get_current_user_with_query_token,
         get_optional_user,
     )
@@ -184,6 +185,7 @@ if settings.auth_mode == "mock":
         return MockAPIKeyPrincipal()
 
     app.dependency_overrides[get_current_user] = mock_get_current_user
+    app.dependency_overrides[get_current_user_or_service] = mock_get_current_user
     app.dependency_overrides[get_current_user_with_query_token] = mock_get_current_user
     app.dependency_overrides[get_optional_user] = mock_get_current_user
     app.dependency_overrides[get_api_key] = mock_get_api_key

@@ -37,6 +37,7 @@ class HubDispatchCommand(FrozenDTO):
     room_id: str | None = None
     user_message_id: str | None = None
     agent_message_id: str | None = None
+    run_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     task_id: str | None = None
     task_data: dict[str, Any] = Field(default_factory=dict)

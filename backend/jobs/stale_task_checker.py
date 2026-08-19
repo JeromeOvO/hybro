@@ -114,7 +114,8 @@ class StaleTerminalProjectionDeps:
 @dataclass(frozen=True)
 class StaleHITLDeps:
     recover_stale_processing: Callable[[], Awaitable[Any]]
-    cancel_requests_for_message: Callable[[str], Awaitable[Any]]
+    cancel_requests_for_message: Callable[..., Awaitable[Any]]
+    reconcile_lifecycle: Callable[[], Awaitable[Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -345,6 +346,14 @@ class StaleTaskChecker:
         # Durable user cancellation wins before any polling, expiry, or recovery.
         await self._reconcile_pending_cancellations()
 
+        # Aggregate deadlines, durable applications, and command uncertainty are
+        # authoritative and must converge before generic stale-agent handling.
+        if self._hitl_deps and self._hitl_deps.reconcile_lifecycle is not None:
+            try:
+                await self._hitl_deps.reconcile_lifecycle()
+            except Exception:
+                logger.exception("HITL lifecycle reconciliation failed")
+
         # Get non-terminal state values for queries
         non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
 
@@ -560,6 +569,32 @@ class StaleTaskChecker:
             return
 
         agent_task_id = task.id
+        if agent_task_id.startswith(("pending-", "relay-pending-")):
+            metadata = task.metadata if isinstance(task.metadata, dict) else {}
+            continuation = (
+                msg.pending_continuation
+                if isinstance(msg.pending_continuation, dict)
+                else {}
+            )
+            recovered_task_id = metadata.get("hitl_a2a_task_id") or continuation.get(
+                "a2a_task_id"
+            )
+            recovered_context_id = metadata.get(
+                "hitl_a2a_context_id"
+            ) or continuation.get("a2a_context_id")
+            if (
+                isinstance(recovered_task_id, str)
+                and recovered_task_id
+                and not recovered_task_id.startswith(("pending-", "relay-pending-"))
+                and isinstance(recovered_context_id, str)
+                and recovered_context_id
+            ):
+                logger.warning(
+                    "Recovered authoritative A2A continuation IDs for stale message %s",
+                    message_id,
+                )
+                agent_task_id = recovered_task_id
+
         created_at = (
             ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
         )
@@ -869,7 +904,10 @@ class StaleTaskChecker:
                     user_msg_id,
                 )
             else:
-                await self._hitl_deps.cancel_requests_for_message(user_msg_id)
+                await self._hitl_deps.cancel_requests_for_message(
+                    user_msg_id,
+                    failure_reason=error,
+                )
         except Exception as e:
             logger.warning(
                 "stale_task_checker: Failed to cancel HITL requests for %s: %s",

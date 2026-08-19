@@ -166,6 +166,9 @@ class StepResult(BaseModel):
     interactive_state: str | None = None
     requires_auth: bool = False
     requires_policy: bool = False
+    end_turn: bool = False
+    ingress_route: str | None = None
+    private_input_prompt: str | None = Field(default=None, exclude=True, repr=False)
 
 
 # =========================================================================

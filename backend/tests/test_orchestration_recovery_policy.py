@@ -936,3 +936,42 @@ def test_normalize_context_refs_rewrites_output_key_to_fact_id():
     normalized = normalize_context_refs_with_available_facts(action, state)
 
     assert normalized.targets[0].context_refs[0].ref_id == "agent-msg-1:text_evidence"
+
+
+def test_rejected_delegate_uses_private_question_text_for_input_required():
+    from models.orchestration import AgentInputObservationRecord
+
+    state = _state()
+    state.blockers = [
+        BlockerRecord(
+            key="agent_blocker:agent-1:agent_input_required",
+            description="Agent requested additional input.",
+            source="agent",
+            evidence_refs=["agent-msg-1", "agent-msg-1:awaiting_input"],
+            validation_status="validated",
+            claimed_user_only=True,
+        )
+    ]
+    state.private_agent_input_observations = [
+        AgentInputObservationRecord(
+            classification="untyped",
+            raw_prompt="Which airport should we fly from?",
+            observed_state="input-required",
+            authoritative_task_id="task-1",
+            authoritative_context_id="ctx-1",
+            agent_id="agent-1",
+            agent_message_id="agent-msg-1",
+        )
+    ]
+
+    action = action_for_rejected_delegate(
+        state,
+        error_code="delegate_blocked_pending_user",
+    )
+
+    assert action is not None
+    assert action.action == PlannerActionType.ASK_USER
+    assert action.questions[0].prompt == "Which airport should we fly from?"
+    assert action.questions[0].blocker_keys == [
+        "agent_blocker:agent-1:agent_input_required"
+    ]

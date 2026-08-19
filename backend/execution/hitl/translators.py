@@ -25,7 +25,7 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         room_id=request.room_id,
         user_message_id=request.user_message_id,
         message_id=message_id,
-        source=_enum_value(request.source),
+        source=_enum_value(request.public_source),
         prompt=request.prompt,
         prompt_type=_enum_value(getattr(request, "prompt_type", "text")),
         choices=getattr(request, "choices", None),
@@ -38,9 +38,13 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         display_message_id=getattr(request, "display_message_id", None),
         client_request_id=getattr(request, "client_request_id", None),
         orchestration_run_id=getattr(request, "orchestration_run_id", None),
-        group_id=getattr(request, "group_id", None),
-        group_total=getattr(request, "group_total", None),
-        group_index=getattr(request, "group_index", None),
+        interaction_id=getattr(request, "interaction_id", None),
+        interaction_status=_enum_value(getattr(request, "interaction_status", None)),
+        interaction_version=getattr(request, "interaction_version", None),
+        application_status=getattr(request, "application_status", None),
+        application_error=getattr(request, "application_error", None),
+        question_count=request.question_count,
+        question_index=request.question_index,
         status=_enum_value(getattr(request, "status", "pending")),
         expires_at=getattr(request, "expires_at", None),
         created_at=getattr(request, "created_at", None),
@@ -59,15 +63,11 @@ def hitl_response_dict_to_common(result: dict[str, Any]) -> CommonHITLResponse:
         resolved_at=result.get("resolved_at"),
         reclaimed=result.get("reclaimed"),
         error=result.get("error"),
+        client_request_id=result.get("client_request_id"),
     )
 
 
-def hitl_cancel_none_to_success(result: None) -> bool:
-    return True
-
-
 __all__ = [
-    "hitl_cancel_none_to_success",
     "hitl_response_dict_to_common",
     "model_hitl_request_to_common",
 ]
