@@ -29,17 +29,21 @@ export { ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS }
 interface FileAttachmentButtonProps {
   onFiles: (files: File[]) => void
   disabled?: boolean
+  /** When true, the button stays visible but clicks are no-ops. */
+  readOnly?: boolean
   className?: string
 }
 
 export function FileAttachmentButton({
   onFiles,
   disabled,
+  readOnly = false,
   className,
 }: FileAttachmentButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (readOnly) return
     const files = Array.from(e.target.files || [])
     if (files.length > 0) {
       onFiles(files)
@@ -58,8 +62,12 @@ export function FileAttachmentButton({
               size="icon"
               disabled={disabled}
               aria-label="Add photos and files"
-              className={cn('h-8 w-8 rounded-full text-muted-foreground hover:text-foreground transition-colors', className)}
-              onClick={() => inputRef.current?.click()}
+              className={cn(
+                'h-8 w-8 rounded-full text-muted-foreground hover:text-foreground transition-colors',
+                className,
+                readOnly && 'cursor-default hover:text-muted-foreground hover:bg-transparent',
+              )}
+              onClick={readOnly ? undefined : () => inputRef.current?.click()}
             >
               <Paperclip className="h-4 w-4" data-testid="attachment-upload-icon" />
             </Button>
@@ -69,14 +77,16 @@ export function FileAttachmentButton({
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept={ACCEPTED_TYPES}
-        onChange={handleChange}
-        className="hidden"
-      />
+      {!readOnly && (
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept={ACCEPTED_TYPES}
+          onChange={handleChange}
+          className="hidden"
+        />
+      )}
     </>
   )
 }

@@ -97,7 +97,7 @@ src/app/
     |-- layout.tsx
     |-- page.tsx
     |-- about/page.tsx
-    |-- open-source/page.tsx
+    |-- core/page.tsx
     |-- agents/page.tsx
     |-- agents/[id]/page.tsx
     |-- agents/new/page.tsx
@@ -145,8 +145,8 @@ src/components/
 |-- ui/                       # shadcn/ui primitives
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
-|-- portal/                   # unified sidebar/header/footer and Manage navigation
-|-- open-source/              # open-source landing page interactions
+|-- portal/                   # unified sidebar/header/footer, Core page, Manage navigation
+|-- open-source/              # Core page terminal animation
 |-- providers/                # React Query provider
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
@@ -553,7 +553,14 @@ default.
 The `(portal)` route group provides one shared shell without adding a URL
 segment.
 
-- `/`: landing/entry behavior.
+- `/`: redirects to `/core`. Hybro Core does not require sign-in.
+- `/core`: Hybro Core product page. The hero composer is the same `RoomChatInput`
+  as `/chat`, with group and mode menus visible but non-selectable and mention
+  and attach buttons visible but non-clickable. While idle it typewrites the
+  featured use cases from `src/lib/use-case-templates.ts` (Travel Planner,
+  Story & Image Creator). The header logo links to `/core`. The logo wall lists Hermes, OpenClaw, Pi, Ollama,
+  n8n, CrewAI, LangChain, and LangGraph. Send-on-demo creates a room named after the current
+  use case, seeds those Agents, and prefills the prompt without auto-sending or a sign-in redirect.
 - `/chat` and `/room/[id]`: chat creation and real-time room workspace.
 - `/agents`: unified local inventory of registered Remote agents and currently
   discoverable Local agents.

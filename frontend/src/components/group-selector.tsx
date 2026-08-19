@@ -38,6 +38,8 @@ interface GroupSelectorProps {
   agentNameMap?: Record<string, string>
   className?: string
   disabled?: boolean
+  /** When true, the dropdown opens normally but item clicks are no-ops. */
+  readOnly?: boolean
 }
 
 export function GroupSelector({
@@ -53,6 +55,7 @@ export function GroupSelector({
   agentNameMap = {},
   className,
   disabled = false,
+  readOnly = false,
 }: GroupSelectorProps) {
   const hasMentions = mentionedAgents.length > 0
 
@@ -216,10 +219,11 @@ export function GroupSelector({
               <Tooltip delayDuration={150}>
                 <TooltipTrigger asChild>
                   <DropdownMenuItem
-                    onClick={() => handleGroupSelect(BUILTIN_GROUP_ALL_AGENTS)}
+                    onClick={readOnly ? undefined : () => handleGroupSelect(BUILTIN_GROUP_ALL_AGENTS)}
                     className={cn(
                       "flex items-start gap-3 py-2.5",
-                      selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent"
+                      selectedGroup === BUILTIN_GROUP_ALL_AGENTS && "bg-accent",
+                      readOnly && 'cursor-default',
                     )}
                   >
                     <Globe className="h-4 w-4 mt-0.5 text-blue-500" />
@@ -247,10 +251,11 @@ export function GroupSelector({
                     <Tooltip key={group.group_id} delayDuration={150}>
                       <TooltipTrigger asChild>
                         <DropdownMenuItem
-                          onClick={() => handleGroupSelect(group.group_id)}
+                          onClick={readOnly ? undefined : () => handleGroupSelect(group.group_id)}
                           className={cn(
                             "flex items-start gap-3 py-2.5",
-                            selectedGroup === group.group_id && "bg-accent"
+                            selectedGroup === group.group_id && "bg-accent",
+                            readOnly && 'cursor-default',
                           )}
                         >
                           <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />

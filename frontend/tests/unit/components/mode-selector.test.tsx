@@ -114,4 +114,15 @@ describe('ModeSelector', () => {
     expect(await screen.findByText('Fast')).toBeTruthy()
     expect(await screen.findByText('Debate (Coming Soon)')).toBeTruthy()
   })
+
+  it('opens the menu in readOnly mode without changing the mode', async () => {
+    const onModeChange = vi.fn()
+    const user = userEvent.setup()
+    render(<ModeSelector mode="ultimate" onModeChange={onModeChange} readOnly />)
+
+    await user.click(screen.getByText('Ultimate'))
+    await user.click(await screen.findByText('Fast'))
+
+    expect(onModeChange).not.toHaveBeenCalled()
+  })
 })

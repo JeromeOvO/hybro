@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { resolveTemplateAgents } from "@/lib/use-case-templates"
+import { Palmtree } from "lucide-react"
+import { buildTemplateDemoMessage, resolveTemplateAgents, useCaseTemplates } from "@/lib/use-case-templates"
 import type { Agent } from "@/lib/types/agent"
-import type { UseCaseAgent } from "@/lib/use-case-templates"
+import type { UseCaseAgent, UseCaseTemplate } from "@/lib/use-case-templates"
 
 function makeAgent(id: string, name: string): Agent {
   return {
@@ -68,5 +69,34 @@ describe("resolveTemplateAgents", () => {
       { agentId: "agent-001", agentName: "YouTube Creator Finder Agent" },
     ]
     expect(() => resolveTemplateAgents(templateAgents, [])).toThrow()
+  })
+})
+
+describe("buildTemplateDemoMessage", () => {
+  const template: UseCaseTemplate = {
+    id: "travel-planner",
+    icon: Palmtree,
+    title: "Travel Planner",
+    description: "Plan a trip",
+    agents: [
+      { agentId: "Weather Agent", agentName: "Weather Agent" },
+      { agentId: "Travel Planner Agent", agentName: "Travel Planner Agent" },
+    ],
+    prefillMessage: "Generate a travel plan",
+  }
+
+  it("prefixes mentions and slices the typed prompt", () => {
+    expect(buildTemplateDemoMessage(template, 0)).toBe(
+      "<@Weather Agent|Weather Agent><@Travel Planner Agent|Travel Planner Agent>",
+    )
+    expect(buildTemplateDemoMessage(template, 8)).toBe(
+      "<@Weather Agent|Weather Agent><@Travel Planner Agent|Travel Planner Agent> Generate",
+    )
+  })
+})
+
+describe("featured use cases", () => {
+  it("includes the hybro travel and story templates, not SaaS creator discovery", () => {
+    expect(useCaseTemplates.map((t) => t.id)).toEqual(["travel-planner", "story-and-image"])
   })
 })

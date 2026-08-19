@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { cn } from "@/lib/utils"
+import { routes } from "@/lib/routes"
 
 interface LogoProps {
   className?: string
@@ -25,7 +26,7 @@ export function Logo({
       hideOnMobile && "max-sm:hidden",
       className
     )}>
-      <Link href="/" className="flex items-center gap-0.5">
+      <Link href={routes.core} className="flex items-center gap-0.5">
         <span
           className={cn(
             "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",

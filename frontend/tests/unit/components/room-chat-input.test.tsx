@@ -152,6 +152,31 @@ describe('RoomChatInput', () => {
       expect(sendButton.className).not.toContain('active:scale-95')
     })
 
+    it('keeps mention and attach buttons visible but inert when disabled for demo', async () => {
+      const execCommand = vi.fn()
+      Object.defineProperty(document, 'execCommand', {
+        configurable: true,
+        value: execCommand,
+      })
+
+      renderInput({
+        disableAttachmentButton: true,
+        disableMentionButton: true,
+      })
+
+      const uploadButton = screen.getByRole('button', { name: /add photos and files/i })
+      const mentionButton = screen.getByRole('button', { name: /mention an agent/i })
+
+      expect(uploadButton).toBeInTheDocument()
+      expect(mentionButton).toBeInTheDocument()
+      expect(document.querySelector('input[type="file"]')).toBeNull()
+
+      fireEvent.click(uploadButton)
+      fireEvent.click(mentionButton)
+
+      expect(execCommand).not.toHaveBeenCalled()
+    })
+
     it('should show spinner when sending=true', () => {
       renderInput({ sending: true })
       const button = screen.getByTestId('sending-button')

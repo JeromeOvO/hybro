@@ -1,29 +1,24 @@
 'use client'
 
-import React, { useState, useEffect } from "react"
-import Link from "next/link"
+import React, { useState } from 'react'
+import Link from 'next/link'
 import {
   ArrowRight,
-  ArrowUp,
-  AtSign,
   Check,
   Copy,
-  Loader2,
-  Paperclip,
   Terminal,
   ExternalLink,
   BookOpen,
-} from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { FadeInSection } from "@/components/fade-in-section"
-import { VideoEmbed } from "@/components/video-embed"
-import { GithubIcon, DiscordIcon } from "@/components/icons"
-import { PortalFooter } from "@/components/portal/portal-footer"
-import { routes } from "@/lib/routes"
-import { useUser, useAuth } from "@/lib/auth"
-import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
-import { FRAMEWORKS } from "@/components/framework-badges"
-import { TypingTerminal } from "@/components/open-source/typing-terminal"
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { FadeInSection } from '@/components/fade-in-section'
+import { VideoEmbed } from '@/components/video-embed'
+import { GithubIcon, DiscordIcon } from '@/components/icons'
+import { routes } from '@/lib/routes'
+import { FRAMEWORKS } from '@/components/framework-badges'
+import { TypingTerminal } from '@/components/open-source/typing-terminal'
+import { CoreHeroComposer } from '@/components/portal/core-hero-composer'
+import { PortalFooter } from '@/components/portal/portal-footer'
 
 // Mirrors install.sh + ./scripts/hybro. The ensure_* scripts generate the
 // secrets that .env.example leaves blank; skipping them leaves the shared
@@ -51,96 +46,30 @@ Requires: git, Docker, Docker Compose. Run every step from the repo root.
 If a container fails, show me its \`./scripts/hybro logs\` output and fix it.`
 
 const QUICK_START_COMMANDS = {
-  script: "curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh",
-  cli: "git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro start",
+  script: 'curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh',
+  cli: 'git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro start',
   ai: AI_SETUP_PROMPT,
 }
 
 // Labels are stored in natural casing; the tab styling uppercases them.
 const QUICK_START_TABS = [
-  { key: "script", label: "curl" },
-  { key: "ai", label: "Agentic" },
-  { key: "cli", label: "CLI" },
+  { key: 'script', label: 'curl' },
+  { key: 'ai', label: 'Agentic' },
+  { key: 'cli', label: 'CLI' },
 ] as const
 
-type QuickStartTab = (typeof QUICK_START_TABS)[number]["key"]
-
-const HERO_EXAMPLE_PROMPTS = [
-  "Plan a travel and calculate the budget for me",
-  "Search creators across all social media platform",
-]
+type QuickStartTab = (typeof QUICK_START_TABS)[number]['key']
 
 const marqueeFrameworks = FRAMEWORKS
 
-export default function OpenSourcePage() {
-  const [activeTab, setActiveTab] = useState<QuickStartTab>("script")
+export function CorePageContent() {
+  const [activeTab, setActiveTab] = useState<QuickStartTab>('script')
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(QUICK_START_COMMANDS[activeTab])
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
-  }
-
-  // Hero prompt input + typewriter placeholder animation
-  const [heroInput, setHeroInput] = useState("")
-  const [promptIndex, setPromptIndex] = useState(0)
-  const [charIndex, setCharIndex] = useState(0)
-  const [isDeleting, setIsDeleting] = useState(false)
-
-  useEffect(() => {
-    if (heroInput) return // pause animation while the user has typed something
-
-    const current = HERO_EXAMPLE_PROMPTS[promptIndex]
-    let delay = isDeleting ? 28 : 55
-    if (!isDeleting && charIndex === current.length) delay = 1500
-    if (isDeleting && charIndex === 0) delay = 300
-
-    const timer = setTimeout(() => {
-      if (!isDeleting && charIndex === current.length) {
-        setIsDeleting(true)
-      } else if (isDeleting && charIndex === 0) {
-        setIsDeleting(false)
-        setPromptIndex((p) => (p + 1) % HERO_EXAMPLE_PROMPTS.length)
-      } else {
-        setCharIndex((c) => c + (isDeleting ? -1 : 1))
-      }
-    }, delay)
-
-    return () => clearTimeout(timer)
-  }, [charIndex, isDeleting, promptIndex, heroInput])
-
-  const { user } = useUser()
-  const { getToken } = useAuth()
-
-  const handleRequireAuth = () => {
-    window.location.href = `/sign-in?redirect_url=${encodeURIComponent(window.location.pathname)}`
-  }
-
-  const { creating, createAndNavigate } = useChatRoomCreation({
-    userId: user?.id,
-    userName: user?.firstName || user?.username || "User",
-    getToken,
-    onRequireAuth: handleRequireAuth,
-  })
-
-  const handleHeroSend = async () => {
-    if (creating) return
-    // createAndNavigate only surfaces a banner when userId is missing, so the
-    // sign-in redirect has to be triggered here (same guard as /chat).
-    if (!user?.id) {
-      handleRequireAuth()
-      return
-    }
-    const text = heroInput.trim() || HERO_EXAMPLE_PROMPTS[promptIndex]
-    await createAndNavigate(text)
-  }
-
-  const handleHeroKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault()
-      handleHeroSend()
-    }
   }
 
   return (
@@ -154,9 +83,9 @@ export default function OpenSourcePage() {
           className="absolute inset-0 opacity-[0.12]"
           style={{
             backgroundImage:
-              "linear-gradient(hsl(var(--color-border) / 0.3) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--color-border) / 0.3) 1px, transparent 1px)",
-            backgroundSize: "48px 48px",
-            maskImage: "linear-gradient(to bottom, black 0%, black 20%, transparent 60%, black 80%, transparent 100%)",
+              'linear-gradient(hsl(var(--color-border) / 0.3) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--color-border) / 0.3) 1px, transparent 1px)',
+            backgroundSize: '48px 48px',
+            maskImage: 'linear-gradient(to bottom, black 0%, black 20%, transparent 60%, black 80%, transparent 100%)',
           }}
         />
       </div>
@@ -182,53 +111,8 @@ export default function OpenSourcePage() {
             Complete data privacy, zero configuration, and native A2A protocol support. All running on your machine.
           </p>
 
-          {/* Hero Prompt Input */}
-          <div
-            className="max-w-xl mx-auto mb-8 rounded-xl bg-muted overflow-hidden text-left"
-            style={{ border: "1px solid var(--conversation-border-light)" }}
-          >
-            {/* Fake mention chip — decorative only */}
-            <div className="flex items-center px-4 pt-3">
-              <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md bg-primary/10 text-primary">
-                <AtSign className="h-3 w-3" />
-                Manager Agent
-              </span>
-            </div>
-
-            <input
-              type="text"
-              value={heroInput}
-              onChange={(e) => setHeroInput(e.target.value)}
-              onKeyDown={handleHeroKeyDown}
-              placeholder={`${HERO_EXAMPLE_PROMPTS[promptIndex].slice(0, charIndex)}▍`}
-              aria-label="Ask Hybro to do something"
-              className="w-full min-w-0 bg-transparent border-0 text-[15px] text-foreground placeholder:text-muted-foreground focus:outline-none px-4 py-2"
-            />
-
-            {/* Decorative toolbar — visual only, mirrors the real chat composer */}
-            <div className="flex items-center justify-between px-3 py-2 border-t border-border/40">
-              <div className="flex items-center gap-1">
-                <span className="flex items-center justify-center size-8 rounded-md text-muted-foreground/70 cursor-default">
-                  <Paperclip className="h-4 w-4" />
-                </span>
-                <span className="flex items-center justify-center size-8 rounded-md text-muted-foreground/70 cursor-default">
-                  <AtSign className="h-4 w-4" />
-                </span>
-              </div>
-              <button
-                onClick={handleHeroSend}
-                disabled={creating}
-                aria-label="Send"
-                className={`flex items-center justify-center size-8 rounded-full shrink-0 transition-colors ${
-                  creating
-                    ? "bg-primary/40 text-primary-foreground/70"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90"
-                }`}
-              >
-                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-              </button>
-            </div>
-          </div>
+          {/* Hero chat composer — matches /chat RoomChatInput with featured use-case demo */}
+          <CoreHeroComposer />
 
           {/* Action CTAs */}
           <div className="flex flex-wrap items-center justify-center gap-4 mb-12">
@@ -267,8 +151,8 @@ export default function OpenSourcePage() {
                     onClick={() => setActiveTab(tab.key)}
                     className={`px-3 py-1.5 rounded-md uppercase tracking-wider transition-all ${
                       activeTab === tab.key
-                        ? "bg-[hsl(var(--color-hybro-hy))]/15 text-[hsl(var(--color-hybro-hy))] font-semibold shadow-sm ring-1 ring-[hsl(var(--color-hybro-hy))]/30"
-                        : "text-muted-foreground hover:text-foreground"
+                        ? 'bg-[hsl(var(--color-hybro-hy))]/15 text-[hsl(var(--color-hybro-hy))] font-semibold shadow-sm ring-1 ring-[hsl(var(--color-hybro-hy))]/30'
+                        : 'text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     {tab.label}
@@ -282,12 +166,12 @@ export default function OpenSourcePage() {
               <div className="flex-1 min-w-0 overflow-x-auto">
                 <code
                   className={`text-[hsl(var(--color-hybro-hy))] ${
-                    activeTab === "ai"
-                      ? "block whitespace-pre-wrap leading-relaxed"
-                      : "whitespace-nowrap"
+                    activeTab === 'ai'
+                      ? 'block whitespace-pre-wrap leading-relaxed'
+                      : 'whitespace-nowrap'
                   }`}
                 >
-                  {activeTab !== "ai" && <span className="text-muted-foreground select-none">$ </span>}
+                  {activeTab !== 'ai' && <span className="text-muted-foreground select-none">$ </span>}
                   {QUICK_START_COMMANDS[activeTab]}
                 </code>
               </div>
@@ -299,7 +183,7 @@ export default function OpenSourcePage() {
               >
                 {copied ? <Check className="h-4 w-4 text-green-600 dark:text-green-400" /> : <Copy className="h-4 w-4" />}
                 <span className="sr-only">
-                  {activeTab === "ai" ? "Copy prompt" : "Copy command"}
+                  {activeTab === 'ai' ? 'Copy prompt' : 'Copy command'}
                 </span>
               </Button>
             </div>
@@ -347,7 +231,7 @@ export default function OpenSourcePage() {
             <FadeInSection variant="left" delay={450} className="order-2 md:order-1">
               <div className="group/wall flex flex-wrap justify-center gap-3 md:gap-4">
                 {marqueeFrameworks.map((fw, i) => {
-                  const offsets = ["md:translate-y-0", "md:translate-y-5", "md:-translate-y-3", "md:translate-y-3", "md:-translate-y-5", "md:translate-y-2", "md:-translate-y-1"]
+                  const offsets = ['md:translate-y-0', 'md:translate-y-5', 'md:-translate-y-3', 'md:translate-y-3', 'md:-translate-y-5', 'md:translate-y-2', 'md:-translate-y-1']
                   const tile = (
                     <>
                       <span className={fw.color}>{fw.icon}</span>
@@ -374,7 +258,7 @@ export default function OpenSourcePage() {
             <FadeInSection variant="right" delay={150} className="order-1 md:order-2">
               <div>
                 <h3 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">
-                  Works with any framework
+                  Works with any agent or harness
                 </h3>
                 <p className="text-base md:text-lg text-muted-foreground leading-relaxed max-w-md">
                   Using the Agent2Agent protocol standard, agents talk to each other in one shared format.
@@ -387,35 +271,35 @@ export default function OpenSourcePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 pt-10 md:pt-14">
             {[
               {
-                title: "Zero-Config Dev Mode",
-                body: "Comes with mock credentials and environment templates. Run in one line.",
-                tint: "hover:bg-[hsl(var(--color-hybro-bro)/0.03)]",
-                rule: "bg-[hsl(var(--color-hybro-bro))]",
+                title: 'Zero-Config Dev Mode',
+                body: 'Comes with mock credentials and environment templates. Run in one line.',
+                tint: 'hover:bg-[hsl(var(--color-hybro-bro)/0.03)]',
+                rule: 'bg-[hsl(var(--color-hybro-bro))]',
               },
               {
-                title: "Multi-Agent Rooms",
-                body: "Open a room for your agents to collaborate and solve multi-step problems.",
-                tint: "hover:bg-[hsl(var(--color-hybro-hy)/0.03)]",
-                rule: "bg-[hsl(var(--color-hybro-hy))]",
+                title: 'Multi-Agent Rooms',
+                body: 'Open a room for your agents to collaborate and solve multi-step problems.',
+                tint: 'hover:bg-[hsl(var(--color-hybro-hy)/0.03)]',
+                rule: 'bg-[hsl(var(--color-hybro-hy))]',
               },
               {
-                title: "Modular Core Architecture",
-                body: "Clean, layered architecture: FastAPI orchestration, Redis pub/sub and MongoDB persistence.",
-                tint: "hover:bg-[hsl(var(--color-hybro-bro)/0.03)]",
-                rule: "bg-[hsl(var(--color-hybro-bro))]",
+                title: 'Modular Core Architecture',
+                body: 'Clean, layered architecture: FastAPI orchestration, Redis pub/sub and MongoDB persistence.',
+                tint: 'hover:bg-[hsl(var(--color-hybro-bro)/0.03)]',
+                rule: 'bg-[hsl(var(--color-hybro-bro))]',
               },
               {
-                title: "Human-in-the-Loop",
-                body: "Delivery is under your control. Approve, reject, or override before it ships.",
-                tint: "hover:bg-[hsl(var(--color-hybro-hy)/0.03)]",
-                rule: "bg-[hsl(var(--color-hybro-hy))]",
+                title: 'Human-in-the-Loop',
+                body: 'Delivery is under your control. Approve, reject, or override before it ships.',
+                tint: 'hover:bg-[hsl(var(--color-hybro-hy)/0.03)]',
+                rule: 'bg-[hsl(var(--color-hybro-hy))]',
               },
             ].map((item, i) => (
               <FadeInSection key={item.title} variant="rise" delay={i * 160}>
                 <div
                   className={`group/cap relative h-full px-6 py-8 md:px-10 md:py-10 transition-colors duration-300 ${item.tint} ${
-                    i % 2 === 1 ? "md:border-l border-border/40" : ""
-                  } ${i >= 2 ? "border-t border-border/40" : ""}`}
+                    i % 2 === 1 ? 'md:border-l border-border/40' : ''
+                  } ${i >= 2 ? 'border-t border-border/40' : ''}`}
                 >
                   <span
                     aria-hidden
@@ -444,19 +328,19 @@ export default function OpenSourcePage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-y-12 md:gap-x-10">
             {[
               {
-                title: "Spin Up Engine",
-                body: "Run the 1-liner script or ./scripts/hybro start to bring the local backend and frontend services up.",
-                example: "./scripts/hybro start",
+                title: 'Spin Up Engine',
+                body: 'Run the 1-liner script or ./scripts/hybro start to bring the local backend and frontend services up.',
+                example: './scripts/hybro start',
               },
               {
-                title: "Register Agents",
-                body: "Connect your local Python or remote A2A agents with the Agent2Agent adapter SDK.",
-                example: "POST /api/v1/agent/registerAgent",
+                title: 'Register Agents',
+                body: 'Connect your local Python or remote A2A agents with the Agent2Agent adapter SDK.',
+                example: 'POST /api/v1/agent/registerAgent',
               },
               {
-                title: "Orchestrate Rooms",
-                body: "Create multi-agent rooms, prompt your cluster, and monitor live task collaboration.",
-                example: "POST /api/v1/roomCenter/createNewRoom",
+                title: 'Orchestrate Rooms',
+                body: 'Create multi-agent rooms, prompt your cluster, and monitor live task collaboration.',
+                example: 'POST /api/v1/roomCenter/createNewRoom',
               },
             ].map((step, i) => {
               // Each numeral fills a consecutive slice of the bro → hy brand gradient,
@@ -475,9 +359,9 @@ export default function OpenSourcePage() {
                         className="font-spaceGrotesk text-[4rem] font-bold leading-none select-none pointer-events-none absolute right-full top-1/2 -translate-y-1/2 -mr-3 opacity-[0.17]"
                         style={{
                           backgroundImage: `linear-gradient(115deg, ${stop(i)}, ${stop(i + 1)})`,
-                          WebkitBackgroundClip: "text",
-                          backgroundClip: "text",
-                          WebkitTextFillColor: "transparent",
+                          WebkitBackgroundClip: 'text',
+                          backgroundClip: 'text',
+                          WebkitTextFillColor: 'transparent',
                         }}
                       >
                         {i + 1}
@@ -523,7 +407,7 @@ export default function OpenSourcePage() {
                 className="pointer-events-none absolute left-1/2 top-0 h-[34rem] w-[62rem] max-w-[150%] -translate-x-1/2 -translate-y-1/3 rounded-full blur-3xl"
                 style={{
                   background:
-                    "radial-gradient(ellipse at center, hsl(var(--color-hybro-hy) / 0.18), hsl(var(--color-hybro-bro) / 0.09) 45%, transparent 72%)",
+                    'radial-gradient(ellipse at center, hsl(var(--color-hybro-hy) / 0.18), hsl(var(--color-hybro-bro) / 0.09) 45%, transparent 72%)',
                 }}
               />
 

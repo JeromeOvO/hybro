@@ -4,6 +4,7 @@ test.describe('Unified portal routing', () => {
   test('serves canonical routes and redirects legacy management paths', async ({ page, request }) => {
     for (const path of [
       '/',
+      '/core',
       '/about',
       '/pricing',
       '/chat',
@@ -13,6 +14,9 @@ test.describe('Unified portal routing', () => {
       const response = await request.get(path)
       expect(response.status(), `${path} should resolve`).toBe(200)
     }
+
+    await page.goto('/')
+    await expect(page).toHaveURL(/\/core$/)
 
     await page.goto('/manage')
     await expect(page).toHaveURL(/\/agents$/)
