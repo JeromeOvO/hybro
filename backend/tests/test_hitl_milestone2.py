@@ -400,7 +400,6 @@ async def test_last_group_answer_applies_one_combined_payload():
     persistence.get_hitl_request = AsyncMock(
         side_effect=lambda rid: next(row for row in rows if row["request_id"] == rid)
     )
-    persistence.get_hitl_group_requests = AsyncMock(return_value=rows)
     lifecycle = MagicMock()
     lifecycle.record_interaction_answer = AsyncMock(
         return_value={

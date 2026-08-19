@@ -488,9 +488,9 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         "hitl_choices": [private_sentinel],
         "hitl_a2a_task_id": "spoofed-task",
         "hitl_a2a_context_id": "spoofed-context",
-        "hitl_group_id": "spoofed-group",
-        "hitl_group_total": 99,
-        "hitl_group_index": 98,
+        "hitl_interaction_id": "spoofed-group",
+        "hitl_question_count": 99,
+        "hitl_question_index": 98,
         "user_answer": private_sentinel,
     }
     authoritative_hitl_metadata = {
@@ -500,9 +500,9 @@ async def test_blocking_hitl_reply_rebuilds_trusted_hitl_metadata_from_local_req
         "hitl_choices": ["Approve", "Reject"],
         "hitl_a2a_task_id": "remote-task",
         "hitl_a2a_context_id": "remote-context",
-        "hitl_group_id": "local-group",
-        "hitl_group_total": 2,
-        "hitl_group_index": 1,
+        "hitl_interaction_id": "local-group",
+        "hitl_question_count": 2,
+        "hitl_question_index": 1,
         "user_answer": "Approve",
     }
     existing_task = Task(
@@ -622,9 +622,9 @@ async def test_blocking_hitl_reply_drops_spoofed_existing_hitl_metadata():
             "hitl_prompt": private_sentinel,
             "hitl_prompt_type": "choice",
             "hitl_choices": [private_sentinel],
-            "hitl_group_id": private_sentinel,
-            "hitl_group_total": 2,
-            "hitl_group_index": 0,
+            "hitl_interaction_id": private_sentinel,
+            "hitl_question_count": 2,
+            "hitl_question_index": 0,
             "user_answer": private_sentinel,
         },
     )

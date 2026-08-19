@@ -43,9 +43,8 @@ def model_hitl_request_to_common(request: Any) -> CommonHITLRequest:
         interaction_version=getattr(request, "interaction_version", None),
         application_status=getattr(request, "application_status", None),
         application_error=getattr(request, "application_error", None),
-        group_id=(request.interaction_id if request.question_count > 1 else None),
-        group_total=(request.question_count if request.question_count > 1 else None),
-        group_index=(request.question_index if request.question_count > 1 else None),
+        question_count=request.question_count,
+        question_index=request.question_index,
         status=_enum_value(getattr(request, "status", "pending")),
         expires_at=getattr(request, "expires_at", None),
         created_at=getattr(request, "created_at", None),
@@ -68,12 +67,7 @@ def hitl_response_dict_to_common(result: dict[str, Any]) -> CommonHITLResponse:
     )
 
 
-def hitl_cancel_none_to_success(result: None) -> bool:
-    return True
-
-
 __all__ = [
-    "hitl_cancel_none_to_success",
     "hitl_response_dict_to_common",
     "model_hitl_request_to_common",
 ]

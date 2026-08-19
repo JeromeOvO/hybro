@@ -22,9 +22,8 @@ export interface HitlPendingRequest {
   interaction_version?: number | null
   application_status?: string | null
   application_error?: string | null
-  group_id?: string | null
-  group_total?: number | null
-  group_index?: number | null
+  question_count?: number
+  question_index?: number
   related_message_id?: string | null
   client_request_id?: string | null
 }
@@ -66,10 +65,16 @@ export async function respondToHitlBatch(
 
 export async function cancelHitl(
   roomId: string,
-  requestId: string,
+  interactionId: string,
+  interactionVersion: number,
+  clientRequestId: string,
   getToken?: () => Promise<string | null>,
-): Promise<{ status: string }> {
-  return apiPost<{ status: string }>(`${hitlUrl(roomId)}/${requestId}/cancel`, {}, getToken)
+): Promise<{ status: string; interaction_id: string; interaction_version: number }> {
+  return apiPost(`${hitlUrl(roomId)}/interactions/${interactionId}/cancel`, {
+    interaction_id: interactionId,
+    expected_interaction_version: interactionVersion,
+    client_request_id: clientRequestId,
+  }, getToken)
 }
 
 export async function fetchPendingHitlRequests(

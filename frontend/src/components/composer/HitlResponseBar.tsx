@@ -62,8 +62,7 @@ function answerText(value: DraftValue | undefined): string {
   return value?.trim() ?? ''
 }
 
-function hasAnswer(hitl: HitlPromptView, value: DraftValue | undefined): boolean {
-  if (hitl.promptType === 'file' || hitl.promptType === 'unknown') return false
+function hasAnswer(_hitl: HitlPromptView, value: DraftValue | undefined): boolean {
   return answerText(value).length > 0
 }
 
@@ -260,17 +259,6 @@ function PromptControl({
         onChange={event => onChange(event.target.value)}
         className="conversation-hitl-text-input"
       />
-    )
-  }
-  if (hitl.promptType === 'file' || hitl.promptType === 'unknown') {
-    return (
-      <div className="conversation-hitl-unsupported" role="alert">
-        <AlertTriangle className="h-5 w-5" aria-hidden="true" />
-        <div>
-          <strong>Unsupported input type</strong>
-          <p>This historical request cannot be answered safely. Cancel it and send a new message instead.</p>
-        </div>
-      </div>
     )
   }
   if (hitl.promptType === 'textarea') {

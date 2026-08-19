@@ -77,6 +77,8 @@ describe('handleHitlRequest', () => {
           agent_name: 'Agent',
           prompt: 'Need stale input',
           prompt_type: 'text',
+          question_count: 1,
+          question_index: 0,
         },
       },
       { shouldDrop: false, shouldBuffer: false },
@@ -119,6 +121,8 @@ describe('handleHitlRequest', () => {
         prompt_type: 'authentication',
         interaction_id: 'interaction-1',
         interaction_status: 'open',
+        question_count: 1,
+        question_index: 0,
       },
     }, { shouldDrop: false, shouldBuffer: false })
 
@@ -140,6 +144,8 @@ describe('handleHitlRequest', () => {
         interaction_id: 'interaction-1',
         interaction_status: 'applying',
         application_status: 'applying',
+        question_count: 1,
+        question_index: 0,
         client_request_id: 'client-1',
       },
     }, { shouldDrop: false, shouldBuffer: false })
@@ -164,6 +170,8 @@ describe('handleHitlRequest', () => {
         interaction_id: 'interaction-1',
         interaction_status: 'applied',
         application_status: 'applied',
+        question_count: 1,
+        question_index: 0,
         client_request_id: 'client-1',
       },
     }, { shouldDrop: false, shouldBuffer: false })

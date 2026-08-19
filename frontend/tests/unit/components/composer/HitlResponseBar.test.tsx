@@ -109,10 +109,4 @@ describe('HitlResponseBar', () => {
     expect(screen.getByText('Checking whether your answers were received')).toBeDefined()
     expect(screen.getByRole('button', { name: 'Check status' })).toBeDefined()
   })
-
-  it('shows file requests as unsupported instead of pretending a filename is uploaded', () => {
-    renderBar([{ ...baseHitl, prompt: 'Upload the signed form', promptType: 'file' }])
-    expect(screen.getByText('Unsupported input type')).toBeDefined()
-    expect(screen.queryByRole('button', { name: 'Review answers' })).toBeDisabled()
-  })
 })

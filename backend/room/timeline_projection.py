@@ -9,6 +9,7 @@ from common.protocols import AttachmentMetadataReader
 from common.types import Artifact, Part, Task, TaskState, TextPart
 from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
 from common.utils.logger import get_logger
+from execution.hitl.public_prompt import concrete_agent_input_prompt
 from execution.task_tracking import (
     extract_public_completed_status_text,
     resolve_public_agent_response_text,
@@ -122,16 +123,17 @@ class RoomTimelineProjector:
         if request_context_id is not None and request_context_id != task.context_id:
             return None, None
 
+        prompt = request.get("prompt")
+        prompt_type = getattr(
+            request.get("prompt_type"), "value", request.get("prompt_type")
+        )
+        choices = request.get("choices")
         if request.get("public_source") == "agent":
-            prompt = _GENERIC_AGENT_INPUT_PROMPT
-            prompt_type = "text"
-            choices = None
-        else:
-            prompt = request.get("prompt")
-            prompt_type = getattr(
-                request.get("prompt_type"), "value", request.get("prompt_type")
-            )
-            choices = request.get("choices")
+            prompt = concrete_agent_input_prompt(prompt)
+            if prompt is None:
+                prompt = _GENERIC_AGENT_INPUT_PROMPT
+                prompt_type = "text"
+                choices = None
 
         trusted: dict[str, object] = {
             "hitl_request_id": request_id,
@@ -139,18 +141,13 @@ class RoomTimelineProjector:
             "hitl_prompt_type": prompt_type,
             "hitl_choices": choices,
         }
-        question_count = request.get("question_count")
-        is_questionnaire = isinstance(question_count, int) and question_count > 1
+        question_count = int(request.get("question_count") or 1)
         optional_fields = {
             "hitl_a2a_task_id": request.get("a2a_task_id"),
             "hitl_a2a_context_id": request.get("a2a_context_id"),
-            "hitl_group_id": (
-                request.get("interaction_id") if is_questionnaire else None
-            ),
-            "hitl_group_total": question_count if is_questionnaire else None,
-            "hitl_group_index": (
-                request.get("question_index") if is_questionnaire else None
-            ),
+            "hitl_interaction_id": request.get("interaction_id"),
+            "hitl_question_count": question_count,
+            "hitl_question_index": int(request.get("question_index") or 0),
             "user_answer": request.get("user_input"),
         }
         trusted.update(

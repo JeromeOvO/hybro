@@ -244,6 +244,8 @@ async def test_trusted_hitl_projection_uses_verified_record_and_redacts_agent_pr
         "hitl_choices": None,
         "hitl_a2a_task_id": "task-1",
         "hitl_a2a_context_id": "context-1",
+        "hitl_question_count": 1,
+        "hitl_question_index": 0,
     }
 
 

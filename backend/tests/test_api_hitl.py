@@ -15,130 +15,18 @@ import pytest
 from fastapi import HTTPException
 
 from api_gateway.routes.hitl_routes import (
-    cancel_hitl_request,
+    cancel_hitl_interaction,
     get_pending_hitl_requests,
-    respond_to_hitl_request,
 )
+from common.dto import HITLCancelCommand
 from common.dto import HITLRequest as CommonHITLRequest
-from common.dto import HITLResponse as CommonHITLResponse
-from execution.hitl.exceptions import (
-    HITLConflictError,
-    HITLContinuationLostError,
-    HITLNotFoundError,
-    HITLRoomMismatchError,
-    HITLRoutingFailedError,
-)
-from models.hitl import HITLResponseRequest
+from execution.hitl.exceptions import HITLRoomMismatchError
 
 
 def _room_ownership(owner_id):
     reader = MagicMock()
     reader.get_room_owner = AsyncMock(return_value=owner_id)
     return reader
-
-
-# =============================================================================
-# HITL Response Tests
-# =============================================================================
-
-
-class TestRespondToHitlRequest:
-    """Tests for respond_to_hitl_request endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_handles_valid_response(
-        self, mock_user, mock_db_service, mock_hitl_service, sample_room
-    ):
-        """Should handle valid HITL response."""
-        body = HITLResponseRequest(
-            request_id="hitl-request-123",
-            user_input="Yes, proceed with the action",
-        )
-
-        mock_db_service.get_room_by_room_id.return_value = sample_room
-        mock_hitl_service.resolve_hitl.return_value = CommonHITLResponse(
-            request_id="hitl-request-123",
-            status="ok",
-        )
-
-        result = await respond_to_hitl_request(
-            sample_room.room_id,
-            body,
-            mock_user,
-            manager=mock_hitl_service,
-            room_ownership=_room_ownership(mock_user.user_id),
-        )
-
-        assert result == {"status": "ok", "request_id": "hitl-request-123"}
-        mock_hitl_service.resolve_hitl.assert_called_once_with(
-            sample_room.room_id,
-            "hitl-request-123",
-            "Yes, proceed with the action",
-            mock_user.user_id,
-        )
-
-    @pytest.mark.asyncio
-    async def test_verifies_room_ownership(
-        self, mock_user_2, mock_db_service, sample_room
-    ):
-        """Should verify room ownership before processing response."""
-        body = HITLResponseRequest(
-            request_id="hitl-request-123",
-            user_input="Response",
-        )
-
-        room_ownership_reader = MagicMock()
-        room_ownership_reader.get_room_owner = AsyncMock(
-            return_value=sample_room.room_owner_id
-        )
-
-        with pytest.raises(HTTPException) as exc_info:
-            await respond_to_hitl_request(
-                sample_room.room_id,
-                body,
-                mock_user_2,
-                manager=MagicMock(),
-                room_ownership=room_ownership_reader,
-            )
-
-        assert exc_info.value.status_code == 403
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("error", "status_code"),
-        [
-            (HITLNotFoundError("HITL request not found"), 404),
-            (HITLConflictError("Request already responded"), 409),
-            (HITLRoomMismatchError("Room mismatch"), 403),
-            (
-                HITLContinuationLostError(
-                    "The supervisor session has expired. Please send a new message."
-                ),
-                410,
-            ),
-            (HITLRoutingFailedError("Failed to deliver response to agent"), 502),
-        ],
-    )
-    async def test_translates_execution_hitl_errors(
-        self, error, status_code, mock_user, mock_hitl_service, sample_room
-    ):
-        body = HITLResponseRequest(
-            request_id="hitl-request-123",
-            user_input="Response",
-        )
-        mock_hitl_service.resolve_hitl.side_effect = error
-
-        with pytest.raises(HTTPException) as exc_info:
-            await respond_to_hitl_request(
-                sample_room.room_id,
-                body,
-                mock_user,
-                manager=mock_hitl_service,
-                room_ownership=_room_ownership(mock_user.user_id),
-            )
-
-        assert exc_info.value.status_code == status_code
-        assert exc_info.value.detail == error.message
 
 
 # =============================================================================
@@ -243,9 +131,9 @@ class TestGetPendingHitlRequests:
                 orchestration_run_id="run-private",
                 prompt_type="choice",
                 choices=["Approve", "Reject"],
-                group_id="group-public-1",
-                group_total=3,
-                group_index=2,
+                interaction_id="interaction-public-1",
+                question_count=3,
+                question_index=2,
                 status="processing",
                 expires_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
                 created_at=datetime(2026, 1, 2, 2, 4, 5, tzinfo=UTC),
@@ -273,9 +161,9 @@ class TestGetPendingHitlRequests:
             "agent_id": "agent-public-1",
             "agent_name": "Researcher",
             "source_step_id": "step-public-1",
-            "group_id": "group-public-1",
-            "group_total": 3,
-            "group_index": 2,
+            "interaction_id": "interaction-public-1",
+            "question_count": 3,
+            "question_index": 2,
             "related_message_id": "user-msg-private",
             "client_request_id": "client-public-1",
             "expires_at": "2026-01-02T03:04:05Z",
@@ -317,33 +205,45 @@ class TestGetPendingHitlRequests:
 
 
 # =============================================================================
-# Cancel HITL Request Tests
+# Cancel HITL Interaction Tests
 # =============================================================================
 
 
-class TestCancelHitlRequest:
-    """Tests for cancel_hitl_request endpoint."""
+class TestCancelHitlInteraction:
+    """Tests for the version-fenced interaction cancel endpoint."""
 
     @pytest.mark.asyncio
     async def test_cancels_request(
         self, mock_user, mock_db_service, mock_hitl_service, sample_room
     ):
         """Should cancel HITL request."""
-        request_id = "hitl-request-to-cancel"
-
+        interaction_id = "interaction-to-cancel"
+        body = HITLCancelCommand(
+            interaction_id=interaction_id,
+            expected_interaction_version=4,
+            client_request_id="cancel-1",
+        )
         mock_db_service.get_room_by_room_id.return_value = sample_room
+        mock_hitl_service.cancel_hitl_interaction = AsyncMock(return_value=5)
 
-        result = await cancel_hitl_request(
+        result = await cancel_hitl_interaction(
             sample_room.room_id,
-            request_id,
+            interaction_id,
+            body,
             mock_user,
             manager=mock_hitl_service,
             room_ownership=_room_ownership(mock_user.user_id),
         )
 
-        assert result["status"] == "canceled"
-        mock_hitl_service.cancel_hitl.assert_called_once_with(
-            sample_room.room_id, request_id
+        assert result == {
+            "status": "canceled",
+            "interaction_id": interaction_id,
+            "interaction_version": 5,
+        }
+        mock_hitl_service.cancel_hitl_interaction.assert_called_once_with(
+            sample_room.room_id,
+            interaction_id,
+            4,
         )
 
     @pytest.mark.asyncio
@@ -351,7 +251,12 @@ class TestCancelHitlRequest:
         self, mock_user_2, mock_db_service, sample_room
     ):
         """Should verify room ownership before canceling."""
-        request_id = "hitl-request-to-cancel"
+        interaction_id = "interaction-to-cancel"
+        body = HITLCancelCommand(
+            interaction_id=interaction_id,
+            expected_interaction_version=1,
+            client_request_id="cancel-1",
+        )
 
         room_ownership_reader = MagicMock()
         room_ownership_reader.get_room_owner = AsyncMock(
@@ -359,9 +264,10 @@ class TestCancelHitlRequest:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await cancel_hitl_request(
+            await cancel_hitl_interaction(
                 sample_room.room_id,
-                request_id,
+                interaction_id,
+                body,
                 mock_user_2,
                 manager=MagicMock(),
                 room_ownership=room_ownership_reader,
@@ -374,12 +280,18 @@ class TestCancelHitlRequest:
         self, mock_user, mock_hitl_service, sample_room
     ):
         error = HITLRoomMismatchError("Room mismatch")
-        mock_hitl_service.cancel_hitl.side_effect = error
+        mock_hitl_service.cancel_hitl_interaction = AsyncMock(side_effect=error)
+        body = HITLCancelCommand(
+            interaction_id="interaction-to-cancel",
+            expected_interaction_version=1,
+            client_request_id="cancel-1",
+        )
 
         with pytest.raises(HTTPException) as exc_info:
-            await cancel_hitl_request(
+            await cancel_hitl_interaction(
                 sample_room.room_id,
-                "hitl-request-to-cancel",
+                "interaction-to-cancel",
+                body,
                 mock_user,
                 manager=mock_hitl_service,
                 room_ownership=_room_ownership(mock_user.user_id),

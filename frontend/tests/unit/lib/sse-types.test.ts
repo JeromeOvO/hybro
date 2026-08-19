@@ -97,6 +97,8 @@ describe('RoomSSEFrameMap HITL durable events', () => {
         source: 'agent',
         prompt: 'Need revenue',
         prompt_type: 'text',
+        question_count: 1,
+        question_index: 0,
       },
     } satisfies RoomSSEFrameMap['hitl_request']
 
@@ -113,6 +115,8 @@ describe('RoomSSEFrameMap HITL durable events', () => {
         message_id: 'agent-msg-1',
         source: 'agent',
         status: 'responded',
+        question_count: 1,
+        question_index: 0,
       },
     } satisfies RoomSSEFrameMap['hitl_response']
 

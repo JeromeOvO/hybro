@@ -60,14 +60,13 @@ def mock_hitl_db_service():
     mock.update_agent_message_task_state = AsyncMock(return_value=True)
     mock.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
     mock.persist_hitl_user_answer = AsyncMock(return_value=True)
-    mock.persist_hitl_group_metadata = AsyncMock(return_value=True)
+    mock.persist_hitl_interaction_metadata = AsyncMock(return_value=True)
     mock.claim_hitl_request = AsyncMock(return_value=None)
     mock.fenced_update_hitl_request = AsyncMock(return_value=True)
     mock.cas_update_hitl_request = AsyncMock(return_value=True)
-    mock.count_pending_in_hitl_group = AsyncMock(return_value=0)
-    mock.claim_hitl_group_routing = AsyncMock(return_value=True)
-    mock.release_hitl_group_routing = AsyncMock(return_value=True)
-    mock.get_hitl_group_requests = AsyncMock(return_value=[])
+    mock.claim_hitl_open_projection = AsyncMock(return_value=None)
+    mock.complete_hitl_open_projection = AsyncMock(return_value=None)
+    mock.release_hitl_open_projection = AsyncMock(return_value=True)
     mock.reset_last_notified_state = AsyncMock()
     mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
     mock.save_continuation_on_user_message = AsyncMock(return_value=True)
@@ -88,12 +87,6 @@ def mock_hitl_delivery():
 # =============================================================================
 # Request Input Tests
 # =============================================================================
-
-
-def test_infer_prompt_type_detects_approve_reject():
-    from execution.hitl.detector import infer_prompt_type
-
-    assert infer_prompt_type("Approve or reject this action").value == "confirmation"
 
 
 @pytest.mark.parametrize(
@@ -142,9 +135,9 @@ def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request
     assert common.request_id == sample_hitl_request.request_id
     assert common.message_id == "display-msg-1"
     assert common.client_request_id == "cr-hitl-1"
-    assert common.group_id == "group-1"
-    assert common.group_total == 2
-    assert common.group_index == 1
+    assert common.interaction_id == "group-1"
+    assert common.question_count == 2
+    assert common.question_index == 1
 
 
 def test_hitl_response_translator_preserves_route_dict_shape():

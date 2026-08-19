@@ -74,7 +74,6 @@ class HITLPromptType(str, Enum):
     APPROVAL = "approval"
     AUTHENTICATION = "authentication"
     DATE = "date"
-    FILE = "file"
 
 
 class HITLStatus(str, Enum):
@@ -403,18 +402,6 @@ class HITLSupervisorEffectCommand(BaseModel):
         if self.status == HITLResumeCommandStatus.DELIVERING and not self.claim_id:
             raise ValueError("delivering command requires a claim")
         return self
-
-
-# ---------------------------------------------------------------------------
-# HITLResponseRequest — REST request body (not persisted separately)
-# ---------------------------------------------------------------------------
-
-
-class HITLResponseRequest(BaseModel):
-    """REST request body for POST /rooms/{room_id}/hitl/respond."""
-
-    request_id: _HITLRequestId
-    user_input: _HITLUserInput
 
 
 class HITLBatchAnswer(BaseModel):

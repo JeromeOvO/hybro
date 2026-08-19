@@ -49,7 +49,6 @@ const KNOWN_PROMPT_TYPES = new Set([
   'approval',
   'authentication',
   'date',
-  'file',
 ])
 
 function normalizePromptType(
@@ -57,7 +56,7 @@ function normalizePromptType(
 ): HITLPromptType {
   if (!promptType) return 'text'
   if (KNOWN_PROMPT_TYPES.has(promptType)) return promptType as HITLPromptType
-  return 'unknown'
+  return 'text'
 }
 
 export function buildPendingHitlIncomingMessage(

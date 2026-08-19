@@ -441,9 +441,8 @@ def mock_hitl_service():
     mock.get_pending_requests = AsyncMock(return_value=[])
     mock.cancel_request = AsyncMock()
     mock.cancel_requests_for_message = AsyncMock()
-    mock.resolve_hitl = AsyncMock()
     mock.get_pending_hitl = AsyncMock(return_value=[])
-    mock.cancel_hitl = AsyncMock()
+    mock.cancel_hitl_interaction = AsyncMock(return_value=1)
     return mock
 
 

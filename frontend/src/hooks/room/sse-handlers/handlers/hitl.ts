@@ -16,7 +16,7 @@ export async function handleHitlRequest(
     request_id, message_id, source, prompt, prompt_type, choices,
     agent_name, agent_id, step_number, total_steps, expires_at,
     interaction_id, interaction_status, interaction_version, application_status,
-    group_id, group_total, group_index, related_message_id,
+    question_count, question_index, related_message_id,
   } = sseMessage.data
 
   if (!request_id || !message_id) return
@@ -95,9 +95,9 @@ export async function handleHitlRequest(
     interactionStatus: interaction_status,
     interactionVersion: interaction_version,
     applicationStatus: application_status,
-    groupId: group_id,
-    groupTotal: group_total,
-    groupIndex: group_index,
+    groupId: interaction_id,
+    groupTotal: question_count,
+    groupIndex: question_index,
     stepNumber: step_number,
     totalSteps: total_steps,
     relatedMessageId: related_message_id,

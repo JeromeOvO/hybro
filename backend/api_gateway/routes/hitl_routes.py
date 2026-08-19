@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from api_gateway.dependencies import get_hitl_manager, get_room_ownership_reader
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
-from common.dto import HITLRequest
+from common.dto import HITLCancelCommand, HITLRequest
 from common.protocols import HITLManager, RoomOwnershipReader
-from models.hitl import HITLBatchResponseRequest, HITLResponseRequest
+from models.hitl import HITLBatchResponseRequest
 
 router = APIRouter(prefix="/rooms/{room_id}/hitl", tags=["hitl"])
 
@@ -62,9 +62,8 @@ _PUBLIC_PENDING_HITL_FIELDS = {
     "interaction_version",
     "application_status",
     "application_error",
-    "group_id",
-    "group_total",
-    "group_index",
+    "question_count",
+    "question_index",
     "client_request_id",
 }
 
@@ -96,32 +95,6 @@ def _pending_hitl_public_payload(request: HITLRequest) -> dict:
     )
     payload["related_message_id"] = request.user_message_id
     return payload
-
-
-@router.post("/respond")
-async def respond_to_hitl_request(
-    room_id: str,
-    body: HITLResponseRequest,
-    user: ClerkUser = Depends(get_current_user),
-    manager: HITLManager = Depends(get_hitl_manager),
-    room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
-):
-    """User responds to an HITL prompt."""
-    await verify_room_ownership(room_id, user, room_ownership)
-
-    try:
-        response = await manager.resolve_hitl(
-            room_id,
-            body.request_id,
-            body.user_input,
-            user.user_id,
-        )
-    except Exception as exc:
-        _raise_http_for_hitl_error(exc)
-    result = {"status": response.status, "request_id": response.request_id}
-    if response.reclaimed is not None:
-        result["reclaimed"] = response.reclaimed
-    return result
 
 
 @router.post("/respond-batch")
@@ -167,22 +140,32 @@ async def get_pending_hitl_requests(
     return {"requests": [_pending_hitl_public_payload(r) for r in requests]}
 
 
-@router.post("/{request_id}/cancel")
-async def cancel_hitl_request(
+@router.post("/interactions/{interaction_id}/cancel")
+async def cancel_hitl_interaction(
     room_id: str,
-    request_id: str,
+    interaction_id: str,
+    body: HITLCancelCommand,
     user: ClerkUser = Depends(get_current_user),
     manager: HITLManager = Depends(get_hitl_manager),
     room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
 ):
-    """Cancel a pending HITL request."""
+    """Cancel one complete interaction with optimistic version fencing."""
     await verify_room_ownership(room_id, user, room_ownership)
-
+    if body.interaction_id != interaction_id:
+        raise HTTPException(status_code=400, detail="interaction_id mismatch")
     try:
-        await manager.cancel_hitl(room_id, request_id)
+        new_version = await manager.cancel_hitl_interaction(
+            room_id,
+            interaction_id,
+            body.expected_interaction_version,
+        )
     except Exception as exc:
         _raise_http_for_hitl_error(exc)
-    return {"status": "canceled"}
+    return {
+        "status": "canceled",
+        "interaction_id": interaction_id,
+        "interaction_version": new_version,
+    }
 
 
 _mark_declared_owner(router, __name__)

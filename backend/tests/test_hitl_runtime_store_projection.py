@@ -487,6 +487,9 @@ async def test_persist_pending_hitl_on_agent_message_projects_metadata_noop_succ
         "hitl_request_id": "req-1",
         "hitl_prompt": "Need policy effective date",
         "hitl_prompt_type": "text",
+        "hitl_interaction_id": "interaction-1",
+        "hitl_question_count": 1,
+        "hitl_question_index": 0,
         "user_answer": None,
     }
     assert "task_updated_at" in sets
@@ -549,9 +552,9 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
         "user_answer": None,
         "hitl_a2a_task_id": "task-1",
         "hitl_a2a_context_id": "ctx-1",
-        "hitl_group_id": "group-1",
-        "hitl_group_total": 2,
-        "hitl_group_index": 0,
+        "hitl_interaction_id": "group-1",
+        "hitl_question_count": 2,
+        "hitl_question_index": 0,
     }
     sets = update["$set"]
     assert sets["message_content.message_task.status.state"] == "input-required"

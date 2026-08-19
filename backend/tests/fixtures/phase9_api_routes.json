@@ -1285,6 +1285,34 @@
       "get_room_ownership_reader"
     ],
     "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.hitl_routes",
+    "name": "cancel_hitl_interaction",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "common.protocols.HITLManager",
+    "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.RoomOwnershipReader"
+    ]
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
+    ],
+    "methods": [
       "GET"
     ],
     "module": "api_gateway.routes.hitl_routes",
@@ -1316,34 +1344,6 @@
       "POST"
     ],
     "module": "api_gateway.routes.hitl_routes",
-    "name": "respond_to_hitl_request",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/respond",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_hitl_manager",
-      "get_room_ownership_reader"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.hitl_routes",
     "name": "respond_to_hitl_interaction",
     "openapi_response_codes": [
       "200",
@@ -1351,34 +1351,6 @@
     ],
     "owning_protocol": "common.protocols.HITLManager",
     "path": "/api/v1/rooms/{room_id}/hitl/respond-batch",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_hitl_manager",
-      "get_room_ownership_reader"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.hitl_routes",
-    "name": "cancel_hitl_request",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.HITLManager",
-    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
     "response_class": null,
     "response_model": null,
     "status_code": null,

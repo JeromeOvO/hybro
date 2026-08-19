@@ -140,7 +140,6 @@ class HITLRequest(FrozenDTO):
         "approval",
         "authentication",
         "date",
-        "file",
     ] = "text"
     choices: list[str] | None = None
     interaction_id: str | None = None
@@ -148,9 +147,8 @@ class HITLRequest(FrozenDTO):
     interaction_version: int | None = None
     application_status: str | None = None
     application_error: str | None = None
-    group_id: str | None = None
-    group_total: int | None = None
-    group_index: int | None = None
+    question_count: int = 1
+    question_index: int = 0
     status: Literal[
         "pending",
         "processing",

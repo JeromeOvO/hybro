@@ -813,7 +813,6 @@ async def test_supervisor_effect_replays_with_stable_identity_after_ack_crash():
     lifecycle.mark_resume_command_state = AsyncMock(side_effect=mark)
     persistence = MagicMock()
     persistence.get_hitl_request = AsyncMock(return_value=row)
-    persistence.get_hitl_group_requests = AsyncMock(return_value=[row])
     applied_effect_ids: set[str] = set()
     actual_effects = 0
 

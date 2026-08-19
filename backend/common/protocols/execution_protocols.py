@@ -1,4 +1,4 @@
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from common.dto import (
     CancellationAck,
@@ -43,42 +43,6 @@ class ExecutionEngine(Protocol):
 
 @runtime_checkable
 class HITLManager(Protocol):
-    async def create_hitl_request(
-        self,
-        room_id: str,
-        user_message_id: str,
-        prompt: str,
-        source: Literal["agent", "supervisor"],
-        source_step_id: str | None = None,
-        agent_id: str | None = None,
-        agent_name: str | None = None,
-        a2a_task_id: str | None = None,
-        a2a_context_id: str | None = None,
-        continuation_message_id: str | None = None,
-        display_message_id: str | None = None,
-        prompt_type: Literal[
-            "text",
-            "textarea",
-            "choice",
-            "single_choice",
-            "multi_choice",
-            "confirmation",
-            "approval",
-            "authentication",
-            "date",
-            "file",
-        ] = "text",
-        choices: list[str] | None = None,
-    ) -> HITLRequest | None: ...
-
-    async def resolve_hitl(
-        self,
-        room_id: str,
-        request_id: str,
-        response: str,
-        responder_id: str,
-    ) -> HITLResponse: ...
-
     async def resolve_hitl_batch(
         self,
         room_id: str,
@@ -89,7 +53,12 @@ class HITLManager(Protocol):
     ) -> HITLResponse: ...
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]: ...
-    async def cancel_hitl(self, room_id: str, request_id: str) -> bool: ...
+    async def cancel_hitl_interaction(
+        self,
+        room_id: str,
+        interaction_id: str,
+        expected_version: int,
+    ) -> int: ...
 
 
 @runtime_checkable

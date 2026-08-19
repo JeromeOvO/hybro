@@ -11,12 +11,8 @@ from common.dto import (
     CancellationAck,
     ExecutionAck,
     ExecutionRequest,
-    HITLApplicationRoute,
-    HITLEvidenceOrigin,
-    HITLPublicSource,
     HITLRequest,
     HITLResponse,
-    HITLRouteSnapshot,
     HubAgentResponseInternal,
     RunInfo,
 )
@@ -37,11 +33,9 @@ from execution.dispatch.a2a_interaction import input_observation_from_a2a
 from execution.dispatch.agent_event import AgentEvent
 from execution.events import emit_room_processing_status
 from execution.hitl.translators import (
-    hitl_cancel_none_to_success,
     hitl_response_dict_to_common,
     model_hitl_request_to_common,
 )
-from execution.hitl.validation import deterministic_interaction_id
 from execution.idempotency import (
     IDEMPOTENCY_FINGERPRINT_VERSION,
     build_execution_request_fingerprint,
@@ -1002,96 +996,6 @@ class ExecutionFacade:
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         return await self._run_lifecycle.heal_diverged_runs(limit=limit)
 
-    async def create_hitl_request(
-        self,
-        room_id: str,
-        user_message_id: str,
-        prompt: str,
-        source: str,
-        **kwargs: Any,
-    ) -> HITLRequest | None:
-        public_source = HITLPublicSource(source)
-        if public_source == HITLPublicSource.AGENT:
-            route = HITLApplicationRoute.A2A_RESUME
-            route_snapshot = HITLRouteSnapshot(
-                route=route,
-                task_id=kwargs["a2a_task_id"],
-                context_id=kwargs["a2a_context_id"],
-                continuation_message_id=kwargs["continuation_message_id"],
-                agent_id=kwargs["agent_id"],
-            )
-        else:
-            route = HITLApplicationRoute.SUPERVISOR_RUN
-            route_snapshot = HITLRouteSnapshot(
-                route=route,
-                orchestration_run_id=kwargs["orchestration_run_id"],
-            )
-        interaction_id = kwargs.pop("interaction_id", None)
-        if interaction_id is None:
-            round_identity = kwargs.get("request_id") or kwargs.pop(
-                "round_identity", None
-            )
-            if not isinstance(round_identity, str) or not round_identity.strip():
-                raise ValueError(
-                    "create_hitl_request requires request_id or round_identity"
-                )
-            interaction_id = deterministic_interaction_id(
-                event_identity=kwargs.get("continuation_message_id") or user_message_id,
-                round_identity=round_identity,
-            )
-        question_keys = {
-            "prompt_type",
-            "choices",
-            "agent_id",
-            "agent_name",
-            "source_step_id",
-            "continuation_message_id",
-            "display_message_id",
-            "request_id",
-        }
-        question = {"prompt": prompt}
-        question.update(
-            {key: kwargs.pop(key) for key in list(kwargs) if key in question_keys}
-        )
-        results = await self._hitl_manager.request_interaction(
-            room_id=room_id,
-            user_message_id=user_message_id,
-            interaction_id=interaction_id,
-            application_route=route,
-            public_source=public_source,
-            evidence_origin=HITLEvidenceOrigin(source),
-            route_snapshot=route_snapshot,
-            questions=[question],
-            **kwargs,
-        )
-        result = results[0] if results else None
-        return model_hitl_request_to_common(result) if result is not None else None
-
-    async def resolve_hitl(
-        self,
-        room_id: str,
-        request_id: str,
-        response: str,
-        responder_id: str,
-    ) -> HITLResponse:
-        result = await self._hitl_manager.handle_response(
-            room_id=room_id,
-            request_id=request_id,
-            user_input=response,
-            user_id=responder_id,
-        )
-        if hasattr(result, "model_dump"):
-            result = result.model_dump(mode="json")
-        if (
-            result.get("status") != "accepted"
-            and result.get("run_projection_status") != "applied"
-        ):
-            await self._record_and_schedule_resolved_hitl(
-                hitl_result=result,
-                response=response,
-            )
-        return hitl_response_dict_to_common(result)
-
     async def _record_and_schedule_resolved_hitl(
         self,
         *,
@@ -1264,9 +1168,9 @@ class ExecutionFacade:
             and result.get("run_projection_status") != "applied"
         ):
             combined_response = "\n\n".join(
-                answer.get("response", "")
+                answer.get("user_input", "")
                 for answer in answers
-                if isinstance(answer.get("response"), str)
+                if isinstance(answer.get("user_input"), str)
             )
             await self._record_and_schedule_resolved_hitl(
                 hitl_result=result,
@@ -1278,9 +1182,17 @@ class ExecutionFacade:
         requests = await self._hitl_manager.get_pending_requests(room_id)
         return [model_hitl_request_to_common(request) for request in requests]
 
-    async def cancel_hitl(self, room_id: str, request_id: str) -> bool:
-        result = await self._hitl_manager.cancel_request(request_id, room_id=room_id)
-        return hitl_cancel_none_to_success(result)
+    async def cancel_hitl_interaction(
+        self,
+        room_id: str,
+        interaction_id: str,
+        expected_version: int,
+    ) -> int:
+        return await self._hitl_manager.cancel_interaction_by_user(
+            interaction_id,
+            room_id,
+            expected_version=expected_version,
+        )
 
     async def handle_hub_agent_response(
         self,

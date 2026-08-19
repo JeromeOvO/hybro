@@ -180,9 +180,8 @@ export type HITLInputRequestedData = {
   interaction_status?: string | null
   interaction_version?: number | null
   application_status?: string | null
-  group_id?: string | null
-  group_total?: number | null
-  group_index?: number | null
+  question_count: number
+  question_index: number
   step_number?: number | null
   total_steps?: number | null
   expires_at?: string | null
@@ -203,9 +202,8 @@ export type HITLStatusUpdateData = {
   interaction_status?: string | null
   interaction_version?: number | null
   application_status?: string | null
-  group_id?: string | null
-  group_total?: number | null
-  group_index?: number | null
+  question_count: number
+  question_index: number
   client_request_id?: string | null
 }
 
@@ -373,8 +371,6 @@ export type HITLPromptType =
   | 'approval'
   | 'authentication'
   | 'date'
-  | 'file'
-  | 'unknown'
 export type HITLStatus = 'pending' | 'responded' | 'expired' | 'canceled' | 'error'
 
 // --- Internal Processing Status (SSE processing_status events) ---

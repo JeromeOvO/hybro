@@ -158,24 +158,10 @@ def test_execution_engine_separates_execute_from_start_orchestration():
 def test_hitl_manager_sensitive_methods_require_room_id():
     from common.protocols import HITLManager
 
-    resolve_sig = inspect.signature(HITLManager.resolve_hitl)
-    cancel_sig = inspect.signature(HITLManager.cancel_hitl)
-    assert "room_id" in resolve_sig.parameters
+    batch_sig = inspect.signature(HITLManager.resolve_hitl_batch)
+    cancel_sig = inspect.signature(HITLManager.cancel_hitl_interaction)
+    assert "room_id" in batch_sig.parameters
     assert "room_id" in cancel_sig.parameters
-
-
-def test_hitl_manager_create_preserves_public_metadata_fields():
-    from common.protocols import HITLManager
-
-    sig = inspect.signature(HITLManager.create_hitl_request)
-    for name in [
-        "source_step_id",
-        "agent_name",
-        "display_message_id",
-        "prompt_type",
-        "choices",
-    ]:
-        assert name in sig.parameters
 
 
 def test_execution_facade_satisfies_task6_public_protocols():

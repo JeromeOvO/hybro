@@ -225,8 +225,17 @@ export function useRoomActions(
     const interactionId = target
       ? (target.hitlInteractionId ?? target.hitlGroupId ?? target.hitlRequestId)
       : undefined
+    if (!interactionId || !target?.hitlInteractionVersion) {
+      throw new Error('The interaction changed before it could be canceled.')
+    }
     const { cancelHitl } = await import('@/lib/api/hitl')
-    await cancelHitl(roomId, requestId, getToken)
+    const result = await cancelHitl(
+      roomId,
+      interactionId,
+      target.hitlInteractionVersion,
+      target.clientRequestId ?? crypto.randomUUID(),
+      getToken,
+    )
 
     for (const entity of Object.values(store.entities)) {
       const entityInteractionId = entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId
@@ -240,6 +249,7 @@ export function useRoomActions(
         timestamp: entity.timestamp,
         hitlResolved: true,
         hitlInteractionStatus: 'canceled',
+        hitlInteractionVersion: result.interaction_version,
         taskStatus: 'canceled',
         taskError: 'Input request canceled',
       }, 'optimistic')

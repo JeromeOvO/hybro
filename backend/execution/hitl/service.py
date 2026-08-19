@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import re
 from datetime import timedelta
 from functools import wraps
 from typing import TYPE_CHECKING, Any
@@ -38,6 +37,7 @@ from execution.dispatch.agent_ingress_router import (
 )
 from execution.hitl.exceptions import (
     ContinuationLostError,
+    HITLConflictError,
     HITLNotFoundError,
     HITLRequestProjectionError,
     HITLRoomMismatchError,
@@ -124,37 +124,6 @@ def _prompt_hash(prompt: str | None) -> str | None:
 MAX_HITL_ROUNDS = 15
 MAX_HITL_GROUP_SIZE = 100
 _GENERIC_AGENT_INPUT_PROMPT = GENERIC_AGENT_INPUT_PROMPT
-
-
-# ---------------------------------------------------------------------------
-# Prompt-type auto-detection helper for trusted callers through hitl.detector
-# ---------------------------------------------------------------------------
-
-_CONFIRMATION_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bapprove\b.*\breject\b", re.IGNORECASE),
-    re.compile(r"\breject\b.*\bapprove\b", re.IGNORECASE),
-    re.compile(r"\bconfirm\b.*\bcancel\b", re.IGNORECASE),
-    re.compile(r"\bcancel\b.*\bconfirm\b", re.IGNORECASE),
-    re.compile(
-        r"\b(yes|no)\b.*\bto\s+(proceed|continue|confirm|cancel)\b", re.IGNORECASE
-    ),
-    re.compile(r"\bdo you (want|wish) to (proceed|continue|confirm)\b", re.IGNORECASE),
-    re.compile(r"click\s+\*{0,2}(approve|confirm)\*{0,2}", re.IGNORECASE),
-    re.compile(r"\bproceed\b.*\bcancel\b", re.IGNORECASE),
-]
-
-
-def _infer_prompt_type(prompt_text: str) -> HITLPromptType:
-    """Infer prompt type for trusted local callers, not remote agent prompts."""
-    for pattern in _CONFIRMATION_PATTERNS:
-        if pattern.search(prompt_text):
-            logger.info(
-                "hitl_prompt_type_inferred: CONFIRMATION (matched %s)",
-                pattern.pattern[:60],
-            )
-            return HITLPromptType.CONFIRMATION
-    logger.info("hitl_prompt_type_inferred: TEXT (no confirmation pattern matched)")
-    return HITLPromptType.TEXT
 
 
 def _is_authoritative_a2a_id(value: Any) -> bool:
@@ -1667,6 +1636,47 @@ class HITLService:
             return True
         return False
 
+    async def cancel_interaction_by_user(
+        self,
+        interaction_id: str,
+        room_id: str,
+        *,
+        expected_version: int,
+    ) -> int:
+        if self._lifecycle is None:
+            raise HITLRoutingFailedError("HITL lifecycle persistence is required")
+        interaction = await self._lifecycle.get_interaction_strict(interaction_id)
+        if interaction is None:
+            raise HITLNotFoundError("HITL interaction not found")
+        if interaction.get("room_id") != room_id:
+            raise HITLRoomMismatchError("Room mismatch")
+        if int(interaction.get("version") or 0) != expected_version:
+            raise HITLConflictError("HITL interaction changed before cancellation")
+        if interaction.get("status") not in {
+            HITLInteractionStatus.MATERIALIZING.value,
+            HITLInteractionStatus.OPEN.value,
+            HITLInteractionStatus.PARTIALLY_ANSWERED.value,
+        }:
+            raise HITLConflictError("HITL interaction is no longer cancelable")
+        request_ids = list(interaction.get("request_ids") or [])
+        if request_ids:
+            await self.cancel_request(request_ids[0], room_id=room_id)
+        else:
+            terminal = await self._lifecycle.terminalize_interaction(
+                interaction_id,
+                expected_statuses=[HITLInteractionStatus.MATERIALIZING.value],
+                status=HITLInteractionStatus.CANCELED.value,
+                reason="Human input interaction was canceled",
+                member_status=HITLStatus.CANCELED.value,
+                owning_run_terminal_status="canceled",
+            )
+            if terminal is None:
+                raise HITLConflictError("HITL interaction could not be canceled")
+        latest = await self._lifecycle.get_interaction_strict(interaction_id)
+        if latest is None:
+            raise HITLConflictError("HITL interaction disappeared after cancellation")
+        return int(latest.get("version") or 0)
+
     async def cancel_request(
         self,
         request_id: str,
@@ -2039,15 +2049,8 @@ class HITLService:
                     ),
                     interaction_version=request.interaction_version,
                     application_status=request.application_status,
-                    group_id=(
-                        request.interaction_id if request.question_count > 1 else None
-                    ),
-                    group_total=(
-                        request.question_count if request.question_count > 1 else None
-                    ),
-                    group_index=(
-                        request.question_index if request.question_count > 1 else None
-                    ),
+                    question_count=request.question_count,
+                    question_index=request.question_index,
                     related_message_id=data["related_message_id"],
                     client_request_id=data.get("client_request_id"),
                 )
@@ -2075,6 +2078,8 @@ class HITLService:
                 ),
                 interaction_version=request.interaction_version,
                 application_status=request.application_status,
+                question_count=request.question_count,
+                question_index=request.question_index,
                 related_message_id=data["related_message_id"],
                 error_message=error,
                 client_request_id=data.get("client_request_id"),

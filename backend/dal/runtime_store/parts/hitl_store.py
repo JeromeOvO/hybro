@@ -562,9 +562,9 @@ class HITLRuntimeStorePart:
             optional_metadata = {
                 "hitl_a2a_task_id": a2a_task_id,
                 "hitl_a2a_context_id": a2a_context_id,
-                "hitl_group_id": interaction_id if question_count > 1 else None,
-                "hitl_group_total": question_count if question_count > 1 else None,
-                "hitl_group_index": question_index if question_count > 1 else None,
+                "hitl_interaction_id": interaction_id,
+                "hitl_question_count": question_count,
+                "hitl_question_index": question_index,
             }
             metadata.update(
                 {
@@ -647,28 +647,15 @@ class HITLRuntimeStorePart:
     ) -> bool:
         try:
             await self._ensure_message_task_metadata(message_id)
-            if interaction_id is None or not question_count or question_count <= 1:
-                return await self._room_agent_messages.update_one(
-                    {"message_id": message_id},
-                    {
-                        "$unset": {
-                            "message_content.message_task.metadata.hitl_group_id": "",
-                            "message_content.message_task.metadata.hitl_group_total": "",
-                            "message_content.message_task.metadata.hitl_group_index": "",
-                        }
-                    },
-                )
+            if interaction_id is None:
+                return False
             updates: dict[str, Any] = {
-                "message_content.message_task.metadata.hitl_group_id": interaction_id,
+                "message_content.message_task.metadata.hitl_interaction_id": interaction_id,
+                "message_content.message_task.metadata.hitl_question_count": question_count
+                or 1,
+                "message_content.message_task.metadata.hitl_question_index": question_index
+                or 0,
             }
-            if question_count is not None:
-                updates["message_content.message_task.metadata.hitl_group_total"] = (
-                    question_count
-                )
-            if question_index is not None:
-                updates["message_content.message_task.metadata.hitl_group_index"] = (
-                    question_index
-                )
             return await self._room_agent_messages.update_one(
                 {"message_id": message_id},
                 {"$set": updates},

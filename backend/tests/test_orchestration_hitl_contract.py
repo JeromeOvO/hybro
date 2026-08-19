@@ -10,17 +10,20 @@ NOW = datetime(2026, 7, 5, 12, 0, tzinfo=UTC)
 
 def _hitl_doc(**overrides):
     request = HITLRequest(
+        schema_version=overrides.pop("schema_version", 3),
         request_id=overrides.pop("request_id", "hitl-1"),
+        interaction_id=overrides.pop("interaction_id", "interaction-1"),
+        question_index=overrides.pop("question_index", 0),
+        question_count=overrides.pop("question_count", 1),
         room_id=overrides.pop("room_id", "room-1"),
         user_message_id=overrides.pop("user_message_id", "user-msg-1"),
-        source=overrides.pop("source", "supervisor"),
+        application_route=overrides.pop("application_route", "supervisor_run"),
+        public_source=overrides.pop("public_source", "supervisor"),
+        evidence_origin=overrides.pop("evidence_origin", "supervisor"),
         prompt=overrides.pop("prompt", "Clarify?"),
         prompt_type=overrides.pop("prompt_type", HITLPromptType.TEXT),
         continuation_message_id=overrides.pop("continuation_message_id", "cont-msg-1"),
         display_message_id=overrides.pop("display_message_id", "display-msg-1"),
-        group_id=overrides.pop("group_id", None),
-        group_total=overrides.pop("group_total", None),
-        group_index=overrides.pop("group_index", None),
         status=overrides.pop("status", HITLStatus.PENDING),
         **overrides,
     )
@@ -36,9 +39,8 @@ def _persistence_mock():
     persistence.update_agent_message_task_state = AsyncMock(return_value=True)
     persistence.persist_hitl_request_id_on_message = AsyncMock(return_value=True)
     persistence.persist_hitl_user_answer = AsyncMock(return_value=True)
-    persistence.persist_hitl_group_metadata = AsyncMock(return_value=True)
+    persistence.persist_hitl_interaction_metadata = AsyncMock(return_value=True)
     persistence.get_hitl_request = AsyncMock(return_value=None)
-    persistence.get_hitl_group_requests = AsyncMock(return_value=[])
     persistence.cas_update_hitl_request = AsyncMock(return_value=True)
     persistence.update_hitl_request = AsyncMock(return_value=True)
     persistence.get_and_clear_continuation_on_message = AsyncMock(return_value=None)

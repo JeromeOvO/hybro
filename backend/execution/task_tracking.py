@@ -793,17 +793,14 @@ def _trusted_metadata_from_hitl_request(request: dict[str, Any]) -> dict[str, An
             request.get("prompt_type"), "value", request.get("prompt_type")
         ),
     }
-    question_count = request.get("question_count")
-    is_questionnaire = isinstance(question_count, int) and question_count > 1
+    question_count = int(request.get("question_count") or 1)
     optional_fields = {
         "hitl_choices": request.get("choices"),
         "hitl_a2a_task_id": request.get("a2a_task_id"),
         "hitl_a2a_context_id": request.get("a2a_context_id"),
-        "hitl_group_id": request.get("interaction_id") if is_questionnaire else None,
-        "hitl_group_total": question_count if is_questionnaire else None,
-        "hitl_group_index": (
-            request.get("question_index") if is_questionnaire else None
-        ),
+        "hitl_interaction_id": request.get("interaction_id"),
+        "hitl_question_count": question_count,
+        "hitl_question_index": int(request.get("question_index") or 0),
         "user_answer": request.get("user_input"),
     }
     trusted.update(

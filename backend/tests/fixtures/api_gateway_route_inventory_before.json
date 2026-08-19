@@ -1098,6 +1098,29 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
+    "methods": [
+      "POST"
+    ],
+    "name": "cancel_hitl_interaction",
+    "endpoint_module": "api_gateway.routes.hitl_routes",
+    "declared_owner": "api_gateway.routes.hitl_routes",
+    "tags": [
+      "hitl",
+      "hitl"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_hitl_manager",
+      "get_room_ownership_reader"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/rooms/{room_id}/hitl/pending",
     "methods": [
       "GET"
@@ -1121,57 +1144,11 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/rooms/{room_id}/hitl/respond",
-    "methods": [
-      "POST"
-    ],
-    "name": "respond_to_hitl_request",
-    "endpoint_module": "api_gateway.routes.hitl_routes",
-    "declared_owner": "api_gateway.routes.hitl_routes",
-    "tags": [
-      "hitl",
-      "hitl"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_hitl_manager",
-      "get_room_ownership_reader"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
     "path": "/api/v1/rooms/{room_id}/hitl/respond-batch",
     "methods": [
       "POST"
     ],
     "name": "respond_to_hitl_interaction",
-    "endpoint_module": "api_gateway.routes.hitl_routes",
-    "declared_owner": "api_gateway.routes.hitl_routes",
-    "tags": [
-      "hitl",
-      "hitl"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_hitl_manager",
-      "get_room_ownership_reader"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/rooms/{room_id}/hitl/{request_id}/cancel",
-    "methods": [
-      "POST"
-    ],
-    "name": "cancel_hitl_request",
     "endpoint_module": "api_gateway.routes.hitl_routes",
     "declared_owner": "api_gateway.routes.hitl_routes",
     "tags": [

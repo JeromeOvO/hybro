@@ -4,11 +4,13 @@ import { server } from '../../setup/msw-server'
 
 let fetchPendingHitlRequests: typeof import('@/lib/api/hitl').fetchPendingHitlRequests
 let respondToHitlBatch: typeof import('@/lib/api/hitl').respondToHitlBatch
+let cancelHitl: typeof import('@/lib/api/hitl').cancelHitl
 
 beforeEach(async () => {
   const mod = await import('@/lib/api/hitl')
   fetchPendingHitlRequests = mod.fetchPendingHitlRequests
   respondToHitlBatch = mod.respondToHitlBatch
+  cancelHitl = mod.cancelHitl
 })
 
 afterEach(() => {
@@ -64,6 +66,30 @@ describe('HITL API Client', () => {
         [{ requestId: 'req-1', answer: 'Acme' }],
         undefined,
       )).rejects.toThrow()
+    })
+  })
+
+  describe('cancelHitl', () => {
+    it('cancels the authoritative interaction with version fencing', async () => {
+      let capturedBody: unknown
+      server.use(
+        http.post('*/rooms/room-1/hitl/interactions/interaction-1/cancel', async ({ request }) => {
+          capturedBody = await request.json()
+          return HttpResponse.json({
+            status: 'canceled',
+            interaction_id: 'interaction-1',
+            interaction_version: 5,
+          })
+        }),
+      )
+
+      await cancelHitl('room-1', 'interaction-1', 4, 'cancel-1')
+
+      expect(capturedBody).toEqual({
+        interaction_id: 'interaction-1',
+        expected_interaction_version: 4,
+        client_request_id: 'cancel-1',
+      })
     })
   })
 

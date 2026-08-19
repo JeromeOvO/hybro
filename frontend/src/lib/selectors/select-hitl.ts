@@ -20,8 +20,7 @@ function deriveLifecycleState(entity: MessageEntity, question: string): HitlLife
   if (
     interaction === 'failed' ||
     !question.trim() ||
-    GENERIC_PROMPT.test(question.trim()) ||
-    entity.hitlPromptType === 'unknown'
+    GENERIC_PROMPT.test(question.trim())
   ) return 'routing_failed'
   return 'open'
 }

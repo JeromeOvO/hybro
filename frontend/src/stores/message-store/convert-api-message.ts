@@ -176,9 +176,9 @@ export async function convertApiMessageToIncoming(
     else if (Array.isArray(meta.choices)) hitlChoices = meta.choices as string[]
     const maybeUserAnswer = meta.user_answer
     if (typeof maybeUserAnswer === 'string') hitlUserAnswer = maybeUserAnswer
-    if (typeof meta.hitl_group_id === 'string') hitlGroupId = meta.hitl_group_id
-    if (typeof meta.hitl_group_total === 'number') hitlGroupTotal = meta.hitl_group_total
-    if (typeof meta.hitl_group_index === 'number') hitlGroupIndex = meta.hitl_group_index
+    if (typeof meta.hitl_interaction_id === 'string') hitlGroupId = meta.hitl_interaction_id
+    if (typeof meta.hitl_question_count === 'number') hitlGroupTotal = meta.hitl_question_count
+    if (typeof meta.hitl_question_index === 'number') hitlGroupIndex = meta.hitl_question_index
   }
 
   // ── Extract user attachments ────────────────────────────
