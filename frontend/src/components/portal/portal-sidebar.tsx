@@ -23,7 +23,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 
-const MARKETING_PAGES: string[] = [routes.home, routes.about, routes.pricing, routes.agents]
+const MARKETING_PAGES: string[] = [routes.home, routes.core, routes.about, routes.pricing, routes.agents]
 
 export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()

@@ -5,6 +5,7 @@ import { routes } from '@/lib/routes'
 describe('canonical portal routes', () => {
   it('defines the unified public and management paths', () => {
     expect(routes.home).toBe('/')
+    expect(routes.core).toBe('/core')
     expect(routes.chat).toBe('/chat')
     expect(routes.room('room/id')).toBe('/room/room%2Fid')
     expect(routes.agents).toBe('/agents')

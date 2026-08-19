@@ -44,6 +44,8 @@ interface ModeSelectorProps {
   mode: ChatMode
   onModeChange: (mode: ChatMode) => void
   disabled?: boolean
+  /** When true, the dropdown opens normally but item clicks are no-ops. */
+  readOnly?: boolean
   className?: string
 }
 
@@ -51,6 +53,7 @@ export function ModeSelector({
   mode,
   onModeChange,
   disabled = false,
+  readOnly = false,
   className,
 }: ModeSelectorProps) {
   const currentMode = toSelectableMode(mode)
@@ -130,10 +133,11 @@ export function ModeSelector({
                 <Tooltip key={modeKey} delayDuration={150}>
                   <TooltipTrigger asChild>
                     <DropdownMenuItem
-                      onClick={() => handleModeSelect(modeKey)}
+                      onClick={readOnly ? undefined : () => handleModeSelect(modeKey)}
                       className={cn(
                         'flex items-center gap-2.5 py-2',
                         currentMode === modeKey && 'bg-accent',
+                        readOnly && 'cursor-default',
                       )}
                     >
                       <Icon className={cn('h-4 w-4', config.iconColor)} />

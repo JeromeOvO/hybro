@@ -1,3 +1,5 @@
+import { HERMES_ICON_DATA_URL } from '@/components/hermes-icon-data'
+
 export function GithubIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -124,6 +126,37 @@ export function OpenClawIcon({ className }: { className?: string }) {
       <circle cx={75} cy={35} r={6} fill="#050810" />
       <circle cx={46} cy={34} r={2.5} fill="#00e5cc" />
       <circle cx={76} cy={34} r={2.5} fill="#00e5cc" />
+    </svg>
+  )
+}
+
+export function HermesIcon({ className }: { className?: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- raster mascot; no official vector mark
+    <img
+      src={HERMES_ICON_DATA_URL}
+      alt=""
+      aria-hidden
+      className={`object-contain dark:invert ${className ?? 'h-10 w-10'}`}
+    />
+  )
+}
+
+export function PiIcon({ className }: { className?: string }) {
+  // Official mark from https://pi.dev/logo-auto.svg (Pi coding agent)
+  return (
+    <svg
+      role="img"
+      viewBox="0 0 800 800"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      className={className}
+    >
+      <path
+        fillRule="evenodd"
+        d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29V165.29ZM282.65 282.65V400H400V282.65H282.65Z"
+      />
+      <path d="M517.36 400H634.72V634.72H517.36V400Z" />
     </svg>
   )
 }

@@ -166,4 +166,32 @@ describe('GroupSelector', () => {
     expect(screen.getByRole('button', { name: /insurance group/i }).className).toContain('flex-1')
     expect(screen.getAllByRole('button')).toHaveLength(1)
   })
+
+  it('opens the menu in readOnly mode without selecting a team', async () => {
+    const onGroupChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <GroupSelector
+        selectedGroup="all_agents"
+        onGroupChange={onGroupChange}
+        groups={[
+          {
+            group_id: 'research',
+            name: 'Research Team',
+            type: 'user',
+            agents: [],
+            owner_id: 'user-1',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ]}
+        readOnly
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: /all agents/i }))
+    expect(await screen.findByText('Research Team')).toBeInTheDocument()
+    await user.click(screen.getByText('Research Team'))
+    expect(onGroupChange).not.toHaveBeenCalled()
+  })
 })

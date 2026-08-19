@@ -8,11 +8,11 @@ export function PortalFooter() {
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 mb-6">
           <Link
-            href="/open-source"
+            href="/core"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
           >
             <Code2 className="h-4 w-4 text-[hsl(var(--color-hybro-hy))]" />
-            Open Source
+            Core
           </Link>
           <a
             href="https://github.com/hybroai/hybro"

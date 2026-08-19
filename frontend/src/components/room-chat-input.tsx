@@ -78,6 +78,7 @@ interface RoomChatInputProps {
   onEditGroup?: (group: AgentGroup) => void
   onDeleteGroup?: (group: AgentGroup) => void
   showGroupSelector?: boolean
+  disableGroupSelector?: boolean
   /**
    * External value to set in the editor (for quick start templates etc.)
    * When this changes to a non-empty value, it updates the editor content.
@@ -88,6 +89,13 @@ interface RoomChatInputProps {
    * Call this to reset externalValue to empty after it's been applied.
    */
   onExternalValueConsumed?: () => void
+  /**
+   * When true, externalValue updates re-apply on every change (for demo/typewriter UIs).
+   * Does not call onExternalValueConsumed or steal focus.
+   */
+  continuousExternalUpdate?: boolean
+  /** Fired when the editor receives focus (e.g. to pause demo animations). */
+  onEditorFocus?: () => void
   /** Currently quoted message (shown as preview above editor). */
   quote?: QuoteData | null
   /** Callback to clear the current quote. */
@@ -100,6 +108,12 @@ interface RoomChatInputProps {
   chatMode?: ChatMode
   /** Callback when the user changes the chat mode. */
   onChatModeChange?: (mode: ChatMode) => void
+  /** When true, keep the mode selector visible but non-interactive. */
+  disableModeSelector?: boolean
+  /** When true, keep the attach button visible but non-clickable. */
+  disableAttachmentButton?: boolean
+  /** When true, keep the mention button visible but non-clickable. */
+  disableMentionButton?: boolean
 }
 
 export function RoomChatInput({
@@ -122,13 +136,19 @@ export function RoomChatInput({
   onEditGroup,
   onDeleteGroup,
   showGroupSelector = true,
+  disableGroupSelector = false,
   externalValue,
   onExternalValueConsumed,
+  continuousExternalUpdate = false,
+  onEditorFocus,
   quote,
   onClearQuote,
   topSlot,
   chatMode,
   onChatModeChange,
+  disableModeSelector = false,
+  disableAttachmentButton = false,
+  disableMentionButton = false,
 }: RoomChatInputProps) {
   const [message, setMessage] = useState('') // Storage format: <@id|name>
   const [showAgentSuggestions, setShowAgentSuggestions] = useState(false)
@@ -315,31 +335,41 @@ export function RoomChatInput({
     return parts.join('')
   }
 
-  // Handle external value changes (e.g., quick start templates)
+  // Handle external value changes (e.g., quick start templates or demo typewriter)
   useEffect(() => {
     if (!externalValue) return
 
-    if (externalValue !== message) {
+    const applyExternalValue = (stealFocus: boolean) => {
       setMessage(externalValue)
       const displayLength = externalValue.replace(/<@[^|]+\|([^>]+)>/g, '@$1').length
       setPlainTextLength(displayLength)
       if (editorRef.current) {
         editorRef.current.innerHTML = convertToDisplayHTML(externalValue)
-        // Set cursor at the end
-        const range = document.createRange()
-        const selection = window.getSelection()
-        range.selectNodeContents(editorRef.current)
-        range.collapse(false)
-        selection?.removeAllRanges()
-        selection?.addRange(range)
-        editorRef.current.focus()
+        if (stealFocus) {
+          const range = document.createRange()
+          const selection = window.getSelection()
+          range.selectNodeContents(editorRef.current)
+          range.collapse(false)
+          selection?.removeAllRanges()
+          selection?.addRange(range)
+          editorRef.current.focus()
+        }
       }
+    }
+
+    if (continuousExternalUpdate) {
+      applyExternalValue(false)
+      return
+    }
+
+    if (externalValue !== message) {
+      applyExternalValue(true)
     }
 
     // Consume even when the same template is selected twice. Otherwise the
     // retained external value would overwrite the user's next edit.
     onExternalValueConsumed?.()
-  }, [externalValue, message, onExternalValueConsumed])
+  }, [externalValue, message, onExternalValueConsumed, continuousExternalUpdate])
 
   // Get plain text from editor (display format)
   const getEditorText = (): string => {
@@ -1043,6 +1073,7 @@ export function RoomChatInput({
               ref={editorRef}
               contentEditable={!disabled}
               onInput={handleInput}
+              onFocus={onEditorFocus}
               onPaste={handlePaste}
               onCopy={handleCopy}
               onCut={handleCut}
@@ -1088,6 +1119,7 @@ export function RoomChatInput({
                   onDeleteGroup={onDeleteGroup}
                   agentNameMap={agentNameMap}
                   disabled={disabled}
+                  readOnly={disableGroupSelector}
                 />
               )}
               {onChatModeChange && (
@@ -1096,6 +1128,7 @@ export function RoomChatInput({
                   mode={chatMode ?? DEFAULT_CHAT_MODE}
                   onModeChange={handleChatModeChange}
                   disabled={disabled || sending || processing}
+                  readOnly={disableModeSelector}
                 />
               )}
             </div>
@@ -1156,6 +1189,7 @@ export function RoomChatInput({
                 <FileAttachmentButton
                   onFiles={addFiles}
                   disabled={disabled || sending || processing}
+                  readOnly={disableAttachmentButton}
                   className="hover:text-foreground hover:bg-muted/70"
                 />
                 <TooltipProvider delayDuration={200}>
@@ -1167,9 +1201,12 @@ export function RoomChatInput({
                         size="icon"
                         aria-label="Mention an agent"
                         disabled={disabled || sending || processing}
-                        className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors"
+                        className={cn(
+                          'h-8 w-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/70 transition-colors',
+                          disableMentionButton && 'cursor-default hover:text-muted-foreground hover:bg-transparent',
+                        )}
                         onClick={() => {
-                          if (!editorRef.current) return
+                          if (disableMentionButton || !editorRef.current) return
                           editorRef.current.focus()
                           document.execCommand('insertText', false, '@')
                           handleInput()
