@@ -39,7 +39,7 @@ from common.dto import (
 )
 from common.message_commit_events import publish_message_committed
 from common.observability import bind_log_context, safe_exception_metadata
-from common.utils.a2a_helpers import artifacts_to_dicts
+from common.utils.a2a_helpers import artifacts_to_dicts, is_authoritative_a2a_id
 from common.utils.artifact_delivery import (
     OUTPUT_DELIVERY_FAILURE_CODE,
     OUTPUT_DELIVERY_FAILURE_MESSAGE,
@@ -3091,6 +3091,15 @@ class SupervisorExecutor:
         )
 
     @staticmethod
+    def _first_authoritative_a2a_id(*values: object) -> str | None:
+        """First authoritative remote A2A identifier; provisional
+        ``pending-*`` placeholders must never propagate into recovery state."""
+        for value in values:
+            if isinstance(value, str) and is_authoritative_a2a_id(value):
+                return value
+        return None
+
+    @staticmethod
     def _orchestration_result_from_agent_message(
         intent: DispatchIntent,
         msg,
@@ -3186,16 +3195,16 @@ class SupervisorExecutor:
                     or task_metadata_dict.get("policy_required")
                 )
             ),
-            a2a_task_id=(
-                _field_from_task(task, "id")
-                or _field_from_task(task_metadata_dict, "remote_task_id")
-                or _field_from_task(task_metadata_dict, "hitl_a2a_task_id")
+            a2a_task_id=SupervisorExecutor._first_authoritative_a2a_id(
+                _field_from_task(task, "id"),
+                _field_from_task(task_metadata_dict, "remote_task_id"),
+                _field_from_task(task_metadata_dict, "hitl_a2a_task_id"),
             ),
-            a2a_context_id=(
-                _field_from_task(task, "context_id")
-                or _field_from_task(task, "contextId")
-                or _field_from_task(task_metadata_dict, "remote_context_id")
-                or _field_from_task(task_metadata_dict, "hitl_a2a_context_id")
+            a2a_context_id=SupervisorExecutor._first_authoritative_a2a_id(
+                _field_from_task(task, "context_id"),
+                _field_from_task(task, "contextId"),
+                _field_from_task(task_metadata_dict, "remote_context_id"),
+                _field_from_task(task_metadata_dict, "hitl_a2a_context_id"),
             ),
             end_turn=bool(task_metadata_dict.get("end_turn")),
             agent_message_id=intent.planned_agent_message_id,

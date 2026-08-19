@@ -814,6 +814,23 @@ class HITLLifecycleRuntimeStorePart:
             {"$set": {"aggregate_applied_at": utcnow(), "updated_at": utcnow()}},
         )
 
+    async def record_uncertain_inspect_failure(
+        self, command_id: str
+    ) -> dict[str, Any] | None:
+        """Increment the failed-inspect counter for a DELIVERY_UNCERTAIN
+        command and return the updated row, or None if it no longer exists."""
+        return await self._resume_commands.find_one_and_update(
+            {
+                "command_id": command_id,
+                "status": HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
+            },
+            {
+                "$inc": {"inspect_attempts": 1, "version": 1},
+                "$set": {"updated_at": utcnow()},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+
     async def iter_due_resume_commands(
         self, now: datetime, *, limit: int = 100
     ) -> AsyncIterator[dict[str, Any]]:

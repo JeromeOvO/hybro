@@ -13079,3 +13079,60 @@ async def test_answered_supervisor_continuation_resumes_through_delivery():
         executor._deliver_claimed_continuation.await_args.kwargs["user_input"]
         == "Two adults, Tokyo, October."
     )
+
+
+def test_first_authoritative_a2a_id_rejects_provisional_placeholders():
+    assert (
+        SupervisorExecutor._first_authoritative_a2a_id("pending-abc", "remote-task-1")
+        == "remote-task-1"
+    )
+    assert (
+        SupervisorExecutor._first_authoritative_a2a_id(
+            "pending-abc", None, "relay-pending-xyz"
+        )
+        is None
+    )
+    assert (
+        SupervisorExecutor._first_authoritative_a2a_id("task-1", "context-1")
+        == "task-1"
+    )
+
+
+def test_recovered_result_prefers_authoritative_ids_over_provisional_task_ids():
+    intent = DispatchIntent(
+        step_id="run-1:step-1",
+        step_target_id="run-1:step-1:target-1",
+        dispatch_intent_id="intent-1",
+        planned_agent_message_id="agent-msg-1",
+        agent_id="agent-1",
+        task="Produce quote",
+        task_hash="hash-1",
+    )
+    message = SimpleNamespace(
+        message_content=SimpleNamespace(
+            message_text="Input required",
+            message_task=SimpleNamespace(
+                id="pending-provisional-task",
+                contextId="pending-provisional-context",
+                status=SimpleNamespace(state=SimpleNamespace(value="input-required")),
+                metadata={
+                    "hitl_a2a_task_id": "authoritative-task",
+                    "hitl_a2a_context_id": "authoritative-context",
+                    "hitl_prompt": "Which market?",
+                },
+            ),
+        ),
+        last_notified_state=None,
+    )
+
+    result = SupervisorExecutor._orchestration_result_from_agent_message(
+        intent,
+        message,
+        agent_names={"agent-1": "Agent One"},
+        step_number=1,
+    )
+
+    assert result is not None
+    assert result.a2a_task_id == "authoritative-task"
+    assert result.a2a_context_id == "authoritative-context"
+    assert result.status == StepStatus.AWAITING_INPUT

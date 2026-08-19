@@ -878,3 +878,151 @@ async def test_fence_loss_prevents_effect_from_starting():
         )
 
     effect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_apply_interaction_persists_stable_error_not_raw_exception_text():
+    lifecycle = MagicMock()
+    lifecycle.renew_interaction_application = AsyncMock(return_value=True)
+    applying = {**_interaction(status="applying"), "application_claim_id": "claim-1"}
+    lifecycle.get_interaction_strict = AsyncMock(return_value=applying)
+    lifecycle.mark_interaction_application_state = AsyncMock(return_value=None)
+    lifecycle.record_interaction_answer = AsyncMock(
+        return_value={
+            **applying,
+            "answer_refs": [{"request_id": "request-1", "digest": _digest("answer")}],
+        }
+    )
+    lifecycle.claim_interaction_application = AsyncMock(
+        return_value={
+            **applying,
+            "answer_refs": [{"request_id": "request-1", "digest": _digest("answer")}],
+        }
+    )
+    service = SimpleNamespace(
+        persistence=SimpleNamespace(
+            get_hitl_request=AsyncMock(return_value=_row()),
+        )
+    )
+    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+    coordinator._apply_supervisor = AsyncMock(return_value={})
+    coordinator._project_run_answers = AsyncMock(
+        side_effect=RuntimeError("SECRET_DB_INTERNAL host=mongo:27017")
+    )
+
+    with pytest.raises(HITLRoutingFailedError, match="Failed to apply HITL answers"):
+        await coordinator.apply_interaction(service, dict(applying))
+
+    lifecycle.mark_interaction_application_state.assert_awaited_once()
+    persisted = lifecycle.mark_interaction_application_state.await_args.kwargs
+    assert persisted["status"] == "applying"
+    assert persisted["error"] == "hitl_apply_failed"
+    assert "SECRET_DB_INTERNAL" not in str(persisted)
+
+
+@pytest.mark.asyncio
+async def test_uncertain_inspect_failures_are_bounded_by_permanent_failure():
+    command = {
+        "schema_version": 3,
+        "command_id": "command-1",
+        "kind": "a2a_resume",
+        "interaction_id": "interaction-1",
+        "application_revision": 1,
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "continuation_message_id": "agent-message",
+        "agent_id": "agent-1",
+        "outbound_message_id": "outbound-1",
+        "answer_request_ids": ["request-1"],
+        "answer_digest": "digest",
+        "status": HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
+        "uncertain_since": utcnow(),
+    }
+    lifecycle = MagicMock()
+
+    async def due_commands(_now, *, limit):
+        del limit
+        yield command
+
+    lifecycle.iter_due_resume_commands = due_commands
+    lifecycle.record_uncertain_inspect_failure = AsyncMock(
+        return_value={**command, "inspect_attempts": 3}
+    )
+    lifecycle.mark_resume_command_state = AsyncMock(
+        return_value={
+            **command,
+            "status": HITLResumeCommandStatus.PERMANENT_FAILURE.value,
+        }
+    )
+    lifecycle.get_interaction_strict = AsyncMock(
+        return_value=_interaction(
+            source="agent",
+            status=HITLInteractionStatus.DELIVERY_UNCERTAIN.value,
+        )
+    )
+    application = MagicMock()
+    application._request_rows = AsyncMock(return_value=[_row(source="agent")])
+    application.fail_interaction = AsyncMock(return_value=None)
+    reconciler = HITLLifecycleReconciler(
+        lifecycle=lifecycle,
+        service=SimpleNamespace(),
+        application=application,
+        inspect_remote_command=AsyncMock(return_value=None),
+    )
+
+    assert await reconciler._reconcile_commands() == 1
+    application.fail_interaction.assert_awaited_once()
+    lifecycle.mark_resume_command_state.assert_awaited_once()
+    assert (
+        lifecycle.mark_resume_command_state.await_args.kwargs["status"]
+        == HITLResumeCommandStatus.PERMANENT_FAILURE.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_uncertain_inspect_failure_below_limit_does_not_terminalize():
+    command = {
+        "schema_version": 3,
+        "command_id": "command-1",
+        "kind": "a2a_resume",
+        "interaction_id": "interaction-1",
+        "application_revision": 1,
+        "task_id": "remote-task",
+        "context_id": "remote-context",
+        "continuation_message_id": "agent-message",
+        "agent_id": "agent-1",
+        "outbound_message_id": "outbound-1",
+        "answer_request_ids": ["request-1"],
+        "answer_digest": "digest",
+        "status": HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
+        "uncertain_since": utcnow(),
+    }
+    lifecycle = MagicMock()
+
+    async def due_commands(_now, *, limit):
+        del limit
+        yield command
+
+    lifecycle.iter_due_resume_commands = due_commands
+    lifecycle.record_uncertain_inspect_failure = AsyncMock(
+        return_value={**command, "inspect_attempts": 1}
+    )
+    lifecycle.get_interaction_strict = AsyncMock(
+        return_value=_interaction(
+            source="agent",
+            status=HITLInteractionStatus.DELIVERY_UNCERTAIN.value,
+        )
+    )
+    application = MagicMock()
+    application._request_rows = AsyncMock(return_value=[_row(source="agent")])
+    application.fail_interaction = AsyncMock(return_value=None)
+    reconciler = HITLLifecycleReconciler(
+        lifecycle=lifecycle,
+        service=SimpleNamespace(),
+        application=application,
+        inspect_remote_command=AsyncMock(return_value=None),
+    )
+
+    assert await reconciler._reconcile_commands() == 0
+    application.fail_interaction.assert_not_called()
+    lifecycle.mark_resume_command_state.assert_not_called()

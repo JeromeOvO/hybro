@@ -893,6 +893,20 @@
   border-top: 1px solid var(--conversation-border);
 }
 
+.conversation-hitl-queue-note {
+  padding: 8px 16px 0;
+  color: var(--conversation-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.conversation-hitl-recovery-error {
+  margin: 6px 0 0;
+  color: var(--conversation-danger);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .conversation-hitl-secondary-actions,
 .conversation-hitl-navigation,
 .conversation-hitl-recovery-actions {

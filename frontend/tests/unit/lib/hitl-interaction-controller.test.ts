@@ -70,4 +70,29 @@ describe('hitlInteractionReducer', () => {
     expect(state.errorState).toBe('expired')
     expect(state.errorMessage).toBe('Expired on the server.')
   })
+
+  it('clears submitted recovery UI when the server leaves applying', () => {
+    let state = createHitlControllerState(seed)
+    state = hitlInteractionReducer(state, { type: 'submit_succeeded' })
+    expect(state.submission).toBe('submitted')
+
+    state = hitlInteractionReducer(state, {
+      type: 'server_reconciled',
+      lifecycle: 'applying',
+    })
+    expect(state.submission).toBe('submitted')
+
+    state = hitlInteractionReducer(state, {
+      type: 'server_reconciled',
+      lifecycle: 'expired',
+    })
+    expect(state.submission).toBe('idle')
+    expect(state.errorState).toBe('expired')
+
+    state = hitlInteractionReducer(state, {
+      type: 'server_reconciled',
+      lifecycle: 'open',
+    })
+    expect(state.errorState).toBeNull()
+  })
 })

@@ -79,7 +79,7 @@ export function hitlInteractionReducer(
         ...state,
         errorState: action.lifecycle === 'open' ? null : action.lifecycle,
         errorMessage: action.message ?? state.errorMessage,
-        submission: action.lifecycle === 'applying' ? 'submitted' : state.submission,
+        submission: action.lifecycle === 'applying' ? 'submitted' : 'idle',
       }
   }
 }

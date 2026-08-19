@@ -123,8 +123,16 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
     : []
 
   if (isHitlMode && activeHitls.length > 0) {
+    const queuedCount = composerState.pendingHitls.length - activeHitls.length
     return (
       <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
+        {queuedCount > 0 ? (
+          <div className="conversation-hitl-queue-note" data-testid="hitl-queue-note">
+            {queuedCount === 1
+              ? '1 more input request is queued after this one.'
+              : `${queuedCount} more input requests are queued after this one.`}
+          </div>
+        ) : null}
         <HitlResponseBar
           hitls={activeHitls.map(toHitlPromptView)}
           onSubmit={adapter.onRespondToHitlBatch}

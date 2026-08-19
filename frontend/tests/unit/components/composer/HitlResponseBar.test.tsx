@@ -110,3 +110,53 @@ describe('HitlResponseBar', () => {
     expect(screen.getByRole('button', { name: 'Check status' })).toBeDefined()
   })
 })
+
+
+describe('HitlResponseBar server lifecycle reconciliation', () => {
+  it('leaves applying when the authoritative lifecycle reports failed', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'open' }]}
+        onSubmit={onSubmit}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Ok' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    expect(await screen.findByText('Applying your answers')).toBeDefined()
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'expired' }]}
+        onSubmit={onSubmit}
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    expect(await screen.findByText('Input request expired')).toBeDefined()
+    expect(screen.queryByText('Applying your answers')).toBeNull()
+  })
+
+  it('clears stale local recovery state when the server returns to open', async () => {
+    const { rerender } = render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'routing_failed' }]}
+        onSubmit={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('This input request cannot be answered')).toBeDefined()
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, promptType: 'text', lifecycleState: 'open' }]}
+        onSubmit={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByPlaceholderText('Type your answer…')).toBeDefined()
+  })
+})

@@ -333,6 +333,7 @@ class HITLResumeCommand(BaseModel):
     claim_id: str | None = None
     lease_expires_at: datetime | None = None
     attempts: int = Field(default=0, ge=0)
+    inspect_attempts: int = Field(default=0, ge=0)
     next_attempt_at: datetime | None = None
     response_snapshot: dict | None = None
     error_code: str | None = None

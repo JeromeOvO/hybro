@@ -29,6 +29,9 @@ from common.dto import (
     HITLRouteSnapshot,
 )
 from common.dto.hitl import A2AInteractionSpec, HITLAnswerKind, HITLInteractionKind
+from common.utils.a2a_helpers import (
+    is_authoritative_a2a_id as _is_authoritative_a2a_id,
+)
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.dispatch.agent_ingress_router import (
@@ -124,14 +127,6 @@ def _prompt_hash(prompt: str | None) -> str | None:
 MAX_HITL_ROUNDS = 15
 MAX_HITL_GROUP_SIZE = 100
 _GENERIC_AGENT_INPUT_PROMPT = GENERIC_AGENT_INPUT_PROMPT
-
-
-def _is_authoritative_a2a_id(value: Any) -> bool:
-    return bool(
-        isinstance(value, str)
-        and value.strip()
-        and not value.startswith(("pending-", "relay-pending-"))
-    )
 
 
 def _is_actionable_agent_hitl_document(document: dict[str, Any]) -> bool:

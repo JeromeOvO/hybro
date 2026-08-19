@@ -169,3 +169,63 @@ describe('ComposerShell', () => {
     expect(screen.getByText('Checking whether your answers were received')).toBeDefined()
   })
 })
+
+
+describe('ComposerShell HITL queuing', () => {
+  beforeEach(() => {
+    cleanup()
+    const store = useMessageStore.getState()
+    store.clearRoom()
+    store.setRoom('test-room')
+  })
+
+  it('notes queued interactions beyond the first while in HITL mode', () => {
+    const store = useMessageStore.getState()
+    store.upsertMessage({
+      id: 'user-1',
+      roomId: 'test-room',
+      messageType: 'user',
+      content: 'hi',
+      senderName: 'User',
+      timestamp: new Date().toISOString(),
+    }, 'db')
+    store.upsertMessage({
+      id: 'hitl-1',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Agent A',
+      timestamp: new Date().toISOString(),
+      relatedMessageId: 'user-1',
+      taskStatus: 'input-required' as any,
+      hitlRequestId: 'h1',
+      hitlPrompt: 'First question?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+      hitlInteractionId: 'interaction-1',
+      hitlInteractionStatus: 'open',
+    }, 'db')
+    store.upsertMessage({
+      id: 'hitl-2',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Agent B',
+      timestamp: new Date().toISOString(),
+      relatedMessageId: 'user-1',
+      taskStatus: 'input-required' as any,
+      hitlRequestId: 'h2',
+      hitlPrompt: 'Second question?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+      hitlInteractionId: 'interaction-2',
+      hitlInteractionStatus: 'open',
+    }, 'db')
+
+    render(<ComposerShell adapter={mockAdapter} />)
+
+    expect(screen.getByText('First question?')).toBeDefined()
+    expect(screen.getByTestId('hitl-queue-note')).toBeDefined()
+    expect(screen.getByText('1 more input request is queued after this one.')).toBeDefined()
+  })
+})

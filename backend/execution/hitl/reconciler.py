@@ -14,6 +14,10 @@ from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES, OrchestrationS
 
 logger = get_logger(__name__)
 
+# Failed remote inspections of an uncertain delivery before the owning
+# interaction fails terminally instead of staying DELIVERY_UNCERTAIN forever.
+_MAX_UNCERTAIN_INSPECT_ATTEMPTS = 3
+
 
 class HITLLifecycleReconciler:
     """Bounded, independently-fenced repair passes for durable HITL state."""
@@ -309,6 +313,49 @@ class HITLLifecycleReconciler:
                             )
                             if projected is not None:
                                 await self._finish_confirmed_command(projected)
+                                repaired += 1
+                        continue
+                    if snapshot is None:
+                        # Remote state could not be inspected at all (missing
+                        # agent URL or fetch failure). Count the failure so an
+                        # unreachable agent cannot leave the command stuck in
+                        # DELIVERY_UNCERTAIN forever: after a bounded number
+                        # of failed inspects the interaction fails terminally.
+                        recorded = (
+                            await self._lifecycle.record_uncertain_inspect_failure(
+                                command["command_id"]
+                            )
+                        )
+                        if (
+                            recorded is not None
+                            and int(recorded.get("inspect_attempts") or 0)
+                            >= _MAX_UNCERTAIN_INSPECT_ATTEMPTS
+                        ):
+                            failed = await self._lifecycle.mark_resume_command_state(
+                                command["command_id"],
+                                claim_id=None,
+                                expected_statuses=[
+                                    HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value
+                                ],
+                                status=HITLResumeCommandStatus.PERMANENT_FAILURE.value,
+                                error_code="uncertain_inspect_exhausted",
+                                error_message=(
+                                    "Remote delivery could not be confirmed after "
+                                    "repeated inspections"
+                                ),
+                            )
+                            if failed is not None:
+                                await self._application.fail_interaction(
+                                    self._service,
+                                    interaction,
+                                    reason=(
+                                        "Remote continuation delivery could not be "
+                                        "confirmed"
+                                    ),
+                                    application_claim_id=interaction.get(
+                                        "application_claim_id"
+                                    ),
+                                )
                                 repaired += 1
             except Exception:
                 logger.warning(

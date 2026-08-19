@@ -229,13 +229,21 @@ export function useRoomActions(
       throw new Error('The interaction changed before it could be canceled.')
     }
     const { cancelHitl } = await import('@/lib/api/hitl')
-    const result = await cancelHitl(
-      roomId,
-      interactionId,
-      target.hitlInteractionVersion,
-      target.clientRequestId ?? crypto.randomUUID(),
-      getToken,
-    )
+    let result
+    try {
+      result = await cancelHitl(
+        roomId,
+        interactionId,
+        target.hitlInteractionVersion,
+        target.clientRequestId ?? crypto.randomUUID(),
+        getToken,
+      )
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 409 || error.status === 410)) {
+        await reconcileWithDb(roomId)
+      }
+      throw error
+    }
 
     for (const entity of Object.values(store.entities)) {
       const entityInteractionId = entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId
@@ -255,7 +263,7 @@ export function useRoomActions(
       }, 'optimistic')
       if (entity.hitlRequestId) hitlRequestIndex.current.delete(entity.hitlRequestId)
     }
-  }, [getToken, hitlRequestIndex, roomId])
+  }, [getToken, hitlRequestIndex, reconcileWithDb, roomId])
 
   // Manually refresh messages — delegates to reconcileWithDb (Gap 14)
   const refreshMessages = useCallback(async () => {

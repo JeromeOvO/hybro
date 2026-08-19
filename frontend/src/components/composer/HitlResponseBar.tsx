@@ -85,6 +85,7 @@ function RecoveryState({
   onRefresh?: () => Promise<void>
 }) {
   const [working, setWorking] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const copy = {
     applying: {
       title: 'Applying your answers',
@@ -122,8 +123,13 @@ function RecoveryState({
   const run = async (action: (() => Promise<void>) | undefined) => {
     if (!action) return
     setWorking(true)
+    setActionError(null)
     try {
       await action()
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Unable to complete this request.',
+      )
     } finally {
       setWorking(false)
     }
@@ -135,6 +141,11 @@ function RecoveryState({
       <div className="conversation-hitl-recovery-copy">
         <h3>{copy.title}</h3>
         <p>{message || copy.body}</p>
+        {actionError ? (
+          <p className="conversation-hitl-recovery-error" role="alert">
+            {actionError}
+          </p>
+        ) : null}
       </div>
       <div className="conversation-hitl-recovery-actions">
         {(state === 'applying' || state === 'delivery_uncertain') && onRefresh ? (
@@ -322,6 +333,20 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   const currentIndex = Math.max(0, ordered.findIndex(hitl => hitl.hitlId === currentId))
   const current = ordered[currentIndex] ?? ordered[0]
   const allAnswered = ordered.every(hitl => hasAnswer(hitl, drafts[hitl.hitlId]))
+
+  // Authoritative lifecycle reconciliation: local submit/recovery state must
+  // never override a fresher store lifecycle (e.g. SSE/refresh reporting
+  // `failed`, `expired`, or `delivery_uncertain` after a successful submit).
+  const authoritativeLifecycle = current?.lifecycleState
+  const lastLifecycleRef = useRef<HitlLifecycleState | undefined>(undefined)
+  useEffect(() => {
+    if (!authoritativeLifecycle) return
+    const previous = lastLifecycleRef.current
+    lastLifecycleRef.current = authoritativeLifecycle
+    if (previous !== undefined && previous !== authoritativeLifecycle) {
+      dispatch({ type: 'server_reconciled', lifecycle: authoritativeLifecycle })
+    }
+  }, [authoritativeLifecycle, dispatch])
 
   useEffect(() => {
     const target = reviewing ? headingRef.current : inputRef.current ?? headingRef.current

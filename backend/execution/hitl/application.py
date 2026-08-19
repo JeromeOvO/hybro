@@ -750,7 +750,7 @@ class HITLApplicationCoordinator:
                 await self.fail_interaction(
                     service,
                     claimed,
-                    reason=str(exc),
+                    reason="Remote continuation permanently failed",
                     application_claim_id=claim_id,
                 )
             else:
@@ -758,7 +758,7 @@ class HITLApplicationCoordinator:
                     interaction_id,
                     claim_id=claim_id,
                     status=target_status,
-                    error=str(exc),
+                    error="remote_continuation_delivery_error",
                 )
             if exc.disposition == HITLDeliveryDisposition.DELIVERY_UNCERTAIN:
                 raise HITLDeliveryUncertainError(str(exc)) from exc
@@ -768,7 +768,7 @@ class HITLApplicationCoordinator:
                 interaction_id,
                 claim_id=claim_id,
                 status=HITLInteractionStatus.DELIVERY_UNCERTAIN.value,
-                error=str(exc),
+                error="answer_delivery_timeout",
             )
             raise HITLDeliveryUncertainError(
                 "Answer may have been delivered; automatic resend is disabled"
@@ -778,7 +778,7 @@ class HITLApplicationCoordinator:
                 interaction_id,
                 claim_id=claim_id,
                 status=HITLInteractionStatus.APPLYING.value,
-                error=str(exc),
+                error="agent_unreachable",
             )
             raise HITLRoutingFailedError("Remote agent was not reached") from exc
         except Exception as exc:
@@ -786,13 +786,18 @@ class HITLApplicationCoordinator:
                 interaction_id,
                 claim_id=claim_id,
                 status=HITLInteractionStatus.APPLYING.value,
-                error=str(exc),
+                error="hitl_apply_failed",
             )
             if isinstance(exc, HITLError):
                 raise
-            raise HITLRoutingFailedError(
-                f"Failed to apply HITL answers: {exc}"
-            ) from exc
+            logger.exception(
+                "Failed to apply HITL answers",
+                extra={
+                    "interaction_id": interaction_id,
+                    "claim_id": claim_id,
+                },
+            )
+            raise HITLRoutingFailedError("Failed to apply HITL answers") from exc
 
         applied = await self._lifecycle.mark_interaction_application_state(
             interaction_id,
