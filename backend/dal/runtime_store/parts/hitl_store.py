@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from common.a2a_constants import TERMINAL_STATES
 from common.utils.logger import get_logger
@@ -686,13 +686,38 @@ class HITLRuntimeStorePart:
             ((("room_id", 1), ("status", 1)), {}),
             ((("expires_at", 1), ("status", 1)), {}),
             ((("user_message_id", 1), ("status", 1)), {}),
-            ((("interaction_id", 1), ("question_index", 1)), {"unique": True}),
+            (
+                (("interaction_id", 1), ("question_index", 1)),
+                {
+                    "unique": True,
+                    "partialFilterExpression": {
+                        "interaction_id": {"$type": "string"},
+                    },
+                },
+            ),
             ((("continuation_message_id", 1),), {}),
         ]
         for keys, kwargs in noncritical_indexes:
             try:
                 await self._hitl_requests.create_index(list(keys), **kwargs)
-            except Exception:
+            except Exception as exc:
+                is_conflict = (
+                    isinstance(exc, OperationFailure)
+                    and getattr(exc, "code", None) in (85, 86)
+                ) or "already exists with different options" in str(exc)
+                index_name = kwargs.get("name")
+                drop_fn = getattr(self._hitl_requests, "drop_index", None)
+                if is_conflict and index_name and drop_fn:
+                    try:
+                        logger.warning(
+                            "Dropping and recreating conflicting non-critical HITL index: %s",
+                            index_name,
+                        )
+                        await drop_fn(index_name)
+                        await self._hitl_requests.create_index(list(keys), **kwargs)
+                        continue
+                    except Exception:
+                        pass
                 logger.error(
                     "Failed to create non-critical HITL index",
                     extra={"index_keys": list(keys), "index_options": kwargs},
@@ -726,9 +751,26 @@ class HITLRuntimeStorePart:
             ),
         ]
         for keys, kwargs in critical_indexes:
+            index_name = kwargs.get("name")
             try:
                 await self._hitl_requests.create_index(keys, **kwargs)
-            except Exception:
+            except Exception as exc:
+                is_conflict = (
+                    isinstance(exc, OperationFailure)
+                    and getattr(exc, "code", None) in (85, 86)
+                ) or "already exists with different options" in str(exc)
+                drop_fn = getattr(self._hitl_requests, "drop_index", None)
+                if is_conflict and index_name and drop_fn:
+                    try:
+                        logger.warning(
+                            "Dropping and recreating conflicting critical HITL index: %s",
+                            index_name,
+                        )
+                        await drop_fn(index_name)
+                        await self._hitl_requests.create_index(keys, **kwargs)
+                        continue
+                    except Exception:
+                        pass
                 logger.error(
                     "Failed to create critical HITL unique index",
                     extra={"index_name": kwargs["name"]},
