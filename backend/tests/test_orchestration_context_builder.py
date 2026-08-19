@@ -1181,3 +1181,99 @@ def test_context_builder_exposes_recovery_directives_for_validated_blocker():
             "reason": "Validated user-only blocker is open.",
         }
     ]
+
+
+def test_context_builder_surfaces_private_question_text_for_input_required():
+    from models.orchestration import AgentInputObservationRecord
+
+    state = _run_state(
+        blockers=[
+            BlockerRecord(
+                key="agent_blocker:agent-1:agent_input_required",
+                description="Agent requested additional input.",
+                source="agent",
+                evidence_refs=["agent-msg-1", "agent-msg-1:awaiting_input"],
+                validation_status="validated",
+                claimed_user_only=True,
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="fp",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="agent_input_required",
+                error_message="Agent requested additional input.",
+                recoverable=True,
+                status="open",
+                recovery_hints=["ask_user_if_missing"],
+            )
+        ],
+        private_agent_input_observations=[
+            AgentInputObservationRecord(
+                classification="untyped",
+                raw_prompt="Where should we fly to?",
+                observed_state="input-required",
+                authoritative_task_id="task-1",
+                authoritative_context_id="ctx-1",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+            )
+        ],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Plan a trip",
+    )
+
+    assert context.state_context.blockers[0]["description"] == "Where should we fly to?"
+    assert (
+        context.state_context.open_failures[0]["error_message"]
+        == "Where should we fly to?"
+    )
+
+
+def test_context_builder_keeps_generic_copy_without_private_observation():
+    state = _run_state(
+        blockers=[
+            BlockerRecord(
+                key="agent_blocker:agent-1:agent_input_required",
+                description="Agent requested additional input.",
+                source="agent",
+                evidence_refs=["agent-msg-1", "agent-msg-1:awaiting_input"],
+                validation_status="validated",
+                claimed_user_only=True,
+            )
+        ],
+        open_failures=[
+            OpenFailureRecord(
+                failure_id="failure-1",
+                fingerprint="fp",
+                source="a2a_adapter",
+                agent_id="agent-1",
+                agent_message_id="agent-msg-1",
+                error_code="agent_input_required",
+                error_message="Agent requested additional input.",
+                recoverable=True,
+                status="open",
+                recovery_hints=["ask_user_if_missing"],
+            )
+        ],
+    )
+
+    context = build_orchestration_planner_context(
+        run_state=state,
+        message_text="Plan a trip",
+    )
+
+    assert (
+        context.state_context.blockers[0]["description"]
+        == "Agent requested additional input."
+    )
+    assert (
+        context.state_context.open_failures[0]["error_message"]
+        == "Agent requested additional input."
+    )

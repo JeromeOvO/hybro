@@ -541,9 +541,7 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
         completion_criteria=_stable_mapping_list(run_state.completion_criteria),
         decision_log=_stable_mapping_list(run_state.decision_log),
         pending_hitl_request_ids=list(run_state.pending_hitl_request_ids),
-        open_failures=[
-            failure.model_dump(mode="json") for failure in run_state.open_failures
-        ],
+        open_failures=_enriched_open_failures(run_state),
         outcomes=_stable_model_list(outcome_history.outcomes),
         goal_progress=_stable_model_list(run_state.goal_progress),
         continuations=[
@@ -562,7 +560,7 @@ def _build_state_context(run_state: OrchestrationRunState) -> OrchestrationState
             for item in run_state.pending_agent_continuations
         ],
         dispositions=_stable_model_list(run_state.goal_family_dispositions),
-        blockers=_stable_model_list(run_state.blockers),
+        blockers=_enriched_blockers(run_state),
         attempt_chain_views=_attempt_chain_views(outcome_history),
         recovery_directives=recovery_directives(run_state),
         participant_snapshot=(
@@ -617,6 +615,65 @@ def _attempt_chain_views(history: OutcomeHistoryView) -> list[dict[str, Any]]:
 
 def _stable_model_list(values: Iterable[BaseModel]) -> list[dict[str, Any]]:
     return [_stable_data(value.model_dump(mode="json")) for value in values]
+
+
+def _private_input_prompt_map(
+    run_state: OrchestrationRunState,
+) -> dict[str, str]:
+    """agent_message_id -> private raw question text for input observations."""
+    return {
+        observation.agent_message_id: observation.raw_prompt.strip()
+        for observation in run_state.private_agent_input_observations
+        if isinstance(observation.raw_prompt, str) and observation.raw_prompt.strip()
+    }
+
+
+def _private_prompt_for_evidence(
+    evidence_refs: Sequence[str],
+    prompts_by_message: dict[str, str],
+) -> str | None:
+    for ref in evidence_refs:
+        if ref in prompts_by_message:
+            return prompts_by_message[ref]
+        for message_id, raw in prompts_by_message.items():
+            if ref == f"{message_id}:awaiting_input":
+                return raw
+    return None
+
+
+def _enriched_open_failures(
+    run_state: OrchestrationRunState,
+) -> list[dict[str, Any]]:
+    """Planner-private failure views. Untyped agents ask their question in
+    prose; surface that private question text so the Planner can phrase a
+    meaningful ASK_USER instead of the generic fallback copy."""
+    prompts_by_message = _private_input_prompt_map(run_state)
+    enriched: list[dict[str, Any]] = []
+    for failure in run_state.open_failures:
+        dump = _stable_data(failure.model_dump(mode="json"))
+        raw = prompts_by_message.get(failure.agent_message_id)
+        if raw is not None and failure.error_code == "agent_input_required":
+            dump["error_message"] = raw
+        enriched.append(dump)
+    return enriched
+
+
+def _enriched_blockers(run_state: OrchestrationRunState) -> list[dict[str, Any]]:
+    """Planner-private blocker views with agent_input_required descriptions
+    replaced by the agent's actual private question text."""
+    prompts_by_message = _private_input_prompt_map(run_state)
+    enriched: list[dict[str, Any]] = []
+    for blocker in run_state.blockers:
+        dump = _stable_data(blocker.model_dump(mode="json"))
+        if blocker.status == "open" and blocker.key.endswith(":agent_input_required"):
+            raw = _private_prompt_for_evidence(
+                blocker.evidence_refs,
+                prompts_by_message,
+            )
+            if raw is not None:
+                dump["description"] = raw
+        enriched.append(dump)
+    return enriched
 
 
 def _stable_mapping_list(values: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:

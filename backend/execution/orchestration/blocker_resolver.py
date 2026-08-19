@@ -49,6 +49,27 @@ def resolve_agent_observed_blockers(
             continue
         if not set(blocker.evidence_refs) & evidence_refs:
             continue
+        if blocker.key.endswith(":agent_input_required") and set(
+            blocker.evidence_refs
+        ) & {
+            intent.planned_agent_message_id,
+            f"{intent.planned_agent_message_id}:awaiting_input",
+        }:
+            # The completed agent itself declared it needs user input. That
+            # blocks every required output until the user answers, regardless
+            # of token matching or alternate-agent policy.
+            blocked_keys = sorted(required_output_keys)
+            replacement = blocker.model_copy(
+                update={
+                    "blocked_output_keys": blocked_keys,
+                    "claimed_user_only": True,
+                    "validation_status": "validated",
+                },
+                deep=True,
+            )
+            updated.blockers[index] = replacement
+            validated.append(replacement)
+            continue
         blocked_keys = _matched_output_keys(
             blocker,
             outcome.remaining_required_obligations,
