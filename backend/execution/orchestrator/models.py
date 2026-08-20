@@ -1,0 +1,585 @@
+"""Provider-neutral and durable contracts for orchestrator v3."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class ContractModel(BaseModel):
+    """Strict base for persisted v3 contracts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ResolvedModelSnapshot(ContractModel):
+    route: str
+    provider: str
+    model_id: str
+    api: str
+    supports_native_tools: bool
+    supports_strict_tools: bool
+    tool_strategy: Literal["native", "structured_action"]
+    context_window: int = Field(gt=0)
+    max_output_tokens: int = Field(gt=0)
+    temperature: float | None
+    provider_timeout_seconds: float = Field(gt=0)
+    max_provider_retries: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _selected_strategy_is_supported(self) -> ResolvedModelSnapshot:
+        if self.tool_strategy == "native" and not self.supports_native_tools:
+            raise ValueError("native tool strategy requires native tool capability")
+        if self.tool_strategy == "structured_action" and not self.supports_strict_tools:
+            raise ValueError(
+                "structured-action strategy requires strict structured output capability"
+            )
+        return self
+
+
+class PromptSnapshot(ContractModel):
+    prompt_id: str
+    version: str
+    content_digest: str
+    rendered_system_prompt: str
+
+
+class OrchestratorProfile(ContractModel):
+    profile_id: Literal["fast", "ultimate"]
+    model: ResolvedModelSnapshot
+    prompt: PromptSnapshot
+    thinking_level: str | None = None
+
+    max_model_turns: int = Field(gt=0)
+    grace_model_turns: int = Field(ge=0)
+    max_agent_calls: int = Field(gt=0)
+    max_parallel_calls: int = Field(gt=0)
+    max_transport_retries_per_call: int = Field(ge=0)
+    max_compactions: int = Field(ge=0)
+    deadline_seconds: float = Field(gt=0)
+
+    initial_routing: Literal["explicit_agent_first", "model_select"]
+    tool_execution: Literal["sequential", "parallel"]
+    finalization: Literal["pass_through", "light", "synthesize"]
+
+    @model_validator(mode="after")
+    def _parallelism_fits_call_budget(self) -> OrchestratorProfile:
+        if self.max_parallel_calls > self.max_agent_calls:
+            raise ValueError("max_parallel_calls cannot exceed max_agent_calls")
+        return self
+
+
+class TextPart(ContractModel):
+    kind: Literal["text"] = "text"
+    text: str
+
+
+class DataPart(ContractModel):
+    kind: Literal["data"] = "data"
+    data: dict[str, object] | list[object]
+    mime_type: str = "application/json"
+
+
+class ArtifactRefPart(ContractModel):
+    kind: Literal["artifact_ref"] = "artifact_ref"
+    artifact_ref: str
+    mime_type: str | None = None
+
+
+ContentPart = Annotated[
+    TextPart | DataPart | ArtifactRefPart, Field(discriminator="kind")
+]
+
+
+class UsageRecord(ContractModel):
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
+
+
+class ToolDefinition(ContractModel):
+    name: str
+    label: str
+    description: str
+    input_schema: dict[str, object]
+    execution_mode: Literal["sequential", "parallel"]
+    side_effect_level: Literal["read", "write", "external"]
+
+
+class ToolCall(ContractModel):
+    call_id: str
+    tool_name: str
+    arguments: dict[str, object]
+
+
+TOOL_RESULT_STATUSES = frozenset(
+    {
+        "completed",
+        "awaiting_external",
+        "input_required",
+        "auth_required",
+        "failed",
+        "canceled",
+        "rejected",
+        "expired",
+    }
+)
+ToolResultStatus = Literal[
+    "completed",
+    "awaiting_external",
+    "input_required",
+    "auth_required",
+    "failed",
+    "canceled",
+    "rejected",
+    "expired",
+]
+
+
+class ToolResult(ContractModel):
+    call_id: str
+    tool_name: str
+    status: ToolResultStatus
+    content: list[ContentPart]
+    artifact_refs: list[str]
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class UserMessage(ContractModel):
+    kind: Literal["user"] = "user"
+    message_id: str
+    content: list[ContentPart]
+    created_at: datetime
+
+
+FinishReason = Literal[
+    "stop", "tool_calls", "length", "content_filter", "error", "aborted"
+]
+
+
+class AssistantMessage(ContractModel):
+    kind: Literal["assistant"] = "assistant"
+    message_id: str
+    content: list[ContentPart]
+    tool_calls: list[ToolCall]
+    finish_reason: FinishReason
+    usage: UsageRecord | None
+    created_at: datetime
+
+
+class ToolResultMessage(ContractModel):
+    kind: Literal["tool_result"] = "tool_result"
+    message_id: str
+    call_id: str
+    tool_name: str
+    status: ToolResultStatus
+    content: list[ContentPart]
+    artifact_refs: list[str]
+    is_error: bool
+    created_at: datetime
+
+
+class SessionNotice(ContractModel):
+    kind: Literal["session_notice"] = "session_notice"
+    code: str
+    content: str
+    created_at: datetime
+
+
+AgentMessage = Annotated[
+    UserMessage | AssistantMessage | ToolResultMessage | SessionNotice,
+    Field(discriminator="kind"),
+]
+
+
+class ModelTextPart(ContractModel):
+    kind: Literal["text"] = "text"
+    text: str
+
+
+class ModelToolCallPart(ContractModel):
+    kind: Literal["tool_call"] = "tool_call"
+    call_id: str
+    tool_name: str
+    arguments: dict[str, object]
+
+
+class ModelToolResultPart(ContractModel):
+    kind: Literal["tool_result"] = "tool_result"
+    call_id: str
+    content: list[ModelTextPart]
+    is_error: bool
+
+
+ModelContentPart = Annotated[
+    ModelTextPart | ModelToolCallPart | ModelToolResultPart,
+    Field(discriminator="kind"),
+]
+
+
+class ModelMessage(ContractModel):
+    role: Literal["user", "assistant", "tool"]
+    content: list[ModelContentPart]
+
+
+class ModelTurnRequest(ContractModel):
+    model: ResolvedModelSnapshot
+    system_prompt: str
+    messages: list[ModelMessage]
+    tools: list[ToolDefinition]
+    tool_choice: Literal["auto", "none", "required"] = "auto"
+
+
+class ModelTurnResult(ContractModel):
+    assistant: AssistantMessage
+    provider_request_id: str | None = None
+
+
+class ModelStreamEvent(ContractModel):
+    kind: Literal[
+        "attempt_started",
+        "retry_scheduled",
+        "attempt_failed",
+        "text_delta",
+        "reasoning_delta",
+        "tool_call_start",
+        "tool_call_arguments_delta",
+        "tool_call_end",
+        "usage",
+        "finish",
+        "error",
+    ]
+    attempt: int | None = Field(default=None, ge=1)
+    provider_request_id: str | None = None
+    error_class: (
+        Literal[
+            "authentication",
+            "rate_limit",
+            "timeout",
+            "network",
+            "provider_5xx",
+            "context_overflow",
+            "invalid_request",
+            "content_filter",
+            "aborted",
+            "unknown",
+        ]
+        | None
+    ) = None
+    retryable: bool | None = None
+    retry_delay_ms: int | None = Field(default=None, ge=0)
+    call_id: str | None = None
+    tool_name: str | None = None
+    delta: str | None = None
+    usage: UsageRecord | None = None
+    finish_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _retry_events_have_durable_accounting_metadata(self) -> ModelStreamEvent:
+        if self.kind == "attempt_started" and self.attempt is None:
+            raise ValueError("attempt_started requires an attempt number")
+        if self.kind in {"attempt_failed", "retry_scheduled"}:
+            missing = [
+                name
+                for name, value in (
+                    ("attempt", self.attempt),
+                    ("error_class", self.error_class),
+                    ("retryable", self.retryable),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(f"{self.kind} requires " + ", ".join(missing))
+        if self.kind == "retry_scheduled" and self.retryable is not True:
+            raise ValueError("retry_scheduled requires retryable=true")
+        return self
+
+
+class CallAgentInput(ContractModel):
+    agent_id: str
+    task: str
+    context_refs: list[str] = Field(default_factory=list)
+    artifact_refs: list[str] = Field(default_factory=list)
+    attachment_refs: list[str] = Field(default_factory=list)
+
+
+AGENT_CALL_STATES = frozenset(
+    {
+        "accepted",
+        "dispatching",
+        "working",
+        "continuation_pending",
+        "input_required",
+        "auth_required",
+        "resuming",
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "expired",
+    }
+)
+AgentCallState = Literal[
+    "accepted",
+    "dispatching",
+    "working",
+    "continuation_pending",
+    "input_required",
+    "auth_required",
+    "resuming",
+    "completed",
+    "failed",
+    "canceled",
+    "rejected",
+    "expired",
+]
+
+
+class AcceptedAgentCall(ContractModel):
+    schema_version: Literal[1] = 1
+    state_version: int = Field(ge=0)
+
+    call_id: str
+    run_id: str
+    agent_id: str
+    tool_name: str
+    arguments: dict[str, object]
+    state: AgentCallState
+    idempotency_key: str
+
+    output_schema_id: str | None = None
+    output_schema_version: str | None = None
+    output_schema_digest: str | None = None
+    a2a_task_id: str | None = None
+    a2a_context_id: str | None = None
+    transport_attempts: int = Field(default=0, ge=0)
+    processed_observation_ids: list[str] = Field(default_factory=list)
+    pending_interaction_id: str | None = None
+    artifact_refs: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    accepted_at: datetime
+    updated_at: datetime
+    terminal_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _observation_inventory_is_unique(self) -> AcceptedAgentCall:
+        if len(self.processed_observation_ids) != len(
+            set(self.processed_observation_ids)
+        ):
+            raise ValueError("processed observation IDs must be unique")
+        return self
+
+
+class RunRequestSnapshot(ContractModel):
+    request_fingerprint: str
+    room_generation: int = Field(ge=0)
+    user_message_id: str
+    quoted_message_id: str | None = None
+    attachment_refs: list[str] = Field(default_factory=list)
+
+
+class RecoveryClaim(ContractModel):
+    owner_id: str | None = None
+    lease_expires_at: datetime | None = None
+    next_attempt_at: datetime | None = None
+
+
+ProjectionIntentStatus = Literal["pending", "claimed", "completed", "blocked"]
+
+
+class ProjectionIntent(ContractModel):
+    intent_id: str
+    kind: str
+    target: str
+    dedupe_key: str
+    required: bool
+    event_id: str
+    event_sequence: int = Field(gt=0)
+    causation_id: str
+    payload: dict[str, object]
+    status: ProjectionIntentStatus
+    blocked_reason: str | None = None
+    claim_owner: str | None = None
+    claim_expires_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    next_attempt_at: datetime | None = None
+
+
+class BudgetState(ContractModel):
+    model_turns_used: int = Field(default=0, ge=0)
+    grace_turns_used: int = Field(default=0, ge=0)
+    agent_calls_used: int = Field(default=0, ge=0)
+    parallel_calls_active: int = Field(default=0, ge=0)
+    provider_retries_used: int = Field(default=0, ge=0)
+    transport_retries_used: int = Field(default=0, ge=0)
+    compactions_used: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    deadline_at: datetime
+    wrap_up_requested: bool = False
+
+
+class AuthorizationBasis(ContractModel):
+    kind: Literal[
+        "room_member",
+        "saved_group_member",
+        "explicit_selection",
+        "mention",
+        "all_active_agents",
+    ]
+    room_id: str | None = None
+    group_id: str | None = None
+    selected_by_user_id: str | None = None
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class CandidateAgentSnapshot(ContractModel):
+    agent_id: str
+    name: str | None = None
+    role: str | None = None
+    capability_summary: str = ""
+    status: str | None = None
+    source: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    input_modes: list[str] = Field(default_factory=lambda: ["text"])
+    output_modes: list[str] = Field(default_factory=list)
+    supports_file_upload: bool = False
+    success_rate: float | None = None
+
+
+class CandidateScopeSnapshot(ContractModel):
+    snapshot_id: str
+    revision: int = Field(default=1, ge=1)
+    source: str
+    room_id: str
+    group_id: str | None = None
+    agent_ids: list[str]
+    agents: list[CandidateAgentSnapshot] = Field(default_factory=list)
+    room_membership_version: str | None = None
+    group_version: str | None = None
+    resolved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    authorization_basis: AuthorizationBasis | None = None
+
+
+RunStatus = Literal[
+    "queued",
+    "running",
+    "waiting_external",
+    "awaiting_user",
+    "finalizing",
+    "completed",
+    "failed",
+    "canceled",
+    "budget_exhausted",
+]
+
+
+class OrchestratorRunState(ContractModel):
+    schema_version: Literal[3] = 3
+    run_id: str
+    session_id: str
+    room_id: str
+    client_request_id: str | None
+    request: RunRequestSnapshot
+    profile: OrchestratorProfile
+    candidate_scope: CandidateScopeSnapshot
+    status: RunStatus
+    transcript: list[AgentMessage]
+    calls: list[AcceptedAgentCall]
+    pending_interaction_ids: list[str]
+    artifact_refs: list[str]
+    budget: BudgetState
+    proposed_final_message_id: str | None
+    terminal_reason: str | None
+    projection_state: Literal["pending", "settled", "blocked"]
+    recovery_claim: RecoveryClaim
+    projection_outbox: list[ProjectionIntent]
+    processed_command_ids: list[str]
+    state_version: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def _aggregate_identity_and_uniqueness(self) -> OrchestratorRunState:
+        if any(call.run_id != self.run_id for call in self.calls):
+            raise ValueError("every AgentCall must belong to the Run")
+        inventories = (
+            ("call IDs", [call.call_id for call in self.calls]),
+            ("pending interaction IDs", self.pending_interaction_ids),
+            ("artifact refs", self.artifact_refs),
+            ("processed command IDs", self.processed_command_ids),
+            (
+                "projection intent IDs",
+                [item.intent_id for item in self.projection_outbox],
+            ),
+        )
+        for label, values in inventories:
+            if len(values) != len(set(values)):
+                raise ValueError(f"{label} must be unique")
+        return self
+
+
+class A2AOwnershipRecord(ContractModel):
+    run_id: str
+    room_id: str
+    room_generation: int = Field(ge=0)
+    call_id: str
+
+
+EVENT_TYPES = frozenset(
+    {
+        "run_started",
+        "turn_started",
+        "message_started",
+        "message_updated",
+        "message_completed",
+        "tool_call_accepted",
+        "tool_call_updated",
+        "tool_call_completed",
+        "turn_completed",
+        "run_waiting_external",
+        "run_awaiting_user",
+        "run_finalizing",
+        "run_completed",
+        "run_failed",
+        "run_canceled",
+        "run_budget_exhausted",
+    }
+)
+EventType = Literal[
+    "run_started",
+    "turn_started",
+    "message_started",
+    "message_updated",
+    "message_completed",
+    "tool_call_accepted",
+    "tool_call_updated",
+    "tool_call_completed",
+    "turn_completed",
+    "run_waiting_external",
+    "run_awaiting_user",
+    "run_finalizing",
+    "run_completed",
+    "run_failed",
+    "run_canceled",
+    "run_budget_exhausted",
+]
+
+
+class OrchestratorEvent(ContractModel):
+    schema_version: Literal[1] = 1
+    event_id: str
+    event_type: EventType
+    session_id: str
+    run_id: str
+    sequence: int = Field(gt=0)
+    state_version: int = Field(ge=0)
+    causation_id: str
+    correlation_id: str | None = None
+    payload: dict[str, object]
+    created_at: datetime
