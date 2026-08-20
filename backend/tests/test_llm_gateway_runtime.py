@@ -35,13 +35,6 @@ class FakeRegistry:
                 capabilities=["json_schema"],
                 max_context_tokens=128000,
             ),
-            "bedrock_supervisor_model": ModelInfo(
-                logical_name="bedrock_supervisor_model",
-                model_id="claude-test",
-                provider="bedrock",
-                capabilities=["json_schema"],
-                max_context_tokens=200000,
-            ),
         }
         for model in list(self.models.values()):
             self.models[model.model_id] = model
@@ -139,7 +132,7 @@ class FailAfterStreamProvider(FakeProvider):
 def _gateway(provider: Any, *, max_attempts: int = 2) -> LLMGatewayImpl:
     return LLMGatewayImpl(
         model_registry=FakeRegistry(),
-        providers={"openai": provider, "bedrock": provider},
+        providers={"openai": provider},
         config=LLMGatewayConfig(
             max_attempts=max_attempts,
             retry_backoff_seconds=0,
@@ -161,13 +154,13 @@ async def test_generate_resolves_logical_model_to_provider_and_concrete_model():
 
 
 @pytest.mark.asyncio
-async def test_registered_model_override_routes_through_registry_metadata():
+async def test_registered_concrete_model_alias_routes_through_registry_metadata():
     provider = FakeProvider()
     gateway = _gateway(provider)
 
-    await gateway.generate([{"role": "user", "content": "hi"}], model="claude-test")
+    await gateway.generate([{"role": "user", "content": "hi"}], model="gpt-test")
 
-    assert provider.generate_calls[0]["model"] == "claude-test"
+    assert provider.generate_calls[0]["model"] == "gpt-test"
 
 
 @pytest.mark.asyncio
@@ -234,7 +227,7 @@ async def test_invalid_timeout_logs_terminal_validation_failure(caplog):
 
 
 @pytest.mark.asyncio
-async def test_unregistered_bedrock_concrete_model_uses_public_provider_override():
+async def test_unregistered_bedrock_provider_override_is_rejected():
     openai_provider = FakeProvider()
     bedrock_provider = FakeProvider()
     gateway = LLMGatewayImpl(
@@ -250,15 +243,15 @@ async def test_unregistered_bedrock_concrete_model_uses_public_provider_override
             json_mode=True,
         )
 
-    result = await gateway.generate_structured_with_provider(
-        [{"role": "user", "content": "hi"}],
-        model="custom-bedrock-model",
-        provider="bedrock",
-        json_mode=True,
-    )
+    with pytest.raises(LLMModelRoutingError, match="Unsupported provider hint"):
+        await gateway.generate_structured_with_provider(
+            [{"role": "user", "content": "hi"}],
+            model="custom-bedrock-model",
+            provider="bedrock",
+            json_mode=True,
+        )
 
-    assert result.data == {"ok": True}
-    assert bedrock_provider.structured_calls[0]["model"] == "custom-bedrock-model"
+    assert bedrock_provider.structured_calls == []
     assert openai_provider.structured_calls == []
 
 

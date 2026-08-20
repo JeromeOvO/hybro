@@ -305,6 +305,111 @@ def commit_terminal_decision(
     )
 
 
+class TerminalStatusCommitRequest(ContractModel):
+    expected_state_version: int = Field(ge=0)
+    command_id: str
+    event_id: str
+    event_sequence: int = Field(gt=0)
+    event_intent_id: str
+    public_run_intent_id: str
+    public_run_target: str
+    status: Literal["failed", "canceled", "budget_exhausted"]
+    terminal_reason: str
+    correlation_id: str | None = None
+    created_at: datetime
+
+
+class TerminalStatusCommitResult(ContractModel):
+    outcome: StoreOutcome
+    run: OrchestratorRunState
+    event: OrchestratorEvent | None = None
+
+
+def commit_terminal_status(
+    run: OrchestratorRunState,
+    *,
+    request: TerminalStatusCommitRequest,
+) -> TerminalStatusCommitResult:
+    """Commit a non-success terminal winner and its mandatory projection facts."""
+
+    if request.command_id in run.processed_command_ids:
+        return TerminalStatusCommitResult(outcome="replayed", run=run)
+    if request.expected_state_version != run.state_version:
+        return TerminalStatusCommitResult(outcome="conflict", run=run)
+    if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+        return TerminalStatusCommitResult(outcome="conflict", run=run)
+    expected_sequence = (
+        max((item.event_sequence for item in run.projection_outbox), default=0) + 1
+    )
+    if request.event_sequence != expected_sequence:
+        return TerminalStatusCommitResult(outcome="conflict", run=run)
+    identities = {
+        request.event_id,
+        request.event_intent_id,
+        request.public_run_intent_id,
+    }
+    if len(identities) != 3 or any(
+        item.event_id == request.event_id
+        or item.intent_id in {request.event_intent_id, request.public_run_intent_id}
+        for item in run.projection_outbox
+    ):
+        return TerminalStatusCommitResult(outcome="conflict", run=run)
+
+    next_version = run.state_version + 1
+    event = OrchestratorEvent(
+        event_id=request.event_id,
+        event_type=f"run_{request.status}",  # type: ignore[arg-type]
+        session_id=run.session_id,
+        run_id=run.run_id,
+        sequence=request.event_sequence,
+        state_version=next_version,
+        causation_id=request.command_id,
+        correlation_id=request.correlation_id,
+        payload={"terminal_reason": request.terminal_reason},
+        created_at=request.created_at,
+    )
+    common = {
+        "event_id": event.event_id,
+        "event_sequence": event.sequence,
+        "causation_id": request.command_id,
+        "status": "pending",
+        "required": True,
+    }
+    intents = [
+        ProjectionIntent(
+            intent_id=request.event_intent_id,
+            kind="append_orchestrator_event",
+            target="orchestrator_run_events",
+            dedupe_key=event.event_id,
+            payload=event.model_dump(mode="json"),
+            **common,
+        ),
+        ProjectionIntent(
+            intent_id=request.public_run_intent_id,
+            kind="project_terminal_run_status",
+            target=request.public_run_target,
+            dedupe_key=f"run-{request.status}:{run.run_id}",
+            payload={"run_id": run.run_id, "status": request.status},
+            **common,
+        ),
+    ]
+    committed = run.model_copy(
+        update={
+            "status": request.status,
+            "terminal_reason": request.terminal_reason,
+            "projection_state": "pending",
+            "projection_outbox": [*run.projection_outbox, *intents],
+            "processed_command_ids": [
+                *run.processed_command_ids,
+                request.command_id,
+            ],
+            "state_version": next_version,
+            "updated_at": request.created_at,
+        }
+    )
+    return TerminalStatusCommitResult(outcome="accepted", run=committed, event=event)
+
+
 PROJECTION_INTENT_TRANSITIONS: dict[
     ProjectionIntentStatus, frozenset[ProjectionIntentStatus]
 ] = {
@@ -367,48 +472,49 @@ def evaluate_projection_settlement(
 
 
 def _has_mandatory_terminal_intents(run: OrchestratorRunState) -> bool:
-    if not run.projection_outbox:
-        return False
-    terminal_sequence = max(item.event_sequence for item in run.projection_outbox)
-    terminal_intents = [
-        item
-        for item in run.projection_outbox
-        if item.event_sequence == terminal_sequence and item.required
-    ]
-    kinds = {item.kind for item in terminal_intents}
+    groups: dict[tuple[str, int, str], list[ProjectionIntent]] = {}
+    for item in run.projection_outbox:
+        key = (item.event_id, item.event_sequence, item.causation_id)
+        groups.setdefault(key, []).append(item)
+
     mandatory = {"append_orchestrator_event", "project_terminal_run_status"}
     if run.status == "completed":
         mandatory.add("deliver_final_message")
-    if not mandatory <= kinds:
-        return False
 
-    public_status = next(
-        (
-            item
-            for item in terminal_intents
-            if item.kind == "project_terminal_run_status"
-            and item.payload.get("status") == run.status
-        ),
-        None,
-    )
-    event = next(
-        (
-            item
-            for item in terminal_intents
-            if item.kind == "append_orchestrator_event"
-            and item.payload.get("event_type") == f"run_{run.status}"
-        ),
-        None,
-    )
-    if public_status is None or event is None:
-        return False
-    if run.status == "completed":
-        return any(
+    matching_groups: list[list[ProjectionIntent]] = []
+    for items in groups.values():
+        required = [item for item in items if item.required]
+        if not mandatory <= {item.kind for item in required}:
+            continue
+        public_status = next(
+            (
+                item
+                for item in required
+                if item.kind == "project_terminal_run_status"
+                and item.payload.get("status") == run.status
+            ),
+            None,
+        )
+        event = next(
+            (
+                item
+                for item in required
+                if item.kind == "append_orchestrator_event"
+                and item.payload.get("event_type") == f"run_{run.status}"
+            ),
+            None,
+        )
+        if public_status is None or event is None:
+            continue
+        if run.status == "completed" and not any(
             item.kind == "deliver_final_message"
             and item.payload.get("message_id") == run.proposed_final_message_id
-            for item in terminal_intents
-        )
-    return True
+            for item in required
+        ):
+            continue
+        matching_groups.append(required)
+
+    return len(matching_groups) == 1
 
 
 class TerminalEvaluationTransitionResult(ContractModel):

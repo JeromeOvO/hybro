@@ -65,6 +65,36 @@ def test_a2a_adapter_does_not_import_orchestrator_policy():
     assert violations == []
 
 
+def test_kernel_has_no_a2a_room_database_sse_or_provider_dependencies():
+    forbidden = {
+        "a2a",
+        "a2a_adapter",
+        "room",
+        "motor",
+        "pymongo",
+        "redis",
+        "sse_starlette",
+        "openai",
+    }
+    modules = imported_modules(ORCHESTRATOR / "kernel.py")
+    assert not {
+        module
+        for module in modules
+        if any(module == root or module.startswith(f"{root}.") for root in forbidden)
+    }
+
+
+def test_gateway_provider_inventory_is_closed_and_gemini_dependency_is_removed():
+    providers = (ROOT / "llm_gateway" / "providers" / "__init__.py").read_text()
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    dependencies = pyproject["project"]["dependencies"]
+    assert "OpenAIProvider" in providers
+    assert "DeepSeekProvider" in providers
+    assert "GeminiProvider" not in providers
+    assert not (ROOT / "llm_gateway" / "providers" / "gemini_provider.py").exists()
+    assert not any(dependency.startswith("google-genai") for dependency in dependencies)
+
+
 def test_profile_contracts_do_not_import_legacy_executors():
     source = (ORCHESTRATOR / "profiles.py").read_text()
     assert "QueueExecutor" not in source

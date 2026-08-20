@@ -45,15 +45,14 @@ class Settings(BaseSettings):
     supervisor_model: str | None = None
 
     deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model_name: str = "deepseek-v4-flash"
 
+    # Rejection-only migration sentinels. Gemini is not a supported provider.
     google_api_key: str = ""
     gemini_api_key: str = ""
-    gemini_model_name: str = "gemini-2.0-flash"
-    gemini_embedding_model_name: str = "gemini-embedding-exp-03-07"
 
     # LLM gateway routing and runtime policy
+    llm_gateway_generation_provider: str = "openai"
     llm_gateway_max_attempts: int = 2
     llm_gateway_retry_backoff_seconds: float = 0.2
     llm_gateway_request_timeout_seconds: float = 60.0
@@ -377,12 +376,6 @@ class Settings(BaseSettings):
             self.a2a_inline_message_max_encoded_bytes = 4 * math.ceil(
                 self.a2a_inline_file_max_raw_bytes / 3
             )
-        return self
-
-    @model_validator(mode="after")
-    def apply_gemini_api_key_fallback(self):
-        if not str(self.google_api_key or "").strip():
-            self.google_api_key = self.gemini_api_key or ""
         return self
 
     @property

@@ -1,12 +1,37 @@
-"""Orchestrator v3 contracts, intentionally unbound until the Plan 4 cutover."""
+"""Orchestrator v3 runtime, intentionally unbound until the Plan 4 cutover."""
 
+from .budget import AttemptUsageLedger, BudgetExceeded, BudgetPolicy
+from .compaction import (
+    CompactionError,
+    DeterministicFakeCompactor,
+    ModelBackedCompactor,
+)
 from .conformance import (
     ProviderConformanceCase,
     ProviderConformanceError,
     ProviderConformanceResult,
     run_provider_conformance,
 )
+from .context import (
+    CompiledContext,
+    ContextCompiler,
+    DeterministicTokenEstimator,
+    UnresolvedToolBatchError,
+)
 from .events import EventAppendEvaluation, evaluate_event_append
+from .fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+    fake_agent_definitions,
+)
+from .in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
+    InMemoryRunStore,
+)
+from .kernel import KernelConflict, KernelRunResult, OrchestratorKernel
+from .lifecycle import LifecycleEmitter, SessionEvent, SessionEventListener
+from .model_runtime import GatewayModelRuntime
 from .models import (
     AGENT_CALL_STATES,
     EVENT_TYPES,
@@ -22,6 +47,7 @@ from .models import (
     CallAgentInput,
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
+    CompactionResult,
     ContentPart,
     DataPart,
     ModelMessage,
@@ -38,13 +64,21 @@ from .models import (
     PromptSnapshot,
     RecoveryClaim,
     ResolvedModelSnapshot,
+    ResolvedTool,
     RunRequestSnapshot,
     SessionNotice,
     TextPart,
+    ToolAcceptance,
+    ToolBatchEntry,
+    ToolBindingRef,
     ToolCall,
+    ToolCallBatch,
     ToolDefinition,
+    ToolInvocation,
+    ToolObservation,
     ToolResult,
     ToolResultMessage,
+    ToolSuspension,
     UsageRecord,
     UserMessage,
 )
@@ -61,10 +95,15 @@ from .persistence import (
 from .ports import (
     A2AOwnershipLookup,
     CancellationSignal,
+    Clock,
+    ContextCompactor,
     EventProjector,
+    IDFactory,
     ModelRuntime,
     OrchestratorEventStore,
     OrchestratorRunStore,
+    ProjectionDriver,
+    ToolCatalog,
     ToolRuntime,
 )
 from .profiles import (
@@ -76,6 +115,14 @@ from .profiles import (
     resolve_profile_snapshot,
     resolve_prompt_snapshot,
 )
+from .session import (
+    DefaultRunFactory,
+    EventCancellationSignal,
+    RoomAgentSession,
+    RoomAgentSessionConfig,
+    SessionConflict,
+    SessionRunResult,
+)
 from .settlement import (
     PROJECTION_INTENT_TRANSITIONS,
     ArtifactDeliveryCheck,
@@ -86,7 +133,10 @@ from .settlement import (
     TerminalDecisionEvaluation,
     TerminalDecisionFacts,
     TerminalEvaluationTransitionResult,
+    TerminalStatusCommitRequest,
+    TerminalStatusCommitResult,
     commit_terminal_decision,
+    commit_terminal_status,
     evaluate_projection_settlement,
     evaluate_terminal_decision,
     transition_after_terminal_evaluation,
@@ -95,12 +145,18 @@ from .settlement import (
 )
 from .streaming import (
     MalformedToolArgumentsError,
+    ModelAssemblyOutcome,
     ModelStreamAssembler,
     ModelStreamAssemblyError,
     ModelStreamAssemblyErrorCode,
     TruncatedToolCallError,
 )
 from .tools import ToolCorrelationError, validate_tool_result_correlation
+from .transcript import (
+    TranscriptCorruptionError,
+    agent_messages_to_model,
+    unresolved_call_ids,
+)
 from .transitions import (
     ACTIVE_AGENT_CALL_STATES,
     AGENT_CALL_TRANSITIONS,
@@ -111,6 +167,35 @@ from .transitions import (
 )
 
 __all__ = [
+    "AttemptUsageLedger",
+    "BudgetExceeded",
+    "BudgetPolicy",
+    "CompactionError",
+    "CompiledContext",
+    "ContextCompiler",
+    "DefaultRunFactory",
+    "DeterministicFakeCompactor",
+    "DeterministicTokenEstimator",
+    "EventCancellationSignal",
+    "GatewayModelRuntime",
+    "InMemoryOrchestratorRunStore",
+    "InMemoryProjectionDriver",
+    "InMemoryRunStore",
+    "KernelConflict",
+    "KernelRunResult",
+    "LifecycleEmitter",
+    "ModelBackedCompactor",
+    "OrchestratorKernel",
+    "RecordingFakeToolRuntime",
+    "RoomAgentSession",
+    "RoomAgentSessionConfig",
+    "SessionConflict",
+    "SessionEvent",
+    "SessionEventListener",
+    "SessionRunResult",
+    "StaticFakeToolCatalog",
+    "TranscriptCorruptionError",
+    "UnresolvedToolBatchError",
     "ACTIVE_AGENT_CALL_STATES",
     "AGENT_CALL_STATES",
     "AGENT_CALL_TRANSITIONS",
@@ -136,18 +221,23 @@ __all__ = [
     "BudgetState",
     "CallAgentInput",
     "CancellationSignal",
+    "Clock",
+    "ContextCompactor",
     "CandidateAgentSnapshot",
     "CandidateScopeSnapshot",
+    "CompactionResult",
     "ContentPart",
     "DataPart",
     "EventAppendEvaluation",
     "EventProjector",
+    "IDFactory",
     "IllegalAgentCallTransition",
     "IllegalProjectionIntentTransition",
     "ModelMessage",
     "ModelRouteConfiguration",
     "ModelRuntime",
     "MalformedToolArgumentsError",
+    "ModelAssemblyOutcome",
     "ModelStreamAssembler",
     "ModelStreamAssemblyError",
     "ModelStreamAssemblyErrorCode",
@@ -166,6 +256,7 @@ __all__ = [
     "OrchestratorRunStore",
     "ProfileConfiguration",
     "ProjectionIntent",
+    "ProjectionDriver",
     "ProjectionSettlementResult",
     "PromptConfiguration",
     "ProviderConformanceCase",
@@ -174,6 +265,7 @@ __all__ = [
     "PromptSnapshot",
     "RecoveryClaim",
     "ResolvedModelSnapshot",
+    "ResolvedTool",
     "RunRequestSnapshot",
     "SessionNotice",
     "TerminalCommitRequest",
@@ -181,21 +273,34 @@ __all__ = [
     "TerminalDecisionEvaluation",
     "TerminalDecisionFacts",
     "TerminalEvaluationTransitionResult",
+    "TerminalStatusCommitRequest",
+    "TerminalStatusCommitResult",
     "TextPart",
+    "ToolAcceptance",
+    "ToolBatchEntry",
+    "ToolBindingRef",
     "ToolCall",
+    "ToolCallBatch",
     "ToolCorrelationError",
+    "ToolCatalog",
     "ToolDefinition",
+    "ToolInvocation",
+    "ToolObservation",
     "ToolResult",
+    "ToolSuspension",
     "ToolResultMessage",
     "ToolRuntime",
     "TruncatedToolCallError",
     "UnsupportedProviderCapabilities",
     "UsageRecord",
     "UserMessage",
+    "agent_messages_to_model",
     "commit_terminal_decision",
+    "commit_terminal_status",
     "evaluate_event_append",
     "evaluate_projection_settlement",
     "evaluate_terminal_decision",
+    "fake_agent_definitions",
     "is_legal_agent_call_transition",
     "resolve_model_snapshot",
     "resolve_profile_snapshot",
@@ -204,6 +309,7 @@ __all__ = [
     "transition_after_terminal_evaluation",
     "transition_projection_intent",
     "transition_projection_settlement",
+    "unresolved_call_ids",
     "validate_agent_call_transition",
     "validate_tool_result_correlation",
 ]

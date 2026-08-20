@@ -1,10 +1,19 @@
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 from openai import AsyncOpenAI
 
 from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
+from llm_gateway.turn_types import (
+    GatewayToolCallPart,
+    GatewayToolResultPart,
+    GatewayTurnEvent,
+    GatewayTurnRequest,
+    GatewayUsage,
+)
 
 
 class OpenAIProvider:
@@ -95,6 +104,147 @@ class OpenAIProvider:
             if content:
                 yield content
 
+    async def stream_turn_once(
+        self,
+        request: GatewayTurnRequest,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[GatewayTurnEvent]:
+        if request.provider != "openai" or request.api != "chat_completions":
+            raise ValueError("OpenAI adapter received unsupported route")
+        kwargs: dict[str, Any] = {
+            "model": request.model_id,
+            "messages": _gateway_messages(request),
+            "tools": [_gateway_tool(tool) for tool in request.tools],
+            "tool_choice": request.tool_choice,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "max_tokens": request.max_output_tokens,
+        }
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        stream = await self._client.chat.completions.create(**kwargs)
+        call_state: dict[int, dict[str, Any]] = {}
+        pending_finish: str | None = None
+        finish_request_id: str | None = None
+        try:
+            async for chunk in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise asyncio.CancelledError
+                request_id = str(getattr(chunk, "id", "") or "") or None
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    yield GatewayTurnEvent(
+                        kind="usage",
+                        provider_request_id=request_id,
+                        usage=GatewayUsage(
+                            input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                            output_tokens=int(
+                                getattr(usage, "completion_tokens", 0) or 0
+                            ),
+                            cache_read_tokens=int(
+                                getattr(
+                                    getattr(usage, "prompt_tokens_details", None),
+                                    "cached_tokens",
+                                    0,
+                                )
+                                or 0
+                            ),
+                        ),
+                    )
+                choices = getattr(chunk, "choices", []) or []
+                for choice in choices:
+                    delta = getattr(choice, "delta", None)
+                    text = getattr(delta, "content", None)
+                    if text:
+                        yield GatewayTurnEvent(
+                            kind="text_delta",
+                            delta=str(text),
+                            provider_request_id=request_id,
+                        )
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        yield GatewayTurnEvent(
+                            kind="reasoning_delta",
+                            delta=str(reasoning),
+                            provider_request_id=request_id,
+                        )
+                    for raw_call in getattr(delta, "tool_calls", None) or []:
+                        index = int(getattr(raw_call, "index", 0) or 0)
+                        state = call_state.setdefault(
+                            index,
+                            {"id": None, "name": None, "pending": [], "started": False},
+                        )
+                        call_id = getattr(raw_call, "id", None)
+                        function = getattr(raw_call, "function", None)
+                        name = getattr(function, "name", None)
+                        arguments = getattr(function, "arguments", None)
+                        if call_id:
+                            state["id"] = str(call_id)
+                        if name:
+                            state["name"] = str(name)
+                        if arguments:
+                            state["pending"].append(str(arguments))
+                        if state["id"] and state["name"] and not state["started"]:
+                            state["started"] = True
+                            yield GatewayTurnEvent(
+                                kind="tool_call_start",
+                                tool_index=index,
+                                call_id=state["id"],
+                                tool_name=state["name"],
+                                provider_request_id=request_id,
+                            )
+                            for pending in state["pending"]:
+                                yield GatewayTurnEvent(
+                                    kind="tool_call_arguments_delta",
+                                    tool_index=index,
+                                    call_id=state["id"],
+                                    delta=pending,
+                                    provider_request_id=request_id,
+                                )
+                            state["pending"].clear()
+                        elif state["started"] and arguments:
+                            yield GatewayTurnEvent(
+                                kind="tool_call_arguments_delta",
+                                tool_index=index,
+                                call_id=state["id"],
+                                delta=str(arguments),
+                                provider_request_id=request_id,
+                            )
+                    raw_finish = getattr(choice, "finish_reason", None)
+                    if raw_finish is not None:
+                        finish = _normalize_finish_reason(str(raw_finish))
+                        if finish == "tool_calls":
+                            for index in sorted(call_state):
+                                state = call_state[index]
+                                if not state["started"]:
+                                    raise ValueError(
+                                        "tool call finished before ID and name arrived"
+                                    )
+                                yield GatewayTurnEvent(
+                                    kind="tool_call_end",
+                                    tool_index=index,
+                                    call_id=state["id"],
+                                    provider_request_id=request_id,
+                                )
+                        if pending_finish is not None:
+                            raise ValueError("provider emitted multiple finish reasons")
+                        pending_finish = finish
+                        finish_request_id = request_id
+            if pending_finish is None:
+                raise ValueError("OpenAI stream ended without a finish reason")
+            yield GatewayTurnEvent(
+                kind="finish",
+                finish_reason=pending_finish,
+                provider_request_id=finish_request_id,
+            )
+        finally:
+            close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+            if close is not None:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
+
     async def embed(self, text: str, model: str) -> list[float]:
         embeddings = await self.embed_batch([text], model=model)
         return embeddings[0] if embeddings else []
@@ -140,6 +290,77 @@ def _raw_response(response: Any) -> dict[str, Any]:
     if hasattr(response, "model_dump"):
         return response.model_dump(mode="json")
     return {}
+
+
+def _gateway_messages(request: GatewayTurnRequest) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    if request.system_prompt:
+        messages.append({"role": "system", "content": request.system_prompt})
+    for message in request.messages:
+        if message.role == "assistant":
+            content = "".join(
+                part.text for part in message.parts if part.kind == "text"
+            )
+            tool_calls = [
+                {
+                    "id": part.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": part.tool_name,
+                        "arguments": json.dumps(part.arguments, separators=(",", ":")),
+                    },
+                }
+                for part in message.parts
+                if isinstance(part, GatewayToolCallPart)
+            ]
+            payload: dict[str, Any] = {"role": "assistant", "content": content or None}
+            if tool_calls:
+                payload["tool_calls"] = tool_calls
+            messages.append(payload)
+            continue
+        tool_results = [
+            part for part in message.parts if isinstance(part, GatewayToolResultPart)
+        ]
+        if message.role == "tool" and tool_results:
+            messages.extend(
+                {
+                    "role": "tool",
+                    "tool_call_id": part.call_id,
+                    "content": part.content,
+                }
+                for part in tool_results
+            )
+            continue
+        messages.append(
+            {
+                "role": message.role,
+                "content": "".join(
+                    part.text for part in message.parts if part.kind == "text"
+                ),
+            }
+        )
+    return messages
+
+
+def _gateway_tool(tool: Any) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.input_schema,
+            "strict": True,
+        },
+    }
+
+
+def _normalize_finish_reason(reason: str) -> str:
+    return {
+        "stop": "stop",
+        "tool_calls": "tool_calls",
+        "length": "length",
+        "content_filter": "content_filter",
+    }.get(reason, "error")
 
 
 __all__ = ["OpenAIProvider"]

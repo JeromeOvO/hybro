@@ -1,21 +1,35 @@
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import aclosing
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, Protocol, TypeVar
 
 from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
 from common.observability import get_logger, safe_exception_metadata
 from common.protocols import LLMProviderAdapter
 from llm_gateway.config import LLMGatewayConfig
-from llm_gateway.errors import LLMModelRoutingError, LLMStreamingUnsupportedError
+from llm_gateway.errors import (
+    LLMModelRoutingError,
+    LLMProviderConfigurationError,
+    LLMStreamingUnsupportedError,
+)
 from llm_gateway.model_registry import ModelRegistryImpl
-from llm_gateway.providers import DeepSeekProvider, GeminiProvider, OpenAIProvider
+from llm_gateway.providers import DeepSeekProvider, OpenAIProvider
+from llm_gateway.turn_types import GatewayTurnEvent, GatewayTurnRequest
 
-ProviderHint = Literal["openai", "deepseek", "gemini"]
+ProviderHint = Literal["openai", "deepseek"]
 T = TypeVar("T")
 logger = get_logger(__name__)
+
+
+class LLMTurnGateway(Protocol):
+    def stream_turn_once(
+        self,
+        request: GatewayTurnRequest,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[GatewayTurnEvent]: ...
 
 
 class LLMGatewayImpl:
@@ -32,6 +46,11 @@ class LLMGatewayImpl:
             settings_obj,
             generation_provider=self.config.generation_provider,
         )
+        self._enforce_provider_credentials = providers is None
+        self._provider_credentials = {
+            "openai": str(getattr(settings_obj, "openai_api_key", "") or ""),
+            "deepseek": str(getattr(settings_obj, "deepseek_api_key", "") or ""),
+        }
         if providers is None:
             providers = {
                 "openai": OpenAIProvider(
@@ -39,17 +58,39 @@ class LLMGatewayImpl:
                 ),
                 "deepseek": DeepSeekProvider(
                     api_key=getattr(settings_obj, "deepseek_api_key", ""),
-                    base_url=getattr(
-                        settings_obj,
-                        "deepseek_base_url",
-                        "https://api.deepseek.com",
-                    ),
-                ),
-                "gemini": GeminiProvider(
-                    api_key=getattr(settings_obj, "google_api_key", "")
                 ),
             }
         self._providers: dict[str, LLMProviderAdapter] = providers
+
+    async def stream_turn_once(
+        self,
+        request: GatewayTurnRequest,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[GatewayTurnEvent]:
+        """Stream exactly one frozen provider attempt with no hidden retry."""
+
+        if request.provider not in {"openai", "deepseek"}:
+            raise LLMModelRoutingError(
+                f"Unsupported turn provider {request.provider!r}"
+            )
+        if (
+            self._enforce_provider_credentials
+            and not self._provider_credentials[request.provider].strip()
+        ):
+            raise LLMProviderConfigurationError(
+                f"{request.provider} API key is not configured"
+            )
+        provider = self._providers.get(request.provider)
+        if provider is None:
+            raise LLMModelRoutingError(f"No provider configured for {request.provider}")
+        stream_method = getattr(provider, "stream_turn_once", None)
+        if stream_method is None:
+            raise LLMStreamingUnsupportedError(
+                f"Provider {request.provider} does not support turn streaming"
+            )
+        async for event in stream_method(request, cancel_event=cancel_event):
+            yield event
 
     async def generate(
         self,
@@ -467,6 +508,8 @@ class LLMGatewayImpl:
         model: str,
         provider_hint: ProviderHint | None = None,
     ) -> tuple[ModelInfo, LLMProviderAdapter]:
+        if provider_hint is not None and provider_hint not in {"openai", "deepseek"}:
+            raise LLMModelRoutingError(f"Unsupported provider hint {provider_hint!r}")
         try:
             model_info = self._model_registry.get_model(model)
         except KeyError as exc:
@@ -484,6 +527,10 @@ class LLMGatewayImpl:
                     else ["json_schema", "tool_use", "vision"]
                 ),
                 max_context_tokens=0,
+            )
+        if model_info.provider not in {"openai", "deepseek"}:
+            raise LLMModelRoutingError(
+                f"Unsupported model provider {model_info.provider!r}"
             )
         if provider_hint is not None and model_info.provider != provider_hint:
             raise LLMModelRoutingError(

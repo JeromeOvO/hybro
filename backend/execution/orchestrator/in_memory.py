@@ -1,0 +1,345 @@
+"""Unbound async in-memory ports for Plan 2 execution tests."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from .models import OrchestratorRunState, RecoveryClaim
+from .settlement import transition_projection_intent, transition_projection_settlement
+
+
+@dataclass(frozen=True, slots=True)
+class InMemoryRunStoreResult:
+    outcome: str
+    run: OrchestratorRunState | None
+
+
+class InMemoryOrchestratorRunStore:
+    def __init__(self) -> None:
+        self.runs: dict[str, OrchestratorRunState] = {}
+        self.commands: dict[tuple[str, str], OrchestratorRunState] = {}
+
+    async def create(
+        self, run: OrchestratorRunState, *, command_id: str
+    ) -> InMemoryRunStoreResult:
+        command_key = (run.run_id, command_id)
+        if command_key in self.commands:
+            return InMemoryRunStoreResult("replayed", self.commands[command_key])
+        existing = self.runs.get(run.run_id)
+        if existing is not None:
+            return InMemoryRunStoreResult(
+                "replayed" if existing == run else "conflict", existing
+            )
+        duplicate = next(
+            (
+                item
+                for item in self.runs.values()
+                if item.room_id == run.room_id
+                and item.client_request_id == run.client_request_id
+                and run.client_request_id is not None
+            ),
+            None,
+        )
+        if duplicate is not None:
+            if duplicate.request.request_fingerprint != run.request.request_fingerprint:
+                return InMemoryRunStoreResult("conflict", duplicate)
+            return InMemoryRunStoreResult("replayed", duplicate)
+        self.runs[run.run_id] = run
+        self.commands[command_key] = run
+        return InMemoryRunStoreResult("accepted", run)
+
+    async def load(self, run_id: str) -> OrchestratorRunState | None:
+        return self.runs.get(run_id)
+
+    async def cas_mutate(
+        self,
+        run: OrchestratorRunState,
+        *,
+        expected_state_version: int,
+        command_id: str,
+    ) -> InMemoryRunStoreResult:
+        command_key = (run.run_id, command_id)
+        if command_key in self.commands:
+            return InMemoryRunStoreResult("replayed", self.commands[command_key])
+        current = self.runs.get(run.run_id)
+        if current is None:
+            return InMemoryRunStoreResult("error", None)
+        if current.state_version != expected_state_version:
+            return InMemoryRunStoreResult("conflict", current)
+        if run.state_version != expected_state_version + 1:
+            return InMemoryRunStoreResult("error", current)
+        self.runs[run.run_id] = run
+        self.commands[command_key] = run
+        return InMemoryRunStoreResult("accepted", run)
+
+    async def claim_recovery(
+        self,
+        run_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        lease_expires_at: datetime,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        if run is None or run.state_version != expected_state_version:
+            return InMemoryRunStoreResult("conflict", run)
+        return await self._replace(
+            run.model_copy(
+                update={
+                    "recovery_claim": RecoveryClaim(
+                        owner_id=owner_id, lease_expires_at=lease_expires_at
+                    ),
+                    "state_version": run.state_version + 1,
+                }
+            ),
+            run.state_version,
+            f"claim:{owner_id}:{run.state_version}",
+        )
+
+    async def renew_recovery(
+        self,
+        run_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        lease_expires_at: datetime,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.state_version != expected_state_version
+            or run.recovery_claim.owner_id != owner_id
+        ):
+            return InMemoryRunStoreResult("conflict", run)
+        return await self._replace(
+            run.model_copy(
+                update={
+                    "recovery_claim": run.recovery_claim.model_copy(
+                        update={"lease_expires_at": lease_expires_at}
+                    ),
+                    "state_version": run.state_version + 1,
+                }
+            ),
+            run.state_version,
+            f"renew:{owner_id}:{run.state_version}",
+        )
+
+    async def release_recovery(
+        self,
+        run_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        next_attempt_at: datetime | None,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.state_version != expected_state_version
+            or run.recovery_claim.owner_id != owner_id
+        ):
+            return InMemoryRunStoreResult("conflict", run)
+        return await self._replace(
+            run.model_copy(
+                update={
+                    "recovery_claim": RecoveryClaim(next_attempt_at=next_attempt_at),
+                    "state_version": run.state_version + 1,
+                }
+            ),
+            run.state_version,
+            f"release:{owner_id}:{run.state_version}",
+        )
+
+    async def list_due_runs(
+        self, *, due_at: datetime, limit: int
+    ) -> list[OrchestratorRunState]:
+        return [
+            run
+            for run in self.runs.values()
+            if run.status
+            in {"queued", "running", "waiting_external", "awaiting_user", "finalizing"}
+            and (
+                run.recovery_claim.next_attempt_at is None
+                or run.recovery_claim.next_attempt_at <= due_at
+            )
+            and (
+                run.recovery_claim.lease_expires_at is None
+                or run.recovery_claim.lease_expires_at <= due_at
+            )
+        ][:limit]
+
+    async def claim_projection_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        lease_expires_at: datetime,
+    ) -> InMemoryRunStoreResult:
+        return await self._transition_intent(
+            run_id,
+            intent_id,
+            expected_state_version=expected_state_version,
+            command_id=f"claim-intent:{intent_id}:{expected_state_version}",
+            to_status="claimed",
+            claim_owner=owner_id,
+            claim_expires_at=lease_expires_at,
+        )
+
+    async def complete_projection_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        item = _intent(run, intent_id)
+        if item is None or item.claim_owner != owner_id:
+            return InMemoryRunStoreResult("conflict", run)
+        return await self._transition_intent(
+            run_id,
+            intent_id,
+            expected_state_version=expected_state_version,
+            command_id=f"complete-intent:{intent_id}:{expected_state_version}",
+            to_status="completed",
+        )
+
+    async def block_projection_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        reason: str,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        item = _intent(run, intent_id)
+        if item is None or item.claim_owner not in {None, owner_id}:
+            return InMemoryRunStoreResult("conflict", run)
+        return await self._transition_intent(
+            run_id,
+            intent_id,
+            expected_state_version=expected_state_version,
+            command_id=f"block-intent:{intent_id}:{expected_state_version}",
+            to_status="blocked",
+            blocked_reason=reason,
+        )
+
+    async def _transition_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        command_id: str,
+        to_status: str,
+        **kwargs: object,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        if run is None or run.state_version != expected_state_version:
+            return InMemoryRunStoreResult("conflict", run)
+        index = next(
+            (
+                index
+                for index, item in enumerate(run.projection_outbox)
+                if item.intent_id == intent_id
+            ),
+            None,
+        )
+        if index is None:
+            return InMemoryRunStoreResult("conflict", run)
+        intents = list(run.projection_outbox)
+        intents[index] = transition_projection_intent(
+            intents[index],
+            to_status=to_status,
+            **kwargs,  # type: ignore[arg-type]
+        )
+        return await self._replace(
+            run.model_copy(
+                update={
+                    "projection_outbox": intents,
+                    "state_version": run.state_version + 1,
+                }
+            ),
+            expected_state_version,
+            command_id,
+        )
+
+    async def _replace(
+        self, run: OrchestratorRunState, expected: int, command: str
+    ) -> InMemoryRunStoreResult:
+        return await self.cas_mutate(
+            run, expected_state_version=expected, command_id=command
+        )
+
+
+class InMemoryProjectionDriver:
+    """Claim and complete required intents without external side effects."""
+
+    def __init__(self, run_store: InMemoryOrchestratorRunStore) -> None:
+        self.run_store = run_store
+
+    async def settle(self, run_id: str) -> OrchestratorRunState:
+        run = await self.run_store.load(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        owner = "plan2-projection"
+        for intent in list(run.projection_outbox):
+            if not intent.required or intent.status == "completed":
+                continue
+            if intent.status == "pending":
+                result = await self.run_store.claim_projection_intent(
+                    run_id,
+                    intent.intent_id,
+                    expected_state_version=run.state_version,
+                    owner_id=owner,
+                    lease_expires_at=run.updated_at,
+                )
+                if result.run is None:
+                    raise RuntimeError("projection claim failed")
+                run = result.run
+            result = await self.run_store.complete_projection_intent(
+                run_id,
+                intent.intent_id,
+                expected_state_version=run.state_version,
+                owner_id=owner,
+            )
+            if result.run is None:
+                raise RuntimeError("projection completion failed")
+            run = result.run
+        transition = transition_projection_settlement(
+            run, expected_state_version=run.state_version, updated_at=run.updated_at
+        )
+        if transition.outcome == "accepted":
+            result = await self.run_store.cas_mutate(
+                transition.run,
+                expected_state_version=run.state_version,
+                command_id=f"settle:{run.run_id}:{run.state_version}",
+            )
+            if result.run is not None:
+                run = result.run
+        return run
+
+
+def _intent(run: OrchestratorRunState | None, intent_id: str):
+    if run is None:
+        return None
+    return next(
+        (item for item in run.projection_outbox if item.intent_id == intent_id), None
+    )
+
+
+# concise aliases used by Plan 2 kernel/session tests
+InMemoryRunStore = InMemoryOrchestratorRunStore
+
+__all__ = [
+    "InMemoryOrchestratorRunStore",
+    "InMemoryProjectionDriver",
+    "InMemoryRunStore",
+    "InMemoryRunStoreResult",
+]

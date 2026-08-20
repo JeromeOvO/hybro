@@ -1,5 +1,8 @@
+import pytest
+
 from common.config.settings import Settings
 from llm_gateway.config import LLMGatewayConfig
+from llm_gateway.errors import UnsupportedConfiguredProvider
 
 
 def _settings(**overrides):
@@ -16,6 +19,7 @@ def _settings(**overrides):
 def test_from_settings_wires_gateway_settings_fields():
     settings = _settings(
         deepseek_api_key="test-deepseek-key",
+        llm_gateway_generation_provider="deepseek",
         llm_gateway_max_attempts=4,
         llm_gateway_retry_backoff_seconds=1.25,
         llm_gateway_request_timeout_seconds=31.0,
@@ -45,7 +49,7 @@ def test_from_settings_wires_gateway_settings_fields():
     )
 
 
-def test_generation_provider_priority_prefers_deepseek_then_openai_then_gemini():
+def test_generation_provider_is_explicit_and_stale_gemini_cannot_override_it():
     all_configured = _settings(
         deepseek_api_key="deepseek-key",
         openai_api_key="openai-key",
@@ -59,27 +63,38 @@ def test_generation_provider_priority_prefers_deepseek_then_openai_then_gemini()
     gemini_alias_only = _settings(gemini_api_key="gemini-key")
 
     assert (
-        LLMGatewayConfig.from_settings(all_configured).generation_provider == "deepseek"
+        LLMGatewayConfig.from_settings(all_configured).generation_provider == "openai"
+    )
+    explicit_deepseek = _settings(
+        deepseek_api_key="deepseek-key",
+        openai_api_key="openai-key",
+        google_api_key="google-key",
+        llm_gateway_generation_provider="deepseek",
+    )
+    assert (
+        LLMGatewayConfig.from_settings(explicit_deepseek).generation_provider
+        == "deepseek"
     )
     assert (
         LLMGatewayConfig.from_settings(without_deepseek).generation_provider == "openai"
     )
-    assert LLMGatewayConfig.from_settings(gemini_only).generation_provider == "gemini"
-    assert (
-        LLMGatewayConfig.from_settings(gemini_alias_only).generation_provider
-        == "gemini"
-    )
+    with pytest.raises(UnsupportedConfiguredProvider):
+        LLMGatewayConfig.from_settings(gemini_only)
+    with pytest.raises(UnsupportedConfiguredProvider):
+        LLMGatewayConfig.from_settings(gemini_alias_only)
 
 
 def test_generation_provider_keeps_zero_config_openai_degraded_mode():
     assert LLMGatewayConfig.from_settings(_settings()).generation_provider == "openai"
 
 
-def test_generation_provider_skips_key_without_model():
+def test_generation_provider_rejects_selected_route_without_model():
     settings = _settings(
         deepseek_api_key="deepseek-key",
         deepseek_model_name="",
         openai_api_key="openai-key",
+        llm_gateway_generation_provider="deepseek",
     )
 
-    assert LLMGatewayConfig.from_settings(settings).generation_provider == "openai"
+    with pytest.raises(UnsupportedConfiguredProvider, match="model route is empty"):
+        LLMGatewayConfig.from_settings(settings)

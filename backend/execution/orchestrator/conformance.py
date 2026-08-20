@@ -74,10 +74,6 @@ def _validate_successful_case(
         )
     elif case.scenario == "usage" and assistant.usage is None:
         raise ProviderConformanceError("usage scenario omitted normalized usage")
-    elif case.scenario == "abort" and (
-        assistant.finish_reason != "aborted" or assistant.tool_calls
-    ):
-        raise ProviderConformanceError("abort exposed executable tool calls")
     elif case.scenario == "retry_classification":
         _validate_retry_case(case, assembler)
 
@@ -128,10 +124,11 @@ async def run_provider_conformance(
         try:
             async for event in runtime.stream_turn(case.request, signal=signal):
                 assembler.accept(event)
-            assistant = assembler.build(
+            outcome = assembler.build_outcome(
                 message_id=f"conformance-{case.scenario}",
                 created_at=case.created_at,
             )
+            assistant = outcome.assistant
         except ModelStreamAssemblyError as exc:
             assembly_error = exc
             assistant = None
@@ -151,11 +148,15 @@ async def run_provider_conformance(
                     f"{type(assembly_error).__name__}:{assembly_error.code}"
                 )
         else:
-            if assembly_error is not None or assistant is None:
-                raise ProviderConformanceError(
-                    f"{case.scenario} failed normalized assembly: {assembly_error}"
-                )
-            _validate_successful_case(case, assistant, assembler)
+            if case.scenario == "abort":
+                if assembly_error is not None or outcome.kind != "aborted":
+                    raise ProviderConformanceError("abort exposed an assistant result")
+            else:
+                if assembly_error is not None or assistant is None:
+                    raise ProviderConformanceError(
+                        f"{case.scenario} failed normalized assembly: {assembly_error}"
+                    )
+                _validate_successful_case(case, assistant, assembler)
 
         results.append(
             ProviderConformanceResult(
