@@ -1709,6 +1709,67 @@ async def test_planner_adapter_keeps_enforceable_text_expected_output():
     assert [output.kind for output in action.targets[0].expected_outputs] == ["text"]
 
 
+@pytest.mark.asyncio
+async def test_planner_adapter_filters_prose_json_fields_before_validation():
+    adapter = RoomSupervisorPlannerAdapter(
+        raw_action_provider=lambda _context: {
+            "action": "delegate",
+            "reasoning": "Prepare an underwriting submission.",
+            "targets": [
+                {
+                    "agent_id": "agent-1",
+                    "agent_name": "Broker",
+                    "task": "Prepare the submission.",
+                    "parallel_group": None,
+                    "depends_on": [],
+                    "required_resource_refs": [],
+                    "context_refs": [],
+                    "artifact_refs": [],
+                    "attachment_refs": [],
+                    "expected_outputs": [
+                        {
+                            "output_key": "submission",
+                            "kind": "application/json",
+                            "required": True,
+                            "description": "Underwriting submission.",
+                            "artifact_name": None,
+                            "required_fields": [
+                                "Client",
+                                "Annual Revenue",
+                                "premium",
+                                "pricing.currency",
+                            ],
+                            "allow_partial": False,
+                        }
+                    ],
+                }
+            ],
+            "questions": [],
+            "synthesis_instruction": None,
+            "failure_reason": None,
+            "completion_evidence": None,
+        }
+    )
+    context = build_orchestration_planner_context(
+        run_state=OrchestrationRunState(
+            run_id="run-1",
+            room_id="room-1",
+            user_message_id="msg-1",
+            goal="Prepare an underwriting submission",
+            candidate_agent_ids=["agent-1"],
+        ),
+        candidate_scope=["agent-1"],
+        message_text="Prepare an underwriting submission",
+    )
+
+    action = await adapter.plan(context)
+
+    output = action.targets[0].expected_outputs[0]
+    assert output.kind == "application/json"
+    assert output.required is True
+    assert output.required_fields == ["premium", "pricing.currency"]
+
+
 def test_planner_prompt_requires_domain_supported_agent_suitability():
     import inspect
 

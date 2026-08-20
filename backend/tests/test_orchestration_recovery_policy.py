@@ -4,6 +4,7 @@ from execution.orchestration.action_validator import PlannerActionValidator
 from execution.orchestration.blocker_resolver import validate_hitl_answered_blockers
 from execution.orchestration.goal_fingerprinting import target_goal_fingerprints
 from execution.orchestration.goal_progress import rebuild_goal_progress
+from execution.orchestration.outcome_evaluator import required_obligations
 from execution.orchestration.recovery_policy import (
     action_for_fulfilled_goal_recovery,
     action_for_rejected_ask_user,
@@ -817,6 +818,81 @@ def test_normalize_prose_expected_outputs_clears_invented_structured_contracts()
     normalized = normalize_prose_expected_outputs(action)
 
     assert normalized.targets[0].expected_outputs == []
+
+
+def test_normalize_prose_expected_outputs_drops_json_labels_but_keeps_paths():
+    broker_fields = [
+        "Client",
+        "Industry",
+        "Headquarters Country",
+        "Operating countries",
+        "Employees",
+        "Annual Revenue",
+        "Coverage limit",
+        "Retention",
+        "Effective Date",
+        "MFA",
+        "Backups",
+        "Security Training",
+        "Cloud Providers",
+        "Endpoint Detection",
+        "Patch Management",
+        "Prior Claims",
+    ]
+    action = PlannerAction(
+        action=PlannerActionType.DELEGATE,
+        reasoning="prepare submission and quote",
+        targets=[
+            PlannedDelegateTarget(
+                agent_id="broker",
+                task="Prepare the submission.",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="submission",
+                        kind="application/json",
+                        required=True,
+                        required_fields=broker_fields,
+                    )
+                ],
+            ),
+            PlannedDelegateTarget(
+                agent_id="insurer",
+                task="Return a quote.",
+                expected_outputs=[
+                    DispatchExpectedOutput(
+                        output_key="quote_decision",
+                        kind="application/json",
+                        required=True,
+                        required_fields=[
+                            "premium",
+                            "pricing.currency",
+                            "Coverage limit",
+                        ],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    normalized = normalize_prose_expected_outputs(action)
+    renormalized = normalize_prose_expected_outputs(normalized)
+
+    submission = normalized.targets[0].expected_outputs[0]
+    quote = normalized.targets[1].expected_outputs[0]
+    assert submission.required_fields == []
+    assert required_obligations([submission]) == {"submission:$present"}
+    assert quote.required_fields == ["premium", "pricing.currency"]
+    assert action.targets[0].expected_outputs[0].required_fields == broker_fields
+    assert renormalized == normalized
+
+
+def test_normalize_prose_expected_outputs_leaves_complete_unchanged():
+    action = PlannerAction(
+        action=PlannerActionType.COMPLETE,
+        reasoning="done",
+    )
+
+    assert normalize_prose_expected_outputs(action) is action
 
 
 def test_normalize_prose_expected_outputs_canonicalizes_text_constraints():
