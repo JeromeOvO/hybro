@@ -1,10 +1,12 @@
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
+
+from llm_gateway.errors import UnsupportedConfiguredProvider
 
 
 @dataclass(frozen=True)
 class LLMGatewayConfig:
-    generation_provider: Literal["deepseek", "openai", "gemini"] = "openai"
+    generation_provider: Literal["deepseek", "openai"] = "openai"
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.2
     request_timeout_seconds: float = 60.0
@@ -74,30 +76,46 @@ class LLMGatewayConfig:
 
 def resolve_generation_provider(
     settings_obj: Any,
-) -> Literal["deepseek", "openai", "gemini"]:
-    candidates = (
-        (
-            "deepseek",
-            getattr(settings_obj, "deepseek_api_key", ""),
-            getattr(settings_obj, "deepseek_model_name", ""),
-        ),
-        (
-            "openai",
-            getattr(settings_obj, "openai_api_key", ""),
-            getattr(settings_obj, "lead_ai_model", ""),
-        ),
-        (
-            "gemini",
-            getattr(settings_obj, "google_api_key", ""),
-            getattr(settings_obj, "gemini_model_name", ""),
-        ),
+) -> Literal["deepseek", "openai"]:
+    selected = (
+        str(
+            getattr(settings_obj, "llm_gateway_generation_provider", "openai")
+            or "openai"
+        )
+        .strip()
+        .lower()
     )
-    for provider, api_key, model in candidates:
-        if str(api_key or "").strip() and str(model or "").strip():
-            return provider
-    # Preserve zero-config startup. Calls remain degraded until a provider key
-    # is configured, matching the existing OpenAI-default behavior.
-    return "openai"
+    if selected not in {"openai", "deepseek"}:
+        raise UnsupportedConfiguredProvider(
+            f"Configured LLM provider {selected!r} is not supported"
+        )
+    selected_model = (
+        getattr(settings_obj, "deepseek_model_name", "")
+        if selected == "deepseek"
+        else getattr(settings_obj, "lead_ai_model", "")
+    )
+    if not str(selected_model or "").strip():
+        raise UnsupportedConfiguredProvider(
+            f"Configured {selected} model route is empty"
+        )
+    gemini_key = getattr(settings_obj, "google_api_key", "") or getattr(
+        settings_obj, "gemini_api_key", ""
+    )
+    provider_keys = {
+        "openai": str(getattr(settings_obj, "openai_api_key", "") or "").strip(),
+        "deepseek": str(getattr(settings_obj, "deepseek_api_key", "") or "").strip(),
+    }
+    if str(gemini_key or "").strip() and not any(provider_keys.values()):
+        raise UnsupportedConfiguredProvider(
+            "Gemini is not supported by this LLM Gateway release"
+        )
+    if any(provider_keys.values()) and not provider_keys[selected]:
+        required_key = "OPENAI_API_KEY" if selected == "openai" else "DEEPSEEK_API_KEY"
+        raise UnsupportedConfiguredProvider(
+            f"LLM_GATEWAY_GENERATION_PROVIDER selects {selected!r}, but "
+            f"{required_key} is not configured"
+        )
+    return cast(Literal["deepseek", "openai"], selected)
 
 
 def _setting(settings_obj: Any, name: str, default: Any) -> Any:

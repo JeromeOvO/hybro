@@ -21,17 +21,18 @@ class UnsupportedProviderCapabilities(ValueError):
 
 class ModelRouteConfiguration(ContractModel):
     route: str
-    provider: str
+    provider: Literal["openai", "deepseek"]
     model_id: str
-    api: str
+    api: Literal["chat_completions"]
     supports_native_tools: bool = False
-    supports_strict_tools: bool = False
-    supports_structured_actions: bool = False
+    supports_provider_strict_schema: bool = False
+    supports_local_structured_action: bool = False
     context_window: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
     temperature: float | None = None
     provider_timeout_seconds: float = Field(gt=0)
     max_provider_retries: int = Field(ge=0)
+    supported_thinking_levels: list[str] = Field(default_factory=list)
 
 
 class PromptConfiguration(ContractModel):
@@ -49,6 +50,9 @@ class ProfileConfiguration(ContractModel):
     max_agent_calls: int = Field(gt=0)
     max_parallel_calls: int = Field(gt=0)
     max_transport_retries_per_call: int = Field(ge=0)
+    max_provider_retries_total: int = Field(default=4, ge=0)
+    max_input_tokens_total: int | None = Field(default=None, gt=0)
+    max_output_tokens_total: int | None = Field(default=None, gt=0)
     max_compactions: int = Field(ge=0)
     deadline_seconds: float = Field(gt=0)
     initial_routing: Literal["explicit_agent_first", "model_select"]
@@ -80,15 +84,21 @@ def resolve_model_snapshot(
             )
         strategy: Literal["native", "structured_action"] = "native"
     elif preferred_strategy == "structured_action":
-        if not (config.supports_structured_actions and config.supports_strict_tools):
+        if not (
+            config.supports_provider_strict_schema
+            or config.supports_local_structured_action
+        ):
             raise UnsupportedProviderCapabilities(
-                f"model route {config.route!r} does not support strict "
+                f"model route {config.route!r} does not support validated "
                 "structured actions"
             )
         strategy = "structured_action"
     elif config.supports_native_tools:
         strategy = "native"
-    elif config.supports_structured_actions and config.supports_strict_tools:
+    elif (
+        config.supports_provider_strict_schema
+        or config.supports_local_structured_action
+    ):
         strategy = "structured_action"
     else:
         raise UnsupportedProviderCapabilities(
@@ -96,8 +106,14 @@ def resolve_model_snapshot(
             "structured actions"
         )
 
+    validation = (
+        "unsupported"
+        if strategy == "native"
+        else ("provider_strict" if config.supports_provider_strict_schema else "local")
+    )
     return ResolvedModelSnapshot(
-        **config.model_dump(exclude={"supports_structured_actions"}),
+        **config.model_dump(),
+        structured_action_validation=validation,
         tool_strategy=strategy,
     )
 

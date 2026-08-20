@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from typing import Literal, Protocol
 
 from .models import (
     A2AOwnershipRecord,
+    CompactionResult,
     ModelStreamEvent,
     ModelTurnRequest,
     OrchestratorEvent,
     OrchestratorRunState,
     ProjectionIntent,
-    ToolCall,
+    ResolvedTool,
+    ToolAcceptance,
     ToolDefinition,
-    ToolResult,
+    ToolExecutionOutcome,
+    ToolInvocation,
 )
 
 StoreOutcome = Literal["accepted", "replayed", "conflict", "error"]
@@ -45,14 +48,47 @@ class ModelRuntime(Protocol):
     ) -> AsyncIterator[ModelStreamEvent]: ...
 
 
+class ToolCatalog(Protocol):
+    def list_tools(self, run: OrchestratorRunState) -> list[ToolDefinition]: ...
+
+    def resolve(self, run: OrchestratorRunState, tool_name: str) -> ResolvedTool: ...
+
+
 class ToolRuntime(Protocol):
+    async def accept(self, invocation: ToolInvocation) -> ToolAcceptance: ...
+
     async def execute(
         self,
-        definition: ToolDefinition,
-        call: ToolCall,
+        invocation: ToolInvocation,
+        acceptance: ToolAcceptance,
         *,
         signal: CancellationSignal,
-    ) -> ToolResult: ...
+    ) -> ToolExecutionOutcome: ...
+
+
+class Clock(Protocol):
+    def now(self) -> datetime: ...
+
+
+class IDFactory(Protocol):
+    def new_id(self, prefix: str) -> str: ...
+
+
+class ProjectionDriver(Protocol):
+    async def settle(self, run_id: str) -> OrchestratorRunState: ...
+
+
+class ContextCompactor(Protocol):
+    async def compact(
+        self,
+        messages: list[object],
+        *,
+        turn_id: str,
+        remaining_provider_retries: int,
+        deadline_at: datetime,
+        on_event: Callable[[ModelStreamEvent], Awaitable[None]],
+        signal: CancellationSignal,
+    ) -> CompactionResult: ...
 
 
 class OrchestratorRunStore(Protocol):

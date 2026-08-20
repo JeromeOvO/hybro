@@ -20,7 +20,6 @@ dependencies = [
     "pymongo",
     "redis>=5.2.0",
     # AI / LLM
-    "google-genai>=1.20.0",
     "openai>=1.86.0",
     "tiktoken>=0.9.0",
     "mcp>=1.9.4",
@@ -36,6 +35,7 @@ dependencies = [
     # Config / data validation
     "pydantic>=2.11.7",
     "pydantic-settings>=2.9.1",
+    "jsonschema>=4.23.0",
     "python-dotenv>=1.1.0",
     "platformdirs>=4.3.8",
     # Utilities
@@ -145,6 +145,12 @@ ignore = ["E501"]
 "execution/orchestration/room_message_center.py" = ["C901"]
 "execution/orchestration/room_supervisor_service.py" = ["C901"]
 "execution/orchestration/supervisor_executor.py" = ["C901"]
+"execution/orchestrator/conformance.py" = ["C901"]
+"execution/orchestrator/kernel.py" = ["C901"]
+"execution/orchestrator/model_runtime.py" = ["C901"]
+"execution/orchestrator/transcript.py" = ["C901"]
+"llm_gateway/providers/openai_provider.py" = ["C901"]
+"llm_gateway/structured_generation.py" = ["C901"]
 "hub_runtime_bridge/facade.py" = ["C901"]
 "hub_runtime_bridge/compat/relay_service.py" = ["C901"]
 "hub_runtime_bridge/service/hub_publish.py" = ["C901"]

@@ -42,11 +42,13 @@ def profile() -> OrchestratorProfile:
         profile_id="ultimate",
         model=ResolvedModelSnapshot(
             route="test",
-            provider="test",
+            provider="openai",
             model_id="model",
-            api="responses",
+            api="chat_completions",
             supports_native_tools=True,
-            supports_strict_tools=True,
+            supports_provider_strict_schema=True,
+            supports_local_structured_action=False,
+            structured_action_validation="unsupported",
             tool_strategy="native",
             context_window=32_000,
             max_output_tokens=2_000,
@@ -490,6 +492,74 @@ def test_terminal_projection_cannot_settle_without_mandatory_intent(missing_kind
     )
     result = transition_projection_settlement(
         terminal, expected_state_version=4, updated_at=NOW + timedelta(seconds=1)
+    )
+    assert result.outcome == "replayed"
+    assert result.run.projection_state == "pending"
+
+
+def test_terminal_batch_settles_with_later_higher_sequence_optional_intent():
+    terminal = _committed_terminal_with_status("completed")
+    optional = terminal.projection_outbox[0].model_copy(
+        update={
+            "intent_id": "optional-later",
+            "kind": "analytics_optional",
+            "required": False,
+            "event_id": "event-later",
+            "event_sequence": 99,
+            "causation_id": "later",
+            "payload": {},
+        }
+    )
+    terminal = terminal.model_copy(
+        update={"projection_outbox": [*terminal.projection_outbox, optional]}
+    )
+    result = transition_projection_settlement(
+        terminal, expected_state_version=4, updated_at=NOW + timedelta(seconds=1)
+    )
+    assert result.outcome == "accepted"
+    assert result.run.projection_state == "settled"
+
+
+def test_terminal_batch_rejects_ambiguous_and_payload_mismatched_groups():
+    terminal = _committed_terminal_with_status("completed")
+    duplicate = [
+        item.model_copy(
+            update={
+                "intent_id": f"duplicate-{index}",
+                "event_id": "event-duplicate",
+                "event_sequence": 2,
+                "causation_id": "duplicate-cause",
+                "payload": {
+                    **item.payload,
+                    "event_id": "event-duplicate",
+                    "event_sequence": 2,
+                    "causation_id": "duplicate-cause",
+                },
+            }
+        )
+        for index, item in enumerate(terminal.projection_outbox)
+    ]
+    ambiguous = terminal.model_copy(
+        update={"projection_outbox": [*terminal.projection_outbox, *duplicate]}
+    )
+    result = transition_projection_settlement(
+        ambiguous, expected_state_version=4, updated_at=NOW + timedelta(seconds=1)
+    )
+    assert result.outcome == "replayed"
+    assert result.run.projection_state == "pending"
+
+    intents = list(terminal.projection_outbox)
+    event_index = next(
+        index
+        for index, item in enumerate(intents)
+        if item.kind == "append_orchestrator_event"
+    )
+    intents[event_index] = intents[event_index].model_copy(
+        update={"payload": {**intents[event_index].payload, "event_type": "wrong"}}
+    )
+    mismatch = terminal.model_copy(update={"projection_outbox": intents})
+    result = transition_projection_settlement(
+        mismatch, expected_state_version=4, updated_at=NOW + timedelta(seconds=1)
     )
     assert result.outcome == "replayed"
     assert result.run.projection_state == "pending"

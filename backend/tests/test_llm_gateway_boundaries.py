@@ -45,7 +45,6 @@ LLM_SETTINGS_FIELDS = {
     "gemini_embedding_model_name",
     "supervisor_model",
     "deepseek_api_key",
-    "deepseek_base_url",
     "deepseek_model_name",
     "use_bedrock_supervisor",
     "bedrock_supervisor_model",

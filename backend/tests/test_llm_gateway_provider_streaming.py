@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from llm_gateway.providers.gemini_provider import GeminiProvider
 from llm_gateway.providers.openai_provider import OpenAIProvider
 
 
@@ -56,24 +55,3 @@ async def test_openai_provider_streams_non_empty_chat_deltas():
         messages=[{"role": "user", "content": "hello"}],
         stream=True,
     )
-
-
-@pytest.mark.asyncio
-async def test_gemini_provider_streaming_falls_back_to_single_generated_chunk():
-    client = SimpleNamespace(
-        models=SimpleNamespace(
-            generate_content=AsyncMock(return_value=SimpleNamespace(text="full text"))
-        )
-    )
-    provider = GeminiProvider(client=client)
-
-    chunks = [
-        chunk
-        async for chunk in provider.generate_stream(
-            [{"role": "user", "content": "hello"}],
-            "gemini-test",
-        )
-    ]
-
-    assert chunks == ["full text"]
-    client.models.generate_content.assert_awaited_once()

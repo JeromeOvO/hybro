@@ -1,0 +1,258 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from execution.orchestrator.model_runtime import GatewayModelRuntime
+from execution.orchestrator.models import ModelMessage, ModelTextPart, ModelTurnRequest
+from execution.orchestrator.streaming import (
+    ModelStreamAssembler,
+    TruncatedToolCallError,
+)
+from llm_gateway.providers.openai_provider import OpenAIProvider
+from llm_gateway.turn_types import (
+    GatewayTextPart,
+    GatewayToolDefinition,
+    GatewayTurnMessage,
+    GatewayTurnRequest,
+)
+from tests._orchestrator_v3_helpers import NOW, NeverCancelled, profile
+
+
+class Stream:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.chunks:
+            raise StopAsyncIteration
+        return self.chunks.pop(0)
+
+    async def aclose(self):
+        self.closed = True
+
+
+def request() -> GatewayTurnRequest:
+    return GatewayTurnRequest(
+        provider="openai",
+        model_id="gpt-test",
+        api="chat_completions",
+        system_prompt="system",
+        messages=[
+            GatewayTurnMessage(role="user", parts=[GatewayTextPart(text="hello")])
+        ],
+        tools=[
+            GatewayToolDefinition(
+                name="echo",
+                description="echo",
+                input_schema={
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            )
+        ],
+        tool_strategy="native",
+        max_output_tokens=100,
+        timeout_seconds=10,
+        turn_id="turn-1",
+    )
+
+
+def chunk(*, delta=None, finish=None, usage=None, chunk_id="req-1"):
+    choices = []
+    if delta is not None or finish is not None:
+        choices = [
+            SimpleNamespace(delta=delta or SimpleNamespace(), finish_reason=finish)
+        ]
+    return SimpleNamespace(id=chunk_id, choices=choices, usage=usage)
+
+
+@pytest.mark.asyncio
+async def test_openai_turn_streams_reasoning_text_delayed_parallel_tools_and_usage():
+    first_call = SimpleNamespace(
+        index=0,
+        id=None,
+        function=SimpleNamespace(name=None, arguments='{"value":'),
+    )
+    second_call = SimpleNamespace(
+        index=1,
+        id="call-2",
+        function=SimpleNamespace(name="echo", arguments='{"value":"b"}'),
+    )
+    stream = Stream(
+        [
+            chunk(delta=SimpleNamespace(reasoning_content="think", content="answer")),
+            chunk(delta=SimpleNamespace(tool_calls=[first_call])),
+            chunk(
+                delta=SimpleNamespace(
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id="call-1",
+                            function=SimpleNamespace(name="echo", arguments='"a"'),
+                        ),
+                        second_call,
+                    ]
+                )
+            ),
+            chunk(
+                delta=SimpleNamespace(
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id=None,
+                            function=SimpleNamespace(name=None, arguments="}"),
+                        )
+                    ]
+                ),
+                finish="tool_calls",
+            ),
+            chunk(
+                usage=SimpleNamespace(
+                    prompt_tokens=4,
+                    completion_tokens=5,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=2),
+                )
+            ),
+        ]
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=stream))
+        )
+    )
+
+    events = [
+        event
+        async for event in OpenAIProvider(client=client).stream_turn_once(request())
+    ]
+
+    assert [event.kind for event in events] == [
+        "text_delta",
+        "reasoning_delta",
+        "tool_call_start",
+        "tool_call_arguments_delta",
+        "tool_call_arguments_delta",
+        "tool_call_start",
+        "tool_call_arguments_delta",
+        "tool_call_arguments_delta",
+        "tool_call_end",
+        "tool_call_end",
+        "usage",
+        "finish",
+    ]
+    assert (
+        "".join(event.delta or "" for event in events if event.call_id == "call-1")
+        == '{"value":"a"}'
+    )
+    assert events[-2].usage.input_tokens == 4
+    assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_openai_usage_terminal_chunk_passes_runtime_and_assembler():
+    stream = Stream(
+        [
+            chunk(delta=SimpleNamespace(content="done"), finish="stop"),
+            chunk(
+                usage=SimpleNamespace(
+                    prompt_tokens=4,
+                    completion_tokens=2,
+                    prompt_tokens_details=None,
+                )
+            ),
+        ]
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=stream))
+        )
+    )
+    runtime = GatewayModelRuntime(OpenAIProvider(client=client), now=lambda: NOW)
+    turn = ModelTurnRequest(
+        turn_id="turn-openai-usage",
+        model=profile().model,
+        system_prompt="system",
+        messages=[ModelMessage(role="user", content=[ModelTextPart(text="hi")])],
+        tools=[],
+        remaining_provider_retries=0,
+        absolute_deadline_at=None,
+    )
+    assembler = ModelStreamAssembler()
+    async for event in runtime.stream_turn(turn, signal=NeverCancelled()):
+        assembler.accept(event)
+
+    outcome = assembler.build_outcome(message_id="assistant", created_at=NOW)
+
+    assert outcome.assistant is not None
+    assert outcome.assistant.usage.input_tokens == 4
+    assert outcome.assistant.content[0].text == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "normalized"),
+    [
+        ("stop", "stop"),
+        ("tool_calls", "tool_calls"),
+        ("length", "length"),
+        ("content_filter", "content_filter"),
+    ],
+)
+async def test_openai_finish_reason_mapping(raw, normalized):
+    stream = Stream([chunk(delta=SimpleNamespace(), finish=raw)])
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=stream))
+        )
+    )
+    events = [
+        event
+        async for event in OpenAIProvider(client=client).stream_turn_once(request())
+    ]
+    assert events[-1].finish_reason == normalized
+
+
+@pytest.mark.asyncio
+async def test_openai_length_finish_surfaces_started_tool_call_as_truncated():
+    partial_call = SimpleNamespace(
+        index=0,
+        id="call-truncated",
+        function=SimpleNamespace(name="echo", arguments='{"value":'),
+    )
+    stream = Stream(
+        [chunk(delta=SimpleNamespace(tool_calls=[partial_call]), finish="length")]
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=stream))
+        )
+    )
+    runtime = GatewayModelRuntime(OpenAIProvider(client=client), now=lambda: NOW)
+    turn = ModelTurnRequest(
+        turn_id="turn-openai-truncated",
+        model=profile().model,
+        system_prompt="system",
+        messages=[ModelMessage(role="user", content=[ModelTextPart(text="hi")])],
+        tools=[],
+        remaining_provider_retries=0,
+        absolute_deadline_at=None,
+    )
+    assembler = ModelStreamAssembler()
+    async for event in runtime.stream_turn(turn, signal=NeverCancelled()):
+        assembler.accept(event)
+
+    with pytest.raises(TruncatedToolCallError) as error:
+        assembler.build_outcome(message_id="assistant", created_at=NOW)
+
+    assert error.value.provider_call_id == "call-truncated"
+    assert error.value.tool_name == "echo"
+    assert error.value.tool_index == 0
+    assert error.value.raw_arguments_digest

@@ -38,6 +38,7 @@ from execution.orchestrator import (
     SessionNotice,
     TextPart,
     ToolCall,
+    ToolCatalog,
     ToolDefinition,
     ToolResult,
     ToolRuntime,
@@ -59,12 +60,12 @@ NOW = datetime(2026, 3, 12, tzinfo=UTC)
 def model_config(**updates) -> ModelRouteConfiguration:
     values = {
         "route": "test-route",
-        "provider": "test-provider",
+        "provider": "openai",
         "model_id": "test-model",
-        "api": "responses",
+        "api": "chat_completions",
         "supports_native_tools": True,
-        "supports_strict_tools": True,
-        "supports_structured_actions": True,
+        "supports_provider_strict_schema": True,
+        "supports_local_structured_action": True,
         "context_window": 32_000,
         "max_output_tokens": 2_000,
         "temperature": 0.2,
@@ -105,7 +106,28 @@ def test_resolved_model_prompt_and_profile_snapshot_serialization():
     assert restored == profile
     assert restored.model.tool_strategy == "native"
     assert len(restored.prompt.content_digest) == 64
-    assert "supports_structured_actions" not in restored.model.model_dump()
+    assert restored.model.structured_action_validation == "unsupported"
+
+
+def test_persisted_provider_api_and_thinking_boundaries_are_closed():
+    with pytest.raises(ValueError):
+        model_config(provider="gemini")
+    with pytest.raises(ValueError):
+        model_config(api="generate_content")
+    thinking = profile_config().model_copy(update={"thinking_level": "high"})
+    prompt = PromptConfiguration(
+        prompt_id="system",
+        version="1",
+        rendered_system_prompt="Be useful.",
+    )
+    with pytest.raises(ValueError, match="thinking_level"):
+        resolve_profile_snapshot(thinking, model=model_config(), prompt=prompt)
+    supported = resolve_profile_snapshot(
+        thinking,
+        model=model_config(supported_thinking_levels=["high"]),
+        prompt=prompt,
+    )
+    assert supported.thinking_level == "high"
 
 
 def test_provider_capability_strategy_resolution_and_rejection():
@@ -116,14 +138,18 @@ def test_provider_capability_strategy_resolution_and_rejection():
 
     with pytest.raises(UnsupportedProviderCapabilities):
         resolve_model_snapshot(
-            model_config(supports_native_tools=False, supports_structured_actions=False)
+            model_config(
+                supports_native_tools=False,
+                supports_provider_strict_schema=False,
+                supports_local_structured_action=False,
+            )
         )
     with pytest.raises(UnsupportedProviderCapabilities):
         resolve_model_snapshot(
             model_config(
                 supports_native_tools=False,
-                supports_strict_tools=False,
-                supports_structured_actions=True,
+                supports_provider_strict_schema=False,
+                supports_local_structured_action=False,
             )
         )
     with pytest.raises(UnsupportedProviderCapabilities):
@@ -131,22 +157,24 @@ def test_provider_capability_strategy_resolution_and_rejection():
 
 
 @pytest.mark.parametrize(
-    ("tool_strategy", "native", "strict"),
+    "updates",
     [
-        ("native", False, True),
-        ("structured_action", True, False),
-        ("structured_action", False, False),
+        {"tool_strategy": "native", "supports_native_tools": False},
+        {
+            "tool_strategy": "structured_action",
+            "structured_action_validation": "provider_strict",
+            "supports_provider_strict_schema": False,
+        },
+        {
+            "tool_strategy": "structured_action",
+            "structured_action_validation": "local",
+            "supports_local_structured_action": False,
+        },
     ],
 )
-def test_persisted_model_and_profile_reject_impossible_strategy_capabilities(
-    tool_strategy, native, strict
-):
+def test_persisted_model_and_profile_reject_impossible_strategy_capabilities(updates):
     payload = resolve_model_snapshot(model_config()).model_dump()
-    payload.update(
-        tool_strategy=tool_strategy,
-        supports_native_tools=native,
-        supports_strict_tools=strict,
-    )
+    payload.update(updates)
     with pytest.raises(ValidationError, match="strategy requires"):
         ResolvedModelSnapshot.model_validate(payload)
 
@@ -177,7 +205,9 @@ def test_message_and_content_discriminated_unions_round_trip():
             usage=UsageRecord(input_tokens=2, output_tokens=3),
             created_at=NOW,
         ),
-        SessionNotice(code="wrap_up", content="finish now", created_at=NOW),
+        SessionNotice(
+            notice_id="notice-1", code="wrap_up", content="finish now", created_at=NOW
+        ),
     ]
 
     adapter = TypeAdapter(list[AgentMessage])
@@ -298,10 +328,16 @@ def test_incomplete_calls_are_not_executable_for_non_tool_finish(finish_reason):
     )
     assembler.accept(ModelStreamEvent(kind="finish", finish_reason=finish_reason))
 
-    assistant = assembler.build(message_id="assistant-1", created_at=NOW)
+    if finish_reason == "length":
+        with pytest.raises(TruncatedToolCallError):
+            assembler.build_outcome(message_id="assistant-1", created_at=NOW)
+        return
 
-    assert assistant.tool_calls == []
-    assert assistant.finish_reason == finish_reason
+    outcome = assembler.build_outcome(message_id="assistant-1", created_at=NOW)
+    assert outcome.assistant is None
+    assert outcome.kind == (
+        "aborted" if finish_reason == "aborted" else "provider_error"
+    )
 
 
 def test_tool_call_finish_rejects_truncated_or_malformed_arguments():
@@ -571,6 +607,7 @@ def _conformance_cases(strategy: str) -> list[ProviderConformanceCase]:
             ProviderConformanceCase(
                 scenario=scenario,
                 request=ModelTurnRequest(
+                    turn_id=f"conformance:{strategy}:{scenario}",
                     model=resolve_model_snapshot(route),
                     system_prompt="offline conformance",
                     messages=[
@@ -656,9 +693,6 @@ async def test_provider_conformance_rejects_unrelated_assembly_failures(scenario
 def test_tool_status_inventory_and_result_correlation_are_complete():
     assert TOOL_RESULT_STATUSES == {
         "completed",
-        "awaiting_external",
-        "input_required",
-        "auth_required",
         "failed",
         "canceled",
         "rejected",
@@ -724,7 +758,8 @@ def test_event_envelope_ordering_and_idempotency():
 def test_v3_protocols_are_narrow_and_explicit():
     expected = {
         ModelRuntime: {"stream_turn"},
-        ToolRuntime: {"execute"},
+        ToolRuntime: {"accept", "execute"},
+        ToolCatalog: {"list_tools", "resolve"},
         OrchestratorEventStore: {"append", "read"},
         A2AOwnershipLookup: {"find_run_by_task_id", "find_run_by_context_id"},
         EventProjector: {"project"},
@@ -771,9 +806,19 @@ def test_unbound_collection_metadata_contains_required_indexes():
         "orchestrator_run_id_unique",
         "orchestrator_active_room_unique",
         "orchestrator_client_request",
-        "orchestrator_call_id",
+        "orchestrator_tool_call_id",
+        "orchestrator_agent_call_id",
         "orchestrator_a2a_task",
         "orchestrator_a2a_context",
         "orchestrator_recovery_due",
         "orchestrator_projection_due",
     } <= run_names
+    indexes = {item.name: item for item in collections["orchestrator_runs"].indexes}
+    assert indexes["orchestrator_tool_call_id"].keys == (
+        ("run_id", 1),
+        ("tool_batches.entries.call_id", 1),
+    )
+    assert indexes["orchestrator_agent_call_id"].keys == (
+        ("run_id", 1),
+        ("calls.call_id", 1),
+    )

@@ -1140,12 +1140,6 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     monkeypatch.setattr(registry_module.settings, "lead_ai_model", "gpt-lead")
     monkeypatch.setattr(registry_module.settings, "classifier_ai_model", "gpt-classify")
     monkeypatch.setattr(registry_module.settings, "embedding_model", "embed-openai")
-    monkeypatch.setattr(registry_module.settings, "gemini_model_name", "gemini-text")
-    monkeypatch.setattr(
-        registry_module.settings,
-        "gemini_embedding_model_name",
-        "gemini-embed",
-    )
     registry = registry_module.ModelRegistryImpl()
 
     assert registry.get_model("lead_ai_model").model_id == "gpt-lead"
@@ -1153,10 +1147,9 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     assert registry.supports_capability("embedding_model", "embedding")
     assert not registry.supports_capability("lead_ai_model", "embedding")
     assert [m.logical_name for m in registry.list_models("embedding")] == [
-        "embedding_model",
-        "gemini_embedding_model_name",
+        "embedding_model"
     ]
-    assert len(registry.list_models()) == 7
+    assert len(registry.list_models()) == 5
     assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
     assert registry.get_model("context_memory_json_model").model_id == "gpt-4o-mini"
     assert registry.supports_capability("context_memory_json_model", "json_schema")
@@ -1170,6 +1163,7 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
         _env_file=None,
         deepseek_api_key="test-deepseek-key",
         deepseek_model_name="deepseek-v4-pro",
+        llm_gateway_generation_provider="deepseek",
         embedding_model="embed-openai",
     )
     registry = ModelRegistryImpl(settings)
@@ -1189,11 +1183,13 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
     assert embedding.provider == "openai"
     assert embedding.model_id == "embed-openai"
     assert embedding.capabilities == ["embedding"]
-    assert registry.get_model("gemini_model_name").provider == "gemini"
+    with pytest.raises(KeyError):
+        registry.get_model("gemini_model_name")
 
 
-def test_model_registry_uses_gemini_when_it_is_the_only_configured_provider():
+def test_model_registry_rejects_gemini_only_configuration():
     from common.config.settings import Settings
+    from llm_gateway.errors import UnsupportedConfiguredProvider
     from llm_gateway.model_registry import ModelRegistryImpl
 
     settings = Settings(
@@ -1202,21 +1198,9 @@ def test_model_registry_uses_gemini_when_it_is_the_only_configured_provider():
         openai_api_key="",
         google_api_key="google-key",
         gemini_api_key="",
-        gemini_model_name="gemini-generation",
     )
-    registry = ModelRegistryImpl(settings)
-
-    for logical_name in (
-        "lead_ai_model",
-        "classifier_ai_model",
-        "context_memory_json_model",
-        "supervisor_model",
-    ):
-        model = registry.get_model(logical_name)
-        assert model.provider == "gemini"
-        assert model.model_id == "gemini-generation"
-
-    assert registry.get_model("embedding_model").provider == "openai"
+    with pytest.raises(UnsupportedConfiguredProvider):
+        ModelRegistryImpl(settings)
 
 
 @pytest.mark.asyncio
@@ -1342,114 +1326,6 @@ async def test_openai_provider_embed_batch_returns_empty_for_empty_texts():
 
     assert await provider.embed_batch([], "embed-test") == []
     client.embeddings.create.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_gemini_provider_generates_structured_responses_and_embeddings():
-    from llm_gateway.providers.gemini_provider import GeminiProvider
-
-    client = SimpleNamespace(
-        models=SimpleNamespace(
-            generate_content=AsyncMock(
-                return_value=SimpleNamespace(
-                    text='{"ok": true}',
-                    usage_metadata=SimpleNamespace(
-                        prompt_token_count=2,
-                        candidates_token_count=3,
-                        total_token_count=5,
-                    ),
-                    model_dump=lambda mode="json": {"id": "gemini-1"},
-                )
-            ),
-            embed_content=AsyncMock(
-                return_value=SimpleNamespace(
-                    embeddings=[
-                        SimpleNamespace(values=[0.1, 0.2]),
-                        SimpleNamespace(values=[0.3, 0.4]),
-                    ],
-                    model_dump=lambda mode="json": {"id": "gemini-embed-1"},
-                )
-            ),
-        )
-    )
-    provider = GeminiProvider(client=client)
-
-    text = await provider.generate([{"role": "user", "content": "hello"}], "gemini")
-    structured = await provider.generate_structured(
-        [{"role": "user", "content": "hello"}],
-        {"type": "object"},
-        "gemini",
-    )
-    embedding = await provider.embed("a", "gemini-embed")
-    embeddings = await provider.embed_batch(["a", "b"], "gemini-embed")
-
-    assert text.content == '{"ok": true}'
-    assert text.usage == LLMUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5)
-    assert structured.data == {"ok": True}
-    assert structured.usage == LLMUsage(
-        prompt_tokens=2,
-        completion_tokens=3,
-        total_tokens=5,
-    )
-    assert embedding == [0.1, 0.2]
-    assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
-
-
-@pytest.mark.asyncio
-async def test_gemini_provider_prefers_async_sdk_generation_when_available():
-    from llm_gateway.providers.gemini_provider import GeminiProvider
-
-    sync_models = SimpleNamespace(
-        generate_content=MagicMock(side_effect=AssertionError("sync generation called"))
-    )
-    async_models = SimpleNamespace(
-        generate_content=AsyncMock(
-            return_value=SimpleNamespace(
-                text="async response",
-                model_dump=lambda mode="json": {"id": "gemini-async"},
-            )
-        )
-    )
-    client = SimpleNamespace(
-        models=sync_models, aio=SimpleNamespace(models=async_models)
-    )
-    provider = GeminiProvider(client=client)
-
-    response = await provider.generate(
-        [{"role": "user", "content": "hello"}],
-        "gemini",
-    )
-
-    assert response.content == "async response"
-    async_models.generate_content.assert_awaited_once()
-    sync_models.generate_content.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_gemini_provider_prefers_async_sdk_embeddings_when_available():
-    from llm_gateway.providers.gemini_provider import GeminiProvider
-
-    sync_models = SimpleNamespace(
-        embed_content=MagicMock(side_effect=AssertionError("sync embedding called"))
-    )
-    async_models = SimpleNamespace(
-        embed_content=AsyncMock(
-            return_value=SimpleNamespace(
-                embeddings=[SimpleNamespace(values=[0.1, 0.2])],
-                model_dump=lambda mode="json": {"id": "gemini-embed-async"},
-            )
-        )
-    )
-    client = SimpleNamespace(
-        models=sync_models, aio=SimpleNamespace(models=async_models)
-    )
-    provider = GeminiProvider(client=client)
-
-    embedding = await provider.embed("hello", "gemini-embed")
-
-    assert embedding == [0.1, 0.2]
-    async_models.embed_content.assert_awaited_once()
-    sync_models.embed_content.assert_not_called()
 
 
 @pytest.mark.asyncio

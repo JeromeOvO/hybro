@@ -306,27 +306,30 @@ relay transport.
 ### `llm_gateway`
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
-adapters under `llm_gateway/providers/` are the only LLM code that imports
-OpenAI or Google GenAI SDKs. `DeepSeekProvider` uses DeepSeek's
+adapters under `llm_gateway/providers/` are the only LLM code that imports the
+OpenAI SDK. `DeepSeekProvider` uses DeepSeek's
 OpenAI-compatible Chat Completions endpoint while keeping its credentials and
 base URL separate from OpenAI. The public gateway layer resolves logical model
 names through `ModelRegistryImpl`, applies centralized retry and
 timeout policy through `LLMGatewayConfig`, and exposes text, structured JSON,
 embedding, and streaming operations through protocols in `common.protocols`.
 `LLMGatewayConfig.from_settings()` reads typed `LLM_GATEWAY_*` policy fields;
-`ModelRegistryImpl` remains responsible for mapping logical routes to concrete
-provider model IDs. At startup, generation provider discovery checks DeepSeek,
-OpenAI, then Gemini and selects the first provider with both an API key and model
-configured. When DeepSeek is selected, the existing `lead_ai_model`,
+`LLM_GATEWAY_GENERATION_PROVIDER` explicitly selects `openai` or `deepseek` and
+API-key presence never changes that route. `ModelRegistryImpl` maps logical
+routes to concrete provider model IDs and exposes route-specific v3 capability
+metadata. When DeepSeek is explicitly selected, the existing `lead_ai_model`,
 `classifier_ai_model`, `context_memory_json_model`, and `supervisor_model`
-routes all resolve to `DEEPSEEK_MODEL_NAME`, so consumers remain
-provider-agnostic. With no configured key, the historical OpenAI degraded mode
-is retained so zero-config startup still succeeds. DeepSeek schema calls use a
+routes resolve to `DEEPSEEK_MODEL_NAME`; embeddings remain OpenAI-backed. A
+missing selected credentials fail fast when another supported generation key is
+present; the intentional zero-key OpenAI degraded mode remains available.
+Gemini-only legacy credentials fail fast as an unsupported-provider migration
+instead of silently falling back to OpenAI. DeepSeek schema calls use a
 schema-bearing prompt plus its `json_object` response mode rather than claiming
 server-enforced strict JSON Schema. DeepSeek thinking is disabled by default for
 text, structured, and streaming calls so control-plane JSON and first visible
-stream content remain within the existing gateway timeouts; an explicit caller
-`extra_body.thinking` setting is preserved. The `embedding_model` route remains
+stream content remain within the existing gateway timeouts; a validated frozen
+profile thinking selection is carried through the provider-neutral turn request.
+The `embedding_model` route remains
 OpenAI-backed because DeepSeek does not expose an embeddings API.
 
 Focused workflow services under `llm_gateway/services/` wrap prompt workflows
@@ -433,6 +436,24 @@ Execution.
 The main orchestration invariant is that `RoomMessageCenter` serializes
 processing per room. It uses a process-local `asyncio.Lock`, and in multi-worker
 mode this is supplemented by a Redis distributed lock configured at startup.
+
+Execution also contains an additive, production-unbound orchestrator-v3 Agent
+Core. Its gateway-owned turn contract supports one official OpenAI or DeepSeek
+attempt without importing Execution or Room models. `GatewayModelRuntime` owns
+bounded retries, hard-deadline handling, typed provider failures, and per-attempt
+durable usage/retry accounting; `OrchestratorKernel` owns the provider-neutral
+model/tool loop, CAS checkpoints, durable compaction summaries, atomic recoverable
+tool batches, two-phase tool acceptance, suspension, correlated observation, and
+terminal settlement.
+`RoomAgentSession` is an unbound exactly-once lifecycle facade, while
+`ContextCompiler`, non-destructive explicitly budgeted compaction, and
+`BudgetPolicy` bound each turn. Plan 2 validates
+these layers with static fake agent-shaped tools only: it does not bind them in
+`container.py`, routes, or jobs and does not expose real `call_agent` or import
+A2A protocol, Room, database, SSE, or provider SDK modules into the kernel.
+OpenAI uses native streamed tool calls; DeepSeek uses the named locally validated
+structured-action route. Gemini credentials remain only as fail-fast migration
+input and cannot select an adapter.
 
 Execution also defines a durable orchestration run-state foundation. The
 versioned `OrchestrationRunState` model, pure reducer transitions, and

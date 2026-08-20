@@ -30,14 +30,11 @@ def test_deepseek_provider_builds_openai_compatible_client():
         "llm_gateway.providers.deepseek_provider.AsyncOpenAI",
         return_value=client,
     ) as client_factory:
-        provider = DeepSeekProvider(
-            api_key="deepseek-key",
-            base_url="https://deepseek.example",
-        )
+        provider = DeepSeekProvider(api_key="deepseek-key")
 
     client_factory.assert_called_once_with(
         api_key="deepseek-key",
-        base_url="https://deepseek.example",
+        base_url="https://api.deepseek.com",
     )
     assert provider._client is client
 
@@ -214,6 +211,7 @@ async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_opena
         _env_file=None,
         deepseek_api_key="test-deepseek-key",
         deepseek_model_name="deepseek-v4-pro",
+        llm_gateway_generation_provider="deepseek",
     )
     registry = ModelRegistryImpl(settings)
     deepseek = SimpleNamespace(

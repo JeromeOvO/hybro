@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from execution.orchestration.blocker_matching import (
@@ -25,6 +26,10 @@ from models.orchestration import (
 )
 
 _ENFORCEABLE_EXPECTED_OUTPUT_KIND = "artifact"
+_JSON_MACHINE_SEGMENT = r"(?:[a-z0-9_$][^\s.]*|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)"
+_ENFORCEABLE_JSON_FIELD_PATH = re.compile(
+    rf"^{_JSON_MACHINE_SEGMENT}(?:\.{_JSON_MACHINE_SEGMENT})*$"
+)
 
 
 def recovery_directives(state: OrchestrationRunState) -> list[dict[str, object]]:
@@ -422,6 +427,17 @@ def normalize_prose_expected_outputs(action: PlannerAction) -> PlannerAction:
             if kind in {"text", "markdown"} or kind.startswith("text/"):
                 normalized = output.model_copy(
                     update={"artifact_name": None, "required_fields": []},
+                    deep=True,
+                )
+            elif kind == "application/json":
+                normalized = output.model_copy(
+                    update={
+                        "required_fields": [
+                            path
+                            for path in output.required_fields
+                            if _ENFORCEABLE_JSON_FIELD_PATH.fullmatch(path)
+                        ]
+                    },
                     deep=True,
                 )
             changed = changed or normalized != output

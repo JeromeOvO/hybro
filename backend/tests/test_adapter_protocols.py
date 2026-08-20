@@ -169,8 +169,10 @@ def test_llm_gateway_import_boundary():
         "common",
         "dal",
         "google",
+        "jsonschema",
         "llm_gateway",
         "openai",
+        "pydantic",
     }
     forbidden_roots = {
         "config",

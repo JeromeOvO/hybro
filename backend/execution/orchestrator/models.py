@@ -16,26 +16,46 @@ class ContractModel(BaseModel):
 
 class ResolvedModelSnapshot(ContractModel):
     route: str
-    provider: str
+    provider: Literal["openai", "deepseek"]
     model_id: str
-    api: str
+    api: Literal["chat_completions"]
     supports_native_tools: bool
-    supports_strict_tools: bool
+    supports_provider_strict_schema: bool
+    supports_local_structured_action: bool
+    structured_action_validation: Literal["provider_strict", "local", "unsupported"]
     tool_strategy: Literal["native", "structured_action"]
     context_window: int = Field(gt=0)
     max_output_tokens: int = Field(gt=0)
     temperature: float | None
     provider_timeout_seconds: float = Field(gt=0)
     max_provider_retries: int = Field(ge=0)
+    supported_thinking_levels: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _selected_strategy_is_supported(self) -> ResolvedModelSnapshot:
         if self.tool_strategy == "native" and not self.supports_native_tools:
             raise ValueError("native tool strategy requires native tool capability")
-        if self.tool_strategy == "structured_action" and not self.supports_strict_tools:
-            raise ValueError(
-                "structured-action strategy requires strict structured output capability"
-            )
+        if self.tool_strategy == "structured_action":
+            if self.structured_action_validation == "unsupported":
+                raise ValueError(
+                    "structured-action strategy requires a validation capability"
+                )
+            if (
+                self.structured_action_validation == "provider_strict"
+                and not self.supports_provider_strict_schema
+            ):
+                raise ValueError(
+                    "provider-strict strategy requires provider strict schema capability"
+                )
+            if (
+                self.structured_action_validation == "local"
+                and not self.supports_local_structured_action
+            ):
+                raise ValueError(
+                    "local structured-action strategy requires local validation capability"
+                )
+        elif self.structured_action_validation != "unsupported":
+            raise ValueError("native tool strategy cannot select structured validation")
         return self
 
 
@@ -57,6 +77,9 @@ class OrchestratorProfile(ContractModel):
     max_agent_calls: int = Field(gt=0)
     max_parallel_calls: int = Field(gt=0)
     max_transport_retries_per_call: int = Field(ge=0)
+    max_provider_retries_total: int = Field(default=4, ge=0)
+    max_input_tokens_total: int | None = Field(default=None, gt=0)
+    max_output_tokens_total: int | None = Field(default=None, gt=0)
     max_compactions: int = Field(ge=0)
     deadline_seconds: float = Field(gt=0)
 
@@ -68,6 +91,11 @@ class OrchestratorProfile(ContractModel):
     def _parallelism_fits_call_budget(self) -> OrchestratorProfile:
         if self.max_parallel_calls > self.max_agent_calls:
             raise ValueError("max_parallel_calls cannot exceed max_agent_calls")
+        if (
+            self.thinking_level is not None
+            and self.thinking_level not in self.model.supported_thinking_levels
+        ):
+            raise ValueError("thinking_level is unsupported by the frozen model route")
         return self
 
 
@@ -116,27 +144,9 @@ class ToolCall(ContractModel):
 
 
 TOOL_RESULT_STATUSES = frozenset(
-    {
-        "completed",
-        "awaiting_external",
-        "input_required",
-        "auth_required",
-        "failed",
-        "canceled",
-        "rejected",
-        "expired",
-    }
+    {"completed", "failed", "canceled", "rejected", "expired"}
 )
-ToolResultStatus = Literal[
-    "completed",
-    "awaiting_external",
-    "input_required",
-    "auth_required",
-    "failed",
-    "canceled",
-    "rejected",
-    "expired",
-]
+ToolResultStatus = Literal["completed", "failed", "canceled", "rejected", "expired"]
 
 
 class ToolResult(ContractModel):
@@ -147,6 +157,110 @@ class ToolResult(ContractModel):
     artifact_refs: list[str]
     error_code: str | None = None
     error_message: str | None = None
+
+
+class ToolBindingRef(ContractModel):
+    binding_id: str
+    binding_digest: str
+
+
+class ResolvedTool(ContractModel):
+    definition: ToolDefinition
+    binding: ToolBindingRef
+
+
+class ToolInvocation(ContractModel):
+    invocation_id: str
+    run_id: str
+    expected_run_version: int = Field(ge=0)
+    assistant_message_id: str
+    source_index: int = Field(ge=0)
+    causation_id: str
+    idempotency_key: str
+    tool: ResolvedTool
+    arguments: dict[str, object]
+    deadline_at: datetime
+
+
+class ToolAcceptance(ContractModel):
+    acceptance_id: str
+    invocation_id: str
+    idempotency_key: str
+    accepted_at: datetime
+
+
+ToolSuspensionStatus = Literal["waiting_external", "input_required", "auth_required"]
+
+
+class ToolSuspension(ContractModel):
+    invocation_id: str
+    status: ToolSuspensionStatus
+    observation_cursor: str | None = None
+
+
+ToolExecutionOutcome = ToolResult | ToolSuspension
+
+
+class ToolObservation(ContractModel):
+    observation_id: str
+    invocation_id: str
+    outcome: ToolExecutionOutcome
+    observed_at: datetime
+
+
+ToolBatchEntryState = Literal[
+    "pending",
+    "invalid",
+    "acceptance_failed",
+    "accepted",
+    "executing",
+    "waiting_external",
+    "input_required",
+    "auth_required",
+    "terminal",
+]
+
+
+class ToolBatchEntry(ContractModel):
+    call_id: str
+    assistant_message_id: str
+    source_index: int = Field(ge=0)
+    tool_name: str
+    state: ToolBatchEntryState = "pending"
+    invocation: ToolInvocation | None = None
+    acceptance: ToolAcceptance | None = None
+    buffered_terminal_result: ToolResult | None = None
+    processed_observation_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _entry_state_is_consistent(self) -> ToolBatchEntry:
+        if len(self.processed_observation_ids) != len(
+            set(self.processed_observation_ids)
+        ):
+            raise ValueError("processed observation IDs must be unique")
+        if self.state == "terminal" and self.buffered_terminal_result is None:
+            raise ValueError("terminal tool entry requires buffered result")
+        if self.acceptance is not None and self.invocation is None:
+            raise ValueError("tool acceptance requires an invocation")
+        return self
+
+
+class ToolCallBatch(ContractModel):
+    assistant_message_id: str
+    entries: list[ToolBatchEntry]
+    results_flushed: bool = False
+
+    @model_validator(mode="after")
+    def _call_ids_are_unique(self) -> ToolCallBatch:
+        call_ids = [entry.call_id for entry in self.entries]
+        if len(call_ids) != len(set(call_ids)):
+            raise ValueError("tool batch call IDs must be unique")
+        if any(
+            entry.assistant_message_id != self.assistant_message_id
+            for entry in self.entries
+        ):
+            raise ValueError("tool batch entries must belong to the assistant message")
+        return self
 
 
 class UserMessage(ContractModel):
@@ -180,13 +294,17 @@ class ToolResultMessage(ContractModel):
     content: list[ContentPart]
     artifact_refs: list[str]
     is_error: bool
+    error_code: str | None = None
+    error_message: str | None = None
     created_at: datetime
 
 
 class SessionNotice(ContractModel):
     kind: Literal["session_notice"] = "session_notice"
+    notice_id: str
     code: str
     content: str
+    related_call_id: str | None = None
     created_at: datetime
 
 
@@ -211,6 +329,7 @@ class ModelToolCallPart(ContractModel):
 class ModelToolResultPart(ContractModel):
     kind: Literal["tool_result"] = "tool_result"
     call_id: str
+    tool_name: str
     content: list[ModelTextPart]
     is_error: bool
 
@@ -227,16 +346,27 @@ class ModelMessage(ContractModel):
 
 
 class ModelTurnRequest(ContractModel):
+    turn_id: str
     model: ResolvedModelSnapshot
     system_prompt: str
     messages: list[ModelMessage]
     tools: list[ToolDefinition]
     tool_choice: Literal["auto", "none", "required"] = "auto"
+    purpose: Literal["agent_turn", "compaction"] = "agent_turn"
+    thinking_level: str | None = None
+    remaining_provider_retries: int = Field(default=0, ge=0)
+    absolute_deadline_at: datetime | None = None
 
 
 class ModelTurnResult(ContractModel):
     assistant: AssistantMessage
     provider_request_id: str | None = None
+
+
+class CompactionResult(ContractModel):
+    summary: str
+    provider_attempts: int = Field(default=0, ge=0)
+    usage: UsageRecord | None = None
 
 
 class ModelStreamEvent(ContractModel):
@@ -272,6 +402,8 @@ class ModelStreamEvent(ContractModel):
     ) = None
     retryable: bool | None = None
     retry_delay_ms: int | None = Field(default=None, ge=0)
+    error_code: str | None = None
+    error_message: str | None = None
     call_id: str | None = None
     tool_name: str | None = None
     delta: str | None = None
@@ -296,6 +428,8 @@ class ModelStreamEvent(ContractModel):
                 raise ValueError(f"{self.kind} requires " + ", ".join(missing))
         if self.kind == "retry_scheduled" and self.retryable is not True:
             raise ValueError("retry_scheduled requires retryable=true")
+        if self.kind == "error" and self.error_class is None:
+            raise ValueError("error requires error_class")
         return self
 
 
@@ -416,12 +550,22 @@ class BudgetState(ContractModel):
     agent_calls_used: int = Field(default=0, ge=0)
     parallel_calls_active: int = Field(default=0, ge=0)
     provider_retries_used: int = Field(default=0, ge=0)
+    provider_attempt_keys: list[str] = Field(default_factory=list)
+    usage_by_attempt: dict[str, UsageRecord] = Field(default_factory=dict)
     transport_retries_used: int = Field(default=0, ge=0)
     compactions_used: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     deadline_at: datetime
     wrap_up_requested: bool = False
+
+    @model_validator(mode="after")
+    def _attempt_inventory_is_unique(self) -> BudgetState:
+        if len(self.provider_attempt_keys) != len(set(self.provider_attempt_keys)):
+            raise ValueError("provider attempt keys must be unique")
+        if not set(self.usage_by_attempt).issubset(self.provider_attempt_keys):
+            raise ValueError("usage ledger keys must identify recorded attempts")
+        return self
 
 
 class AuthorizationBasis(ContractModel):
@@ -491,9 +635,12 @@ class OrchestratorRunState(ContractModel):
     status: RunStatus
     transcript: list[AgentMessage]
     calls: list[AcceptedAgentCall]
+    tool_batches: list[ToolCallBatch] = Field(default_factory=list)
     pending_interaction_ids: list[str]
     artifact_refs: list[str]
     budget: BudgetState
+    compaction_summary: str | None = None
+    compaction_baseline_tokens: int | None = Field(default=None, ge=0)
     proposed_final_message_id: str | None
     terminal_reason: str | None
     projection_state: Literal["pending", "settled", "blocked"]
@@ -508,8 +655,15 @@ class OrchestratorRunState(ContractModel):
     def _aggregate_identity_and_uniqueness(self) -> OrchestratorRunState:
         if any(call.run_id != self.run_id for call in self.calls):
             raise ValueError("every AgentCall must belong to the Run")
+        batch_message_ids = [batch.assistant_message_id for batch in self.tool_batches]
+        if len(batch_message_ids) != len(set(batch_message_ids)):
+            raise ValueError("tool batch assistant message IDs must be unique")
+        batch_call_ids = [
+            entry.call_id for batch in self.tool_batches for entry in batch.entries
+        ]
         inventories = (
             ("call IDs", [call.call_id for call in self.calls]),
+            ("tool batch call IDs", batch_call_ids),
             ("pending interaction IDs", self.pending_interaction_ids),
             ("artifact refs", self.artifact_refs),
             ("processed command IDs", self.processed_command_ids),

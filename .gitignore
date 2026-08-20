@@ -1,5 +1,6 @@
 # Internal / scratch docs
 docs/superpowers/
+.pi-subagents/
 
 # Operating System Files
 .DS_Store
