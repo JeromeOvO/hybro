@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
 from models.hitl import HITLPromptType
@@ -100,6 +100,10 @@ class _FakeCollection:
         if error is not None:
             raise error
         return name or "index-name"
+
+    async def drop_index(self, name: str):
+        if name in self.create_index_side_effect_by_name:
+            del self.create_index_side_effect_by_name[name]
 
 
 def _store(
@@ -649,3 +653,57 @@ async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
         kwargs.get("name") == index_name
         for _keys, kwargs in hitl_requests.create_index_calls
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "index_name",
+    [
+        "uq_pending_hitl_display_message",
+        "uq_pending_hitl_continuation_message",
+    ],
+)
+async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflict(
+    index_name,
+):
+    error = OperationFailure(
+        f"Index with name: {index_name} already exists with different options",
+        code=85,
+    )
+    hitl_requests = _FakeCollection(
+        create_index_side_effect_by_name={index_name: error}
+    )
+    store = _store(hitl_requests=hitl_requests)
+
+    await store.ensure_hitl_indexes()
+
+    matching_calls = [
+        kwargs
+        for _keys, kwargs in hitl_requests.create_index_calls
+        if kwargs.get("name") == index_name
+    ]
+    # First call failed with OperationFailure, then drop_index was called, and second create_index succeeded
+    assert len(matching_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_ensure_hitl_indexes_recreates_noncritical_index_when_options_conflict():
+    index_name = "uq_hitl_interaction_question"
+    error = OperationFailure(
+        f"Index with name: {index_name} already exists with different options",
+        code=85,
+    )
+    hitl_requests = _FakeCollection(
+        create_index_side_effect_by_name={index_name: error}
+    )
+    store = _store(hitl_requests=hitl_requests)
+
+    await store.ensure_hitl_indexes()
+
+    matching_calls = [
+        kwargs
+        for _keys, kwargs in hitl_requests.create_index_calls
+        if kwargs.get("name") == index_name
+    ]
+    # First call failed with OperationFailure, then drop_index was called, and second create_index succeeded
+    assert len(matching_calls) == 2

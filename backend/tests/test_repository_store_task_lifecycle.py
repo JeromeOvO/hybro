@@ -94,6 +94,10 @@ class RecordingCollection:
         self.create_index_calls.append((deepcopy(keys), deepcopy(kwargs)))
         return "index-name"
 
+    async def drop_index(self, name: str):
+        if self.side_effect is not None:
+            raise self.side_effect
+
 
 def _result(modified_count: int):
     return SimpleNamespace(modified_count=modified_count)
@@ -493,7 +497,13 @@ class TestRepositoryStoreHITL:
             ([("user_message_id", 1), ("status", 1)], {}),
             (
                 [("interaction_id", 1), ("question_index", 1)],
-                {"unique": True},
+                {
+                    "unique": True,
+                    "name": "uq_hitl_interaction_question",
+                    "partialFilterExpression": {
+                        "interaction_id": {"$type": "string"},
+                    },
+                },
             ),
             ([("continuation_message_id", 1)], {}),
             (
