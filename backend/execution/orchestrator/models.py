@@ -639,6 +639,8 @@ class OrchestratorRunState(ContractModel):
     pending_interaction_ids: list[str]
     artifact_refs: list[str]
     budget: BudgetState
+    compaction_summary: str | None = None
+    compaction_baseline_tokens: int | None = Field(default=None, ge=0)
     proposed_final_message_id: str | None
     terminal_reason: str | None
     projection_state: Literal["pending", "settled", "blocked"]

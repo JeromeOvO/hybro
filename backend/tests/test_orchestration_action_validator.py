@@ -1738,6 +1738,9 @@ async def test_planner_adapter_filters_prose_json_fields_before_validation():
                                 "Annual Revenue",
                                 "premium",
                                 "pricing.currency",
+                                "_id",
+                                "2fa_enabled",
+                                "PascalCase",
                             ],
                             "allow_partial": False,
                         }
@@ -1767,7 +1770,13 @@ async def test_planner_adapter_filters_prose_json_fields_before_validation():
     output = action.targets[0].expected_outputs[0]
     assert output.kind == "application/json"
     assert output.required is True
-    assert output.required_fields == ["premium", "pricing.currency"]
+    assert output.required_fields == [
+        "premium",
+        "pricing.currency",
+        "_id",
+        "2fa_enabled",
+        "PascalCase",
+    ]
 
 
 def test_planner_prompt_requires_domain_supported_agent_suitability():

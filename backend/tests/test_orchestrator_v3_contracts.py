@@ -328,17 +328,16 @@ def test_incomplete_calls_are_not_executable_for_non_tool_finish(finish_reason):
     )
     assembler.accept(ModelStreamEvent(kind="finish", finish_reason=finish_reason))
 
-    outcome = assembler.build_outcome(message_id="assistant-1", created_at=NOW)
+    if finish_reason == "length":
+        with pytest.raises(TruncatedToolCallError):
+            assembler.build_outcome(message_id="assistant-1", created_at=NOW)
+        return
 
-    if finish_reason in {"error", "aborted"}:
-        assert outcome.assistant is None
-        assert outcome.kind == (
-            "aborted" if finish_reason == "aborted" else "provider_error"
-        )
-    else:
-        assert outcome.assistant is not None
-        assert outcome.assistant.tool_calls == []
-        assert outcome.assistant.finish_reason == finish_reason
+    outcome = assembler.build_outcome(message_id="assistant-1", created_at=NOW)
+    assert outcome.assistant is None
+    assert outcome.kind == (
+        "aborted" if finish_reason == "aborted" else "provider_error"
+    )
 
 
 def test_tool_call_finish_rejects_truncated_or_malformed_arguments():
@@ -814,3 +813,12 @@ def test_unbound_collection_metadata_contains_required_indexes():
         "orchestrator_recovery_due",
         "orchestrator_projection_due",
     } <= run_names
+    indexes = {item.name: item for item in collections["orchestrator_runs"].indexes}
+    assert indexes["orchestrator_tool_call_id"].keys == (
+        ("run_id", 1),
+        ("tool_batches.entries.call_id", 1),
+    )
+    assert indexes["orchestrator_agent_call_id"].keys == (
+        ("run_id", 1),
+        ("calls.call_id", 1),
+    )

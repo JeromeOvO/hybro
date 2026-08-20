@@ -320,7 +320,8 @@ routes to concrete provider model IDs and exposes route-specific v3 capability
 metadata. When DeepSeek is explicitly selected, the existing `lead_ai_model`,
 `classifier_ai_model`, `context_memory_json_model`, and `supervisor_model`
 routes resolve to `DEEPSEEK_MODEL_NAME`; embeddings remain OpenAI-backed. A
-missing selected credential fails at call time with a typed configuration error.
+missing selected credentials fail fast when another supported generation key is
+present; the intentional zero-key OpenAI degraded mode remains available.
 Gemini-only legacy credentials fail fast as an unsupported-provider migration
 instead of silently falling back to OpenAI. DeepSeek schema calls use a
 schema-bearing prompt plus its `json_object` response mode rather than claiming
@@ -441,8 +442,9 @@ Core. Its gateway-owned turn contract supports one official OpenAI or DeepSeek
 attempt without importing Execution or Room models. `GatewayModelRuntime` owns
 bounded retries, hard-deadline handling, typed provider failures, and per-attempt
 durable usage/retry accounting; `OrchestratorKernel` owns the provider-neutral
-model/tool loop, CAS checkpoints, recoverable two-phase tool acceptance,
-suspension, correlated observation, and terminal settlement.
+model/tool loop, CAS checkpoints, durable compaction summaries, atomic recoverable
+tool batches, two-phase tool acceptance, suspension, correlated observation, and
+terminal settlement.
 `RoomAgentSession` is an unbound exactly-once lifecycle facade, while
 `ContextCompiler`, non-destructive explicitly budgeted compaction, and
 `BudgetPolicy` bound each turn. Plan 2 validates

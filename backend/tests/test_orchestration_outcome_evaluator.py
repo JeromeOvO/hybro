@@ -220,6 +220,45 @@ def test_json_expected_output_matches_structured_artifact(artifact):
     assert outcome.satisfied_output_keys == ["structured_result"]
 
 
+def test_json_expected_output_supports_exact_machine_key_shapes():
+    message_id = "msg-json-keys"
+    intent = _intent(message_id)
+    intent.expected_outputs = [
+        DispatchExpectedOutput(
+            output_key="structured_result",
+            kind="application/json",
+            required=True,
+            required_fields=[
+                "_id",
+                "2fa_enabled",
+                "PascalCase",
+                "UserProfile.DisplayName",
+            ],
+        )
+    ]
+    output = _output(message_id, text="")
+    artifact = _artifact(
+        message_id,
+        {
+            "_id": "record-1",
+            "2fa_enabled": True,
+            "PascalCase": "value",
+            "UserProfile": {"DisplayName": "Acme"},
+        },
+    )
+
+    outcome = DelegationOutcomeEvaluator().evaluate(
+        _state(),
+        _state(artifacts=[artifact]),
+        intent,
+        output,
+        [],
+    )
+
+    assert outcome.status == "fulfilled"
+    assert outcome.remaining_required_obligations == []
+
+
 def test_wrong_media_artifact_does_not_satisfy_image_expected_output():
     message_id = "msg-image"
     intent = _intent(message_id)

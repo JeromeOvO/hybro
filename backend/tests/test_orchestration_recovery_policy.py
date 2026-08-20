@@ -866,6 +866,10 @@ def test_normalize_prose_expected_outputs_drops_json_labels_but_keeps_paths():
                         required_fields=[
                             "premium",
                             "pricing.currency",
+                            "_id",
+                            "2fa_enabled",
+                            "PascalCase",
+                            "UserProfile.DisplayName",
                             "Coverage limit",
                         ],
                     )
@@ -881,7 +885,14 @@ def test_normalize_prose_expected_outputs_drops_json_labels_but_keeps_paths():
     quote = normalized.targets[1].expected_outputs[0]
     assert submission.required_fields == []
     assert required_obligations([submission]) == {"submission:$present"}
-    assert quote.required_fields == ["premium", "pricing.currency"]
+    assert quote.required_fields == [
+        "premium",
+        "pricing.currency",
+        "_id",
+        "2fa_enabled",
+        "PascalCase",
+        "UserProfile.DisplayName",
+    ]
     assert action.targets[0].expected_outputs[0].required_fields == broker_fields
     assert renormalized == normalized
 

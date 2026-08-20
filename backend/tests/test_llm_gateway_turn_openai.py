@@ -7,7 +7,10 @@ import pytest
 
 from execution.orchestrator.model_runtime import GatewayModelRuntime
 from execution.orchestrator.models import ModelMessage, ModelTextPart, ModelTurnRequest
-from execution.orchestrator.streaming import ModelStreamAssembler
+from execution.orchestrator.streaming import (
+    ModelStreamAssembler,
+    TruncatedToolCallError,
+)
 from llm_gateway.providers.openai_provider import OpenAIProvider
 from llm_gateway.turn_types import (
     GatewayTextPart,
@@ -215,3 +218,41 @@ async def test_openai_finish_reason_mapping(raw, normalized):
         async for event in OpenAIProvider(client=client).stream_turn_once(request())
     ]
     assert events[-1].finish_reason == normalized
+
+
+@pytest.mark.asyncio
+async def test_openai_length_finish_surfaces_started_tool_call_as_truncated():
+    partial_call = SimpleNamespace(
+        index=0,
+        id="call-truncated",
+        function=SimpleNamespace(name="echo", arguments='{"value":'),
+    )
+    stream = Stream(
+        [chunk(delta=SimpleNamespace(tool_calls=[partial_call]), finish="length")]
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=AsyncMock(return_value=stream))
+        )
+    )
+    runtime = GatewayModelRuntime(OpenAIProvider(client=client), now=lambda: NOW)
+    turn = ModelTurnRequest(
+        turn_id="turn-openai-truncated",
+        model=profile().model,
+        system_prompt="system",
+        messages=[ModelMessage(role="user", content=[ModelTextPart(text="hi")])],
+        tools=[],
+        remaining_provider_retries=0,
+        absolute_deadline_at=None,
+    )
+    assembler = ModelStreamAssembler()
+    async for event in runtime.stream_turn(turn, signal=NeverCancelled()):
+        assembler.accept(event)
+
+    with pytest.raises(TruncatedToolCallError) as error:
+        assembler.build_outcome(message_id="assistant", created_at=NOW)
+
+    assert error.value.provider_call_id == "call-truncated"
+    assert error.value.tool_name == "echo"
+    assert error.value.tool_index == 0
+    assert error.value.raw_arguments_digest

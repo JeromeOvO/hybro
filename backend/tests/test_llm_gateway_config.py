@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from common.config.settings import Settings
@@ -86,6 +88,33 @@ def test_generation_provider_is_explicit_and_stale_gemini_cannot_override_it():
 
 def test_generation_provider_keeps_zero_config_openai_degraded_mode():
     assert LLMGatewayConfig.from_settings(_settings()).generation_provider == "openai"
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        _settings(deepseek_api_key="deepseek-key"),
+        _settings(
+            openai_api_key="openai-key",
+            llm_gateway_generation_provider="deepseek",
+        ),
+    ],
+)
+def test_generation_provider_rejects_key_for_a_different_selected_provider(settings):
+    with pytest.raises(
+        UnsupportedConfiguredProvider,
+        match="LLM_GATEWAY_GENERATION_PROVIDER selects",
+    ):
+        LLMGatewayConfig.from_settings(settings)
+
+
+def test_env_example_documents_explicit_deepseek_opt_in():
+    text = (Path(__file__).parents[2] / ".env.example").read_text()
+
+    assert "LLM_GATEWAY_GENERATION_PROVIDER=openai" in text
+    assert "DeepSeek-primary deployments must set this value to deepseek" in text
+    assert "first priority" not in text
+    assert "provider priority" not in text
 
 
 def test_generation_provider_rejects_selected_route_without_model():

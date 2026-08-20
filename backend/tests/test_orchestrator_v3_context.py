@@ -163,6 +163,44 @@ async def test_kernel_preflight_compaction_consumes_budget_before_model_turn():
     assert result.outcome == "final_answer"
     assert result.run.budget.compactions_used == 1
     assert result.run.budget.model_turns_used == 1
+    assert result.run.compaction_summary == "Compacted 7 prior model messages."
+    assert result.run.compaction_baseline_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_restart_reuses_durable_compaction_without_second_compactor_call():
+    run = make_run(context_window=1_000, max_output_tokens=100)
+    run = run.model_copy(
+        update={
+            "transcript": [user_message("original"), *pair(1), *pair(2), *pair(3)],
+            "budget": run.budget.model_copy(update={"compactions_used": 1}),
+            "compaction_summary": "Durable prior-turn summary.",
+            "compaction_baseline_tokens": 10_000,
+        }
+    )
+    store = InMemoryOrchestratorRunStore()
+    await store.create(run, command_id="create")
+    runtime = ScriptedModelRuntime([final_events()])
+    kernel = OrchestratorKernel(
+        run_store=store,
+        model_runtime=runtime,
+        tool_runtime=RecordingFakeToolRuntime(),
+        tool_catalog=StaticFakeToolCatalog(),
+        context_compiler=ContextCompiler(),
+        context_compactor=None,
+        budget_policy=BudgetPolicy(),
+        projection_driver=InMemoryProjectionDriver(store),
+        clock=FixedClock(),
+        id_factory=FixedIDs(),
+    )
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled())
+
+    assert result.outcome == "final_answer"
+    assert result.run.budget.compactions_used == 1
+    assert result.run.compaction_summary == "Durable prior-turn summary."
+    assert result.run.compaction_baseline_tokens is None
+    assert len(runtime.requests) == 1
 
 
 @pytest.mark.asyncio

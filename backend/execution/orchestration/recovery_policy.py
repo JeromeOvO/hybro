@@ -26,7 +26,10 @@ from models.orchestration import (
 )
 
 _ENFORCEABLE_EXPECTED_OUTPUT_KIND = "artifact"
-_CANONICAL_JSON_FIELD_PATH = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+_JSON_MACHINE_SEGMENT = r"(?:[a-z0-9_$][^\s.]*|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+)"
+_ENFORCEABLE_JSON_FIELD_PATH = re.compile(
+    rf"^{_JSON_MACHINE_SEGMENT}(?:\.{_JSON_MACHINE_SEGMENT})*$"
+)
 
 
 def recovery_directives(state: OrchestrationRunState) -> list[dict[str, object]]:
@@ -432,7 +435,7 @@ def normalize_prose_expected_outputs(action: PlannerAction) -> PlannerAction:
                         "required_fields": [
                             path
                             for path in output.required_fields
-                            if _CANONICAL_JSON_FIELD_PATH.fullmatch(path)
+                            if _ENFORCEABLE_JSON_FIELD_PATH.fullmatch(path)
                         ]
                     },
                     deep=True,

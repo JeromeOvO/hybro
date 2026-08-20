@@ -216,6 +216,53 @@ async def test_client_request_reuse_with_different_fingerprint_conflicts():
 
 
 @pytest.mark.asyncio
+async def test_replayed_active_client_request_does_not_start_second_kernel():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    store = InMemoryOrchestratorRunStore()
+
+    class BlockingKernel:
+        calls = 0
+
+        async def run(self, run_id, *, signal, lifecycle=None):
+            del signal, lifecycle
+            self.calls += 1
+            entered.set()
+            await release.wait()
+            run = await store.load(run_id)
+            return KernelRunResult("failed", run)
+
+    kernel = BlockingKernel()
+
+    def session():
+        return RoomAgentSession(
+            config=session_config(),
+            kernel=kernel,
+            run_store=store,
+            run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+            clock=FixedClock(),
+        )
+
+    owner = session()
+    replay = session()
+    owner_task = asyncio.create_task(
+        owner.prompt(user_message(), client_request_id="request-shared")
+    )
+    await entered.wait()
+
+    with pytest.raises(SessionConflict, match="replayed Run is already active"):
+        await replay.prompt(user_message(), client_request_id="request-shared")
+    with pytest.raises(SessionConflict, match="no active Run"):
+        await replay.continue_run()
+    await replay.abort()
+
+    assert kernel.calls == 1
+    assert len(store.runs) == 1
+    release.set()
+    await owner_task
+
+
+@pytest.mark.asyncio
 async def test_concurrent_prompt_and_abort_settle_lifecycle_once():
     entered = asyncio.Event()
     store = InMemoryOrchestratorRunStore()

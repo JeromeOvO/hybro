@@ -101,12 +101,19 @@ def resolve_generation_provider(
     gemini_key = getattr(settings_obj, "google_api_key", "") or getattr(
         settings_obj, "gemini_api_key", ""
     )
-    supported_key = getattr(settings_obj, "openai_api_key", "") or getattr(
-        settings_obj, "deepseek_api_key", ""
-    )
-    if str(gemini_key or "").strip() and not str(supported_key or "").strip():
+    provider_keys = {
+        "openai": str(getattr(settings_obj, "openai_api_key", "") or "").strip(),
+        "deepseek": str(getattr(settings_obj, "deepseek_api_key", "") or "").strip(),
+    }
+    if str(gemini_key or "").strip() and not any(provider_keys.values()):
         raise UnsupportedConfiguredProvider(
             "Gemini is not supported by this LLM Gateway release"
+        )
+    if any(provider_keys.values()) and not provider_keys[selected]:
+        required_key = "OPENAI_API_KEY" if selected == "openai" else "DEEPSEEK_API_KEY"
+        raise UnsupportedConfiguredProvider(
+            f"LLM_GATEWAY_GENERATION_PROVIDER selects {selected!r}, but "
+            f"{required_key} is not configured"
         )
     return cast(Literal["deepseek", "openai"], selected)
 

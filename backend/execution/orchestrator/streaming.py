@@ -266,6 +266,8 @@ class ModelStreamAssembler:
                 error_class=self._terminal_error_class,
                 provider_request_id=self.provider_request_id,
             )
+        if self._finish_reason is None:
+            raise ModelStreamAssemblyError("stream did not finish")
         if self._finish_reason in {"error", "aborted", "content_filter"}:
             return ModelAssemblyOutcome(
                 kind=(
@@ -282,35 +284,33 @@ class ModelStreamAssembler:
                 ),
                 provider_request_id=self.provider_request_id,
             )
-        if self._finish_reason is None:
-            raise ModelStreamAssemblyError("stream did not finish")
+        if set(self._closed_calls) != set(self._tool_names):
+            open_call = next(
+                (
+                    call_id
+                    for call_id in self._tool_names
+                    if call_id not in self._closed_calls
+                ),
+                None,
+            )
+            raise TruncatedToolCallError(
+                "stream finished with a truncated tool call",
+                provider_call_id=open_call,
+                tool_name=self._tool_names.get(open_call or ""),
+                tool_index=(
+                    list(self._tool_names).index(open_call)
+                    if open_call is not None
+                    else None
+                ),
+                raw_arguments=(
+                    "".join(self._tool_arguments.get(open_call, []))
+                    if open_call is not None
+                    else None
+                ),
+            )
 
         tool_calls: list[ToolCall] = []
         if self._finish_reason == "tool_calls":
-            if set(self._closed_calls) != set(self._tool_names):
-                open_call = next(
-                    (
-                        call_id
-                        for call_id in self._tool_names
-                        if call_id not in self._closed_calls
-                    ),
-                    None,
-                )
-                raise TruncatedToolCallError(
-                    "tool-call finish contains truncated calls",
-                    provider_call_id=open_call,
-                    tool_name=self._tool_names.get(open_call or ""),
-                    tool_index=(
-                        list(self._tool_names).index(open_call)
-                        if open_call is not None
-                        else None
-                    ),
-                    raw_arguments=(
-                        "".join(self._tool_arguments.get(open_call, []))
-                        if open_call is not None
-                        else None
-                    ),
-                )
             tool_calls = [
                 self._build_tool_call(call_id) for call_id in self._closed_calls
             ]

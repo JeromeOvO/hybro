@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from execution.orchestrator.budget import BudgetExceeded, BudgetPolicy
 from execution.orchestrator.fake_tools import RecordingFakeToolRuntime
 from execution.orchestrator.in_memory import (
     InMemoryOrchestratorRunStore,
@@ -45,6 +46,141 @@ async def test_kernel_completes_final_answer_without_tools():
     assert result.run.status == "completed"
     assert result.run.projection_state == "settled"
     assert runtime.requests[0].tools
+
+
+@pytest.mark.asyncio
+async def test_finalizing_run_resumes_terminal_commit_without_new_model_turn():
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="pending-final",
+        content=[TextPart(text="durable answer")],
+        tool_calls=[],
+        finish_reason="stop",
+        usage=None,
+        created_at=NOW,
+    )
+    run = run.model_copy(
+        update={
+            "status": "finalizing",
+            "proposed_final_message_id": assistant.message_id,
+            "transcript": [*run.transcript, assistant],
+        }
+    )
+    kernel, _, runtime, _ = await make_kernel([], run=run)
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled())
+
+    assert result.outcome == "final_answer"
+    assert result.run.status == "completed"
+    assert result.run.proposed_final_message_id == assistant.message_id
+    assert runtime.requests == []
+    assert [
+        item.message_id
+        for item in result.run.transcript
+        if isinstance(item, AssistantMessage)
+    ] == [assistant.message_id]
+
+
+@pytest.mark.asyncio
+async def test_tool_calling_assistant_and_pending_batch_checkpoint_atomically():
+    kernel, store, _, _ = await make_kernel([])
+    run = next(iter(store.runs.values()))
+    assistant = AssistantMessage(
+        message_id="assistant-tools",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-atomic",
+                tool_name="fake_agent_echo",
+                arguments={"value": "ok"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+
+    stored = await kernel._append_assistant(run, assistant)
+
+    assert stored.transcript[-1] == assistant
+    assert len(stored.tool_batches) == 1
+    assert stored.tool_batches[0].assistant_message_id == assistant.message_id
+    assert stored.tool_batches[0].entries[0].call_id == "call-atomic"
+    assert stored.tool_batches[0].entries[0].state == "pending"
+
+
+@pytest.mark.asyncio
+async def test_running_run_reconstructs_missing_tool_batch_after_crash():
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="assistant-torn",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-torn",
+                tool_name="fake_agent_echo",
+                arguments={"value": "recovered"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    run = run.model_copy(update={"transcript": [*run.transcript, assistant]})
+    kernel, _, runtime, tools = await make_kernel([final_events()], run=run)
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled())
+
+    assert result.outcome == "final_answer"
+    assert tools.accept_log == ["call-torn"]
+    assert tools.execute_log == ["call-torn"]
+    assert result.run.tool_batches[0].results_flushed is True
+    assert len(runtime.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_reconstructed_tool_batch_can_suspend_and_accept_observation():
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="assistant-torn-pause",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-torn-pause",
+                tool_name="fake_agent_pause",
+                arguments={"status": "waiting_external"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    run = run.model_copy(update={"transcript": [*run.transcript, assistant]})
+    kernel, _, runtime, _ = await make_kernel([final_events()], run=run)
+
+    waiting = await kernel.run(run.run_id, signal=NeverCancelled())
+    assert waiting.outcome == "waiting_external"
+    assert waiting.run.status == "waiting_external"
+
+    result = await kernel.observe_tool(
+        run.run_id,
+        ToolObservation(
+            observation_id="torn-complete",
+            invocation_id="call-torn-pause",
+            outcome=ToolResult(
+                call_id="call-torn-pause",
+                tool_name="fake_agent_pause",
+                status="completed",
+                content=[TextPart(text="done")],
+                artifact_refs=[],
+            ),
+            observed_at=NOW,
+        ),
+        signal=NeverCancelled(),
+    )
+
+    assert result.outcome == "final_answer"
+    assert len(runtime.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -185,6 +321,97 @@ async def test_cas_conflict_after_acceptance_reconciles_without_duplicate_execut
     assert result.outcome == "final_answer"
     assert tools.accept_log == ["call-1"]
     assert tools.execute_log == ["call-1"]
+
+
+@pytest.mark.asyncio
+async def test_stale_tool_entry_writer_cannot_overwrite_terminal_result():
+    winner = ToolResult(
+        call_id="call-1",
+        tool_name="fake_agent_echo",
+        status="completed",
+        content=[TextPart(text="winner")],
+        artifact_refs=[],
+    )
+
+    class InterveningWinnerStore(InMemoryOrchestratorRunStore):
+        conflicted = False
+
+        async def cas_mutate(self, run, *, expected_state_version, command_id):
+            if command_id == "stale-writer" and not self.conflicted:
+                self.conflicted = True
+                current = self.runs[run.run_id]
+                batch = current.tool_batches[0]
+                entry = batch.entries[0].model_copy(
+                    update={
+                        "state": "terminal",
+                        "buffered_terminal_result": winner,
+                    }
+                )
+                self.runs[run.run_id] = current.model_copy(
+                    update={
+                        "tool_batches": [batch.model_copy(update={"entries": [entry]})],
+                        "state_version": current.state_version + 1,
+                    }
+                )
+                return InMemoryRunStoreResult("conflict", self.runs[run.run_id])
+            return await super().cas_mutate(
+                run,
+                expected_state_version=expected_state_version,
+                command_id=command_id,
+            )
+
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="assistant-1",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-1",
+                tool_name="fake_agent_echo",
+                arguments={"value": "ok"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    batch = ToolCallBatch(
+        assistant_message_id=assistant.message_id,
+        entries=[
+            ToolBatchEntry(
+                call_id="call-1",
+                assistant_message_id=assistant.message_id,
+                source_index=0,
+                tool_name="fake_agent_echo",
+            )
+        ],
+    )
+    run = run.model_copy(
+        update={"transcript": [*run.transcript, assistant], "tool_batches": [batch]}
+    )
+    store = InterveningWinnerStore()
+    kernel, store, _, _ = await make_kernel([], run=run, run_store=store)
+    loser = ToolResult(
+        call_id="call-1",
+        tool_name="fake_agent_echo",
+        status="rejected",
+        content=[TextPart(text="loser")],
+        artifact_refs=[],
+        error_code="invalid_tool_call",
+    )
+
+    with pytest.raises(KernelConflict, match="entry changed"):
+        await kernel._update_entry(
+            run,
+            0,
+            0,
+            state="terminal",
+            result=loser,
+            command="stale-writer",
+        )
+
+    stored = await store.load(run.run_id)
+    assert stored.tool_batches[0].entries[0].buffered_terminal_result == winner
 
 
 @pytest.mark.asyncio
@@ -333,6 +560,88 @@ async def test_tool_budget_is_reserved_before_acceptance():
     assert tools.execute_log == ["first"]
     assert result.run.budget.agent_calls_used == 1
     assert next(item for item in results if item.call_id == "excess").is_error
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_tool_calls_are_rejected_and_flushed_before_grace_final():
+    run = make_run(max_model_turns=1, grace_model_turns=2)
+    kernel, _, runtime, tools = await make_kernel(
+        [
+            tool_events(("normal", "fake_agent_echo", '{"value":"first"}')),
+            tool_events(("grace-tool", "fake_agent_echo", '{"value":"blocked"}')),
+            final_events("wrapped up"),
+        ],
+        run=run,
+    )
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled())
+
+    assert result.outcome == "final_answer"
+    assert len(runtime.requests) == 3
+    assert runtime.requests[1].tools == []
+    assert tools.execute_log == ["normal"]
+    grace_batch = result.run.tool_batches[1]
+    assert grace_batch.results_flushed is True
+    assert grace_batch.entries[0].state == "terminal"
+    assert grace_batch.entries[0].buffered_terminal_result.error_code == (
+        "grace_tools_disabled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deadline_during_tool_reservation_aborts_batch_without_side_effects():
+    class DeadlineAtToolPolicy(BudgetPolicy):
+        def before_tool_call(self, budget, profile, *, now):
+            del budget, profile, now
+            raise BudgetExceeded("deadline")
+
+    kernel, store, _, tools = await make_kernel(
+        [
+            tool_events(
+                ("first", "fake_agent_echo", '{"value":"one"}'),
+                ("second", "fake_agent_echo", '{"value":"two"}'),
+            )
+        ]
+    )
+    kernel.budget_policy = DeadlineAtToolPolicy()
+
+    result = await kernel.run(next(iter(store.runs)), signal=NeverCancelled())
+
+    assert result.outcome == "budget_exhausted"
+    assert result.run.terminal_reason == "deadline"
+    assert tools.accept_log == tools.execute_log == []
+    assert all(
+        entry.buffered_terminal_result is None
+        for entry in result.run.tool_batches[0].entries
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_budget_reservation_conflict_propagates_without_execution():
+    class ReservationConflictStore(InMemoryOrchestratorRunStore):
+        async def cas_mutate(self, run, *, expected_state_version, command_id):
+            if command_id.startswith("tool-budget-reserve:"):
+                current = self.runs[run.run_id]
+                return InMemoryRunStoreResult("conflict", current)
+            return await super().cas_mutate(
+                run,
+                expected_state_version=expected_state_version,
+                command_id=command_id,
+            )
+
+    store = ReservationConflictStore()
+    kernel, store, _, tools = await make_kernel(
+        [tool_events(("call-1", "fake_agent_echo", '{"value":"ok"}'))],
+        run_store=store,
+    )
+
+    with pytest.raises(KernelConflict, match="tool-budget-reserve"):
+        await kernel.run(next(iter(store.runs)), signal=NeverCancelled())
+
+    assert tools.accept_log == tools.execute_log == []
+    stored = await store.load(next(iter(store.runs)))
+    assert stored.tool_batches[0].entries[0].state == "pending"
+    assert stored.tool_batches[0].entries[0].buffered_terminal_result is None
 
 
 @pytest.mark.asyncio

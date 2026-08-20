@@ -89,6 +89,8 @@ class DefaultRunFactory:
             budget=BudgetState(
                 deadline_at=now + timedelta(seconds=config.profile.deadline_seconds)
             ),
+            compaction_summary=None,
+            compaction_baseline_tokens=None,
             proposed_final_message_id=None,
             terminal_reason=None,
             projection_state="pending",
@@ -169,6 +171,13 @@ class RoomAgentSession:
         )
         if created.outcome not in {"accepted", "replayed"} or created.run is None:
             raise SessionConflict(f"Run create failed: {created.outcome}")
+        if created.outcome == "replayed":
+            replayed = _replayed_result(created.run)
+            if replayed is None:
+                raise SessionConflict("replayed Run is already active")
+            self._run_id = created.run.run_id
+            self._signal = EventCancellationSignal()
+            return replayed
         self._run_id = created.run.run_id
         self._signal = EventCancellationSignal()
         await self._emit("session_started", created.run)
@@ -298,6 +307,21 @@ class RoomAgentSession:
             ),
             terminal=terminal,
         )
+
+
+def _replayed_result(run: OrchestratorRunState) -> KernelRunResult | None:
+    outcomes = {
+        "completed": "final_answer",
+        "failed": "failed",
+        "canceled": "aborted",
+        "budget_exhausted": "budget_exhausted",
+        "waiting_external": "waiting_external",
+        "awaiting_user": "awaiting_user",
+    }
+    outcome = outcomes.get(run.status)
+    if outcome is None:
+        return None
+    return KernelRunResult(outcome, run)  # type: ignore[arg-type]
 
 
 SessionRunResult = KernelRunResult

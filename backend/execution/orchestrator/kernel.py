@@ -48,6 +48,7 @@ from .settlement import (
 )
 from .streaming import ModelStreamAssembler, ModelStreamAssemblyError
 from .tools import validate_tool_result_correlation
+from .transcript import unresolved_call_ids
 
 KernelLifecycle = Callable[
     [str, OrchestratorRunState, dict[str, object]], Awaitable[None]
@@ -116,13 +117,18 @@ class OrchestratorKernel:
         signal: CancellationSignal,
         lifecycle: KernelLifecycle | None = None,
     ) -> KernelRunResult:
-        summary: str | None = None
-        compaction_baseline: int | None = None
         invalid_observations = 0
         while True:
             run = await self._load(run_id)
             if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
                 return KernelRunResult(_outcome_for_status(run.status), run)
+            if run.status == "finalizing":
+                assistant = _finalization_candidate(run)
+                if assistant is None:
+                    return await self._terminate(
+                        run, status="failed", reason="finalization candidate missing"
+                    )
+                return await self._complete(run, assistant)
             if signal.cancelled:
                 return await self._terminate(
                     run, status="canceled", reason="cancellation requested"
@@ -154,6 +160,17 @@ class OrchestratorKernel:
                 )
                 if recovered is not None:
                     return recovered
+                continue
+            torn_assistant = _assistant_missing_tool_batch(run)
+            if torn_assistant is not None:
+                try:
+                    await self._ensure_tool_batch(run, torn_assistant)
+                except KernelConflict:
+                    return await self._terminate(
+                        await self._load(run_id),
+                        status="failed",
+                        reason="unresolved tool batch could not be recovered",
+                    )
                 continue
 
             await self._emit(lifecycle, "turn_started", run, {})
@@ -192,14 +209,11 @@ class OrchestratorKernel:
             )
             try:
                 compiled = self.context_compiler.compile(
-                    run, tools=tools, summary=summary
+                    run, tools=tools, summary=run.compaction_summary
                 )
             except UnresolvedToolBatchError:
-                return KernelRunResult(
-                    "awaiting_user"
-                    if run.status == "awaiting_user"
-                    else "waiting_external",
-                    run,
+                return await self._terminate(
+                    run, status="failed", reason="unresolved tool batch"
                 )
             if compiled.kind == "context_unfit":
                 return await self._terminate(
@@ -214,19 +228,25 @@ class OrchestratorKernel:
                 )
                 if isinstance(compacted, KernelRunResult):
                     return compacted
-                run, summary = compacted
-                compaction_baseline = compiled.estimated_input_tokens
                 continue
             if (
-                compaction_baseline is not None
-                and compiled.estimated_input_tokens >= compaction_baseline
+                run.compaction_baseline_tokens is not None
+                and compiled.estimated_input_tokens >= run.compaction_baseline_tokens
             ):
                 return await self._terminate(
                     run,
                     status="budget_exhausted",
                     reason="compaction did not reduce context",
                 )
-            compaction_baseline = None
+            if run.compaction_baseline_tokens is not None:
+                run = await self._checkpoint(
+                    run,
+                    updates={"compaction_baseline_tokens": None},
+                    command_id=(
+                        f"compaction-validated:{run.run_id}:"
+                        f"{run.budget.compactions_used}"
+                    ),
+                )
 
             request = self._model_request(run, compiled.messages, tools)
             assembler = ModelStreamAssembler()
@@ -275,8 +295,6 @@ class OrchestratorKernel:
                 )
                 if isinstance(compacted, KernelRunResult):
                     return compacted
-                run, summary = compacted
-                compaction_baseline = compiled.estimated_input_tokens
                 continue
             if model_outcome.kind == "provider_error":
                 notice = SessionNotice(
@@ -442,6 +460,28 @@ class OrchestratorKernel:
             )
         return await self.run(run_id, signal=signal, lifecycle=lifecycle)
 
+    async def _ensure_tool_batch(
+        self, run: OrchestratorRunState, assistant: AssistantMessage
+    ) -> OrchestratorRunState:
+        existing = next(
+            (
+                batch
+                for batch in run.tool_batches
+                if batch.assistant_message_id == assistant.message_id
+            ),
+            None,
+        )
+        if existing is not None:
+            return run
+        call_ids = {call.call_id for call in assistant.tool_calls}
+        if not call_ids or not call_ids.issubset(unresolved_call_ids(run.transcript)):
+            raise KernelConflict("tool batch reconstruction is inconsistent")
+        return await self._checkpoint(
+            run,
+            updates={"tool_batches": [*run.tool_batches, _new_tool_batch(assistant)]},
+            command_id=f"reconstruct-tool-batch:{assistant.message_id}",
+        )
+
     async def _execute_tool_batch(
         self,
         run: OrchestratorRunState,
@@ -460,24 +500,13 @@ class OrchestratorKernel:
             None,
         )
         if batch_index is None:
-            batch = ToolCallBatch(
-                assistant_message_id=assistant.message_id,
-                entries=[
-                    ToolBatchEntry(
-                        call_id=call.call_id,
-                        assistant_message_id=assistant.message_id,
-                        source_index=index,
-                        tool_name=call.tool_name,
-                    )
-                    for index, call in enumerate(assistant.tool_calls)
-                ],
+            run = await self._ensure_tool_batch(run, assistant)
+            batch_index = next(
+                index
+                for index, item in enumerate(run.tool_batches)
+                if item.assistant_message_id == assistant.message_id
+                and not item.results_flushed
             )
-            run = await self._checkpoint(
-                run,
-                updates={"tool_batches": [*run.tool_batches, batch]},
-                command_id=f"tool-batch:{assistant.message_id}",
-            )
-            batch_index = len(run.tool_batches) - 1
         executable: list[tuple[ToolCall, ToolInvocation, ToolAcceptance]] = []
         for call in assistant.tool_calls:
             run = await self._load(run.run_id)
@@ -513,18 +542,6 @@ class OrchestratorKernel:
                 )
                 if errors:
                     raise ValueError("tool arguments failed schema validation")
-                self.budget_policy.before_tool_call(
-                    run.budget, run.profile, now=self.clock.now()
-                )
-                run = await self._checkpoint(
-                    run,
-                    updates={
-                        "budget": self.budget_policy.record_tool_calls(run.budget, 1)
-                    },
-                    command_id=(
-                        f"tool-budget-reserve:{assistant.message_id}:{call.call_id}"
-                    ),
-                )
             except Exception as exc:
                 run = await self._update_entry(
                     run,
@@ -535,6 +552,31 @@ class OrchestratorKernel:
                     command=f"invalid-tool:{call.call_id}",
                 )
                 continue
+            try:
+                self.budget_policy.before_tool_call(
+                    run.budget, run.profile, now=self.clock.now()
+                )
+            except BudgetExceeded as exc:
+                if exc.reason != "tool_calls":
+                    return await self._terminate(
+                        run, status="budget_exhausted", reason=exc.reason
+                    )
+                run = await self._update_entry(
+                    run,
+                    batch_index,
+                    entry_index,
+                    state="terminal",
+                    result=_tool_error(call, "tool_call_budget_exhausted", exc.reason),
+                    command=f"tool-budget-exhausted:{call.call_id}",
+                )
+                continue
+            run = await self._checkpoint(
+                run,
+                updates={"budget": self.budget_policy.record_tool_calls(run.budget, 1)},
+                command_id=(
+                    f"tool-budget-reserve:{assistant.message_id}:{call.call_id}"
+                ),
+            )
             invocation = ToolInvocation(
                 invocation_id=call.call_id,
                 run_id=run.run_id,
@@ -733,24 +775,43 @@ class OrchestratorKernel:
     async def _reject_grace_tools(
         self, run: OrchestratorRunState, assistant: AssistantMessage
     ) -> OrchestratorRunState:
-        messages = [
-            ToolResultMessage(
-                message_id=f"tool-result:{call.call_id}",
-                call_id=call.call_id,
-                tool_name=call.tool_name,
-                status="rejected",
-                content=[TextPart(text="Tools are disabled during wrap-up.")],
-                artifact_refs=[],
-                is_error=True,
-                error_code="grace_tools_disabled",
-                error_message="Tools are disabled during wrap-up.",
-                created_at=self.clock.now(),
+        batch_index = next(
+            (
+                index
+                for index, batch in enumerate(run.tool_batches)
+                if batch.assistant_message_id == assistant.message_id
+                and not batch.results_flushed
+            ),
+            None,
+        )
+        if batch_index is None:
+            raise KernelConflict("wrap-up tool batch is missing")
+        batches = list(run.tool_batches)
+        batch = batches[batch_index]
+        calls = {call.call_id: call for call in assistant.tool_calls}
+        entries = []
+        for entry in batch.entries:
+            call = calls.get(entry.call_id)
+            if call is None:
+                raise KernelConflict("wrap-up tool batch does not correlate")
+            entries.append(
+                entry.model_copy(
+                    update={
+                        "state": "terminal",
+                        "buffered_terminal_result": _tool_error(
+                            call,
+                            "grace_tools_disabled",
+                            "Tools are disabled during wrap-up.",
+                        ),
+                    }
+                )
             )
-            for call in assistant.tool_calls
-        ]
+        batch = batch.model_copy(update={"entries": entries})
+        transcript, batch = _flush_batch(run.transcript, batch, self.clock.now())
+        batches[batch_index] = batch
         return await self._checkpoint(
             run,
-            updates={"transcript": [*run.transcript, *messages]},
+            updates={"transcript": transcript, "tool_batches": batches},
             command_id=f"reject-grace-tools:{assistant.message_id}",
         )
 
@@ -758,7 +819,12 @@ class OrchestratorKernel:
         self, run: OrchestratorRunState, assistant: AssistantMessage
     ) -> OrchestratorRunState:
         updates: dict[str, object] = {"transcript": [*run.transcript, assistant]}
-        if not assistant.tool_calls:
+        if assistant.tool_calls:
+            updates["tool_batches"] = [
+                *run.tool_batches,
+                _new_tool_batch(assistant),
+            ]
+        else:
             updates.update(
                 proposed_final_message_id=assistant.message_id,
                 status="finalizing",
@@ -828,8 +894,7 @@ class OrchestratorKernel:
         *,
         baseline: int,
         signal: CancellationSignal,
-    ) -> tuple[OrchestratorRunState, str] | KernelRunResult:
-        del baseline
+    ) -> OrchestratorRunState | KernelRunResult:
         if (
             self.context_compactor is None
             or run.budget.compactions_used >= run.profile.max_compactions
@@ -875,10 +940,14 @@ class OrchestratorKernel:
             budget = self.budget_policy.record_compaction(run.budget, run.profile)
         run = await self._checkpoint(
             run,
-            updates={"budget": budget},
+            updates={
+                "budget": budget,
+                "compaction_summary": summary,
+                "compaction_baseline_tokens": baseline,
+            },
             command_id=(f"compaction:{run.run_id}:{run.budget.compactions_used + 1}"),
         )
-        return run, summary
+        return run
 
     async def _emit(
         self,
@@ -999,6 +1068,7 @@ class OrchestratorKernel:
         batches = list(run.tool_batches)
         batch = batches[batch_index]
         entries = list(batch.entries)
+        original_entry = entries[entry_index]
         update: dict[str, object] = {
             "state": state,
             "buffered_terminal_result": result,
@@ -1007,7 +1077,8 @@ class OrchestratorKernel:
             update["invocation"] = invocation
         if acceptance is not None:
             update["acceptance"] = acceptance
-        entries[entry_index] = entries[entry_index].model_copy(update=update)
+        desired_entry = original_entry.model_copy(update=update)
+        entries[entry_index] = desired_entry
         batches[batch_index] = batch.model_copy(update={"entries": entries})
         try:
             return await self._checkpoint(
@@ -1015,24 +1086,27 @@ class OrchestratorKernel:
             )
         except KernelConflict:
             current = await self._load(run.run_id)
-            current_entry = current.tool_batches[batch_index].entries[entry_index]
-            if acceptance is not None and current_entry.acceptance == acceptance:
-                return current
-            current_batches = list(current.tool_batches)
-            current_batch = current_batches[batch_index]
-            current_entries = list(current_batch.entries)
-            current_update: dict[str, object] = {
-                "state": state,
-                "buffered_terminal_result": result,
-            }
-            if invocation is not None:
-                current_update["invocation"] = invocation
-            if acceptance is not None:
-                current_update["acceptance"] = acceptance
-            current_entries[entry_index] = current_entries[entry_index].model_copy(
-                update=current_update
+            current_batch_index, current_entry_index = _find_entry(
+                current,
+                assistant_message_id=original_entry.assistant_message_id,
+                call_id=original_entry.call_id,
             )
-            current_batches[batch_index] = current_batch.model_copy(
+            if current_batch_index is None or current_entry_index is None:
+                raise KernelConflict(
+                    "tool entry disappeared during CAS retry"
+                ) from None
+            current_entry = current.tool_batches[current_batch_index].entries[
+                current_entry_index
+            ]
+            if current_entry == desired_entry:
+                return current
+            if current_entry != original_entry:
+                raise KernelConflict("tool entry changed during CAS retry") from None
+            current_batches = list(current.tool_batches)
+            current_batch = current_batches[current_batch_index]
+            current_entries = list(current_batch.entries)
+            current_entries[current_entry_index] = desired_entry
+            current_batches[current_batch_index] = current_batch.model_copy(
                 update={"entries": current_entries}
             )
             return await self._checkpoint(
@@ -1120,6 +1194,64 @@ class OrchestratorKernel:
     def _stable_id(self, run: OrchestratorRunState, *parts: object) -> str:
         raw = ":".join([run.run_id, *(str(part) for part in parts)])
         return sha256(raw.encode()).hexdigest()
+
+
+def _new_tool_batch(assistant: AssistantMessage) -> ToolCallBatch:
+    return ToolCallBatch(
+        assistant_message_id=assistant.message_id,
+        entries=[
+            ToolBatchEntry(
+                call_id=call.call_id,
+                assistant_message_id=assistant.message_id,
+                source_index=index,
+                tool_name=call.tool_name,
+            )
+            for index, call in enumerate(assistant.tool_calls)
+        ],
+    )
+
+
+def _finalization_candidate(run: OrchestratorRunState) -> AssistantMessage | None:
+    if run.proposed_final_message_id is None:
+        return None
+    candidates = [
+        item
+        for item in run.transcript
+        if isinstance(item, AssistantMessage)
+        and item.message_id == run.proposed_final_message_id
+        and not item.tool_calls
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _assistant_missing_tool_batch(
+    run: OrchestratorRunState,
+) -> AssistantMessage | None:
+    unresolved = unresolved_call_ids(run.transcript)
+    batch_message_ids = {batch.assistant_message_id for batch in run.tool_batches}
+    for item in run.transcript:
+        if not isinstance(item, AssistantMessage) or not item.tool_calls:
+            continue
+        if item.message_id in batch_message_ids:
+            continue
+        if {call.call_id for call in item.tool_calls} & unresolved:
+            return item
+    return None
+
+
+def _find_entry(
+    run: OrchestratorRunState,
+    *,
+    assistant_message_id: str,
+    call_id: str,
+) -> tuple[int | None, int | None]:
+    for batch_index, batch in enumerate(run.tool_batches):
+        if batch.assistant_message_id != assistant_message_id:
+            continue
+        for entry_index, entry in enumerate(batch.entries):
+            if entry.call_id == call_id:
+                return batch_index, entry_index
+    return None, None
 
 
 def _tool_error(call: ToolCall, code: str, message: str) -> ToolResult:

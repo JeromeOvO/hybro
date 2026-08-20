@@ -52,11 +52,13 @@ ORCHESTRATOR_RUN_INDEXES = (
     ),
     MongoIndexDefinition(
         name="orchestrator_tool_call_id",
-        keys=(("tool_batches.entries.call_id", 1),),
+        keys=(("run_id", 1), ("tool_batches.entries.call_id", 1)),
         unique=True,
     ),
     MongoIndexDefinition(
-        name="orchestrator_agent_call_id", keys=(("calls.call_id", 1),), unique=True
+        name="orchestrator_agent_call_id",
+        keys=(("run_id", 1), ("calls.call_id", 1)),
+        unique=True,
     ),
     MongoIndexDefinition(
         name="orchestrator_a2a_task", keys=(("calls.a2a_task_id", 1),)
