@@ -24,9 +24,13 @@ from execution.orchestrator.a2a_runtime.ingress import (
     A2AObservationIngress,
     RejectExternalIngressAuthenticator,
 )
-from execution.orchestrator.a2a_runtime.ledger import transition_call
+from execution.orchestrator.a2a_runtime.ledger import (
+    ownership_alias_keys,
+    transition_call,
+)
 from execution.orchestrator.a2a_runtime.models import (
     A2ADispatchReceipt,
+    A2AOwnershipAlias,
     MaterializedResourcePart,
     NormalizedA2AObservation,
 )
@@ -199,6 +203,39 @@ async def test_execute_dispatches_stable_command_and_suspends_for_remote_work():
     persisted = await ledger.load("run-1", "call-1")
     assert persisted.state == "working"
     assert dispatch.commands[0].command_id == persisted.dispatch_command_id
+
+
+async def test_dispatch_alias_conflict_fails_closed_without_divergent_identity():
+    runtime, ledger, _, dispatch, _ = await setup()
+    accepted = await runtime.accept(invocation())
+    record = await ledger.load("run-1", "call-1")
+    stolen = A2AOwnershipAlias(
+        kind="task",
+        value="task-stolen",
+        binding_scope=record.endpoint_scope_digest,
+    )
+    poisoned = record.model_copy(
+        update={
+            "ownership_aliases": [stolen],
+            "ownership_alias_keys": ownership_alias_keys([stolen]),
+            "a2a_task_id": "task-stolen",
+            "state_version": record.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(poisoned, expected_state_version=record.state_version)
+        == "accepted"
+    )
+
+    outcome = await runtime.execute(invocation(), accepted, signal=NeverCancelled())
+
+    assert isinstance(outcome, ToolSuspension)
+    assert len(dispatch.commands) == 1
+    persisted = await ledger.load("run-1", "call-1")
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.error_code == "authoritative_alias_conflict"
+    assert persisted.a2a_task_id == "task-stolen"
+    assert persisted.ownership_aliases == [stolen]
 
 
 async def test_frozen_binding_selects_stream_then_sync_then_poll_capability():
