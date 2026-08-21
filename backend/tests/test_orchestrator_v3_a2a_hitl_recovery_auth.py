@@ -7,7 +7,10 @@ from hashlib import sha256
 import pytest
 
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
-from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
+from execution.orchestrator.a2a_runtime.errors import (
+    AmbiguousRemoteEffectError,
+    RecoverableCheckpointError,
+)
 from execution.orchestrator.a2a_runtime.hitl import (
     A2AContinuationCoordinator,
     InMemoryHITLApplicationPort,
@@ -70,6 +73,12 @@ class Dispatch:
 
     async def inspect_continuation(self, command):
         return A2ADispatchReceipt(outcome="accepted")
+
+
+class AmbiguousContinuationDispatch(Dispatch):
+    async def continue_task(self, command):
+        self.commands.append(command)
+        raise AmbiguousRemoteEffectError("continuation acknowledgement is ambiguous")
 
 
 class TrustedAuthReferences:
@@ -541,6 +550,66 @@ async def test_conflicting_terminal_receipt_fails_closed_on_canonical_evidence()
         answers=questionnaire_answers(),
         authenticated_answerer_id="user-1",
     )
+
+    assert outcome == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.terminal_result is None
+    conflicts = await coordinator.observations.conflicts.list_for_source(
+        canonical.source_identity
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].accepted_observation_id == canonical.observation_id
+    assert len(dispatch.commands) == 1
+
+
+async def test_conflicting_continuation_expiry_fails_closed():
+    dispatch = AmbiguousContinuationDispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    assert (
+        await coordinator.resume(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            route_fingerprint=route.fingerprint,
+            answers=questionnaire_answers(),
+            authenticated_answerer_id="user-1",
+        )
+        == "delivery_uncertain"
+    )
+    uncertain = await ledger.load_by_record_id(call.call_record_id)
+    exhausted = uncertain.model_copy(
+        update={
+            "continuation_attempts": (
+                uncertain.runtime_policy.max_uncertain_inspection_attempts
+            ),
+            "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+            "state_version": uncertain.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(exhausted, expected_state_version=uncertain.state_version)
+        == "accepted"
+    )
+    uncertain = exhausted
+    command = uncertain.continuation_command
+    canonical = NormalizedA2AObservation(
+        observation_id="canonical-expiry-failed",
+        call_record_id=call.call_record_id,
+        source_kind="inspection",
+        source_identity=f"continuation-expired:{command.command_id}",
+        binding_scope=call.endpoint_scope_digest,
+        event_kind="terminal",
+        observed_at=NOW,
+        task_id=call.a2a_task_id,
+        context_id=call.a2a_context_id,
+        status="failed",
+    )
+    assert (await coordinator.observations.record(canonical))[0] == "accepted"
+
+    outcome = await coordinator.recover_call(call_record_id=call.call_record_id)
 
     assert outcome == "delivery_uncertain"
     persisted = await ledger.load_by_record_id(call.call_record_id)
