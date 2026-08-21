@@ -54,6 +54,7 @@ def test_plan3_collection_and_exact_index_inventory_matches_contract():
         "orchestrator_a2a_observations",
         "orchestrator_a2a_observation_conflicts",
         "orchestrator_room_epochs",
+        "orchestrator_hitl_interactions",
     }
     actual = {
         collection_name: {index.name: _index(index) for index in definition.indexes}
@@ -110,6 +111,9 @@ def test_plan3_collection_and_exact_index_inventory_matches_contract():
             "room_epoch_room_unique": (("room_id", 1),),
             "room_epoch_high_water": (("room_id", 1), ("high_water_mark", -1)),
         },
+        "orchestrator_hitl_interactions": {
+            "hitl_interaction_id_unique": (("interaction_id", 1),),
+        },
     }
 
     unique_indexes = {
@@ -126,6 +130,7 @@ def test_plan3_collection_and_exact_index_inventory_matches_contract():
         "observation_source_unique",
         "observation_conflict_id_unique",
         "room_epoch_room_unique",
+        "hitl_interaction_id_unique",
     }
     for indexes in actual.values():
         for name, (_, unique, _) in indexes.items():

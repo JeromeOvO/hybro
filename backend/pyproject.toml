@@ -197,6 +197,7 @@ packages = [
     "delivery.sse",
     "delivery.event_bus",
     "execution",
+    "execution.adapters",
     "execution.cancellation",
     "execution.orchestration",
     "execution.orchestrator",

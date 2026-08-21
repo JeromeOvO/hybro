@@ -800,7 +800,11 @@ def test_recovery_and_projection_claim_ports_require_cas_version_and_lease():
 
 def test_unbound_collection_metadata_contains_required_indexes():
     collections = {item.name: item for item in ORCHESTRATOR_COLLECTIONS}
-    assert set(collections) == {"orchestrator_runs", "orchestrator_run_events"}
+    assert set(collections) == {
+        "orchestrator_runs",
+        "orchestrator_run_events",
+        "relay_command_journal",
+    }
     run_names = {item.name for item in collections["orchestrator_runs"].indexes}
     assert {
         "orchestrator_run_id_unique",
@@ -820,3 +824,10 @@ def test_unbound_collection_metadata_contains_required_indexes():
         "orchestrator_a2a_task",
         "orchestrator_a2a_context",
     }.isdisjoint(indexes)
+    relay_names = {item.name for item in collections["relay_command_journal"].indexes}
+    assert relay_names == {"relay_command_id_unique"}
+    relay_indexes = {
+        item.name: item for item in collections["relay_command_journal"].indexes
+    }
+    assert relay_indexes["relay_command_id_unique"].keys == (("command_id", 1),)
+    assert relay_indexes["relay_command_id_unique"].unique is True

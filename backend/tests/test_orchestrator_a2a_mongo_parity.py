@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -8,6 +9,8 @@ import pytest
 from pydantic import ValidationError
 from pymongo.errors import AutoReconnect, DuplicateKeyError
 
+from common.dto.hitl import HITLQuestionAnswer, HITLTextAnswer
+from dal.orchestrator.hitl import MongoHITLApplicationStore
 from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
     MongoAgentCallLedgerStore,
@@ -15,6 +18,7 @@ from dal.orchestrator.stores import (
     MongoObservationInboxStore,
     MongoRoomEpochStore,
 )
+from execution.adapters.hitl import InMemoryHITLApplicationStore
 from execution.orchestrator.a2a_runtime.in_memory import (
     InMemoryAgentCallLedgerStore,
     InMemoryObservationConflictStore,
@@ -25,6 +29,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2AObservationConflictRecord,
     A2AObservationInboxRecord,
     A2ARuntimePolicy,
+    DurableHITLAnswerRecord,
     NormalizedA2AObservation,
 )
 
@@ -65,6 +70,24 @@ class FakeCollection:
             self.values.append(deepcopy(document))
             return SimpleNamespace(modified_count=0, matched_count=0, upserted_id=1)
         return SimpleNamespace(modified_count=0, matched_count=0, upserted_id=None)
+
+    async def update_one(self, query, update, *, upsert=False):
+        del upsert  # HITL answers use plain filters only; no upsert path needed.
+        matched = 0
+        modified = 0
+        for item in self.values:
+            if not _matches(item, query):
+                continue
+            matched += 1
+            before = deepcopy(item)
+            if "$set" in update:
+                for dotted, value in update["$set"].items():
+                    _set(item, dotted, value)
+            if item != before:
+                modified += 1
+        return SimpleNamespace(
+            matched_count=matched, modified_count=modified, upserted_id=None
+        )
 
     async def delete_many(self, query):
         before = len(self.values)
@@ -140,6 +163,23 @@ class ConcurrentClientRequestWinnerCollection(FakeCollection):
         raise DuplicateKeyError("client request winner used another run ID")
 
 
+class ConcurrentAnswerCollection(FakeCollection):
+    """Release two ``update_one`` callers together to simulate a CAS race."""
+
+    def __init__(self):
+        super().__init__()
+        self._waiters = 0
+        self._both_waiting = asyncio.Event()
+        self._release = asyncio.Event()
+
+    async def update_one(self, query, update, *, upsert=False):
+        self._waiters += 1
+        if self._waiters == 2:
+            self._both_waiting.set()
+        await self._release.wait()
+        return await super().update_one(query, update, upsert=upsert)
+
+
 class MongoPrecisionCollection(FakeCollection):
     def __init__(self):
         super().__init__()
@@ -209,6 +249,14 @@ def _get(document, dotted):
             return None
         value = value[part]
     return value
+
+
+def _set(document, dotted, value):
+    parts = dotted.split(".")
+    current = document
+    for part in parts[:-1]:
+        current = current.setdefault(part, {})
+    current[parts[-1]] = value
 
 
 def _bson_roundtrip(value):
@@ -710,3 +758,60 @@ async def test_mongo_and_memory_room_epoch_recreation_rules_match():
         )
         assert outcome == "accepted"
         assert recreated.epoch == active.epoch + 1
+
+
+def _answer_record(text: str) -> DurableHITLAnswerRecord:
+    return DurableHITLAnswerRecord(
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint="route-fingerprint",
+        authenticated_answerer_id="user-1",
+        answer_digest=f"digest:{text}",
+        answers=[
+            HITLQuestionAnswer(question_id="q-1", answer=HITLTextAnswer(text=text))
+        ],
+        verified_auth_reference_digests=[],
+        verified_auth_references=[],
+        applied_at=NOW,
+    )
+
+
+async def test_mongo_and_memory_hitl_concurrent_differing_answers_match():
+    memory = InMemoryHITLApplicationStore()
+    assert (
+        await memory.ensure_answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            record=_answer_record("Ada"),
+        )
+        == "accepted"
+    )
+    assert (
+        await memory.ensure_answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            record=_answer_record("Bob"),
+        )
+        == "conflict"
+    )
+
+    collection = ConcurrentAnswerCollection()
+    collection.values.append({"interaction_id": "interaction-1", "answers": {}})
+    mongo = MongoHITLApplicationStore(collection)
+    first = asyncio.create_task(
+        mongo.ensure_answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            record=_answer_record("Ada"),
+        )
+    )
+    second = asyncio.create_task(
+        mongo.ensure_answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            record=_answer_record("Bob"),
+        )
+    )
+    await collection._both_waiting.wait()
+    collection._release.set()
+    assert sorted(await asyncio.gather(first, second)) == ["accepted", "conflict"]
