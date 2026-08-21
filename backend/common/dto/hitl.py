@@ -291,6 +291,49 @@ class HITLRouteSnapshot(_HITLContract):
         return hashlib.sha256(canonical_json.encode()).hexdigest()
 
 
+class HITLRouteSnapshotV2(_HITLContract):
+    """Invocation-owned route added for the unbound Orchestrator V3 runtime."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_version: Literal[2] = 2
+    route: Literal["orchestrator_tool"] = "orchestrator_tool"
+    orchestration_run_id: _NonBlankId
+    call_record_id: _NonBlankId
+    invocation_id: _NonBlankId
+    room_id: _NonBlankId
+    room_epoch: _StrictVersion
+    binding_id: _NonBlankId
+    agent_id: _NonBlankId
+    task_id: _NonBlankId | None = None
+    context_id: _NonBlankId | None = None
+    interaction_revision: _StrictVersion
+    interaction_fingerprint: _NonBlankId
+
+    @model_validator(mode="after")
+    def validate_authoritative_aliases(self) -> Self:
+        for value in (self.task_id, self.context_id):
+            if value is not None and _is_provisional_identifier(value):
+                raise ValueError("V2 route aliases must be authoritative")
+        return self
+
+    @property
+    def fingerprint(self) -> str:
+        canonical_json = json.dumps(
+            self.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical_json.encode()).hexdigest()
+
+
+HITLRouteSnapshotUnion = Annotated[
+    HITLRouteSnapshot | HITLRouteSnapshotV2,
+    Field(discriminator="schema_version"),
+]
+
+
 def _is_provisional_identifier(value: str) -> bool:
     normalized = value.casefold()
     return normalized in {"pending", "provisional", "unknown"} or normalized.startswith(
@@ -315,6 +358,8 @@ __all__ = [
     "HITLQuestionAnswer",
     "HITLQuestionSpec",
     "HITLRouteSnapshot",
+    "HITLRouteSnapshotUnion",
+    "HITLRouteSnapshotV2",
     "HITLSingleChoiceAnswer",
     "HITLTextAnswer",
 ]

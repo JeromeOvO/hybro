@@ -16,7 +16,6 @@ from .models import (
     ProjectionIntent,
     ProjectionIntentStatus,
 )
-from .transitions import ACTIVE_AGENT_CALL_STATES
 
 TerminalDecision = Literal[
     "ready",
@@ -104,16 +103,20 @@ def evaluate_terminal_decision(
             reason="stable final message is not part of the pending aggregate",
         )
 
-    if run.pending_interaction_ids or any(
-        call.state in {"input_required", "auth_required"} for call in run.calls
-    ):
+    batch_states = [
+        entry.state for batch in run.tool_batches for entry in batch.entries
+    ]
+    if any(state in {"input_required", "auth_required"} for state in batch_states):
         return TerminalDecisionEvaluation(
             decision="awaiting_user", reason="user interaction remains pending"
         )
 
-    if any(call.state in ACTIVE_AGENT_CALL_STATES for call in run.calls):
+    if any(
+        state in {"pending", "accepted", "executing", "waiting_external"}
+        for state in batch_states
+    ):
         return TerminalDecisionEvaluation(
-            decision="waiting_external", reason="AgentCall remains active"
+            decision="waiting_external", reason="ToolBatch entry remains active"
         )
 
     if not facts.terminal_observations_persisted:

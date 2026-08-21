@@ -13,10 +13,12 @@ from .lifecycle import LifecycleEmitter, SessionEvent, SessionEventListener
 from .models import (
     BudgetState,
     CandidateScopeSnapshot,
+    FrozenToolCatalogSnapshot,
     OrchestratorProfile,
     OrchestratorRunState,
     RecoveryClaim,
     RunRequestSnapshot,
+    RunResourceManifestSnapshot,
     ToolObservation,
     UserMessage,
 )
@@ -33,7 +35,11 @@ class RoomAgentSessionConfig:
     room_id: str
     profile: OrchestratorProfile
     candidate_scope: CandidateScopeSnapshot
+    room_epoch: int
+    requesting_subject_id: str
     tool_catalog: ToolCatalog
+    frozen_tool_catalog: FrozenToolCatalogSnapshot | None = None
+    resource_manifest: RunResourceManifestSnapshot | None = None
 
 
 class RunFactory(Protocol):
@@ -66,7 +72,10 @@ class DefaultRunFactory:
         now = self.clock.now()
         run_id = self.id_factory.new_id("run")
         fingerprint = sha256(
-            f"{config.room_id}:{message.model_dump_json()}".encode()
+            (
+                f"{config.room_id}:{config.room_epoch}:"
+                f"{config.requesting_subject_id}:{message.model_dump_json()}"
+            ).encode()
         ).hexdigest()
         return OrchestratorRunState(
             run_id=run_id,
@@ -75,16 +84,17 @@ class DefaultRunFactory:
             client_request_id=client_request_id,
             request=RunRequestSnapshot(
                 request_fingerprint=fingerprint,
-                room_generation=0,
+                room_epoch=config.room_epoch,
+                requesting_subject_id=config.requesting_subject_id,
                 user_message_id=message.message_id,
             ),
             profile=config.profile,
             candidate_scope=config.candidate_scope,
             status="running",
             transcript=[message],
-            calls=[],
+            tool_catalog=config.frozen_tool_catalog,
+            resource_manifest=config.resource_manifest,
             tool_batches=[],
-            pending_interaction_ids=[],
             artifact_refs=[],
             budget=BudgetState(
                 deadline_at=now + timedelta(seconds=config.profile.deadline_seconds)

@@ -130,6 +130,8 @@ def session_config(**profile_kwargs) -> RoomAgentSessionConfig:
         candidate_scope=CandidateScopeSnapshot(
             snapshot_id="scope-1", source="test", room_id="room-1", agent_ids=[]
         ),
+        room_epoch=1,
+        requesting_subject_id="user-1",
         tool_catalog=StaticFakeToolCatalog(),
     )
 

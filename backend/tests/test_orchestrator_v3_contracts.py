@@ -8,10 +8,8 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from execution.orchestrator import (
-    AGENT_CALL_STATES,
     ORCHESTRATOR_COLLECTIONS,
     TOOL_RESULT_STATUSES,
-    A2AOwnershipLookup,
     ArtifactRefPart,
     AssistantMessage,
     BudgetState,
@@ -52,6 +50,7 @@ from execution.orchestrator import (
     run_provider_conformance,
     validate_tool_result_correlation,
 )
+from execution.orchestrator.a2a_runtime.models import AGENT_CALL_STATES
 from execution.orchestrator.models import AgentMessage
 
 NOW = datetime(2026, 3, 12, tzinfo=UTC)
@@ -698,7 +697,7 @@ def test_tool_status_inventory_and_result_correlation_are_complete():
         "rejected",
         "expired",
     }
-    assert len(AGENT_CALL_STATES) == 12
+    assert len(AGENT_CALL_STATES) == 15
     call = ToolCall(call_id="call-1", tool_name="agent", arguments={})
     result = ToolResult(
         call_id="call-1",
@@ -761,7 +760,6 @@ def test_v3_protocols_are_narrow_and_explicit():
         ToolRuntime: {"accept", "execute"},
         ToolCatalog: {"list_tools", "resolve"},
         OrchestratorEventStore: {"append", "read"},
-        A2AOwnershipLookup: {"find_run_by_task_id", "find_run_by_context_id"},
         EventProjector: {"project"},
         OrchestratorRunStore: {
             "create",
@@ -807,9 +805,6 @@ def test_unbound_collection_metadata_contains_required_indexes():
         "orchestrator_active_room_unique",
         "orchestrator_client_request",
         "orchestrator_tool_call_id",
-        "orchestrator_agent_call_id",
-        "orchestrator_a2a_task",
-        "orchestrator_a2a_context",
         "orchestrator_recovery_due",
         "orchestrator_projection_due",
     } <= run_names
@@ -818,7 +813,8 @@ def test_unbound_collection_metadata_contains_required_indexes():
         ("run_id", 1),
         ("tool_batches.entries.call_id", 1),
     )
-    assert indexes["orchestrator_agent_call_id"].keys == (
-        ("run_id", 1),
-        ("calls.call_id", 1),
-    )
+    assert {
+        "orchestrator_agent_call_id",
+        "orchestrator_a2a_task",
+        "orchestrator_a2a_context",
+    }.isdisjoint(indexes)

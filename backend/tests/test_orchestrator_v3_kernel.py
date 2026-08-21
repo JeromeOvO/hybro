@@ -794,3 +794,66 @@ async def test_fake_tools_cover_failure_delays_and_cancellation():
     signal.cancel()
     with pytest.raises(asyncio.CancelledError):
         await fresh_tools.execute(cancel_invocation, cancel_acceptance, signal=signal)
+
+
+@pytest.mark.asyncio
+async def test_terminal_tool_artifacts_merge_atomically_into_run_inventory():
+    class ArtifactRuntime(RecordingFakeToolRuntime):
+        async def execute(self, invocation, acceptance, *, signal):
+            await super().execute(invocation, acceptance, signal=signal)
+            return ToolResult(
+                call_id=invocation.invocation_id,
+                tool_name=invocation.tool.definition.name,
+                status="completed",
+                content=[],
+                artifact_refs=["artifact-1"],
+            )
+
+    kernel, store, _, _ = await make_kernel(
+        [
+            tool_events(("artifact-call", "fake_agent_echo", '{"value":"ok"}')),
+            final_events(),
+        ],
+        tool_runtime=ArtifactRuntime(),
+    )
+    result = await kernel.run(next(iter(store.runs)), signal=NeverCancelled())
+    assert result.run.artifact_refs == ["artifact-1"]
+    assert result.run.tool_batches[0].entries[
+        0
+    ].buffered_terminal_result.artifact_refs == ["artifact-1"]
+
+
+@pytest.mark.asyncio
+async def test_observed_terminal_tool_artifacts_merge_with_observation_checkpoint():
+    kernel, store, _, _ = await make_kernel(
+        [
+            tool_events(
+                (
+                    "wait",
+                    "fake_agent_pause",
+                    '{"status":"waiting_external"}',
+                )
+            ),
+            final_events(),
+        ]
+    )
+    run_id = next(iter(store.runs))
+    waiting = await kernel.run(run_id, signal=NeverCancelled())
+    completed = await kernel.observe_tool(
+        run_id,
+        ToolObservation(
+            observation_id="artifact-observation",
+            invocation_id="wait",
+            outcome=ToolResult(
+                call_id="wait",
+                tool_name="fake_agent_pause",
+                status="completed",
+                content=[],
+                artifact_refs=["artifact-observed"],
+            ),
+            observed_at=NOW,
+        ),
+        signal=NeverCancelled(),
+    )
+    assert waiting.outcome == "waiting_external"
+    assert completed.run.artifact_refs == ["artifact-observed"]

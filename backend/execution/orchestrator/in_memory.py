@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .models import OrchestratorRunState, RecoveryClaim
+from .events import evaluate_event_append
+from .models import OrchestratorEvent, OrchestratorRunState, RecoveryClaim
 from .settlement import transition_projection_intent, transition_projection_settlement
 
 
@@ -278,6 +279,29 @@ class InMemoryOrchestratorRunStore:
         )
 
 
+class InMemoryOrchestratorEventStore:
+    """Event append/read port backed by the pure ordering evaluation."""
+
+    def __init__(self) -> None:
+        self.events: dict[str, list[OrchestratorEvent]] = {}
+
+    async def append(self, event: OrchestratorEvent) -> str:
+        existing = self.events.setdefault(event.run_id, [])
+        evaluation = evaluate_event_append(existing, event)
+        if evaluation.outcome == "accepted":
+            self.events[event.run_id] = [*existing, event]
+        return evaluation.outcome
+
+    async def read(
+        self, run_id: str, *, after_sequence: int = 0
+    ) -> list[OrchestratorEvent]:
+        return [
+            event
+            for event in self.events.get(run_id, [])
+            if event.sequence > after_sequence
+        ]
+
+
 class InMemoryProjectionDriver:
     """Claim and complete required intents without external side effects."""
 
@@ -338,6 +362,7 @@ def _intent(run: OrchestratorRunState | None, intent_id: str):
 InMemoryRunStore = InMemoryOrchestratorRunStore
 
 __all__ = [
+    "InMemoryOrchestratorEventStore",
     "InMemoryOrchestratorRunStore",
     "InMemoryProjectionDriver",
     "InMemoryRunStore",

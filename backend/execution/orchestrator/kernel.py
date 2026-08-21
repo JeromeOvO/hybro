@@ -429,6 +429,10 @@ class OrchestratorKernel:
         batches[batch_index] = batch
         all_terminal = all(item.state == "terminal" for item in batch.entries)
         updates: dict[str, object] = {"tool_batches": batches}
+        if isinstance(observation.outcome, ToolResult):
+            updates["artifact_refs"] = _merge_artifact_refs(
+                run.artifact_refs, [observation.outcome]
+            )
         if all_terminal:
             transcript, batch = _flush_batch(run.transcript, batch, self.clock.now())
             batches[batch_index] = batch
@@ -702,12 +706,20 @@ class OrchestratorKernel:
         batch = batch.model_copy(update={"entries": entries})
         batches = list(run.tool_batches)
         batches[batch_index] = batch
+        artifact_refs = _merge_artifact_refs(
+            run.artifact_refs,
+            [outcome for _, outcome in outcomes if isinstance(outcome, ToolResult)],
+        )
         if all(entry.state == "terminal" for entry in entries):
             transcript, batch = _flush_batch(run.transcript, batch, self.clock.now())
             batches[batch_index] = batch
             run = await self._checkpoint(
                 run,
-                updates={"tool_batches": batches, "transcript": transcript},
+                updates={
+                    "tool_batches": batches,
+                    "transcript": transcript,
+                    "artifact_refs": artifact_refs,
+                },
                 command_id=f"complete-tool-batch:{assistant.message_id}",
             )
             for entry in batch.entries:
@@ -721,7 +733,11 @@ class OrchestratorKernel:
         status = _wait_status(batch)
         run = await self._checkpoint(
             run,
-            updates={"tool_batches": batches, "status": status},
+            updates={
+                "tool_batches": batches,
+                "status": status,
+                "artifact_refs": artifact_refs,
+            },
             command_id=f"suspend-tool-batch:{assistant.message_id}",
         )
         await self._emit(
@@ -1194,6 +1210,14 @@ class OrchestratorKernel:
     def _stable_id(self, run: OrchestratorRunState, *parts: object) -> str:
         raw = ":".join([run.run_id, *(str(part) for part in parts)])
         return sha256(raw.encode()).hexdigest()
+
+
+def _merge_artifact_refs(existing: list[str], results: list[ToolResult]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            [*existing, *(ref for result in results for ref in result.artifact_refs)]
+        )
+    )
 
 
 def _new_tool_batch(assistant: AssistantMessage) -> ToolCallBatch:
