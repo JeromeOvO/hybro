@@ -74,6 +74,41 @@ class FakeCollection:
     def find(self, query):
         return Cursor([deepcopy(item) for item in self.values if _matches(item, query)])
 
+    def aggregate(self, pipeline):  # noqa: C901
+        values = deepcopy(self.values)
+        for stage in pipeline:
+            if "$match" in stage:
+                values = [item for item in values if _matches(item, stage["$match"])]
+            elif "$addFields" in stage:
+                for field, expression in stage["$addFields"].items():
+                    candidates = expression["$ifNull"]
+                    for item in values:
+                        item[field] = next(
+                            (
+                                _get(item, candidate.removeprefix("$"))
+                                for candidate in candidates
+                                if _get(item, candidate.removeprefix("$")) is not None
+                            ),
+                            None,
+                        )
+            elif "$sort" in stage:
+                fields = list(stage["$sort"])
+                values.sort(
+                    key=lambda item: tuple(_get(item, field) for field in fields)
+                )
+            elif "$limit" in stage:
+                values = values[: stage["$limit"]]
+            elif "$project" in stage:
+                excluded = [
+                    field
+                    for field, included in stage["$project"].items()
+                    if not included
+                ]
+                for item in values:
+                    for field in excluded:
+                        item.pop(field, None)
+        return Cursor(values)
+
 
 class DuplicateAfterWriteCollection(FakeCollection):
     def __init__(self, *, fail_insert=False, fail_upsert=False):
@@ -251,6 +286,48 @@ async def test_mongo_due_run_listing_ignores_mongo_id():
     due = await store.list_due_runs(due_at=NOW, limit=10)
 
     assert due == [created.run]
+
+
+async def test_mongo_due_run_listing_uses_contract_order_before_limit():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    base = make_run()
+
+    def scheduled(run_id, *, next_attempt_at, updated_at):
+        return base.model_copy(
+            update={
+                "run_id": run_id,
+                "session_id": f"session-{run_id}",
+                "room_id": f"room-{run_id}",
+                "client_request_id": f"request-{run_id}",
+                "request": base.request.model_copy(
+                    update={"request_fingerprint": f"fingerprint-{run_id}"}
+                ),
+                "recovery_claim": base.recovery_claim.model_copy(
+                    update={"next_attempt_at": next_attempt_at}
+                ),
+                "updated_at": updated_at,
+            }
+        )
+
+    runs = [
+        scheduled("third", next_attempt_at=NOW - timedelta(seconds=5), updated_at=NOW),
+        scheduled(
+            "second", next_attempt_at=NOW - timedelta(seconds=10), updated_at=NOW
+        ),
+        scheduled(
+            "first", next_attempt_at=None, updated_at=NOW - timedelta(seconds=20)
+        ),
+    ]
+    for run in runs:
+        assert (
+            await store.create(run, command_id=f"create:{run.run_id}")
+        ).outcome == "accepted"
+
+    due = await store.list_due_runs(due_at=NOW, limit=2)
+
+    assert [run.run_id for run in due] == ["first", "second"]
+    assert await store.list_due_runs(due_at=NOW, limit=0) == []
 
 
 async def test_mongo_run_dates_remain_bson_datetimes_for_due_queries():

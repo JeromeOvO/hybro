@@ -247,9 +247,29 @@ class MongoOrchestratorRunStore:
                 },
             ],
         }
+        if limit <= 0:
+            return []
+        pipeline: list[dict[str, object]] = [
+            {"$match": query},
+            {
+                "$addFields": {
+                    "_recovery_due_at": {
+                        "$ifNull": [
+                            "$recovery_claim.next_attempt_at",
+                            "$updated_at",
+                        ]
+                    }
+                }
+            },
+            {"$sort": {"_recovery_due_at": 1, "run_id": 1}},
+            {"$limit": limit},
+            {"$project": {"_recovery_due_at": 0}},
+        ]
         return [
             OrchestratorRunState.model_validate(_without_mongo_id(value))
-            for value in await _to_list(self.collection.find(query), length=limit)
+            for value in await _to_list(
+                self.collection.aggregate(pipeline), length=limit
+            )
         ]
 
     async def claim_projection_intent(

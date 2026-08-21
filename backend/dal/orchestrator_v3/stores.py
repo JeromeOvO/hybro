@@ -43,6 +43,8 @@ class AsyncMongoCollection(Protocol):
 
     def find(self, query: dict[str, object]) -> Any: ...
 
+    def aggregate(self, pipeline: list[dict[str, object]]) -> Any: ...
+
 
 _TRANSIENT_MONGO_ERRORS = (
     AutoReconnect,
@@ -79,6 +81,17 @@ def _mongo_find(collection: AsyncMongoCollection, query: dict[str, object]) -> A
         raise
 
 
+def _mongo_aggregate(
+    collection: AsyncMongoCollection, pipeline: list[dict[str, object]]
+) -> Any:
+    try:
+        return collection.aggregate(pipeline)
+    except PyMongoError as exc:
+        if _is_transient_mongo_error(exc):
+            raise RecoverableAdapterError("transient Mongo aggregate failed") from exc
+        raise
+
+
 class _MongoCollectionBoundary:
     def __init__(self, collection: AsyncMongoCollection) -> None:
         self._collection = collection
@@ -108,6 +121,9 @@ class _MongoCollectionBoundary:
 
     def find(self, query: dict[str, object]) -> Any:
         return _mongo_find(self._collection, query)
+
+    def aggregate(self, pipeline: list[dict[str, object]]) -> Any:
+        return _mongo_aggregate(self._collection, pipeline)
 
 
 def _bounded(collection: AsyncMongoCollection) -> AsyncMongoCollection:
