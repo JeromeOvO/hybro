@@ -1967,8 +1967,42 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             logger.warning("Orchestrator runtime composition disabled: %s", exc)
             app.state.orchestrator_runtime = None
 
-        # ── Orchestrator background workers (dark launch, default OFF) ──
+        # ── Dual-routing seam (step 7) ──
+        # Routes and the execution facade reach the orchestrator ONLY through
+        # this seam; it is attached here after the composition is ready.
         _orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+        if _orchestrator_runtime is not None:
+            from execution.orchestrator_routing import (
+                DualRuntimeRouter,
+                RoomMessageEnvelopeResolver,
+            )
+
+            async def _list_room_agent_ids(room_id: str) -> list[str]:
+                room = await agent_room_store.get_room_by_room_id(room_id)
+                return list((room.room_agent_set or {}).keys()) if room else []
+
+            async def _list_group_agent_ids(group_id: str) -> list[str]:
+                group = await agent_room_store.get_agent_group_by_id(group_id)
+                return list(getattr(group, "agents", []) or [])
+
+            envelope_source = RoomMessageEnvelopeResolver(
+                get_user_message=message_store.get_room_user_message_by_message_id,
+                list_room_agent_ids=_list_room_agent_ids,
+                list_group_agent_ids=_list_group_agent_ids,
+            )
+            orchestrator_router = DualRuntimeRouter(
+                runtime=_orchestrator_runtime,
+                settings=runtime.settings,
+                envelope_source=envelope_source,
+                webhook_token_verifier=task_store.verify_webhook_token_for_task,
+            )
+            app.state.orchestrator_routing = orchestrator_router
+            execution_facade.bind_orchestrator_router(orchestrator_router)
+            logger.info("Orchestrator dual-routing seam ready (0%% traffic)")
+        else:
+            app.state.orchestrator_routing = None
+
+        # ── Orchestrator background workers (dark launch, default OFF) ──
         if _orchestrator_runtime is not None:
             orchestrator_recovery_job.set_leader_election(_leader)
             orchestrator_recovery_job.interval_seconds = (

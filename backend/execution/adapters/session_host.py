@@ -84,6 +84,7 @@ class RoomSessionHost:
         requesting_subject_id: str,
         frozen_catalog: FrozenToolCatalogSnapshot,
         resource_manifest: RunResourceManifestSnapshot | None = None,
+        run_factory: RunFactory | None = None,
     ) -> RoomAgentSession:
         if room_id in self._sessions:
             raise SessionConflict("a session is already active for this Room")
@@ -108,7 +109,7 @@ class RoomSessionHost:
             config=config,
             kernel=self._kernel_factory(frozen_catalog),
             run_store=self._run_store,
-            run_factory=self._run_factory,
+            run_factory=run_factory or self._run_factory,
             lifecycle=lifecycle,
             clock=self._clock,
         )

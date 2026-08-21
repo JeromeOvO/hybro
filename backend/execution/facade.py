@@ -47,6 +47,11 @@ from execution.orchestration.run_store import (
     OrchestrationRunStore,
     OrchestrationStoreConflict,
 )
+from execution.orchestrator_routing import (
+    OWNER_LEGACY,
+    OWNER_ORCHESTRATOR,
+    UnsupportedEnvelopeError,
+)
 from execution.ports import (
     AgentResponseHandlerPort,
     AgentTaskCleanupPort,
@@ -122,6 +127,29 @@ class _RequestIdempotency:
     client_request_id: str | None = None
     fingerprint: str | None = None
     fingerprint_version: int | None = None
+
+
+def _orchestrator_cancellation_ack(results: dict[str, str]) -> CancellationAck:
+    """Translate per-call cancellation outcomes into an honest public ack.
+
+    The orchestrator cancellation coordinator returns one state per call. A
+    call still ``cancel_pending`` means its remote effect was not reconciled in
+    this attempt, so the Run-level ack must not claim full reconciliation.
+    """
+    if not results:
+        # A Run with no in-flight calls has nothing left to reconcile.
+        return CancellationAck(
+            status="canceled", cancellation_applied=True, reconciled=True
+        )
+    if any(state == "cancel_pending" for state in results.values()):
+        return CancellationAck(
+            status="cancellation_pending",
+            cancellation_applied=False,
+            reconciled=False,
+        )
+    return CancellationAck(
+        status="canceled", cancellation_applied=True, reconciled=True
+    )
 
 
 class RoomCenterPort(Protocol):
@@ -468,9 +496,11 @@ class ExecutionFacade:
         client_request_id_resolver: ClientRequestIdResolver,
         orchestration_run_store: OrchestrationRunStore | None = None,
         task_factory: TaskFactory = traced_create_task,
+        orchestrator_router: Any | None = None,
     ) -> None:
         self._room_center = room_center
         self._room_message_center = room_message_center
+        self._orchestrator_router = orchestrator_router
         self._hitl_manager = hitl_manager
         self._run_lifecycle = run_lifecycle
         self._run_reader = run_reader
@@ -506,6 +536,10 @@ class ExecutionFacade:
         )
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
+
+    def bind_orchestrator_router(self, router: Any) -> None:
+        """Attach the dual-routing seam after composition (container-wired)."""
+        self._orchestrator_router = router
 
     @staticmethod
     def _prepare_request_idempotency(
@@ -775,6 +809,55 @@ class ExecutionFacade:
                 )
             raise
 
+    async def _route_orchestration(
+        self,
+        request: ExecutionRequest,
+        orchestration_request: OrchestrationRequest,
+    ) -> None:
+        owner = OWNER_LEGACY
+        router = self._orchestrator_router
+        if router is not None:
+            try:
+                owner = await router.assign_runtime(
+                    room_id=request.room_id,
+                    client_request_id=request.client_request_id,
+                    user_id=request.sender_id,
+                    mode=request.mode,
+                )
+            except Exception:
+                logger.warning(
+                    "orchestrator routing failed; falling back to legacy",
+                    exc_info=True,
+                )
+                owner = OWNER_LEGACY
+            if owner == OWNER_ORCHESTRATOR:
+                try:
+                    await router.preflight_room_user_message(orchestration_request)
+                except UnsupportedEnvelopeError:
+                    logger.info(
+                        "orchestrator envelope unsupported; falling back to legacy",
+                        extra={"room_id": request.room_id},
+                    )
+                    owner = OWNER_LEGACY
+                except Exception:
+                    logger.warning(
+                        "orchestrator envelope preflight failed; "
+                        "falling back to legacy",
+                        exc_info=True,
+                    )
+                    owner = OWNER_LEGACY
+        if owner == OWNER_ORCHESTRATOR:
+            try:
+                await router.process_room_user_message(orchestration_request)
+                return
+            except UnsupportedEnvelopeError:
+                logger.info(
+                    "orchestrator message adapter rejected envelope; "
+                    "falling back to legacy",
+                    extra={"room_id": request.room_id},
+                )
+        await self._room_message_center.process_room_user_message(orchestration_request)
+
     async def start_orchestration(
         self,
         request: ExecutionRequest,
@@ -796,9 +879,7 @@ class ExecutionFacade:
             message_id=ack.message_id,
         ):
             task = self._spawn_orchestration(
-                self._room_message_center.process_room_user_message(
-                    orchestration_request,
-                ),
+                self._route_orchestration(request, orchestration_request),
                 name=f"execution-orchestrate-{ack.message_id}",
             )
         await task
@@ -824,9 +905,7 @@ class ExecutionFacade:
             message_id=ack.message_id,
         ):
             self._spawn_orchestration(
-                self._room_message_center.process_room_user_message(
-                    orchestration_request
-                ),
+                self._route_orchestration(request, orchestration_request),
                 name=f"execution-orchestrate-{ack.message_id}",
             )
 
@@ -961,6 +1040,30 @@ class ExecutionFacade:
         *,
         requested_by_user_id: str,
     ) -> bool | CancellationAck:
+        router = self._orchestrator_router
+        if router is not None:
+            try:
+                owner = await router.resolve_run_owner_by_user_message(message_id)
+            except Exception:
+                logger.warning(
+                    "orchestrator cancel ownership resolution failed; "
+                    "falling back to legacy",
+                    exc_info=True,
+                )
+                owner = OWNER_LEGACY
+            if owner == OWNER_ORCHESTRATOR:
+                try:
+                    results = await router.route_cancellation_by_user_message(
+                        message_id,
+                        reason=f"user:{requested_by_user_id}",
+                    )
+                    return _orchestrator_cancellation_ack(results)
+                except Exception:
+                    logger.warning(
+                        "orchestrator cancellation routing failed; "
+                        "falling back to legacy",
+                        exc_info=True,
+                    )
         return await self._cancellation_service.cancel(
             room_id=room_id,
             message_id=message_id,
@@ -1150,6 +1253,30 @@ class ExecutionFacade:
         responder_id: str,
         client_request_id: str | None = None,
     ) -> HITLResponse:
+        router = self._orchestrator_router
+        if router is not None:
+            try:
+                owner = await router.resolve_interaction_owner(interaction_id)
+            except Exception:
+                logger.warning(
+                    "orchestrator HITL ownership resolution failed; "
+                    "falling back to legacy",
+                    exc_info=True,
+                )
+                owner = OWNER_LEGACY
+            if owner == OWNER_ORCHESTRATOR:
+                await router.route_hitl_answer(
+                    interaction_id=interaction_id,
+                    answers=answers,
+                    responder_id=responder_id,
+                    room_id=room_id,
+                )
+                return HITLResponse(
+                    request_id=interaction_id,
+                    status="accepted",
+                    responder_id=responder_id,
+                    client_request_id=client_request_id,
+                )
         result = await self._hitl_manager.handle_batch_response(
             room_id=room_id,
             interaction_id=interaction_id,

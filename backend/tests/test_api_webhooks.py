@@ -34,6 +34,7 @@ from execution.dispatch.transports.webhook import (
     WebhookTransport,
     parse_stream_response,
 )
+from execution.orchestrator_routing import WebhookAuthenticationError
 
 # =============================================================================
 # parse_stream_response Tests (pure function)
@@ -388,17 +389,16 @@ class TestWebhookRouteAdapter:
             )
 
         assert exc.value.status_code == 413
-        transport.authenticate_webhook.assert_awaited_once_with("msg-001", "token")
+        transport.authenticate_webhook.assert_not_awaited()
         transport.handle_webhook.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_route_rejects_invalid_token_before_reading_body(self):
+    async def test_route_rejects_invalid_token(self):
         class FakeRequest:
             headers = {}
 
             async def stream(self):
-                raise AssertionError("body must not be read before authentication")
-                yield b""
+                yield b'{"task":{"id":"task-001"}}'
 
         transport = MagicMock()
         transport.authenticate_webhook = AsyncMock(
@@ -452,6 +452,115 @@ class TestWebhookRouteAdapter:
         )
 
         assert json.loads in offloaded
+
+    @pytest.mark.asyncio
+    async def test_route_returns_accepted_when_orchestrator_owns_webhook(self):
+        class FakeState:
+            orchestrator_routing = AsyncMock()
+
+        class FakeApp:
+            state = FakeState()
+
+        class FakeRequest:
+            app = FakeApp()
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
+
+        FakeState.orchestrator_routing.route_webhook = AsyncMock(
+            return_value=webhooks.OWNER_ORCHESTRATOR
+        )
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+
+        result = await webhooks.handle_a2a_webhook(
+            request=FakeRequest(),
+            message_id="task-001",
+            authorization="Bearer token",
+            x_a2a_notification_token="",
+            transport=transport,
+        )
+
+        assert result == {"status": "accepted"}
+        FakeState.orchestrator_routing.route_webhook.assert_awaited_once_with(
+            message_id="task-001",
+            payload={"task": {"id": "task-001"}},
+            token="token",
+        )
+        transport.authenticate_webhook.assert_not_awaited()
+        transport.handle_webhook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_falls_back_to_legacy_on_seam_error(self):
+        class FakeState:
+            orchestrator_routing = AsyncMock()
+
+        class FakeApp:
+            state = FakeState()
+
+        class FakeRequest:
+            app = FakeApp()
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
+
+        FakeState.orchestrator_routing.route_webhook = AsyncMock(
+            side_effect=RuntimeError("store unavailable")
+        )
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+
+        result = await webhooks.handle_a2a_webhook(
+            request=FakeRequest(),
+            message_id="msg-001",
+            authorization="Bearer token",
+            x_a2a_notification_token="",
+            transport=transport,
+        )
+
+        assert result == {"status": "accepted"}
+        transport.authenticate_webhook.assert_awaited_once_with("msg-001", "token")
+        transport.handle_webhook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_route_translates_seam_auth_failure_to_http(self):
+        class FakeState:
+            orchestrator_routing = AsyncMock()
+
+        class FakeApp:
+            state = FakeState()
+
+        class FakeRequest:
+            app = FakeApp()
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
+
+        FakeState.orchestrator_routing.route_webhook = AsyncMock(
+            side_effect=WebhookAuthenticationError(401, "Invalid token")
+        )
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
+        transport.handle_webhook = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await webhooks.handle_a2a_webhook(
+                request=FakeRequest(),
+                message_id="task-001",
+                authorization="Bearer bad-token",
+                x_a2a_notification_token="",
+                transport=transport,
+            )
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "Invalid token"
+        transport.authenticate_webhook.assert_not_awaited()
+        transport.handle_webhook.assert_not_awaited()
 
     def test_webhook_transport_signature_matches_route_protocol(self):
         protocol_hints = get_type_hints(WebhookReceiver.handle_webhook)

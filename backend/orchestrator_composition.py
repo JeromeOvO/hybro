@@ -129,15 +129,18 @@ class OrchestratorRuntime:
     call_ledger: Any
     observation_inbox: Any
     observation_conflicts: Any
+    hitl_store: Any
     hitl_port: Any
     catalog_assembler: Any
     tool_runtime: Any
     observation_ingress: Any
+    observation_processor: Any
     dispatch: Any
     profile_resolver: Any
     profiles: dict[str, OrchestratorProfile]
     session_host: Any
     observation_sink: Any
+    cancellation_coordinator: Any
     kernel_factory: Callable[[FrozenToolCatalogSnapshot], OrchestratorKernel]
     projection_worker: Any
     recovery_cycle: Any
@@ -151,15 +154,18 @@ _RUNTIME_BINDINGS = (
     "call_ledger",
     "observation_inbox",
     "observation_conflicts",
+    "hitl_store",
     "hitl_port",
     "catalog_assembler",
     "tool_runtime",
     "observation_ingress",
+    "observation_processor",
     "dispatch",
     "profile_resolver",
     "profiles",
     "session_host",
     "observation_sink",
+    "cancellation_coordinator",
     "kernel_factory",
     "projection_worker",
     "recovery_cycle",
@@ -469,15 +475,18 @@ def create_orchestrator_runtime(  # noqa: C901
         call_ledger=call_ledger,
         observation_inbox=observation_inbox,
         observation_conflicts=observation_conflicts,
+        hitl_store=hitl_store,
         hitl_port=hitl_port,
         catalog_assembler=catalog_assembler,
         tool_runtime=tool_runtime,
         observation_ingress=observation_ingress,
+        observation_processor=observation_processor,
         dispatch=dispatch,
         profile_resolver=profile_resolver,
         profiles=profiles,
         session_host=session_host,
         observation_sink=observation_sink,
+        cancellation_coordinator=cancellation_coordinator,
         kernel_factory=kernel_for_catalog,
         projection_worker=projection_worker,
         recovery_cycle=recovery_cycle,

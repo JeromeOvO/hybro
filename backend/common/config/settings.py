@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     orchestrator_projection_enabled: bool = False
     orchestrator_worker_interval_seconds: int = Field(default=30, gt=0)
 
+    # Orchestrator dual-routing (step 7). Every switch defaults OFF/0/empty so
+    # the orchestrator receives zero traffic until explicitly enabled. Routing
+    # happens only at Run creation; these flags never change an existing Run's
+    # owner.
+    orchestrator_routing_enabled: bool = False
+    orchestrator_fast_ratio: int = Field(default=0, ge=0, le=100)
+    orchestrator_ultimate_ratio: int = Field(default=0, ge=0, le=100)
+    orchestrator_user_allowlist: str | list[str] = []
+    orchestrator_room_allowlist: str | list[str] = []
+    orchestrator_kill_switch: bool = False
+
     log_level: str = "INFO"
     log_format: str = "auto"
 
@@ -398,6 +409,8 @@ class Settings(BaseSettings):
     @field_validator(
         "orchestrator_recovery_enabled",
         "orchestrator_projection_enabled",
+        "orchestrator_routing_enabled",
+        "orchestrator_kill_switch",
         mode="before",
     )
     @classmethod
@@ -407,6 +420,31 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator(
+        "orchestrator_user_allowlist", "orchestrator_room_allowlist", mode="before"
+    )
+    @classmethod
+    def parse_orchestrator_allowlist(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return []
+
+    @field_validator(
+        "orchestrator_fast_ratio", "orchestrator_ultimate_ratio", mode="before"
+    )
+    @classmethod
+    def normalize_orchestrator_ratio(cls, value):
+        if value is None or str(value).strip() == "":
+            return 0
+        try:
+            return max(0, min(100, int(value)))
+        except (TypeError, ValueError):
+            return 0
 
     @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
     @classmethod

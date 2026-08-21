@@ -153,13 +153,13 @@ def test_run_model_excludes_forbidden_semantic_state():
         assert f"{name}:" not in source
 
 
-def test_orchestrator_runtime_composition_is_container_confined():
-    """The container is the composition root; every other path stays dark.
+def test_production_entry_points_reach_orchestrator_only_through_routing_seam():
+    """Step-7 coexistence invariant.
 
-    ``container.py`` may reference the full ``execution.orchestrator`` runtime
-    (directly or through the dedicated ``orchestrator_composition``
-    module). The legacy product entry points must stay orchestrator-free until
-    dual routing lands in step 7.
+    The legacy product entry points (facade and routes) may reach the
+    orchestrator ONLY through ``execution.orchestrator_routing`` (the dual-routing
+    seam). Direct runtime/store imports remain forbidden so the dark-launch
+    boundary cannot be bypassed. ``jobs`` and ``room`` stay orchestrator-free.
     """
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     packages = set(pyproject["tool"]["setuptools"]["packages"])
@@ -168,11 +168,9 @@ def test_orchestrator_runtime_composition_is_container_confined():
     assert "dal.orchestrator" in packages
 
     container_modules = imported_modules(ROOT / "container.py")
-    # The dedicated composition module must be the reach point from the
-    # container; the real enforcement is the orchestrator-free entry-point
-    # assertion below.
     assert "orchestrator_composition" in container_modules
 
+    routing_seam = "execution.orchestrator_routing"
     production_paths = [
         ROOT / "main.py",
         *(ROOT / "api_gateway").rglob("*.py"),
@@ -180,12 +178,16 @@ def test_orchestrator_runtime_composition_is_container_confined():
         *(ROOT / "room").rglob("*.py"),
         ROOT / "execution" / "facade.py",
     ]
-    bindings = [
-        str(path.relative_to(ROOT))
-        for path in production_paths
-        if "execution.orchestrator" in path.read_text()
-    ]
-    assert bindings == []
+    violations = []
+    for path in production_paths:
+        for module in imported_modules(path):
+            if module == routing_seam:
+                continue
+            if module.startswith("execution.orchestrator") or module.startswith(
+                "dal.orchestrator"
+            ):
+                violations.append(f"{path.relative_to(ROOT)} imports {module}")
+    assert violations == []
 
 
 def test_direct_client_boundary_contains_no_sdk_or_provider_types():

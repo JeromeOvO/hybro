@@ -58,6 +58,18 @@ class InMemoryOrchestratorRunStore:
     async def load(self, run_id: str) -> OrchestratorRunState | None:
         return self.runs.get(run_id)
 
+    async def load_by_user_message_id(
+        self, user_message_id: str
+    ) -> OrchestratorRunState | None:
+        return next(
+            (
+                run
+                for run in self.runs.values()
+                if run.request.user_message_id == user_message_id
+            ),
+            None,
+        )
+
     async def cas_mutate(
         self,
         run: OrchestratorRunState,

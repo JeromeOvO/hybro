@@ -83,6 +83,15 @@ class MongoOrchestratorRunStore:
         value = await self.collection.find_one({"run_id": run_id})
         return _run_from_document(value) if value else None
 
+    async def load_by_user_message_id(
+        self, user_message_id: str
+    ) -> OrchestratorRunState | None:
+        """Correlate an orchestrator Run by its originating room user message."""
+        value = await self.collection.find_one(
+            {"request.user_message_id": user_message_id}
+        )
+        return _run_from_document(value) if value else None
+
     async def _load_client_request_duplicate(
         self, run: OrchestratorRunState
     ) -> OrchestratorRunState | None:
