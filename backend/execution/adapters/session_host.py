@@ -157,6 +157,18 @@ class RoomSessionHost:
             signal_factory=EventCancellationSignal,
         )
 
+    async def shutdown(self) -> None:
+        """Cancel every in-process session task without persisting terminal state.
+
+        This is the graceful-shutdown surface: the asyncio tasks are cancelled
+        directly so Runs stay non-terminal and are re-entered by the recovery
+        workers (plan 2.3). ``RoomAgentSession.abort`` is the user-facing
+        cancellation path and persists ``canceled``; do not call it here.
+        """
+        for session in list(self._sessions.values()):
+            await session.shutdown()
+        self._sessions.clear()
+
     def _require_session(self, room_id: str) -> RoomAgentSession:
         session = self._sessions.get(room_id)
         if session is None:

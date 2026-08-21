@@ -158,6 +158,9 @@ class OrchestratorProfileResolver:
             raise OrchestratorProfileResolutionError(
                 f"no orchestrator prompt configured for {profile_id!r}"
             )
+        # prompt_version is currently decorative: PromptAssetRegistry is an
+        # inline default registry with no versioned assets or digests; a real
+        # prompt-asset source replaces it before the canary rollout.
         version = str(self._setting(profile_id, "prompt_version", "1"))
         return PromptConfiguration(
             prompt_id=prompt_id,

@@ -168,14 +168,10 @@ def test_orchestrator_runtime_composition_is_container_confined():
     assert "dal.orchestrator" in packages
 
     container_modules = imported_modules(ROOT / "container.py")
-    # Any orchestrator submodule is allowed from the composition root; the
-    # dedicated composition module must be the reach point from the container.
+    # The dedicated composition module must be the reach point from the
+    # container; the real enforcement is the orchestrator-free entry-point
+    # assertion below.
     assert "orchestrator_composition" in container_modules
-    for module in container_modules:
-        if module == "execution.orchestrator" or module.startswith(
-            "execution.orchestrator."
-        ):
-            assert module.startswith("execution.orchestrator")
 
     production_paths = [
         ROOT / "main.py",

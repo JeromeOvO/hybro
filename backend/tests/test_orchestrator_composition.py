@@ -106,7 +106,11 @@ def test_profile_resolution_failure_degrades_to_composition_error():
 
 
 def test_validate_lists_every_missing_binding():
+    from dataclasses import fields
+
+    from orchestrator_composition import OrchestratorRuntime
+
     assert validate_orchestrator_runtime(None) == ["runtime"]
+    expected = {field.name for field in fields(OrchestratorRuntime)}
     missing = SimpleNamespace()
-    assert "run_store" in validate_orchestrator_runtime(missing)
-    assert len(validate_orchestrator_runtime(missing)) >= 10
+    assert set(validate_orchestrator_runtime(missing)) == expected

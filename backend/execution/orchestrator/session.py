@@ -239,6 +239,22 @@ class RoomAgentSession:
     async def wait_for_idle(self) -> None:
         await self._idle.wait()
 
+    async def shutdown(self) -> None:
+        """Cancel the in-process task without persisting a terminal state.
+
+        Graceful-shutdown surface: the Run stays non-terminal and is re-entered
+        by recovery workers later. Unlike ``abort``, this never routes through
+        the kernel's terminal settlement.
+        """
+        task = self._task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     def subscribe(self, listener: SessionEventListener):
         return self.lifecycle.subscribe(listener)
 

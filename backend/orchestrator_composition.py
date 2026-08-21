@@ -66,9 +66,6 @@ from execution.orchestrator.a2a_runtime.models import (
     A2ADispatchReceipt,
     NormalizedA2AObservation,
 )
-from execution.orchestrator.a2a_runtime.observations import (
-    RunAddressedToolObservationSink,
-)
 from execution.orchestrator.a2a_runtime.preparation import (
     RunPreparedInvocationSnapshotReader,
 )
@@ -86,7 +83,6 @@ from execution.orchestrator.models import (
     OrchestratorProfile,
 )
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
-from execution.orchestrator.session import EventCancellationSignal
 from hub_runtime_bridge.orchestrator_relay import (
     MongoRelayCommandJournalStore,
     RelayCommandJournal,
@@ -167,6 +163,8 @@ def create_orchestrator_runtime(  # noqa: C901
     No Mongo or LLM calls are made during construction; this is wiring only.
     """
     run_store = MongoOrchestratorRunStore(mongo.collection("orchestrator_runs"))
+    # The event store is bound now but only gains its consumer in step 6's
+    # production projection driver, which appends durable Run events.
     event_store = MongoOrchestratorEventStore(
         mongo.collection("orchestrator_run_events")
     )
@@ -224,6 +222,8 @@ def create_orchestrator_runtime(  # noqa: C901
     hitl_port = DurableHITLApplicationPort(hitl_store=hitl_store)
     terminal_finalizer = TerminalInteractionFinalizer(hitl_port)
 
+    # External ingress stays fully rejected until step 7 wires the per-source
+    # authenticators (webhook HMAC via a2a_adapter, relay identity).
     authenticator = observation_authenticator or RejectExternalIngressAuthenticator()
     observation_ingress = A2AObservationIngress(
         inbox=observation_inbox,
@@ -302,8 +302,11 @@ def create_orchestrator_runtime(  # noqa: C901
         snapshot: FrozenToolCatalogSnapshot,
     ) -> OrchestratorKernel:
         # InMemoryProjectionDriver is a deliberate placeholder until step 6
-        # introduces the real projection driver/worker. It satisfies the
-        # kernel's terminal-settlement contract without external side effects.
+        # introduces the real projection driver/worker. NOTE: it marks
+        # required intents complete WITHOUT performing the projections (event
+        # append, final-message delivery, public run status). If it is not
+        # replaced before step 7 routes traffic, final answers would be
+        # silently undelivered while intents appear complete.
         return OrchestratorKernel(
             run_store=run_store,
             model_runtime=model_runtime,
@@ -321,16 +324,7 @@ def create_orchestrator_runtime(  # noqa: C901
         listener=session_listener,
     )
 
-    def kernel_for_run(run: Any) -> OrchestratorKernel:
-        if run.tool_catalog is None:
-            raise OrchestratorCompositionError("Run has no frozen tool catalog")
-        return kernel_for_catalog(run.tool_catalog)
-
-    observation_sink = RunAddressedToolObservationSink(
-        run_store=run_store,
-        kernel_factory=kernel_for_run,
-        signal_factory=EventCancellationSignal,
-    )
+    observation_sink = session_host.observation_sink()
 
     return OrchestratorRuntime(
         run_store=run_store,

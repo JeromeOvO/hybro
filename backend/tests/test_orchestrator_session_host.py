@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from execution.adapters.session_host import RoomSessionHost
@@ -19,6 +21,7 @@ from execution.orchestrator.in_memory import (
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.models import (
     FrozenToolCatalogSnapshot,
+    ModelStreamEvent,
     ToolObservation,
     ToolResult,
 )
@@ -156,3 +159,47 @@ async def test_observation_sink_reenters_without_a_session_object(catalog):
                 observed_at=NOW,
             ),
         )
+
+
+class BlockingModelRuntime:
+    """Streams an attempt start and then blocks until the task is cancelled."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def stream_turn(self, request, *, signal):
+        self.started.set()
+        yield ModelStreamEvent(kind="attempt_started", attempt=1)
+        await asyncio.Event().wait()
+
+
+async def test_shutdown_cancels_tasks_without_persisting_terminal_state(catalog):
+    run_store = InMemoryOrchestratorRunStore()
+    epoch_store = InMemoryRoomEpochStore()
+    await epoch_store.activate("room-1", "create-1", activated_at=NOW)
+    blocking = BlockingModelRuntime()
+    host = _host(
+        run_store=run_store,
+        epoch_store=epoch_store,
+        runtime=blocking,
+    )
+    await host.create_session(
+        room_id="room-1",
+        profile=profile(),
+        candidate_scope=make_run().candidate_scope,
+        requesting_subject_id="user-1",
+        frozen_catalog=catalog,
+    )
+
+    prompt_task = asyncio.create_task(host.prompt("room-1", user_message()))
+    await blocking.started.wait()
+
+    await host.shutdown()
+    with pytest.raises(asyncio.CancelledError):
+        await prompt_task
+
+    # The Run stays non-terminal so recovery workers can re-enter it.
+    run_id = run_store.runs
+    assert run_id
+    run = next(iter(run_id.values()))
+    assert run.status == "running"
