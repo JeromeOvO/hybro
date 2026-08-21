@@ -97,8 +97,11 @@ narrow adapter implementing the existing
 - `HITLApplicationPort` over the existing durable HITL store: preserve route
   fingerprint, authenticated answerer, verified auth references; `answer_applied`
   is the idempotency marker.
-- `DirectA2AClient` over the `a2a_adapter` SDK client (SDK types must not leak
-  past the adapter; `dispatch.py` already has the boundary protocol).
+- `DirectA2AClient` over the `a2a_adapter` SDK client. `a2a_adapter` is the
+  SDK anti-corruption layer: it is the only backend package allowed to import
+  the `a2a` SDK (`a2a.types`, `a2a.client`; pinned by
+  `test_a2a_adapter_does_not_import_orchestrator_policy`), so SDK types must
+  not leak past `dispatch.py`'s provider-neutral boundary protocol.
 - `RelayCommandJournal` / `RelayCommandSender` over `hub_runtime_bridge`.
   Note the journaling semantics: `hub_runtime_bridge` today journals only
   **inbound** hub→backend responses (`hub_response_journal.py`); the
