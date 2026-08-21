@@ -56,7 +56,7 @@ class MongoOrchestratorRunStore:
             )
             return MongoRunStoreResult("replayed" if replay else "conflict", duplicate)
         try:
-            await self.collection.insert_one(candidate.model_dump(mode="json"))
+            await self.collection.insert_one(candidate.model_dump(mode="python"))
         except DuplicateKeyError:
             existing = await self.load(run.run_id)
             return MongoRunStoreResult(
@@ -103,7 +103,7 @@ class MongoOrchestratorRunStore:
         try:
             result = await self.collection.replace_one(
                 {"run_id": run.run_id, "state_version": expected_state_version},
-                candidate.model_dump(mode="json"),
+                candidate.model_dump(mode="python"),
             )
         except DuplicateKeyError:
             return MongoRunStoreResult("conflict", await self.load(run.run_id))

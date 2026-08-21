@@ -222,6 +222,26 @@ async def test_mongo_due_run_listing_ignores_mongo_id():
     assert due == [created.run]
 
 
+async def test_mongo_run_dates_remain_bson_datetimes_for_due_queries():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    scheduled = make_run().model_copy(
+        update={
+            "recovery_claim": make_run().recovery_claim.model_copy(
+                update={"next_attempt_at": NOW - timedelta(seconds=1)}
+            )
+        }
+    )
+
+    created = await store.create(scheduled, command_id="create:scheduled")
+
+    assert isinstance(
+        collection.values[0]["recovery_claim"]["next_attempt_at"],
+        type(NOW),
+    )
+    assert await store.list_due_runs(due_at=NOW, limit=10) == [created.run]
+
+
 async def test_mongo_and_memory_call_lease_contracts_match():
     stores = [
         InMemoryAgentCallLedgerStore(),
