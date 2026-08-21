@@ -624,6 +624,47 @@ async def test_conflicting_terminal_receipt_applies_nonterminal_canonical_eviden
     assert len(dispatch.commands) == 1
 
 
+async def test_conflicting_terminal_receipt_preserves_canonical_hitl_reset():
+    dispatch = Dispatch(terminal_status="completed")
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    canonical = NormalizedA2AObservation(
+        observation_id="canonical-input-required",
+        call_record_id=call.call_record_id,
+        source_kind="direct",
+        source_identity="receipt:completed",
+        binding_scope=call.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id=call.a2a_task_id,
+        context_id=call.a2a_context_id,
+    )
+    assert (await coordinator.observations.record(canonical))[0] == "accepted"
+
+    outcome = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert outcome == "continuation_pending"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "continuation_pending"
+    assert persisted.continuation_command is None
+    assert persisted.continuation_state is None
+    assert persisted.answer_applied is None
+    conflicts = await coordinator.observations.conflicts.list_for_source(
+        canonical.source_identity
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].accepted_observation_id == canonical.observation_id
+    assert len(dispatch.commands) == 1
+
+
 async def test_continuation_expiry_replays_after_observation_ack_loss():
     dispatch = AmbiguousContinuationDispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(

@@ -792,7 +792,11 @@ class A2AContinuationCoordinator:
                 call,
                 observation,
                 recent_limit=call.runtime_policy.recent_observation_id_limit,
-            ).model_copy(update={"continuation_state": "accepted"})
+            )
+            if terminal.continuation_command is not None:
+                terminal = terminal.model_copy(
+                    update={"continuation_state": "accepted"}
+                )
             persisted = await self._cas_or_load_winner(
                 terminal, expected_state_version=call.state_version
             )
