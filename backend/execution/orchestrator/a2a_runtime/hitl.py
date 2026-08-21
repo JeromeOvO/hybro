@@ -775,23 +775,33 @@ class A2AContinuationCoordinator:
         if call is None:
             return "delivery_uncertain"
         if receipt.terminal_observation is not None:
-            await self.observations.record(receipt.terminal_observation)
+            observation = receipt.terminal_observation
+            if observation.call_record_id is None:
+                observation = observation.model_copy(
+                    update={"call_record_id": call.call_record_id}
+                )
+            await self.observations.record(observation)
             call = await self._renew_and_verify(call)
             if call is None:
                 return "delivery_uncertain"
-            waiting = call.model_copy(
-                update={
-                    "continuation_state": "accepted",
-                    "claim_owner": None,
-                    "claim_expires_at": None,
-                    "next_attempt_at": datetime.now(UTC),
-                    "state_version": call.state_version + 1,
-                    "updated_at": datetime.now(UTC),
-                }
-            )
+            terminal = apply_observation(
+                call,
+                observation,
+                recent_limit=call.runtime_policy.recent_observation_id_limit,
+            ).model_copy(update={"continuation_state": "accepted"})
             persisted = await self._cas_or_load_winner(
-                waiting, expected_state_version=call.state_version
+                terminal, expected_state_version=call.state_version
             )
+            if (
+                observation.observation_id in persisted.recent_observation_ids
+                and persisted.terminal_result_digest
+                == terminal.terminal_result_digest
+            ):
+                assert persisted.terminal_result_digest is not None
+                await self.observations.mark_executor_outcome(
+                    observation.observation_id,
+                    outcome_digest=persisted.terminal_result_digest,
+                )
             return await self._finalized_state(persisted)
         if receipt.outcome == "accepted":
             working = transition_call(

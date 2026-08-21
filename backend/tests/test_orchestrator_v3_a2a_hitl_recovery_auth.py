@@ -170,7 +170,9 @@ class ContinuationWinnerRaceLedger(InMemoryAgentCallLedgerStore):
         self.durable_winner = None
 
     async def cas(self, record, *, expected_state_version):
-        target_state = "working" if self.branch == "working" else "resuming"
+        target_state = (
+            "working" if self.branch == "working" else self.terminal_status
+        )
         if (
             not self.raced
             and record.continuation_state == "accepted"
@@ -483,6 +485,35 @@ async def test_continuation_delivery_cas_race_returns_durable_terminal_winner(
             verified_auth_reference_digests=[],
             verified_auth_references=[],
         )
+
+
+@pytest.mark.parametrize(
+    "terminal_status", ["completed", "failed", "canceled", "rejected", "expired"]
+)
+async def test_continuation_terminal_receipt_persists_winner_without_redispatch(
+    terminal_status,
+):
+    dispatch = Dispatch(terminal_status=terminal_status)
+    coordinator, ledger, hitl, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    resume_kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
+
+    assert await coordinator.resume(**resume_kwargs) == terminal_status
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == terminal_status
+    assert persisted.terminal_result is not None
+    assert persisted.continuation_state == "accepted"
+    assert await coordinator.resume(**resume_kwargs) == terminal_status
+    assert len(dispatch.commands) == 1
+    assert hitl.read_interaction_for_test("interaction-1") is None
 
 
 @pytest.mark.parametrize(
