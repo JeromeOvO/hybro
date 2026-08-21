@@ -16,8 +16,15 @@ def imported_modules(path: Path) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level:
+                package_parts = list(path.relative_to(ROOT).with_suffix("").parts[:-1])
+                keep = max(0, len(package_parts) - node.level + 1)
+                resolved = ".".join([*package_parts[:keep], module]).strip(".")
+                modules.add(resolved)
+            elif module:
+                modules.add(module)
     return modules
 
 
@@ -31,6 +38,7 @@ def test_orchestrator_contracts_do_not_import_runtime_adapters_or_old_policies()
         "google",
         "openai",
         "execution.orchestration",
+        "execution.orchestrator.a2a_runtime",
     }
     violations = []
     for path in ORCHESTRATOR.glob("*.py"):
@@ -65,7 +73,7 @@ def test_a2a_adapter_does_not_import_orchestrator_policy():
     assert violations == []
 
 
-def test_kernel_has_no_a2a_room_database_sse_or_provider_dependencies():
+def test_generic_kernel_session_context_and_budget_have_no_plan3_or_product_dependencies():
     forbidden = {
         "a2a",
         "a2a_adapter",
@@ -76,12 +84,16 @@ def test_kernel_has_no_a2a_room_database_sse_or_provider_dependencies():
         "sse_starlette",
         "openai",
     }
-    modules = imported_modules(ORCHESTRATOR / "kernel.py")
-    assert not {
-        module
-        for module in modules
-        if any(module == root or module.startswith(f"{root}.") for root in forbidden)
-    }
+    for filename in ("kernel.py", "session.py", "context.py", "budget.py"):
+        modules = imported_modules(ORCHESTRATOR / filename)
+        assert not {
+            module
+            for module in modules
+            if module.startswith("execution.orchestrator.a2a_runtime")
+            or any(
+                module == root or module.startswith(f"{root}.") for root in forbidden
+            )
+        }, filename
 
 
 def test_gateway_provider_inventory_is_closed_and_gemini_dependency_is_removed():
@@ -115,7 +127,6 @@ def test_v3_run_model_excludes_forbidden_semantic_state():
         "semantic_blockers",
         "planner_validation_failures",
         "semantic_retry_fingerprints",
-        "epochs",
         "disposition_lineage",
         "required_fields",
         "goal_fingerprint",
@@ -146,6 +157,8 @@ def test_v3_package_is_distributable_but_not_bound_to_production():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     packages = set(pyproject["tool"]["setuptools"]["packages"])
     assert "execution.orchestrator" in packages
+    assert "execution.orchestrator.a2a_runtime" in packages
+    assert "dal.orchestrator_v3" in packages
 
     production_paths = [
         ROOT / "container.py",
@@ -163,6 +176,20 @@ def test_v3_package_is_distributable_but_not_bound_to_production():
     container_source = (ROOT / "container.py").read_text()
     assert "execution.orchestration.room_message_center" in container_source
     assert "execution.orchestration.factory" in container_source
+
+
+def test_direct_client_boundary_contains_no_sdk_or_provider_types():
+    dispatch = ORCHESTRATOR / "a2a_runtime" / "dispatch.py"
+    modules = imported_modules(dispatch)
+    forbidden = {"a2a", "a2a_adapter", "aiohttp", "httpx", "grpc"}
+    assert not {
+        module
+        for module in modules
+        if any(module == root or module.startswith(f"{root}.") for root in forbidden)
+    }
+    source = dispatch.read_text()
+    assert "A2AClient" not in source.replace("DirectA2AClient", "")
+    assert "ClientFactory" not in source
 
 
 def test_v3_persistence_metadata_is_unbound_and_has_no_repository_constructor():

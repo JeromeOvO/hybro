@@ -19,6 +19,62 @@ Absent or invalid typed metadata fails with `unsupported_interaction` and the
 fixed public message `The agent requested an unsupported interaction.`
 
 
+## Production-unbound Orchestrator V3 A2A runtime
+
+The Plan 3 runtime remains outside `container.py`, routes, and jobs until the
+Plan 4 cutover. Its durable adapter boundary translates only retryable provider
+persistence failures into `RecoverableAdapterError`; checkpoint,
+authorization, epoch, resource, transport, and ambiguous-effect adapters use
+narrow typed subclasses. Contract and programming errors (`ValueError`,
+`TypeError`, assertion failures, and unexpected runtime failures) remain
+visible. Accepted execution converts only those typed outages into recoverable
+suspension or reconciliation so a remote effect cannot compete with a generic
+tool failure.
+
+Observation ingress resolves the frozen call or authoritative alias before the
+immutable inbox insert. Every accepted inbox and conflict row therefore carries
+its Room ID and epoch at creation; unresolvable evidence is rejected before it
+can evade Room-epoch cleanup. HITL authorization proofs bind the call and Room
+identity plus interaction ID/revision, route and interaction fingerprints,
+question/challenge identity, and answer digest. Consumed reference digests are
+retained on the call so a later challenge cannot reuse the same reference. An
+exact retry validates the durable answer, route, marker, answerer, proofs, and
+continuation outcome before returning the existing state without another
+command. Input/auth inbox processing classifies the durable call winner at both
+the continuation-pending and interaction-attach CAS boundaries. A terminal
+winner completes the inbox without suspension delivery; any aggregate created
+before the losing attach is durably abandoned and excluded from interaction
+reads. Activation is followed by an authoritative call reload: only the exact
+state, interaction ID, revision, and fingerprint may emit a suspension. Every
+later terminal producer closes the attached interaction through the shared
+`TerminalInteractionFinalizer` before coordinator return, terminal sink, inbox
+completion, or any `A2AAgentToolRuntime` terminal `ToolResult`. Runtime replay,
+persisted-outcome, inline terminal, and competing-CAS-winner paths suspend on a
+typed closure failure and retry the durable terminal winner without repeating
+the transport effect. Observation, cancellation, continuation, and runtime
+reads/answers therefore remain terminal-monotonic. Activation renews and verifies
+the Room epoch immediately
+before and after the owner effect; inactive-epoch cleanup must close the exact
+prepared/attached interaction before consuming the inbox. Explicit absent
+abandonment is an idempotent no-op; owner errors and typed outages keep cleanup
+retryable. General recovery compares semantic state, attempts, result, and future
+schedule rather than lease/version churn; orphan acceptances schedule at their
+TTL, dispatch failures use bounded backoff, and a per-record outage cannot abort
+the remaining recovery scan.
+
+Direct transport capability selection (`stream`, `sync`, or `poll`) is frozen
+in the accepted dispatch snapshot. The provider-neutral direct client port
+contains SDK types behind its implementation boundary. Stream events enter the
+same durable ingress before they affect lifecycle state; deadline, cancellation,
+and process-death paths close the stream and reconcile through inspection.
+Inbound remote artifacts may be enabled only with the Plan 3 guarded adapter,
+which uses the existing SSRF-pinned fetch primitive and an unbound
+`RoomFilesEpochFencedArtifactOwner`. After a long fetch, that owner holds the
+existing Room deletion/write lease while checking the exact Room epoch and
+committing; a recreated Room cannot receive an old-incarnation artifact. Room
+epoch activation/deactivation replay uses creation/deletion identity and the
+winner's timestamp rather than caller timestamp equality.
+
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
 currently present in this repository.
@@ -447,11 +503,19 @@ tool batches, two-phase tool acceptance, suspension, correlated observation, and
 terminal settlement.
 `RoomAgentSession` is an unbound exactly-once lifecycle facade, while
 `ContextCompiler`, non-destructive explicitly budgeted compaction, and
-`BudgetPolicy` bound each turn. Plan 2 validates
-these layers with static fake agent-shaped tools only: it does not bind them in
-`container.py`, routes, or jobs and does not expose real `call_agent` or import
-A2A protocol, Room, database, SSE, or provider SDK modules into the kernel.
-OpenAI uses native streamed tool calls; DeepSeek uses the named locally validated
+`BudgetPolicy` bound each turn. Plan 3 adds a sibling, production-unbound
+`execution.orchestrator.a2a_runtime` adapter layer: async authorized Agent Card
+projection produces a frozen synchronous catalog and private bindings; a separate
+call ledger enforces accept-before-dispatch, scoped task/context ownership,
+Room-epoch fences, cancellation, and leased recovery; authenticated direct,
+relay, webhook, and inspection evidence converges through an immutable observation
+inbox before generic `ToolObservation` delivery. Typed V2 HITL routes use
+trusted call-bound auth-reference verification and an answer-applied reconciler
+that closes answer-to-command crash windows; frozen resource manifests and
+durable/regenerable projections remain adapter-owned. The Kernel/session/context/budget layer
+still imports none of A2A, Room, persistence, SSE, or provider SDK concerns, and
+Plan 3 constructs nothing in `container.py`, routes, or production jobs. OpenAI
+uses native streamed tool calls; DeepSeek uses the named locally validated
 structured-action route. Gemini credentials remain only as fail-fast migration
 input and cannot select an adapter.
 

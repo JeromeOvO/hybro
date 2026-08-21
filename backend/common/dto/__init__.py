@@ -67,6 +67,8 @@ from common.dto.hitl import (
     HITLQuestionAnswer,
     HITLQuestionSpec,
     HITLRouteSnapshot,
+    HITLRouteSnapshotUnion,
+    HITLRouteSnapshotV2,
     HITLSingleChoiceAnswer,
     HITLTextAnswer,
 )
@@ -205,6 +207,8 @@ __all__ = [
     "HITLResolvedEvent",
     "HITLResponse",
     "HITLRouteSnapshot",
+    "HITLRouteSnapshotUnion",
+    "HITLRouteSnapshotV2",
     "HITLSingleChoiceAnswer",
     "HITLTextAnswer",
     "HubAgentDescriptor",

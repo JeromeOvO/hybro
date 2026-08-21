@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 from .models import (
-    A2AOwnershipRecord,
     CompactionResult,
     ModelStreamEvent,
     ModelTurnRequest,
@@ -175,14 +174,38 @@ class OrchestratorEventStore(Protocol):
     ) -> list[OrchestratorEvent]: ...
 
 
-class A2AOwnershipLookup(Protocol):
-    async def find_run_by_task_id(
-        self, a2a_task_id: str
-    ) -> A2AOwnershipRecord | None: ...
+class InvocationCheckpointReader(Protocol):
+    async def is_acceptance_checkpointed(
+        self,
+        run_id: str,
+        invocation_id: str,
+        acceptance_id: str,
+        idempotency_key: str,
+        binding_digest: str,
+    ) -> bool: ...
 
-    async def find_run_by_context_id(
-        self, a2a_context_id: str
-    ) -> A2AOwnershipRecord | None: ...
+    async def is_suspension_checkpointed(
+        self,
+        run_id: str,
+        invocation_id: str,
+        status: str,
+    ) -> bool: ...
+
+
+class InvocationOutcomeCheckpointReader(Protocol):
+    async def is_outcome_checkpointed(
+        self,
+        run_id: str,
+        invocation_id: str,
+        outcome_digest: str,
+    ) -> bool: ...
+
+    async def has_processed_observation(
+        self,
+        run_id: str,
+        invocation_id: str,
+        observation_id: str,
+    ) -> bool: ...
 
 
 class EventProjector(Protocol):

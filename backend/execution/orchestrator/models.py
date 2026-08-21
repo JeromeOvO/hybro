@@ -433,85 +433,57 @@ class ModelStreamEvent(ContractModel):
         return self
 
 
-class CallAgentInput(ContractModel):
-    agent_id: str
-    task: str
+class AgentToolInput(ContractModel):
+    """Platform-owned arguments for one privately bound Agent tool."""
+
+    task: str = Field(min_length=1, max_length=20_000)
     context_refs: list[str] = Field(default_factory=list)
     artifact_refs: list[str] = Field(default_factory=list)
     attachment_refs: list[str] = Field(default_factory=list)
 
 
-AGENT_CALL_STATES = frozenset(
-    {
-        "accepted",
-        "dispatching",
-        "working",
-        "continuation_pending",
-        "input_required",
-        "auth_required",
-        "resuming",
-        "completed",
-        "failed",
-        "canceled",
-        "rejected",
-        "expired",
-    }
-)
-AgentCallState = Literal[
-    "accepted",
-    "dispatching",
-    "working",
-    "continuation_pending",
-    "input_required",
-    "auth_required",
-    "resuming",
-    "completed",
-    "failed",
-    "canceled",
-    "rejected",
-    "expired",
-]
+class PreparedResourceRef(ContractModel):
+    ref_id: str
+    kind: Literal["context", "artifact", "attachment"]
+    source_message_id: str
+    mime_type: str | None = None
+    size_bytes: int = Field(default=0, ge=0)
+    content_digest: str
 
 
-class AcceptedAgentCall(ContractModel):
+class RunResourceManifestSnapshot(ContractModel):
     schema_version: Literal[1] = 1
-    state_version: int = Field(ge=0)
+    manifest_id: str
+    refs: list[PreparedResourceRef] = Field(default_factory=list)
+    content_digest: str
 
-    call_id: str
-    run_id: str
-    agent_id: str
-    tool_name: str
-    arguments: dict[str, object]
-    state: AgentCallState
-    idempotency_key: str
 
-    output_schema_id: str | None = None
-    output_schema_version: str | None = None
-    output_schema_digest: str | None = None
-    a2a_task_id: str | None = None
-    a2a_context_id: str | None = None
-    transport_attempts: int = Field(default=0, ge=0)
-    processed_observation_ids: list[str] = Field(default_factory=list)
-    pending_interaction_id: str | None = None
-    artifact_refs: list[str] = Field(default_factory=list)
-    error_code: str | None = None
-    error_message: str | None = None
-    accepted_at: datetime
-    updated_at: datetime
-    terminal_at: datetime | None = None
+class FrozenToolCatalogEntry(ContractModel):
+    definition: ToolDefinition
+    binding: ToolBindingRef
+
+
+class FrozenToolCatalogSnapshot(ContractModel):
+    schema_version: Literal[1] = 1
+    catalog_id: str
+    entries: list[FrozenToolCatalogEntry]
+    created_at: datetime
 
     @model_validator(mode="after")
-    def _observation_inventory_is_unique(self) -> AcceptedAgentCall:
-        if len(self.processed_observation_ids) != len(
-            set(self.processed_observation_ids)
-        ):
-            raise ValueError("processed observation IDs must be unique")
+    def _tool_names_and_bindings_are_unique(self) -> FrozenToolCatalogSnapshot:
+        names = [entry.definition.name for entry in self.entries]
+        bindings = [entry.binding.binding_id for entry in self.entries]
+        if len(names) != len(set(names)):
+            raise ValueError("frozen tool names must be unique")
+        if len(bindings) != len(set(bindings)):
+            raise ValueError("frozen tool binding IDs must be unique")
         return self
 
 
 class RunRequestSnapshot(ContractModel):
     request_fingerprint: str
-    room_generation: int = Field(ge=0)
+    room_epoch: int = Field(ge=1)
+    requesting_subject_id: str = Field(min_length=1, max_length=256)
     user_message_id: str
     quoted_message_id: str | None = None
     attachment_refs: list[str] = Field(default_factory=list)
@@ -624,7 +596,7 @@ RunStatus = Literal[
 
 
 class OrchestratorRunState(ContractModel):
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     run_id: str
     session_id: str
     room_id: str
@@ -634,9 +606,9 @@ class OrchestratorRunState(ContractModel):
     candidate_scope: CandidateScopeSnapshot
     status: RunStatus
     transcript: list[AgentMessage]
-    calls: list[AcceptedAgentCall]
+    tool_catalog: FrozenToolCatalogSnapshot | None = None
+    resource_manifest: RunResourceManifestSnapshot | None = None
     tool_batches: list[ToolCallBatch] = Field(default_factory=list)
-    pending_interaction_ids: list[str]
     artifact_refs: list[str]
     budget: BudgetState
     compaction_summary: str | None = None
@@ -653,8 +625,6 @@ class OrchestratorRunState(ContractModel):
 
     @model_validator(mode="after")
     def _aggregate_identity_and_uniqueness(self) -> OrchestratorRunState:
-        if any(call.run_id != self.run_id for call in self.calls):
-            raise ValueError("every AgentCall must belong to the Run")
         batch_message_ids = [batch.assistant_message_id for batch in self.tool_batches]
         if len(batch_message_ids) != len(set(batch_message_ids)):
             raise ValueError("tool batch assistant message IDs must be unique")
@@ -662,9 +632,7 @@ class OrchestratorRunState(ContractModel):
             entry.call_id for batch in self.tool_batches for entry in batch.entries
         ]
         inventories = (
-            ("call IDs", [call.call_id for call in self.calls]),
             ("tool batch call IDs", batch_call_ids),
-            ("pending interaction IDs", self.pending_interaction_ids),
             ("artifact refs", self.artifact_refs),
             ("processed command IDs", self.processed_command_ids),
             (
@@ -676,13 +644,6 @@ class OrchestratorRunState(ContractModel):
             if len(values) != len(set(values)):
                 raise ValueError(f"{label} must be unique")
         return self
-
-
-class A2AOwnershipRecord(ContractModel):
-    run_id: str
-    room_id: str
-    room_generation: int = Field(ge=0)
-    call_id: str
 
 
 EVENT_TYPES = frozenset(

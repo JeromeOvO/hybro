@@ -56,17 +56,6 @@ ORCHESTRATOR_RUN_INDEXES = (
         unique=True,
     ),
     MongoIndexDefinition(
-        name="orchestrator_agent_call_id",
-        keys=(("run_id", 1), ("calls.call_id", 1)),
-        unique=True,
-    ),
-    MongoIndexDefinition(
-        name="orchestrator_a2a_task", keys=(("calls.a2a_task_id", 1),)
-    ),
-    MongoIndexDefinition(
-        name="orchestrator_a2a_context", keys=(("calls.a2a_context_id", 1),)
-    ),
-    MongoIndexDefinition(
         name="orchestrator_recovery_due",
         keys=(
             ("recovery_claim.next_attempt_at", 1),
