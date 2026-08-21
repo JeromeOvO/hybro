@@ -211,6 +211,17 @@ async def test_mongo_run_cas_does_not_duplicate_preapplied_command_id():
     assert await store.load(terminal.run_id) == committed.run
 
 
+async def test_mongo_due_run_listing_ignores_mongo_id():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    created = await store.create(make_run(), command_id="create:run-1")
+    collection.values[0]["_id"] = "mongo-generated-id"
+
+    due = await store.list_due_runs(due_at=NOW, limit=10)
+
+    assert due == [created.run]
+
+
 async def test_mongo_and_memory_call_lease_contracts_match():
     stores = [
         InMemoryAgentCallLedgerStore(),

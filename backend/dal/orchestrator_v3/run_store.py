@@ -229,7 +229,7 @@ class MongoOrchestratorRunStore:
             ],
         }
         return [
-            OrchestratorRunState.model_validate(value)
+            OrchestratorRunState.model_validate(_without_mongo_id(value))
             for value in await _to_list(self.collection.find(query), length=limit)
         ]
 
