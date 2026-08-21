@@ -64,6 +64,41 @@ class Settings(BaseSettings):
     llm_gateway_default_embedding_model: str = "embedding_model"
     llm_gateway_default_supervisor_model: str = "supervisor_model"
 
+    # Orchestrator runtime profile parameters (Fast/Ultimate). Fast and Ultimate
+    # share one Kernel and differ only in these resolved parameters. The
+    # initial_routing dimension is pinned to explicit_agent_first (the API
+    # pre-filters the candidate scope) and finalization to pass_through until
+    # those reserved dimensions are consumed by the kernel.
+    orchestrator_fast_model_route: str = "supervisor_model"
+    orchestrator_fast_prompt_id: str = "orchestrator_fast"
+    orchestrator_fast_prompt_version: str = "1"
+    orchestrator_fast_thinking_level: str | None = None
+    orchestrator_fast_max_model_turns: int = 6
+    orchestrator_fast_grace_model_turns: int = 1
+    orchestrator_fast_max_agent_calls: int = 10
+    orchestrator_fast_max_parallel_calls: int = 3
+    orchestrator_fast_max_transport_retries_per_call: int = 2
+    orchestrator_fast_max_compactions: int = 2
+    orchestrator_fast_deadline_seconds: float = 300.0
+    orchestrator_fast_initial_routing: str = "explicit_agent_first"
+    orchestrator_fast_tool_execution: str = "parallel"
+    orchestrator_fast_finalization: str = "pass_through"
+
+    orchestrator_ultimate_model_route: str = "supervisor_model"
+    orchestrator_ultimate_prompt_id: str = "orchestrator_ultimate"
+    orchestrator_ultimate_prompt_version: str = "1"
+    orchestrator_ultimate_thinking_level: str | None = None
+    orchestrator_ultimate_max_model_turns: int = 12
+    orchestrator_ultimate_grace_model_turns: int = 2
+    orchestrator_ultimate_max_agent_calls: int = 20
+    orchestrator_ultimate_max_parallel_calls: int = 4
+    orchestrator_ultimate_max_transport_retries_per_call: int = 3
+    orchestrator_ultimate_max_compactions: int = 3
+    orchestrator_ultimate_deadline_seconds: float = 600.0
+    orchestrator_ultimate_initial_routing: str = "explicit_agent_first"
+    orchestrator_ultimate_tool_execution: str = "parallel"
+    orchestrator_ultimate_finalization: str = "pass_through"
+
     log_level: str = "INFO"
     log_format: str = "auto"
 

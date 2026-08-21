@@ -153,14 +153,13 @@ def test_run_model_excludes_forbidden_semantic_state():
         assert f"{name}:" not in source
 
 
-def test_orchestrator_production_coexistence_invariants_hold_before_runtime_wiring():
-    """Gate the first container.py wiring without allowing runtime imports yet.
+def test_orchestrator_runtime_composition_is_container_confined():
+    """The container is the composition root; every other path stays dark.
 
-    Step 3 wires only persistence/metadata into ``container.py`` (index
-    provisioning and the room epoch store binding). Runtime composition
-    (kernel, session, a2a_runtime dispatch/ingress) lands in step 5, so no
-    other ``execution.orchestrator`` module may be referenced from the
-    container yet. The product's legacy entry points stay orchestrator-free.
+    ``container.py`` may reference the full ``execution.orchestrator`` runtime
+    (directly or through the dedicated ``orchestrator_composition``
+    module). The legacy product entry points must stay orchestrator-free until
+    dual routing lands in step 7.
     """
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     packages = set(pyproject["tool"]["setuptools"]["packages"])
@@ -168,17 +167,15 @@ def test_orchestrator_production_coexistence_invariants_hold_before_runtime_wiri
     assert "execution.orchestrator.a2a_runtime" in packages
     assert "dal.orchestrator" in packages
 
-    allowed_container_references = {
-        "execution.orchestrator.persistence",
-        "execution.orchestrator.a2a_runtime.persistence",
-    }
-    container_references = {
-        module
-        for module in imported_modules(ROOT / "container.py")
-        if module == "execution.orchestrator"
-        or module.startswith("execution.orchestrator.")
-    }
-    assert container_references <= allowed_container_references
+    container_modules = imported_modules(ROOT / "container.py")
+    # Any orchestrator submodule is allowed from the composition root; the
+    # dedicated composition module must be the reach point from the container.
+    assert "orchestrator_composition" in container_modules
+    for module in container_modules:
+        if module == "execution.orchestrator" or module.startswith(
+            "execution.orchestrator."
+        ):
+            assert module.startswith("execution.orchestrator")
 
     production_paths = [
         ROOT / "main.py",

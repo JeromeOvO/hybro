@@ -102,6 +102,11 @@ from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from models.request import RoomCenterAgentMessageRequest
+from orchestrator_composition import (
+    OrchestratorCompositionError,
+    create_orchestrator_runtime,
+    validate_orchestrator_runtime,
+)
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
@@ -1894,6 +1899,42 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 local_agent_discovery=_local_agent_service,
             ),
         )
+
+        # ── Orchestrator runtime composition (dark launch, 0% traffic) ──
+        #
+        # The composition is constructed eagerly so a misconfigured model
+        # route, prompt asset, or profile parameter is detected during startup
+        # even though nothing routes into it yet. Adapter-level failures
+        # degrade the dark launch; programming errors still fail startup.
+        try:
+            app.state.orchestrator_runtime = create_orchestrator_runtime(
+                mongo=mongo_dal,
+                settings_obj=runtime.settings,
+                llm_gateway=llm_provider,
+                model_registry=model_registry,
+                agent_registry=_agent_deps.agent_registry,
+                exclusion_reader=CapabilityIssueExclusionReader(
+                    agent_capability_issue_service
+                ),
+                room_ownership_reader=_room_deps.room_registry,
+                epoch_store=require_room_epoch_store(),
+                room_files=file_storage,
+                relay_service=_relay_svc,
+            )
+            missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
+            if missing:
+                logger.warning(
+                    "Orchestrator runtime composition incomplete: %s",
+                    ", ".join(missing),
+                )
+                app.state.orchestrator_runtime = None
+            else:
+                logger.info(
+                    "Orchestrator runtime composition ready (dark launch, 0%% traffic)"
+                )
+        except OrchestratorCompositionError as exc:
+            logger.warning("Orchestrator runtime composition disabled: %s", exc)
+            app.state.orchestrator_runtime = None
 
     except BaseException:
         # Startup cleanup never replaces the original failure. Every opened
