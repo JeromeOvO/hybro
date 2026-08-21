@@ -394,6 +394,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
+            from dal.orchestrator.epoch_bindings import (
+                bind_room_epoch_store,
+                reset_room_epoch_store,
+            )
+            from dal.orchestrator.stores import MongoRoomEpochStore
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
@@ -429,6 +434,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # The compatibility runtime is process-global. Clear bindings from a
             # previous failed or completed lifespan before composing this one.
             room_runtime.reset_bindings()
+            reset_room_epoch_store()
+
+            bind_room_epoch_store(
+                MongoRoomEpochStore(mongo_dal.collection("orchestrator_room_epochs"))
+            )
 
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
@@ -454,6 +464,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "hitl_interactions",
                         "hitl_resume_commands",
                         "cancelled_messages",
+                        "orchestrator_runs",
+                        "orchestrator_run_events",
+                        "orchestrator_agent_tool_bindings",
+                        "orchestrator_agent_calls",
+                        "orchestrator_a2a_observations",
+                        "orchestrator_a2a_observation_conflicts",
+                        "orchestrator_room_epochs",
                     )
                 ],
                 file_dir=runtime.settings.hybro_file_dir,
@@ -2126,6 +2143,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestration_run_indexes(mongo)
+    await _ensure_orchestrator_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_room_history_indexes(mongo)
     await _ensure_user_message_indexes(mongo)
@@ -2437,6 +2455,28 @@ async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
         [("run_id", 1), ("created_at", 1)],
         name="orchestration_run_created_at",
     )
+
+
+async def _ensure_orchestrator_indexes(mongo: MongoDAL) -> None:
+    from execution.orchestrator.a2a_runtime.persistence import (
+        A2A_RUNTIME_COLLECTIONS,
+    )
+    from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+
+    for collection_definition in (*ORCHESTRATOR_COLLECTIONS, *A2A_RUNTIME_COLLECTIONS):
+        for index in collection_definition.indexes:
+            kwargs: dict[str, Any] = {}
+            if index.partial_filter is not None:
+                kwargs["partialFilterExpression"] = dict(index.partial_filter)
+            await _create_index(
+                mongo,
+                collection_definition.name,
+                list(index.keys),
+                name=index.name,
+                unique=index.unique,
+                critical=index.unique,
+                **kwargs,
+            )
 
 
 async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:

@@ -153,14 +153,14 @@ def test_run_model_excludes_forbidden_semantic_state():
         assert f"{name}:" not in source
 
 
-def test_orchestrator_package_is_distributable_but_not_bound_to_production():
-    """Gate the runtime stays production-unbound until the production cutover.
+def test_orchestrator_production_coexistence_invariants_hold_before_runtime_wiring():
+    """Gate the first container.py wiring without allowing runtime imports yet.
 
-    The first container.py wiring change replaces this gate with coexistence
-    and routing invariants (persisted runtime_generation routing, flag-off
-    zero traffic, no mid-run owner switching). See
-    ``test_orchestrator_cutover_contracts.py`` for the pinned pre-cutover
-    contracts that survive the replacement.
+    Step 3 wires only persistence/metadata into ``container.py`` (index
+    provisioning and the room epoch store binding). Runtime composition
+    (kernel, session, a2a_runtime dispatch/ingress) lands in step 5, so no
+    other ``execution.orchestrator`` module may be referenced from the
+    container yet. The product's legacy entry points stay orchestrator-free.
     """
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     packages = set(pyproject["tool"]["setuptools"]["packages"])
@@ -168,11 +168,24 @@ def test_orchestrator_package_is_distributable_but_not_bound_to_production():
     assert "execution.orchestrator.a2a_runtime" in packages
     assert "dal.orchestrator" in packages
 
+    allowed_container_references = {
+        "execution.orchestrator.persistence",
+        "execution.orchestrator.a2a_runtime.persistence",
+    }
+    container_references = {
+        module
+        for module in imported_modules(ROOT / "container.py")
+        if module == "execution.orchestrator"
+        or module.startswith("execution.orchestrator.")
+    }
+    assert container_references <= allowed_container_references
+
     production_paths = [
-        ROOT / "container.py",
         ROOT / "main.py",
         *(ROOT / "api_gateway").rglob("*.py"),
         *(ROOT / "jobs").rglob("*.py"),
+        *(ROOT / "room").rglob("*.py"),
+        ROOT / "execution" / "facade.py",
     ]
     bindings = [
         str(path.relative_to(ROOT))
@@ -180,10 +193,6 @@ def test_orchestrator_package_is_distributable_but_not_bound_to_production():
         if "execution.orchestrator" in path.read_text()
     ]
     assert bindings == []
-
-    container_source = (ROOT / "container.py").read_text()
-    assert "execution.orchestration.room_message_center" in container_source
-    assert "execution.orchestration.factory" in container_source
 
 
 def test_direct_client_boundary_contains_no_sdk_or_provider_types():

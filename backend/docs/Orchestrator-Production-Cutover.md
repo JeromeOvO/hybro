@@ -201,6 +201,13 @@ never by current flag state.
   `orchestrator_agent_tool_bindings`, `orchestrator_agent_calls`,
   `orchestrator_a2a_observations`, `orchestrator_a2a_observation_conflicts`,
   `orchestrator_room_epochs`.
+- Cleanup lineage note for step 4: `orchestrator_run_events` documents carry
+  no `room_id` today, so the legacy room-owned fallback delete (by
+  `{"room_id": room_id}`) cannot remove them. Exact-epoch cleanup must delete
+  events through Run lineage (resolve the Room's Runs, then their events) or
+  persist `room_id`/`room_epoch` on events when they are minted in
+  `settlement.py`; `MongoOrchestratorEventStore` also needs a
+  `delete_by_epoch`-style method for the fenced cleanup path.
 
 ## 6. Outbox projection, SSE, and public state
 
