@@ -783,10 +783,13 @@ class A2AContinuationCoordinator:
                 observation = observation.model_copy(
                     update={"call_record_id": call.call_record_id}
                 )
-            await self.observations.record(observation)
+            record_outcome, inbox_record = await self.observations.record(observation)
             call = await self._renew_and_verify(call)
             if call is None:
                 return "delivery_uncertain"
+            if record_outcome == "conflict":
+                return await self._mark_uncertain(call)
+            observation = inbox_record.observation
             terminal = apply_observation(
                 call,
                 observation,

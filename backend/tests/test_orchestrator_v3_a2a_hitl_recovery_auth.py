@@ -514,6 +514,46 @@ async def test_continuation_terminal_receipt_persists_winner_without_redispatch(
     assert hitl.read_interaction_for_test("interaction-1") is None
 
 
+async def test_conflicting_terminal_receipt_fails_closed_on_canonical_evidence():
+    dispatch = Dispatch(terminal_status="completed")
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    canonical = NormalizedA2AObservation(
+        observation_id="canonical-failed",
+        call_record_id=call.call_record_id,
+        source_kind="direct",
+        source_identity="receipt:completed",
+        binding_scope=call.endpoint_scope_digest,
+        event_kind="terminal",
+        observed_at=NOW,
+        task_id=call.a2a_task_id,
+        context_id=call.a2a_context_id,
+        status="failed",
+    )
+    assert (await coordinator.observations.record(canonical))[0] == "accepted"
+
+    outcome = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert outcome == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.terminal_result is None
+    conflicts = await coordinator.observations.conflicts.list_for_source(
+        canonical.source_identity
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].accepted_observation_id == canonical.observation_id
+    assert len(dispatch.commands) == 1
+
+
 @pytest.mark.parametrize(
     "terminal_status", ["completed", "failed", "canceled", "rejected", "expired"]
 )
