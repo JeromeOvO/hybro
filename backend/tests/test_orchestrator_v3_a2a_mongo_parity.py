@@ -185,6 +185,32 @@ async def test_mongo_run_duplicate_request_ignores_mongo_id():
     assert replayed.run.run_id == run.run_id
 
 
+async def test_mongo_run_cas_does_not_duplicate_preapplied_command_id():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    created = await store.create(make_run(), command_id="create:run-1")
+    terminal = created.run.model_copy(
+        update={
+            "status": "failed",
+            "terminal_reason": "test failure",
+            "processed_command_ids": [
+                *created.run.processed_command_ids,
+                "complete:run-1",
+            ],
+            "state_version": created.run.state_version + 1,
+        }
+    )
+
+    committed = await store.cas_mutate(
+        terminal,
+        expected_state_version=created.run.state_version,
+        command_id="complete:run-1",
+    )
+
+    assert committed.outcome == "accepted"
+    assert committed.run.processed_command_ids == ["create:run-1", "complete:run-1"]
+    assert await store.load(terminal.run_id) == committed.run
+
+
 async def test_mongo_and_memory_call_lease_contracts_match():
     stores = [
         InMemoryAgentCallLedgerStore(),

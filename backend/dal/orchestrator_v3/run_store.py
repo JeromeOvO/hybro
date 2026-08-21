@@ -94,8 +94,11 @@ class MongoOrchestratorRunStore:
             or run.state_version != expected_state_version + 1
         ):
             return MongoRunStoreResult("conflict", current)
+        processed_command_ids = list(run.processed_command_ids)
+        if command_id not in processed_command_ids:
+            processed_command_ids.append(command_id)
         candidate = run.model_copy(
-            update={"processed_command_ids": [*run.processed_command_ids, command_id]}
+            update={"processed_command_ids": processed_command_ids}
         )
         try:
             result = await self.collection.replace_one(
