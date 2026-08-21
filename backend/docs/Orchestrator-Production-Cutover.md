@@ -78,7 +78,7 @@ narrow adapter implementing the existing
 
 | Component | Production binding |
 |---|---|
-| `GatewayModelRuntime` | existing `LLMGatewayImpl` via `route_configuration_from_gateway` |
+| `GatewayModelRuntime` | existing `LLMGatewayImpl` (bound as the `LLMTurnGateway` contract); `route_configuration_from_gateway` separately resolves the profile's `ModelRouteConfiguration` |
 | `AgentToolCatalogAssembler` | `AgentService`/`AgentResolver` candidate listing (see 2.2) |
 | `A2AAgentToolRuntime` + call ledger | Mongo stores in `dal.orchestrator` |
 | `RoomAgentSession` | in-process session host keyed by Room (see 2.3) |
@@ -100,9 +100,26 @@ narrow adapter implementing the existing
 - `DirectA2AClient` over the `a2a_adapter` SDK client (SDK types must not leak
   past the adapter; `dispatch.py` already has the boundary protocol).
 - `RelayCommandJournal` / `RelayCommandSender` over `hub_runtime_bridge`.
+  Note the journaling semantics: `hub_runtime_bridge` today journals only
+  **inbound** hub→backend responses (`hub_response_journal.py`); the
+  **outgoing** command journal (`persist_dispatch`/`persist_continuation`/
+  `persist_cancellation` plus `inspect(command_id)` idempotency/dedupe, per
+  the `RelayCommandJournal` protocol in `dispatch.py`) must be built new.
+  `RelayCommandSender` maps onto `HubRelayService.send_to_hub` /
+  `cancel_hub_task` / `reply_to_hub_task`, which currently push to the
+  transport with no journaling.
 - `ObservationIngressAuthenticator` implementations per source kind: webhook
   HMAC, relay identity. `RejectExternalIngressAuthenticator` remains the safe
-  default until each source is enabled.
+  default until each source is enabled. The webhook HMAC authenticator must
+  reuse the existing scheme — static `WEBHOOK_SIGNING_KEY` (≥ 32 bytes),
+  per-message `secrets.token_urlsafe(32)` tokens stored only as HMAC-SHA256
+  hex digests (`dal/runtime_store/parts/webhook_tokens.py`), verified with
+  `hmac.compare_digest` — and bridge it to the orchestrator's
+  `authenticate(source_kind, headers, body) -> source_identity` signature
+  (`ports.py`). The existing route (`api_gateway/routes/webhook_routes.py`)
+  reads the token from `X-A2A-Notification-Token` / `Authorization: Bearer`
+  and looks up the stored hash by the `message_id` path parameter; do not
+  invent a second HMAC key or scheme for the orchestrator ingress.
 - `ResourceMaterializerPort` file source over `room_files`/attachment storage
   with the epoch-fenced artifact owner for inbound remote artifacts.
 - Profile resolver: reads the Fast/Ultimate parameter table plus model/prompt
@@ -263,6 +280,56 @@ lands on different runtimes across replicas. Recommended order:
 7. Stability observation window
 8. Plan 5: legacy cleanup
 
+### 8.1 Configuration and secrets
+
+Enumerate cutover configuration before the first canary user:
+
+- Webhook HMAC: reuse the existing `WEBHOOK_SIGNING_KEY` (≥ 32 bytes); never
+  provision a second webhook key for the orchestrator authenticator (2.2).
+- Relay identity: agent cards, endpoint scopes, and digests come from
+  `AgentService`/`AgentResolver`; define the relay ingress authenticator's
+  identity material before the relay source kind is enabled.
+- LLM providers: the orchestrator adds no provider-specific secrets — it
+  consumes the existing gateway settings (`openai_api_key`,
+  `deepseek_api_key`) through `LLMGatewayConfig`.
+- Redis (`REDIS_URL`): recovery/projection worker leader election is enabled
+  only when the DAL Redis KV connects (`container.py`); under gunicorn the
+  app refuses to start multi-worker without fully connected Redis. Never run
+  orchestrator recovery workers without leader election — jobs then execute
+  once per replica.
+- Local vs production: document docker-compose vs production differences
+  (replica count, Mongo topology, secrets manager) in the cutover runbook;
+  the compose stack is the manual-test baseline, not the production shape.
+
+### 8.2 Canary observability
+
+Everything below derives from existing durable stores; no new fact sources.
+
+- Orchestrator Run outcome rate per profile (success/failure/aborted) from
+  `orchestrator_runs` status transitions.
+- Projection intent backlog and blocked count. `blocked` is terminal
+  (section 6), so any blocked mandatory intent needs operational
+  requeue/replacement — alert on it, don't just watch it.
+- Recovery cycle cadence: time between completed `A2ARecoveryCycle.run_once`
+  cycles. `run_once` has no per-phase exception isolation yet (section 7), so
+  one failing phase suppresses the whole cycle until the next tick — a
+  stalled cycle means orphaned work across every phase.
+- Ingress rejection rate. During dark launch every orchestrator ingress must
+  reject (safe default); an acceptance before its source kind is enabled is a
+  bug.
+- Outstanding A2A calls (`orchestrator_agent_calls`) and
+  `orchestrator_a2a_observation_conflicts` growth.
+- Room-deletion cleanup failures (`room_files` cleanup over
+  `room_owned_collections`).
+- New-Run routing share per profile, confirming the ratio flags and the
+  stable-hash selection behave as configured.
+
+Suggested initial thresholds (tune before launch): Run failure rate > 1%
+over 5 minutes; any blocked mandatory intent > 10 minutes; recovery cycle
+age beyond twice the normal cadence; ingress 5xx rate > 0.5%; sustained
+observation-conflict growth. Each threshold maps to a named owner in the
+execution order below.
+
 ## 9. Rollback and drain
 
 - Stop assigning new Runs to the orchestrator runtime (flag off or ratio 0).
@@ -275,6 +342,16 @@ lands on different runtimes across replicas. Recommended order:
   terminal Runs, pending inbox rows, HITL continuations, cancellations,
   artifacts, and projection intents reach zero. Only then may worker groups
   stop.
+- **Rollback triggers** — the cutover DRI stops assignment first (kill
+  switch, then diagnose) whenever a canary threshold in 8.2 breaks, dual
+  routing misroutes a delivery (wrong-owner answer), a duplicate final
+  message appears, or any other data-integrity incident is attributable to
+  the orchestrator. After diagnosis, choose between ratio reduction and full
+  rollback; both reuse the mechanics above.
+- The seven `room_owned_collections` registrations (section 5) stay in
+  place on rollback: they are inert while assignment is off, and removing
+  them would churn indexes and break the drain. They are removed only in
+  Plan 5 cleanup.
 
 ## 10. Validation and acceptance
 
@@ -328,6 +405,10 @@ first wires `container.py`.
    boundary (section 4 mode mapping).
 8. Feature flags and canary rollout.
 9. Rollback manual exercise + acceptance matrix (section 10).
+
+Steps 3–9 each need a named DRI and an explicit exit criterion (the
+corresponding section 10 gate or 8.2 threshold). The cutover DRI owns the
+canary on-call during steps 8–9 and the rollback decision in section 9.
 
 ## Plan 5 boundaries (out of scope)
 
