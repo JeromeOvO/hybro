@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -162,8 +162,13 @@ def _matches(document, query):  # noqa: C901
                 return False
             if "$nin" in expected and actual in expected["$nin"]:
                 return False
-            if "$lte" in expected and actual is not None and actual > expected["$lte"]:
-                return False
+            if "$lte" in expected and actual is not None:
+                boundary = expected["$lte"]
+                if isinstance(actual, datetime) and isinstance(boundary, datetime):
+                    actual = actual.replace(tzinfo=actual.tzinfo or UTC)
+                    boundary = boundary.replace(tzinfo=boundary.tzinfo or UTC)
+                if actual > boundary:
+                    return False
             continue
         if actual != expected:
             return False
@@ -348,6 +353,32 @@ async def test_mongo_run_dates_remain_bson_datetimes_for_due_queries():
         type(NOW),
     )
     assert await store.list_due_runs(due_at=NOW, limit=10) == [created.run]
+
+
+async def test_mongo_run_reads_restore_utc_to_bson_datetimes():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    scheduled = make_run().model_copy(
+        update={
+            "recovery_claim": make_run().recovery_claim.model_copy(
+                update={"next_attempt_at": NOW - timedelta(seconds=1)}
+            )
+        }
+    )
+    await store.create(scheduled, command_id="create:scheduled")
+    collection.values[0]["created_at"] = scheduled.created_at.replace(tzinfo=None)
+    collection.values[0]["updated_at"] = scheduled.updated_at.replace(tzinfo=None)
+    collection.values[0]["recovery_claim"]["next_attempt_at"] = (
+        scheduled.recovery_claim.next_attempt_at.replace(tzinfo=None)
+    )
+
+    loaded = await store.load(scheduled.run_id)
+    due = await store.list_due_runs(due_at=NOW, limit=10)
+
+    assert loaded.created_at.tzinfo is UTC
+    assert loaded.updated_at.tzinfo is UTC
+    assert loaded.recovery_claim.next_attempt_at.tzinfo is UTC
+    assert due[0].recovery_claim.next_attempt_at.tzinfo is UTC
 
 
 async def test_mongo_and_memory_call_lease_contracts_match():

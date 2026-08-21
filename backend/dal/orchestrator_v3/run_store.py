@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
@@ -76,11 +77,7 @@ class MongoOrchestratorRunStore:
 
     async def load(self, run_id: str) -> OrchestratorRunState | None:
         value = await self.collection.find_one({"run_id": run_id})
-        return (
-            OrchestratorRunState.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _run_from_document(value) if value else None
 
     async def _load_client_request_duplicate(
         self, run: OrchestratorRunState
@@ -90,11 +87,7 @@ class MongoOrchestratorRunStore:
         value = await self.collection.find_one(
             {"room_id": run.room_id, "client_request_id": run.client_request_id}
         )
-        return (
-            OrchestratorRunState.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _run_from_document(value) if value else None
 
     async def cas_mutate(
         self,
@@ -266,7 +259,7 @@ class MongoOrchestratorRunStore:
             {"$project": {"_recovery_due_at": 0}},
         ]
         return [
-            OrchestratorRunState.model_validate(_without_mongo_id(value))
+            _run_from_document(value)
             for value in await _to_list(
                 self.collection.aggregate(pipeline), length=limit
             )
@@ -364,6 +357,22 @@ class MongoOrchestratorRunStore:
         return await self.cas_mutate(
             candidate, expected_state_version=run.state_version, command_id=command_id
         )
+
+
+def _run_from_document(value: dict[str, Any]) -> OrchestratorRunState:
+    return OrchestratorRunState.model_validate(
+        _restore_utc_datetimes(_without_mongo_id(value))
+    )
+
+
+def _restore_utc_datetimes(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    if isinstance(value, dict):
+        return {key: _restore_utc_datetimes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_restore_utc_datetimes(item) for item in value]
+    return value
 
 
 def _find_intent(run: OrchestratorRunState | None, intent_id: str):
