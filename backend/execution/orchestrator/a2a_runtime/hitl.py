@@ -311,9 +311,12 @@ class A2AContinuationCoordinator:
             )
             if call.answer_applied is not None:
                 self._validate_applied_outcome(call, existing_answer)
-                if call.state in {"resuming", "delivery_uncertain"}:
-                    return await self.recover_call(call_record_id=call_record_id)
-                return await self._finalized_state(call)
+                if call.terminal_result is not None:
+                    return await self._finalized_state(call)
+                if call.continuation_command is not None:
+                    if call.state in {"resuming", "delivery_uncertain"}:
+                        return await self.recover_call(call_record_id=call_record_id)
+                    return await self._finalized_state(call)
         if call.terminal_result is not None:
             raise ValueError("terminal call has no matching applied HITL answer")
         if call.state == "resuming" and call.continuation_command is not None:
@@ -465,7 +468,7 @@ class A2AContinuationCoordinator:
         if call.answer_applied != marker:
             raise PermissionError("applied HITL marker changed")
         command = call.continuation_command
-        if command is None or (
+        if command is not None and (
             command.interaction_id != answer_record.interaction_id
             or command.interaction_revision != answer_record.interaction_revision
             or command.answer_digest != answer_record.answer_digest

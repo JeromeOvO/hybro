@@ -660,21 +660,21 @@ async def test_answer_marker_recovers_all_pre_command_crash_boundaries(failure):
             return await original_verify(room_id, epoch)
 
         coordinator.room_epochs.verify_active = crash_verify
+    resume_kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
     with pytest.raises(OSError):
-        await coordinator.resume(
-            call_record_id=call.call_record_id,
-            interaction_id="interaction-1",
-            interaction_revision=1,
-            route_fingerprint=route.fingerprint,
-            answers=questionnaire_answers(),
-            authenticated_answerer_id="user-1",
-        )
+        await coordinator.resume(**resume_kwargs)
     persisted = await ledger.load_by_record_id(call.call_record_id)
     assert persisted.answer_applied is not None
     assert persisted.continuation_command is None
     await expire_claim(ledger, call.call_record_id)
-    outcome = await coordinator.reconcile_answer(call_record_id=call.call_record_id)
-    assert outcome == "working"
+    assert await coordinator.resume(**resume_kwargs) == "working"
     assert len(dispatch.commands) == 1
 
 
