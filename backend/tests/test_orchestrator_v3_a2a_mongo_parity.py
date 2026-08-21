@@ -96,6 +96,15 @@ class DuplicateAfterWriteCollection(FakeCollection):
         return result
 
 
+class ConcurrentClientRequestWinnerCollection(FakeCollection):
+    async def insert_one(self, document):
+        winner = deepcopy(document)
+        winner["run_id"] = "run-concurrent-winner"
+        winner["processed_command_ids"] = ["create:concurrent-winner"]
+        self.values.append(winner)
+        raise DuplicateKeyError("client request winner used another run ID")
+
+
 def _matches(document, query):  # noqa: C901
     for key, expected in query.items():
         if key == "$and":
@@ -169,6 +178,17 @@ async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
     assert replayed.outcome == "replayed"
     assert replayed.run == accepted.run
     assert replayed.run.processed_command_ids == ["create:run-1"]
+
+
+async def test_mongo_run_create_reloads_concurrent_client_request_winner():
+    store = MongoOrchestratorRunStore(ConcurrentClientRequestWinnerCollection())
+    run = make_run()
+
+    replayed = await store.create(run, command_id="create:attempt")
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.run_id == "run-concurrent-winner"
+    assert replayed.run.request.request_fingerprint == run.request.request_fingerprint
 
 
 async def test_mongo_run_duplicate_request_ignores_mongo_id():

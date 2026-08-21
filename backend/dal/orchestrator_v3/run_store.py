@@ -40,16 +40,7 @@ class MongoOrchestratorRunStore:
             return MongoRunStoreResult(
                 "replayed" if existing == candidate else "conflict", existing
             )
-        duplicate = None
-        if run.client_request_id is not None:
-            value = await self.collection.find_one(
-                {"room_id": run.room_id, "client_request_id": run.client_request_id}
-            )
-            duplicate = (
-                OrchestratorRunState.model_validate(_without_mongo_id(value))
-                if value
-                else None
-            )
+        duplicate = await self._load_client_request_duplicate(run)
         if duplicate is not None:
             replay = (
                 duplicate.request.request_fingerprint == run.request.request_fingerprint
@@ -59,9 +50,20 @@ class MongoOrchestratorRunStore:
             await self.collection.insert_one(candidate.model_dump(mode="python"))
         except DuplicateKeyError:
             existing = await self.load(run.run_id)
-            return MongoRunStoreResult(
-                "replayed" if existing == candidate else "conflict", existing
-            )
+            if existing is not None:
+                return MongoRunStoreResult(
+                    "replayed" if existing == candidate else "conflict", existing
+                )
+            duplicate = await self._load_client_request_duplicate(run)
+            if duplicate is not None:
+                replay = (
+                    duplicate.request.request_fingerprint
+                    == run.request.request_fingerprint
+                )
+                return MongoRunStoreResult(
+                    "replayed" if replay else "conflict", duplicate
+                )
+            return MongoRunStoreResult("conflict", None)
         except RecoverableAdapterError:
             existing = await self.load(run.run_id)
             if existing == candidate:
@@ -71,6 +73,20 @@ class MongoOrchestratorRunStore:
 
     async def load(self, run_id: str) -> OrchestratorRunState | None:
         value = await self.collection.find_one({"run_id": run_id})
+        return (
+            OrchestratorRunState.model_validate(_without_mongo_id(value))
+            if value
+            else None
+        )
+
+    async def _load_client_request_duplicate(
+        self, run: OrchestratorRunState
+    ) -> OrchestratorRunState | None:
+        if run.client_request_id is None:
+            return None
+        value = await self.collection.find_one(
+            {"room_id": run.room_id, "client_request_id": run.client_request_id}
+        )
         return (
             OrchestratorRunState.model_validate(_without_mongo_id(value))
             if value
