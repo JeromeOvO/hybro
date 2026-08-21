@@ -774,6 +774,8 @@ def test_protocols_are_narrow_and_explicit():
             "claim_projection_intent",
             "complete_projection_intent",
             "block_projection_intent",
+            "release_projection_intent",
+            "list_due_projection_intents",
         },
     }
     for protocol, methods in expected.items():

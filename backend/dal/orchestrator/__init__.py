@@ -6,6 +6,11 @@ from .artifacts import (
 )
 from .event_store import MongoOrchestratorEventStore
 from .hitl import HITL_INTERACTIONS_COLLECTION, MongoHITLApplicationStore
+from .projection import (
+    MongoAppendEventProjector,
+    MongoFinalMessageProjector,
+    MongoTerminalRunStatusProjector,
+)
 from .run_store import MongoOrchestratorRunStore, MongoRunStoreResult
 from .stores import (
     AsyncMongoCollection,
@@ -23,6 +28,8 @@ __all__ = [
     "HITL_INTERACTIONS_COLLECTION",
     "MongoAgentCallLedgerStore",
     "MongoAgentToolBindingStore",
+    "MongoAppendEventProjector",
+    "MongoFinalMessageProjector",
     "MongoHITLApplicationStore",
     "MongoObservationConflictStore",
     "MongoObservationInboxStore",
@@ -30,4 +37,5 @@ __all__ = [
     "MongoOrchestratorRunStore",
     "MongoRunStoreResult",
     "MongoRoomEpochStore",
+    "MongoTerminalRunStatusProjector",
 ]

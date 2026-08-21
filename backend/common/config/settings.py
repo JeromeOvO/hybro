@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     orchestrator_ultimate_tool_execution: str = "parallel"
     orchestrator_ultimate_finalization: str = "pass_through"
 
+    # Orchestrator background workers (step 6). Both default OFF: legacy jobs
+    # already run and no traffic is routed to the orchestrator until step 8.
+    orchestrator_recovery_enabled: bool = False
+    orchestrator_projection_enabled: bool = False
+    orchestrator_worker_interval_seconds: int = Field(default=30, gt=0)
+
     log_level: str = "INFO"
     log_format: str = "auto"
 
@@ -383,6 +389,19 @@ class Settings(BaseSettings):
     @field_validator("orchestration_outcome_guardrails", mode="before")
     @classmethod
     def normalize_orchestration_outcome_guardrails(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator(
+        "orchestrator_recovery_enabled",
+        "orchestrator_projection_enabled",
+        mode="before",
+    )
+    @classmethod
+    def normalize_orchestrator_worker_switch(cls, value):
         if value is None or str(value).strip() == "":
             return False
         if isinstance(value, bool):

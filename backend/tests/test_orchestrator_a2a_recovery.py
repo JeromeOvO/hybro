@@ -598,6 +598,7 @@ async def test_recovery_cycle_keeps_watchdog_last():
         calls=phase("calls"),
         artifacts=phase("artifacts"),
         generic_runs=phase("runs"),
+        projection=phase("projection"),
         watchdog=phase("watchdog"),
     )
     await cycle.run_once()
@@ -608,5 +609,40 @@ async def test_recovery_cycle_keeps_watchdog_last():
         "calls",
         "artifacts",
         "runs",
+        "projection",
+        "watchdog",
+    ]
+
+
+async def test_recovery_cycle_isolates_phase_failures_without_reordering():
+    order = []
+
+    def phase(name, *, fail=False):
+        async def run():
+            order.append(name)
+            if fail:
+                raise RuntimeError(f"{name} failed")
+
+        return run
+
+    cycle = A2ARecoveryCycle(
+        cancellation=phase("cancel", fail=True),
+        continuation=phase("hitl"),
+        observations=phase("inbox", fail=True),
+        calls=phase("calls"),
+        artifacts=phase("artifacts"),
+        generic_runs=phase("runs", fail=True),
+        projection=phase("projection"),
+        watchdog=phase("watchdog"),
+    )
+    await cycle.run_once()
+    assert order == [
+        "cancel",
+        "hitl",
+        "inbox",
+        "calls",
+        "artifacts",
+        "runs",
+        "projection",
         "watchdog",
     ]

@@ -9,7 +9,11 @@ from typing import Any
 from pymongo.errors import DuplicateKeyError
 
 from execution.orchestrator.a2a_runtime.errors import RecoverableAdapterError
-from execution.orchestrator.models import OrchestratorRunState, RecoveryClaim
+from execution.orchestrator.models import (
+    OrchestratorRunState,
+    ProjectionIntent,
+    RecoveryClaim,
+)
 from execution.orchestrator.settlement import transition_projection_intent
 
 from .stores import (
@@ -319,6 +323,112 @@ class MongoOrchestratorRunStore:
             command_id=f"block-intent:{intent_id}:{expected_state_version}",
             blocked_reason=reason,
         )
+
+    async def release_projection_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        next_attempt_at: datetime,
+        now: datetime,
+    ) -> MongoRunStoreResult:
+        run = await self.load(run_id)
+        item = _find_intent(run, intent_id)
+        if item is None or item.status != "claimed":
+            return MongoRunStoreResult("conflict", run)
+        lease_expired = (
+            item.claim_expires_at is not None and item.claim_expires_at <= now
+        )
+        if item.claim_owner != owner_id and not lease_expired:
+            return MongoRunStoreResult("conflict", run)
+        return await self._intent(
+            run_id,
+            intent_id,
+            expected_state_version=expected_state_version,
+            to_status="pending",
+            command_id=f"release-intent:{intent_id}:{expected_state_version}",
+            next_attempt_at=next_attempt_at,
+        )
+
+    async def list_due_projection_intents(
+        self, *, due_at: datetime, limit: int
+    ) -> list[tuple[str, ProjectionIntent]]:
+        if limit <= 0:
+            return []
+        # Dotted paths are relative to the Run document (post-$unwind match).
+        due = {
+            "$or": [
+                {
+                    "projection_outbox.status": "pending",
+                    "$or": [
+                        {"projection_outbox.next_attempt_at": None},
+                        {"projection_outbox.next_attempt_at": {"$lte": due_at}},
+                    ],
+                },
+                {
+                    "projection_outbox.status": "claimed",
+                    "projection_outbox.claim_expires_at": {"$lte": due_at},
+                },
+            ]
+        }
+        # Inside $elemMatch the paths are relative to the array ELEMENT, so the
+        # pre-filter must drop the "projection_outbox." prefix.
+        pre_filter = {
+            "$or": [
+                {
+                    "status": "pending",
+                    "$or": [
+                        {"next_attempt_at": None},
+                        {"next_attempt_at": {"$lte": due_at}},
+                    ],
+                },
+                {
+                    "status": "claimed",
+                    "claim_expires_at": {"$lte": due_at},
+                },
+            ]
+        }
+        pipeline: list[dict[str, object]] = [
+            {"$match": {"projection_outbox": {"$elemMatch": pre_filter}}},
+            {"$unwind": "$projection_outbox"},
+            {"$match": due},
+            {
+                "$addFields": {
+                    "_projection_due_at": {
+                        "$ifNull": [
+                            "$projection_outbox.next_attempt_at",
+                            "$projection_outbox.claim_expires_at",
+                            "$updated_at",
+                        ]
+                    }
+                }
+            },
+            {"$sort": {"_projection_due_at": 1, "run_id": 1}},
+            {"$limit": limit},
+            {
+                "$project": {
+                    "_id": 0,
+                    "_projection_due_at": 0,
+                    "run_id": 1,
+                    "projection_outbox": 1,
+                }
+            },
+        ]
+        results: list[tuple[str, ProjectionIntent]] = []
+        for value in await _to_list(self.collection.aggregate(pipeline), length=limit):
+            run_id = value.get("run_id")
+            intent_value = value.get("projection_outbox")
+            if not isinstance(run_id, str) or not isinstance(intent_value, dict):
+                continue
+            results.append(
+                (
+                    run_id,
+                    ProjectionIntent.model_validate(_without_mongo_id(intent_value)),
+                )
+            )
+        return results
 
     async def _intent(
         self,

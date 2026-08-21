@@ -32,6 +32,7 @@ from execution.orchestrator.a2a_runtime.models import (
     DurableHITLAnswerRecord,
     NormalizedA2AObservation,
 )
+from execution.orchestrator.models import ProjectionIntent
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW, make_run
@@ -114,10 +115,26 @@ class FakeCollection:
                             ),
                             None,
                         )
+            elif "$unwind" in stage:
+                field = stage["$unwind"].removeprefix("$")
+                unwound = []
+                for item in values:
+                    entries = _get(item, field) or []
+                    for entry in entries:
+                        copied = deepcopy(item)
+                        copied[field] = entry
+                        unwound.append(copied)
+                values = unwound
             elif "$sort" in stage:
                 fields = list(stage["$sort"])
                 values.sort(
-                    key=lambda item: tuple(_get(item, field) for field in fields)
+                    key=lambda item: tuple(
+                        # Mongo sorts null/missing before any value.
+                        datetime.min.replace(tzinfo=UTC)
+                        if _get(item, field) is None
+                        else _get(item, field)
+                        for field in fields
+                    )
                 )
             elif "$limit" in stage:
                 values = values[: stage["$limit"]]
@@ -219,6 +236,11 @@ def _matches(document, query):  # noqa: C901
             continue
         actual = _get(document, key)
         if isinstance(expected, dict):
+            if "$elemMatch" in expected:
+                if not isinstance(actual, list) or not any(
+                    _matches(item, expected["$elemMatch"]) for item in actual
+                ):
+                    return False
             if "$ne" in expected and actual == expected["$ne"]:
                 return False
             if "$in" in expected:
@@ -815,3 +837,101 @@ async def test_mongo_and_memory_hitl_concurrent_differing_answers_match():
     await collection._both_waiting.wait()
     collection._release.set()
     assert sorted(await asyncio.gather(first, second)) == ["accepted", "conflict"]
+
+
+def _intent_doc(intent_id: str, *, status: str, next_attempt_at=None) -> dict:
+    return {
+        "intent_id": intent_id,
+        "kind": "append_orchestrator_event",
+        "target": "orchestrator_run_events",
+        "dedupe_key": f"event-{intent_id}",
+        "required": True,
+        "event_id": f"event-{intent_id}",
+        "event_sequence": 1,
+        "causation_id": "complete",
+        "payload": {},
+        "status": status,
+        "blocked_reason": None,
+        "claim_owner": None,
+        "claim_expires_at": None,
+        "attempt_count": 0,
+        "next_attempt_at": next_attempt_at,
+    }
+
+
+async def test_mongo_list_due_projection_intents_unwinds_sorts_and_filters():
+    collection = FakeCollection()
+    due_pending = {
+        "run_id": "run-due",
+        "projection_outbox": [
+            _intent_doc("intent-1", status="pending", next_attempt_at=None)
+        ],
+    }
+    future_pending = {
+        "run_id": "run-future",
+        "projection_outbox": [
+            _intent_doc(
+                "intent-2",
+                status="pending",
+                next_attempt_at=NOW + timedelta(minutes=10),
+            )
+        ],
+    }
+    expired_claimed = {
+        "run_id": "run-expired",
+        "projection_outbox": [
+            _intent_doc(
+                "intent-3",
+                status="claimed",
+                next_attempt_at=None,
+            )
+            | {
+                "claim_owner": "worker-a",
+                "claim_expires_at": NOW - timedelta(seconds=1),
+            }
+        ],
+    }
+    collection.values = [future_pending, expired_claimed, due_pending]
+    store = MongoOrchestratorRunStore(collection)
+
+    due = await store.list_due_projection_intents(due_at=NOW, limit=10)
+
+    assert [(run_id, intent.intent_id) for run_id, intent in due] == [
+        ("run-due", "intent-1"),
+        ("run-expired", "intent-3"),
+    ]
+
+
+async def test_mongo_release_projection_intent_backs_off_durably():
+    collection = FakeCollection()
+    run = make_run().model_copy(
+        update={
+            "projection_outbox": [
+                ProjectionIntent.model_validate(
+                    {
+                        **_intent_doc("intent-1", status="claimed"),
+                        "claim_owner": "worker-a",
+                        "claim_expires_at": NOW,
+                    }
+                )
+            ]
+        }
+    )
+    collection.values = [run.model_dump(mode="json")]
+    store = MongoOrchestratorRunStore(collection)
+
+    released = await store.release_projection_intent(
+        run.run_id,
+        "intent-1",
+        expected_state_version=0,
+        owner_id="worker-a",
+        next_attempt_at=NOW + timedelta(seconds=5),
+        now=NOW,
+    )
+    assert released.outcome in {"accepted", "replayed"}
+    assert released.run is not None
+    intent = next(
+        item for item in released.run.projection_outbox if item.intent_id == "intent-1"
+    )
+    assert intent.status == "pending"
+    assert intent.next_attempt_at == NOW + timedelta(seconds=5)

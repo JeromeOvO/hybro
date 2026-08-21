@@ -100,6 +100,12 @@ from jobs.cleanup_orphaned_uploads import (
 )
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
+from jobs.orchestrator_workers import (
+    OrchestratorProjectionDeps,
+    OrchestratorRecoveryDeps,
+    orchestrator_projection_job,
+    orchestrator_recovery_job,
+)
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from models.request import RoomCenterAgentMessageRequest
 from orchestrator_composition import (
@@ -1906,6 +1912,30 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # route, prompt asset, or profile parameter is detected during startup
         # even though nothing routes into it yet. Adapter-level failures
         # degrade the dark launch; programming errors still fail startup.
+        from common.dto import ProcessingStatusEvent
+        from execution.orchestrator.projection import public_terminal_status
+
+        async def publish_orchestrator_projection_status(run, intent) -> None:
+            # SSE is non-authoritative: it is published only after the durable
+            # public run/processing projection has completed AND the Run
+            # reached projection_state == "settled" (all mandatory intents
+            # durable). The status is derived from the settled Run, never from
+            # the intent payload, so intent completion order cannot leak an
+            # early terminal event.
+            del intent
+            status = public_terminal_status(str(run.status or ""))
+            if status is None or _delivery_deps is None:
+                return
+            await _delivery_deps.event_publisher.emit(
+                ProcessingStatusEvent(
+                    room_id=run.room_id,
+                    message_id=run.request.user_message_id,
+                    status=status,
+                    client_request_id=run.client_request_id,
+                    delivery_id=f"orchestrator:{run.run_id}:{run.status}",
+                )
+            )
+
         try:
             app.state.orchestrator_runtime = create_orchestrator_runtime(
                 mongo=mongo_dal,
@@ -1920,6 +1950,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 epoch_store=require_room_epoch_store(),
                 room_files=file_storage,
                 relay_service=_relay_svc,
+                projection_listener=publish_orchestrator_projection_status,
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:
@@ -1936,6 +1967,30 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             logger.warning("Orchestrator runtime composition disabled: %s", exc)
             app.state.orchestrator_runtime = None
 
+        # ── Orchestrator background workers (dark launch, default OFF) ──
+        _orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+        if _orchestrator_runtime is not None:
+            orchestrator_recovery_job.set_leader_election(_leader)
+            orchestrator_recovery_job.interval_seconds = (
+                runtime.settings.orchestrator_worker_interval_seconds
+            )
+            orchestrator_recovery_job.set_recovery_deps(
+                OrchestratorRecoveryDeps(
+                    recover_once=_orchestrator_runtime.recovery_cycle.run_once
+                )
+            )
+            orchestrator_projection_job.set_leader_election(_leader)
+            orchestrator_projection_job.interval_seconds = (
+                runtime.settings.orchestrator_worker_interval_seconds
+            )
+            orchestrator_projection_job.set_projection_deps(
+                OrchestratorProjectionDeps(
+                    project_once=_orchestrator_runtime.projection_worker.run_once
+                )
+            )
+            await orchestrator_recovery_job.start()
+            await orchestrator_projection_job.start()
+
     except BaseException:
         # Startup cleanup never replaces the original failure. Every opened
         # stage is attempted even if an earlier close fails.
@@ -1947,6 +2002,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if _bg_started:
             startup_steps.extend(
                 [
+                    ("orchestrator-projection", orchestrator_projection_job.stop),
+                    ("orchestrator-recovery", orchestrator_recovery_job.stop),
                     ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
                     ("compaction-sweep", compaction_sweep.stop),
                     ("stale-task-checker", stale_task_checker.stop),
@@ -2023,6 +2080,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
         shutdown_steps.extend(
             [
+                ("orchestrator-projection", orchestrator_projection_job.stop),
+                ("orchestrator-recovery", orchestrator_recovery_job.stop),
                 ("stale-task-checker", stale_task_checker.stop),
                 ("compaction-sweep", compaction_sweep.stop),
                 ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),

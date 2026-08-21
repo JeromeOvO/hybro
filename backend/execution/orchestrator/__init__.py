@@ -117,6 +117,13 @@ from .profiles import (
     resolve_profile_snapshot,
     resolve_prompt_snapshot,
 )
+from .projection import (
+    ProjectionListener,
+    ProjectionOutboxWorker,
+    ProjectionProjector,
+    SettlingProjectionDriver,
+    public_terminal_status,
+)
 from .session import (
     DefaultRunFactory,
     EventCancellationSignal,
@@ -188,6 +195,7 @@ __all__ = [
     "SessionEvent",
     "SessionEventListener",
     "SessionRunResult",
+    "SettlingProjectionDriver",
     "StaticFakeToolCatalog",
     "TranscriptCorruptionError",
     "UnresolvedToolBatchError",
@@ -248,6 +256,9 @@ __all__ = [
     "PreparedResourceRef",
     "ProjectionIntent",
     "ProjectionDriver",
+    "ProjectionListener",
+    "ProjectionOutboxWorker",
+    "ProjectionProjector",
     "ProjectionSettlementResult",
     "PromptConfiguration",
     "ProviderConformanceCase",
@@ -293,6 +304,7 @@ __all__ = [
     "evaluate_projection_settlement",
     "evaluate_terminal_decision",
     "fake_agent_definitions",
+    "public_terminal_status",
     "resolve_model_snapshot",
     "resolve_profile_snapshot",
     "resolve_prompt_snapshot",

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from a2a_adapter.client_facade import (
@@ -28,9 +29,15 @@ from a2a_adapter.client_facade import send_message as sdk_send_message
 from a2a_adapter.client_facade import stream_message as sdk_stream_message
 from a2a_adapter.orchestrator_direct_client import OrchestratorDirectA2AClient
 from a2a_adapter.remote_task import fetch_remote_task as sdk_fetch_remote_task
+from common.utils.logger import get_logger
 from dal.orchestrator.artifacts import GuardedRoomFileArtifactWriter
 from dal.orchestrator.event_store import MongoOrchestratorEventStore
 from dal.orchestrator.hitl import MongoHITLApplicationStore
+from dal.orchestrator.projection import (
+    MongoAppendEventProjector,
+    MongoFinalMessageProjector,
+    MongoTerminalRunStatusProjector,
+)
 from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
     MongoAgentCallLedgerStore,
@@ -48,6 +55,7 @@ from execution.adapters.profiles import (
 )
 from execution.adapters.resources import RoomFilesResourceMaterializer
 from execution.adapters.session_host import RoomSessionHost
+from execution.orchestrator.a2a_runtime.cancellation import A2ACancellationCoordinator
 from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
 from execution.orchestrator.a2a_runtime.catalog_assembler import (
     AgentToolCatalogAssembler,
@@ -57,9 +65,13 @@ from execution.orchestrator.a2a_runtime.dispatch import (
     RelayA2ADispatchAdapter,
     RoutedA2ADispatchPort,
 )
+from execution.orchestrator.a2a_runtime.errors import (
+    RecoverableAdapterError,
+)
 from execution.orchestrator.a2a_runtime.in_memory import RunCheckpointReader
 from execution.orchestrator.a2a_runtime.ingress import (
     A2AObservationIngress,
+    A2AObservationProcessor,
     RejectExternalIngressAuthenticator,
 )
 from execution.orchestrator.a2a_runtime.models import (
@@ -69,13 +81,20 @@ from execution.orchestrator.a2a_runtime.models import (
 from execution.orchestrator.a2a_runtime.preparation import (
     RunPreparedInvocationSnapshotReader,
 )
+from execution.orchestrator.a2a_runtime.recovery import (
+    A2AArtifactRecoveryService,
+    A2ACallRecoveryService,
+    A2ACancellationRecoveryService,
+    A2AInboxRecoveryService,
+    A2ARecoveryCycle,
+    dispatch_command,
+)
 from execution.orchestrator.a2a_runtime.runtime import A2AAgentToolRuntime
 from execution.orchestrator.a2a_runtime.terminal_interactions import (
     TerminalInteractionFinalizer,
 )
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.in_memory import InMemoryProjectionDriver
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.model_runtime import GatewayModelRuntime
 from execution.orchestrator.models import (
@@ -83,11 +102,18 @@ from execution.orchestrator.models import (
     OrchestratorProfile,
 )
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
+from execution.orchestrator.projection import (
+    ProjectionListener,
+    ProjectionOutboxWorker,
+    SettlingProjectionDriver,
+)
 from hub_runtime_bridge.orchestrator_relay import (
     MongoRelayCommandJournalStore,
     RelayCommandJournal,
     RelayCommandSender,
 )
+
+logger = get_logger(__name__)
 
 
 class OrchestratorCompositionError(RuntimeError):
@@ -113,6 +139,8 @@ class OrchestratorRuntime:
     session_host: Any
     observation_sink: Any
     kernel_factory: Callable[[FrozenToolCatalogSnapshot], OrchestratorKernel]
+    projection_worker: Any
+    recovery_cycle: Any
 
 
 _RUNTIME_BINDINGS = (
@@ -133,6 +161,8 @@ _RUNTIME_BINDINGS = (
     "session_host",
     "observation_sink",
     "kernel_factory",
+    "projection_worker",
+    "recovery_cycle",
 )
 
 
@@ -157,14 +187,15 @@ def create_orchestrator_runtime(  # noqa: C901
     relay_service: Any,
     observation_authenticator: Any | None = None,
     session_listener: Any | None = None,
+    projection_listener: ProjectionListener | None = None,
 ) -> OrchestratorRuntime:
     """Compose the full orchestrator runtime over the registered Mongo stores.
 
     No Mongo or LLM calls are made during construction; this is wiring only.
     """
     run_store = MongoOrchestratorRunStore(mongo.collection("orchestrator_runs"))
-    # The event store is bound now but only gains its consumer in step 6's
-    # production projection driver, which appends durable Run events.
+    # The event store is bound for the projection worker (step 6), which
+    # appends durable Run events through the outbox projector.
     event_store = MongoOrchestratorEventStore(
         mongo.collection("orchestrator_run_events")
     )
@@ -301,12 +332,11 @@ def create_orchestrator_runtime(  # noqa: C901
     def kernel_for_catalog(
         snapshot: FrozenToolCatalogSnapshot,
     ) -> OrchestratorKernel:
-        # InMemoryProjectionDriver is a deliberate placeholder until step 6
-        # introduces the real projection driver/worker. NOTE: it marks
-        # required intents complete WITHOUT performing the projections (event
-        # append, final-message delivery, public run status). If it is not
-        # replaced before step 7 routes traffic, final answers would be
-        # silently undelivered while intents appear complete.
+        # The production projection driver never claims or completes intents
+        # in-process. Terminal CAS already minted the required outbox intents;
+        # the leader-elected ProjectionOutboxWorker delivers them. This driver
+        # only attempts the idempotent settlement transition so the kernel
+        # remains non-blocking and replay-safe.
         return OrchestratorKernel(
             run_store=run_store,
             model_runtime=model_runtime,
@@ -314,7 +344,7 @@ def create_orchestrator_runtime(  # noqa: C901
             tool_catalog=FrozenToolCatalog(snapshot),
             context_compiler=ContextCompiler(),
             budget_policy=BudgetPolicy(),
-            projection_driver=InMemoryProjectionDriver(run_store),
+            projection_driver=SettlingProjectionDriver(run_store),
         )
 
     session_host = RoomSessionHost(
@@ -325,6 +355,111 @@ def create_orchestrator_runtime(  # noqa: C901
     )
 
     observation_sink = session_host.observation_sink()
+
+    projectors = {
+        "append_orchestrator_event": MongoAppendEventProjector(event_store).project,
+        "deliver_final_message": MongoFinalMessageProjector(
+            mongo.collection("room_agent_messages")
+        ).project,
+        "project_terminal_run_status": MongoTerminalRunStatusProjector(
+            mongo.collection("runs")
+        ).project,
+    }
+    projection_worker = ProjectionOutboxWorker(
+        run_store=run_store,
+        projectors=projectors,
+        after_project=projection_listener,
+    )
+
+    cancellation_coordinator = A2ACancellationCoordinator(
+        ledger=call_ledger,
+        room_epochs=epoch_store,
+        dispatch=dispatch,
+        observations=observation_ingress,
+        hitl=hitl_port,
+    )
+    cancellation_recovery = A2ACancellationRecoveryService(
+        coordinator=cancellation_coordinator,
+        ledger=call_ledger,
+    )
+    observation_processor = A2AObservationProcessor(
+        inbox=observation_inbox,
+        conflicts=observation_conflicts,
+        ledger=call_ledger,
+        room_epochs=epoch_store,
+        artifacts=resources,
+        hitl=hitl_port,
+        sink=observation_sink,
+        checkpoint_reader=checkpoint_reader,
+        outcome_reader=checkpoint_reader,
+    )
+    inbox_recovery = A2AInboxRecoveryService(
+        processor=observation_processor,
+        inbox=observation_inbox,
+    )
+
+    async def recover_dispatch(record: Any) -> None:
+        # Re-delivery for checkpointed accepted/ready_to_dispatch calls. The
+        # shared dispatch_command helper builds materialized_resources=[];
+        # a resource-bearing Run re-dispatch would silently drop attachments
+        # and context refs. Until the step-7 resource re-materialization path
+        # lands, refuse that case loudly instead of dispatching empty
+        # resources.
+        if getattr(record, "resource_manifest", None) is not None and getattr(
+            record.resource_manifest, "refs", []
+        ):
+            logger.warning(
+                "orchestrator recovery: resource-bearing re-dispatch is "
+                "unsupported until step 7; call %s stays due",
+                record.call_record_id,
+            )
+            raise RecoverableAdapterError(
+                "resource-bearing re-dispatch is not implemented"
+            )
+        await dispatch.dispatch(dispatch_command(record))
+
+    call_recovery = A2ACallRecoveryService(
+        ledger=call_ledger,
+        checkpoints=checkpoint_reader,
+        room_epochs=epoch_store,
+        dispatch=dispatch,
+        observations=observation_ingress,
+        recover_dispatch=recover_dispatch,
+    )
+    artifact_recovery = A2AArtifactRecoveryService(inbox_recovery)
+
+    async def _recovery_noop() -> None:
+        # HITL continuation (needs the step-7 auth-reference verifier), generic
+        # Run re-entry, and the orchestrator watchdog are bound in later steps.
+        return None
+
+    if getattr(settings_obj, "orchestrator_recovery_enabled", False):
+        logger.warning(
+            "orchestrator recovery enabled while continuation/generic_runs/"
+            "watchdog phases are still no-ops; HITL continuations and generic "
+            "Run re-entry will not run until step 7 binds them"
+        )
+
+    def _due_phase(recover: Callable[..., Any]) -> Callable[[], Any]:
+        async def run() -> None:
+            await recover(due_at=datetime.now(UTC))
+
+        return run
+
+    # Projection delivery is deliberately bound twice: as the recovery-cycle
+    # projection phase AND as the standalone leader-gated projection job.
+    # Both surfaces are idempotent (CAS + lease + dedupe) and re-drive the
+    # same outbox; the redundancy self-heals whichever worker is behind.
+    recovery_cycle = A2ARecoveryCycle(
+        cancellation=_due_phase(cancellation_recovery.recover_due),
+        continuation=_recovery_noop,
+        observations=_due_phase(inbox_recovery.recover_due),
+        calls=_due_phase(call_recovery.recover_due),
+        artifacts=_due_phase(artifact_recovery.recover_due),
+        generic_runs=_recovery_noop,
+        projection=projection_worker.run_once,
+        watchdog=_recovery_noop,
+    )
 
     return OrchestratorRuntime(
         run_store=run_store,
@@ -344,6 +479,8 @@ def create_orchestrator_runtime(  # noqa: C901
         session_host=session_host,
         observation_sink=observation_sink,
         kernel_factory=kernel_for_catalog,
+        projection_worker=projection_worker,
+        recovery_cycle=recovery_cycle,
     )
 
 

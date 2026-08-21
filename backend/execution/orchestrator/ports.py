@@ -165,6 +165,21 @@ class OrchestratorRunStore(Protocol):
         reason: str,
     ) -> RunStoreResult: ...
 
+    async def release_projection_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        next_attempt_at: datetime,
+        now: datetime,
+    ) -> RunStoreResult: ...
+
+    async def list_due_projection_intents(
+        self, *, due_at: datetime, limit: int
+    ) -> list[tuple[str, ProjectionIntent]]: ...
+
 
 class OrchestratorEventStore(Protocol):
     async def append(self, event: OrchestratorEvent) -> StoreOutcome: ...

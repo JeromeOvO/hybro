@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+
+from common.utils.logger import get_logger
 
 from ..models import TextPart
 from ..ports import InvocationCheckpointReader
@@ -34,6 +37,8 @@ from .ports import (
     ObservationInboxStore,
     RoomEpochStore,
 )
+
+logger = get_logger(__name__)
 
 RecoverDispatch = Callable[[AgentCallLedgerRecord], Awaitable[None]]
 RecoverPhase = Callable[[], Awaitable[None]]
@@ -213,7 +218,7 @@ class A2ACallRecoveryService:
                 is not None
             )
 
-        command = _dispatch_command(record)
+        command = dispatch_command(record)
         try:
             inspected = await self.dispatch.inspect(command)
         except (
@@ -546,21 +551,34 @@ class A2ARecoveryCycle:
         calls: RecoverPhase,
         artifacts: RecoverPhase,
         generic_runs: RecoverPhase,
+        projection: RecoverPhase,
         watchdog: RecoverPhase,
     ) -> None:
         self.phases = (
-            cancellation,
-            continuation,
-            observations,
-            calls,
-            artifacts,
-            generic_runs,
-            watchdog,
+            ("cancellation", cancellation),
+            ("continuation", continuation),
+            ("observations", observations),
+            ("calls", calls),
+            ("artifacts", artifacts),
+            ("generic_runs", generic_runs),
+            ("projection", projection),
+            ("watchdog", watchdog),
         )
 
     async def run_once(self) -> None:
-        for phase in self.phases:
-            await phase()
+        """Run phases in order, isolating one phase failure from the rest.
+
+        Cancellation is still propagated so job shutdown remains responsive; any
+        other phase exception is logged and the cycle continues to the next
+        phase. Watchdog remains the last phase by construction.
+        """
+        for name, phase in self.phases:
+            try:
+                await phase()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.error("A2A recovery phase failed: %s", name, exc_info=True)
 
 
 def _general_call_recovery_progressed(
@@ -627,7 +645,7 @@ def _call_recovery_progressed(
     )
 
 
-def _dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
+def dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
     return A2ADispatchCommand(
         command_id=record.dispatch_snapshot.command_id,
         call_record_id=record.call_record_id,
