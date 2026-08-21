@@ -783,26 +783,37 @@ class A2AContinuationCoordinator:
                 observation = observation.model_copy(
                     update={"call_record_id": call.call_record_id}
                 )
-            record_outcome, inbox_record = await self.observations.record(observation)
+            _, inbox_record = await self.observations.record(observation)
             call = await self._renew_and_verify(call)
             if call is None:
                 return "delivery_uncertain"
-            if record_outcome == "conflict":
-                return await self._mark_uncertain(call)
             observation = inbox_record.observation
+            if (
+                observation.event_kind != "terminal"
+                or observation.artifact_refs
+                or inbox_record.state == "claimed"
+                or inbox_record.delivery_route == "observation_sink"
+            ):
+                return await self._mark_uncertain(call)
             terminal = apply_observation(
                 call,
                 observation,
                 recent_limit=call.runtime_policy.recent_observation_id_limit,
-            ).model_copy(update={"continuation_state": "accepted"})
+            )
+            if terminal.continuation_command is not None:
+                terminal = terminal.model_copy(
+                    update={"continuation_state": "accepted"}
+                )
             persisted = await self._cas_or_load_winner(
                 terminal, expected_state_version=call.state_version
             )
             if (
-                observation.observation_id in persisted.recent_observation_ids
+                inbox_record.delivery_route == "unresolved"
+                and inbox_record.delivery_state == "pending"
+                and persisted.terminal_result_digest is not None
+                and observation.observation_id in persisted.recent_observation_ids
                 and persisted.terminal_result_digest == terminal.terminal_result_digest
             ):
-                assert persisted.terminal_result_digest is not None
                 await self.observations.mark_executor_outcome(
                     observation.observation_id,
                     outcome_digest=persisted.terminal_result_digest,
@@ -843,26 +854,35 @@ class A2AContinuationCoordinator:
             error_code="continuation_uncertainty_exhausted",
             error_message="Continuation delivery could not be reconciled.",
         )
-        record_outcome, inbox_record = await self.observations.record(observation)
+        _, inbox_record = await self.observations.record(observation)
         renewed = await self._renew_and_verify(call)
         if renewed is None:
             return "delivery_uncertain"
-        if record_outcome == "conflict":
-            return await self._mark_uncertain(renewed)
         observation = inbox_record.observation
+        if (
+            observation.event_kind != "terminal"
+            or observation.artifact_refs
+            or inbox_record.state == "claimed"
+            or inbox_record.delivery_route == "observation_sink"
+        ):
+            return await self._mark_uncertain(renewed)
         expired = apply_observation(
             renewed,
             observation,
             recent_limit=renewed.runtime_policy.recent_observation_id_limit,
         )
+        if expired.continuation_command is not None:
+            expired = expired.model_copy(update={"continuation_state": "accepted"})
         persisted = await self._cas_or_load_winner(
             expired, expected_state_version=renewed.state_version
         )
         if (
-            observation.observation_id in persisted.recent_observation_ids
+            inbox_record.delivery_route == "unresolved"
+            and inbox_record.delivery_state == "pending"
+            and persisted.terminal_result_digest is not None
+            and observation.observation_id in persisted.recent_observation_ids
             and persisted.terminal_result_digest == expired.terminal_result_digest
         ):
-            assert persisted.terminal_result_digest is not None
             await self.observations.mark_executor_outcome(
                 observation.observation_id,
                 outcome_digest=persisted.terminal_result_digest,
