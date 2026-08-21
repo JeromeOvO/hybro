@@ -835,7 +835,7 @@ class A2AContinuationCoordinator:
             source_identity=f"continuation-expired:{command.command_id}",
             binding_scope=call.endpoint_scope_digest,
             event_kind="terminal",
-            observed_at=datetime.now(UTC),
+            observed_at=command.created_at,
             task_id=call.a2a_task_id,
             context_id=call.a2a_context_id,
             status="expired",

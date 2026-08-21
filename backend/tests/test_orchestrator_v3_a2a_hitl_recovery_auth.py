@@ -223,6 +223,26 @@ class ContinuationWinnerRaceLedger(InMemoryAgentCallLedgerStore):
         return await super().load_by_record_id(call_record_id)
 
 
+class AckLossObservationRecorder:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.fail_once = True
+
+    async def record(self, observation):
+        result = await self.delegate.record(observation)
+        if self.fail_once and observation.source_identity.startswith(
+            "continuation-expired:"
+        ):
+            self.fail_once = False
+            raise RecoverableCheckpointError("observation acknowledgement lost")
+        return result
+
+    async def mark_executor_outcome(self, observation_id, *, outcome_digest):
+        await self.delegate.mark_executor_outcome(
+            observation_id, outcome_digest=outcome_digest
+        )
+
+
 class FinalizerFaultHITL(InMemoryHITLApplicationPort):
     def __init__(self, mode):
         super().__init__()
@@ -561,6 +581,58 @@ async def test_conflicting_terminal_receipt_fails_closed_on_canonical_evidence()
     assert len(conflicts) == 1
     assert conflicts[0].accepted_observation_id == canonical.observation_id
     assert len(dispatch.commands) == 1
+
+
+async def test_continuation_expiry_replays_after_observation_ack_loss():
+    dispatch = AmbiguousContinuationDispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    assert (
+        await coordinator.resume(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            route_fingerprint=route.fingerprint,
+            answers=questionnaire_answers(),
+            authenticated_answerer_id="user-1",
+        )
+        == "delivery_uncertain"
+    )
+    uncertain = await ledger.load_by_record_id(call.call_record_id)
+    exhausted = uncertain.model_copy(
+        update={
+            "continuation_attempts": (
+                uncertain.runtime_policy.max_uncertain_inspection_attempts
+            ),
+            "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+            "state_version": uncertain.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(exhausted, expected_state_version=uncertain.state_version)
+        == "accepted"
+    )
+    recorder = AckLossObservationRecorder(coordinator.observations)
+    coordinator.observations = recorder
+
+    assert (
+        await coordinator.recover_call(call_record_id=call.call_record_id)
+        == "delivery_uncertain"
+    )
+    await expire_claim(ledger, call.call_record_id)
+    assert await coordinator.recover_call(call_record_id=call.call_record_id) == (
+        "expired"
+    )
+
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "expired"
+    assert persisted.terminal_result is not None
+    assert len(dispatch.commands) == 1
+    conflicts = await recorder.delegate.conflicts.list_for_source(
+        f"continuation-expired:{persisted.continuation_command.command_id}"
+    )
+    assert conflicts == []
 
 
 async def test_conflicting_continuation_expiry_fails_closed():
