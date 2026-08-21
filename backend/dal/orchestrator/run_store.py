@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
@@ -32,46 +33,61 @@ class MongoOrchestratorRunStore:
     async def create(
         self, run: OrchestratorRunState, *, command_id: str
     ) -> MongoRunStoreResult:
+        processed_command_ids = list(run.processed_command_ids)
+        if command_id not in processed_command_ids:
+            processed_command_ids.append(command_id)
+        candidate = _normalize_run_for_mongo(
+            run.model_copy(update={"processed_command_ids": processed_command_ids})
+        )
         existing = await self.load(run.run_id)
         if existing is not None:
-            return MongoRunStoreResult(
-                "replayed" if existing == run else "conflict", existing
-            )
-        duplicate = None
-        if run.client_request_id is not None:
-            value = await self.collection.find_one(
-                {"room_id": run.room_id, "client_request_id": run.client_request_id}
-            )
-            duplicate = OrchestratorRunState.model_validate(value) if value else None
+            replay = command_id in existing.processed_command_ids
+            return MongoRunStoreResult("replayed" if replay else "conflict", existing)
+        duplicate = await self._load_client_request_duplicate(run)
         if duplicate is not None:
             replay = (
                 duplicate.request.request_fingerprint == run.request.request_fingerprint
             )
             return MongoRunStoreResult("replayed" if replay else "conflict", duplicate)
-        candidate = run.model_copy(
-            update={"processed_command_ids": [*run.processed_command_ids, command_id]}
-        )
         try:
-            await self.collection.insert_one(candidate.model_dump(mode="json"))
+            await self.collection.insert_one(candidate.model_dump(mode="python"))
         except DuplicateKeyError:
             existing = await self.load(run.run_id)
-            return MongoRunStoreResult(
-                "replayed" if existing == candidate else "conflict", existing
-            )
+            if existing is not None:
+                replay = command_id in existing.processed_command_ids
+                return MongoRunStoreResult(
+                    "replayed" if replay else "conflict", existing
+                )
+            duplicate = await self._load_client_request_duplicate(run)
+            if duplicate is not None:
+                replay = (
+                    duplicate.request.request_fingerprint
+                    == run.request.request_fingerprint
+                )
+                return MongoRunStoreResult(
+                    "replayed" if replay else "conflict", duplicate
+                )
+            return MongoRunStoreResult("conflict", None)
         except RecoverableAdapterError:
             existing = await self.load(run.run_id)
-            if existing == candidate:
+            if existing is not None and command_id in existing.processed_command_ids:
                 return MongoRunStoreResult("replayed", existing)
             raise
         return MongoRunStoreResult("accepted", candidate)
 
     async def load(self, run_id: str) -> OrchestratorRunState | None:
         value = await self.collection.find_one({"run_id": run_id})
-        return (
-            OrchestratorRunState.model_validate(_without_mongo_id(value))
-            if value
-            else None
+        return _run_from_document(value) if value else None
+
+    async def _load_client_request_duplicate(
+        self, run: OrchestratorRunState
+    ) -> OrchestratorRunState | None:
+        if run.client_request_id is None:
+            return None
+        value = await self.collection.find_one(
+            {"room_id": run.room_id, "client_request_id": run.client_request_id}
         )
+        return _run_from_document(value) if value else None
 
     async def cas_mutate(
         self,
@@ -90,26 +106,28 @@ class MongoOrchestratorRunStore:
             or run.state_version != expected_state_version + 1
         ):
             return MongoRunStoreResult("conflict", current)
-        candidate = run.model_copy(
-            update={"processed_command_ids": [*run.processed_command_ids, command_id]}
+        processed_command_ids = list(run.processed_command_ids)
+        if command_id not in processed_command_ids:
+            processed_command_ids.append(command_id)
+        candidate = _normalize_run_for_mongo(
+            run.model_copy(update={"processed_command_ids": processed_command_ids})
         )
         try:
             result = await self.collection.replace_one(
                 {"run_id": run.run_id, "state_version": expected_state_version},
-                candidate.model_dump(mode="json"),
+                candidate.model_dump(mode="python"),
             )
         except DuplicateKeyError:
             return MongoRunStoreResult("conflict", await self.load(run.run_id))
         except RecoverableAdapterError:
             winner = await self.load(run.run_id)
-            if winner == candidate:
+            if winner is not None and command_id in winner.processed_command_ids:
                 return MongoRunStoreResult("replayed", winner)
             raise
         if int(getattr(result, "modified_count", 0)) != 1:
             winner = await self.load(run.run_id)
-            return MongoRunStoreResult(
-                "replayed" if winner == candidate else "conflict", winner
-            )
+            replay = winner is not None and command_id in winner.processed_command_ids
+            return MongoRunStoreResult("replayed" if replay else "conflict", winner)
         return MongoRunStoreResult("accepted", candidate)
 
     async def claim_recovery(
@@ -221,9 +239,29 @@ class MongoOrchestratorRunStore:
                 },
             ],
         }
+        if limit <= 0:
+            return []
+        pipeline: list[dict[str, object]] = [
+            {"$match": query},
+            {
+                "$addFields": {
+                    "_recovery_due_at": {
+                        "$ifNull": [
+                            "$recovery_claim.next_attempt_at",
+                            "$updated_at",
+                        ]
+                    }
+                }
+            },
+            {"$sort": {"_recovery_due_at": 1, "run_id": 1}},
+            {"$limit": limit},
+            {"$project": {"_recovery_due_at": 0}},
+        ]
         return [
-            OrchestratorRunState.model_validate(value)
-            for value in await _to_list(self.collection.find(query), length=limit)
+            _run_from_document(value)
+            for value in await _to_list(
+                self.collection.aggregate(pipeline), length=limit
+            )
         ]
 
     async def claim_projection_intent(
@@ -318,6 +356,41 @@ class MongoOrchestratorRunStore:
         return await self.cas_mutate(
             candidate, expected_state_version=run.state_version, command_id=command_id
         )
+
+
+def _normalize_run_for_mongo(run: OrchestratorRunState) -> OrchestratorRunState:
+    return OrchestratorRunState.model_validate(
+        _truncate_datetimes_to_bson_precision(run.model_dump(mode="python"))
+    )
+
+
+def _truncate_datetimes_to_bson_precision(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+    if isinstance(value, dict):
+        return {
+            key: _truncate_datetimes_to_bson_precision(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_truncate_datetimes_to_bson_precision(item) for item in value]
+    return value
+
+
+def _run_from_document(value: dict[str, Any]) -> OrchestratorRunState:
+    return OrchestratorRunState.model_validate(
+        _restore_utc_datetimes(_without_mongo_id(value))
+    )
+
+
+def _restore_utc_datetimes(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    if isinstance(value, dict):
+        return {key: _restore_utc_datetimes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_restore_utc_datetimes(item) for item in value]
+    return value
 
 
 def _find_intent(run: OrchestratorRunState | None, intent_id: str):

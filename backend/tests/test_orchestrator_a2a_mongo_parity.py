@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import AutoReconnect, DuplicateKeyError
 
+from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
     MongoAgentCallLedgerStore,
     MongoObservationConflictStore,
@@ -28,7 +29,7 @@ from execution.orchestrator.a2a_runtime.models import (
 )
 
 from ._orchestrator_a2a_helpers import ledger_record
-from ._orchestrator_helpers import NOW
+from ._orchestrator_helpers import NOW, make_run
 
 
 class Cursor:
@@ -73,6 +74,41 @@ class FakeCollection:
     def find(self, query):
         return Cursor([deepcopy(item) for item in self.values if _matches(item, query)])
 
+    def aggregate(self, pipeline):  # noqa: C901
+        values = deepcopy(self.values)
+        for stage in pipeline:
+            if "$match" in stage:
+                values = [item for item in values if _matches(item, stage["$match"])]
+            elif "$addFields" in stage:
+                for field, expression in stage["$addFields"].items():
+                    candidates = expression["$ifNull"]
+                    for item in values:
+                        item[field] = next(
+                            (
+                                _get(item, candidate.removeprefix("$"))
+                                for candidate in candidates
+                                if _get(item, candidate.removeprefix("$")) is not None
+                            ),
+                            None,
+                        )
+            elif "$sort" in stage:
+                fields = list(stage["$sort"])
+                values.sort(
+                    key=lambda item: tuple(_get(item, field) for field in fields)
+                )
+            elif "$limit" in stage:
+                values = values[: stage["$limit"]]
+            elif "$project" in stage:
+                excluded = [
+                    field
+                    for field, included in stage["$project"].items()
+                    if not included
+                ]
+                for item in values:
+                    for field in excluded:
+                        item.pop(field, None)
+        return Cursor(values)
+
 
 class DuplicateAfterWriteCollection(FakeCollection):
     def __init__(self, *, fail_insert=False, fail_upsert=False):
@@ -92,6 +128,42 @@ class DuplicateAfterWriteCollection(FakeCollection):
         if upsert and self.fail_upsert:
             self.fail_upsert = False
             raise DuplicateKeyError("duplicate key after concurrent upsert winner")
+        return result
+
+
+class ConcurrentClientRequestWinnerCollection(FakeCollection):
+    async def insert_one(self, document):
+        winner = deepcopy(document)
+        winner["run_id"] = "run-concurrent-winner"
+        winner["processed_command_ids"] = ["create:concurrent-winner"]
+        self.values.append(winner)
+        raise DuplicateKeyError("client request winner used another run ID")
+
+
+class MongoPrecisionCollection(FakeCollection):
+    def __init__(self):
+        super().__init__()
+        self.lose_replace_ack = False
+        self.advance_after_replace_ack_loss = False
+
+    async def insert_one(self, document):
+        return await super().insert_one(_bson_roundtrip(document))
+
+    async def replace_one(self, query, document, *, upsert=False):
+        result = await super().replace_one(
+            query, _bson_roundtrip(document), upsert=upsert
+        )
+        if self.advance_after_replace_ack_loss:
+            self.advance_after_replace_ack_loss = False
+            winner = next(
+                item for item in self.values if item["run_id"] == document["run_id"]
+            )
+            winner["state_version"] += 1
+            winner["processed_command_ids"].append("later:command")
+            raise AutoReconnect("replace acknowledgement lost before later mutation")
+        if self.lose_replace_ack:
+            self.lose_replace_ack = False
+            raise AutoReconnect("replace acknowledgement lost")
         return result
 
 
@@ -117,8 +189,13 @@ def _matches(document, query):  # noqa: C901
                 return False
             if "$nin" in expected and actual in expected["$nin"]:
                 return False
-            if "$lte" in expected and actual is not None and actual > expected["$lte"]:
-                return False
+            if "$lte" in expected and actual is not None:
+                boundary = expected["$lte"]
+                if isinstance(actual, datetime) and isinstance(boundary, datetime):
+                    actual = actual.replace(tzinfo=actual.tzinfo or UTC)
+                    boundary = boundary.replace(tzinfo=boundary.tzinfo or UTC)
+                if actual > boundary:
+                    return False
             continue
         if actual != expected:
             return False
@@ -132,6 +209,19 @@ def _get(document, dotted):
             return None
         value = value[part]
     return value
+
+
+def _bson_roundtrip(value):
+    if isinstance(value, datetime):
+        return value.replace(
+            microsecond=(value.microsecond // 1000) * 1000,
+            tzinfo=None,
+        )
+    if isinstance(value, dict):
+        return {key: _bson_roundtrip(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_bson_roundtrip(item) for item in value]
+    return deepcopy(value)
 
 
 def _inbox_record():
@@ -155,6 +245,268 @@ def _inbox_record():
         event_kind=observation.event_kind,
         observation=observation,
     )
+
+
+async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    run = make_run()
+
+    accepted = await store.create(run, command_id="create:run-1")
+    replayed = await store.create(run, command_id="create:run-1")
+
+    assert accepted.outcome == "accepted"
+    assert replayed.outcome == "replayed"
+    assert replayed.run == accepted.run
+    assert replayed.run.processed_command_ids == ["create:run-1"]
+
+
+async def test_mongo_run_replay_and_ack_loss_use_bson_datetime_precision():
+    collection = MongoPrecisionCollection()
+    store = MongoOrchestratorRunStore(collection)
+    precise = NOW.replace(microsecond=456789)
+    run = make_run().model_copy(update={"created_at": precise, "updated_at": precise})
+
+    accepted = await store.create(run, command_id="create:precise")
+    replayed = await store.create(run, command_id="create:precise")
+
+    assert accepted.outcome == "accepted"
+    assert replayed.outcome == "replayed"
+    assert replayed.run == accepted.run
+    assert accepted.run.updated_at.microsecond == 456000
+
+    candidate = accepted.run.model_copy(
+        update={
+            "status": "running",
+            "state_version": accepted.run.state_version + 1,
+            "updated_at": precise + timedelta(seconds=1),
+        }
+    )
+    collection.lose_replace_ack = True
+    reconciled = await store.cas_mutate(
+        candidate,
+        expected_state_version=accepted.run.state_version,
+        command_id="mutate:precise",
+    )
+
+    assert reconciled.outcome == "replayed"
+    assert reconciled.run.updated_at.microsecond == 456000
+    assert reconciled.run.processed_command_ids == [
+        "create:precise",
+        "mutate:precise",
+    ]
+
+
+async def test_mongo_run_cas_ack_loss_replays_after_later_advance():
+    collection = MongoPrecisionCollection()
+    store = MongoOrchestratorRunStore(collection)
+    created = await store.create(make_run(), command_id="create:run-1")
+    candidate = created.run.model_copy(
+        update={
+            "status": "running",
+            "state_version": created.run.state_version + 1,
+        }
+    )
+    collection.advance_after_replace_ack_loss = True
+
+    replayed = await store.cas_mutate(
+        candidate,
+        expected_state_version=created.run.state_version,
+        command_id="mutate:run-1",
+    )
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.state_version == candidate.state_version + 1
+    assert replayed.run.processed_command_ids == [
+        "create:run-1",
+        "mutate:run-1",
+        "later:command",
+    ]
+
+
+async def test_mongo_run_create_does_not_duplicate_preapplied_command_id():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    run = make_run().model_copy(update={"processed_command_ids": ["create:run-1"]})
+
+    created = await store.create(run, command_id="create:run-1")
+
+    assert created.outcome == "accepted"
+    assert created.run.processed_command_ids == ["create:run-1"]
+    assert await store.load(run.run_id) == created.run
+
+
+async def test_mongo_run_create_retry_replays_after_aggregate_advances():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    run = make_run()
+    created = await store.create(run, command_id="create:run-1")
+    advanced = created.run.model_copy(
+        update={
+            "status": "running",
+            "state_version": created.run.state_version + 1,
+        }
+    )
+    assert (
+        await store.cas_mutate(
+            advanced,
+            expected_state_version=created.run.state_version,
+            command_id="mutate:run-1",
+        )
+    ).outcome == "accepted"
+
+    replayed = await store.create(run, command_id="create:run-1")
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.state_version == advanced.state_version
+    assert replayed.run.processed_command_ids == ["create:run-1", "mutate:run-1"]
+
+
+async def test_mongo_run_create_reloads_concurrent_client_request_winner():
+    store = MongoOrchestratorRunStore(ConcurrentClientRequestWinnerCollection())
+    run = make_run()
+
+    replayed = await store.create(run, command_id="create:attempt")
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.run_id == "run-concurrent-winner"
+    assert replayed.run.request.request_fingerprint == run.request.request_fingerprint
+
+
+async def test_mongo_run_duplicate_request_ignores_mongo_id():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    run = make_run()
+    assert (await store.create(run, command_id="create:run-1")).outcome == "accepted"
+    collection.values[0]["_id"] = "mongo-generated-id"
+    duplicate = run.model_copy(update={"run_id": "run-duplicate"})
+
+    replayed = await store.create(duplicate, command_id="create:run-duplicate")
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.run_id == run.run_id
+
+
+async def test_mongo_run_cas_does_not_duplicate_preapplied_command_id():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    created = await store.create(make_run(), command_id="create:run-1")
+    terminal = created.run.model_copy(
+        update={
+            "status": "failed",
+            "terminal_reason": "test failure",
+            "processed_command_ids": [
+                *created.run.processed_command_ids,
+                "complete:run-1",
+            ],
+            "state_version": created.run.state_version + 1,
+        }
+    )
+
+    committed = await store.cas_mutate(
+        terminal,
+        expected_state_version=created.run.state_version,
+        command_id="complete:run-1",
+    )
+
+    assert committed.outcome == "accepted"
+    assert committed.run.processed_command_ids == ["create:run-1", "complete:run-1"]
+    assert await store.load(terminal.run_id) == committed.run
+
+
+async def test_mongo_due_run_listing_ignores_mongo_id():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    created = await store.create(make_run(), command_id="create:run-1")
+    collection.values[0]["_id"] = "mongo-generated-id"
+
+    due = await store.list_due_runs(due_at=NOW, limit=10)
+
+    assert due == [created.run]
+
+
+async def test_mongo_due_run_listing_uses_contract_order_before_limit():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    base = make_run()
+
+    def scheduled(run_id, *, next_attempt_at, updated_at):
+        return base.model_copy(
+            update={
+                "run_id": run_id,
+                "session_id": f"session-{run_id}",
+                "room_id": f"room-{run_id}",
+                "client_request_id": f"request-{run_id}",
+                "request": base.request.model_copy(
+                    update={"request_fingerprint": f"fingerprint-{run_id}"}
+                ),
+                "recovery_claim": base.recovery_claim.model_copy(
+                    update={"next_attempt_at": next_attempt_at}
+                ),
+                "updated_at": updated_at,
+            }
+        )
+
+    runs = [
+        scheduled("third", next_attempt_at=NOW - timedelta(seconds=5), updated_at=NOW),
+        scheduled(
+            "second", next_attempt_at=NOW - timedelta(seconds=10), updated_at=NOW
+        ),
+        scheduled(
+            "first", next_attempt_at=None, updated_at=NOW - timedelta(seconds=20)
+        ),
+    ]
+    for run in runs:
+        assert (
+            await store.create(run, command_id=f"create:{run.run_id}")
+        ).outcome == "accepted"
+
+    due = await store.list_due_runs(due_at=NOW, limit=2)
+
+    assert [run.run_id for run in due] == ["first", "second"]
+    assert await store.list_due_runs(due_at=NOW, limit=0) == []
+
+
+async def test_mongo_run_dates_remain_bson_datetimes_for_due_queries():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    scheduled = make_run().model_copy(
+        update={
+            "recovery_claim": make_run().recovery_claim.model_copy(
+                update={"next_attempt_at": NOW - timedelta(seconds=1)}
+            )
+        }
+    )
+
+    created = await store.create(scheduled, command_id="create:scheduled")
+
+    assert isinstance(
+        collection.values[0]["recovery_claim"]["next_attempt_at"],
+        type(NOW),
+    )
+    assert await store.list_due_runs(due_at=NOW, limit=10) == [created.run]
+
+
+async def test_mongo_run_reads_restore_utc_to_bson_datetimes():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    scheduled = make_run().model_copy(
+        update={
+            "recovery_claim": make_run().recovery_claim.model_copy(
+                update={"next_attempt_at": NOW - timedelta(seconds=1)}
+            )
+        }
+    )
+    await store.create(scheduled, command_id="create:scheduled")
+    collection.values[0]["created_at"] = scheduled.created_at.replace(tzinfo=None)
+    collection.values[0]["updated_at"] = scheduled.updated_at.replace(tzinfo=None)
+    collection.values[0]["recovery_claim"]["next_attempt_at"] = (
+        scheduled.recovery_claim.next_attempt_at.replace(tzinfo=None)
+    )
+
+    loaded = await store.load(scheduled.run_id)
+    due = await store.list_due_runs(due_at=NOW, limit=10)
+
+    assert loaded.created_at.tzinfo is UTC
+    assert loaded.updated_at.tzinfo is UTC
+    assert loaded.recovery_claim.next_attempt_at.tzinfo is UTC
+    assert due[0].recovery_claim.next_attempt_at.tzinfo is UTC
 
 
 async def test_mongo_and_memory_call_lease_contracts_match():

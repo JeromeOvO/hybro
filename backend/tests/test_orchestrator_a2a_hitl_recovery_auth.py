@@ -7,7 +7,10 @@ from hashlib import sha256
 import pytest
 
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
-from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
+from execution.orchestrator.a2a_runtime.errors import (
+    AmbiguousRemoteEffectError,
+    RecoverableCheckpointError,
+)
 from execution.orchestrator.a2a_runtime.hitl import (
     A2AContinuationCoordinator,
     InMemoryHITLApplicationPort,
@@ -70,6 +73,12 @@ class Dispatch:
 
     async def inspect_continuation(self, command):
         return A2ADispatchReceipt(outcome="accepted")
+
+
+class AmbiguousContinuationDispatch(Dispatch):
+    async def continue_task(self, command):
+        self.commands.append(command)
+        raise AmbiguousRemoteEffectError("continuation acknowledgement is ambiguous")
 
 
 class TrustedAuthReferences:
@@ -170,7 +179,7 @@ class ContinuationWinnerRaceLedger(InMemoryAgentCallLedgerStore):
         self.durable_winner = None
 
     async def cas(self, record, *, expected_state_version):
-        target_state = "working" if self.branch == "working" else "resuming"
+        target_state = "working" if self.branch == "working" else self.terminal_status
         if (
             not self.raced
             and record.continuation_state == "accepted"
@@ -212,6 +221,26 @@ class ContinuationWinnerRaceLedger(InMemoryAgentCallLedgerStore):
                 return None
             raise RecoverableCheckpointError("winner temporarily unavailable")
         return await super().load_by_record_id(call_record_id)
+
+
+class AckLossObservationRecorder:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.fail_once = True
+
+    async def record(self, observation):
+        result = await self.delegate.record(observation)
+        if self.fail_once and observation.source_identity.startswith(
+            "continuation-expired:"
+        ):
+            self.fail_once = False
+            raise RecoverableCheckpointError("observation acknowledgement lost")
+        return result
+
+    async def mark_executor_outcome(self, observation_id, *, outcome_digest):
+        await self.delegate.mark_executor_outcome(
+            observation_id, outcome_digest=outcome_digest
+        )
 
 
 class FinalizerFaultHITL(InMemoryHITLApplicationPort):
@@ -488,6 +517,187 @@ async def test_continuation_delivery_cas_race_returns_durable_terminal_winner(
 @pytest.mark.parametrize(
     "terminal_status", ["completed", "failed", "canceled", "rejected", "expired"]
 )
+async def test_continuation_terminal_receipt_persists_winner_without_redispatch(
+    terminal_status,
+):
+    dispatch = Dispatch(terminal_status=terminal_status)
+    coordinator, ledger, hitl, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    resume_kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
+
+    assert await coordinator.resume(**resume_kwargs) == terminal_status
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == terminal_status
+    assert persisted.terminal_result is not None
+    assert persisted.continuation_state == "accepted"
+    assert await coordinator.resume(**resume_kwargs) == terminal_status
+    assert len(dispatch.commands) == 1
+    assert hitl.read_interaction_for_test("interaction-1") is None
+
+
+async def test_conflicting_terminal_receipt_fails_closed_on_canonical_evidence():
+    dispatch = Dispatch(terminal_status="completed")
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    canonical = NormalizedA2AObservation(
+        observation_id="canonical-failed",
+        call_record_id=call.call_record_id,
+        source_kind="direct",
+        source_identity="receipt:completed",
+        binding_scope=call.endpoint_scope_digest,
+        event_kind="terminal",
+        observed_at=NOW,
+        task_id=call.a2a_task_id,
+        context_id=call.a2a_context_id,
+        status="failed",
+    )
+    assert (await coordinator.observations.record(canonical))[0] == "accepted"
+
+    outcome = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert outcome == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.terminal_result is None
+    conflicts = await coordinator.observations.conflicts.list_for_source(
+        canonical.source_identity
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].accepted_observation_id == canonical.observation_id
+    assert len(dispatch.commands) == 1
+
+
+async def test_continuation_expiry_replays_after_observation_ack_loss():
+    dispatch = AmbiguousContinuationDispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    assert (
+        await coordinator.resume(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            route_fingerprint=route.fingerprint,
+            answers=questionnaire_answers(),
+            authenticated_answerer_id="user-1",
+        )
+        == "delivery_uncertain"
+    )
+    uncertain = await ledger.load_by_record_id(call.call_record_id)
+    exhausted = uncertain.model_copy(
+        update={
+            "continuation_attempts": (
+                uncertain.runtime_policy.max_uncertain_inspection_attempts
+            ),
+            "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+            "state_version": uncertain.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(exhausted, expected_state_version=uncertain.state_version)
+        == "accepted"
+    )
+    recorder = AckLossObservationRecorder(coordinator.observations)
+    coordinator.observations = recorder
+
+    assert (
+        await coordinator.recover_call(call_record_id=call.call_record_id)
+        == "delivery_uncertain"
+    )
+    await expire_claim(ledger, call.call_record_id)
+    assert await coordinator.recover_call(call_record_id=call.call_record_id) == (
+        "expired"
+    )
+
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "expired"
+    assert persisted.terminal_result is not None
+    assert len(dispatch.commands) == 1
+    conflicts = await recorder.delegate.conflicts.list_for_source(
+        f"continuation-expired:{persisted.continuation_command.command_id}"
+    )
+    assert conflicts == []
+
+
+async def test_conflicting_continuation_expiry_fails_closed():
+    dispatch = AmbiguousContinuationDispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    assert (
+        await coordinator.resume(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            route_fingerprint=route.fingerprint,
+            answers=questionnaire_answers(),
+            authenticated_answerer_id="user-1",
+        )
+        == "delivery_uncertain"
+    )
+    uncertain = await ledger.load_by_record_id(call.call_record_id)
+    exhausted = uncertain.model_copy(
+        update={
+            "continuation_attempts": (
+                uncertain.runtime_policy.max_uncertain_inspection_attempts
+            ),
+            "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+            "state_version": uncertain.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(exhausted, expected_state_version=uncertain.state_version)
+        == "accepted"
+    )
+    uncertain = exhausted
+    command = uncertain.continuation_command
+    canonical = NormalizedA2AObservation(
+        observation_id="canonical-expiry-failed",
+        call_record_id=call.call_record_id,
+        source_kind="inspection",
+        source_identity=f"continuation-expired:{command.command_id}",
+        binding_scope=call.endpoint_scope_digest,
+        event_kind="terminal",
+        observed_at=NOW,
+        task_id=call.a2a_task_id,
+        context_id=call.a2a_context_id,
+        status="failed",
+    )
+    assert (await coordinator.observations.record(canonical))[0] == "accepted"
+
+    outcome = await coordinator.recover_call(call_record_id=call.call_record_id)
+
+    assert outcome == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.terminal_result is None
+    conflicts = await coordinator.observations.conflicts.list_for_source(
+        canonical.source_identity
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].accepted_observation_id == canonical.observation_id
+    assert len(dispatch.commands) == 1
+
+
+@pytest.mark.parametrize(
+    "terminal_status", ["completed", "failed", "canceled", "rejected", "expired"]
+)
 @pytest.mark.parametrize(
     "close_mode",
     ["accepted", "replayed", "absent", "conflict", "error", "outage", "ack_loss"],
@@ -629,21 +839,21 @@ async def test_answer_marker_recovers_all_pre_command_crash_boundaries(failure):
             return await original_verify(room_id, epoch)
 
         coordinator.room_epochs.verify_active = crash_verify
+    resume_kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
     with pytest.raises(OSError):
-        await coordinator.resume(
-            call_record_id=call.call_record_id,
-            interaction_id="interaction-1",
-            interaction_revision=1,
-            route_fingerprint=route.fingerprint,
-            answers=questionnaire_answers(),
-            authenticated_answerer_id="user-1",
-        )
+        await coordinator.resume(**resume_kwargs)
     persisted = await ledger.load_by_record_id(call.call_record_id)
     assert persisted.answer_applied is not None
     assert persisted.continuation_command is None
     await expire_claim(ledger, call.call_record_id)
-    outcome = await coordinator.reconcile_answer(call_record_id=call.call_record_id)
-    assert outcome == "working"
+    assert await coordinator.resume(**resume_kwargs) == "working"
     assert len(dispatch.commands) == 1
 
 

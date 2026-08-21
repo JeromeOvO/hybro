@@ -311,9 +311,12 @@ class A2AContinuationCoordinator:
             )
             if call.answer_applied is not None:
                 self._validate_applied_outcome(call, existing_answer)
-                if call.state in {"resuming", "delivery_uncertain"}:
-                    return await self.recover_call(call_record_id=call_record_id)
-                return await self._finalized_state(call)
+                if call.terminal_result is not None:
+                    return await self._finalized_state(call)
+                if call.continuation_command is not None:
+                    if call.state in {"resuming", "delivery_uncertain"}:
+                        return await self.recover_call(call_record_id=call_record_id)
+                    return await self._finalized_state(call)
         if call.terminal_result is not None:
             raise ValueError("terminal call has no matching applied HITL answer")
         if call.state == "resuming" and call.continuation_command is not None:
@@ -465,7 +468,7 @@ class A2AContinuationCoordinator:
         if call.answer_applied != marker:
             raise PermissionError("applied HITL marker changed")
         command = call.continuation_command
-        if command is None or (
+        if command is not None and (
             command.interaction_id != answer_record.interaction_id
             or command.interaction_revision != answer_record.interaction_revision
             or command.answer_digest != answer_record.answer_digest
@@ -775,23 +778,35 @@ class A2AContinuationCoordinator:
         if call is None:
             return "delivery_uncertain"
         if receipt.terminal_observation is not None:
-            await self.observations.record(receipt.terminal_observation)
+            observation = receipt.terminal_observation
+            if observation.call_record_id is None:
+                observation = observation.model_copy(
+                    update={"call_record_id": call.call_record_id}
+                )
+            record_outcome, inbox_record = await self.observations.record(observation)
             call = await self._renew_and_verify(call)
             if call is None:
                 return "delivery_uncertain"
-            waiting = call.model_copy(
-                update={
-                    "continuation_state": "accepted",
-                    "claim_owner": None,
-                    "claim_expires_at": None,
-                    "next_attempt_at": datetime.now(UTC),
-                    "state_version": call.state_version + 1,
-                    "updated_at": datetime.now(UTC),
-                }
-            )
+            if record_outcome == "conflict":
+                return await self._mark_uncertain(call)
+            observation = inbox_record.observation
+            terminal = apply_observation(
+                call,
+                observation,
+                recent_limit=call.runtime_policy.recent_observation_id_limit,
+            ).model_copy(update={"continuation_state": "accepted"})
             persisted = await self._cas_or_load_winner(
-                waiting, expected_state_version=call.state_version
+                terminal, expected_state_version=call.state_version
             )
+            if (
+                observation.observation_id in persisted.recent_observation_ids
+                and persisted.terminal_result_digest == terminal.terminal_result_digest
+            ):
+                assert persisted.terminal_result_digest is not None
+                await self.observations.mark_executor_outcome(
+                    observation.observation_id,
+                    outcome_digest=persisted.terminal_result_digest,
+                )
             return await self._finalized_state(persisted)
         if receipt.outcome == "accepted":
             working = transition_call(
@@ -820,7 +835,7 @@ class A2AContinuationCoordinator:
             source_identity=f"continuation-expired:{command.command_id}",
             binding_scope=call.endpoint_scope_digest,
             event_kind="terminal",
-            observed_at=datetime.now(UTC),
+            observed_at=command.created_at,
             task_id=call.a2a_task_id,
             context_id=call.a2a_context_id,
             status="expired",
@@ -828,10 +843,13 @@ class A2AContinuationCoordinator:
             error_code="continuation_uncertainty_exhausted",
             error_message="Continuation delivery could not be reconciled.",
         )
-        await self.observations.record(observation)
+        record_outcome, inbox_record = await self.observations.record(observation)
         renewed = await self._renew_and_verify(call)
         if renewed is None:
             return "delivery_uncertain"
+        if record_outcome == "conflict":
+            return await self._mark_uncertain(renewed)
+        observation = inbox_record.observation
         expired = apply_observation(
             renewed,
             observation,
@@ -840,6 +858,15 @@ class A2AContinuationCoordinator:
         persisted = await self._cas_or_load_winner(
             expired, expected_state_version=renewed.state_version
         )
+        if (
+            observation.observation_id in persisted.recent_observation_ids
+            and persisted.terminal_result_digest == expired.terminal_result_digest
+        ):
+            assert persisted.terminal_result_digest is not None
+            await self.observations.mark_executor_outcome(
+                observation.observation_id,
+                outcome_digest=persisted.terminal_result_digest,
+            )
         return await self._finalized_state(persisted)
 
     async def _mark_uncertain(self, call: AgentCallLedgerRecord) -> str:

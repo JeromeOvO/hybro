@@ -398,7 +398,19 @@ class A2AAgentToolRuntime:
                     record, task_id=receipt.task_id, context_id=receipt.context_id
                 )
             except ValueError:
-                aliases = record.ownership_aliases
+                uncertain = transition_call(
+                    record,
+                    to_state="delivery_uncertain",
+                    updated_at=datetime.now(UTC),
+                    error_code="authoritative_alias_conflict",
+                    claim_owner=None,
+                    claim_expires_at=None,
+                    next_attempt_at=datetime.now(UTC),
+                )
+                await self.ledger.cas(
+                    uncertain, expected_state_version=record.state_version
+                )
+                return _suspension(invocation)
             if not any(alias.kind == "task" for alias in aliases):
                 uncertain = transition_call(
                     record,
