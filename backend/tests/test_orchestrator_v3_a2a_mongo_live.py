@@ -14,6 +14,7 @@ from dal.orchestrator_v3.stores import (
     MongoRoomEpochStore,
 )
 from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
+from execution.orchestrator.persistence import ORCHESTRATOR_RUN_INDEXES
 
 from ._orchestrator_v3_helpers import NOW, make_run
 
@@ -80,6 +81,13 @@ async def test_live_mongo_run_due_dates_and_order_match_contract():
     database = client[database_name]
     try:
         collection = database["runs"]
+        index_definitions = {item.name: item for item in ORCHESTRATOR_RUN_INDEXES}
+        for name in ("orchestrator_run_id_unique", "orchestrator_client_request"):
+            definition = index_definitions[name]
+            options = {"name": definition.name, "unique": definition.unique}
+            if definition.partial_filter is not None:
+                options["partialFilterExpression"] = dict(definition.partial_filter)
+            await collection.create_index(list(definition.keys), **options)
         store = MongoOrchestratorRunStore(collection)
         base = make_run().model_copy(
             update={"created_at": NOW.replace(microsecond=456789)}
@@ -125,6 +133,28 @@ async def test_live_mongo_run_due_dates_and_order_match_contract():
 
         assert replayed.outcome == "replayed"
         assert replayed.run.created_at.microsecond == 456000
+
+        race_base = make_run()
+        race_runs = [
+            race_base.model_copy(update={"run_id": "race-a"}),
+            race_base.model_copy(update={"run_id": "race-b"}),
+        ]
+        race_outcomes = await asyncio.gather(
+            *(store.create(run, command_id=f"create:{run.run_id}") for run in race_runs)
+        )
+        assert sorted(result.outcome for result in race_outcomes) == [
+            "accepted",
+            "replayed",
+        ]
+        assert (
+            await collection.count_documents(
+                {
+                    "room_id": race_base.room_id,
+                    "client_request_id": race_base.client_request_id,
+                }
+            )
+            == 1
+        )
         assert raw["recovery_claim"]["next_attempt_at"].tzinfo is None
         assert [run.run_id for run in due] == ["earlier", "later"]
         assert all(run.updated_at.tzinfo is not None for run in due)
