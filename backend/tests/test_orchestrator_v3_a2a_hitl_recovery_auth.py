@@ -576,6 +576,8 @@ async def test_conflicting_terminal_receipt_applies_canonical_evidence():
     assert persisted.state == "failed"
     assert persisted.terminal_result is not None
     assert persisted.terminal_result.status == "failed"
+    assert persisted.continuation_state == "accepted"
+    assert persisted.claim_owner is None
     conflicts = await coordinator.observations.conflicts.list_for_source(
         canonical.source_identity
     )
@@ -584,7 +586,52 @@ async def test_conflicting_terminal_receipt_applies_canonical_evidence():
     assert len(dispatch.commands) == 1
 
 
-async def test_conflicting_terminal_receipt_applies_nonterminal_canonical_evidence():
+async def test_conflicting_terminal_receipt_defers_artifacts_to_processor():
+    dispatch = Dispatch(terminal_status="completed")
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    canonical = NormalizedA2AObservation(
+        observation_id="canonical-failed-artifact",
+        call_record_id=call.call_record_id,
+        source_kind="direct",
+        source_identity="receipt:completed",
+        binding_scope=call.endpoint_scope_digest,
+        event_kind="terminal",
+        observed_at=NOW,
+        task_id=call.a2a_task_id,
+        context_id=call.a2a_context_id,
+        status="failed",
+        artifact_refs=["raw-agent-artifact"],
+    )
+    assert (await coordinator.observations.record(canonical))[0] == "accepted"
+
+    outcome = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert outcome == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.terminal_result is None
+    assert canonical.observation_id not in persisted.recent_observation_ids
+    inbox_record = await coordinator.observations.inbox.load(canonical.observation_id)
+    assert inbox_record.state == "pending"
+    assert inbox_record.observation.artifact_refs == ["raw-agent-artifact"]
+    conflicts = await coordinator.observations.conflicts.list_for_source(
+        canonical.source_identity
+    )
+    assert len(conflicts) == 1
+    assert conflicts[0].accepted_observation_id == canonical.observation_id
+    assert len(dispatch.commands) == 1
+
+
+async def test_conflicting_terminal_receipt_defers_nonterminal_canonical_evidence():
     dispatch = Dispatch(terminal_status="completed")
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -611,11 +658,15 @@ async def test_conflicting_terminal_receipt_applies_nonterminal_canonical_eviden
         authenticated_answerer_id="user-1",
     )
 
-    assert outcome == "working"
+    assert outcome == "delivery_uncertain"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "working"
+    assert persisted.state == "delivery_uncertain"
     assert persisted.terminal_result is None
-    assert persisted.continuation_state == "accepted"
+    assert persisted.continuation_command is not None
+    assert persisted.continuation_state == "delivery_uncertain"
+    assert persisted.continuation_attempts == 0
+    assert persisted.claim_owner is None
+    assert canonical.observation_id not in persisted.recent_observation_ids
     conflicts = await coordinator.observations.conflicts.list_for_source(
         canonical.source_identity
     )
@@ -624,7 +675,7 @@ async def test_conflicting_terminal_receipt_applies_nonterminal_canonical_eviden
     assert len(dispatch.commands) == 1
 
 
-async def test_conflicting_terminal_receipt_preserves_canonical_hitl_reset():
+async def test_conflicting_terminal_receipt_defers_canonical_hitl_to_processor():
     dispatch = Dispatch(terminal_status="completed")
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -651,12 +702,16 @@ async def test_conflicting_terminal_receipt_preserves_canonical_hitl_reset():
         authenticated_answerer_id="user-1",
     )
 
-    assert outcome == "continuation_pending"
+    assert outcome == "delivery_uncertain"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "continuation_pending"
-    assert persisted.continuation_command is None
-    assert persisted.continuation_state is None
-    assert persisted.answer_applied is None
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.continuation_command is not None
+    assert persisted.continuation_state == "delivery_uncertain"
+    assert persisted.continuation_attempts == 0
+    assert persisted.answer_applied is not None
+    assert canonical.observation_id not in persisted.recent_observation_ids
+    inbox_record = await coordinator.observations.inbox.load(canonical.observation_id)
+    assert inbox_record.state == "pending"
     conflicts = await coordinator.observations.conflicts.list_for_source(
         canonical.source_identity
     )
@@ -770,6 +825,8 @@ async def test_conflicting_continuation_expiry_applies_canonical_evidence():
     assert persisted.state == "failed"
     assert persisted.terminal_result is not None
     assert persisted.terminal_result.status == "failed"
+    assert persisted.continuation_state == "accepted"
+    assert persisted.claim_owner is None
     assert (
         await coordinator.recover_call(call_record_id=call.call_record_id) == "failed"
     )
@@ -781,7 +838,7 @@ async def test_conflicting_continuation_expiry_applies_canonical_evidence():
     assert len(dispatch.commands) == 1
 
 
-async def test_conflicting_continuation_expiry_applies_nonterminal_canonical_evidence():
+async def test_conflicting_continuation_expiry_defers_nonterminal_canonical_evidence():
     dispatch = AmbiguousContinuationDispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -827,10 +884,23 @@ async def test_conflicting_continuation_expiry_applies_nonterminal_canonical_evi
 
     outcome = await coordinator.recover_call(call_record_id=call.call_record_id)
 
-    assert outcome == "working"
+    assert outcome == "delivery_uncertain"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "working"
+    assert persisted.state == "delivery_uncertain"
     assert persisted.terminal_result is None
+    assert persisted.continuation_attempts == 0
+    assert persisted.claim_owner is None
+    assert canonical.observation_id not in persisted.recent_observation_ids
+    due = persisted.model_copy(
+        update={
+            "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+            "state_version": persisted.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(due, expected_state_version=persisted.state_version)
+        == "accepted"
+    )
     assert await coordinator.recover_call(call_record_id=call.call_record_id) == (
         "working"
     )
