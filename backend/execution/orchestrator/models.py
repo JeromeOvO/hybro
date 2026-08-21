@@ -596,8 +596,15 @@ RunStatus = Literal[
 
 
 class OrchestratorRunState(ContractModel):
-    schema_version: Literal[4] = 4
+    schema_version: Literal[5] = 5
     run_id: str
+    # Explicit persisted execution-engine ownership, fixed at Run creation and
+    # never re-evaluated afterwards (Plan 4 cutover invariant). Runs owned by
+    # the legacy executor are identified by their absence from this store, so
+    # this schema only ever persists the "orchestrator" generation today; the
+    # discriminator exists so future runtime generations can be routed the same
+    # way without guessing from store identity.
+    runtime_generation: Literal["orchestrator"] = "orchestrator"
     session_id: str
     room_id: str
     client_request_id: str | None

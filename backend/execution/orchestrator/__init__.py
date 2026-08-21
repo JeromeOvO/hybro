@@ -25,6 +25,7 @@ from .fake_tools import (
     fake_agent_definitions,
 )
 from .in_memory import (
+    InMemoryOrchestratorEventStore,
     InMemoryOrchestratorRunStore,
     InMemoryProjectionDriver,
     InMemoryRunStore,
@@ -171,6 +172,7 @@ __all__ = [
     "DeterministicTokenEstimator",
     "EventCancellationSignal",
     "GatewayModelRuntime",
+    "InMemoryOrchestratorEventStore",
     "InMemoryOrchestratorRunStore",
     "InMemoryProjectionDriver",
     "InMemoryRunStore",

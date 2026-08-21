@@ -55,6 +55,13 @@ class ProfileConfiguration(ContractModel):
     max_output_tokens_total: int | None = Field(default=None, gt=0)
     max_compactions: int = Field(ge=0)
     deadline_seconds: float = Field(gt=0)
+    # Reserved profile dimensions, frozen per Run but not yet consumed by the
+    # kernel. Production composition pins `explicit_agent_first` (the candidate
+    # scope is pre-filtered by the API before the Run starts) and
+    # `pass_through` (the final assistant message is delivered unchanged).
+    # `model_select` and `synthesize` are deferred product capabilities; do not
+    # treat these fields as active behavior, and update the cutover contract
+    # test when either becomes consumed.
     initial_routing: Literal["explicit_agent_first", "model_select"]
     tool_execution: Literal["sequential", "parallel"]
     finalization: Literal["pass_through", "light", "synthesize"]

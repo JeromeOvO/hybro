@@ -82,6 +82,10 @@ class RoomFilesEpochFencedArtifactOwner:
         max_bytes: int,
     ) -> str:
         try:
+            # The write-lease owner string is durable operational identity: it
+            # must stay stable across the Plan 4 version-neutral naming cleanup
+            # so old and new backend replicas contend on the same Room lease
+            # instead of fencing each other out.
             async with self.room_files.write_lease(
                 room_id, "orchestrator-v3-a2a-artifact"
             ):
@@ -141,6 +145,12 @@ class GuardedRoomFileArtifactWriter:
         if len(content) > self.max_bytes:
             raise ValueError("remote artifact exceeds Plan 3 owner limit")
         content_digest = sha256(content).hexdigest()
+        # The "orchestrator-v3-a2a" namespace participates in the SHA-256
+        # origin-key preimage below. Renaming it would change the idempotency
+        # identity of every artifact already written by the Plan 3 runtime and
+        # could duplicate owned artifacts on replay. It is durable data
+        # identity, not architecture branding, and must not be renamed during
+        # the Plan 4 naming cleanup.
         origin_key = sha256(
             "|".join(
                 (

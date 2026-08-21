@@ -22,7 +22,28 @@ fixed public message `The agent requested an unsupported interaction.`
 ## Production-unbound Orchestrator V3 A2A runtime
 
 The Plan 3 runtime remains outside `container.py`, routes, and jobs until the
-Plan 4 cutover. Its durable adapter boundary translates only retryable provider
+Plan 4 cutover. Pre-cutover contracts pinned before wiring:
+
+- `OrchestratorRunState` (schema version 5) persists an explicit
+  `runtime_generation` (always `"orchestrator"` in this store) fixed at Run
+  creation and never re-evaluated; legacy-owned Runs are identified by their
+  absence from this store. Plan 4 dual routing and recovery must key off this
+  persisted ownership, never off a live feature flag.
+- `ProfileConfiguration.initial_routing` and `finalization` are frozen per Run
+  but reserved: no code consumes them yet. Production composition pins
+  `explicit_agent_first` (API pre-filters the candidate scope) and
+  `pass_through` (final assistant message delivered unchanged);
+  `model_select` and `synthesize` are deferred product capabilities.
+- The `orchestrator_run_events` inventory now has both an in-memory and a
+  Mongo `OrchestratorEventStore` implementation behind the pure
+  `evaluate_event_append` ordering/idempotency evaluation; the Mongo store
+  relies on the `(event_id)` and `(run_id, sequence)` unique indexes to
+  classify concurrent insert losers as replay or conflict.
+- The artifact write-lease owner `orchestrator-v3-a2a-artifact` and the
+  `orchestrator-v3-a2a` origin-key namespace are durable operational/data
+  identity and must survive the version-neutral naming cleanup unchanged.
+
+Its durable adapter boundary translates only retryable provider
 persistence failures into `RecoverableAdapterError`; checkpoint,
 authorization, epoch, resource, transport, and ambiguous-effect adapters use
 narrow typed subclasses. Contract and programming errors (`ValueError`,

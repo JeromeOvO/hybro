@@ -154,6 +154,14 @@ def test_v3_run_model_excludes_forbidden_semantic_state():
 
 
 def test_v3_package_is_distributable_but_not_bound_to_production():
+    """Gate the runtime stays production-unbound until the Plan 4 cutover.
+
+    The first container.py wiring change replaces this gate with coexistence
+    and routing invariants (persisted runtime_generation routing, flag-off
+    zero traffic, no mid-run owner switching). See
+    ``test_orchestrator_cutover_contracts.py`` for the pinned pre-cutover
+    contracts that survive the replacement.
+    """
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     packages = set(pyproject["tool"]["setuptools"]["packages"])
     assert "execution.orchestrator" in packages

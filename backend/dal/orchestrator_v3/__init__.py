@@ -4,6 +4,7 @@ from .artifacts import (
     GuardedRoomFileArtifactWriter,
     RoomFilesEpochFencedArtifactOwner,
 )
+from .event_store import MongoOrchestratorEventStore
 from .run_store import MongoOrchestratorRunStore, MongoRunStoreResult
 from .stores import (
     AsyncMongoCollection,
@@ -22,6 +23,7 @@ __all__ = [
     "MongoAgentToolBindingStore",
     "MongoObservationConflictStore",
     "MongoObservationInboxStore",
+    "MongoOrchestratorEventStore",
     "MongoOrchestratorRunStore",
     "MongoRunStoreResult",
     "MongoRoomEpochStore",
