@@ -788,8 +788,6 @@ class A2AContinuationCoordinator:
             if call is None:
                 return "delivery_uncertain"
             observation = inbox_record.observation
-            if observation.event_kind != "terminal":
-                return await self._mark_uncertain(call)
             terminal = apply_observation(
                 call,
                 observation,
@@ -850,8 +848,6 @@ class A2AContinuationCoordinator:
         if renewed is None:
             return "delivery_uncertain"
         observation = inbox_record.observation
-        if observation.event_kind != "terminal":
-            return await self._mark_uncertain(renewed)
         expired = apply_observation(
             renewed,
             observation,
