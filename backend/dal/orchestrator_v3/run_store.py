@@ -45,7 +45,11 @@ class MongoOrchestratorRunStore:
             value = await self.collection.find_one(
                 {"room_id": run.room_id, "client_request_id": run.client_request_id}
             )
-            duplicate = OrchestratorRunState.model_validate(value) if value else None
+            duplicate = (
+                OrchestratorRunState.model_validate(_without_mongo_id(value))
+                if value
+                else None
+            )
         if duplicate is not None:
             replay = (
                 duplicate.request.request_fingerprint == run.request.request_fingerprint

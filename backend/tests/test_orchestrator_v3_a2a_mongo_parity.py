@@ -171,6 +171,20 @@ async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
     assert replayed.run.processed_command_ids == ["create:run-1"]
 
 
+async def test_mongo_run_duplicate_request_ignores_mongo_id():
+    collection = FakeCollection()
+    store = MongoOrchestratorRunStore(collection)
+    run = make_run()
+    assert (await store.create(run, command_id="create:run-1")).outcome == "accepted"
+    collection.values[0]["_id"] = "mongo-generated-id"
+    duplicate = run.model_copy(update={"run_id": "run-duplicate"})
+
+    replayed = await store.create(duplicate, command_id="create:run-duplicate")
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.run_id == run.run_id
+
+
 async def test_mongo_and_memory_call_lease_contracts_match():
     stores = [
         InMemoryAgentCallLedgerStore(),
