@@ -116,6 +116,16 @@ class Settings(BaseSettings):
     orchestrator_room_allowlist: str | list[str] = []
     orchestrator_kill_switch: bool = False
 
+    # Orchestrator canary observability (step 8). The canary job is disabled by
+    # default and reads only the existing orchestrator durable stores. Thresholds
+    # follow the suggested §8.2 initial values and are tuned before launch.
+    orchestrator_canary_enabled: bool = False
+    orchestrator_canary_run_failure_rate_max: float = Field(default=0.01, ge=0)
+    orchestrator_canary_run_failure_window_seconds: int = Field(default=300, gt=0)
+    orchestrator_canary_blocked_intent_max_age_seconds: int = Field(default=600, gt=0)
+    orchestrator_canary_recovery_cycle_max_age_seconds: int = Field(default=60, gt=0)
+    orchestrator_canary_observation_conflicts_max: int = Field(default=0, ge=0)
+
     log_level: str = "INFO"
     log_format: str = "auto"
 
@@ -411,6 +421,7 @@ class Settings(BaseSettings):
         "orchestrator_projection_enabled",
         "orchestrator_routing_enabled",
         "orchestrator_kill_switch",
+        "orchestrator_canary_enabled",
         mode="before",
     )
     @classmethod

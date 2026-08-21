@@ -88,6 +88,7 @@ from delivery.facade import DeliveryFacade
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
+from execution.adapters.canary_metrics import collect_metrics
 from execution.cancellation import (
     CancellationConfig,
     CancellationRuntime,
@@ -101,8 +102,10 @@ from jobs.cleanup_orphaned_uploads import (
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
 from jobs.orchestrator_workers import (
+    OrchestratorCanaryDeps,
     OrchestratorProjectionDeps,
     OrchestratorRecoveryDeps,
+    orchestrator_canary_job,
     orchestrator_projection_job,
     orchestrator_recovery_job,
 )
@@ -2022,8 +2025,30 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     project_once=_orchestrator_runtime.projection_worker.run_once
                 )
             )
+
+            async def collect_orchestrator_canary() -> dict[str, Any]:
+                return await collect_metrics(
+                    _orchestrator_runtime.run_store.collection,
+                    _orchestrator_runtime.call_ledger.collection,
+                    _orchestrator_runtime.observation_conflicts.collection,
+                    recovery_cycle_last_run_at=(
+                        orchestrator_recovery_job.last_completed_at
+                    ),
+                    window_seconds=(
+                        runtime.settings.orchestrator_canary_run_failure_window_seconds
+                    ),
+                )
+
+            orchestrator_canary_job.set_leader_election(_leader)
+            orchestrator_canary_job.interval_seconds = (
+                runtime.settings.orchestrator_worker_interval_seconds
+            )
+            orchestrator_canary_job.set_canary_deps(
+                OrchestratorCanaryDeps(collect=collect_orchestrator_canary)
+            )
             await orchestrator_recovery_job.start()
             await orchestrator_projection_job.start()
+            await orchestrator_canary_job.start()
 
     except BaseException:
         # Startup cleanup never replaces the original failure. Every opened
@@ -2036,6 +2061,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if _bg_started:
             startup_steps.extend(
                 [
+                    ("orchestrator-canary", orchestrator_canary_job.stop),
                     ("orchestrator-projection", orchestrator_projection_job.stop),
                     ("orchestrator-recovery", orchestrator_recovery_job.stop),
                     ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
@@ -2114,6 +2140,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
         shutdown_steps.extend(
             [
+                ("orchestrator-canary", orchestrator_canary_job.stop),
                 ("orchestrator-projection", orchestrator_projection_job.stop),
                 ("orchestrator-recovery", orchestrator_recovery_job.stop),
                 ("stale-task-checker", stale_task_checker.stop),

@@ -405,23 +405,43 @@ first wires `container.py`.
 1. **DONE** — pre-cutover contracts (ownership schema, event stores, reserved
    profile semantics, durable-identity pins).
 2. **DONE** — version-neutral naming.
-3. Persistence wiring: create all seven collections and their indexes through
-   the startup registry; unique-index conflicts are fatal; add collections to
-   `room_owned_collections`; wire Mongo epoch store.
-4. Room epoch lifecycle: create activation, delete deactivation/tombstone,
-   exact-epoch cleanup; enforce the fenced deletion path (the fallback without
-   `file_lifecycle` is incompatible with epoch-safe deletion).
-5. Missing production adapters (2.2) and the dark-launch composition
-   (0% traffic) with full construction validation; replace the architecture
-   gate in the same commit.
-6. Projection outbox worker and concrete projectors; recovery cycle binding.
-7. Dual-routing ingress (webhook/relay/HITL/cancel/recovery) keyed by
-   persisted ownership, plus `fast|ultimate` mode acceptance at the API
-   boundary (section 4 mode mapping).
-8. Feature flags and canary rollout.
+3. **DONE** — persistence wiring
+   (`feat: wire orchestrator persistence into the production startup`): all
+   seven collections and indexes through the startup registry, unique-index
+   conflicts fatal, `room_owned_collections`, Mongo epoch store.
+4. **DONE** — room epoch lifecycle
+   (`feat: fence room epoch lifecycle and exact-epoch cleanup`): activation,
+   deactivation/tombstone, exact-epoch cleanup, fenced deletion path.
+5. **DONE** — production adapters and dark-launch composition
+   (`feat: add production adapters for the orchestrator runtime`,
+   `feat: compose the orchestrator runtime for dark launch`,
+   `fix: harden the dark-launch composition after review`): 0% traffic with full
+   construction validation; the architecture gate was replaced in this work.
+6. **DONE** — projection outbox worker and recovery-cycle binding
+   (`feat: production projection outbox worker and recovery cycle`).
+7. **DONE** — dual-routing ingress
+   (`feat: dual-route production entry points by persisted ownership`):
+   webhook/relay/HITL/cancel/recovery keyed by persisted ownership, plus
+   `fast|ultimate` mode acceptance at the API boundary (section 4 mode mapping).
+8. **IN PROGRESS** — feature flags and canary rollout. The six routing flags
+   exist (all default OFF). Canary observability is now wired: typed §8.2
+   thresholds (`orchestrator_canary_*`) plus a leader-gated, flag-gated
+   (default OFF) canary job that reads only the existing durable stores and
+   logs a warning on breach. Remaining before any canary user: tune thresholds,
+   promote the live-Mongo suite to CI, run real Fast/Ultimate E2E through the
+   product UI, and assign the canary DRI.
 9. Rollback manual exercise + acceptance matrix (section 10).
 
-Steps 3–9 each need a named DRI and an explicit exit criterion (the
+Operational prerequisites before the first canary user:
+
+- Tune the §8.2 thresholds (`orchestrator_canary_*`) for the real deployment.
+- Promote the live-Mongo concurrency suite into CI (`HYBRO_TEST_LIVE_MONGO=1`;
+  index provisioning must move into startup).
+- Exercise real Fast and Ultimate flows through the product UI.
+- Assign the cutover/canary DRI (owns on-call during steps 8–9 and the
+  rollback decision in section 9).
+
+Steps 8–9 each need a named DRI and an explicit exit criterion (the
 corresponding section 10 gate or 8.2 threshold). The cutover DRI owns the
 canary on-call during steps 8–9 and the rollback decision in section 9.
 
@@ -436,3 +456,39 @@ canary on-call during steps 8–9 and the rollback decision in section 9.
 - Dropping any remaining `dal.orchestrator` compatibility re-exports or
   historical durable identity (the `orchestrator-v3-a2a` artifact namespace
   may remain forever as durable data identity).
+
+## Rollback manual
+
+Stop assigning new Runs to the orchestrator, then let already-owned work drain.
+Legacy and orchestrator workers may run simultaneously; rollback only affects
+new Runs, never in-flight ownership.
+
+1. **Stop assignment first** (kill switch):
+   - Set `orchestrator_routing_enabled=false` (or `orchestrator_kill_switch=true`).
+   - Optionally set `orchestrator_fast_ratio=0` and
+     `orchestrator_ultimate_ratio=0`.
+   - Never change an existing Run's owner; ownership is persisted at creation.
+2. **Verify orchestrator-owned Runs continue** through the orchestrator
+   workers: recovery, projection, ingress, HITL, and cancellation stay enabled
+   while owned work remains.
+3. **Drain criteria** — keep orchestrator ingress/recovery/projection workers
+   alive until all of the following reach zero:
+   - non-terminal `orchestrator_runs`
+   - pending observation inbox rows (`orchestrator_a2a_observations`)
+   - HITL continuations (`orchestrator_hitl_interactions`)
+   - in-flight cancellations
+   - artifacts pending delivery
+   - projection intents (`projection_outbox` pending/claimed/blocked)
+4. **Worker stop order** — only after the drain criteria reach zero:
+   - stop ingress first (no new work is accepted)
+   - stop recovery, then projection
+   - keep the seven `room_owned_collections` registrations in place: they are
+     inert while assignment is off and are removed only in Plan 5 cleanup
+5. **Forbidden actions**:
+   - never hand an orchestrator checkpoint to the legacy executor
+   - never change an existing Run's owner via a feature flag
+   - never remove the `room_owned_collections` registrations during rollback
+
+Verification: exercise the section 10 "canary rollback leaves in-flight Runs
+untouched" gate and the coexistence invariants (persisted-ownership routing,
+flag-off zero traffic, no mid-run owner switching).
