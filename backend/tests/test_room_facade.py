@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -18,6 +19,7 @@ from common.dto import (
     UserMessageInsertResult,
 )
 from common.types import Task, TaskState, TaskStatus
+from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from models.quote import QuoteSourceKind
 from models.request import RoomCenterUserMessageRequest
 from models.room import (
@@ -865,6 +867,89 @@ async def test_hub_publish_lineage_walks_agent_parent_chain_to_root_user():
     assert "u1" in lineage.cancellation_message_ids
 
 
+@pytest.mark.asyncio
+async def test_create_room_activates_epoch_after_persist():
+    epoch_store = InMemoryRoomEpochStore()
+    facade, rooms, _, _, _ = _facade(ids=["room-created"], epoch_store=epoch_store)
+
+    room = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Room",
+            membership_seed=MembershipSeed(mode="manual"),
+        )
+    )
+
+    active = await epoch_store.read_active("room-created")
+    assert active is not None
+    assert active.epoch == 1
+    assert active.creation_id
+    assert room.room_id == "room-created"
+    assert await facade.get_room("room-created") is not None
+    assert rooms.deleted_ids == []
+
+
+@pytest.mark.asyncio
+async def test_create_room_conflict_compensates_and_room_is_not_routable():
+    epoch_store = SimpleNamespace(activate=AsyncMock(return_value=("conflict", None)))
+    facade, rooms, _, _, _ = _facade(ids=["room-created"], epoch_store=epoch_store)
+
+    with pytest.raises(ValueError, match="Room epoch activation conflict"):
+        await facade.create_room(
+            CreateRoomRequest(
+                owner_id="owner",
+                owner_name="Owner",
+                room_name="Room",
+                membership_seed=MembershipSeed(mode="manual"),
+            )
+        )
+
+    assert "room-created" in rooms.deleted_ids
+    assert await facade.get_room("room-created") is None
+
+
+@pytest.mark.asyncio
+async def test_create_room_tolerates_epoch_replay():
+    epoch_store = SimpleNamespace(activate=AsyncMock(return_value=("replayed", None)))
+    facade, rooms, _, _, _ = _facade(ids=["room-created"], epoch_store=epoch_store)
+
+    room = await facade.create_room(
+        CreateRoomRequest(
+            owner_id="owner",
+            owner_name="Owner",
+            room_name="Room",
+            membership_seed=MembershipSeed(mode="manual"),
+        )
+    )
+
+    assert room.room_id == "room-created"
+    assert rooms.deleted_ids == []
+    assert await facade.get_room("room-created") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_room_activation_error_compensates():
+    async def activate(*args, **kwargs):
+        raise RuntimeError("mongo down")
+
+    epoch_store = SimpleNamespace(activate=activate)
+    facade, rooms, _, _, _ = _facade(ids=["room-created"], epoch_store=epoch_store)
+
+    with pytest.raises(ValueError, match="Room epoch activation failed"):
+        await facade.create_room(
+            CreateRoomRequest(
+                owner_id="owner",
+                owner_name="Owner",
+                room_name="Room",
+                membership_seed=MembershipSeed(mode="manual"),
+            )
+        )
+
+    assert "room-created" in rooms.deleted_ids
+    assert await facade.get_room("room-created") is None
+
+
 def _facade(
     *,
     room_docs: list[dict] | None = None,
@@ -873,6 +958,7 @@ def _facade(
     current_agents: list[AgentInfo] | None = None,
     ids: list[str] | None = None,
     quote_repository=None,
+    epoch_store=None,
 ):
     rooms = FakeRoomRepository(room_docs or [])
     messages = FakeMessageRepository()
@@ -882,6 +968,7 @@ def _facade(
         current_agents=current_agents or [],
     )
     id_iter = iter(ids or ["generated-id"])
+    epoch_store = epoch_store or InMemoryRoomEpochStore()
     facade = RoomFacade(
         repository=rooms,
         message_repository=messages,
@@ -890,6 +977,7 @@ def _facade(
         quote_repository=quote_repository,
         id_factory=lambda: next(id_iter),
         now=lambda: NOW,
+        epoch_store=epoch_store,
     )
     return facade, rooms, messages, registry, source
 

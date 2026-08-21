@@ -739,6 +739,10 @@ class MongoRoomEpochStore:
     def __init__(self, collection: AsyncMongoCollection) -> None:
         self.collection = _bounded(collection)
 
+    async def read(self, room_id: str) -> RoomEpoch | None:
+        value = await self.collection.find_one({"room_id": room_id})
+        return RoomEpoch.model_validate(_without_mongo_id(value)) if value else None
+
     async def read_active(self, room_id: str) -> RoomEpoch | None:
         value = await self.collection.find_one({"room_id": room_id, "active": True})
         return RoomEpoch.model_validate(_without_mongo_id(value)) if value else None

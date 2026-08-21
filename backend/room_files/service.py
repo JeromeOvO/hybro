@@ -38,6 +38,7 @@ class RoomFiles:
         messages: Any | None = None,
         agent_messages: Any | None = None,
         room_owned_collections: Iterable[Any] = (),
+        excluded_from_room_state_delete: Iterable[str] = (),
         lease_writes: bool = False,
         file_id_factory: Callable[[], str] | None = None,
         now: Callable[[], datetime] = utcnow,
@@ -50,6 +51,9 @@ class RoomFiles:
         self._messages = messages
         self._agent_messages = agent_messages
         self._room_owned_collections = tuple(room_owned_collections)
+        self._excluded_from_room_state_delete = frozenset(
+            excluded_from_room_state_delete
+        )
         self._leases = (
             RoomWriteLeases(rooms, now=now)
             if rooms is not None and lease_writes
@@ -760,9 +764,14 @@ class RoomFiles:
         return _changed(result)
 
     async def delete_room_state(self, room_id: str) -> bool:
-        for collection in self._room_owned_collections:
+        collections = [
+            collection
+            for collection in self._room_owned_collections
+            if _collection_name(collection) not in self._excluded_from_room_state_delete
+        ]
+        for collection in collections:
             await collection.delete_many({"room_id": room_id})
-        for collection in self._room_owned_collections:
+        for collection in collections:
             if await collection.count({"room_id": room_id}):
                 return False
         return True
@@ -1116,3 +1125,8 @@ def _changed(result: Any, *, attribute: str = "modified_count") -> bool:
     if isinstance(result, bool):
         return result
     return bool(getattr(result, attribute, 0))
+
+
+def _collection_name(collection: Any) -> str | None:
+    name = getattr(collection, "name", None)
+    return str(name) if name else None

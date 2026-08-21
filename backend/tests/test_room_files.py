@@ -684,3 +684,58 @@ async def test_recovery_removes_crash_orphaned_agent_artifact():
     assert recovered == 1
     assert collection.docs == []
     assert await content_store.read(orphan_file_id, max_bytes=6) is None
+
+
+class NamedCollection:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.deleted_many: list[dict] = []
+        self.counts: list[dict] = []
+
+    async def delete_many(self, query):
+        self.deleted_many.append(query)
+        return SimpleNamespace(deleted_count=0)
+
+    async def count(self, query):
+        self.counts.append(query)
+        return 0
+
+
+async def test_delete_room_state_skips_all_orchestrator_collections():
+    runs = NamedCollection("orchestrator_runs")
+    bindings = NamedCollection("orchestrator_agent_tool_bindings")
+    calls = NamedCollection("orchestrator_agent_calls")
+    observations = NamedCollection("orchestrator_a2a_observations")
+    conflicts = NamedCollection("orchestrator_a2a_observation_conflicts")
+    epochs = NamedCollection("orchestrator_room_epochs")
+    run_events = NamedCollection("orchestrator_run_events")
+
+    files = RoomFiles(
+        metadata=object(),
+        content=MemoryFileContentStore(),
+        room_owned_collections=[
+            runs,
+            bindings,
+            calls,
+            observations,
+            conflicts,
+            epochs,
+            run_events,
+        ],
+        excluded_from_room_state_delete={
+            "orchestrator_room_epochs",
+            "orchestrator_run_events",
+            "orchestrator_runs",
+            "orchestrator_agent_tool_bindings",
+            "orchestrator_agent_calls",
+            "orchestrator_a2a_observations",
+            "orchestrator_a2a_observation_conflicts",
+        },
+    )
+
+    assert await files.delete_room_state("room-1") is True
+
+    for collection in (runs, bindings, calls, observations, conflicts):
+        assert collection.deleted_many == []
+    assert epochs.deleted_many == []
+    assert run_events.deleted_many == []

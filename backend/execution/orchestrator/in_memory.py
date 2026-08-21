@@ -301,6 +301,21 @@ class InMemoryOrchestratorEventStore:
             if event.sequence > after_sequence
         ]
 
+    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+        deleted = 0
+        for run_id, events in list(self.events.items()):
+            kept = [
+                event
+                for event in events
+                if not (event.room_id == room_id and event.room_epoch == room_epoch)
+            ]
+            deleted += len(events) - len(kept)
+            if kept:
+                self.events[run_id] = kept
+            else:
+                self.events.pop(run_id, None)
+        return deleted
+
 
 class InMemoryProjectionDriver:
     """Claim and complete required intents without external side effects."""

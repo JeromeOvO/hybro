@@ -81,6 +81,10 @@ ORCHESTRATOR_EVENT_INDEXES = (
         keys=(("run_id", 1), ("sequence", 1)),
         unique=True,
     ),
+    MongoIndexDefinition(
+        name="orchestrator_event_epoch_cleanup",
+        keys=(("room_id", 1), ("room_epoch", 1)),
+    ),
 )
 
 ORCHESTRATOR_COLLECTIONS = (

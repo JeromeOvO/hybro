@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from dal.orchestrator.epoch_bindings import (
+    EpochScopedOrchestratorCleanup,
     bind_room_epoch_store,
     require_room_epoch_store,
     reset_room_epoch_store,
@@ -124,3 +126,28 @@ def test_epoch_store_binding_is_bind_reset_and_fail_fast():
     reset_room_epoch_store()
     with pytest.raises(RuntimeError, match="has not been bound"):
         require_room_epoch_store()
+
+
+@pytest.mark.asyncio
+async def test_epoch_scoped_cleanup_deletes_every_collection_at_exact_epoch():
+    stores = [
+        SimpleNamespace(delete_by_epoch=AsyncMock(return_value=1)) for _ in range(5)
+    ]
+    runs = SimpleNamespace(
+        delete_many=AsyncMock(return_value=SimpleNamespace(deleted_count=2))
+    )
+    cleanup = EpochScopedOrchestratorCleanup(
+        bindings=stores[0],
+        calls=stores[1],
+        observations=stores[2],
+        conflicts=stores[3],
+        runs=runs,
+        run_events=stores[4],
+    )
+
+    assert await cleanup.delete_by_epoch("room-1", 3) == 7
+    for store in stores:
+        store.delete_by_epoch.assert_awaited_once_with("room-1", 3)
+    runs.delete_many.assert_awaited_once_with(
+        {"room_id": "room-1", "request.room_epoch": 3}
+    )

@@ -694,11 +694,13 @@ EventType = Literal[
 
 
 class OrchestratorEvent(ContractModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     event_id: str
     event_type: EventType
     session_id: str
     run_id: str
+    room_id: str
+    room_epoch: int = Field(ge=1)
     sequence: int = Field(gt=0)
     state_version: int = Field(ge=0)
     causation_id: str

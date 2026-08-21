@@ -60,5 +60,11 @@ class MongoOrchestratorEventStore:
         )
         return [event for event in events if event.sequence > after_sequence]
 
+    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+        result = await self.collection.delete_many(
+            {"room_id": room_id, "room_epoch": room_epoch}
+        )
+        return int(getattr(result, "deleted_count", 0))
+
 
 __all__ = ["MongoOrchestratorEventStore"]

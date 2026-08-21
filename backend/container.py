@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -395,10 +395,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
             from dal.orchestrator.epoch_bindings import (
+                EpochScopedOrchestratorCleanup,
                 bind_room_epoch_store,
+                require_room_epoch_store,
                 reset_room_epoch_store,
             )
-            from dal.orchestrator.stores import MongoRoomEpochStore
+            from dal.orchestrator.event_store import MongoOrchestratorEventStore
+            from dal.orchestrator.stores import (
+                MongoAgentCallLedgerStore,
+                MongoAgentToolBindingStore,
+                MongoObservationConflictStore,
+                MongoObservationInboxStore,
+                MongoRoomEpochStore,
+            )
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
@@ -473,6 +482,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "orchestrator_room_epochs",
                     )
                 ],
+                excluded_from_room_state_delete=(
+                    "orchestrator_room_epochs",
+                    "orchestrator_run_events",
+                    "orchestrator_runs",
+                    "orchestrator_agent_tool_bindings",
+                    "orchestrator_agent_calls",
+                    "orchestrator_a2a_observations",
+                    "orchestrator_a2a_observation_conflicts",
+                ),
                 file_dir=runtime.settings.hybro_file_dir,
                 content_url_prefix=f"{runtime.settings.api_prefix.rstrip('/')}/files",
             )
@@ -735,6 +753,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_registry=_agent_deps.agent_registry,
                 membership_source=membership_source,
                 attachment_metadata_reader=file_storage,
+                epoch_store=require_room_epoch_store(),
             )
             _room_facade = _room_deps.room_registry
             # Runtime store aggregate: callers below receive focused runtime-store parts.
@@ -1321,6 +1340,25 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     delete_room_state=file_storage.delete_room_state,
                 ),
                 memory_cleanup=context_memory_facade,
+                epoch_store=require_room_epoch_store(),
+                orchestrator_epoch_cleanup=EpochScopedOrchestratorCleanup(
+                    bindings=MongoAgentToolBindingStore(
+                        mongo_dal.collection("orchestrator_agent_tool_bindings")
+                    ),
+                    calls=MongoAgentCallLedgerStore(
+                        mongo_dal.collection("orchestrator_agent_calls")
+                    ),
+                    observations=MongoObservationInboxStore(
+                        mongo_dal.collection("orchestrator_a2a_observations")
+                    ),
+                    conflicts=MongoObservationConflictStore(
+                        mongo_dal.collection("orchestrator_a2a_observation_conflicts")
+                    ),
+                    runs=mongo_dal.collection("orchestrator_runs"),
+                    run_events=MongoOrchestratorEventStore(
+                        mongo_dal.collection("orchestrator_run_events")
+                    ),
+                ),
             )
             room_runtime.bind_room_deletion(room_deletion)
             agent_message_preparation = AgentMessagePreparationService(
@@ -3032,6 +3070,7 @@ def create_file_storage(
     room_messages_collection: MongoCollection,
     room_agent_messages_collection: MongoCollection,
     room_owned_collections: list[MongoCollection],
+    excluded_from_room_state_delete: Iterable[str] = (),
     file_dir: str = "",
     max_upload_bytes: int = 5 * 1024 * 1024,
     content_url_prefix: str = "/api/v1/files",
@@ -3046,6 +3085,7 @@ def create_file_storage(
         messages=room_messages_collection,
         agent_messages=room_agent_messages_collection,
         room_owned_collections=room_owned_collections,
+        excluded_from_room_state_delete=excluded_from_room_state_delete,
         lease_writes=True,
         max_upload_bytes=max_upload_bytes,
         content_url_prefix=content_url_prefix,
@@ -3350,6 +3390,7 @@ def create_room_deps(
     agent_registry: AgentRegistry,
     membership_source: RoomMembershipSeedSource,
     attachment_metadata_reader: AttachmentMetadataReader | None = None,
+    epoch_store: Any | None = None,
 ) -> RoomDeps:
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
@@ -3363,6 +3404,7 @@ def create_room_deps(
         attachment_metadata_reader=attachment_metadata_reader,
         id_factory=lambda: uuid4().hex,
         now=utcnow,
+        epoch_store=epoch_store,
     )
     return RoomDeps(
         room_registry=facade,

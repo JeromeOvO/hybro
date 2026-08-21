@@ -20,6 +20,8 @@ def event(event_id: str, sequence: int, state_version: int = 1) -> OrchestratorE
         event_type="turn_started",
         session_id="room-1",
         run_id="run-1",
+        room_id="room-1",
+        room_epoch=1,
         sequence=sequence,
         state_version=state_version,
         causation_id=f"cause-{event_id}",
@@ -74,6 +76,25 @@ async def test_memory_and_mongo_append_read_and_ordering_match():
             item.event_id for item in await store.read("run-1", after_sequence=1)
         ] == ["event-2"]
         assert await store.read("run-other") == []
+
+
+async def test_memory_and_mongo_delete_by_epoch_removes_exact_epoch_events():
+    stores = [
+        InMemoryOrchestratorEventStore(),
+        MongoOrchestratorEventStore(FakeCollection()),
+    ]
+    for store in stores:
+        first = event("event-1", 1)
+        second = event("event-2", 2).model_copy(
+            update={"event_id": "event-2", "room_epoch": 2}
+        )
+        assert await store.append(first) == "accepted"
+        assert await store.append(second) == "accepted"
+
+        assert await store.delete_by_epoch("room-1", 1) == 1
+        assert [item.event_id for item in await store.read("run-1")] == ["event-2"]
+        assert await store.delete_by_epoch("room-1", 2) == 1
+        assert await store.read("run-1") == []
 
 
 async def test_memory_and_mongo_reject_identity_and_ordering_conflicts():

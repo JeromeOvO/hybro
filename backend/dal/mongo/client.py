@@ -14,6 +14,10 @@ class MongoCollectionAdapter:
     def __init__(self, collection: Any) -> None:
         self._collection = collection
 
+    @property
+    def name(self) -> str:
+        return str(self._collection.name)
+
     async def find_one(self, query: dict, **kwargs) -> dict | None:
         return await self._collection.find_one(query, **kwargs)
 

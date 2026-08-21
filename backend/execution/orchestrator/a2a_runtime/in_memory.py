@@ -562,6 +562,10 @@ class InMemoryRoomEpochStore:
     def __init__(self) -> None:
         self._records: dict[str, RoomEpoch] = {}
 
+    async def read(self, room_id: str) -> RoomEpoch | None:
+        record = self._records.get(room_id)
+        return _clone(record) if record is not None else None
+
     async def read_active(self, room_id: str) -> RoomEpoch | None:
         record = self._records.get(room_id)
         return _clone(record) if record is not None and record.active else None
