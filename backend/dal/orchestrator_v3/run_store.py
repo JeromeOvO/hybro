@@ -41,9 +41,8 @@ class MongoOrchestratorRunStore:
         )
         existing = await self.load(run.run_id)
         if existing is not None:
-            return MongoRunStoreResult(
-                "replayed" if existing == candidate else "conflict", existing
-            )
+            replay = command_id in existing.processed_command_ids
+            return MongoRunStoreResult("replayed" if replay else "conflict", existing)
         duplicate = await self._load_client_request_duplicate(run)
         if duplicate is not None:
             replay = (
@@ -55,8 +54,9 @@ class MongoOrchestratorRunStore:
         except DuplicateKeyError:
             existing = await self.load(run.run_id)
             if existing is not None:
+                replay = command_id in existing.processed_command_ids
                 return MongoRunStoreResult(
-                    "replayed" if existing == candidate else "conflict", existing
+                    "replayed" if replay else "conflict", existing
                 )
             duplicate = await self._load_client_request_duplicate(run)
             if duplicate is not None:
@@ -70,7 +70,7 @@ class MongoOrchestratorRunStore:
             return MongoRunStoreResult("conflict", None)
         except RecoverableAdapterError:
             existing = await self.load(run.run_id)
-            if existing == candidate:
+            if existing is not None and command_id in existing.processed_command_ids:
                 return MongoRunStoreResult("replayed", existing)
             raise
         return MongoRunStoreResult("accepted", candidate)
@@ -121,14 +121,13 @@ class MongoOrchestratorRunStore:
             return MongoRunStoreResult("conflict", await self.load(run.run_id))
         except RecoverableAdapterError:
             winner = await self.load(run.run_id)
-            if winner == candidate:
+            if winner is not None and command_id in winner.processed_command_ids:
                 return MongoRunStoreResult("replayed", winner)
             raise
         if int(getattr(result, "modified_count", 0)) != 1:
             winner = await self.load(run.run_id)
-            return MongoRunStoreResult(
-                "replayed" if winner == candidate else "conflict", winner
-            )
+            replay = winner is not None and command_id in winner.processed_command_ids
+            return MongoRunStoreResult("replayed" if replay else "conflict", winner)
         return MongoRunStoreResult("accepted", candidate)
 
     async def claim_recovery(

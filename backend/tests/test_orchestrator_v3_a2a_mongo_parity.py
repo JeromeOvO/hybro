@@ -144,6 +144,7 @@ class MongoPrecisionCollection(FakeCollection):
     def __init__(self):
         super().__init__()
         self.lose_replace_ack = False
+        self.advance_after_replace_ack_loss = False
 
     async def insert_one(self, document):
         return await super().insert_one(_bson_roundtrip(document))
@@ -152,6 +153,14 @@ class MongoPrecisionCollection(FakeCollection):
         result = await super().replace_one(
             query, _bson_roundtrip(document), upsert=upsert
         )
+        if self.advance_after_replace_ack_loss:
+            self.advance_after_replace_ack_loss = False
+            winner = next(
+                item for item in self.values if item["run_id"] == document["run_id"]
+            )
+            winner["state_version"] += 1
+            winner["processed_command_ids"].append("later:command")
+            raise AutoReconnect("replace acknowledgement lost before later mutation")
         if self.lose_replace_ack:
             self.lose_replace_ack = False
             raise AutoReconnect("replace acknowledgement lost")
@@ -287,6 +296,33 @@ async def test_mongo_run_replay_and_ack_loss_use_bson_datetime_precision():
     ]
 
 
+async def test_mongo_run_cas_ack_loss_replays_after_later_advance():
+    collection = MongoPrecisionCollection()
+    store = MongoOrchestratorRunStore(collection)
+    created = await store.create(make_run(), command_id="create:run-1")
+    candidate = created.run.model_copy(
+        update={
+            "status": "running",
+            "state_version": created.run.state_version + 1,
+        }
+    )
+    collection.advance_after_replace_ack_loss = True
+
+    replayed = await store.cas_mutate(
+        candidate,
+        expected_state_version=created.run.state_version,
+        command_id="mutate:run-1",
+    )
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.state_version == candidate.state_version + 1
+    assert replayed.run.processed_command_ids == [
+        "create:run-1",
+        "mutate:run-1",
+        "later:command",
+    ]
+
+
 async def test_mongo_run_create_does_not_duplicate_preapplied_command_id():
     store = MongoOrchestratorRunStore(FakeCollection())
     run = make_run().model_copy(update={"processed_command_ids": ["create:run-1"]})
@@ -296,6 +332,31 @@ async def test_mongo_run_create_does_not_duplicate_preapplied_command_id():
     assert created.outcome == "accepted"
     assert created.run.processed_command_ids == ["create:run-1"]
     assert await store.load(run.run_id) == created.run
+
+
+async def test_mongo_run_create_retry_replays_after_aggregate_advances():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    run = make_run()
+    created = await store.create(run, command_id="create:run-1")
+    advanced = created.run.model_copy(
+        update={
+            "status": "running",
+            "state_version": created.run.state_version + 1,
+        }
+    )
+    assert (
+        await store.cas_mutate(
+            advanced,
+            expected_state_version=created.run.state_version,
+            command_id="mutate:run-1",
+        )
+    ).outcome == "accepted"
+
+    replayed = await store.create(run, command_id="create:run-1")
+
+    assert replayed.outcome == "replayed"
+    assert replayed.run.state_version == advanced.state_version
+    assert replayed.run.processed_command_ids == ["create:run-1", "mutate:run-1"]
 
 
 async def test_mongo_run_create_reloads_concurrent_client_request_winner():
