@@ -543,7 +543,7 @@ async def test_continuation_terminal_receipt_persists_winner_without_redispatch(
     assert hitl.read_interaction_for_test("interaction-1") is None
 
 
-async def test_conflicting_terminal_receipt_fails_closed_on_canonical_evidence():
+async def test_conflicting_terminal_receipt_applies_canonical_evidence():
     dispatch = Dispatch(terminal_status="completed")
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -571,10 +571,11 @@ async def test_conflicting_terminal_receipt_fails_closed_on_canonical_evidence()
         authenticated_answerer_id="user-1",
     )
 
-    assert outcome == "delivery_uncertain"
+    assert outcome == "failed"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "delivery_uncertain"
-    assert persisted.terminal_result is None
+    assert persisted.state == "failed"
+    assert persisted.terminal_result is not None
+    assert persisted.terminal_result.status == "failed"
     conflicts = await coordinator.observations.conflicts.list_for_source(
         canonical.source_identity
     )
@@ -635,7 +636,7 @@ async def test_continuation_expiry_replays_after_observation_ack_loss():
     assert conflicts == []
 
 
-async def test_conflicting_continuation_expiry_fails_closed():
+async def test_conflicting_continuation_expiry_applies_canonical_evidence():
     dispatch = AmbiguousContinuationDispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -683,10 +684,14 @@ async def test_conflicting_continuation_expiry_fails_closed():
 
     outcome = await coordinator.recover_call(call_record_id=call.call_record_id)
 
-    assert outcome == "delivery_uncertain"
+    assert outcome == "failed"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "delivery_uncertain"
-    assert persisted.terminal_result is None
+    assert persisted.state == "failed"
+    assert persisted.terminal_result is not None
+    assert persisted.terminal_result.status == "failed"
+    assert (
+        await coordinator.recover_call(call_record_id=call.call_record_id) == "failed"
+    )
     conflicts = await coordinator.observations.conflicts.list_for_source(
         canonical.source_identity
     )
