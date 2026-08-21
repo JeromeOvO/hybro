@@ -1,4 +1,4 @@
-"""Private durable contracts for the production-unbound Orchestrator V3 A2A runtime."""
+"""Private durable contracts for the orchestrator A2A runtime."""
 
 from __future__ import annotations
 

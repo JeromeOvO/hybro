@@ -1,4 +1,4 @@
-"""Async authorization and Agent Card projection before a V3 Run starts."""
+"""Async authorization and Agent Card projection before a Run starts."""
 
 from __future__ import annotations
 

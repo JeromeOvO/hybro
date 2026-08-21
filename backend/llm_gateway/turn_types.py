@@ -73,9 +73,9 @@ class GatewayTurnRequest(GatewayContract):
     @model_validator(mode="after")
     def _strategy_matches_supported_route(self) -> GatewayTurnRequest:
         if self.provider == "openai" and self.tool_strategy != "native":
-            raise ValueError("OpenAI Plan 2 route requires native tools")
+            raise ValueError("OpenAI route requires native tools")
         if self.provider == "deepseek" and self.tool_strategy != "structured_action":
-            raise ValueError("DeepSeek Plan 2 route requires structured action")
+            raise ValueError("DeepSeek route requires structured action")
         return self
 
 

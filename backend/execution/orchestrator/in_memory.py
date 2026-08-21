@@ -1,4 +1,4 @@
-"""Unbound async in-memory ports for Plan 2 execution tests."""
+"""Async in-memory ports for kernel and session tests."""
 
 from __future__ import annotations
 
@@ -358,7 +358,7 @@ def _intent(run: OrchestratorRunState | None, intent_id: str):
     )
 
 
-# concise aliases used by Plan 2 kernel/session tests
+# concise aliases used by kernel/session tests
 InMemoryRunStore = InMemoryOrchestratorRunStore
 
 __all__ = [

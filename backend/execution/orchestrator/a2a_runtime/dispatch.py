@@ -1,4 +1,4 @@
-"""Unbound direct and relay adapters behind the transport-neutral dispatch port."""
+"""Direct and relay adapters behind the transport-neutral dispatch port."""
 
 from __future__ import annotations
 

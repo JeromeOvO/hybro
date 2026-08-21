@@ -18,7 +18,7 @@ from llm_gateway.turn_types import (
     GatewayTurnMessage,
     GatewayTurnRequest,
 )
-from tests._orchestrator_v3_helpers import NOW, NeverCancelled, profile
+from tests._orchestrator_helpers import NOW, NeverCancelled, profile
 
 
 class Stream:

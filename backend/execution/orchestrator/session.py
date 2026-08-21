@@ -1,4 +1,4 @@
-"""Unbound Room-owned facade over the generic Plan 2 kernel."""
+"""Room-owned facade over the generic orchestrator kernel."""
 
 from __future__ import annotations
 

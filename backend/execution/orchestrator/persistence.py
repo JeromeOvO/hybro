@@ -1,4 +1,4 @@
-"""Unbound Mongo collection and index metadata for orchestrator v3."""
+"""Mongo collection and index metadata for orchestrator persistence."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Private in-process lifecycle events for the unbound Plan 2 session."""
+"""Private in-process lifecycle events for the room session."""
 
 from __future__ import annotations
 

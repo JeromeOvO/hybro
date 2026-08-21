@@ -1,4 +1,4 @@
-"""Unbound leased recovery services; production scheduling is deferred to Plan 4."""
+"""Leased recovery services for the orchestrator A2A runtime."""
 
 from __future__ import annotations
 

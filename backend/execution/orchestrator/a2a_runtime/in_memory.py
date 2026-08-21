@@ -1,4 +1,4 @@
-"""Deterministic in-memory repositories for Plan 3 conformance and failure tests."""
+"""Deterministic in-memory repositories for conformance and failure tests."""
 
 from __future__ import annotations
 

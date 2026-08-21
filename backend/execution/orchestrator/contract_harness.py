@@ -1,4 +1,4 @@
-"""Unbound in-memory harness for generic Run persistence ordering contracts."""
+"""In-memory harness for generic Run persistence ordering contracts."""
 
 from __future__ import annotations
 

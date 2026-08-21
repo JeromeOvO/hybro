@@ -204,7 +204,7 @@ class ModelStreamAssembler:
         self._text.append(event.delta or "")
 
     def _accept_reasoning_delta(self, event: ModelStreamEvent) -> None:
-        del event  # reasoning remains private lifecycle data in Plan 2
+        del event  # reasoning remains private lifecycle data
 
     def _accept_tool_call_start(self, event: ModelStreamEvent) -> None:
         if not event.call_id or not event.tool_name:

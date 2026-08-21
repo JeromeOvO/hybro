@@ -1,4 +1,4 @@
-"""Unbound Mongo collection/index metadata for Plan 3 private runtime state."""
+"""Mongo collection and index metadata for private A2A runtime state."""
 
 from __future__ import annotations
 

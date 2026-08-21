@@ -31,6 +31,7 @@ def repository_text_index() -> dict[Path, str]:
     paths.update(
         {
             BACKEND_ROOT / "container.py",
+            BACKEND_ROOT / "pyproject.toml",
             REPO_ROOT / ".env.example",
             BACKEND_ROOT / "docs" / "System-Architecture.md",
         }
@@ -103,6 +104,44 @@ def test_orchestration_runtime_has_no_versioned_path_names(repository_text_index
         text = source.casefold()
         if "_v2_" in text or "run_v2" in text or re.search(r"\bv2\b", text):
             offenders.append(str(path.relative_to(REPO_ROOT)))
+
+    assert offenders == []
+
+
+def test_orchestrator_runtime_has_no_temporary_version_branding(
+    repository_text_index,
+):
+    # The version-neutral naming cleanup removed the temporary V3 architecture
+    # brand. Only the two durable artifact identities are allowlisted: they
+    # participate in the write-lease owner and the SHA-256 origin-key preimage
+    # and are idempotency data, not branding. Schema/protocol version constants
+    # (schema_version, HITLRouteSnapshotV2) are not matched by these markers.
+    durable_identity = (
+        "orchestrator-v3-a2a-artifact",
+        "orchestrator-v3-a2a",
+    )
+    offenders: list[str] = []
+    for path, source in repository_text_index.items():
+        if not (BACKEND_ROOT in path.parents or path == BACKEND_ROOT / "container.py"):
+            continue
+        if path.suffix not in {".py", ".toml", ".md"}:
+            continue
+        text = source.casefold()
+        for durable in durable_identity:
+            text = text.replace(durable.casefold(), "")
+        for marker in ("orchestrator_v3", "orchestrator-v3", "orchestrator v3"):
+            if marker in text:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {marker}")
+
+    assert offenders == []
+
+
+def test_orchestrator_test_module_names_have_no_temporary_version_branding():
+    offenders = [
+        str(path.relative_to(REPO_ROOT))
+        for path in (BACKEND_ROOT / "tests").rglob("*.py")
+        if "orchestrator_v3" in path.name or "_orchestrator_v3" in path.name
+    ]
 
     assert offenders == []
 

@@ -192,7 +192,7 @@ packages = [
     "dal.redis",
     "dal.runtime_store",
     "dal.runtime_store.parts",
-    "dal.orchestrator_v3",
+    "dal.orchestrator",
     "delivery",
     "delivery.sse",
     "delivery.event_bus",

@@ -1,4 +1,4 @@
-"""Narrow injected ports for the unbound orchestrator v3 contracts."""
+"""Narrow injected ports for the orchestrator contracts."""
 
 from __future__ import annotations
 

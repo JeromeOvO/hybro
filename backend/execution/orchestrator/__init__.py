@@ -1,4 +1,4 @@
-"""Orchestrator v3 runtime, intentionally unbound until the Plan 4 cutover."""
+"""Version-neutral orchestrator runtime: bounded agent kernel, room session facade, profile contracts, and injected ports."""
 
 from .budget import AttemptUsageLedger, BudgetExceeded, BudgetPolicy
 from .compaction import (

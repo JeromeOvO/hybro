@@ -1,4 +1,4 @@
-"""Executable provider-neutral ModelRuntime conformance harness for Plan 1."""
+"""Executable provider-neutral ModelRuntime conformance harness."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ async def run_provider_conformance(
     *,
     signal: CancellationSignal,
 ) -> list[ProviderConformanceResult]:
-    """Execute the complete offline Plan 1 matrix against any ModelRuntime."""
+    """Execute the complete offline conformance matrix against any ModelRuntime."""
 
     required = set(get_args(ProviderScenario))
     supplied = {case.scenario for case in cases}

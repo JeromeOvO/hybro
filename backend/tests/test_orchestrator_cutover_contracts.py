@@ -2,7 +2,7 @@
 
 These invariants stay true while the orchestrator runtime is production-unbound
 and are the successor spine of the architecture gate in
-``test_orchestrator_v3_architecture.py``. That gate will be replaced by
+``test_orchestrator_architecture.py``. That gate will be replaced by
 coexistence/routing invariants (persisted ownership routing, flag-off zero
 traffic, no mid-run owner switching) in the same change that wires
 ``container.py``.
@@ -16,14 +16,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dal.orchestrator_v3.artifacts import RoomFilesEpochFencedArtifactOwner
-from dal.orchestrator_v3.event_store import MongoOrchestratorEventStore
+from dal.orchestrator.artifacts import RoomFilesEpochFencedArtifactOwner
+from dal.orchestrator.event_store import MongoOrchestratorEventStore
 from execution.orchestrator.in_memory import InMemoryOrchestratorEventStore
 from execution.orchestrator.models import OrchestratorRunState
 from execution.orchestrator.ports import OrchestratorEventStore
 from execution.orchestrator.profiles import ProfileConfiguration
 
-from ._orchestrator_v3_helpers import make_run
+from ._orchestrator_helpers import make_run
 
 ROOT = Path(__file__).parents[1]
 ORCHESTRATOR = ROOT / "execution" / "orchestrator"
@@ -86,7 +86,7 @@ def test_artifact_durable_identity_strings_are_pinned():
     source = inspect.getsource(RoomFilesEpochFencedArtifactOwner)
     assert "orchestrator-v3-a2a-artifact" in source
 
-    artifacts = (ROOT / "dal" / "orchestrator_v3" / "artifacts.py").read_text()
+    artifacts = (ROOT / "dal" / "orchestrator" / "artifacts.py").read_text()
     assert '"orchestrator-v3-a2a"' in artifacts
 
 
