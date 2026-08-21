@@ -180,6 +180,17 @@ async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
     assert replayed.run.processed_command_ids == ["create:run-1"]
 
 
+async def test_mongo_run_create_does_not_duplicate_preapplied_command_id():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    run = make_run().model_copy(update={"processed_command_ids": ["create:run-1"]})
+
+    created = await store.create(run, command_id="create:run-1")
+
+    assert created.outcome == "accepted"
+    assert created.run.processed_command_ids == ["create:run-1"]
+    assert await store.load(run.run_id) == created.run
+
+
 async def test_mongo_run_create_reloads_concurrent_client_request_winner():
     store = MongoOrchestratorRunStore(ConcurrentClientRequestWinnerCollection())
     run = make_run()

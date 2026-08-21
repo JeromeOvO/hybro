@@ -32,8 +32,11 @@ class MongoOrchestratorRunStore:
     async def create(
         self, run: OrchestratorRunState, *, command_id: str
     ) -> MongoRunStoreResult:
+        processed_command_ids = list(run.processed_command_ids)
+        if command_id not in processed_command_ids:
+            processed_command_ids.append(command_id)
         candidate = run.model_copy(
-            update={"processed_command_ids": [*run.processed_command_ids, command_id]}
+            update={"processed_command_ids": processed_command_ids}
         )
         existing = await self.load(run.run_id)
         if existing is not None:
