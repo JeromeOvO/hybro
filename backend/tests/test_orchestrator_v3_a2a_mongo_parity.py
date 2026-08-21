@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import AutoReconnect, DuplicateKeyError
 
 from dal.orchestrator_v3.run_store import MongoOrchestratorRunStore
 from dal.orchestrator_v3.stores import (
@@ -140,6 +140,24 @@ class ConcurrentClientRequestWinnerCollection(FakeCollection):
         raise DuplicateKeyError("client request winner used another run ID")
 
 
+class MongoPrecisionCollection(FakeCollection):
+    def __init__(self):
+        super().__init__()
+        self.lose_replace_ack = False
+
+    async def insert_one(self, document):
+        return await super().insert_one(_bson_roundtrip(document))
+
+    async def replace_one(self, query, document, *, upsert=False):
+        result = await super().replace_one(
+            query, _bson_roundtrip(document), upsert=upsert
+        )
+        if self.lose_replace_ack:
+            self.lose_replace_ack = False
+            raise AutoReconnect("replace acknowledgement lost")
+        return result
+
+
 def _matches(document, query):  # noqa: C901
     for key, expected in query.items():
         if key == "$and":
@@ -184,6 +202,19 @@ def _get(document, dotted):
     return value
 
 
+def _bson_roundtrip(value):
+    if isinstance(value, datetime):
+        return value.replace(
+            microsecond=(value.microsecond // 1000) * 1000,
+            tzinfo=None,
+        )
+    if isinstance(value, dict):
+        return {key: _bson_roundtrip(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_bson_roundtrip(item) for item in value]
+    return deepcopy(value)
+
+
 def _inbox_record():
     observation = NormalizedA2AObservation(
         observation_id="observation-1",
@@ -218,6 +249,42 @@ async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
     assert replayed.outcome == "replayed"
     assert replayed.run == accepted.run
     assert replayed.run.processed_command_ids == ["create:run-1"]
+
+
+async def test_mongo_run_replay_and_ack_loss_use_bson_datetime_precision():
+    collection = MongoPrecisionCollection()
+    store = MongoOrchestratorRunStore(collection)
+    precise = NOW.replace(microsecond=456789)
+    run = make_run().model_copy(update={"created_at": precise, "updated_at": precise})
+
+    accepted = await store.create(run, command_id="create:precise")
+    replayed = await store.create(run, command_id="create:precise")
+
+    assert accepted.outcome == "accepted"
+    assert replayed.outcome == "replayed"
+    assert replayed.run == accepted.run
+    assert accepted.run.updated_at.microsecond == 456000
+
+    candidate = accepted.run.model_copy(
+        update={
+            "status": "running",
+            "state_version": accepted.run.state_version + 1,
+            "updated_at": precise + timedelta(seconds=1),
+        }
+    )
+    collection.lose_replace_ack = True
+    reconciled = await store.cas_mutate(
+        candidate,
+        expected_state_version=accepted.run.state_version,
+        command_id="mutate:precise",
+    )
+
+    assert reconciled.outcome == "replayed"
+    assert reconciled.run.updated_at.microsecond == 456000
+    assert reconciled.run.processed_command_ids == [
+        "create:precise",
+        "mutate:precise",
+    ]
 
 
 async def test_mongo_run_create_does_not_duplicate_preapplied_command_id():

@@ -81,7 +81,9 @@ async def test_live_mongo_run_due_dates_and_order_match_contract():
     try:
         collection = database["runs"]
         store = MongoOrchestratorRunStore(collection)
-        base = make_run()
+        base = make_run().model_copy(
+            update={"created_at": NOW.replace(microsecond=456789)}
+        )
 
         def scheduled(run_id, *, next_attempt_at, updated_at):
             return base.model_copy(
@@ -116,10 +118,13 @@ async def test_live_mongo_run_due_dates_and_order_match_contract():
             assert (
                 await store.create(run, command_id=f"create:{run.run_id}")
             ).outcome == "accepted"
+        replayed = await store.create(runs[0], command_id="create:later")
 
         raw = await collection.find_one({"run_id": "later"})
         due = await store.list_due_runs(due_at=NOW, limit=2)
 
+        assert replayed.outcome == "replayed"
+        assert replayed.run.created_at.microsecond == 456000
         assert raw["recovery_claim"]["next_attempt_at"].tzinfo is None
         assert [run.run_id for run in due] == ["earlier", "later"]
         assert all(run.updated_at.tzinfo is not None for run in due)

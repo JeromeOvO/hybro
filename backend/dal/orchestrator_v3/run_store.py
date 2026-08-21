@@ -36,8 +36,8 @@ class MongoOrchestratorRunStore:
         processed_command_ids = list(run.processed_command_ids)
         if command_id not in processed_command_ids:
             processed_command_ids.append(command_id)
-        candidate = run.model_copy(
-            update={"processed_command_ids": processed_command_ids}
+        candidate = _normalize_run_for_mongo(
+            run.model_copy(update={"processed_command_ids": processed_command_ids})
         )
         existing = await self.load(run.run_id)
         if existing is not None:
@@ -109,8 +109,8 @@ class MongoOrchestratorRunStore:
         processed_command_ids = list(run.processed_command_ids)
         if command_id not in processed_command_ids:
             processed_command_ids.append(command_id)
-        candidate = run.model_copy(
-            update={"processed_command_ids": processed_command_ids}
+        candidate = _normalize_run_for_mongo(
+            run.model_copy(update={"processed_command_ids": processed_command_ids})
         )
         try:
             result = await self.collection.replace_one(
@@ -357,6 +357,25 @@ class MongoOrchestratorRunStore:
         return await self.cas_mutate(
             candidate, expected_state_version=run.state_version, command_id=command_id
         )
+
+
+def _normalize_run_for_mongo(run: OrchestratorRunState) -> OrchestratorRunState:
+    return OrchestratorRunState.model_validate(
+        _truncate_datetimes_to_bson_precision(run.model_dump(mode="python"))
+    )
+
+
+def _truncate_datetimes_to_bson_precision(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+    if isinstance(value, dict):
+        return {
+            key: _truncate_datetimes_to_bson_precision(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_truncate_datetimes_to_bson_precision(item) for item in value]
+    return value
 
 
 def _run_from_document(value: dict[str, Any]) -> OrchestratorRunState:
