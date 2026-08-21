@@ -98,9 +98,10 @@ narrow adapter implementing the existing
   fingerprint, authenticated answerer, verified auth references; `answer_applied`
   is the idempotency marker. The production adapter must also keep the
   coordinator's replay rules intact: an applied answer whose continuation
-  command is gone finalizes against the durable terminal winner, and a
-  conflicting observation record must mark the call uncertain instead of
-  applying evidence (`a2a_runtime/hitl.py`).
+  command is gone finalizes against the durable terminal winner, and
+  conflicting or ineligible observation evidence (non-terminal, artifact-
+  bearing, claimed inbox, or observation-sink-routed) must mark the call
+  uncertain instead of applying it (`a2a_runtime/hitl.py`).
 - `DirectA2AClient` over the `a2a_adapter` SDK client. `a2a_adapter` is the
   SDK anti-corruption layer: it is the only backend package allowed to import
   the `a2a` SDK (`a2a.types`, `a2a.client`; pinned by
