@@ -32,10 +32,13 @@ class MongoOrchestratorRunStore:
     async def create(
         self, run: OrchestratorRunState, *, command_id: str
     ) -> MongoRunStoreResult:
+        candidate = run.model_copy(
+            update={"processed_command_ids": [*run.processed_command_ids, command_id]}
+        )
         existing = await self.load(run.run_id)
         if existing is not None:
             return MongoRunStoreResult(
-                "replayed" if existing == run else "conflict", existing
+                "replayed" if existing == candidate else "conflict", existing
             )
         duplicate = None
         if run.client_request_id is not None:
@@ -48,9 +51,6 @@ class MongoOrchestratorRunStore:
                 duplicate.request.request_fingerprint == run.request.request_fingerprint
             )
             return MongoRunStoreResult("replayed" if replay else "conflict", duplicate)
-        candidate = run.model_copy(
-            update={"processed_command_ids": [*run.processed_command_ids, command_id]}
-        )
         try:
             await self.collection.insert_one(candidate.model_dump(mode="json"))
         except DuplicateKeyError:

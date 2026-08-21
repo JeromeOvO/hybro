@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
+from dal.orchestrator_v3.run_store import MongoOrchestratorRunStore
 from dal.orchestrator_v3.stores import (
     MongoAgentCallLedgerStore,
     MongoObservationConflictStore,
@@ -28,7 +29,7 @@ from execution.orchestrator.a2a_runtime.models import (
 )
 
 from ._orchestrator_v3_a2a_helpers import ledger_record
-from ._orchestrator_v3_helpers import NOW
+from ._orchestrator_v3_helpers import NOW, make_run
 
 
 class Cursor:
@@ -155,6 +156,19 @@ def _inbox_record():
         event_kind=observation.event_kind,
         observation=observation,
     )
+
+
+async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
+    store = MongoOrchestratorRunStore(FakeCollection())
+    run = make_run()
+
+    accepted = await store.create(run, command_id="create:run-1")
+    replayed = await store.create(run, command_id="create:run-1")
+
+    assert accepted.outcome == "accepted"
+    assert replayed.outcome == "replayed"
+    assert replayed.run == accepted.run
+    assert replayed.run.processed_command_ids == ["create:run-1"]
 
 
 async def test_mongo_and_memory_call_lease_contracts_match():
