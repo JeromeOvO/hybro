@@ -794,7 +794,7 @@ class A2AContinuationCoordinator:
                 or inbox_record.state == "claimed"
                 or inbox_record.delivery_route == "observation_sink"
             ):
-                return await self._mark_uncertain(call, reset_attempts=True)
+                return await self._mark_uncertain(call)
             terminal = apply_observation(
                 call,
                 observation,
@@ -865,7 +865,7 @@ class A2AContinuationCoordinator:
             or inbox_record.state == "claimed"
             or inbox_record.delivery_route == "observation_sink"
         ):
-            return await self._mark_uncertain(renewed, reset_attempts=True)
+            return await self._mark_uncertain(renewed)
         expired = apply_observation(
             renewed,
             observation,
@@ -889,10 +889,7 @@ class A2AContinuationCoordinator:
             )
         return await self._finalized_state(persisted)
 
-    async def _mark_uncertain(
-        self, call: AgentCallLedgerRecord, *, reset_attempts: bool = False
-    ) -> str:
-        attempt_updates = {"continuation_attempts": 0} if reset_attempts else {}
+    async def _mark_uncertain(self, call: AgentCallLedgerRecord) -> str:
         if call.state == "resuming":
             uncertain = transition_call(
                 call,
@@ -903,7 +900,6 @@ class A2AContinuationCoordinator:
                 claim_expires_at=None,
                 next_attempt_at=datetime.now(UTC)
                 + timedelta(seconds=self.policy.retry_backoff_initial_seconds),
-                **attempt_updates,
             )
         else:
             uncertain = call.model_copy(
@@ -915,7 +911,6 @@ class A2AContinuationCoordinator:
                     + timedelta(seconds=self.policy.retry_backoff_initial_seconds),
                     "state_version": call.state_version + 1,
                     "updated_at": datetime.now(UTC),
-                    **attempt_updates,
                 }
             )
         persisted = await self._cas_or_load_winner(

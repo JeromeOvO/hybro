@@ -49,6 +49,7 @@ class Authorization:
 class Dispatch:
     def __init__(self, *, terminal_status=None):
         self.commands = []
+        self.inspections = []
         self.terminal_status = terminal_status
 
     async def continue_task(self, command):
@@ -72,7 +73,29 @@ class Dispatch:
         return A2ADispatchReceipt(outcome="accepted")
 
     async def inspect_continuation(self, command):
+        self.inspections.append(command)
         return A2ADispatchReceipt(outcome="accepted")
+
+
+class RepeatingTerminalDispatch(Dispatch):
+    async def inspect_continuation(self, command):
+        self.inspections.append(command)
+        assert self.terminal_status is not None
+        return A2ADispatchReceipt(
+            outcome="terminal",
+            terminal_observation=NormalizedA2AObservation(
+                observation_id=f"inspection-{self.terminal_status}",
+                call_record_id=command.call_record_id,
+                source_kind="direct",
+                source_identity=f"receipt:{self.terminal_status}",
+                binding_scope="endpoint",
+                event_kind="terminal",
+                observed_at=NOW,
+                task_id=command.task_id,
+                context_id=command.context_id,
+                status=self.terminal_status,
+            ),
+        )
 
 
 class AmbiguousContinuationDispatch(Dispatch):
@@ -586,8 +609,8 @@ async def test_conflicting_terminal_receipt_applies_canonical_evidence():
     assert len(dispatch.commands) == 1
 
 
-async def test_conflicting_terminal_receipt_defers_artifacts_to_processor():
-    dispatch = Dispatch(terminal_status="completed")
+async def test_conflicting_terminal_receipt_preserves_uncertainty_budget():
+    dispatch = RepeatingTerminalDispatch(terminal_status="completed")
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
     )
@@ -619,6 +642,7 @@ async def test_conflicting_terminal_receipt_defers_artifacts_to_processor():
     persisted = await ledger.load_by_record_id(call.call_record_id)
     assert persisted.state == "delivery_uncertain"
     assert persisted.terminal_result is None
+    assert persisted.continuation_attempts == 1
     assert canonical.observation_id not in persisted.recent_observation_ids
     inbox_record = await coordinator.observations.inbox.load(canonical.observation_id)
     assert inbox_record.state == "pending"
@@ -629,6 +653,25 @@ async def test_conflicting_terminal_receipt_defers_artifacts_to_processor():
     assert len(conflicts) == 1
     assert conflicts[0].accepted_observation_id == canonical.observation_id
     assert len(dispatch.commands) == 1
+
+    for expected_attempts in (2, 3):
+        await make_due(ledger, call.call_record_id)
+        assert (
+            await coordinator.recover_call(call_record_id=call.call_record_id)
+            == "delivery_uncertain"
+        )
+        persisted = await ledger.load_by_record_id(call.call_record_id)
+        assert persisted.continuation_attempts == expected_attempts
+
+    await make_due(ledger, call.call_record_id)
+    assert await coordinator.recover_call(call_record_id=call.call_record_id) == (
+        "expired"
+    )
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "expired"
+    assert persisted.terminal_result is not None
+    assert persisted.terminal_result.status == "expired"
+    assert len(dispatch.inspections) == 2
 
 
 async def test_conflicting_terminal_receipt_defers_nonterminal_canonical_evidence():
@@ -664,7 +707,7 @@ async def test_conflicting_terminal_receipt_defers_nonterminal_canonical_evidenc
     assert persisted.terminal_result is None
     assert persisted.continuation_command is not None
     assert persisted.continuation_state == "delivery_uncertain"
-    assert persisted.continuation_attempts == 0
+    assert persisted.continuation_attempts == 1
     assert persisted.claim_owner is None
     assert canonical.observation_id not in persisted.recent_observation_ids
     conflicts = await coordinator.observations.conflicts.list_for_source(
@@ -707,7 +750,7 @@ async def test_conflicting_terminal_receipt_defers_canonical_hitl_to_processor()
     assert persisted.state == "delivery_uncertain"
     assert persisted.continuation_command is not None
     assert persisted.continuation_state == "delivery_uncertain"
-    assert persisted.continuation_attempts == 0
+    assert persisted.continuation_attempts == 1
     assert persisted.answer_applied is not None
     assert canonical.observation_id not in persisted.recent_observation_ids
     inbox_record = await coordinator.observations.inbox.load(canonical.observation_id)
@@ -888,7 +931,10 @@ async def test_conflicting_continuation_expiry_defers_nonterminal_canonical_evid
     persisted = await ledger.load_by_record_id(call.call_record_id)
     assert persisted.state == "delivery_uncertain"
     assert persisted.terminal_result is None
-    assert persisted.continuation_attempts == 0
+    assert (
+        persisted.continuation_attempts
+        == persisted.runtime_policy.max_uncertain_inspection_attempts
+    )
     assert persisted.claim_owner is None
     assert canonical.observation_id not in persisted.recent_observation_ids
     due = persisted.model_copy(
@@ -902,8 +948,14 @@ async def test_conflicting_continuation_expiry_defers_nonterminal_canonical_evid
         == "accepted"
     )
     assert await coordinator.recover_call(call_record_id=call.call_record_id) == (
-        "working"
+        "delivery_uncertain"
     )
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert (
+        persisted.continuation_attempts
+        == persisted.runtime_policy.max_uncertain_inspection_attempts
+    )
+    assert dispatch.inspections == []
     conflicts = await coordinator.observations.conflicts.list_for_source(
         canonical.source_identity
     )
@@ -997,6 +1049,20 @@ async def test_continuation_unclassifiable_winner_is_typed_recoverable(
     assert persisted.state == "completed"
     assert await coordinator.resume(**resume_kwargs) == "completed"
     assert len(dispatch.commands) == 1
+
+
+async def make_due(ledger, call_record_id):
+    current = await ledger.load_by_record_id(call_record_id)
+    due = current.model_copy(
+        update={
+            "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+            "state_version": current.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(due, expected_state_version=current.state_version)
+        == "accepted"
+    )
 
 
 async def expire_claim(ledger, call_record_id):
