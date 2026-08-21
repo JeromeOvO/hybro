@@ -113,6 +113,28 @@ async def test_alias_lookup_is_scoped_and_rejects_ambiguous_matches():
     assert await store.find_by_alias("wrong", task_id="task-1", context_id=None) is None
 
 
+@pytest.mark.parametrize("state", ["accepted", "ready_to_dispatch"])
+@pytest.mark.parametrize("event_kind", ["working", "artifact"])
+def test_pre_dispatch_progress_cannot_bind_authoritative_aliases(state, event_kind):
+    record = ledger_record()
+    if state == "ready_to_dispatch":
+        record = transition_call(record, to_state=state, updated_at=NOW)
+    observation = NormalizedA2AObservation(
+        observation_id=f"pre-dispatch-{state}-{event_kind}",
+        call_record_id=record.call_record_id,
+        source_kind="webhook",
+        source_identity=f"webhook:{state}:{event_kind}",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind=event_kind,
+        observed_at=NOW,
+        task_id="task-stolen",
+        context_id="context-stolen",
+        artifact_refs=["artifact-stolen"] if event_kind == "artifact" else [],
+    )
+
+    assert apply_observation(record, observation, recent_limit=10) == record
+
+
 def test_terminal_observation_wins_once_and_recent_inventory_is_bounded():
     record = transition_call(
         ledger_record(), to_state="ready_to_dispatch", updated_at=NOW
