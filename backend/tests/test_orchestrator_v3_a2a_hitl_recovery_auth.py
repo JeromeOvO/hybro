@@ -170,9 +170,7 @@ class ContinuationWinnerRaceLedger(InMemoryAgentCallLedgerStore):
         self.durable_winner = None
 
     async def cas(self, record, *, expected_state_version):
-        target_state = (
-            "working" if self.branch == "working" else self.terminal_status
-        )
+        target_state = "working" if self.branch == "working" else self.terminal_status
         if (
             not self.raced
             and record.continuation_state == "accepted"

@@ -797,8 +797,7 @@ class A2AContinuationCoordinator:
             )
             if (
                 observation.observation_id in persisted.recent_observation_ids
-                and persisted.terminal_result_digest
-                == terminal.terminal_result_digest
+                and persisted.terminal_result_digest == terminal.terminal_result_digest
             ):
                 assert persisted.terminal_result_digest is not None
                 await self.observations.mark_executor_outcome(

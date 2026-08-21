@@ -192,10 +192,10 @@ def apply_observation(
             persisted_digest=record.terminal_result_digest or "missing",
             conflicting_digest=conflicting,
         )
-    if (
-        observation.event_kind in {"working", "artifact"}
-        and record.state in {"accepted", "ready_to_dispatch"}
-    ):
+    if observation.event_kind in {"working", "artifact"} and record.state in {
+        "accepted",
+        "ready_to_dispatch",
+    }:
         return record
 
     aliases = bind_authoritative_aliases(
