@@ -47,11 +47,7 @@ from execution.orchestration.run_store import (
     OrchestrationRunStore,
     OrchestrationStoreConflict,
 )
-from execution.orchestrator_routing import (
-    OWNER_LEGACY,
-    OWNER_ORCHESTRATOR,
-    UnsupportedEnvelopeError,
-)
+from execution.orchestrator_routing import OrchestratorRoutingError
 from execution.ports import (
     AgentResponseHandlerPort,
     AgentTaskCleanupPort,
@@ -538,8 +534,21 @@ class ExecutionFacade:
         self._inflight: set[asyncio.Task] = set()
 
     def bind_orchestrator_router(self, router: Any) -> None:
-        """Attach the dual-routing seam after composition (container-wired)."""
+        """Attach the orchestrator ingress adapter after composition."""
         self._orchestrator_router = router
+
+    async def route_webhook(
+        self,
+        *,
+        message_id: str,
+        payload: dict[str, Any],
+        token: str,
+    ) -> None:
+        """Record an authenticated orchestrator-owned webhook observation."""
+        router = self._orchestrator_router
+        if router is None:
+            raise OrchestratorRoutingError("orchestrator webhook ingress is not bound")
+        await router.route_webhook(message_id=message_id, payload=payload, token=token)
 
     @staticmethod
     def _prepare_request_idempotency(
@@ -814,50 +823,10 @@ class ExecutionFacade:
         request: ExecutionRequest,
         orchestration_request: OrchestrationRequest,
     ) -> None:
-        owner = OWNER_LEGACY
         router = self._orchestrator_router
-        if router is not None:
-            try:
-                owner = await router.assign_runtime(
-                    room_id=request.room_id,
-                    client_request_id=request.client_request_id,
-                    user_id=request.sender_id,
-                    mode=request.mode,
-                    agent_scope=orchestration_request.agent_scope,
-                )
-            except Exception:
-                logger.warning(
-                    "orchestrator routing failed; falling back to legacy",
-                    exc_info=True,
-                )
-                owner = OWNER_LEGACY
-            if owner == OWNER_ORCHESTRATOR:
-                try:
-                    await router.preflight_room_user_message(orchestration_request)
-                except UnsupportedEnvelopeError:
-                    logger.info(
-                        "orchestrator envelope unsupported; falling back to legacy",
-                        extra={"room_id": request.room_id},
-                    )
-                    owner = OWNER_LEGACY
-                except Exception:
-                    logger.warning(
-                        "orchestrator envelope preflight failed; "
-                        "falling back to legacy",
-                        exc_info=True,
-                    )
-                    owner = OWNER_LEGACY
-        if owner == OWNER_ORCHESTRATOR:
-            try:
-                await router.process_room_user_message(orchestration_request)
-                return
-            except UnsupportedEnvelopeError:
-                logger.info(
-                    "orchestrator message adapter rejected envelope; "
-                    "falling back to legacy",
-                    extra={"room_id": request.room_id},
-                )
-        await self._room_message_center.process_room_user_message(orchestration_request)
+        if router is None:
+            raise OrchestratorRoutingError("orchestrator router is not bound")
+        await router.process_room_user_message(orchestration_request)
 
     async def start_orchestration(
         self,
@@ -925,32 +894,6 @@ class ExecutionFacade:
         )
 
         async def _recover() -> None:
-            # Recovery must respect persisted runtime ownership: a user
-            # message owned by the orchestrator runtime is recovered by its
-            # own A2A recovery cycle, never re-entered into the legacy
-            # executor (dual execution of one turn).
-            router = self._orchestrator_router
-            if router is not None and request.room_user_message_id:
-                try:
-                    owner = await router.resolve_run_owner_by_user_message(
-                        request.room_user_message_id
-                    )
-                except Exception:
-                    logger.warning(
-                        "recovery ownership lookup failed; falling back to legacy",
-                        exc_info=True,
-                    )
-                    owner = OWNER_LEGACY
-                if owner == OWNER_ORCHESTRATOR:
-                    logger.info(
-                        "recovery skipped: user message is owned by the "
-                        "orchestrator runtime",
-                        extra={
-                            "room_id": request.room_id,
-                            "user_message_id": request.room_user_message_id,
-                        },
-                    )
-                    return
             await self._room_message_center.process_room_user_message(request)
 
         with bind_log_context(
@@ -1077,28 +1020,11 @@ class ExecutionFacade:
     ) -> bool | CancellationAck:
         router = self._orchestrator_router
         if router is not None:
-            try:
-                owner = await router.resolve_run_owner_by_user_message(message_id)
-            except Exception:
-                logger.warning(
-                    "orchestrator cancel ownership resolution failed; "
-                    "falling back to legacy",
-                    exc_info=True,
-                )
-                owner = OWNER_LEGACY
-            if owner == OWNER_ORCHESTRATOR:
-                try:
-                    results = await router.route_cancellation_by_user_message(
-                        message_id,
-                        reason=f"user:{requested_by_user_id}",
-                    )
-                    return _orchestrator_cancellation_ack(results)
-                except Exception:
-                    logger.exception(
-                        "orchestrator cancellation routing failed after ownership "
-                        "was resolved"
-                    )
-                    raise
+            results = await router.route_cancellation_by_user_message(
+                message_id,
+                reason=f"user:{requested_by_user_id}",
+            )
+            return _orchestrator_cancellation_ack(results)
         return await self._cancellation_service.cancel(
             room_id=room_id,
             message_id=message_id,
@@ -1290,28 +1216,18 @@ class ExecutionFacade:
     ) -> HITLResponse:
         router = self._orchestrator_router
         if router is not None:
-            try:
-                owner = await router.resolve_interaction_owner(interaction_id)
-            except Exception:
-                logger.warning(
-                    "orchestrator HITL ownership resolution failed; "
-                    "falling back to legacy",
-                    exc_info=True,
-                )
-                owner = OWNER_LEGACY
-            if owner == OWNER_ORCHESTRATOR:
-                await router.route_hitl_answer(
-                    interaction_id=interaction_id,
-                    answers=answers,
-                    responder_id=responder_id,
-                    room_id=room_id,
-                )
-                return HITLResponse(
-                    request_id=interaction_id,
-                    status="accepted",
-                    responder_id=responder_id,
-                    client_request_id=client_request_id,
-                )
+            await router.route_hitl_answer(
+                interaction_id=interaction_id,
+                answers=answers,
+                responder_id=responder_id,
+                room_id=room_id,
+            )
+            return HITLResponse(
+                request_id=interaction_id,
+                status="accepted",
+                responder_id=responder_id,
+                client_request_id=client_request_id,
+            )
         result = await self._hitl_manager.handle_batch_response(
             room_id=room_id,
             interaction_id=interaction_id,

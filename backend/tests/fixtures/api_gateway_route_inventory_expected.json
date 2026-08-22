@@ -1265,9 +1265,7 @@
       "webhooks"
     ],
     "status_code": null,
-    "dependencies": [
-      "get_webhook_receiver"
-    ],
+    "dependencies": [],
     "auth_dependencies": [],
     "include_in_schema": true
   },

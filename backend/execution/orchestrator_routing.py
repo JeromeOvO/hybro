@@ -1,28 +1,18 @@
-"""Dual-routing seam keyed by persisted runtime ownership.
+"""Orchestrator ingress adapter for the single execution path.
 
-This module is the *only* orchestrator surface the legacy product entry points
+This module is the *only* orchestrator surface the product entry points
 (``execution/facade.py`` and ``api_gateway/routes``) are allowed to import. It
-owns two concerns:
+owns the ingress concerns that translate between the legacy
+``OrchestrationRequest`` envelope and the orchestrator runtime:
 
-* **Run-creation routing** — the deterministic, flag-driven decision that
-  selects ``orchestrator`` or ``legacy`` for a new user message. The decision
-  is made exactly once, at Run creation, and is never re-evaluated for an
-  existing Run.
-* **Persisted-ownership ingress routing** — webhook observations, HITL answers,
-  and cancellation are dispatched back to the runtime that originally owns the
-  correlated Run/call/interaction.
+* **Run-creation** — ``process_room_user_message`` prepares a Run and drives
+  the orchestrator ``RoomSessionHost`` prompt for every new user message.
+* **Ingress routing** — webhook observations, HITL answers, and cancellation
+  are dispatched to the orchestrator runtime (the only runtime).
 
-The heavy translation between the legacy ``OrchestrationRequest`` envelope and
-the orchestrator's ``RoomSessionHost`` inputs also lives here (``process_room_user_message``),
-so ``execution/facade.py`` stays orchestrator-import-free.
-
-Mixed-runtime concurrency note: partial per-profile ratios can interleave
-legacy and orchestrator Runs inside one Room. Each engine owns an
-independent Room lock/claim, so two concurrently-arriving messages in the
-same Room may execute in different runtimes without coordinating. The
-canary plan must adopt Room-level stickiness (one owner per Room while
-mixed) before raising per-profile ratios; this seam documents the risk but
-does not implement stickiness.
+The heavy translation between the ``OrchestrationRequest`` envelope and the
+orchestrator's ``RoomSessionHost`` inputs also lives here, so
+``execution/facade.py`` stays orchestrator-import-free.
 """
 
 from __future__ import annotations
@@ -65,23 +55,12 @@ from models.response import OrchestrationResponse
 
 logger = get_logger(__name__)
 
-OWNER_ORCHESTRATOR = "orchestrator"
-OWNER_LEGACY = "legacy"
-
 MODE_PROFILE_MAP = {
     "fast": "fast",
     "direct": "fast",
     "ultimate": "ultimate",
     "supervisor": "ultimate",
 }
-
-# The closed agent-scope enumeration shared with the API boundary
-# (api_gateway/routes/room_routes.py) and the frontend AgentScopeInput. A
-# scope outside this set means the seam cannot serve the request and the
-# legacy executor must take it.
-_SERVABLE_SCOPE_SOURCES = frozenset(
-    {"mention", "room_default", "all_agents", "saved_group"}
-)
 
 _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
 _PROFILE_PINNED_FINALIZATION = "pass_through"
@@ -356,26 +335,11 @@ def _attachments_from_message(content: Any) -> list[AttachmentEnvelope]:
     return attachments
 
 
-def stable_route_bucket(room_id: str, client_request_id: str | None) -> int:
-    """Deterministic 0-99 bucket shared by every replica for the same request."""
-    key = f"{room_id or ''}:{client_request_id or ''}"
-    digest = hashlib.sha256(key.encode()).hexdigest()
-    return int(digest[:8], 16) % 100
-
-
 def map_mode_to_profile(mode: str) -> str:
     profile_id = MODE_PROFILE_MAP.get(mode)
     if profile_id is None:
         raise UnsupportedEnvelopeError(f"unsupported execution mode {mode!r}")
     return profile_id
-
-
-def _allowlist(values: Any) -> set[str]:
-    if values is None:
-        return set()
-    if isinstance(values, str):
-        return {values}
-    return {str(item) for item in values if item}
 
 
 # Scope source → AuthorizationBasis.kind. Scopes outside this map (and the
@@ -657,133 +621,25 @@ class _PreparedRunFactory:
 
 
 class DualRuntimeRouter:
-    """Ownership-aware dispatcher shared by every legacy ingress.
+    """Thin orchestrator ingress adapter for the single execution path.
 
-    Construction is cheap and non-IO. When ``runtime`` is ``None`` (or the
-    orchestrator composition was disabled) every decision falls back to
-    ``legacy`` and every ingress route stays on the legacy path.
+    Construction is cheap and non-IO. ``runtime`` is the composed orchestrator
+    runtime; every ingress (message, cancellation, HITL answer, webhook) is
+    served by the orchestrator directly.
     """
 
     def __init__(
         self,
         *,
         runtime: Any | None = None,
-        settings: Any | None = None,
         envelope_source: RoomEnvelopeSource | None = None,
         run_factory: RunFactory | None = None,
         webhook_token_verifier: WebhookTokenVerifier | None = None,
     ) -> None:
         self._runtime = runtime
-        self._settings = settings
         self._envelope_source = envelope_source
         self._run_factory = run_factory or DefaultRunFactory()
         self._webhook_token_verifier = webhook_token_verifier
-
-    # -- Run-creation decision ------------------------------------------
-
-    async def assign_runtime(
-        self,
-        *,
-        room_id: str,
-        client_request_id: str | None,
-        user_id: str | None,
-        mode: str,
-        agent_scope: dict[str, Any] | None = None,
-    ) -> str:
-        """Decide the runtime for a *new* Run. Never re-evaluated afterwards."""
-        if self._runtime is None or self._settings is None:
-            return OWNER_LEGACY
-        if getattr(self._settings, "orchestrator_kill_switch", False):
-            return OWNER_LEGACY
-        if not getattr(self._settings, "orchestrator_routing_enabled", False):
-            return OWNER_LEGACY
-        if agent_scope is not None:
-            # The agent scope is part of the orchestration request; the seam
-            # must be able to serve it before ownership is decided. Scopes
-            # outside the closed API enumeration stay on the legacy executor.
-            source = (
-                agent_scope.get("source") if isinstance(agent_scope, dict) else None
-            )
-            if source not in _SERVABLE_SCOPE_SOURCES:
-                return OWNER_LEGACY
-        profile_id = map_mode_to_profile(mode)
-        profiles = getattr(self._runtime, "profiles", None)
-        if profiles is not None and profile_id not in profiles:
-            return OWNER_LEGACY
-
-        user_allowlist = _allowlist(
-            getattr(self._settings, "orchestrator_user_allowlist", [])
-        )
-        room_allowlist = _allowlist(
-            getattr(self._settings, "orchestrator_room_allowlist", [])
-        )
-        if user_id in user_allowlist or room_id in room_allowlist:
-            return OWNER_ORCHESTRATOR
-        if user_allowlist or room_allowlist:
-            return OWNER_LEGACY
-
-        ratio = int(getattr(self._settings, f"orchestrator_{profile_id}_ratio", 0) or 0)
-        if ratio <= 0:
-            return OWNER_LEGACY
-        bucket = stable_route_bucket(room_id, client_request_id)
-        return OWNER_ORCHESTRATOR if bucket < ratio else OWNER_LEGACY
-
-    # -- Persisted-ownership resolution ---------------------------------
-
-    async def resolve_run_owner(self, run_id: str) -> str:
-        if self._runtime is None:
-            return OWNER_LEGACY
-        run = await self._runtime.run_store.load(run_id)
-        return OWNER_ORCHESTRATOR if run is not None else OWNER_LEGACY
-
-    async def resolve_run_owner_by_user_message(self, user_message_id: str) -> str:
-        """Correlate ownership by the originating room user message id.
-
-        The public cancel path is keyed by the room user message id (not the
-        orchestrator ``run_id``), so it must resolve through
-        ``RunRequestSnapshot.user_message_id``.
-        """
-        if self._runtime is None:
-            return OWNER_LEGACY
-        run = await self._runtime.run_store.load_by_user_message_id(user_message_id)
-        return OWNER_ORCHESTRATOR if run is not None else OWNER_LEGACY
-
-    async def resolve_call_owner(
-        self,
-        *,
-        binding_scope: str | None,
-        task_id: str | None,
-        context_id: str | None,
-        call_record_id: str | None,
-    ) -> str:
-        if self._runtime is None:
-            return OWNER_LEGACY
-        ledger = self._runtime.call_ledger
-        if call_record_id:
-            call = await ledger.load_by_record_id(call_record_id)
-        elif binding_scope:
-            call = await ledger.find_by_alias(
-                binding_scope, task_id=task_id, context_id=context_id
-            )
-        elif task_id:
-            call = await ledger.find_by_task_id(task_id)
-        else:
-            return OWNER_LEGACY
-        return OWNER_ORCHESTRATOR if call is not None else OWNER_LEGACY
-
-    async def _resolve_webhook_call(self, message_id: str) -> Any | None:
-        """Resolve a webhook by A2A task id first, then by call record id."""
-        ledger = self._runtime.call_ledger
-        call = await ledger.find_by_task_id(message_id)
-        if call is None:
-            call = await ledger.load_by_record_id(message_id)
-        return call
-
-    async def resolve_interaction_owner(self, interaction_id: str) -> str:
-        if self._runtime is None:
-            return OWNER_LEGACY
-        stored = await self._runtime.hitl_store.load_interaction(interaction_id)
-        return OWNER_ORCHESTRATOR if stored is not None else OWNER_LEGACY
 
     # -- Ingress routing -------------------------------------------------
 
@@ -793,19 +649,6 @@ class DualRuntimeRouter:
         if self._runtime is None:
             raise OrchestratorRoutingError("orchestrator ingress is not bound")
         return await self._runtime.observation_ingress.record(observation)
-
-    async def route_cancellation(
-        self,
-        run_id: str,
-        *,
-        reason: str,
-        deletion_id: str | None = None,
-    ) -> dict[str, str]:
-        if self._runtime is None:
-            raise OrchestratorRoutingError("orchestrator cancellation is not bound")
-        return await self._runtime.cancellation_coordinator.cancel_run(
-            run_id, reason=reason, deletion_id=deletion_id
-        )
 
     async def route_cancellation_by_user_message(
         self,
@@ -869,47 +712,36 @@ class DualRuntimeRouter:
                 raise WebhookAuthenticationError(401, "Invalid token")
             raise WebhookAuthenticationError(500, "Token verification failed")
 
+    async def _resolve_webhook_call(self, message_id: str) -> Any | None:
+        """Resolve a webhook by A2A task id first, then by call record id."""
+        ledger = self._runtime.call_ledger
+        call = await ledger.find_by_task_id(message_id)
+        if call is None:
+            call = await ledger.load_by_record_id(message_id)
+        return call
+
     async def route_webhook(
         self, *, message_id: str, payload: dict[str, Any], token: str
-    ) -> str:
-        """Record an authenticated orchestrator-owned webhook, or fall through.
+    ) -> None:
+        """Record an authenticated orchestrator-owned webhook.
 
-        Correlation resolves the A2A ``task_id`` alias first and then falls back
-        to the orchestrator ``call_record_id``; any webhook that does not match
-        an orchestrator call stays on the legacy path. Orchestrator-owned
-        webhooks authenticate against the call's room-scoped assistant message
-        id through the injected legacy token verifier
-        (``verify_webhook_token_for_task``); the legacy token store is keyed by
-        room message ids, so authentication must go through this seam rather
-        than the legacy ``transport.authenticate_webhook`` path (which is keyed
-        by the URL path id). A failing webhook raises
-        ``WebhookAuthenticationError`` carrying the same HTTP status as the
-        legacy authenticator.
+        Correlation resolves the A2A ``task_id`` alias first and then falls
+        back to the orchestrator ``call_record_id``. Webhooks authenticate
+        against the call's room-scoped assistant message id through the
+        injected token verifier (``verify_webhook_token_for_task``). A webhook
+        that does not correlate to an orchestrator call is a hard error; there
+        is no legacy executor left to fall back to.
         """
         if self._runtime is None:
-            return OWNER_LEGACY
-        owner = await self.resolve_call_owner(
-            binding_scope=None,
-            task_id=message_id,
-            context_id=None,
-            call_record_id=None,
-        )
-        if owner != OWNER_ORCHESTRATOR:
-            owner = await self.resolve_call_owner(
-                binding_scope=None,
-                task_id=None,
-                context_id=None,
-                call_record_id=message_id,
-            )
-        if owner != OWNER_ORCHESTRATOR:
-            return OWNER_LEGACY
+            raise OrchestratorRoutingError("orchestrator webhook ingress is not bound")
         call = await self._resolve_webhook_call(message_id)
         if call is None:
-            return OWNER_LEGACY
+            raise WebhookAuthenticationError(
+                404, "Task not found. The task may not have been created yet."
+            )
         await self._authenticate_webhook(call.assistant_message_id, token)
         observation = _observation_from_webhook_payload(payload, call)
         await self._runtime.observation_ingress.record(observation)
-        return OWNER_ORCHESTRATOR
 
     # -- RoomMessageCenterPort adapter ------------------------------------
 
@@ -1043,9 +875,6 @@ __all__ = [
     "AttachmentEnvelope",
     "DualRuntimeRouter",
     "MODE_PROFILE_MAP",
-    "OWNER_LEGACY",
-    "_SERVABLE_SCOPE_SOURCES",
-    "OWNER_ORCHESTRATOR",
     "OrchestratorRoutingError",
     "RoomEnvelopeSource",
     "RoomMessageEnvelope",
@@ -1054,5 +883,4 @@ __all__ = [
     "WebhookAuthenticationError",
     "WebhookTokenVerifier",
     "map_mode_to_profile",
-    "stable_route_bucket",
 ]

@@ -2332,9 +2332,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             logger.warning("Orchestrator runtime composition disabled: %s", exc)
             app.state.orchestrator_runtime = None
 
-        # ── Dual-routing seam (step 7) ──
-        # Routes and the execution facade reach the orchestrator ONLY through
-        # this seam; it is attached here after the composition is ready.
+        # ── Orchestrator ingress adapter (single execution path) ──
+        # The execution facade and API routes reach the orchestrator through
+        # this adapter; it is attached here after the composition is ready.
         _orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
         if _orchestrator_runtime is not None:
             from execution.orchestrator_routing import (
@@ -2353,12 +2353,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             async def _list_all_active_agent_ids(
                 user_id: str | None = None,
             ) -> list[str]:
-                # Same visibility-filtered listing the legacy all_agents scope
-                # uses, so both engines resolve identical candidate sets.
+                # Same visibility-filtered listing the all_agents scope uses.
                 agents = await agent_room_store.get_all_active_agents(user_id)
                 return [agent.agent_id for agent in agents or []]
 
-            # PDF projection reuses the legacy attachment projection service;
+            # PDF projection reuses the attachment projection service;
             # text/* attachments are decoded directly. Bounded to keep the
             # kernel turn within its context window.
             attachment_projection = AttachmentProjectionService(
@@ -2401,15 +2400,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             orchestrator_router = DualRuntimeRouter(
                 runtime=_orchestrator_runtime,
-                settings=runtime.settings,
                 envelope_source=envelope_source,
                 webhook_token_verifier=task_store.verify_webhook_token_for_task,
             )
-            app.state.orchestrator_routing = orchestrator_router
             execution_facade.bind_orchestrator_router(orchestrator_router)
-            logger.info("Orchestrator dual-routing seam ready (0%% traffic)")
-        else:
-            app.state.orchestrator_routing = None
+            logger.info("Orchestrator ingress adapter ready")
 
         # ── Orchestrator background workers (dark launch, default OFF) ──
         if _orchestrator_runtime is not None:

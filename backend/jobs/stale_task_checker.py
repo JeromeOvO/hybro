@@ -383,9 +383,8 @@ class StaleTaskChecker:
         for msg in expired_messages:
             await self._auto_fail_expired_task(msg)
 
-        # 3. Recover interrupted orchestration and queue work.
+        # 3. Recover interrupted orchestration work.
         await self._recover_claimed_orchestration_envelopes()
-        await self._recover_orphaned_messages()
 
         # 4. Clean up stuck room processing status
         await self._cleanup_stuck_processing_status()
@@ -1117,96 +1116,6 @@ class StaleTaskChecker:
             if len(messages) < batch_size:
                 return
             after_message_id = messages[-1].message_id
-
-    async def _recover_orphaned_messages(self) -> None:
-        """
-        Recover orphaned agent messages that were never processed.
-
-        This handles the case where:
-        1. User sends a message
-        2. SendMessage creates user message + agent messages
-        3. User refreshes before processRoomUserMessage is called
-        4. Agent messages exist but were never executed
-
-        Recovery groups orphaned messages by their related_message_id (user message)
-        and triggers processing for each unique user message.
-        """
-        orphaned_messages = await self._store.get_orphaned_agent_messages(
-            self.orphan_threshold_minutes
-        )
-
-        if not orphaned_messages:
-            return
-        if self._execution_recovery_deps is None:
-            logger.warning(
-                "Orphan recovery skipped: Execution recovery dependencies are not bound"
-            )
-            return
-
-        logger.info(
-            f"Found {len(orphaned_messages)} orphaned agent messages to recover"
-        )
-
-        # Group by related_message_id (user message) to avoid duplicate processing
-        user_messages_to_process: dict[str, str] = {}  # user_message_id -> room_id
-
-        for msg in orphaned_messages:
-            # Skip hub-sourced agents — their timeouts are managed by the
-            # relay offline queue TTL, not the orphan recovery job.
-            agent = (
-                await self._store.get_agent_by_agent_id(msg.agent_id)
-                if msg.agent_id
-                else None
-            )
-            if agent and getattr(agent, "source", "cloud") == "hub":
-                continue
-
-            user_message_id = msg.related_message_id
-            if user_message_id and user_message_id not in user_messages_to_process:
-                user_messages_to_process[user_message_id] = msg.room_id
-                logger.info(
-                    f"Orphaned message {msg.message_id} belongs to user message {user_message_id} "
-                    f"in room {msg.room_id}"
-                )
-
-        for user_message_id, room_id in user_messages_to_process.items():
-            try:
-                if await self._is_message_cancelled_for_recovery(user_message_id):
-                    continue
-                logger.info(
-                    f"Recovering orphaned messages for user message {user_message_id} in room {room_id}"
-                )
-
-                request = OrchestrationRequest(
-                    room_id=room_id,
-                    room_user_message_id=user_message_id,
-                    room_related_message_id="",
-                    is_recovery=True,
-                )
-
-                # Process in background with bounded concurrency (SDR 2.13).
-                # Non-blocking: if all slots are occupied, defer remaining
-                # to the next checker cycle so steps 4-7 aren't starved.
-                scheduled = await self._schedule_recovery_with_slot(
-                    request,
-                    reason="orphan",
-                )
-                if not scheduled:
-                    logger.info(
-                        "Recovery slots full, deferring remaining orphan recoveries "
-                        "to next cycle"
-                    )
-                    break
-
-            except Exception as exc:
-                logger.error(
-                    "orphan_recovery_schedule_failed",
-                    extra={
-                        "room_id": room_id,
-                        "user_message_id": user_message_id,
-                        **safe_exception_metadata(exc),
-                    },
-                )
 
     async def _reconcile_pending_cancellations(self) -> None:
         """Trigger Execution-owned reconciliation of pending markers."""

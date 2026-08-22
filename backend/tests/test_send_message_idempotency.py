@@ -227,10 +227,12 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
 
     room_services.run_message_preflight_to_room = AsyncMock(side_effect=preflight)
     room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
+    orchestrator_router = SimpleNamespace(process_room_user_message=AsyncMock())
     run_lifecycle = SimpleNamespace(record_processing_status=AsyncMock())
     engine = ExecutionFacade(
         room_center=room_services,
         room_message_center=room_message_center,
+        orchestrator_router=orchestrator_router,
         hitl_manager=SimpleNamespace(get_pending_requests=AsyncMock(return_value=[])),
         run_lifecycle=run_lifecycle,
         run_reader=SimpleNamespace(
@@ -282,7 +284,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     ) == [False, True]
     assert preflight_count == 1
     assert room_services.run_message_preflight_to_room.await_count == 1
-    assert room_message_center.process_room_user_message.await_count == 1
+    assert orchestrator_router.process_room_user_message.await_count == 1
     assert len(internal_publisher.internal_events) == 1
     assert run_lifecycle.record_processing_status.await_count == 1
     assert len(delivery_publisher.public_events) == 1
@@ -299,7 +301,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         preflight_count,
         len(internal_publisher.internal_events),
         run_lifecycle.record_processing_status.await_count,
-        room_message_center.process_room_user_message.await_count,
+        orchestrator_router.process_room_user_message.await_count,
         len(room_files.claims),
         len(room_files.commits),
         len(room_files.releases),
@@ -314,7 +316,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         preflight_count,
         len(internal_publisher.internal_events),
         run_lifecycle.record_processing_status.await_count,
-        room_message_center.process_room_user_message.await_count,
+        orchestrator_router.process_room_user_message.await_count,
         len(room_files.claims),
         len(room_files.commits),
         len(room_files.releases),

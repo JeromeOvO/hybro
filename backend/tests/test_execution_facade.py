@@ -579,56 +579,9 @@ async def test_schedule_orchestration_carries_live_mode_and_scope():
 
 
 @pytest.mark.asyncio
-async def test_recovery_skips_orchestrator_owned_user_messages():
-    """Legacy recovery must never re-enter a turn owned by the orchestrator
-    runtime: the orchestrator's own recovery cycle owns those runs."""
-    facade, deps = _make_facade(
-        orchestrator_router=SimpleNamespace(
-            resolve_run_owner_by_user_message=AsyncMock(return_value="orchestrator")
-        )
-    )
-    request = OrchestrationRequest(
-        room_id="room-1",
-        room_user_message_id="msg-1",
-        client_request_id="cr-1",
-        is_recovery=True,
-    )
-
-    facade.schedule_recovery_orchestration(request, reason="orphan")
-    await asyncio.sleep(0)
-
-    deps["room_message_center"].process_room_user_message.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_recovery_proceeds_for_legacy_owned_user_messages():
-    facade, deps = _make_facade(
-        orchestrator_router=SimpleNamespace(
-            resolve_run_owner_by_user_message=AsyncMock(return_value="legacy")
-        )
-    )
-    request = OrchestrationRequest(
-        room_id="room-1",
-        room_user_message_id="msg-1",
-        client_request_id="cr-1",
-        is_recovery=True,
-    )
-
-    facade.schedule_recovery_orchestration(request, reason="orphan")
-    await asyncio.sleep(0)
-
-    deps["room_message_center"].process_room_user_message.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_recovery_falls_back_to_legacy_when_ownership_lookup_fails():
-    facade, deps = _make_facade(
-        orchestrator_router=SimpleNamespace(
-            resolve_run_owner_by_user_message=AsyncMock(
-                side_effect=RuntimeError("store down")
-            )
-        )
-    )
+async def test_recovery_schedules_legacy_executor_processing():
+    """Recovery re-enters the (still-present) legacy executor until Phases 2-3."""
+    facade, deps = _make_facade()
     request = OrchestrationRequest(
         room_id="room-1",
         room_user_message_id="msg-1",
@@ -1171,7 +1124,10 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
 @pytest.mark.asyncio
 async def test_start_orchestration_tracks_and_awaits_background_task():
     task_factory = RecordingTaskFactory()
-    facade, deps = _make_facade(task_factory=task_factory)
+    orchestrator_router = SimpleNamespace(process_room_user_message=AsyncMock())
+    facade, deps = _make_facade(
+        task_factory=task_factory, orchestrator_router=orchestrator_router
+    )
     request = ExecutionRequest(
         room_id="room-1",
         sender_id="user-1",
@@ -1182,15 +1138,15 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
 
     await facade.start_orchestration(request, ack)
 
-    orchestration_request = deps[
-        "room_message_center"
-    ].process_room_user_message.call_args.args[0]
+    orchestration_request = (
+        orchestrator_router.process_room_user_message.call_args.args[0]
+    )
     assert orchestration_request.room_id == "room-1"
     assert orchestration_request.room_user_message_id == "msg-1"
     assert orchestration_request.user_id == "user-1"
     assert orchestration_request.client_request_id == "cr-1"
     assert orchestration_request.room_related_message_id == "parent-1"
-    assert deps["room_message_center"].process_room_user_message.call_args.kwargs == {}
+    assert orchestrator_router.process_room_user_message.call_args.kwargs == {}
     assert task_factory.calls == ["execution-orchestrate-msg-1"]
     assert facade._inflight == set()
 
