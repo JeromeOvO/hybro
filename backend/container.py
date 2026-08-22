@@ -598,7 +598,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if await mongo_dal.ping():
             from a2a_adapter import AgentCardResolverImpl
             from a2a_adapter import artifact_storage as a2a_artifact_storage
-            from a2a_adapter.remote_task_reader import RemoteTaskReader
             from agent.capability_issue import (
                 CapabilityIssueExclusionReader,
             )
@@ -718,7 +717,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
             route_room_center = RoomRouteAdapter()
-            remote_task_reader = RemoteTaskReader()
             _delivery_config = create_delivery_config(runtime.settings)
             cancellation_startup_policy = create_cancellation_startup_policy(
                 redis_url=runtime.settings.redis_url,
@@ -784,9 +782,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 HITLMessageCancellationAdapter,
             )
             from execution.client_request_id import SSEClientRequestIdResolver
-            from execution.dispatch.response_handler import AgentResponseHandler
             from execution.dispatch.task_notifications import (
-                _notify_task_update_impl,
                 bind_notification_store,
                 bind_task_notification_runtime,
                 notify_task_update,
@@ -794,7 +790,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.dispatch.task_notifications import (
                 bind_processing_status_emitter as bind_task_processing_status_emitter,
             )
-            from execution.dispatch.transports.webhook import WebhookTransport
             from execution.events import (
                 emit_processing_status,
                 run_event_notification_from_payload,
@@ -1063,17 +1058,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 iter_stale_processing_hitl_requests=(
                     hitl_store.iter_stale_processing_hitl_requests
-                ),
-            )
-            response_client_request_resolver = SimpleNamespace(
-                resolve_client_request_id_for_message_id=(
-                    task_store.resolve_client_request_id_for_message_id
-                ),
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                resolve_client_request_id_for_agent_message=(
-                    task_store.resolve_client_request_id_for_agent_message
                 ),
             )
             stale_task_store = SimpleNamespace(
@@ -1370,37 +1354,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 context_assembly=context_memory_facade,
             )
             room_runtime.bind_agent_message_preparation(agent_message_preparation)
-            agent_response_handler = AgentResponseHandler(
-                message_writer=message_store,
-                task_writer=message_store,
-                continuation_store=task_store,
-                client_request_resolver=response_client_request_resolver,
-                room_reader=agent_room_store,
-                hitl_reader=hitl_store,
-                delivery=execution_delivery,
-                hitl_coordinator=hitl_manager,
-                task_notifier=task_notifier,
-                task_notification_store=task_notification_store,
-                task_notification_impl=_notify_task_update_impl,
-                room_files=file_storage,
-            )
-            stale_task_checker.set_terminal_event_handler(agent_response_handler.handle)
-
-            def create_webhook_transport():
-                async def fetch_terminal_webhook_task(agent_url: str, task_id: str):
-                    agent_card = await a2a_service.get_agent_card_from_url(agent_url)
-                    return await remote_task_reader.get_task_from_agent(
-                        agent_card, task_id
-                    )
-
-                return WebhookTransport(
-                    response_handler=agent_response_handler,
-                    webhook_auth=task_store,
-                    message_reader=message_store,
-                    cancellation_reader=task_store,
-                    task_notifier=notify_task_update_with_string_state,
-                    terminal_task_fetcher=fetch_terminal_webhook_task,
-                )
 
             execution_facade = create_execution_facade(
                 room_center=route_room_center,
@@ -1421,7 +1374,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     cancel_remote_task=a2a_service.cancel_remote_task,
                     notify_task_update=notify_task_update_with_string_state,
                 ),
-                agent_response_handler=agent_response_handler,
                 event_publisher=_delivery_deps.event_publisher,
                 run_event_enabled=run_event_sse_enabled,
                 client_request_id_resolver=execution_client_request_id_resolver,
@@ -1452,9 +1404,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
 
             bind_task_processing_status_emitter(emit_room_processing_status)
-            agent_response_handler.bind_execution_event_deps(
-                emit_room_processing_status
-            )
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
@@ -1694,7 +1643,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 execution_engine=_execution_deps.execution_engine,
                 sse_store=sse_state_reader,
                 sse_transport=_delivery_facade,
-                webhook_receiver=create_webhook_transport(),
                 repository_provider=DALViewSetRepositoryProvider(mongo=mongo_dal),
                 local_agent_discovery=_local_agent_service,
             ),

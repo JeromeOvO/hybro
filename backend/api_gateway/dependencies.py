@@ -30,7 +30,6 @@ from common.protocols import (
     SSERouteTransport,
     SSEStateReader,
     ViewSetRepositoryProvider,
-    WebhookReceiver,
 )
 from local_agents.protocols import LocalAgentDiscovery
 from room.protocols import RoomCenterCompatibility
@@ -60,7 +59,6 @@ class APIGatewayDeps:
     execution_engine: ExecutionEngine
     sse_store: SSEStateReader
     sse_transport: SSERouteTransport
-    webhook_receiver: WebhookReceiver
     repository_provider: ViewSetRepositoryProvider
     local_agent_discovery: LocalAgentDiscovery | None = None
 
@@ -244,12 +242,6 @@ def get_sse_transport(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> SSERouteTransport:
     return deps.sse_transport
-
-
-def get_webhook_receiver(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> WebhookReceiver:
-    return deps.webhook_receiver
 
 
 def get_viewset_repository_provider(
