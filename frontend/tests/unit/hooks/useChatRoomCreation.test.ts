@@ -237,7 +237,7 @@ describe('useChatRoomCreation', () => {
       expect(pending).toEqual({
         initialMessage: 'Hello',
         mode: 'supervisor',
-        agentScope: { source: 'room_default' },
+        agentScope: { source: 'saved_group', group_id: 'g-1' },
         clientRequestId: expect.any(String),
         attachments: undefined,
       })
@@ -330,7 +330,10 @@ describe('useChatRoomCreation', () => {
       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
       expect(Object.keys(roomAgentSet)).toContain('agent-1')
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual']
-      expect(pending?.agentScope).toEqual({ source: 'room_default' })
+      expect(pending?.agentScope).toEqual({
+        source: 'saved_group',
+        group_id: 'group-abc',
+      })
       expect(pending?.mode).toBe('supervisor')
     })
 

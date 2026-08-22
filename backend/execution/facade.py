@@ -923,6 +923,36 @@ class ExecutionFacade:
         message_id = (
             request.room_user_message_id or request.room_agent_message_id or "unknown"
         )
+
+        async def _recover() -> None:
+            # Recovery must respect persisted runtime ownership: a user
+            # message owned by the orchestrator runtime is recovered by its
+            # own A2A recovery cycle, never re-entered into the legacy
+            # executor (dual execution of one turn).
+            router = self._orchestrator_router
+            if router is not None and request.room_user_message_id:
+                try:
+                    owner = await router.resolve_run_owner_by_user_message(
+                        request.room_user_message_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "recovery ownership lookup failed; falling back to legacy",
+                        exc_info=True,
+                    )
+                    owner = OWNER_LEGACY
+                if owner == OWNER_ORCHESTRATOR:
+                    logger.info(
+                        "recovery skipped: user message is owned by the "
+                        "orchestrator runtime",
+                        extra={
+                            "room_id": request.room_id,
+                            "user_message_id": request.room_user_message_id,
+                        },
+                    )
+                    return
+            await self._room_message_center.process_room_user_message(request)
+
         with bind_log_context(
             client_request_id=request.client_request_id,
             room_id=request.room_id,
@@ -930,7 +960,7 @@ class ExecutionFacade:
             message_id=message_id,
         ):
             return self._spawn_orchestration(
-                self._room_message_center.process_room_user_message(request),
+                _recover(),
                 name=f"execution-recovery-{reason}-{message_id}",
             )
 

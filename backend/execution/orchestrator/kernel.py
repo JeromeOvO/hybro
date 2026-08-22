@@ -460,9 +460,28 @@ class OrchestratorKernel:
                 lifecycle,
                 "message_completed",
                 run,
-                {"call_id": item.call_id, "message_kind": "tool_result"},
+                {
+                    "call_id": item.call_id,
+                    "message_kind": "tool_result",
+                    "agent_label": self._tool_label(
+                        run, item.buffered_terminal_result.tool_name
+                    )
+                    if item.buffered_terminal_result is not None
+                    else None,
+                },
             )
         return await self.run(run_id, signal=signal, lifecycle=lifecycle)
+
+    @staticmethod
+    def _tool_label(run: OrchestratorRunState, tool_name: str) -> str | None:
+        """Resolve the user-facing agent label for a tool name."""
+        if run.tool_catalog is None:
+            return None
+        for entry in run.tool_catalog.entries:
+            if entry.definition.name == tool_name:
+                label = entry.definition.label.strip()
+                return label or None
+        return None
 
     async def _ensure_tool_batch(
         self, run: OrchestratorRunState, assistant: AssistantMessage
@@ -640,7 +659,11 @@ class OrchestratorKernel:
                     lifecycle,
                     "tool_execution_started",
                     run,
-                    {"call_id": call.call_id, "tool_name": call.tool_name},
+                    {
+                        "call_id": call.call_id,
+                        "tool_name": call.tool_name,
+                        "agent_label": self._tool_label(run, call.tool_name),
+                    },
                 )
                 outcome = await self._execute_one(invocation, acceptance, signal=signal)
                 await self._emit(
@@ -727,7 +750,15 @@ class OrchestratorKernel:
                     lifecycle,
                     "message_completed",
                     run,
-                    {"call_id": entry.call_id, "message_kind": "tool_result"},
+                    {
+                        "call_id": entry.call_id,
+                        "message_kind": "tool_result",
+                        "agent_label": self._tool_label(
+                            run, entry.buffered_terminal_result.tool_name
+                        )
+                        if entry.buffered_terminal_result is not None
+                        else None,
+                    },
                 )
             return None
         status = _wait_status(batch)

@@ -1938,6 +1938,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             status = public_terminal_status(str(run.status or ""))
             if status is None or _delivery_deps is None:
                 return
+            terminal_message = {
+                "completed": "Completed.",
+                "failed": "Failed.",
+                "canceled": "Canceled.",
+                "budget_exhausted": "Stopped: step budget exhausted.",
+            }.get(str(run.status or ""), None)
             await _delivery_deps.event_publisher.emit(
                 ProcessingStatusEvent(
                     room_id=run.room_id,
@@ -1945,6 +1951,39 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     status=status,
                     client_request_id=run.client_request_id,
                     delivery_id=f"orchestrator:{run.run_id}:{run.status}",
+                    details=(
+                        {"message": terminal_message, "turn_phase": "terminal"}
+                        if terminal_message
+                        else None
+                    ),
+                )
+            )
+
+        # Non-terminal lifecycle events (agent delegation, responses,
+        # waiting) flow to the room work log over SSE. SSE is
+        # non-authoritative: durable state stays in the Run store.
+        from execution.orchestrator.lifecycle import (
+            orchestrator_lifecycle_log_message,
+        )
+
+        async def _orchestrator_session_listener(event: Any) -> None:
+            if _delivery_deps is None:
+                return
+            mapped = orchestrator_lifecycle_log_message(event)
+            if mapped is None:
+                return
+            message, turn_phase = mapped
+            await _delivery_deps.event_publisher.emit(
+                ProcessingStatusEvent(
+                    room_id=event.room_id or "",
+                    message_id=(event.user_message_id or event.causation_id or ""),
+                    status="processing",
+                    client_request_id=event.client_request_id,
+                    details={"message": message, "turn_phase": turn_phase},
+                    delivery_id=(
+                        f"orchestrator:{event.run_id}:"
+                        f"{event.event_type}:{event.sequence}"
+                    ),
                 )
             )
 
@@ -1963,6 +2002,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_files=file_storage,
                 relay_service=_relay_svc,
                 projection_listener=publish_orchestrator_projection_status,
+                session_listener=_orchestrator_session_listener,
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:

@@ -143,6 +143,14 @@ export function appendProcessingStatusLog(
   const existing = latestUserEntity.processingStatusLogs ?? []
   if (existing.some((entry) => entry.message === trimmed)) return
 
+  // The optimistic 'Thinking...' placeholder is replaced by the first real
+  // work-log entry so the UI never shows both a live log and a stale
+  // placeholder for the same turn.
+  const entries = existing.length === 1
+    && existing[0].message === INITIAL_PROCESSING_STATUS_MESSAGE
+    ? []
+    : existing
+
   useMessageStore.getState().upsertMessage({
     id: latestUserEntity.id,
     roomId,
@@ -151,9 +159,9 @@ export function appendProcessingStatusLog(
     senderName: latestUserEntity.senderName,
     timestamp: latestUserEntity.timestamp,
     processingStatusLogs: [
-      ...existing,
+      ...entries,
       {
-        id: `processing-log-${timestamp}-${existing.length}`,
+        id: `processing-log-${timestamp}-${entries.length}`,
         message: trimmed,
         timestamp,
         ...(options?.turnPhase ? { turnPhase: options.turnPhase } : {}),

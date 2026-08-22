@@ -339,6 +339,9 @@ class RoomAgentSession:
                 sequence=self._sequence,
                 timestamp=self.clock.now(),
                 payload=payload or {"status": run.status},
+                room_id=run.room_id,
+                user_message_id=run.request.user_message_id,
+                client_request_id=run.client_request_id,
             ),
             terminal=terminal,
         )

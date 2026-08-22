@@ -169,6 +169,34 @@ async def test_session_emits_tool_lifecycle_inventory():
 
 
 @pytest.mark.asyncio
+async def test_session_events_carry_delivery_correlation_fields():
+    """SSE work-log listeners must address room/message without a store hit."""
+    observed = []
+
+    async def listener(event):
+        observed.append(event)
+
+    lifecycle = LifecycleEmitter()
+    lifecycle.subscribe(listener)
+    session, _ = make_session(
+        [
+            tool_events(("call-1", "fake_agent_echo", '{"value":"ok"}')),
+            final_events(),
+        ],
+        lifecycle=lifecycle,
+    )
+
+    await session.prompt(user_message(), client_request_id="request-run-1")
+    await asyncio.sleep(0)
+
+    assert observed
+    for event in observed:
+        assert event.room_id == "room-1"
+        assert event.client_request_id == "request-run-1"
+        assert event.user_message_id
+
+
+@pytest.mark.asyncio
 async def test_session_rejects_second_prompt_while_active_and_abort_becomes_idle():
     entered = asyncio.Event()
     release = asyncio.Event()

@@ -142,12 +142,8 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         membership = { membership_seed_input: "saved_group", seed_group_id: handoffTargetGroup }
       }
 
-      // Once membership is copied into a room, subsequent routing must use the
-      // room snapshot rather than live saved-team or global membership.
-      const handoffDispatch: MessageDispatchInput = !isMentionDispatchInput(dispatch)
-        && (selectedAgents.length > 0 || membership !== undefined)
-        ? { message_target_mode: 'room_default' }
-        : dispatch
+      // The selector is authoritative: what the user sees is exactly what
+      // gets sent. room_default no longer exists as a routing concept.
 
       // Use custom room name if provided, otherwise auto-generate from message
       // Strip mentions from room name (e.g., <@id|name> -> "")
@@ -184,7 +180,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
           mode: useSupervisor ? 'supervisor' : 'direct',
-          agentScope: dispatchToAgentScope(handoffDispatch),
+          agentScope: dispatchToAgentScope(dispatch),
           clientRequestId: crypto.randomUUID(),
           attachments: options.attachments,
         })

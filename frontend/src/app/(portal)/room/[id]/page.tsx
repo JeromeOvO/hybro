@@ -60,7 +60,6 @@ export default function RoomChatPage() {
   })
 
   // Room agent count
-  const roomAgentCount = room?.room_agent_set ? Object.keys(room.room_agent_set).length : 0
 
   // Sync local chat mode from room data (re-syncs when roomId changes)
   const lastSyncedRoomRef = useRef<string | null>(null)
@@ -86,9 +85,7 @@ export default function RoomChatPage() {
     isLoaded,
     defaultGroup: roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS,
     defaultGroupName: room?.source_group_name ?? undefined,
-    defaultTargetMode: roomAgentCount > 0
-      ? { message_target_mode: 'room_default' }
-      : { message_target_mode: 'all_agents' },
+    defaultTargetMode: { message_target_mode: 'all_agents' },
     roomId,
   })
 

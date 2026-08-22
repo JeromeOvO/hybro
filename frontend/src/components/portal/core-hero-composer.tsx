@@ -34,8 +34,8 @@ export function CoreHeroComposer() {
 
   const {
     creating,
+    createAndNavigate,
     createFromTemplate,
-    createWithAgentsAndNavigate,
   } = useChatRoomCreation({
     userId,
     userName,
@@ -133,8 +133,7 @@ export function CoreHeroComposer() {
       }
 
       try {
-        const resolved = resolveTemplateAgents(currentTemplate.agents, availableAgents)
-        await createWithAgentsAndNavigate(value, resolved, {
+        await createAndNavigate(value, {
           useSupervisor: chatModeToExecutionMode(DEFAULT_CHAT_MODE) === 'supervisor',
           dispatch,
           attachments,
@@ -147,7 +146,7 @@ export function CoreHeroComposer() {
       demoActive,
       currentTemplate,
       sendFromTemplate,
-      createWithAgentsAndNavigate,
+      createAndNavigate,
       availableAgents,
     ],
   )
