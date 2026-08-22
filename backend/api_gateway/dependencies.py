@@ -25,8 +25,6 @@ from common.protocols import (
     GatewayDiscoveryProvider,
     GatewayService,
     HITLManager,
-    HubRelayManagement,
-    HubStatusReader,
     RoomOwnershipReader,
     RoomRouteReader,
     SSERouteTransport,
@@ -53,11 +51,9 @@ class APIGatewayDeps:
     file_storage: FileStorage
     room_ownership_reader: RoomOwnershipReader
     hitl_manager: HITLManager
-    hub_relay_service: HubStatusReader
     inspection_center: AgentInspection
     gateway_service: GatewayService | None
     gateway_rate_limiter: APIKeyRateLimiter | None
-    relay_service: HubRelayManagement
     room_center: RoomCenterCompatibility
     room_store: RoomRouteReader
     agent_selection_service: AgentSuggestionService
@@ -196,12 +192,6 @@ def get_hitl_manager(
     return deps.hitl_manager
 
 
-def get_hub_relay_service(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> HubStatusReader:
-    return deps.hub_relay_service
-
-
 def get_inspection_center(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> AgentInspection:
@@ -218,12 +208,6 @@ def get_gateway_rate_limiter(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> APIKeyRateLimiter:
     return deps.gateway_rate_limiter
-
-
-def get_relay_service(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> HubRelayManagement:
-    return deps.relay_service
 
 
 def get_room_center(

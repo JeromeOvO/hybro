@@ -16,8 +16,6 @@ from .dispatch import (
     DirectA2AClient,
     DirectA2ADispatchAdapter,
     DirectA2AStream,
-    RelayA2ADispatchAdapter,
-    RoutedA2ADispatchPort,
 )
 from .errors import (
     AmbiguousRemoteEffectError,
@@ -123,9 +121,7 @@ __all__ = [
     "RecoverableTransportError",
     "StaleRoomEpochError",
     "RejectExternalIngressAuthenticator",
-    "RelayA2ADispatchAdapter",
     "ResourceSelectionError",
-    "RoutedA2ADispatchPort",
     "RunAddressedToolObservationSink",
     "RunCheckpointReader",
     "RunPreparedInvocationSnapshotReader",

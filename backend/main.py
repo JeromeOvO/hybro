@@ -55,7 +55,6 @@ def compute_health_status(
     eventing_connected: bool = True,
     delivery_kv_connected: bool,
     redis_runtime_connected: bool,
-    relay_streams_available: bool = False,
     redis_url: str,
     change_stream_connected: bool,
     agent_search_index_ready: bool = False,
@@ -68,7 +67,6 @@ def compute_health_status(
         and eventing_connected
         and delivery_kv_connected
         and redis_runtime_connected
-        and relay_streams_available
     )
     degraded = redis_degraded or not change_stream_connected or not search_indexes_ready
     return {
@@ -79,7 +77,6 @@ def compute_health_status(
             "eventing_connected": eventing_connected,
             "delivery_kv_connected": delivery_kv_connected,
             "redis_runtime_connected": redis_runtime_connected,
-            "relay_streams_available": relay_streams_available,
             "redis_expected": redis_expected,
             "broker_connected": delivery_pubsub_connected,
             "broker_expected": redis_expected,

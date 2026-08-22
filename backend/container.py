@@ -48,11 +48,6 @@ from common.protocols import (
     ExecutionEngine,
     FileStorage,
     HITLManager,
-    HubAgentResponseSink,
-    HubDispatchPolicy,
-    HubDispatchPort,
-    HubLivenessReader,
-    HubManagement,
     LeaderElector,
     LLMGateway,
     MemoryRepository,
@@ -141,7 +136,6 @@ def check_multi_worker_safety(
     eventing_connected: bool = True,
     delivery_kv_connected: bool,
     redis_service_connected: bool,
-    relay_streams_connected: bool,
     change_stream_connected: bool,
 ) -> None:
     """Refuse to start under gunicorn without fully connected Redis.
@@ -150,7 +144,6 @@ def check_multi_worker_safety(
     - SSE broadcast is local-only (cross-worker delivery fails)
     - Background jobs run N times (no leader election)
     - Room locks use asyncio.Lock only (no cross-process coordination)
-    - Relay uses in-memory queues (hub messages lost across workers)
 
     Raises:
         RuntimeError: if gunicorn detected and any Redis service is not connected
@@ -167,8 +160,6 @@ def check_multi_worker_safety(
         problems.append("Delivery KV not connected")
     if not redis_service_connected:
         problems.append("RedisService (key-value) not connected")
-    if not relay_streams_connected:
-        problems.append("Relay streams not connected")
     if not change_stream_connected:
         problems.append("Cancellation change stream not connected")
 
@@ -180,31 +171,6 @@ def check_multi_worker_safety(
             "or use 'uvicorn main:app' for single-process mode."
         )
     logger.info("Multi-worker safety check passed: gunicorn + Redis OK")
-
-
-class RelayReadyHubInternalHandler:
-    """Queues Hub events until the relay router is fully constructed."""
-
-    def __init__(self) -> None:
-        self._ready = asyncio.Event()
-        self._router: Any | None = None
-
-    @property
-    def is_ready(self) -> bool:
-        return self._ready.is_set()
-
-    def bind(self, router: Any) -> None:
-        if router is None:
-            raise ValueError("Hub internal response router is required")
-        self._router = router
-        self._ready.set()
-
-    async def __call__(self, event: Any) -> None:
-        await self._ready.wait()
-        router = self._router
-        if router is None:
-            raise RuntimeError("Hub internal response router is not bound")
-        await router.dispatch_hub_internal_response(event)
 
 
 @dataclass
@@ -606,14 +572,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _redis_service = None
     _redis_streams_service = None
     _leader = None
-    _relay_svc = None
     _agent_deps = None
     _delivery_facade = None
     _delivery_config = None
     _cancellation_runtime = None
     _eventing_bus = None
     _eventing_deps = None
-    _relay_ready_handler = RelayReadyHubInternalHandler()
     _execution_deps = None
     _mongo_dal = None
     _local_agent_service = None
@@ -898,7 +862,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
                 card_resolver=agent_card_resolver,
-                hub_liveness=None,
                 exclusion_reader=CapabilityIssueExclusionReader(
                     agent_capability_issue_service
                 ),
@@ -954,7 +917,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             agent_liveness_checker = AgentLivenessService(
                 health_service=agent_health_service,
-                hub_liveness_reader=None,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
             )
             route_inspection_center = AgentInspectionService()
@@ -1159,18 +1121,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 update_room_user_message_by_message_id=(
                     message_store.update_room_user_message_by_message_id
                 ),
-            )
-            relay_runtime_store = SimpleNamespace(
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                get_room_user_message_by_message_id=(
-                    message_store.get_room_user_message_by_message_id
-                ),
-                increment_agent_call_count=agent_room_store.increment_agent_call_count,
-                is_message_cancelled=task_store.is_message_cancelled,
             )
 
             async def get_quoted_snippet_by_id(quote_id: str):
@@ -1513,10 +1463,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 context_memory_facade=context_memory_facade,
             )
 
-            _eventing_deps.event_bus.register_handler(
-                "hub_agent_response_internal",
-                _relay_ready_handler,
-            )
             await _eventing_deps.event_bus.start()
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
@@ -1548,8 +1494,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             instance_id=(
                 _delivery_facade.instance_id if _delivery_facade is not None else None
             ),
-            relay_stream_maxlen=runtime.settings.relay_stream_maxlen,
-            relay_hub_heartbeat_ttl=runtime.settings.relay_hub_heartbeat_ttl,
         )
         _redis_service = _redis_runtime.command_client
         if _redis_service:
@@ -1586,7 +1530,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 _delivery_facade and _delivery_facade.delivery_kv_connected
             ),
             redis_service_connected=redis_kv_ready,
-            relay_streams_connected=redis_streams_ready,
             change_stream_connected=bool(_cancellation_runtime.change_stream_connected),
         )
 
@@ -1726,71 +1669,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
 
-        # Initialize relay service
-        from execution.facade import hub_agent_response_internal_to_agent_event
-        from hub_runtime_bridge.adapters.legacy_failure import (
-            RelayOfflineFailureAdapter,
-        )
-        from hub_runtime_bridge.adapters.relay_hub_store import RelayHubStore
-        from hub_runtime_bridge.compat.relay_service import (
-            RelayHubLivenessReader,
-            init_relay_service,
-        )
-        from hub_runtime_bridge.config import config_from_settings
-        from hub_runtime_bridge.repository.mongo import HubMongoRepository
-
-        relay_hub_store = RelayHubStore(
-            mongo=mongo_dal,
-            hub_repository=HubMongoRepository(mongo_dal),
-            agent_repository=_agent_deps.agent_repository,
-        )
-        _relay_svc = init_relay_service(
-            mongo=relay_hub_store,
-            db=relay_runtime_store,
-            agent_response_handler=agent_response_handler,
-            hitl_coordinator=hitl_manager,
-            internal_event_publisher=(
-                _eventing_deps.internal_event_publisher if _eventing_deps else None
-            ),
-            worker_id=(
-                _delivery_facade.instance_id if _delivery_facade is not None else None
-            ),
-            response_converter=hub_agent_response_internal_to_agent_event,
-            offline_failure_port=RelayOfflineFailureAdapter(
-                message_store,
-                _delivery_facade,
-            ),
-            config=config_from_settings(settings),
-        )
-        app.state.relay_service = _relay_svc
-        router = _relay_svc.internal_response_dispatcher
-        if router is None:
-            raise RuntimeError("Hub internal response router is not bound")
-        _relay_ready_handler.bind(router)
-        _relay_svc.set_leader_election(_leader)
-        if _agent_deps is not None:
-            hub_liveness_reader = RelayHubLivenessReader(_relay_svc)
-            if hasattr(_agent_deps.agent_registry, "bind_hub_liveness"):
-                _agent_deps.agent_registry.bind_hub_liveness(hub_liveness_reader)
-            _relay_svc.bind_agent_registry_writer(_agent_deps.agent_registry_writer)
-            agent_liveness_checker.bind_deps(
-                health_service=agent_health_service,
-                hub_liveness_reader=hub_liveness_reader,
-                agent_registry_writer=_agent_deps.agent_registry_writer,
-            )
-        await _relay_svc.start()
-        logger.info("Relay service initialized and heartbeat checker started")
-
-        # Attach Redis Streams to relay service
-        if bind_redis_runtime_to_relay(
-            _relay_svc,
-            redis_runtime=_redis_runtime,
-            redis_streams_ready=redis_streams_ready,
-        ):
-            logger.info(
-                "Redis Streams relay enabled (separate pool for blocking XREAD)"
-            )
-
         bind_api_gateway_deps(
             app,
             APIGatewayDeps(
@@ -1807,11 +1685,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 file_storage=file_storage,
                 room_ownership_reader=_room_deps.room_registry,
                 hitl_manager=_execution_deps.hitl_manager,
-                hub_relay_service=_relay_svc,
                 inspection_center=route_inspection_center,
                 gateway_service=None,
                 gateway_rate_limiter=None,
-                relay_service=_relay_svc,
                 room_center=route_room_center,
                 room_store=route_room_reader,
                 agent_selection_service=agent_selection_service,
@@ -1969,7 +1845,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_ownership_reader=_room_deps.room_registry,
                 epoch_store=require_room_epoch_store(),
                 room_files=file_storage,
-                relay_service=_relay_svc,
                 projection_listener=publish_orchestrator_projection_status,
                 session_listener=_orchestrator_session_listener,
                 user_message_text_reader=_orchestrator_user_message_text,
@@ -2112,10 +1987,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # Startup cleanup never replaces the original failure. Every opened
         # stage is attempted even if an earlier close fails.
         startup_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
-        # Roll back in dependency-reverse order. Relay ingress must be quiesced
-        # before the internal bus it publishes into.
-        if _relay_svc:
-            startup_steps.append(("relay", _relay_svc.stop))
+        # Roll back in dependency-reverse order.
         if _bg_started:
             startup_steps.extend(
                 [
@@ -2166,9 +2038,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         yield
     finally:
         body_error = sys.exc_info()[1]
-        from hub_runtime_bridge.compat.relay_service import (
-            relay_service as _relay_svc_shutdown,
-        )
 
         async def cancel_execution() -> None:
             orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
@@ -2194,8 +2063,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
         shutdown_steps: list[tuple[str, Callable[[], Awaitable[Any]]]] = []
-        if _relay_svc_shutdown:
-            shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
         shutdown_steps.extend(
             [
                 ("orchestrator-canary", orchestrator_canary_job.stop),
@@ -2290,16 +2157,6 @@ class EventingDeps:
 class ExecutionDeps:
     execution_engine: ExecutionEngine
     hitl_manager: HITLManager
-    hub_agent_response_sink: HubAgentResponseSink
-
-
-@dataclass(frozen=True)
-class HubDeps:
-    hub_management: HubManagement
-    hub_liveness: HubLivenessReader
-    hub_dispatch_port: HubDispatchPort
-    hub_dispatch_policy: HubDispatchPolicy
-    hub_facade: Any
 
 
 @dataclass(frozen=True)
@@ -2308,15 +2165,12 @@ class RedisRuntimeDeps:
     streams_client: RedisStreams | None
     leader: LeaderElector | None
     room_lock: RoomDistributedLock | None
-    relay_streams: Any | None
 
 
 def create_redis_runtime_deps(
     *,
     redis_url: str,
     instance_id: str | None = None,
-    relay_stream_maxlen: int | None = None,
-    relay_hub_heartbeat_ttl: int | None = None,
 ) -> RedisRuntimeDeps:
     if not redis_url:
         return RedisRuntimeDeps(
@@ -2324,13 +2178,11 @@ def create_redis_runtime_deps(
             streams_client=None,
             leader=None,
             room_lock=None,
-            relay_streams=None,
         )
 
     from dal.redis.kv import RedisKVImpl
     from dal.redis.lock import LeaderElectorImpl, RoomRedisDistributedLock
     from dal.redis.streams import RedisStreamsImpl
-    from hub_runtime_bridge.transport.relay_streams import RelayStreamService
 
     command_client = RedisKVImpl(url=redis_url)
     shared_command_client = command_client._ensure_client()
@@ -2344,12 +2196,6 @@ def create_redis_runtime_deps(
             else None
         ),
         room_lock=RoomRedisDistributedLock(client=shared_command_client),
-        relay_streams=RelayStreamService(
-            streams_client,
-            kv=command_client,
-            maxlen=relay_stream_maxlen or settings.relay_stream_maxlen,
-            heartbeat_ttl=(relay_hub_heartbeat_ttl or settings.relay_hub_heartbeat_ttl),
-        ),
     )
 
 
@@ -2366,19 +2212,6 @@ async def close_redis_runtime_deps(redis_runtime: RedisRuntimeDeps | None) -> No
             continue
         closed.add(id(close_target))
         await close()
-
-
-def bind_redis_runtime_to_relay(
-    relay_service: Any,
-    *,
-    redis_runtime: RedisRuntimeDeps,
-    redis_streams_ready: bool,
-) -> bool:
-    relay_streams = redis_runtime.relay_streams
-    if redis_streams_ready and relay_streams:
-        relay_service.set_stream_service(relay_streams)
-        return True
-    return False
 
 
 def create_mongo_dal() -> MongoDAL:
@@ -3446,11 +3279,10 @@ def create_internal_event_bus(
 
 
 def register_internal_event_models(registry: EventModelRegistry) -> None:
-    from common.dto import HubAgentResponseInternal, MessageCommitted, RunStateChanged
+    from common.dto import MessageCommitted, RunStateChanged
 
     registry.register("message_committed", MessageCommitted)
     registry.register("run_state_changed", RunStateChanged)
-    registry.register("hub_agent_response_internal", HubAgentResponseInternal)
 
 
 def create_eventing_deps(event_bus: InternalEventBus) -> EventingDeps:
@@ -3541,31 +3373,6 @@ def create_execution_deps(facade) -> ExecutionDeps:
     return ExecutionDeps(
         execution_engine=facade,
         hitl_manager=facade,
-        hub_agent_response_sink=facade,
-    )
-
-
-def create_hub_facade(**kwargs: Any):
-    from hub_runtime_bridge import HubFacade
-
-    return HubFacade(**kwargs)
-
-
-def create_hub_deps(facade: Any) -> HubDeps:
-    from hub_runtime_bridge.dispatch_adapter import HubDispatchAdapter
-    from hub_runtime_bridge.service.dispatch_policy import (
-        HubDispatchPolicy as HubPolicy,
-    )
-
-    return HubDeps(
-        hub_management=facade,
-        hub_liveness=facade,
-        hub_dispatch_port=HubDispatchAdapter(
-            facade,
-            liveness_cache=getattr(facade, "_liveness_cache", None),
-        ),
-        hub_dispatch_policy=HubPolicy(facade),
-        hub_facade=facade,
     )
 
 
@@ -3573,7 +3380,6 @@ def create_agent_deps(
     *,
     mongo: MongoDAL,
     card_resolver: AgentCardResolver,
-    hub_liveness: HubLivenessReader | None = None,
     exclusion_reader: AgentExclusionReader | None = None,
     gateway_base_url: str | None = None,
 ) -> AgentDeps:
@@ -3581,7 +3387,6 @@ def create_agent_deps(
     facade = AgentFacade(
         repository=repository,
         card_resolver=card_resolver,
-        hub_liveness=hub_liveness,
         exclusion_reader=exclusion_reader,
         gateway_base_url=gateway_base_url,
         id_factory=lambda: uuid4().hex,
