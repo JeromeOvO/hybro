@@ -408,10 +408,47 @@ async def _resolve_orchestrator_agent_facts(
     }
 
 
+async def _emit_working_card(
+    *,
+    delivery: Any,
+    run: Any,
+    message_id: str,
+    task_id: str,
+    label: str,
+    agent_id: str,
+    task_text: str,
+    now: datetime,
+) -> None:
+    """Emit task_submitted + working task_update for a live agent card."""
+    await delivery.send_task_submitted(
+        room_id=run.room_id,
+        message_id=message_id,
+        task_id=task_id,
+        agent_name=label,
+        agent_id=agent_id or None,
+        status="working",
+        related_message_id=run.request.user_message_id,
+        created_at=now.isoformat(),
+        step_number=None,
+        total_steps=None,
+        task_content=f"Requesting {label}",
+        client_request_id=run.client_request_id,
+    )
+    await delivery.send_task_update(
+        room_id=run.room_id,
+        message_id=message_id,
+        status="working",
+        status_message=task_text or f"Requesting {label}",
+        agent_id=agent_id or None,
+        client_request_id=run.client_request_id,
+    )
+
+
 async def _project_orchestrator_agent_activity(
     event: Any,
     runtime: Any,
     message_store: Any,
+    delivery: Any = None,
 ) -> None:
     """Project a kernel tool lifecycle event into room_agent_messages.
 
@@ -471,6 +508,17 @@ async def _project_orchestrator_agent_activity(
             },
         )
         await message_store.upsert_room_agent_message(document)
+        if delivery is not None:
+            await _emit_working_card(
+                delivery=delivery,
+                run=run,
+                message_id=message_id,
+                task_id=task_id,
+                label=label,
+                agent_id=facts["agent_id"],
+                task_text=facts["task_text"],
+                now=now,
+            )
         return
 
     # message_completed: durable result text and terminal task state.
@@ -510,6 +558,18 @@ async def _project_orchestrator_agent_activity(
         },
     )
     await message_store.upsert_room_agent_message(document)
+    if delivery is not None:
+        await delivery.send_task_update(
+            room_id=run.room_id,
+            message_id=message_id,
+            status=str(state.value),
+            content=result_text,
+            agent_name=label,
+            agent_id=facts["agent_id"] or None,
+            related_message_id=run.request.user_message_id,
+            client_request_id=run.client_request_id,
+            task_content=f"Requesting {label}",
+        )
 
 
 @asynccontextmanager
@@ -2147,7 +2207,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             ):
                 try:
                     await _project_orchestrator_agent_activity(
-                        event, runtime, message_store
+                        event, runtime, message_store, _delivery_facade
                     )
                 except Exception:
                     logger.warning(
