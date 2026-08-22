@@ -154,6 +154,22 @@ class RoomAgentSession:
         self._idle = asyncio.Event()
         self._idle.set()
 
+    async def has_active_run(self) -> bool:
+        """True while this session owns a non-terminal Run."""
+        if self._task is not None and not self._task.done():
+            return True
+        if self._run_id is None:
+            return False
+        existing = await self.run_store.load(self._run_id)
+        if existing is None:
+            return False
+        return existing.status not in {
+            "completed",
+            "failed",
+            "canceled",
+            "budget_exhausted",
+        }
+
     async def prompt(
         self,
         message: UserMessage,
@@ -162,15 +178,8 @@ class RoomAgentSession:
     ) -> KernelRunResult:
         if self._task is not None and not self._task.done():
             raise SessionConflict("a Run is already active")
-        if self._run_id is not None:
-            existing = await self.run_store.load(self._run_id)
-            if existing is not None and existing.status not in {
-                "completed",
-                "failed",
-                "canceled",
-                "budget_exhausted",
-            }:
-                raise SessionConflict("a Run is already active")
+        if await self.has_active_run():
+            raise SessionConflict("a Run is already active")
         run = self.run_factory.create_run(
             config=self.config,
             message=message,

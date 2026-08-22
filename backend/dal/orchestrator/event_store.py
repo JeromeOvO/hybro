@@ -11,6 +11,7 @@ from execution.orchestrator.ports import StoreOutcome
 from .stores import (
     AsyncMongoCollection,
     _bounded,
+    _from_document,
     _to_list,
     _without_mongo_id,
 )
@@ -36,13 +37,13 @@ class MongoOrchestratorEventStore:
             return evaluation.outcome
         try:
             await self.collection.insert_one(
-                _without_mongo_id(event.model_dump(mode="json"))
+                _without_mongo_id(event.model_dump(mode="python"))
             )
         except DuplicateKeyError:
             current = await self.collection.find_one({"event_id": event.event_id})
             if current is None:
                 return "conflict"
-            if OrchestratorEvent.model_validate(_without_mongo_id(current)) == event:
+            if _from_document(OrchestratorEvent, current) == event:
                 return "replayed"
             return "conflict"
         return "accepted"
@@ -53,7 +54,7 @@ class MongoOrchestratorEventStore:
         cursor = self.collection.find({"run_id": run_id})
         events = sorted(
             (
-                OrchestratorEvent.model_validate(_without_mongo_id(value))
+                _from_document(OrchestratorEvent, value)
                 for value in await _to_list(cursor)
             ),
             key=lambda item: item.sequence,

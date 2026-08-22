@@ -2040,14 +2040,21 @@ class RoomServices:
         if execution_mode not in {"direct", "supervisor"}:
             execution_mode = "direct"
         use_supervisor = execution_mode == "supervisor"
+        scope = orchestration_info.get("agent_scope")
+        scope = scope if isinstance(scope, dict) else {"source": "room_default"}
         user_extend_info = (
             user_message.extend_info
             if isinstance(user_message.extend_info, dict)
             else {}
         )
+        # Persist the canonical scope alongside the mode: the orchestrator
+        # dual-routing seam reconstructs its envelope from the persisted
+        # user message (never from in-flight requests), so a missing
+        # agent_scope here silently demotes every message to the legacy path.
         user_message.extend_info = {
             **user_extend_info,
             "execution_mode": execution_mode,
+            "agent_scope": scope,
         }
         message_text = user_message.message_content.message_text
 
@@ -2063,8 +2070,6 @@ class RoomServices:
         required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
         orchestration_requested = use_supervisor
-        scope = orchestration_info.get("agent_scope")
-        scope = scope if isinstance(scope, dict) else {"source": "room_default"}
         candidate_scope_mode = str(scope.get("source") or "room_default")
 
         if (

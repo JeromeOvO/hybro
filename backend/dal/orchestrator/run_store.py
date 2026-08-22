@@ -419,7 +419,6 @@ class MongoOrchestratorRunStore:
             {
                 "$project": {
                     "_id": 0,
-                    "_projection_due_at": 0,
                     "run_id": 1,
                     "projection_outbox": 1,
                 }

@@ -19,6 +19,7 @@ from common.dto.hitl import (
 )
 from execution.facade import ExecutionFacade
 from execution.hitl.exceptions import HITLRoomMismatchError
+from execution.orchestrator.session import SessionConflict
 from execution.orchestrator_routing import (
     OWNER_LEGACY,
     OWNER_ORCHESTRATOR,
@@ -269,12 +270,20 @@ async def test_resolve_call_and_interaction_owner():
 # -- Envelope resolver ---------------------------------------------------
 
 
-def _user_message(*, text="hello", mode="direct", scope=None, attachments=None):
+def _user_message(
+    *,
+    text="hello",
+    mode="direct",
+    scope=None,
+    attachments=None,
+    extend_info=None,
+):
     return SimpleNamespace(
         message_content=SimpleNamespace(
             message_text=text, attachments=attachments or []
         ),
-        extend_info={
+        extend_info=extend_info
+        or {
             "execution_mode": mode,
             "agent_scope": scope or {"source": "mention", "agent_ids": ["agent-1"]},
         },
@@ -317,6 +326,35 @@ async def test_envelope_resolver_room_default_scope():
 
 
 @pytest.mark.asyncio
+async def test_envelope_resolver_reconstructs_supervisor_candidate_scope():
+    """The legacy supervisor preflight whitelists extend_info keys and stores
+    the candidate scope as candidate_scope_source/candidate_agent_ids;
+    supervisor-mode messages must still resolve to the orchestrator."""
+    get_user_message = AsyncMock(
+        return_value=_user_message(
+            text="supervisor message",
+            mode="supervisor",
+            extend_info={
+                "execution_mode": "supervisor",
+                "orchestration": True,
+                "candidate_scope_source": "mention",
+                "candidate_scope_mode": "mention",
+                "candidate_agent_ids": ["agent-9"],
+            },
+        )
+    )
+    resolver = RoomMessageEnvelopeResolver(
+        get_user_message=get_user_message,
+        list_room_agent_ids=AsyncMock(return_value=[]),
+    )
+    envelope = await resolver.load_envelope(
+        OrchestrationRequest(room_id="room-1", room_user_message_id="msg-1")
+    )
+    assert envelope.mode == "supervisor"
+    assert envelope.candidate_agent_ids == ["agent-9"]
+
+
+@pytest.mark.asyncio
 async def test_envelope_resolver_rejects_missing_message():
     resolver = RoomMessageEnvelopeResolver(
         get_user_message=AsyncMock(return_value=None),
@@ -343,6 +381,7 @@ class _FakeSessionHost:
     def __init__(self):
         self.create_session = AsyncMock()
         self.prompt = AsyncMock()
+        self.drop_session = MagicMock()
         self._session = object()
 
     def get_session(self, room_id):
@@ -395,6 +434,69 @@ async def test_process_room_user_message_drives_session_prompt():
     assert host.prompt.await_args.kwargs["client_request_id"] == "req-1"
     assert response.success is True
     assert response.task_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_process_room_user_message_rebuilds_idle_session_per_message():
+    host = _FakeSessionHost()
+    idle = SimpleNamespace(has_active_run=AsyncMock(return_value=False))
+    host.get_session = lambda room_id: idle
+    host.prompt.return_value = SimpleNamespace(run=SimpleNamespace(run_id="run-2"))
+    envelope = RoomMessageEnvelope(
+        message_text="second message",
+        mode="direct",
+        candidate_agent_ids=["agent-1"],
+        requesting_subject_id="user-1",
+    )
+    router = _router(
+        runtime=_adapter_runtime(host),
+        envelope_source=_FakeEnvelopeSource(envelope),
+    )
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-2",
+        user_id="user-1",
+        client_request_id="req-2",
+    )
+
+    response = await router.process_room_user_message(request)
+
+    # An idle session pins a stale Run id and catalog, so it is dropped and
+    # replaced by a freshly prepared session for the new message.
+    host.drop_session.assert_called_once_with("room-1")
+    host.create_session.assert_awaited_once()
+    host.prompt.assert_awaited_once()
+    assert response.task_id == "run-2"
+
+
+@pytest.mark.asyncio
+async def test_process_room_user_message_rejects_active_session():
+    host = _FakeSessionHost()
+    active = SimpleNamespace(has_active_run=AsyncMock(return_value=True))
+    host.get_session = lambda room_id: active
+    envelope = RoomMessageEnvelope(
+        message_text="busy room",
+        mode="direct",
+        candidate_agent_ids=["agent-1"],
+        requesting_subject_id="user-1",
+    )
+    router = _router(
+        runtime=_adapter_runtime(host),
+        envelope_source=_FakeEnvelopeSource(envelope),
+    )
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-3",
+        user_id="user-1",
+        client_request_id="req-3",
+    )
+
+    with pytest.raises(SessionConflict):
+        await router.process_room_user_message(request)
+
+    host.drop_session.assert_not_called()
+    host.create_session.assert_not_awaited()
+    host.prompt.assert_not_awaited()
 
 
 @pytest.mark.asyncio

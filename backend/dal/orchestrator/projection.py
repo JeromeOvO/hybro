@@ -75,7 +75,15 @@ class MongoFinalMessageProjector:
 
 
 class MongoTerminalRunStatusProjector:
-    """Project a terminal status into the public ``runs`` collection."""
+    """Project a terminal status into the public ``runs`` collection.
+
+    The public collection is the legacy UI surface keyed by the originating
+    user message id (``run_id`` == user message id). The preflight already
+    created that row in ``processing``; converging it here keeps the room's
+    active-run gate and the UI timeline on one row per turn instead of
+    leaking a second, orchestrator-keyed row that leaves the room stuck in
+    ``processing``.
+    """
 
     def __init__(self, runs: Any) -> None:
         self.runs = runs
@@ -87,12 +95,13 @@ class MongoTerminalRunStatusProjector:
         state = _run_state_for_status(status)
         if state is None:
             return "conflict"
+        public_run_id = run.request.user_message_id or run.run_id
         now = datetime.now(UTC)
         document: dict[str, Any] = {
-            "run_id": run.run_id,
+            "run_id": public_run_id,
             "room_id": run.room_id,
             "state": state.value,
-            "trigger_message_id": run.request.user_message_id,
+            "trigger_message_id": public_run_id,
             "client_request_id": run.client_request_id,
             "seq": 0,
             "created_at": run.created_at,
@@ -108,7 +117,7 @@ class MongoTerminalRunStatusProjector:
         try:
             await self.runs.update_one(
                 {
-                    "run_id": run.run_id,
+                    "run_id": public_run_id,
                     "state": {"$nin": _TERMINAL_RUN_STATE_VALUES},
                 },
                 {"$set": document},
@@ -116,7 +125,7 @@ class MongoTerminalRunStatusProjector:
             )
         except DuplicateKeyError:
             already_terminal = True
-        existing = await self.runs.find_one({"run_id": run.run_id})
+        existing = await self.runs.find_one({"run_id": public_run_id})
         if existing is None:
             return "conflict"
         if existing.get("state") != state.value:

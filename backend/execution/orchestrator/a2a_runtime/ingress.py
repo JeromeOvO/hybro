@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from common.dto.hitl import A2AInteractionSpec
 
+from ..kernel import KernelConflict
 from ..models import TextPart, ToolObservation, ToolSuspension
 from ..ports import InvocationCheckpointReader, InvocationOutcomeCheckpointReader
 from .errors import RecoverableAdapterError, RecoverableCheckpointError
@@ -304,6 +305,37 @@ class A2AObservationProcessor:
             )
             if record.state in TERMINAL_AGENT_CALL_STATES:
                 await self._close_terminal_interaction_or_retry(claimed, record)
+            if not checkpointed and record.state in TERMINAL_AGENT_CALL_STATES:
+                # The live executor finished the call before the Run's
+                # suspension was durably checkpointed, so the kernel never
+                # received the result through the executor path. If the Run
+                # is now suspended for this invocation, deliver through the
+                # sink (kernel application is idempotent) instead of leaving
+                # the row in outcome_pending forever.
+                suspended = await self.checkpoint_reader.is_suspension_checkpointed(
+                    record.run_id, record.invocation_id, "waiting_external"
+                )
+                if suspended:
+                    try:
+                        await self.sink.deliver(
+                            record.run_id,
+                            _to_tool_observation(record, claimed.observation),
+                        )
+                    except KernelConflict:
+                        pass
+                    checkpointed = await self.outcome_reader.is_outcome_checkpointed(
+                        record.run_id,
+                        record.invocation_id,
+                        claimed.outcome_digest,
+                    )
+                    if checkpointed:
+                        return await self._release_inbox(
+                            claimed,
+                            state="completed",
+                            route="observation_sink",
+                            delivery_state="completed",
+                            outcome_digest=claimed.outcome_digest,
+                        )
             return await self._release_inbox(
                 claimed,
                 state="completed" if checkpointed else "outcome_pending",

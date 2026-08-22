@@ -199,26 +199,28 @@ def create_orchestrator_runtime(  # noqa: C901
 
     No Mongo or LLM calls are made during construction; this is wiring only.
     """
-    run_store = MongoOrchestratorRunStore(mongo.collection("orchestrator_runs"))
+    run_store = MongoOrchestratorRunStore(
+        mongo.collection("orchestrator_runs").raw_collection
+    )
     # The event store is bound for the projection worker (step 6), which
     # appends durable Run events through the outbox projector.
     event_store = MongoOrchestratorEventStore(
-        mongo.collection("orchestrator_run_events")
+        mongo.collection("orchestrator_run_events").raw_collection
     )
     binding_store = MongoAgentToolBindingStore(
-        mongo.collection("orchestrator_agent_tool_bindings")
+        mongo.collection("orchestrator_agent_tool_bindings").raw_collection
     )
     call_ledger = MongoAgentCallLedgerStore(
-        mongo.collection("orchestrator_agent_calls")
+        mongo.collection("orchestrator_agent_calls").raw_collection
     )
     observation_inbox = MongoObservationInboxStore(
-        mongo.collection("orchestrator_a2a_observations")
+        mongo.collection("orchestrator_a2a_observations").raw_collection
     )
     observation_conflicts = MongoObservationConflictStore(
-        mongo.collection("orchestrator_a2a_observation_conflicts")
+        mongo.collection("orchestrator_a2a_observation_conflicts").raw_collection
     )
     hitl_store = MongoHITLApplicationStore(
-        mongo.collection("orchestrator_hitl_interactions")
+        mongo.collection("orchestrator_hitl_interactions").raw_collection
     )
 
     profile_resolver = OrchestratorProfileResolver(

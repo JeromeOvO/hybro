@@ -168,8 +168,30 @@ async def test_terminal_run_status_projector_updates_public_runs():
     runs = _FakeRunsCollection()
     projector = MongoTerminalRunStatusProjector(runs)
     assert await projector.project(intent, stored) == "accepted"
-    assert runs.documents[run.run_id]["state"] == "completed"
+    # The public row is keyed by the legacy run id convention (user message
+    # id), which the preflight already created in ``processing``.
+    assert runs.documents[stored.request.user_message_id]["state"] == "completed"
+    assert stored.run_id not in runs.documents
     assert await projector.project(intent, stored) == "replayed"
+
+
+async def test_terminal_run_status_projector_falls_back_without_user_message():
+    run = _terminal_run(run_id="run-fallback")
+    run = run.model_copy(
+        update={"request": run.request.model_copy(update={"user_message_id": ""})}
+    )
+    store = InMemoryOrchestratorRunStore()
+    assert (await store.create(run, command_id="create")).outcome == "accepted"
+    stored = await store.load(run.run_id)
+    intent = next(
+        item
+        for item in stored.projection_outbox
+        if item.kind == "project_terminal_run_status"
+    )
+    runs = _FakeRunsCollection()
+    projector = MongoTerminalRunStatusProjector(runs)
+    assert await projector.project(intent, stored) == "accepted"
+    assert runs.documents[run.run_id]["state"] == "completed"
 
 
 async def test_worker_blocks_poison_intent_after_bounded_attempts():

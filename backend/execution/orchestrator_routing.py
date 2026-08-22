@@ -54,7 +54,11 @@ from execution.orchestrator.models import (
     TextPart,
     UserMessage,
 )
-from execution.orchestrator.session import DefaultRunFactory, RunFactory
+from execution.orchestrator.session import (
+    DefaultRunFactory,
+    RunFactory,
+    SessionConflict,
+)
 from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
 
@@ -172,6 +176,31 @@ class RoomMessageEnvelopeResolver:
         scope = (
             extend_info.get("agent_scope") if isinstance(extend_info, dict) else None
         )
+        if not isinstance(scope, dict):
+            # The legacy supervisor preflight whitelists extend_info keys and
+            # persists the candidate scope under its own names, so
+            # supervisor-mode messages never carry ``agent_scope``.
+            # Reconstruct the canonical scope from those fields.
+            source = (
+                extend_info.get("candidate_scope_source")
+                if isinstance(extend_info, dict)
+                else None
+            )
+            agent_ids = (
+                extend_info.get("candidate_agent_ids")
+                if isinstance(extend_info, dict)
+                else None
+            )
+            if source in {"mention", "saved_group", "all_agents", "room_default"}:
+                scope = {"source": source}
+                if source == "mention" and isinstance(agent_ids, list):
+                    scope["agent_ids"] = [
+                        str(agent_id) for agent_id in agent_ids if agent_id
+                    ]
+                if source == "saved_group":
+                    group_id = extend_info.get("candidate_scope_group_id")
+                    if isinstance(group_id, str) and group_id.strip():
+                        scope["group_id"] = group_id.strip()
         candidate_agent_ids = await self._resolve_candidate_agent_ids(
             request.room_id, scope
         )
@@ -819,38 +848,44 @@ class DualRuntimeRouter:
 
         session_host = self._runtime.session_host
         session = session_host.get_session(room_id)
-        if session is None:
-            epoch = await self._runtime.epoch_store.read_active(room_id)
-            if epoch is None:
-                raise UnsupportedEnvelopeError("Room epoch is not active")
-            run_id = f"run-{uuid4().hex}"
-            prepared = await self._runtime.catalog_assembler.prepare(
-                run_id=run_id,
-                room_id=room_id,
-                room_epoch=epoch.epoch,
-                requesting_subject_id=requesting_subject_id,
-                candidate_scope=candidate_scope,
-                resource_manifest=resource_manifest,
-                authorization_basis_digest=_sha256_hex(
-                    json.dumps(
-                        {
-                            "room_id": room_id,
-                            "subject": requesting_subject_id,
-                            "scope": candidate_scope.agent_ids,
-                        }
-                    )
-                ),
-                created_at=datetime.now(UTC),
-            )
-            await session_host.create_session(
-                room_id=room_id,
-                profile=profile,
-                candidate_scope=candidate_scope,
-                requesting_subject_id=requesting_subject_id,
-                frozen_catalog=prepared.snapshot,
-                resource_manifest=resource_manifest,
-                run_factory=_PreparedRunFactory(run_id, self._run_factory),
-            )
+        if session is not None:
+            if await session.has_active_run():
+                raise SessionConflict("a Run is already active for this Room")
+            # A session pins ONE Run id and ONE frozen catalog, so an idle
+            # (terminal) session is replaced by a freshly prepared one for
+            # every new message instead of replaying the stale Run id.
+            session_host.drop_session(room_id)
+        epoch = await self._runtime.epoch_store.read_active(room_id)
+        if epoch is None:
+            raise UnsupportedEnvelopeError("Room epoch is not active")
+        run_id = f"run-{uuid4().hex}"
+        prepared = await self._runtime.catalog_assembler.prepare(
+            run_id=run_id,
+            room_id=room_id,
+            room_epoch=epoch.epoch,
+            requesting_subject_id=requesting_subject_id,
+            candidate_scope=candidate_scope,
+            resource_manifest=resource_manifest,
+            authorization_basis_digest=_sha256_hex(
+                json.dumps(
+                    {
+                        "room_id": room_id,
+                        "subject": requesting_subject_id,
+                        "scope": candidate_scope.agent_ids,
+                    }
+                )
+            ),
+            created_at=datetime.now(UTC),
+        )
+        await session_host.create_session(
+            room_id=room_id,
+            profile=profile,
+            candidate_scope=candidate_scope,
+            requesting_subject_id=requesting_subject_id,
+            frozen_catalog=prepared.snapshot,
+            resource_manifest=resource_manifest,
+            run_factory=_PreparedRunFactory(run_id, self._run_factory),
+        )
 
         message = UserMessage(
             message_id=request.room_user_message_id or f"user-{uuid4().hex}",

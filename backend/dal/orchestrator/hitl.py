@@ -13,6 +13,7 @@ from typing import Any
 from pymongo.errors import DuplicateKeyError
 
 from common.dto.hitl import A2AInteractionSpec, HITLRouteSnapshotV2
+from dal.orchestrator.stores import _restore_utc_datetimes
 from execution.adapters.hitl import StoredHITLInteraction, answers_identical
 from execution.orchestrator.a2a_runtime.models import DurableHITLAnswerRecord
 from execution.orchestrator.a2a_runtime.persistence import (
@@ -41,8 +42,8 @@ class MongoHITLApplicationStore:
             )
         doc = {
             "interaction_id": interaction_id,
-            "spec": spec.model_dump(mode="json"),
-            "route": route.model_dump(mode="json"),
+            "spec": spec.model_dump(mode="python"),
+            "route": route.model_dump(mode="python"),
             "fingerprint": fingerprint,
             "eligible": False,
             "abandoned": None,
@@ -148,7 +149,7 @@ class MongoHITLApplicationStore:
             },
             {
                 "$set": {
-                    f"answers.{interaction_revision}": record.model_dump(mode="json")
+                    f"answers.{interaction_revision}": record.model_dump(mode="python")
                 }
             },
         )
@@ -168,8 +169,8 @@ def _same_interaction(
 ) -> bool:
     return (
         doc.get("fingerprint") == fingerprint
-        and doc.get("spec") == spec.model_dump(mode="json")
-        and doc.get("route") == route.model_dump(mode="json")
+        and _restore_utc_datetimes(doc.get("spec")) == spec.model_dump(mode="python")
+        and _restore_utc_datetimes(doc.get("route")) == route.model_dump(mode="python")
     )
 
 
@@ -182,8 +183,10 @@ def _interaction_from_doc(doc: dict[str, Any]) -> StoredHITLInteraction:
     )
     return StoredHITLInteraction(
         interaction_id=str(doc["interaction_id"]),
-        spec=A2AInteractionSpec.model_validate(doc.get("spec")),
-        route=HITLRouteSnapshotV2.model_validate(doc.get("route")),
+        spec=A2AInteractionSpec.model_validate(_restore_utc_datetimes(doc.get("spec"))),
+        route=HITLRouteSnapshotV2.model_validate(
+            _restore_utc_datetimes(doc.get("route"))
+        ),
         fingerprint=str(doc.get("fingerprint") or ""),
         eligible=bool(doc.get("eligible")),
         abandoned=abandoned_tuple,

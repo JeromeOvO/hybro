@@ -460,7 +460,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             reset_room_epoch_store()
 
             bind_room_epoch_store(
-                MongoRoomEpochStore(mongo_dal.collection("orchestrator_room_epochs"))
+                MongoRoomEpochStore(
+                    mongo_dal.collection("orchestrator_room_epochs").raw_collection
+                )
             )
 
             room_files_collection = mongo_dal.collection("room_files")
@@ -1357,20 +1359,26 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 epoch_store=require_room_epoch_store(),
                 orchestrator_epoch_cleanup=EpochScopedOrchestratorCleanup(
                     bindings=MongoAgentToolBindingStore(
-                        mongo_dal.collection("orchestrator_agent_tool_bindings")
+                        mongo_dal.collection(
+                            "orchestrator_agent_tool_bindings"
+                        ).raw_collection
                     ),
                     calls=MongoAgentCallLedgerStore(
-                        mongo_dal.collection("orchestrator_agent_calls")
+                        mongo_dal.collection("orchestrator_agent_calls").raw_collection
                     ),
                     observations=MongoObservationInboxStore(
-                        mongo_dal.collection("orchestrator_a2a_observations")
+                        mongo_dal.collection(
+                            "orchestrator_a2a_observations"
+                        ).raw_collection
                     ),
                     conflicts=MongoObservationConflictStore(
-                        mongo_dal.collection("orchestrator_a2a_observation_conflicts")
+                        mongo_dal.collection(
+                            "orchestrator_a2a_observation_conflicts"
+                        ).raw_collection
                     ),
-                    runs=mongo_dal.collection("orchestrator_runs"),
+                    runs=mongo_dal.collection("orchestrator_runs").raw_collection,
                     run_events=MongoOrchestratorEventStore(
-                        mongo_dal.collection("orchestrator_run_events")
+                        mongo_dal.collection("orchestrator_run_events").raw_collection
                     ),
                 ),
             )

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import inspect
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from pymongo.errors import (
@@ -134,16 +135,52 @@ def _without_mongo_id(value: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if key != "_id"}
 
 
+def _restore_utc_datetimes(value: Any) -> Any:
+    """Re-attach UTC to naive datetimes decoded from BSON.
+
+    Motor returns BSON dates as offset-naive datetimes; mixing them with
+    aware ``datetime.now(UTC)`` boundaries raises ``TypeError`` inside
+    claim/renew/list_due comparisons.
+    """
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    if isinstance(value, dict):
+        return {key: _restore_utc_datetimes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_restore_utc_datetimes(item) for item in value]
+    return value
+
+
+def _from_document(model: Any, value: dict[str, Any]) -> Any:
+    return model.model_validate(_restore_utc_datetimes(_without_mongo_id(value)))
+
+
 async def _to_list(cursor: Any, *, length: int | None = None) -> list[dict[str, Any]]:
+    """Materialize a find/aggregate result into documents.
+
+    The protocol's ``find``/``aggregate`` return ``Any`` and production has
+    shipped two shapes: Motor cursors (raw collections, ``to_list``) and
+    already-awaited lists (async adapter methods returning materialized
+    values). Accept all of them so a shape mismatch degrades gracefully
+    instead of crashing the recovery/projection workers.
+    """
     try:
-        if hasattr(cursor, "to_list"):
+        if inspect.isawaitable(cursor):
+            values = await _mongo_await(cursor)
+            if not isinstance(values, list):
+                values = list(values)
+        elif isinstance(cursor, (list, tuple)):
+            values = list(cursor)
+        elif hasattr(cursor, "to_list"):
             return await _mongo_await(cursor.to_list(length=length))
-        values = []
-        async for value in cursor:
-            values.append(value)
-            if length is not None and len(values) >= length:
-                break
-        return values
+        else:
+            values = []
+            async for value in cursor:
+                values.append(value)
+                if length is not None and len(values) >= length:
+                    break
+            return values
+        return values[:length] if length is not None else values
     except PyMongoError as exc:
         if _is_transient_mongo_error(exc):
             raise RecoverableAdapterError("transient Mongo cursor failed") from exc
@@ -159,7 +196,7 @@ class MongoAgentToolBindingStore:
         if existing is not None:
             return "replayed" if existing == record else "conflict"
         try:
-            await self.collection.insert_one(record.model_dump(mode="json"))
+            await self.collection.insert_one(record.model_dump(mode="python"))
         except DuplicateKeyError:
             existing = await self.load(record.binding_id)
             return "replayed" if existing == record else "conflict"
@@ -172,19 +209,12 @@ class MongoAgentToolBindingStore:
 
     async def load(self, binding_id: str) -> AgentToolBindingRecord | None:
         value = await self.collection.find_one({"binding_id": binding_id})
-        return (
-            AgentToolBindingRecord.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _from_document(AgentToolBindingRecord, value) if value else None
 
     async def list_for_run(self, run_id: str) -> list[AgentToolBindingRecord]:
         values = await _to_list(self.collection.find({"run_id": run_id}))
         return sorted(
-            (
-                AgentToolBindingRecord.model_validate(_without_mongo_id(value))
-                for value in values
-            ),
+            (_from_document(AgentToolBindingRecord, value) for value in values),
             key=lambda item: item.tool_name,
         )
 
@@ -208,7 +238,7 @@ class MongoAgentCallLedgerStore:
                 else "conflict"
             )
         try:
-            await self.collection.insert_one(record.model_dump(mode="json"))
+            await self.collection.insert_one(record.model_dump(mode="python"))
         except DuplicateKeyError:
             existing = await self.load(record.run_id, record.invocation_id)
             return (
@@ -232,21 +262,13 @@ class MongoAgentCallLedgerStore:
         value = await self.collection.find_one(
             {"run_id": run_id, "invocation_id": invocation_id}
         )
-        return (
-            AgentCallLedgerRecord.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _from_document(AgentCallLedgerRecord, value) if value else None
 
     async def load_by_record_id(
         self, call_record_id: str
     ) -> AgentCallLedgerRecord | None:
         value = await self.collection.find_one({"call_record_id": call_record_id})
-        return (
-            AgentCallLedgerRecord.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _from_document(AgentCallLedgerRecord, value) if value else None
 
     async def find_by_alias(
         self, binding_scope: str, *, task_id: str | None, context_id: str | None
@@ -270,7 +292,7 @@ class MongoAgentCallLedgerStore:
             return None
         values = await _to_list(self.collection.find({"$or": candidates}), length=2)
         return (
-            AgentCallLedgerRecord.model_validate(_without_mongo_id(values[0]))
+            _from_document(AgentCallLedgerRecord, values[0])
             if len(values) == 1
             else None
         )
@@ -288,7 +310,7 @@ class MongoAgentCallLedgerStore:
             length=2,
         )
         return (
-            AgentCallLedgerRecord.model_validate(_without_mongo_id(values[0]))
+            _from_document(AgentCallLedgerRecord, values[0])
             if len(values) == 1
             else None
         )
@@ -327,7 +349,7 @@ class MongoAgentCallLedgerStore:
                     "call_record_id": record.call_record_id,
                     "state_version": expected_state_version,
                 },
-                record.model_dump(mode="json"),
+                record.model_dump(mode="python"),
             )
         except DuplicateKeyError:
             return "conflict"
@@ -469,17 +491,11 @@ class MongoAgentCallLedgerStore:
             ],
         }
         values = await _to_list(self.collection.find(query), length=limit)
-        return [
-            AgentCallLedgerRecord.model_validate(_without_mongo_id(value))
-            for value in values
-        ]
+        return [_from_document(AgentCallLedgerRecord, value) for value in values]
 
     async def list_for_run(self, run_id: str) -> list[AgentCallLedgerRecord]:
         values = await _to_list(self.collection.find({"run_id": run_id}))
-        return [
-            AgentCallLedgerRecord.model_validate(_without_mongo_id(value))
-            for value in values
-        ]
+        return [_from_document(AgentCallLedgerRecord, value) for value in values]
 
     async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
         result = await self.collection.delete_many(
@@ -501,7 +517,7 @@ class MongoObservationInboxStore:
                 else "conflict"
             )
         try:
-            await self.collection.insert_one(record.model_dump(mode="json"))
+            await self.collection.insert_one(record.model_dump(mode="python"))
         except DuplicateKeyError:
             existing = await self.load_by_source_identity(record.source_identity)
             return (
@@ -518,21 +534,13 @@ class MongoObservationInboxStore:
 
     async def load(self, observation_id: str) -> A2AObservationInboxRecord | None:
         value = await self.collection.find_one({"observation_id": observation_id})
-        return (
-            A2AObservationInboxRecord.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _from_document(A2AObservationInboxRecord, value) if value else None
 
     async def load_by_source_identity(
         self, source_identity: str
     ) -> A2AObservationInboxRecord | None:
         value = await self.collection.find_one({"source_identity": source_identity})
-        return (
-            A2AObservationInboxRecord.model_validate(_without_mongo_id(value))
-            if value
-            else None
-        )
+        return _from_document(A2AObservationInboxRecord, value) if value else None
 
     async def cas(  # noqa: C901
         self,
@@ -566,7 +574,7 @@ class MongoObservationInboxStore:
             query.update(claim_owner=owner_id, claim_token=claim_token)
         try:
             result = await self.collection.replace_one(
-                query, record.model_dump(mode="json")
+                query, record.model_dump(mode="python")
             )
         except DuplicateKeyError:
             return "conflict"
@@ -684,10 +692,7 @@ class MongoObservationInboxStore:
             ],
         }
         values = await _to_list(self.collection.find(query), length=limit)
-        return [
-            A2AObservationInboxRecord.model_validate(_without_mongo_id(value))
-            for value in values
-        ]
+        return [_from_document(A2AObservationInboxRecord, value) for value in values]
 
     async def delete_by_binding_scope(self, binding_scope: str) -> int:
         result = await self.collection.delete_many({"binding_scope": binding_scope})
@@ -718,7 +723,7 @@ class MongoObservationConflictStore:
                 else "conflict"
             )
         try:
-            await self.collection.insert_one(record.model_dump(mode="json"))
+            await self.collection.insert_one(record.model_dump(mode="python"))
         except (DuplicateKeyError, RecoverableAdapterError) as exc:
             winner = await self.collection.find_one({"conflict_id": record.conflict_id})
             if winner is None:
@@ -741,10 +746,7 @@ class MongoObservationConflictStore:
         values = await _to_list(
             self.collection.find({"source_identity": source_identity})
         )
-        return [
-            A2AObservationConflictRecord.model_validate(_without_mongo_id(value))
-            for value in values
-        ]
+        return [_from_document(A2AObservationConflictRecord, value) for value in values]
 
     async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
         result = await self.collection.delete_many(
@@ -759,17 +761,17 @@ class MongoRoomEpochStore:
 
     async def read(self, room_id: str) -> RoomEpoch | None:
         value = await self.collection.find_one({"room_id": room_id})
-        return RoomEpoch.model_validate(_without_mongo_id(value)) if value else None
+        return _from_document(RoomEpoch, value) if value else None
 
     async def read_active(self, room_id: str) -> RoomEpoch | None:
         value = await self.collection.find_one({"room_id": room_id, "active": True})
-        return RoomEpoch.model_validate(_without_mongo_id(value)) if value else None
+        return _from_document(RoomEpoch, value) if value else None
 
     async def activate(
         self, room_id: str, creation_id: str, *, activated_at: datetime
     ) -> tuple[str, RoomEpoch | None]:
         value = await self.collection.find_one({"room_id": room_id})
-        current = RoomEpoch.model_validate(_without_mongo_id(value)) if value else None
+        current = _from_document(RoomEpoch, value) if value else None
         if current and current.active:
             return (
                 ("replayed", current)
@@ -796,7 +798,7 @@ class MongoRoomEpochStore:
                     if current
                     else {"$exists": False},
                 },
-                record.model_dump(mode="json"),
+                record.model_dump(mode="python"),
                 upsert=current is None,
             )
         except DuplicateKeyError:
@@ -814,11 +816,7 @@ class MongoRoomEpochStore:
         if accepted:
             return "accepted", record
         winner_value = await self.collection.find_one({"room_id": room_id})
-        winner = (
-            RoomEpoch.model_validate(_without_mongo_id(winner_value))
-            if winner_value
-            else None
-        )
+        winner = _from_document(RoomEpoch, winner_value) if winner_value else None
         if winner is not None and _same_room_activation(winner, record):
             return "replayed", winner
         if operation_error is not None:
@@ -831,9 +829,7 @@ class MongoRoomEpochStore:
         current = await self.read_active(room_id)
         if current is None or current.epoch != epoch:
             value = await self.collection.find_one({"room_id": room_id})
-            existing = (
-                RoomEpoch.model_validate(_without_mongo_id(value)) if value else None
-            )
+            existing = _from_document(RoomEpoch, value) if value else None
             if (
                 existing
                 and not existing.active
@@ -853,7 +849,7 @@ class MongoRoomEpochStore:
         try:
             result = await self.collection.replace_one(
                 {"room_id": room_id, "epoch": epoch, "active": True},
-                record.model_dump(mode="json"),
+                record.model_dump(mode="python"),
             )
         except RecoverableAdapterError as exc:
             operation_error = exc
@@ -861,11 +857,7 @@ class MongoRoomEpochStore:
         if result is not None and int(getattr(result, "modified_count", 0)) == 1:
             return "accepted", record
         winner_value = await self.collection.find_one({"room_id": room_id})
-        winner = (
-            RoomEpoch.model_validate(_without_mongo_id(winner_value))
-            if winner_value
-            else None
-        )
+        winner = _from_document(RoomEpoch, winner_value) if winner_value else None
         if winner is not None and _same_room_deactivation(winner, record):
             return "replayed", winner
         if operation_error is not None:

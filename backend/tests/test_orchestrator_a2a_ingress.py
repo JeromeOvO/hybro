@@ -29,9 +29,11 @@ from execution.orchestrator.a2a_runtime.ledger import (
     transition_call,
 )
 from execution.orchestrator.a2a_runtime.models import (
+    A2AObservationInboxRecord,
     A2AOwnershipAlias,
     NormalizedA2AObservation,
 )
+from execution.orchestrator.models import TextPart, ToolResult
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW
@@ -466,6 +468,104 @@ async def test_processor_applies_terminal_once_and_uses_run_addressed_sink():
     assert sink.values[0][0] == "run-1"
     assert await processor.process("observation-1") == "replayed"
     assert len(sink.values) == 1
+
+
+class _LateSuspensionOutcomes:
+    def __init__(self):
+        self.checkpointed = False
+
+    async def is_outcome_checkpointed(self, *args):
+        return self.checkpointed
+
+    async def has_processed_observation(self, *args):
+        return False
+
+
+class _ApplyingSink(Sink):
+    def __init__(self, outcomes):
+        super().__init__()
+        self._outcomes = outcomes
+
+    async def deliver(self, run_id, observation):
+        self.values.append((run_id, observation))
+        # The kernel applies the delivered observation idempotently.
+        self._outcomes.checkpointed = True
+
+
+async def test_executor_observation_reroutes_to_sink_after_late_suspension():
+    """A terminal observation first processed before the Run's suspension was
+    checkpointed is routed to the live executor. If the executor has finished
+    the call and the Run is suspended now, the processor must re-deliver via
+    the sink or the row (and the Run) deadlocks in outcome_pending forever.
+    """
+    ledger = await lineage_ledger()
+    record = await ledger.load("run-1", "call-1")
+    result = ToolResult(
+        call_id="call-1",
+        tool_name=record.tool_name,
+        status="completed",
+        content=[TextPart(text="done")],
+        artifact_refs=[],
+        error_code=None,
+        error_message=None,
+    )
+    outcome_digest = sha256(result.model_dump_json().encode()).hexdigest()
+    terminal = transition_call(
+        record,
+        to_state="completed",
+        updated_at=NOW,
+        terminal_result=result,
+        terminal_result_digest=outcome_digest,
+    )
+    assert (
+        await ledger.cas(terminal, expected_state_version=record.state_version)
+        == "accepted"
+    )
+
+    inbox = InMemoryObservationInboxStore()
+    obs = observation(status="completed")
+    stuck = A2AObservationInboxRecord(
+        observation_id=obs.observation_id,
+        source_kind=obs.source_kind,
+        source_identity=obs.source_identity,
+        payload_digest="digest",
+        received_at=NOW,
+        binding_scope="endpoint",
+        room_id="room-1",
+        room_epoch=1,
+        event_kind=obs.event_kind,
+        observation=obs,
+        call_record_id=record.call_record_id,
+        task_id=obs.task_id,
+        context_id=obs.context_id,
+        state="outcome_pending",
+        delivery_route="executor",
+        delivery_state="checkpointed",
+        outcome_digest=outcome_digest,
+    )
+    assert await inbox.insert(stuck) == "accepted"
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "create-1", activated_at=NOW)
+    outcomes = _LateSuspensionOutcomes()
+    sink = _ApplyingSink(outcomes)
+    processor = A2AObservationProcessor(
+        inbox=inbox,
+        conflicts=InMemoryObservationConflictStore(),
+        ledger=ledger,
+        room_epochs=epochs,
+        artifacts=Artifacts(),
+        hitl=InMemoryHITLApplicationPort(),
+        sink=sink,
+        checkpoint_reader=Checkpoints(),
+        outcome_reader=outcomes,
+    )
+
+    assert await processor.process(obs.observation_id) == "accepted"
+    stored = await inbox.load(obs.observation_id)
+    assert stored.state == "completed"
+    assert stored.delivery_route == "observation_sink"
+    assert len(sink.values) == 1
+    assert sink.values[0][0] == "run-1"
 
 
 def interaction_spec(event_kind="input_required"):

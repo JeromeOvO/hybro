@@ -139,14 +139,28 @@ class FakeCollection:
             elif "$limit" in stage:
                 values = values[: stage["$limit"]]
             elif "$project" in stage:
+                projection = stage["$project"]
+                # Mirror Mongo's rule: only `_id` may be excluded alongside
+                # inclusions; a mixed projection is rejected by the server.
                 excluded = [
-                    field
-                    for field, included in stage["$project"].items()
-                    if not included
+                    field for field, included in projection.items() if not included
                 ]
+                non_id_exclusions = [field for field in excluded if field != "_id"]
+                inclusions = [
+                    field for field, included in projection.items() if included
+                ]
+                if non_id_exclusions and inclusions:
+                    raise AssertionError(
+                        "mixed projection is invalid in Mongo aggregation: "
+                        f"{projection!r}"
+                    )
                 for item in values:
                     for field in excluded:
                         item.pop(field, None)
+                    if inclusions:
+                        for key in list(item):
+                            if key not in inclusions:
+                                item.pop(key, None)
         return Cursor(values)
 
 
@@ -253,6 +267,10 @@ def _matches(document, query):  # noqa: C901
                 return False
             if "$lte" in expected and actual is not None:
                 boundary = expected["$lte"]
+                # Mirror Mongo's BSON type order: a string date is never
+                # less-than-or-equal to a Date boundary.
+                if isinstance(actual, str) and isinstance(boundary, datetime):
+                    return False
                 if isinstance(actual, datetime) and isinstance(boundary, datetime):
                     actual = actual.replace(tzinfo=actual.tzinfo or UTC)
                     boundary = boundary.replace(tzinfo=boundary.tzinfo or UTC)
@@ -315,6 +333,98 @@ def _inbox_record():
         event_kind=observation.event_kind,
         observation=observation,
     )
+
+
+class AsyncListCollection:
+    """Fake collection shaped like the production ``MongoCollectionAdapter``.
+
+    ``find``/``aggregate`` are async and return materialized lists (no
+    ``to_list``); ``replace_one`` returns a bool and ``delete_many`` an int.
+    The orchestrator DAL must tolerate this shape for reads (``_to_list``),
+    which is why the production composition passes raw Motor collections for
+    write paths whose results carry ``modified_count``/``deleted_count``.
+    """
+
+    def __init__(self, values=None):
+        self.values = deepcopy(values or [])
+
+    async def find_one(self, query):
+        return next(
+            (deepcopy(item) for item in self.values if _matches(item, query)), None
+        )
+
+    async def find(self, query):
+        return [deepcopy(item) for item in self.values if _matches(item, query)]
+
+    async def aggregate(self, pipeline):
+        del pipeline  # Shape-only fake: the caller must not depend on filtering.
+        return deepcopy(self.values)
+
+
+async def test_mongo_parity_accepts_adapter_shaped_async_list_find():
+    record = ledger_record()
+    collection = AsyncListCollection([record.model_dump(mode="python")])
+    ledger = MongoAgentCallLedgerStore(collection)
+
+    due = await ledger.list_due(due_at=NOW, limit=5)
+
+    assert [item.call_record_id for item in due] == [record.call_record_id]
+
+
+async def test_mongo_parity_accepts_adapter_shaped_async_list_aggregate():
+    intent = ProjectionIntent(
+        intent_id="intent-1",
+        kind="deliver_final_message",
+        target="room-1",
+        dedupe_key="dedupe-1",
+        required=True,
+        event_id="event-1",
+        event_sequence=1,
+        causation_id="cause-1",
+        payload={},
+        status="pending",
+    )
+    collection = AsyncListCollection(
+        [
+            {
+                "run_id": "run-1",
+                "projection_outbox": intent.model_dump(mode="python"),
+            }
+        ]
+    )
+    store = MongoOrchestratorRunStore(collection)
+
+    due = await store.list_due_projection_intents(due_at=NOW, limit=5)
+
+    assert [(run_id, item.intent_id) for run_id, item in due] == [("run-1", "intent-1")]
+
+
+async def test_mongo_ledger_string_dates_never_match_due_queries():
+    """Mongo compares BSON types: a string date is never <= a Date boundary.
+
+    Persisting records with ``mode="json"`` turns datetimes into ISO strings,
+    which silently excludes working calls from every recovery ``list_due``
+    scan and stalls them forever. The fake mirrors Mongo's type order so a
+    regression here fails the parity suite.
+    """
+    record = ledger_record(state="working").model_copy(update={"next_attempt_at": NOW})
+    collection = AsyncListCollection([record.model_dump(mode="json")])
+    ledger = MongoAgentCallLedgerStore(collection)
+
+    due = await ledger.list_due(due_at=NOW, limit=5)
+
+    assert due == []
+
+
+async def test_mongo_ledger_python_mode_dates_match_due_queries():
+    record = ledger_record(state="working")
+    collection = AsyncListCollection([record.model_dump(mode="python")])
+    ledger = MongoAgentCallLedgerStore(collection)
+
+    due = await ledger.list_due(due_at=NOW, limit=5)
+
+    assert [item.call_record_id for item in due] == [record.call_record_id]
+    assert isinstance(due[0].accepted_at, datetime)
 
 
 async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
@@ -917,7 +1027,7 @@ async def test_mongo_release_projection_intent_backs_off_durably():
             ]
         }
     )
-    collection.values = [run.model_dump(mode="json")]
+    collection.values = [run.model_dump(mode="python")]
     store = MongoOrchestratorRunStore(collection)
 
     released = await store.release_projection_intent(

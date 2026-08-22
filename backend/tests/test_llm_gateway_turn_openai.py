@@ -157,6 +157,93 @@ async def test_openai_turn_streams_reasoning_text_delayed_parallel_tools_and_usa
 
 
 @pytest.mark.asyncio
+async def test_openai_native_tools_skip_strict_mode_and_keep_schema():
+    stream = Stream([chunk(delta=SimpleNamespace(content="ok"), finish="stop")])
+    create = AsyncMock(return_value=stream)
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    req = request().model_copy(
+        update={
+            "tools": [
+                GatewayToolDefinition(
+                    name="echo",
+                    description="echo",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "uniqueItems": True,
+                            }
+                        },
+                        "required": ["tags"],
+                    },
+                )
+            ],
+        }
+    )
+
+    async for _ in OpenAIProvider(client=client).stream_turn_once(req):
+        pass
+
+    sent = create.await_args.kwargs
+    function = sent["tools"][0]["function"]
+    assert "strict" not in function
+    # Native mode must not mutate the caller's schema.
+    assert function["parameters"]["properties"]["tags"]["uniqueItems"] is True
+
+
+@pytest.mark.asyncio
+async def test_openai_structured_action_tools_are_strictified():
+    stream = Stream([chunk(delta=SimpleNamespace(content="ok"), finish="stop")])
+    create = AsyncMock(return_value=stream)
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    req = request().model_copy(
+        update={
+            "tool_strategy": "structured_action",
+            "tools": [
+                GatewayToolDefinition(
+                    name="echo",
+                    description="echo",
+                    input_schema={
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {
+                            "nested": {
+                                "type": "object",
+                                "properties": {"value": {"type": "string"}},
+                            },
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "uniqueItems": True,
+                            },
+                        },
+                        "required": ["nested"],
+                    },
+                )
+            ],
+        }
+    )
+
+    async for _ in OpenAIProvider(client=client).stream_turn_once(req):
+        pass
+
+    sent = create.await_args.kwargs
+    function = sent["tools"][0]["function"]
+    assert function["strict"] is True
+    parameters = function["parameters"]
+    assert "$schema" not in parameters
+    assert parameters["additionalProperties"] is False
+    assert parameters["properties"]["nested"]["additionalProperties"] is False
+    assert "uniqueItems" not in parameters["properties"]["tags"]
+
+
+@pytest.mark.asyncio
 async def test_openai_usage_terminal_chunk_passes_runtime_and_assembler():
     stream = Stream(
         [
