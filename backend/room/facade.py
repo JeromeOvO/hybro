@@ -12,7 +12,6 @@ from common.dto import (
     AgentInfo,
     AgentMessageInput,
     CreateRoomRequest,
-    HubPublishLineageSnapshot,
     MembershipSeed,
     MembershipUpdateRequest,
     RoomInfo,
@@ -702,93 +701,6 @@ class RoomFacade:
     async def verify_room_agent_membership(self, room_id: str, agent_id: str) -> bool:
         return agent_id in await self.get_room_agents(room_id)
 
-    async def verify_room_hub_ownership(self, room_id: str, hub_id: str) -> bool:
-        agent_ids = await self.get_room_agents(room_id)
-        if not agent_ids:
-            return False
-        agents = await self._agent_registry.get_agents_by_ids(agent_ids)
-        return any(agent.hub_id == hub_id for agent in agents)
-
-    async def get_hub_publish_lineage(
-        self, *, room_id: str, agent_message_id: str
-    ) -> HubPublishLineageSnapshot | None:
-        room_doc = await self._repository.get_by_id(room_id)
-        if room_doc is None:
-            return None
-        message_doc = await self._message_repository.get_by_id(agent_message_id)
-        if message_doc is None or message_doc.get("room_id") != room_id:
-            return None
-        agent_id = message_doc.get("agent_id")
-        if not agent_id:
-            return None
-        agents = await self._agent_registry.get_agents_by_ids([agent_id])
-        if not agents:
-            return None
-        agent = agents[0]
-        related_message_id = message_doc.get("related_message_id") or message_doc.get(
-            "parent_message_id"
-        )
-        task_data = (
-            message_doc.get("message_content", {}).get("message_task", {})
-            if isinstance(message_doc.get("message_content"), dict)
-            else {}
-        )
-        tracked_task_id = task_data.get("id") if isinstance(task_data, dict) else None
-        root_user_message_id = message_doc.get(
-            "turn_id"
-        ) or await self._resolve_root_user_message_id(related_message_id)
-        return HubPublishLineageSnapshot(
-            room_id=room_id,
-            room_owner_id=_owner_id_from_doc(room_doc) or "",
-            agent_message_id=agent_message_id,
-            agent_id=agent_id,
-            agent_hub_id=agent.hub_id or "",
-            related_message_id=related_message_id,
-            turn_id=message_doc.get("turn_id"),
-            run_id=message_doc.get("run_id"),
-            root_user_message_id=root_user_message_id,
-            tracked_task_id=tracked_task_id,
-            lifecycle_message_id=root_user_message_id,
-            client_request_id=message_doc.get("client_request_id"),
-            cancellation_message_ids=[
-                item
-                for item in [agent_message_id, related_message_id, root_user_message_id]
-                if item
-            ],
-        )
-
-    async def _resolve_root_user_message_id(self, message_id: str | None) -> str | None:
-        cursor = message_id
-        visited: set[str] = set()
-        for _ in range(20):
-            if not isinstance(cursor, str) or not cursor or cursor in visited:
-                return None
-            visited.add(cursor)
-            doc = await self._message_repository.get_by_id(cursor)
-            if doc is None:
-                return cursor
-            if doc.get("message_type") == "user":
-                return cursor
-            turn_id = doc.get("turn_id")
-            if isinstance(turn_id, str) and turn_id:
-                return turn_id
-            cursor = doc.get("related_message_id") or doc.get("parent_message_id")
-        return None
-
-    async def authorize_hub_publish(
-        self, *, hub_id: str, owner_id: str, room_id: str, agent_message_id: str
-    ) -> HubPublishLineageSnapshot | None:
-        lineage = await self.get_hub_publish_lineage(
-            room_id=room_id, agent_message_id=agent_message_id
-        )
-        if lineage is None:
-            return None
-        if lineage.room_owner_id != owner_id:
-            return None
-        if lineage.agent_hub_id != hub_id:
-            return None
-        return lineage
-
     async def is_message_cancelled(self, message_id: str) -> bool:
         repository_checker = getattr(
             self._message_repository, "is_message_cancelled", None
@@ -800,25 +712,6 @@ class RoomFacade:
             return False
         status = str(doc.get("status") or doc.get("message_status") or "").lower()
         return bool(doc.get("is_cancelled")) or status in {"cancelled", "canceled"}
-
-    async def track_hub_task(self, message_id: str, task_data: dict) -> None:
-        task_fields = {
-            f"message_content.message_task.{key}": value
-            for key, value in task_data.items()
-            if key != "status"
-        }
-        status_data = task_data.get("status")
-        if isinstance(status_data, dict):
-            task_fields.update(
-                {
-                    f"message_content.message_task.status.{key}": value
-                    for key, value in status_data.items()
-                    if key != "state"
-                }
-            )
-        await self._message_repository.update_status(
-            message_id, "processing", **task_fields
-        )
 
     def _validate_create_room_request(self, request: CreateRoomRequest) -> None:
         if not request.owner_id:

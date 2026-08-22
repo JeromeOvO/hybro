@@ -75,7 +75,7 @@ async def test_golden_delete_history_and_ownership_behaviors():
                 "room_agent_set": {"a1": "Agent One"},
             }
         ],
-        agents=[AgentInfo(agent_id="a1", name="Agent One", hub_id="hub-1")],
+        agents=[AgentInfo(agent_id="a1", name="Agent One")],
     )
     messages.user_messages["u1"] = {
         "room_id": "r1",
@@ -96,7 +96,6 @@ async def test_golden_delete_history_and_ownership_behaviors():
     }
 
     assert await facade.verify_room_agent_membership("r1", "a1") is True
-    assert await facade.verify_room_hub_ownership("r1", "hub-1") is True
     assert [
         message.message_id for message in await facade.get_messages_for_room("r1")
     ] == [

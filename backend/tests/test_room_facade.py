@@ -49,8 +49,8 @@ async def test_registry_and_ownership_methods_use_repository_and_agent_registry(
             }
         ],
         agents=[
-            AgentInfo(agent_id="a1", name="Agent One", hub_id="hub-1"),
-            AgentInfo(agent_id="a2", name="Agent Two", hub_id="hub-2"),
+            AgentInfo(agent_id="a1", name="Agent One"),
+            AgentInfo(agent_id="a2", name="Agent Two"),
         ],
     )
 
@@ -66,12 +66,9 @@ async def test_registry_and_ownership_methods_use_repository_and_agent_registry(
     assert await facade.get_room_owner("missing") is None
     assert await facade.verify_room_agent_membership("r1", "a1") is True
     assert await facade.verify_room_agent_membership("r1", "missing") is False
-    assert await facade.verify_room_hub_ownership("r1", "hub-2") is True
-    assert await facade.verify_room_hub_ownership("r1", "missing-hub") is False
     assert rooms.get_by_id_calls[:2] == ["r1", "missing"]
     assert rooms.get_by_id_calls.count("missing") == 3
-    assert rooms.get_by_id_calls.count("r1") >= 6
-    registry.get_agents_by_ids.assert_called_with(["a1", "a2"])
+    assert rooms.get_by_id_calls.count("r1") >= 5
 
 
 @pytest.mark.asyncio
@@ -783,91 +780,6 @@ async def test_quote_materialization_rejects_invalid_source_room():
     assert quote_repo.inserted == []
 
 
-@pytest.mark.asyncio
-async def test_track_hub_task_writes_message_task_paths_for_lineage_reader():
-    facade, _, messages, _, _ = _facade()
-    messages.agent_messages["a1"] = {
-        "room_id": "r1",
-        "message_id": "a1",
-        "message_type": "agent",
-        "agent_id": "agent",
-        "message_content": {"message_task": {}},
-        "message_created_at": NOW,
-    }
-
-    await facade.track_hub_task(
-        "a1",
-        {
-            "id": "hub-task-1",
-            "context_id": "ctx-1",
-            "status": {"state": "submitted", "message": "queued"},
-        },
-    )
-
-    assert messages.status_updates == [
-        (
-            "a1",
-            "processing",
-            {
-                "message_content.message_task.id": "hub-task-1",
-                "message_content.message_task.context_id": "ctx-1",
-                "message_content.message_task.status.message": "queued",
-            },
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_hub_publish_lineage_walks_agent_parent_chain_to_root_user():
-    facade, _, messages, _, _ = _facade(
-        room_docs=[
-            {
-                "room_id": "r1",
-                "room_name": "Room",
-                "room_owner_id": "owner",
-                "room_owner_name": "Owner",
-                "room_created_at": NOW,
-            }
-        ],
-        agents=[AgentInfo(agent_id="agent", name="Agent", hub_id="hub-1")],
-    )
-    messages.user_messages["u1"] = {
-        "room_id": "r1",
-        "message_id": "u1",
-        "message_type": "user",
-        "message_created_at": NOW,
-    }
-    messages.agent_messages["parent"] = {
-        "room_id": "r1",
-        "message_id": "parent",
-        "message_type": "agent",
-        "agent_id": "agent",
-        "related_message_id": "u1",
-        "message_content": {"message_task": {}},
-        "message_created_at": NOW,
-    }
-    messages.agent_messages["child"] = {
-        "room_id": "r1",
-        "message_id": "child",
-        "message_type": "agent",
-        "agent_id": "agent",
-        "related_message_id": "parent",
-        "message_content": {"message_task": {}},
-        "message_created_at": NOW,
-    }
-
-    lineage = await facade.get_hub_publish_lineage(
-        room_id="r1",
-        agent_message_id="child",
-    )
-
-    assert lineage is not None
-    assert lineage.root_user_message_id == "u1"
-    assert lineage.lifecycle_message_id == "u1"
-    assert "u1" in lineage.cancellation_message_ids
-
-
-@pytest.mark.asyncio
 async def test_create_room_activates_epoch_after_persist():
     epoch_store = InMemoryRoomEpochStore()
     facade, rooms, _, _, _ = _facade(ids=["room-created"], epoch_store=epoch_store)
