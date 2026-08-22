@@ -7,7 +7,6 @@ from agent.repository.mongo import AgentMongoRepository
 
 
 def test_agent_facade_exposes_hub_support_protocol_methods() -> None:
-    assert inspect.iscoroutinefunction(AgentFacade.count_hub_agents)
     assert inspect.iscoroutinefunction(AgentFacade.increment_agent_call_count)
 
 

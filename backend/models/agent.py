@@ -96,27 +96,20 @@ class Agent(BaseModel):
     # Visibility: True = public (everyone can see/use), False = private (owner only)
     is_public: bool = True
 
-    # Origin: cloud (registered), local (host-discovered), or hub (relayed).
+    # Origin: cloud (registered) or local (host-discovered).
     source: str = "cloud"
-    hub_id: str | None = None
     local_agent_id: str | None = None
-
-    # Derived at read time from the hub document — not persisted in MongoDB.
-    hub_owner_id: str | None = None
-    is_hub_online: bool = False
 
     # Derived at read time from Clerk — not persisted in MongoDB.
     provider_name: str | None = None
 
     # Fields excluded from DB serialization (populated at read time).
     _DB_EXCLUDE_FIELDS: ClassVar[set[str]] = {
-        "hub_owner_id",
-        "is_hub_online",
         "provider_name",
     }
 
     def db_dump(self, **kwargs) -> dict:
-        """Serialize for MongoDB, excluding derived hub fields."""
+        """Serialize for MongoDB, excluding derived fields."""
         kwargs.setdefault("mode", "json")
         return self.model_dump(exclude=self._DB_EXCLUDE_FIELDS, **kwargs)
 

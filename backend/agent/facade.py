@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 from collections.abc import Callable
@@ -19,26 +18,21 @@ from agent.translators import (
     _status_value,
     agent_card_from_doc,
     agent_info_from_doc,
-    hub_descriptor_to_doc,
     registration_doc_from_card,
 )
-from agent.url_utils import is_local_agent_url, normalize_agent_url
-from common.dto import HubAgentCounts, LocalAgentUpsertResult
+from agent.url_utils import normalize_agent_url
+from common.dto import LocalAgentUpsertResult
 from common.dto.agent import (
     AgentCardSnapshot,
     AgentInfo,
     AgentMatchResult,
-    HubAgentDescriptor,
-    SyncedHubAgent,
 )
 from common.observability import NoopTracingProvider
 from common.protocols import (
     AgentCardResolver,
     AgentExclusionReader,
     AgentRepository,
-    HubLivenessReader,
 )
-from common.protocols.hub_protocols import validate_hub_liveness_reader
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +53,6 @@ class AgentFacade:
         *,
         repository: AgentRepository,
         card_resolver: AgentCardResolver,
-        hub_liveness: HubLivenessReader | None = None,
         exclusion_reader: AgentExclusionReader | None = None,
         gateway_base_url: str | None = None,
         public_url_base_domain: str = "hybro.ai",
@@ -70,8 +63,6 @@ class AgentFacade:
     ) -> None:
         self._repository = repository
         self._card_resolver = card_resolver
-        validate_hub_liveness_reader(hub_liveness)
-        self._hub_liveness = hub_liveness
         self._exclusion_reader = exclusion_reader
         self._gateway_base_url = gateway_base_url
         self._public_url_base_domain = public_url_base_domain
@@ -79,10 +70,6 @@ class AgentFacade:
         self._id_factory = id_factory
         self._now = now
         self._tracer = tracer or NoopTracingProvider()
-
-    def bind_hub_liveness(self, hub_liveness: HubLivenessReader | None) -> None:
-        validate_hub_liveness_reader(hub_liveness)
-        self._hub_liveness = hub_liveness
 
     def bind_exclusion_reader(
         self,
@@ -94,7 +81,7 @@ class AgentFacade:
         doc = await self._repository.get_by_id(agent_id)
         if doc is None:
             return None
-        return agent_info_from_doc(await self._with_hub_liveness(doc))
+        return agent_info_from_doc(doc)
 
     async def get_agent_card(self, agent_id: str) -> AgentCardSnapshot | None:
         doc = await self._repository.get_by_id(agent_id)
@@ -109,7 +96,7 @@ class AgentFacade:
         for agent_id in agent_ids:
             if agent_id in docs_by_id:
                 ordered_docs.append(docs_by_id[agent_id])
-        enriched = await self._with_hub_liveness_many(ordered_docs)
+        enriched = list(ordered_docs)
         return [agent_info_from_doc(doc) for doc in enriched]
 
     async def is_agent_healthy(self, agent_id: str) -> bool:
@@ -121,16 +108,10 @@ class AgentFacade:
 
     async def is_directly_callable(self, agent_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
-        if (
-            doc is None
-            or _status_value(doc.get("agent_status"), default=None) != "active"
-        ):
-            return False
-        if doc.get("source") != "hub" and not doc.get("hub_id"):
-            return True
-        if self._hub_liveness is None or not doc.get("hub_id"):
-            return False
-        return await self._is_hub_online(doc["hub_id"])
+        return (
+            doc is not None
+            and _status_value(doc.get("agent_status"), default=None) == "active"
+        )
 
     async def match_agents(
         self,
@@ -285,7 +266,6 @@ class AgentFacade:
                 "agent_status": "active",
                 "is_public": True,
                 "source": "local",
-                "hub_id": None,
                 "capabilities": list(card.capabilities),
                 "rate_limit_per_user_per_hour": None,
                 "rate_limit_system_per_hour": None,
@@ -313,11 +293,7 @@ class AgentFacade:
 
     async def delete_agent(self, agent_id: str, provider_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
-        if (
-            doc is None
-            or doc.get("provider_id") != provider_id
-            or doc.get("source") == "hub"
-        ):
+        if doc is None or doc.get("provider_id") != provider_id:
             return False
         return bool(await self._repository.delete(agent_id))
 
@@ -340,119 +316,11 @@ class AgentFacade:
 
     async def list_agents(self, provider_id: str) -> list[AgentInfo]:
         docs = await self._repository.get_by_provider(provider_id)
-        enriched = await self._with_hub_liveness_many(docs)
-        return [agent_info_from_doc(doc) for doc in enriched]
+        return [agent_info_from_doc(doc) for doc in docs]
 
     async def list_public_agents(self, limit: int = 50) -> list[AgentInfo]:
         docs = await self._repository.get_public(limit=limit)
-        enriched = await self._with_hub_liveness_many(docs)
-        return [agent_info_from_doc(doc) for doc in enriched]
-
-    async def sync_hub_agents(
-        self,
-        hub_id: str,
-        owner_user_id: str,
-        agents: list[HubAgentDescriptor],
-        prune_missing: bool = True,
-    ) -> list[SyncedHubAgent]:
-        synced: list[SyncedHubAgent] = []
-        for descriptor in agents:
-            card = _descriptor_card(descriptor)
-            card_url = descriptor.url or card.get("url")
-            card_name = descriptor.name or card.get("name")
-            if not descriptor.agent_id or not card_url or not card_name:
-                continue
-
-            normalized_url = normalize_agent_url(card_url)
-            if is_local_agent_url(card_url):
-                normalized_url = None
-
-            existing = None
-            if normalized_url is not None:
-                existing = await self._repository.find_by_normalized_url(
-                    normalized_url,
-                    provider_id=owner_user_id,
-                )
-
-            agent_id = (
-                existing["agent_id"] if existing is not None else self._id_factory()
-            )
-
-            doc = hub_descriptor_to_doc(
-                hub_id=hub_id,
-                owner_user_id=owner_user_id,
-                descriptor=descriptor,
-                agent_id=agent_id,
-                normalized_url=normalized_url,
-                public_url=None,
-            )
-            doc["agent_card"].setdefault("description", card.get("description"))
-
-            if existing is not None:
-                doc = _merge_existing_hub_doc(existing, doc)
-                updated = await self._repository.update(agent_id, doc)
-                if updated is not None:
-                    doc = updated
-            else:
-                agent_id = await self._repository.upsert_hub_agent(
-                    hub_id,
-                    descriptor.agent_id,
-                    doc,
-                )
-                doc["agent_id"] = agent_id
-
-            if self._gateway_base_url:
-                public_url = self._gateway_public_url(agent_id)
-                updated = await self._repository.update(
-                    agent_id,
-                    {"public_url": public_url},
-                )
-                if updated is not None:
-                    doc = updated
-                else:
-                    doc["public_url"] = public_url
-
-            synced.append(
-                SyncedHubAgent(
-                    hub_id=hub_id,
-                    agent_id=agent_id,
-                    status="active",
-                    is_online=True,
-                    descriptor=descriptor,
-                )
-            )
-
-        if prune_missing:
-            synced_ids = [item.agent_id for item in synced]
-            if synced_ids or not agents:
-                await self._repository.prune_missing_hub_agents(hub_id, synced_ids)
-            else:
-                logger.warning(
-                    "Hub %s: skipping prune because no submitted descriptors were valid",
-                    hub_id,
-                )
-
-        is_online = await self._is_hub_online(hub_id) if self._hub_liveness else False
-        if is_online and synced:
-            await self._repository.activate_agents([item.agent_id for item in synced])
-
-        return [
-            SyncedHubAgent(
-                hub_id=item.hub_id,
-                agent_id=item.agent_id,
-                status=item.status,
-                is_online=is_online,
-                descriptor=item.descriptor,
-            )
-            for item in synced
-        ]
-
-    async def mark_hub_agents_offline(self, hub_id: str) -> None:
-        await self._repository.mark_hub_agents_offline(hub_id)
-
-    async def count_hub_agents(self, hub_id: str) -> HubAgentCounts:
-        active, inactive = await self._repository.count_hub_agents(hub_id)
-        return HubAgentCounts(active=active, inactive=inactive)
+        return [agent_info_from_doc(doc) for doc in docs]
 
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         await self._repository.increment_agent_call_count(agent_id, success=success)
@@ -474,54 +342,17 @@ class AgentFacade:
             query=query,
             limit=limit,
         )
-        enriched = await self._with_hub_liveness_many(docs)
-        return [agent_info_from_doc(doc) for doc in enriched]
+        return [agent_info_from_doc(doc) for doc in docs]
 
     async def get_agent_by_url(self, url: str) -> AgentInfo | None:
         doc = await self._repository.find_by_normalized_url(
             normalize_agent_url(url),
             provider_id=None,
         )
-        return agent_info_from_doc(await self._with_hub_liveness(doc)) if doc else None
+        return agent_info_from_doc(doc) if doc else None
 
     async def update_health(self, agent_id: str, healthy: bool) -> None:
         await self._repository.update_health(agent_id, healthy)
-
-    async def _with_hub_liveness(self, doc: dict) -> dict:
-        if not doc.get("hub_id") or self._hub_liveness is None:
-            return doc
-        enriched = dict(doc)
-        enriched["is_hub_online"] = await self._is_hub_online(doc["hub_id"])
-        return enriched
-
-    async def _with_hub_liveness_many(self, docs: list[dict]) -> list[dict]:
-        if self._hub_liveness is None:
-            return docs
-        hub_ids = list(
-            dict.fromkeys(doc.get("hub_id") for doc in docs if doc.get("hub_id"))
-        )
-        if not hub_ids:
-            return docs
-
-        statuses = await asyncio.gather(
-            *(self._is_hub_online(hub_id) for hub_id in hub_ids)
-        )
-        online_by_hub = dict(zip(hub_ids, statuses, strict=True))
-        enriched: list[dict] = []
-        for doc in docs:
-            hub_id = doc.get("hub_id")
-            if not hub_id:
-                enriched.append(doc)
-                continue
-            item = dict(doc)
-            item["is_hub_online"] = online_by_hub[hub_id]
-            enriched.append(item)
-        return enriched
-
-    async def _is_hub_online(self, hub_id: str) -> bool:
-        if self._hub_liveness is None:
-            return False
-        return bool(await self._hub_liveness.is_hub_online(hub_id))
 
     async def _get_excluded_agent_ids(self) -> frozenset[str]:
         if self._exclusion_reader is None:
@@ -646,40 +477,3 @@ class AgentFacade:
             value = doc.get(key)
             if value is not None and (not isinstance(value, int) or value <= 0):
                 raise ValueError(f"{key} must be a positive integer or None")
-
-
-def _descriptor_card(descriptor: HubAgentDescriptor) -> dict[str, Any]:
-    card = dict(descriptor.raw_card or {})
-    if descriptor.name is not None:
-        card.setdefault("name", descriptor.name)
-    if descriptor.url is not None:
-        card.setdefault("url", descriptor.url)
-    return card
-
-
-def _merge_existing_hub_doc(
-    existing: dict[str, Any], incoming: dict[str, Any]
-) -> dict[str, Any]:
-    merged = dict(incoming)
-    if "is_public" in existing:
-        merged["is_public"] = existing["is_public"]
-    if incoming.get("public_url") is None and "public_url" in existing:
-        merged["public_url"] = existing["public_url"]
-
-    existing_card = dict(existing.get("agent_card") or {})
-    incoming_card = dict(incoming.get("agent_card") or {})
-    preserved = {
-        key: existing_card[key]
-        for key in AGENT_CARD_NO_OVERWRITE
-        if key in existing_card
-    }
-    merged["agent_card"] = {
-        **existing_card,
-        **{
-            key: value
-            for key, value in incoming_card.items()
-            if key not in AGENT_CARD_NO_OVERWRITE
-        },
-        **preserved,
-    }
-    return merged

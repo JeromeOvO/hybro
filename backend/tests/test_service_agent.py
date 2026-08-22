@@ -186,8 +186,6 @@ def _info_from_agent(agent: Agent) -> AgentInfo:
         is_public=agent.is_public,
         public_url=agent.public_url,
         source=agent.source,
-        hub_id=agent.hub_id,
-        is_hub_online=agent.is_hub_online,
         rate_limit_per_user_per_hour=agent.rate_limit_per_user_per_hour,
         rate_limit_system_per_hour=agent.rate_limit_system_per_hour,
         call_count=agent.call_count,

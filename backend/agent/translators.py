@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from common.dto.agent import AgentCardSnapshot, AgentInfo, HubAgentDescriptor
+from common.dto.agent import AgentCardSnapshot, AgentInfo
 
 
 def agent_info_from_doc(doc: dict[str, Any]) -> AgentInfo:
@@ -17,8 +17,6 @@ def agent_info_from_doc(doc: dict[str, Any]) -> AgentInfo:
         status=_status_value(doc.get("agent_status", "active")) or "active",
         capabilities=list(doc.get("capabilities") or _card_capabilities(card)),
         source=doc.get("source", "cloud"),
-        hub_id=doc.get("hub_id"),
-        is_hub_online=doc.get("is_hub_online"),
         is_public=doc.get("is_public", True),
         public_url=doc.get("public_url"),
         rate_limit_per_user_per_hour=doc.get("rate_limit_per_user_per_hour"),
@@ -71,35 +69,6 @@ def registration_doc_from_card(
         "call_count": 0,
         "created_at": now,
         "updated_at": now,
-    }
-
-
-def hub_descriptor_to_doc(
-    *,
-    hub_id: str,
-    owner_user_id: str,
-    descriptor: HubAgentDescriptor,
-    agent_id: str,
-    normalized_url: str | None,
-    public_url: str | None,
-) -> dict[str, Any]:
-    card = dict(descriptor.raw_card or {})
-    if descriptor.name is not None:
-        card["name"] = descriptor.name
-    if descriptor.url is not None:
-        card["url"] = descriptor.url
-    return {
-        "agent_id": agent_id,
-        "provider_id": owner_user_id,
-        "source": "hub",
-        "hub_id": hub_id,
-        "local_agent_id": descriptor.agent_id,
-        "agent_status": "active",
-        "is_public": False,
-        "normalized_url": normalized_url,
-        "public_url": public_url,
-        "capabilities": list(descriptor.capabilities),
-        "agent_card": card,
     }
 
 
