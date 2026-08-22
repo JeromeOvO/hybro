@@ -1477,9 +1477,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 client_request_id_resolver=execution_client_request_id_resolver,
                 orchestration_run_store=orchestration_run_store,
             )
-            hitl_application.bind_run_answer_projector(
-                execution_facade._record_and_schedule_resolved_hitl
-            )
             _execution_deps = create_execution_deps(execution_facade)
 
             from execution.terminal_projection import TerminalProjectionFinalizer

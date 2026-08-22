@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from execution.orchestration.run_reducer import record_hitl_terminalization
+from common.utils.time import utcnow
 from execution.orchestration.run_store import (
     DuplicateEventIdConflict,
     OrchestrationStoreConflict,
@@ -80,7 +80,7 @@ class HITLTerminalLifecycleAdapter:
         self._orchestration_run_store = orchestration_run_store
         self._run_lifecycle = run_lifecycle
 
-    async def terminalize_owning_run(
+    async def terminalize_owning_run(  # noqa: C901
         self,
         request,
         *,
@@ -104,12 +104,36 @@ class HITLTerminalLifecycleAdapter:
                         if isinstance(entry, dict)
                     )
                     break
-                updated = record_hitl_terminalization(
-                    current,
-                    request_id=request.request_id,
-                    terminal_status=terminal_status,
-                    reason=reason,
+                updated = current.model_copy(deep=True)
+                resolved_at = utcnow().isoformat()
+                updated.pending_hitl_request_ids.clear()
+                for question in updated.open_questions:
+                    if not isinstance(question, dict):
+                        continue
+                    if question.get("status") not in {"open", "creating"}:
+                        continue
+                    question["status"] = terminal_status
+                    question["resolved"] = True
+                    question["resolved_at"] = resolved_at
+                    question["terminal_reason"] = reason
+                updated.pending_agent_continuations.clear()
+                updated.active_dispatches.clear()
+                updated.status = (
+                    OrchestrationStatus.CANCELED
+                    if terminal_status == "canceled"
+                    else OrchestrationStatus.FAILED
                 )
+                updated.terminal_reason = reason
+                updated.decision_log.append(
+                    {
+                        "code": f"hitl_{terminal_status}",
+                        "request_id": request.request_id,
+                        "reason": reason,
+                        "created_at": resolved_at,
+                    }
+                )
+                updated.state_version += 1
+                updated.updated_at = utcnow()
                 try:
                     orchestration_state = (
                         await self._orchestration_run_store.save_state(

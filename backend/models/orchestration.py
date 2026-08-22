@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -239,8 +238,6 @@ class PlannerQuestion(BaseModel):
     choices: list[str] | None = None
     reason: Literal["initial_clarification", "blocker"] = "initial_clarification"
     blocker_keys: list[str] = Field(default_factory=list)
-    required_obligation_keys: list[str] = Field(default_factory=list)
-    blocker_obligations: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AuthorizationBasis(BaseModel):
@@ -301,63 +298,6 @@ class ParticipantSnapshot(BaseModel):
     completed_agent_ids: list[str] = Field(default_factory=list)
 
 
-class WaivedOutputEvidence(BaseModel):
-    output_key: str
-    reason: str
-    blocker_keys: list[str] = Field(default_factory=list)
-
-
-class GoalFamilyDispositionRequest(BaseModel):
-    event_id: str
-    goal_family_fingerprint: str
-    through_goal_revision_fingerprint: str
-    status: Literal["abandoned", "superseded"]
-    reason: str
-    replacement_goal_family_fingerprint: str | None = None
-
-    @field_validator(
-        "event_id",
-        "goal_family_fingerprint",
-        "through_goal_revision_fingerprint",
-        "reason",
-        "replacement_goal_family_fingerprint",
-    )
-    @classmethod
-    def _nonempty_request_fields(cls, value: str | None, info) -> str | None:
-        if value is None:
-            return value
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError(
-                f"completion disposition request {info.field_name} must be nonempty"
-            )
-        return normalized
-
-
-class CompletionEvidence(BaseModel):
-    satisfied_criteria: list[str] = Field(default_factory=list)
-    referenced_fact_ids: list[str] = Field(default_factory=list)
-    referenced_artifact_keys: list[str] = Field(default_factory=list)
-    unresolved_questions: list[str] = Field(default_factory=list)
-    final_answer_intent: str
-    confidence: float
-    satisfied_output_keys: list[str] = Field(default_factory=list)
-    waived_outputs: list[WaivedOutputEvidence] = Field(default_factory=list)
-    abandoned_goal_disposition_event_ids: list[str] = Field(default_factory=list)
-    requested_goal_family_dispositions: list[GoalFamilyDispositionRequest] = Field(
-        default_factory=list
-    )
-    assumption_keys: list[str] = Field(default_factory=list)
-    unresolved_non_blocking_unknown_keys: list[str] = Field(default_factory=list)
-
-    @field_validator("confidence")
-    @classmethod
-    def _confidence_range(cls, value: float) -> float:
-        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-            raise ValueError("confidence must be between 0.0 and 1.0")
-        return value
-
-
 class ActiveDispatchRef(BaseModel):
     agent_message_id: str
     agent_id: str
@@ -389,7 +329,6 @@ class PlannerAction(BaseModel):
     synthesis_instruction: str | None = None
     file_prompt: str | None = None
     failure_reason: str | None = None
-    completion_evidence: CompletionEvidence | None = None
 
     @property
     def reasoning(self) -> str:  # provider compatibility; never serialized
@@ -534,8 +473,6 @@ class DelegationOutcomeRecord(BaseModel):
     status: Literal["fulfilled", "partial", "blocked", "no_progress", "failed"]
     satisfied_output_keys: list[str] = Field(default_factory=list)
     missing_output_keys: list[str] = Field(default_factory=list)
-    remaining_required_obligations: list[str] = Field(default_factory=list)
-    newly_satisfied_required_obligations: list[str] = Field(default_factory=list)
     changed_artifact_keys: list[str] = Field(default_factory=list)
     changed_fact_keys: list[str] = Field(default_factory=list)
     open_failure_ids: list[str] = Field(default_factory=list)
@@ -591,8 +528,6 @@ class GoalProgressRecord(BaseModel):
     source_outcome_ids: list[str] = Field(default_factory=list)
     agent_ids: list[str] = Field(default_factory=list)
     status: Literal["fulfilled", "partial", "blocked", "no_progress", "failed"]
-    satisfied_required_obligations: list[str] = Field(default_factory=list)
-    remaining_required_obligations: list[str] = Field(default_factory=list)
     blocker_keys: list[str] = Field(default_factory=list)
     unknown_keys: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -639,7 +574,6 @@ class OrchestrationRunState(BaseModel):
     system_agent_message_id: str | None = None
     active_dispatches: list[ActiveDispatchRef] = Field(default_factory=list)
     last_planner_action: PlannerActionRecord | None = None
-    completion_evidence: CompletionEvidence | None = None
     terminal_reason: str | None = None
     terminal_summary: dict[str, Any] | None = None
     file_turn: dict[str, Any] | None = None

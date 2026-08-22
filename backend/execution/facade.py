@@ -41,12 +41,7 @@ from execution.idempotency import (
     build_execution_request_fingerprint,
     normalize_client_request_id,
 )
-from execution.orchestration.run_reducer import record_hitl_resolution
-from execution.orchestration.run_store import (
-    DuplicateEventIdConflict,
-    OrchestrationRunStore,
-    OrchestrationStoreConflict,
-)
+from execution.orchestration.run_store import OrchestrationRunStore
 from execution.orchestrator_routing import OrchestratorRoutingError
 from execution.ports import (
     AgentResponseHandlerPort,
@@ -61,12 +56,7 @@ from execution.ports import (
 )
 from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from execution.translators import room_response_to_execution_ack
-from models.orchestration import (
-    OrchestrationEventType,
-    OrchestrationRunEvent,
-    OrchestrationRunState,
-    OrchestrationStatus,
-)
+from models.orchestration import OrchestrationStatus
 from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
 from models.run import RunState
 
@@ -495,7 +485,6 @@ class ExecutionFacade:
         self._event_publisher = event_publisher
         self._run_event_enabled = run_event_enabled
         self._client_request_id_resolver = client_request_id_resolver
-        self._orchestration_run_store = orchestration_run_store
         cancellation_finalizer = CancellationFinalizer(
             run_store=orchestration_run_store,
             project_status=self._project_orchestration_status,
@@ -1024,106 +1013,6 @@ class ExecutionFacade:
     async def heal_diverged_runs(self, limit: int = 500) -> int:
         return await self._run_lifecycle.heal_diverged_runs(limit=limit)
 
-    async def _record_and_schedule_resolved_hitl(
-        self,
-        *,
-        hitl_result: dict[str, Any],
-        response: str,
-    ) -> OrchestrationRunState | None:
-        """Idempotently project answers onto the legacy orchestration run.
-
-        The HITL application coordinator journals and fences this callback.
-        Recovery after a crash replays the answer projection rather than
-        re-dispatching; the orchestrator runtime owns its own continuation
-        recovery, so this legacy projector only records.
-        """
-        return await self._record_resolved_hitl_on_orchestration_run(
-            hitl_result=hitl_result,
-            response=response,
-        )
-
-    async def _record_resolved_hitl_on_orchestration_run(  # noqa: C901
-        self,
-        *,
-        hitl_result: dict[str, Any],
-        response: str,
-    ) -> OrchestrationRunState | None:
-        if self._orchestration_run_store is None:
-            return None
-        run_id = hitl_result.get("orchestration_run_id")
-        request_id = hitl_result.get("request_id")
-        if not isinstance(run_id, str) or not run_id:
-            return None
-        if not isinstance(request_id, str) or not request_id:
-            return None
-        answer_records = hitl_result.get("answer_records")
-        if not isinstance(answer_records, list) or not answer_records:
-            answer_records = [{"request_id": request_id, "response": response}]
-        normalized_records = [
-            record
-            for record in answer_records
-            if isinstance(record, dict)
-            and isinstance(record.get("request_id"), str)
-            and isinstance(record.get("response"), str)
-        ]
-        if not normalized_records:
-            return None
-
-        for _attempt in range(2):
-            state = await self._orchestration_run_store.get_run(run_id)
-            if state is None:
-                return None
-            expected_version = state.state_version
-            updated = state
-            for record in normalized_records:
-                updated = record_hitl_resolution(
-                    updated,
-                    request_id=record["request_id"],
-                    response=record["response"],
-                    hitl_result=hitl_result,
-                )
-            try:
-                saved = (
-                    updated
-                    if updated.state_version == expected_version
-                    else await self._orchestration_run_store.save_state(
-                        updated,
-                        expected_version=expected_version,
-                    )
-                )
-            except OrchestrationStoreConflict:
-                continue
-
-            interaction_id = hitl_result.get("interaction_id") or request_id
-            revision = hitl_result.get("application_revision") or 1
-            try:
-                await self._orchestration_run_store.append_event(
-                    OrchestrationRunEvent(
-                        event_id=f"hitl-resolved:{run_id}:{interaction_id}:{revision}",
-                        run_id=saved.run_id,
-                        room_id=saved.room_id,
-                        type=OrchestrationEventType.HITL_RESOLVED,
-                        state_version=saved.state_version,
-                        payload={
-                            "request_ids": [
-                                record["request_id"] for record in normalized_records
-                            ],
-                            "answer_recorded": True,
-                            "source": hitl_result.get("source"),
-                            "interaction_id": interaction_id,
-                            "application_revision": revision,
-                        },
-                    )
-                )
-            except DuplicateEventIdConflict:
-                pass
-            return saved
-
-        raise OrchestrationStoreConflict(
-            "failed to record resolved HITL after repeated orchestration store "
-            f"conflicts for run {run_id!r} and request {request_id!r}"
-        )
-
     async def resolve_hitl_batch(
         self,
         room_id: str,
@@ -1159,19 +1048,6 @@ class ExecutionFacade:
         result.setdefault("responder_id", responder_id)
         if client_request_id:
             result.setdefault("client_request_id", client_request_id)
-        if (
-            result.get("status") != "accepted"
-            and result.get("run_projection_status") != "applied"
-        ):
-            combined_response = "\n\n".join(
-                answer.get("user_input", "")
-                for answer in answers
-                if isinstance(answer.get("user_input"), str)
-            )
-            await self._record_and_schedule_resolved_hitl(
-                hitl_result=result,
-                response=combined_response,
-            )
         return hitl_response_dict_to_common(result)
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
