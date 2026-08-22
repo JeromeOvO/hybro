@@ -438,7 +438,7 @@ async def _emit_working_card(
         room_id=run.room_id,
         message_id=message_id,
         status="working",
-        status_message=task_text or f"Requesting {label}",
+        status_message=f"Requesting {label}",
         agent_id=agent_id or None,
         client_request_id=run.client_request_id,
     )
@@ -528,18 +528,22 @@ async def _project_orchestrator_agent_activity(
         if result is not None and result.status == "completed"
         else TaskState.failed
     )
-    parts: list[str] = []
-    if result is not None:
+    text_parts = [
+        part.text
+        for part in result.content
+        if result is not None and hasattr(part, "text") and part.text
+    ]
+    if text_parts:
+        result_text = "\n".join(text_parts)[:8000]
+    else:
         import json as _json
 
-        for part in result.content:
-            if hasattr(part, "text") and part.text:
-                parts.append(part.text)
-            elif hasattr(part, "data"):
-                parts.append(
-                    _json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
-                )
-    result_text = "\n".join(parts)[:8000] or facts["task_text"]
+        data_parts = [
+            _json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
+            for part in (result.content if result is not None else [])
+            if hasattr(part, "data")
+        ]
+        result_text = "\n".join(data_parts)[:8000] or facts["task_text"]
     document = RoomAgentMessage(
         **common,
         message_content=MessageContent(
