@@ -2196,7 +2196,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             orchestrator_lifecycle_log_message,
         )
 
+        # Lifecycle events are dispatched concurrently (create_task), so a
+        # per-run lock re-serializes the work-log SSE and the agent-card
+        # projection into the kernel's durable event order. Without it the
+        # frontend sees "Waiting…" before "…responded" and drops entries
+        # that arrive after the terminal status.
+        _orchestrator_session_locks: dict[str, asyncio.Lock] = {}
+
         async def _orchestrator_session_listener(event: Any) -> None:
+            lock = _orchestrator_session_locks.setdefault(event.run_id, asyncio.Lock())
+            async with lock:
+                await _orchestrator_session_event(event)
+                return
+
+        async def _orchestrator_session_event(event: Any) -> None:
             # Project agent activity into room_agent_messages so the legacy
             # conversation surface (agent cards) reflects the kernel's
             # dispatches. Best-effort: durable Run state stays authoritative.

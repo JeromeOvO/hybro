@@ -729,7 +729,11 @@ class OrchestratorKernel:
                         lifecycle,
                         "tool_execution_started",
                         run,
-                        {"call_id": call.call_id, "tool_name": call.tool_name},
+                        {
+                            "call_id": call.call_id,
+                            "tool_name": call.tool_name,
+                            "agent_label": self._tool_label(run, call.tool_name),
+                        },
                     )
                     outcome = await self._execute_one(
                         invocation, acceptance, signal=signal
