@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any, Protocol
 
 from a2a_adapter.remote_task import fetch_remote_task
@@ -38,19 +37,10 @@ from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.cancellation.ports import CancellationReconciliationPort
 from execution.dispatch.agent_event import AgentEvent
-from execution.orchestration.run_store import OrchestrationStoreConflict
 from jobs.constants import STALE_TASK_CHECKER
-from models.orchestration import (
-    TERMINAL_ORCHESTRATION_STATUSES,
-    OrchestrationEventType,
-    OrchestrationRunEvent,
-)
-from models.request import OrchestrationRequest
 from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
-
-MAX_CONCURRENT_RECOVERIES = 5
 
 
 class LeaderGate(Protocol):
@@ -82,16 +72,6 @@ async def notify_task_update(**_kwargs) -> Any:
 
 def increment_counter(_name: str) -> None:
     raise RuntimeError("Stale task checker metrics dependency is not bound")
-
-
-@dataclass(frozen=True)
-class StaleRecoveryDeps:
-    schedule_recovery: Callable[..., asyncio.Task]
-
-
-@dataclass(frozen=True)
-class StaleOrchestrationRunRecoveryDeps:
-    orchestration_run_store: Any
 
 
 @dataclass(frozen=True)
@@ -189,12 +169,7 @@ class StaleTaskChecker:
         self.processing_status_expiry_minutes = processing_status_expiry_minutes
         self._running = False
         self._task: asyncio.Task | None = None
-        self._recovery_semaphore = asyncio.Semaphore(MAX_CONCURRENT_RECOVERIES)
         self._leader: LeaderGate | None = None
-        self._execution_recovery_deps: StaleRecoveryDeps | None = None
-        self._orchestration_run_recovery_deps: (
-            StaleOrchestrationRunRecoveryDeps | None
-        ) = None
         self._cancellation_reconciliation_deps: (
             StaleCancellationReconciliationDeps | None
         ) = None
@@ -267,15 +242,6 @@ class StaleTaskChecker:
 
     def _increment_counter(self, name: str) -> Any:
         return self._deps().increment_counter(name)
-
-    def set_execution_recovery_deps(self, deps: StaleRecoveryDeps) -> None:
-        self._execution_recovery_deps = deps
-
-    def set_orchestration_run_recovery_deps(
-        self,
-        deps: StaleOrchestrationRunRecoveryDeps,
-    ) -> None:
-        self._orchestration_run_recovery_deps = deps
 
     def set_run_watchdog_event_deps(self, deps: StaleRunWatchdogEventDeps) -> None:
         self._watchdog_event_deps = deps
@@ -383,10 +349,7 @@ class StaleTaskChecker:
         for msg in expired_messages:
             await self._auto_fail_expired_task(msg)
 
-        # 3. Recover interrupted orchestration work.
-        await self._recover_claimed_orchestration_envelopes()
-
-        # 4. Clean up stuck room processing status
+        # 3. Clean up stuck room processing status
         await self._cleanup_stuck_processing_status()
 
         # 5. Auto-fail non-tracked tasks stuck in submitted/working state too long.
@@ -419,14 +382,7 @@ class StaleTaskChecker:
                     },
                 )
 
-        # 6. Recover supervisor trajectories stuck in "running" status.
-        #    This handles mid-loop crashes where the server restarted while
-        #    SupervisorExecutor.run() was in-flight.
-
-        # 6b. Recover stale durable orchestration runs.
-        await self._recover_stuck_orchestration_runs()
-
-        # 7. Recover HITL requests stuck in "processing" (worker crashed
+        # 6. Recover HITL requests stuck in "processing" (worker crashed
         #    between CAS claim and finalization).
         try:
             if self._hitl_deps is None:
@@ -963,324 +919,6 @@ class StaleTaskChecker:
             self._store.is_message_cancelled,
         )
         return await strict_reader(message_id)
-
-    def _release_recovery_slot(self, _task: asyncio.Task) -> None:
-        self._recovery_semaphore.release()
-
-    async def _schedule_recovery_with_slot(
-        self,
-        request: OrchestrationRequest,
-        *,
-        reason: str,
-    ) -> bool:
-        """Schedule recovery with exception-safe semaphore ownership."""
-        if self._execution_recovery_deps is None:
-            raise RuntimeError("Execution recovery dependencies are not bound")
-        if self._recovery_semaphore.locked():
-            return False
-
-        await self._recovery_semaphore.acquire()
-        try:
-            task = self._execution_recovery_deps.schedule_recovery(
-                request,
-                reason=reason,
-            )
-        except Exception:
-            self._recovery_semaphore.release()
-            raise
-        task.add_done_callback(self._release_recovery_slot)
-        return True
-
-    async def _repair_orchestration_envelope_from_run(
-        self,
-        message: Any,
-        state: Any,
-    ) -> None:
-        """Repair stale message projection from the canonical durable run."""
-        extend_info = getattr(message, "extend_info", None)
-        if not isinstance(extend_info, dict):
-            return
-        status = getattr(state, "status", None)
-        status_value = getattr(status, "value", status)
-        if not isinstance(status_value, str) or not status_value:
-            return
-
-        terminal = status in TERMINAL_ORCHESTRATION_STATUSES
-        expected_status = extend_info.get("orchestration_status")
-        if not isinstance(expected_status, str) or not expected_status:
-            return
-        if expected_status == status_value and (
-            not terminal or getattr(message, "processing_claimed_at", None) is None
-        ):
-            return
-        updated = await self._store.update_orchestration_projection_if_status(
-            message.message_id,
-            expected_status=expected_status,
-            status=status_value,
-            clear_processing_claim=terminal,
-        )
-        if updated:
-            extend_info["orchestration_status"] = status_value
-            if terminal:
-                message.processing_claimed_at = None
-
-    async def _recover_claimed_orchestration_envelopes(self) -> None:
-        """Recover supervisor requests interrupted before durable run creation."""
-        if self._execution_recovery_deps is None:
-            logger.warning(
-                "Orchestration envelope recovery skipped: Execution recovery "
-                "dependencies are not bound"
-            )
-            return
-        if self._orchestration_run_recovery_deps is None:
-            logger.warning(
-                "Orchestration envelope recovery skipped: run-store dependencies "
-                "are not bound"
-            )
-            return
-
-        run_store = self._orchestration_run_recovery_deps.orchestration_run_store
-        batch_size = 100
-        after_message_id: str | None = None
-        while True:
-            try:
-                messages = await self._store.get_stale_claimed_orchestration_messages(
-                    self.orphan_threshold_minutes,
-                    limit=batch_size,
-                    after_message_id=after_message_id,
-                )
-            except Exception:
-                logger.error(
-                    "orchestration_envelope_recovery_scan_failed",
-                    exc_info=True,
-                )
-                return
-            if not messages:
-                return
-
-            for message in messages:
-                message_id = getattr(message, "message_id", None)
-                room_id = getattr(message, "room_id", None)
-                if not isinstance(message_id, str) or not message_id:
-                    continue
-                if not isinstance(room_id, str) or not room_id:
-                    continue
-                try:
-                    existing = await run_store.get_latest_by_user_message_id(message_id)
-                    if existing is not None:
-                        await self._repair_orchestration_envelope_from_run(
-                            message,
-                            existing,
-                        )
-                        continue
-                    if await self._is_message_cancelled_for_recovery(message_id):
-                        extend_info = getattr(message, "extend_info", None)
-                        expected_status = (
-                            extend_info.get("orchestration_status")
-                            if isinstance(extend_info, dict)
-                            else None
-                        )
-                        if isinstance(expected_status, str) and expected_status:
-                            await self._store.update_orchestration_projection_if_status(
-                                message_id,
-                                expected_status=expected_status,
-                                status="canceled",
-                                clear_processing_claim=True,
-                            )
-                        continue
-                    scheduled = await self._schedule_recovery_with_slot(
-                        OrchestrationRequest(
-                            room_id=room_id,
-                            room_user_message_id=message_id,
-                            room_related_message_id="",
-                            is_recovery=True,
-                        ),
-                        reason="orchestration-envelope",
-                    )
-                    if not scheduled:
-                        logger.info(
-                            "Recovery slots full, deferring remaining orchestration "
-                            "envelopes"
-                        )
-                        return
-                except Exception as exc:
-                    logger.error(
-                        "orchestration_envelope_recovery_schedule_failed",
-                        extra={
-                            "room_id": room_id,
-                            "user_message_id": message_id,
-                            **safe_exception_metadata(exc),
-                        },
-                    )
-
-            if len(messages) < batch_size:
-                return
-            after_message_id = messages[-1].message_id
-
-    async def _reconcile_pending_cancellations(self) -> None:
-        """Trigger Execution-owned reconciliation of pending markers."""
-        if self._cancellation_reconciliation_deps is None:
-            logger.warning("Cancellation reconciliation dependency is not bound")
-            return
-        settle_cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
-        await self._cancellation_reconciliation_deps.reconciliation.reconcile_pending(
-            settle_cutoff=settle_cutoff
-        )
-
-    async def _recover_stuck_orchestration_runs(self) -> None:
-        """Recover stale durable orchestration runs.
-
-        Supervisor checkpoints keep durable progress in ``OrchestrationRunState``
-        rather than ``user_message.extend_info``. This watchdog claims stale
-        non-terminal runs with optimistic
-        concurrency and reuses the normal recovery orchestration path.
-        """
-        if self._orchestration_run_recovery_deps is None:
-            return
-        if self._execution_recovery_deps is None:
-            logger.warning(
-                "orchestration_recovery: skipped because Execution recovery dependencies are not bound"
-            )
-            return
-
-        run_store = self._orchestration_run_recovery_deps.orchestration_run_store
-        cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
-        try:
-            states = await run_store.list_recoverable()
-        except Exception as e:
-            logger.error("orchestration_recovery: failed to list runs: %s", e)
-            return
-
-        for state in states:
-            if ensure_utc(state.updated_at) > cutoff:
-                continue
-            if await self._is_message_cancelled_for_recovery(state.user_message_id):
-                # Pending durable markers are retried by the Execution-owned
-                # reconciliation pass at the start of each checker cycle.
-                continue
-            if state.status.value == "awaiting_user":
-                logger.info(
-                    "orchestration_recovery: skipping run %s — awaiting user input",
-                    state.run_id,
-                )
-                continue
-            if self._recovery_semaphore.locked():
-                logger.info(
-                    "Recovery slots full, deferring remaining orchestration recoveries"
-                )
-                break
-
-            get_user_message = getattr(
-                self._store,
-                "get_room_user_message_by_message_id",
-                None,
-            )
-            if not callable(get_user_message):
-                logger.error(
-                    "orchestration_recovery: skipping run %s because the "
-                    "processing-claim reader is not bound",
-                    state.run_id,
-                )
-                continue
-            try:
-                user_message = await get_user_message(state.user_message_id)
-                processing_claimed_at = (
-                    user_message.get("processing_claimed_at")
-                    if isinstance(user_message, dict)
-                    else getattr(user_message, "processing_claimed_at", None)
-                )
-                if (
-                    processing_claimed_at is not None
-                    and ensure_utc(processing_claimed_at) > cutoff
-                ):
-                    logger.info(
-                        "orchestration_recovery: skipping live run %s",
-                        state.run_id,
-                    )
-                    continue
-            except Exception:
-                logger.warning(
-                    "orchestration_recovery: failed to inspect processing "
-                    "claim for %s; skipping recovery",
-                    state.run_id,
-                    exc_info=True,
-                )
-                continue
-
-            expected_version = state.state_version
-            claimed = state.model_copy(deep=True)
-            claimed.state_version = expected_version + 1
-            claimed.updated_at = utcnow()
-            try:
-                saved = await run_store.save_state(
-                    claimed,
-                    expected_version=expected_version,
-                )
-            except OrchestrationStoreConflict:
-                logger.info(
-                    "orchestration_recovery: run %s already claimed",
-                    state.run_id,
-                )
-                continue
-            except Exception as e:
-                logger.error(
-                    "orchestration_recovery: failed to claim run %s: %s",
-                    state.run_id,
-                    e,
-                )
-                continue
-
-            try:
-                await run_store.append_event(
-                    OrchestrationRunEvent(
-                        run_id=saved.run_id,
-                        room_id=saved.room_id,
-                        type=OrchestrationEventType.RUN_RECOVERED,
-                        state_version=saved.state_version,
-                        payload={
-                            "previous_status": state.status.value,
-                            "user_message_id": state.user_message_id,
-                        },
-                    )
-                )
-            except OrchestrationStoreConflict:
-                logger.info(
-                    "orchestration_recovery: recovery event already recorded for %s",
-                    saved.run_id,
-                )
-            except Exception:
-                logger.debug(
-                    "orchestration_recovery: failed to append recovery event",
-                    exc_info=True,
-                )
-
-            try:
-                logger.info(
-                    "orchestration_recovery: re-triggering run %s message %s",
-                    saved.run_id,
-                    saved.user_message_id,
-                )
-                request = OrchestrationRequest(
-                    room_id=saved.room_id,
-                    room_user_message_id=saved.user_message_id,
-                    room_related_message_id="",
-                    is_recovery=True,
-                )
-                scheduled = await self._schedule_recovery_with_slot(
-                    request,
-                    reason="orchestration",
-                )
-                if not scheduled:
-                    logger.info(
-                        "Recovery slots full, deferring orchestration run %s",
-                        saved.run_id,
-                    )
-            except Exception as e:
-                logger.error(
-                    "orchestration_recovery: failed to trigger recovery for %s: %s",
-                    saved.run_id,
-                    e,
-                )
 
 
 # Singleton instance. Application startup binds runtime dependencies and settings.

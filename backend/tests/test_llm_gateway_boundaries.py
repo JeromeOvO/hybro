@@ -140,19 +140,11 @@ def test_container_binds_focused_llm_services_to_production_consumers():
     expected_snippets = [
         "generation_provider=llm_gateway_config.generation_provider,",
         "settings_obj=runtime.settings,",
-        "supervisor_llm_service = SupervisorLLMService(",
-        "summary_llm_service = SummaryLLMService(llm_provider=llm_provider)",
         "agent_selection_llm_service = AgentSelectionLLMService(",
         "message_parser_llm_service = MessageParserLLMService(",
-        "agent_selection_service=agent_selection_llm_service,",
-        "room_supervisor_service.bind_supervisor_service(supervisor_llm_service)",
         "room_runtime.bind_message_parser_service(message_parser_llm_service)",
-        "synthesis_coordinator.bind_summary_service(summary_llm_service)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
-        "add_synthesis_to_history=context_memory_facade.add_synthesis_to_history,",
-        "update_room_summary=context_memory_facade.update_room_summary,",
-        "summary_service=summary_llm_service,",
     ]
     forbidden_snippets = [
         "discovery_llm_service = DiscoveryLLMService(",
@@ -179,26 +171,6 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         " wiring: "
         f"{leaked_legacy}"
     )
-
-
-def test_focused_llm_binding_targets_expose_startup_methods():
-    from execution.orchestration.room_supervisor_service import room_supervisor_service
-    from execution.orchestration.synthesis_coordinator import SynthesisCoordinator
-    from room.compat.runtime import room_runtime
-
-    synthesis_coordinator = SynthesisCoordinator()
-
-    bindings = [
-        (room_runtime, "bind_message_parser_service"),
-        (synthesis_coordinator, "bind_summary_service"),
-        (room_supervisor_service, "bind_supervisor_service"),
-    ]
-    missing = [
-        f"{target.__class__.__name__}.{method}"
-        for target, method in bindings
-        if not callable(getattr(target, method, None))
-    ]
-    assert missing == [], f"startup binding targets missing methods: {missing}"
 
 
 def test_llm_settings_are_not_read_by_feature_runtime_modules():

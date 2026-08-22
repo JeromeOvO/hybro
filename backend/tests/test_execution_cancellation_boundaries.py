@@ -87,11 +87,7 @@ def test_common_eventing_has_no_cancellation_semantics():
 
 
 def test_orchestration_does_not_call_cancellation_through_delivery():
-    for relative in (
-        "execution/orchestration/room_message_center.py",
-        "execution/orchestration/queue_executor.py",
-        "room/compat/runtime.py",
-    ):
+    for relative in ("room/compat/runtime.py",):
         source = (BACKEND_ROOT / relative).read_text()
         assert "self.delivery.create_token" not in source
         assert "self.delivery.get_token" not in source

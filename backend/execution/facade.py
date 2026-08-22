@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
@@ -69,9 +69,6 @@ from models.orchestration import (
 )
 from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
 from models.run import RunState
-
-if TYPE_CHECKING:
-    from models.response import OrchestrationResponse
 
 logger = get_logger(__name__)
 
@@ -187,13 +184,6 @@ class RoomCenterPort(Protocol):
         message_id: str,
         status: str,
     ) -> bool: ...
-
-
-class RoomMessageCenterPort(Protocol):
-    async def process_room_user_message(
-        self,
-        request: OrchestrationRequest,
-    ) -> OrchestrationResponse: ...
 
 
 class HITLServicePort(Protocol):
@@ -477,7 +467,6 @@ class ExecutionFacade:
         self,
         *,
         room_center: RoomCenterPort,
-        room_message_center: RoomMessageCenterPort,
         hitl_manager: HITLServicePort,
         run_lifecycle: RunLifecyclePort,
         run_reader: RunReadPort,
@@ -495,7 +484,6 @@ class ExecutionFacade:
         orchestrator_router: Any | None = None,
     ) -> None:
         self._room_center = room_center
-        self._room_message_center = room_message_center
         self._orchestrator_router = orchestrator_router
         self._hitl_manager = hitl_manager
         self._run_lifecycle = run_lifecycle
@@ -883,30 +871,6 @@ class ExecutionFacade:
                 name=f"execution-orchestrate-{ack.message_id}",
             )
 
-    def schedule_recovery_orchestration(
-        self,
-        request: OrchestrationRequest,
-        *,
-        reason: str,
-    ) -> asyncio.Task[Any]:
-        message_id = (
-            request.room_user_message_id or request.room_agent_message_id or "unknown"
-        )
-
-        async def _recover() -> None:
-            await self._room_message_center.process_room_user_message(request)
-
-        with bind_log_context(
-            client_request_id=request.client_request_id,
-            room_id=request.room_id,
-            user_message_id=message_id,
-            message_id=message_id,
-        ):
-            return self._spawn_orchestration(
-                _recover(),
-                name=f"execution-recovery-{reason}-{message_id}",
-            )
-
     def _spawn_orchestration(
         self,
         coro,
@@ -1066,21 +1030,17 @@ class ExecutionFacade:
         hitl_result: dict[str, Any],
         response: str,
     ) -> OrchestrationRunState | None:
-        """Idempotently project answers and resume orchestration.
+        """Idempotently project answers onto the legacy orchestration run.
 
-        The HITL application coordinator journals and fences this callback. Keeping
-        scheduling inside the callback means recovery after a crash replays the
-        complete supervisor effect rather than only recording the answer.
+        The HITL application coordinator journals and fences this callback.
+        Recovery after a crash replays the answer projection rather than
+        re-dispatching; the orchestrator runtime owns its own continuation
+        recovery, so this legacy projector only records.
         """
-        saved_state = await self._record_resolved_hitl_on_orchestration_run(
+        return await self._record_resolved_hitl_on_orchestration_run(
             hitl_result=hitl_result,
             response=response,
         )
-        self._schedule_orchestration_after_hitl_if_needed(
-            state=saved_state,
-            hitl_result=hitl_result,
-        )
-        return saved_state
 
     async def _record_resolved_hitl_on_orchestration_run(  # noqa: C901
         self,
@@ -1162,48 +1122,6 @@ class ExecutionFacade:
         raise OrchestrationStoreConflict(
             "failed to record resolved HITL after repeated orchestration store "
             f"conflicts for run {run_id!r} and request {request_id!r}"
-        )
-
-    @staticmethod
-    def _has_open_pending_hitl(state: OrchestrationRunState) -> bool:
-        pending_request_ids = {
-            request_id
-            for request_id in state.pending_hitl_request_ids
-            if isinstance(request_id, str)
-        }
-        if not pending_request_ids:
-            return False
-        return any(
-            isinstance(question, dict)
-            and question.get("request_id") in pending_request_ids
-            and question.get("status") in {"open", "creating"}
-            for question in state.open_questions
-        )
-
-    def _schedule_orchestration_after_hitl_if_needed(
-        self,
-        *,
-        state: OrchestrationRunState | None,
-        hitl_result: dict[str, Any],
-    ) -> None:
-        if state is None:
-            return
-        if hitl_result.get("resume_execution") is False:
-            return
-        if self._has_open_pending_hitl(state):
-            return
-
-        request = OrchestrationRequest(
-            room_id=state.room_id,
-            room_user_message_id=state.user_message_id,
-            user_id=hitl_result.get("responder_id"),
-            is_recovery=True,
-            reuse_processing_claim=True,
-            client_request_id=state.client_request_id,
-        )
-        self.schedule_recovery_orchestration(
-            request,
-            reason="hitl-resolved",
         )
 
     async def resolve_hitl_batch(

@@ -157,13 +157,13 @@ async def test_hub_facade_uses_injected_offline_failure_port_for_legacy_rejectio
 def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
     mongo = MagicMock()
     db_service = MagicMock()
-    room_message_center = MagicMock()
+    agent_response_handler = MagicMock()
     hitl_coordinator = MagicMock()
 
     svc = init_relay_service(
         mongo=mongo,
         db=db_service,
-        room_message_center=room_message_center,
+        agent_response_handler=agent_response_handler,
         hitl_coordinator=hitl_coordinator,
         offline_failure_port=MagicMock(),
     )
@@ -174,14 +174,13 @@ def test_init_relay_service_binds_hitl_coordinator_to_publish_handler():
 def test_init_relay_service_requires_injected_response_handler():
     mongo = MagicMock()
     db_service = MagicMock()
-    room_message_center = SimpleNamespace()
     hitl_coordinator = MagicMock()
 
     with pytest.raises(ValueError, match="agent_response_handler"):
         init_relay_service(
             mongo=mongo,
             db=db_service,
-            room_message_center=room_message_center,
+            agent_response_handler=None,
             hitl_coordinator=hitl_coordinator,
             offline_failure_port=MagicMock(),
         )
@@ -192,40 +191,8 @@ def test_init_relay_service_requires_offline_failure_port():
         init_relay_service(
             mongo=MagicMock(),
             db=MagicMock(),
-            room_message_center=MagicMock(agent_response_handler=MagicMock()),
+            agent_response_handler=MagicMock(),
         )
-
-
-def test_init_relay_service_binds_processor_relay_path():
-    mongo = MagicMock()
-    db_service = MagicMock()
-    hitl_coordinator = MagicMock()
-
-    processor = MagicMock()
-    processor.bind_relay_service = MagicMock()
-    response_handler = MagicMock()
-    room_message_center = MagicMock(
-        agent_message_processor=processor,
-        agent_response_handler=response_handler,
-    )
-
-    svc = init_relay_service(
-        mongo=mongo,
-        db=db_service,
-        room_message_center=room_message_center,
-        hitl_coordinator=hitl_coordinator,
-        offline_failure_port=MagicMock(),
-    )
-
-    assert svc.relay_transport is None
-    assert svc._publish_handler is None
-    assert svc._facade.deps.publish_authorization_reader is not None
-    assert svc._facade.deps.cancellation_reader is not None
-    assert svc.internal_response_dispatcher is not None
-    assert svc._facade._dispatcher is svc.internal_response_dispatcher
-    assert svc._response_handler is response_handler
-    assert response_handler.hitl_coordinator is hitl_coordinator
-    processor.bind_relay_service.assert_called_once_with(svc)
 
 
 def test_init_relay_service_wires_hub_worker_and_internal_event_publisher():
@@ -234,7 +201,7 @@ def test_init_relay_service_wires_hub_worker_and_internal_event_publisher():
     svc = init_relay_service(
         mongo=MagicMock(),
         db=MagicMock(),
-        room_message_center=MagicMock(agent_response_handler=MagicMock()),
+        agent_response_handler=MagicMock(),
         internal_event_publisher=publisher,
         worker_id="worker-123",
         response_converter=converter,

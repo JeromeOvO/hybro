@@ -279,7 +279,6 @@ async def test_publish_response_alias_normalizes_legacy_parts_for_public_deliver
         room_reader=db,
         hitl_reader=db,
         delivery=delivery,
-        room_message_center=MagicMock(resume_queue_from_continuation=AsyncMock()),
         task_notifier=MagicMock(),
         task_notification_impl=notification_impl,
         task_notification_store=MagicMock(),

@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-from datetime import timedelta
 from types import SimpleNamespace
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock, call
@@ -33,7 +32,6 @@ from models.orchestration import (
     OrchestrationRunState,
     OrchestrationStatus,
 )
-from models.request import OrchestrationRequest
 from models.response import RoomCenterUserMessageResponse
 from models.run import RunState
 from room.route_adapter import RoomRouteAdapter
@@ -67,7 +65,6 @@ def _make_facade(**overrides):
     )
     room_center.discard_message_preflight = MagicMock()
     room_center.update_user_message_orchestration_status = AsyncMock(return_value=True)
-    room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     hitl_manager = SimpleNamespace(
         request_interaction=AsyncMock(),
         handle_response=AsyncMock(),
@@ -108,7 +105,6 @@ def _make_facade(**overrides):
     )
     deps = {
         "room_center": room_center,
-        "room_message_center": room_message_center,
         "hitl_manager": hitl_manager,
         "run_lifecycle": run_lifecycle,
         "run_reader": run_reader,
@@ -184,7 +180,6 @@ def test_constructor_core_dependencies_are_typed_ports():
     hints = get_type_hints(ExecutionFacade.__init__)
 
     assert hints["room_center"].__name__ == "RoomCenterPort"
-    assert hints["room_message_center"].__name__ == "RoomMessageCenterPort"
     assert hints["hitl_manager"].__name__ == "HITLServicePort"
 
 
@@ -224,7 +219,6 @@ async def test_execute_persists_ack_without_starting_orchestration():
         "room_team",
         ["agent-1"],
     )
-    deps["room_message_center"].process_room_user_message.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -576,23 +570,6 @@ async def test_schedule_orchestration_carries_live_mode_and_scope():
     # request so routing never depends on the persisted extend_info rewrite.
     assert orchestration_request.mode == "supervisor"
     assert orchestration_request.agent_scope == {"source": "all_agents"}
-
-
-@pytest.mark.asyncio
-async def test_recovery_schedules_legacy_executor_processing():
-    """Recovery re-enters the (still-present) legacy executor until Phases 2-3."""
-    facade, deps = _make_facade()
-    request = OrchestrationRequest(
-        room_id="room-1",
-        room_user_message_id="msg-1",
-        client_request_id="cr-1",
-        is_recovery=True,
-    )
-
-    facade.schedule_recovery_orchestration(request, reason="orphan")
-    await asyncio.sleep(0)
-
-    deps["room_message_center"].process_room_user_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1153,7 +1130,7 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
 
 @pytest.mark.asyncio
 async def test_start_orchestration_skips_when_ack_disables_dispatch():
-    facade, deps = _make_facade()
+    facade, _ = _make_facade()
     request = ExecutionRequest(room_id="room-1", sender_id="user-1")
     ack = ExecutionAck(
         success=True,
@@ -1163,7 +1140,6 @@ async def test_start_orchestration_skips_when_ack_disables_dispatch():
 
     await facade.start_orchestration(request, ack)
 
-    deps["room_message_center"].process_room_user_message.assert_not_called()
     assert facade._inflight == set()
 
 
@@ -1518,86 +1494,6 @@ async def test_cancel_inflight_tasks_interrupts_without_public_cancellation():
     assert cancellation_reasons == [(GRACEFUL_SHUTDOWN_CANCEL_REASON,)]
     assert facade._inflight == set()
     deps["run_lifecycle"].record_processing_status.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_shutdown_interruption_remains_recoverable_after_restart():
-    from jobs.stale_task_checker import (
-        StaleOrchestrationRunRecoveryDeps,
-        StaleRecoveryDeps,
-        StaleTaskChecker,
-        StaleTaskCheckerDeps,
-    )
-
-    run_store = InMemoryOrchestrationRunStore()
-    await run_store.create_run(
-        OrchestrationRunState(
-            run_id="run-1",
-            room_id="room-1",
-            user_message_id="msg-1",
-            goal="Recover after restart",
-            candidate_agent_ids=["agent-1"],
-            status=OrchestrationStatus.DISPATCHING,
-            updated_at=utcnow() - timedelta(minutes=10),
-        )
-    )
-    facade, deps = _make_facade(orchestration_run_store=run_store)
-
-    async def wait_forever():
-        await asyncio.Event().wait()
-
-    facade._spawn_orchestration(
-        wait_forever(),
-        name="execution-test",
-    )
-    await asyncio.sleep(0)
-    assert await facade.cancel_inflight_tasks() == 1
-
-    interrupted = await run_store.get_run("run-1")
-    assert interrupted is not None
-    assert interrupted.status == OrchestrationStatus.DISPATCHING
-    assert run_store._events_by_run.get("run-1", []) == []
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
-
-    scheduled = []
-
-    def schedule_recovery(request, *, reason):
-        scheduled.append((request, reason))
-        return MagicMock(add_done_callback=MagicMock())
-
-    checker = StaleTaskChecker(orphan_threshold_minutes=2)
-    checker.set_runtime_deps(
-        StaleTaskCheckerDeps(
-            store=SimpleNamespace(
-                is_message_cancelled=AsyncMock(return_value=False),
-                get_room_user_message_by_message_id=AsyncMock(return_value=None),
-            ),
-            rooms_collection=None,
-            notify_task_update=AsyncMock(),
-            increment_counter=MagicMock(),
-            a2a_service=SimpleNamespace(),
-        )
-    )
-    checker.set_execution_recovery_deps(
-        StaleRecoveryDeps(schedule_recovery=schedule_recovery)
-    )
-    checker.set_orchestration_run_recovery_deps(
-        StaleOrchestrationRunRecoveryDeps(orchestration_run_store=run_store)
-    )
-
-    await checker._recover_stuck_orchestration_runs()
-
-    assert len(scheduled) == 1
-    recovery_request, reason = scheduled[0]
-    assert reason == "orchestration"
-    assert recovery_request.room_user_message_id == "msg-1"
-    recovered = await run_store.get_run("run-1")
-    assert recovered is not None
-    assert recovered.status == OrchestrationStatus.DISPATCHING
-    assert recovered.state_version == 1
-    assert run_store._events_by_run["run-1"][0].type == (
-        OrchestrationEventType.RUN_RECOVERED
-    )
 
 
 @pytest.mark.asyncio

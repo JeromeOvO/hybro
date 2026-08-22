@@ -189,29 +189,6 @@ def test_room_runtime_has_no_duplicate_a2a_response_handler():
     assert "handle_a2a_response_for_room" not in runtime_methods
     assert "_trusted_hitl_projection" not in runtime_methods
 
-    transport_tree = ast.parse(
-        Path("execution/dispatch/transports/direct.py").read_text()
-    )
-    direct_transport = next(
-        node
-        for node in transport_tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "DirectTransport"
-    )
-    transport_methods = {
-        node.name
-        for node in direct_transport.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    }
-    handler_calls = [
-        node
-        for node in ast.walk(direct_transport)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "_handle_a2a_response_for_room"
-    ]
-    assert "_handle_a2a_response_for_room" in transport_methods
-    assert handler_calls
-
 
 async def test_trusted_hitl_projection_uses_verified_record_and_redacts_agent_prompt():
     message, task = _hitl_message()

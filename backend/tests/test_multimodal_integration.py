@@ -18,7 +18,6 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
-from common.utils.cancellation import CancellationToken
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
 from models.memory import RoomMemory
@@ -298,70 +297,6 @@ class TestProcessAgentMessageAttachmentPreflight:
             )
         )
         return content_reader
-
-    async def test_processor_forwards_dispatch_task_into_request(self):
-        from execution.dispatch.agent_message_processor import AgentMessageProcessor
-        from models.processing import ProcessingResult, ProcessingStatus
-
-        dispatch_task = "dispatch from processor sentinel"
-        prepared_message = Message(
-            role=MessageRole.USER,
-            parts=[
-                Part(root=TextPart(text="prepared task")),
-                Part(
-                    root=TextPart(
-                        text="prepared selected resource",
-                        metadata={"ref_id": "ctx:selected"},
-                    )
-                ),
-            ],
-        )
-        room_runtime = SimpleNamespace(
-            process_agent_message=AsyncMock(
-                return_value=SimpleNamespace(
-                    success=True,
-                    a2a_message=prepared_message,
-                )
-            )
-        )
-        room_memory_reader = SimpleNamespace(
-            get_room_memory_by_room_id=AsyncMock(return_value=None)
-        )
-        direct_transport = SimpleNamespace(
-            dispatch=AsyncMock(
-                return_value=ProcessingResult(
-                    ProcessingStatus.SUCCESS,
-                    response_text="ok",
-                )
-            )
-        )
-        processor = AgentMessageProcessor(
-            delivery=MagicMock(),
-            room_runtime=room_runtime,
-            room_memory_reader=room_memory_reader,
-            task_tracker=MagicMock(),
-            transports={"direct": direct_transport},
-        )
-
-        result = await processor.process_single_message(
-            self._message(),
-            "room-1",
-            SimpleNamespace(agent_id="agent-1"),
-            "user-msg-1",
-            token=CancellationToken("agent-msg-1"),
-            dispatch_task=dispatch_task,
-        )
-
-        assert result.status == ProcessingStatus.SUCCESS
-        request = room_runtime.process_agent_message.await_args.args[0]
-        assert isinstance(request, RoomCenterAgentMessageRequest)
-        assert request.dispatch_task == dispatch_task
-        dispatch_context = direct_transport.dispatch.await_args.args[0]
-        assert dispatch_context.prepared_message is prepared_message
-        assert [part.root.text for part in prepared_message.parts] == [
-            "prepared task",
-            "prepared selected resource",
-        ]
 
     async def test_selected_text_resources_are_separate_parts_without_rewriting(self):
         svc = RoomServices()

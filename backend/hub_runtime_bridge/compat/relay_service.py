@@ -350,7 +350,7 @@ def init_relay_service(
     mongo: Any,
     db: Any | None = None,
     legacy_store: Any | None = None,
-    room_message_center: object,
+    agent_response_handler: object,
     hitl_coordinator: object | None = None,
     internal_event_publisher: Any | None = None,
     worker_id: str | None = None,
@@ -373,21 +373,12 @@ def init_relay_service(
         offline_failure_port=offline_failure_port,
         config=config,
     )
-    response_handler = getattr(room_message_center, "agent_response_handler", None)
-    if response_handler is None:
-        raise ValueError(
-            "init_relay_service requires room_message_center.agent_response_handler"
-        )
+    if agent_response_handler is None:
+        raise ValueError("init_relay_service requires agent_response_handler")
     elif hitl_coordinator is not None:
-        response_handler.hitl_coordinator = hitl_coordinator
+        agent_response_handler.hitl_coordinator = hitl_coordinator
 
-    relay_service.bind_response_handler(response_handler)
-
-    processor = getattr(room_message_center, "agent_message_processor", None)
-    if processor is not None and hasattr(processor, "bind_relay_service"):
-        processor.bind_relay_service(relay_service)
-    elif processor is not None:
-        processor.relay_service = relay_service
+    relay_service.bind_response_handler(agent_response_handler)
     return relay_service
 
 

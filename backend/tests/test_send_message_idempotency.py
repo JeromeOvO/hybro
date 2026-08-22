@@ -226,12 +226,10 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         )
 
     room_services.run_message_preflight_to_room = AsyncMock(side_effect=preflight)
-    room_message_center = SimpleNamespace(process_room_user_message=AsyncMock())
     orchestrator_router = SimpleNamespace(process_room_user_message=AsyncMock())
     run_lifecycle = SimpleNamespace(record_processing_status=AsyncMock())
     engine = ExecutionFacade(
         room_center=room_services,
-        room_message_center=room_message_center,
         orchestrator_router=orchestrator_router,
         hitl_manager=SimpleNamespace(get_pending_requests=AsyncMock(return_value=[])),
         run_lifecycle=run_lifecycle,

@@ -297,7 +297,6 @@ class AgentResponseHandler:
         room_reader: ResponseRoomReader,
         hitl_reader: ResponseHITLReader,
         delivery: ExecutionDeliveryPort,
-        room_message_center: object,
         slot_lifecycle=None,
         hitl_coordinator=None,
         task_notifier=None,
@@ -313,7 +312,6 @@ class AgentResponseHandler:
         self._room_reader = room_reader
         self._hitl_reader = hitl_reader
         self._delivery = delivery
-        self._rmc = room_message_center
         self._slot_lifecycle = slot_lifecycle
         self.hitl_coordinator = hitl_coordinator
         self._task_notifier = task_notifier
@@ -2066,59 +2064,6 @@ class AgentResponseHandler:
         failed: bool = False,
         end_turn: bool = False,
     ) -> None:
-        resume_kwargs = {
-            "message_id": message_id,
-            "task_result_text": response_text if not failed else None,
-            "failed": failed,
-        }
-        if end_turn:
-            resume_kwargs["end_turn"] = True
-        resumed = await self._rmc.resume_queue_from_continuation(**resume_kwargs)
-        if resumed is not False:
-            return
-        continuation = (
-            await self._continuation_store.get_pending_continuation_on_message(
-                message_id
-            )
-        )
-        supervisor = getattr(self._rmc, "supervisor_executor", None)
-        run_store = getattr(supervisor, "orchestration_run_store", None)
-        if continuation:
-            run_id = (
-                continuation.get("orchestration_run_id")
-                if isinstance(continuation, dict)
-                else None
-            )
-            run = await run_store.get_run(run_id) if run_id and run_store else None
-            run_status = getattr(getattr(run, "status", None), "value", None)
-            if run_status in {"completed", "failed", "canceled", "budget_exhausted"}:
-                return
-            raise RuntimeError(f"failed to resume orchestration for {message_id}")
-
-        message = (
-            await self._client_request_resolver.get_room_agent_message_by_message_id(
-                message_id
-            )
-        )
-        if message is None or run_store is None:
-            return
-        extend_info = getattr(message, "extend_info", None)
-        run_id = (
-            extend_info.get("orchestration_run_id")
-            if isinstance(extend_info, dict)
-            else None
-        )
-        if run_id:
-            run = await run_store.get_run(run_id)
-        else:
-            user_message_id = getattr(message, "related_message_id", None)
-            run = (
-                await run_store.get_latest_by_user_message_id(user_message_id)
-                if user_message_id
-                else None
-            )
-        if run is None:
-            return
-        run_status = getattr(getattr(run, "status", None), "value", None)
-        if run_status not in {"completed", "failed", "canceled", "budget_exhausted"}:
-            raise RuntimeError(f"failed to resume orchestration for {message_id}")
+        # The legacy queue/supervisor executors are retired; the orchestrator
+        # runtime owns its own continuation recovery via its recovery cycle.
+        return

@@ -33,9 +33,8 @@ class HITLDeliveryAdapter:
 
 
 class A2AHITLContinuationAdapter:
-    def __init__(self, agent_reply_transport, room_message_center_provider) -> None:
+    def __init__(self, agent_reply_transport) -> None:
         self._agent_reply_transport = agent_reply_transport
-        self._room_message_center_provider = room_message_center_provider
 
     async def reply_to_task(
         self,
@@ -63,23 +62,15 @@ class A2AHITLContinuationAdapter:
         task_result_text: str | None = None,
         failed: bool = False,
     ) -> bool:
-        room_message_center = self._room_message_center_provider()
-        return await room_message_center.resume_queue_from_continuation(
-            continuation_message_id,
-            task_result_text=task_result_text,
-            failed=failed,
-        )
+        # The legacy queue executor is retired; there is no direct continuation
+        # left to resume. Legacy-owned Runs have drained before this phase.
+        return False
 
     async def has_pending_queue_continuation(
         self,
         continuation_message_id: str,
     ) -> bool:
-        room_message_center = self._room_message_center_provider()
-        store = room_message_center.continuation_store
-        pending = await store.get_pending_continuation_on_message(
-            continuation_message_id
-        )
-        return bool(pending)
+        return False
 
 
 class HITLTerminalLifecycleAdapter:
