@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from io import BytesIO
@@ -9,8 +11,44 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 from common.utils.a2a_file_modes import mime_type_is_accepted
-from execution.orchestration.outcome_evaluator import canonical_content_fingerprint
 from models.room import UserAttachment
+
+VOLATILE_KEYS = {
+    "artifact_key",
+    "source_agent_message_id",
+    "source_agent_id",
+    "message_id",
+    "task_id",
+    "context_id",
+    "created_at",
+    "updated_at",
+}
+
+
+def _stable_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _stable_value(item)
+            for key, item in sorted(value.items())
+            if key not in VOLATILE_KEYS
+        }
+    if isinstance(value, list):
+        return [_stable_value(item) for item in value]
+    if isinstance(value, str):
+        return " ".join(value.split())
+    return value
+
+
+def canonical_content_fingerprint(value: Any) -> str:
+    payload = json.dumps(
+        _stable_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 ResourceKind = Literal["attachment", "context", "artifact"]
 ResourceOrigin = Literal[

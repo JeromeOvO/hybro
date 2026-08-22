@@ -5,7 +5,6 @@ import json
 from datetime import UTC, datetime
 
 from execution.orchestration.failure_classifier import classify_agent_failure
-from execution.orchestration.outcome_evaluator import semantic_fact_map
 from execution.orchestration.result_ingestor import (
     AgentResultIngestor,
     AgentResultRead,
@@ -501,7 +500,14 @@ def test_ingest_narrative_only_artifact_preserves_untrusted_text_evidence():
         "trusted_for_blocker_keys": False,
     }
     assert not any(fact.get("kind") == "agent_text" for fact in updated.facts)
-    assert semantic_fact_map(updated.facts) == {}
+    semantic_keys = {
+        str(fact["semantic_key"])
+        for fact in updated.facts
+        if isinstance(fact, dict)
+        and fact.get("kind") not in {"agent_text", "agent_text_evidence"}
+        and fact.get("semantic_key")
+    }
+    assert semantic_keys == set()
 
 
 def test_ingest_artifact_overwrites_stale_source_metadata():
