@@ -112,10 +112,8 @@ ignore = ["E501"]
 "api_gateway/routes/discovery_routes.py" = ["B008"]
 "api_gateway/routes/files_routes.py" = ["B008"]
 "api_gateway/routes/hitl_routes.py" = ["B008"]
-"api_gateway/routes/hub_routes.py" = ["B008"]
 "api_gateway/routes/inspection_routes.py" = ["B008"]
 "api_gateway/routes/platform_gateway_routes.py" = ["B008"]
-"api_gateway/routes/relay_routes.py" = ["B008"]
 "api_gateway/routes/room_routes.py" = ["B008", "C901"]
 "api_gateway/routes/sse_routes.py" = ["B008"]
 "api_gateway/routes/webhook_routes.py" = ["B008"]
@@ -123,12 +121,10 @@ ignore = ["E501"]
 "api_gateway/viewsets/base.py" = ["B008"]
 "agent/health.py" = ["C901"]
 "agent/service.py" = ["C901"]
-"execution/orchestration/synthesis_coordinator.py" = ["C901"]
 "room/compat/runtime.py" = ["C901", "UP042"]
 "common/a2a_constants.py" = ["UP042"]
 "common/dto/execution.py" = ["UP042"]
 "common/observability/tracing.py" = ["UP035"]
-"common/protocols/hub_protocols.py" = ["UP040"]
 "common/types.py" = ["UP042"]
 "common/utils/a2a_helpers.py" = ["C901"]
 "common/utils/context_utils.py" = ["C901", "UP047"]
@@ -137,9 +133,8 @@ ignore = ["E501"]
 "context_memory/compaction.py" = ["C901"]
 "context_memory/models.py" = ["UP042"]
 "delivery/translator.py" = ["C901"]
+"common/protocols/hub_protocols.py" = ["UP040"]
 "execution/dispatch/task_notifications.py" = ["C901"]
-"execution/dispatch/transports/direct.py" = ["C901"]
-"execution/dispatch/transports/webhook.py" = ["C901"]
 "execution/hitl/service.py" = ["C901"]
 "execution/orchestration/queue_executor.py" = ["C901", "UP042"]
 "execution/orchestration/room_message_center.py" = ["C901"]
@@ -151,9 +146,6 @@ ignore = ["E501"]
 "execution/orchestrator/transcript.py" = ["C901"]
 "llm_gateway/providers/openai_provider.py" = ["C901"]
 "llm_gateway/structured_generation.py" = ["C901"]
-"hub_runtime_bridge/facade.py" = ["C901"]
-"hub_runtime_bridge/compat/relay_service.py" = ["C901"]
-"hub_runtime_bridge/service/hub_publish.py" = ["C901"]
 "jobs/compaction_sweep.py" = ["C901"]
 "jobs/stale_task_checker.py" = ["C901"]
 "main.py" = ["B008", "C901"]
@@ -204,16 +196,8 @@ packages = [
     "execution.orchestrator.a2a_runtime",
     "execution.repository",
     "execution.dispatch",
-    "execution.dispatch.middleware",
-    "execution.dispatch.transports",
     "execution.state",
     "execution.hitl",
-    "hub_runtime_bridge",
-    "hub_runtime_bridge.repository",
-    "hub_runtime_bridge.service",
-    "hub_runtime_bridge.transport",
-    "hub_runtime_bridge.adapters",
-    "hub_runtime_bridge.compat",
     "local_agents",
     "api_gateway",
     "api_gateway.routes",

@@ -254,7 +254,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         agent_task_cleanup=SimpleNamespace(
             cleanup_cancelled_message_tasks=AsyncMock(),
         ),
-        agent_response_handler=SimpleNamespace(handle=AsyncMock()),
         event_publisher=delivery_publisher,
         run_event_enabled=lambda: False,
         client_request_id_resolver=SimpleNamespace(

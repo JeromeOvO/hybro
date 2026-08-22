@@ -95,7 +95,6 @@ def _make_facade(**overrides):
     agent_task_cleanup = SimpleNamespace(
         cleanup_cancelled_message_tasks=AsyncMock(),
     )
-    agent_response_handler = SimpleNamespace(handle=AsyncMock())
     event_publisher = SimpleNamespace(emit=AsyncMock())
     client_request_id_resolver = SimpleNamespace(
         resolve_client_request_id=AsyncMock(side_effect=lambda _, provided: provided),
@@ -110,7 +109,6 @@ def _make_facade(**overrides):
         "cancellation_message_reader": AsyncMock(return_value=None),
         "hitl_message_cancellation": hitl_message_cancellation,
         "agent_task_cleanup": agent_task_cleanup,
-        "agent_response_handler": agent_response_handler,
         "event_publisher": event_publisher,
         "run_event_enabled": lambda: False,
         "client_request_id_resolver": client_request_id_resolver,
