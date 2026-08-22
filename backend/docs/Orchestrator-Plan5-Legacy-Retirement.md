@@ -6,6 +6,32 @@ capabilities; it removes the old Fast/Ultimate executors, the dual-routing
 seam, and the compatibility layers so the repository ends with exactly one
 execution path.
 
+## Execution Record (traceability)
+
+Changes land as one commit per phase, and each commit message carries the
+phase it closes. This section is updated as each phase lands so the plan and
+the history stay in lockstep.
+
+- **Phase 1 — Stop dual routing** — landed (`refactor: retire dual-routing
+  seam and route every ingress to the orchestrator`). Owner constants, routing
+  flags, `assign_runtime`, and every legacy fallback removed; every new Run is
+  orchestrator-owned.
+- **Phase 2 — Delete the legacy Fast path** — pending.
+- **Phase 3 — Delete the legacy Ultimate path** — pending.
+- **Phase 4 — Delete the deterministic-semantics machinery** — pending.
+- **Phase 5 — Converge HITL, callbacks, and data compatibility** — pending.
+- **Phase 6 — Clean up configuration, tests, and docs** — pending.
+
+> **Convergence decision (accepted).** In the actual code the legacy
+> executors are not leaf modules: deleting `room_message_center.py` forces the
+> HITL continuation adapter, the cancellation finalizer, and the hub relay
+> service to converge at the same time (they read
+> `room_message_center.agent_response_handler` /
+> `.agent_message_processor` / `.resume_queue_from_continuation`). Phases 2→3
+> therefore land together with the forced Phase 5 HITL/relay/cancellation
+> convergence as a single coordinated commit; the phase boundaries below are
+> kept for traceability, not as independent merge windows.
+
 The target architecture is:
 
 ```text
@@ -18,6 +44,40 @@ Ultimate profile ─┘   → OrchestratorKernel
 
 Fast and Ultimate remain product experiences and parameter profiles; they are
 no longer separate executors.
+
+## Architectural North Star
+
+The single execution path is modeled on the mechanism of one orchestrating
+agent harness (cf. the `pi` coding-agent harness): a single kernel holds the
+model and the tool surface, delegates work to sub-agents, and keeps durable
+state so every step is re-entrant and recoverable.
+
+The mapping onto Hybro, and the one intentional difference:
+
+- **`OrchestratorKernel` = the main agent.** One provider-neutral model/tool
+  loop with CAS checkpoints, bounded compaction, and two-phase tool
+  acceptance.
+- **External A2A agents = the sub-agents.** Unlike pi's in-process coding
+  sub-agents, Hybro's sub-agents are heterogeneous external services (cloud,
+  hub, local) reached over A2A. Hybro never performs an agent's work itself:
+  it is the middleman between the user and the agents — it decomposes intent,
+  dispatches A2A tasks, observes results, resolves HITL, and synthesizes the
+  user-facing answer.
+- **The A2A runtime = the delegation/observation tool surface.** Dispatch
+  (direct/relay), the webhook/SSE observation ingress, and the call ledger are
+  the "tools" the kernel uses to reach sub-agents and to accept their results
+  back.
+- **HITL = the coordination channel.** When an agent needs the user, the
+  kernel surfaces an interaction and resumes the run once the answer is durably
+  applied (answer-idempotent).
+- **Durable state = the recovery backbone.** `OrchestratorRunState` (schema 5),
+  the call ledger, the observation inbox, the HITL store, and the Room Epoch
+  play the role pi gives to sessions/transcripts/async runs: any interrupted
+  step is re-entrant and recovered by the recovery cycle.
+
+The consequence for this plan: there is no second engine to fall back to. An
+unsupported envelope, an unknown webhook, or an unowned interaction is a hard
+error or a synthesized answer — never a hand-off to a deleted executor.
 
 ## Prerequisites (hard gates)
 
@@ -257,6 +317,11 @@ references:
    only by the supervisor path; verify with `rg` before deleting).
 4. **Phase 5** is gated on both data drain *and* the code-order rule above
    (legacy HITL/cancellation adapters reference `run_store`/`run_reducer`).
+   Per the accepted convergence decision, the HITL/relay/cancellation
+   convergence is pulled forward into the Phase 2→3 commit because
+   `room_message_center.py` is the shared node the legacy HITL continuation
+   adapter, the cancellation finalizer, and the hub relay service all reach
+   through.
 5. **Phase 6** last; it includes the doc/test sweep that declares the
    retirement complete.
 
