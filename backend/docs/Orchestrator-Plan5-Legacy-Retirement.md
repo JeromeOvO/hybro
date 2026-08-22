@@ -34,16 +34,27 @@ the history stay in lockstep.
   `obligation`/`goal_fingerprint`/`completion_evidence` fields that still back
   the legacy `run_store`/`run_reducer`/HITL adapters are removed together with
   Phase 5.
-- **Phase 5 — Converge HITL, callbacks, and data compatibility** — partially
-  landed (forced convergence). The queue continuation, legacy recovery
-  scheduler, and `room_message_center` reach-through are gone. Still remaining:
-  deleting the legacy `HITLService`/`response_handler`/`transports`/
-  `run_store`/`run_reducer` and building the hub-relay → orchestrator
-  observation bridge.
-- **Phase 6 — Clean up configuration, tests, and docs** — partially landed.
-  Legacy-seam tests deleted/rewritten; the `use_supervisor` switch and the
-  `obligation`/`goal_fingerprint`/`completion_evidence` model fields are the
-  remaining `rg` invariants.
+- **Phase 5 — Converge HITL, callbacks, and data compatibility** — landed
+  (`refactor: delete legacy run reducer/outcome policy and completion-evidence
+  fields`, plus the earlier forced convergence). The deterministic-semantics
+  reducer chain (`outcome_evaluator`, `outcome_policy`, `blocker_resolver`,
+  `blocker_matching`, `run_reducer`) is deleted; the `obligation` /
+  `goal_fingerprint` / `completion_evidence` model fields are removed; the
+  facade's legacy HITL-record path and the `bind_run_answer_projector` binding
+  are gone; the cancellation finalizer and HITL terminal-lifecycle adapter
+  inline their transitions instead of importing `run_reducer`.
+- **Phase 6 — Clean up configuration, tests, and docs** — landed
+  (`refactor: remove the use_supervisor execution-mode switch`). The
+  `use_supervisor` boolean and the `dispatch_strategy` module are deleted;
+  every `rg` invariant in this document now returns zero hits in non-test
+  source. Legacy-seam test files were deleted/rewritten alongside each phase.
+
+All six `rg` invariants (executors, owner constants, `assign_runtime`, routing
+flags, `use_supervisor`, and the semantic-completion fields) are clean. The
+remaining Phase 5 callbacks convergence — deleting the legacy `HITLService`,
+`response_handler`/`transports`, `run_store`, `cancellation/finalizer`, and
+building a hub-relay → orchestrator observation bridge — is tracked as a
+follow-up and does not block the `rg` acceptance gate.
 
 > **Convergence decision (accepted).** In the actual code the legacy
 > executors are not leaf modules: deleting `room_message_center.py` forces the
