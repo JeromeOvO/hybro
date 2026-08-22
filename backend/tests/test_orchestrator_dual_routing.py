@@ -439,6 +439,66 @@ async def test_envelope_resolver_all_agents_requires_bound_callback():
 
 
 @pytest.mark.asyncio
+async def test_envelope_resolver_appends_attachment_text_projections():
+    """Attachment text projections must reach the kernel's user message so
+    the LLM can carry attachment facts into agent tasks."""
+    attachment = {
+        "file_id": "file-1",
+        "mime_type": "application/pdf",
+        "size_bytes": 100,
+    }
+    get_user_message = AsyncMock(
+        return_value=_user_message(text="quote this policy", attachments=[attachment])
+    )
+
+    async def read_text(envelope):
+        return "Policy: Acme risk profile."
+
+    resolver = RoomMessageEnvelopeResolver(
+        get_user_message=get_user_message,
+        list_room_agent_ids=AsyncMock(return_value=[]),
+        attachment_text_reader=read_text,
+    )
+    envelope = await resolver.load_envelope(
+        OrchestrationRequest(room_id="room-1", room_user_message_id="msg-1")
+    )
+    assert envelope.attachment_texts == [
+        "[attachment file-1 (application/pdf)]:\nPolicy: Acme risk profile."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_process_room_user_message_includes_attachment_text_in_user_message():
+    host = _FakeSessionHost()
+    envelope = RoomMessageEnvelope(
+        message_text="quote this policy",
+        mode="direct",
+        candidate_agent_ids=["agent-1"],
+        attachment_texts=[
+            "[attachment file-1 (application/pdf)]:\nPolicy: Acme risk profile."
+        ],
+        requesting_subject_id="user-1",
+    )
+    router = _router(
+        runtime=_adapter_runtime(host),
+        envelope_source=_FakeEnvelopeSource(envelope),
+    )
+    host.prompt.return_value = SimpleNamespace(run=SimpleNamespace(run_id="run-1"))
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-1",
+        user_id="user-1",
+        client_request_id="req-1",
+    )
+
+    await router.process_room_user_message(request)
+
+    message = host.prompt.await_args.args[1]
+    assert message.content[0].text == "quote this policy"
+    assert "Policy: Acme risk profile." in message.content[1].text
+
+
+@pytest.mark.asyncio
 async def test_process_room_user_message_empty_scope_falls_back():
     host = _FakeSessionHost()
     envelope = RoomMessageEnvelope(

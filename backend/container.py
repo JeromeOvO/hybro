@@ -111,6 +111,7 @@ from jobs.orchestrator_workers import (
 )
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from models.request import RoomCenterAgentMessageRequest
+from models.room import UserAttachment
 from orchestrator_composition import (
     OrchestratorCompositionError,
     create_orchestrator_runtime,
@@ -2004,11 +2005,46 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agents = await agent_room_store.get_all_active_agents(user_id)
                 return [agent.agent_id for agent in agents or []]
 
+            # PDF projection reuses the legacy attachment projection service;
+            # text/* attachments are decoded directly. Bounded to keep the
+            # kernel turn within its context window.
+            attachment_projection = AttachmentProjectionService(
+                content_reader=file_storage
+            )
+            _MAX_ATTACHMENT_TEXT_CHARS = 120_000
+            _MAX_TEXT_BYTES = 1_000_000
+
+            async def _attachment_text(
+                attachment: Any,
+            ) -> str | None:
+                mime_type = attachment.mime_type or ""
+                if mime_type == "application/pdf":
+                    _ref, payload = await attachment_projection.ensure_projection(
+                        UserAttachment(
+                            file_id=attachment.file_id,
+                            mime_type=mime_type,
+                            file_name="",
+                            size_bytes=attachment.size_bytes,
+                        )
+                    )
+                    return payload.text if payload is not None else None
+                if mime_type.startswith("text/"):
+                    data = await file_storage.get_bytes(
+                        attachment.file_id, max_bytes=_MAX_TEXT_BYTES
+                    )
+                    if not data:
+                        return None
+                    return data.decode("utf-8", errors="replace")[
+                        :_MAX_ATTACHMENT_TEXT_CHARS
+                    ]
+                return None
+
             envelope_source = RoomMessageEnvelopeResolver(
                 get_user_message=message_store.get_room_user_message_by_message_id,
                 list_room_agent_ids=_list_room_agent_ids,
                 list_group_agent_ids=_list_group_agent_ids,
                 list_all_active_agent_ids=_list_all_active_agent_ids,
+                attachment_text_reader=_attachment_text,
             )
             orchestrator_router = DualRuntimeRouter(
                 runtime=_orchestrator_runtime,

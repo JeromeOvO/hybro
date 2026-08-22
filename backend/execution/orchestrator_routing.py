@@ -30,7 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -118,6 +118,10 @@ class RoomMessageEnvelope:
     mode: str
     candidate_agent_ids: list[str]
     attachments: list[AttachmentEnvelope] | None = None
+    # Extracted attachment text (PDF/text projections) rendered into the
+    # kernel's user message so the LLM can carry attachment facts into agent
+    # tasks instead of losing them during task decomposition.
+    attachment_texts: list[str] = field(default_factory=list)
     requesting_subject_id: str | None = None
     # The canonical scope source the candidates were resolved from; it feeds
     # the Run's frozen AuthorizationBasis (membership vs all-active-agents).
@@ -154,11 +158,15 @@ class RoomMessageEnvelopeResolver:
         list_group_agent_ids: Callable[[str], Awaitable[list[str]]] | None = None,
         list_all_active_agent_ids: Callable[[str | None], Awaitable[list[str]]]
         | None = None,
+        attachment_text_reader: (
+            Callable[[AttachmentEnvelope], Awaitable[str | None]] | None
+        ) = None,
     ) -> None:
         self._get_user_message = get_user_message
         self._list_room_agent_ids = list_room_agent_ids
         self._list_group_agent_ids = list_group_agent_ids
         self._list_all_active_agent_ids = list_all_active_agent_ids
+        self._attachment_text_reader = attachment_text_reader
 
     async def load_envelope(self, request: OrchestrationRequest) -> RoomMessageEnvelope:
         message_id = request.room_user_message_id
@@ -242,16 +250,34 @@ class RoomMessageEnvelopeResolver:
         )
 
         attachments = _attachments_from_message(content)
+        attachment_texts = await self._resolve_attachment_texts(attachments)
         requesting_subject_id = request.user_id
         return RoomMessageEnvelope(
             message_text=message_text,
             mode=mode,
             candidate_agent_ids=candidate_agent_ids,
             attachments=attachments,
+            attachment_texts=attachment_texts,
             requesting_subject_id=requesting_subject_id,
             scope_source=scope_source,
             group_id=group_id,
         )
+
+    async def _resolve_attachment_texts(
+        self, attachments: list[AttachmentEnvelope]
+    ) -> list[str]:
+        """Project attachment contents into the kernel's user message."""
+        if self._attachment_text_reader is None:
+            return []
+        blocks: list[str] = []
+        for attachment in attachments:
+            text = await self._attachment_text_reader(attachment)
+            if text:
+                blocks.append(
+                    f"[attachment {attachment.file_id}"
+                    f" ({attachment.mime_type or 'unknown'})]:\n{text}"
+                )
+        return blocks
 
     async def _resolve_candidate_agent_ids(
         self, room_id: str | None, scope: Any, *, user_id: str | None = None
@@ -969,7 +995,10 @@ class DualRuntimeRouter:
 
         message = UserMessage(
             message_id=request.room_user_message_id or f"user-{uuid4().hex}",
-            content=[TextPart(text=envelope.message_text)],
+            content=[
+                TextPart(text=envelope.message_text),
+                *[TextPart(text=block) for block in envelope.attachment_texts],
+            ],
             created_at=datetime.now(UTC),
         )
         result = await session_host.prompt(
