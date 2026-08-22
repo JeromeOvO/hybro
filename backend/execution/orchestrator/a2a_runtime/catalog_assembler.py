@@ -17,6 +17,7 @@ from ..models import (
 )
 from .models import AgentToolBindingRecord
 from .ports import AgentToolBindingStore, AgentToolCandidateSource, RoomEpochStore
+from .resources import resource_is_compatible
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,19 +92,30 @@ class AgentToolCatalogAssembler:
                 description_parts.append("; ".join(io_parts))
             description = " ".join(part for part in description_parts if part)[:500]
             compatible_refs = [
-                ref.ref_id
+                ref
                 for ref in resource_manifest.refs
-                if _resource_is_compatible(
+                if resource_is_compatible(
                     kind=ref.kind,
                     mime_type=ref.mime_type,
                     input_modes=candidate.input_modes,
                 )
             ]
+            context_refs = [
+                ref.ref_id for ref in compatible_refs if ref.kind == "context"
+            ]
+            artifact_refs = [
+                ref.ref_id for ref in compatible_refs if ref.kind == "artifact"
+            ]
+            attachment_refs = [
+                ref.ref_id for ref in compatible_refs if ref.kind == "attachment"
+            ]
             definition = ToolDefinition(
                 name=name,
                 label=candidate.display_name.strip()[:120] or "Agent",
                 description=description or "Delegate this task to the bound Agent.",
-                input_schema=agent_tool_input_schema(compatible_refs),
+                input_schema=agent_tool_input_schema(
+                    context_refs, artifact_refs, attachment_refs
+                ),
                 execution_mode=candidate.execution_mode,
                 side_effect_level="external",
             )
@@ -120,7 +132,7 @@ class AgentToolCatalogAssembler:
                 "input_modes": candidate.input_modes,
                 "output_modes": candidate.output_modes,
                 "direct_capabilities": candidate.direct_capabilities,
-                "compatible_resource_refs": compatible_refs,
+                "compatible_resource_refs": [ref.ref_id for ref in compatible_refs],
             }
             binding_digest = _digest_json(digest_payload)
             binding_id = f"binding-{_digest_json({'run_id': run_id, 'tool': name, 'digest': binding_digest})}"
@@ -146,7 +158,7 @@ class AgentToolCatalogAssembler:
                 requesting_subject_digest=subject_digest,
                 input_modes=candidate.input_modes,
                 output_modes=candidate.output_modes,
-                compatible_resource_refs=compatible_refs,
+                compatible_resource_refs=[ref.ref_id for ref in compatible_refs],
                 created_at=created_at,
             )
             outcome = await self.binding_store.insert(binding)
@@ -159,6 +171,7 @@ class AgentToolCatalogAssembler:
                     binding=ToolBindingRef(
                         binding_id=binding_id, binding_digest=binding_digest
                     ),
+                    input_modes=list(candidate.input_modes),
                 )
             )
         catalog_id = f"catalog-{_digest_json([entry.model_dump(mode='json') for entry in entries])}"
@@ -178,41 +191,33 @@ def deterministic_tool_name(agent_id: str, skill_id: str | None = None) -> str:
     return f"agent_{agent_hash}"
 
 
-def agent_tool_input_schema(resource_refs: list[str]) -> dict[str, object]:
-    # When no resource is available to reference, do not expose the ref
-    # fields at all. A free-form string field invites the model to invent
-    # reference ids (which are then rejected by authorization); with no ref
-    # fields the model inlines facts into ``task`` instead.
+def agent_tool_input_schema(
+    context_refs: list[str],
+    artifact_refs: list[str] | None = None,
+    attachment_refs: list[str] | None = None,
+) -> dict[str, object]:
+    # Each ref family is exposed only when that family has real resources.
+    # A free-form ref field invites the model to invent reference ids (which
+    # are then rejected by authorization); with no refs for a family the model
+    # inlines facts into ``task`` instead.
     properties: dict[str, object] = {
         "task": {"type": "string", "minLength": 1, "maxLength": 20_000},
     }
-    if resource_refs:
-        ref_items: dict[str, object] = {
-            "type": "string",
-            "enum": sorted(set(resource_refs)),
+
+    def ref_field(items: list[str], max_items: int) -> dict[str, object]:
+        return {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(set(items))},
+            "uniqueItems": True,
+            "maxItems": max_items,
         }
-        properties.update(
-            {
-                "context_refs": {
-                    "type": "array",
-                    "items": ref_items,
-                    "uniqueItems": True,
-                    "maxItems": 100,
-                },
-                "artifact_refs": {
-                    "type": "array",
-                    "items": ref_items,
-                    "uniqueItems": True,
-                    "maxItems": 100,
-                },
-                "attachment_refs": {
-                    "type": "array",
-                    "items": ref_items,
-                    "uniqueItems": True,
-                    "maxItems": 20,
-                },
-            }
-        )
+
+    if context_refs:
+        properties["context_refs"] = ref_field(context_refs, 100)
+    if artifact_refs:
+        properties["artifact_refs"] = ref_field(artifact_refs, 100)
+    if attachment_refs:
+        properties["attachment_refs"] = ref_field(attachment_refs, 20)
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -220,21 +225,6 @@ def agent_tool_input_schema(resource_refs: list[str]) -> dict[str, object]:
         "required": ["task"],
         "properties": properties,
     }
-
-
-def _resource_is_compatible(
-    *, kind: str, mime_type: str | None, input_modes: list[str]
-) -> bool:
-    modes = {mode.lower() for mode in input_modes}
-    if kind == "context":
-        return "text" in modes or "text/plain" in modes
-    if "file" in modes or "*/*" in modes:
-        return True
-    if mime_type is None:
-        return False
-    normalized = mime_type.lower()
-    major = normalized.split("/", 1)[0] + "/*" if "/" in normalized else normalized
-    return normalized in modes or major in modes
 
 
 def _digest(value: str) -> str:

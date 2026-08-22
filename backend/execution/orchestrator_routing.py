@@ -414,18 +414,42 @@ def _build_candidate_scope(
 
 
 def _build_resource_manifest(
-    *, source_message_id: str, attachments: list[AttachmentEnvelope] | None
+    *,
+    source_message_id: str,
+    user_text: str | None,
+    attachments: list[AttachmentEnvelope] | None,
 ) -> RunResourceManifestSnapshot:
+    from context_memory.resources import (
+        AttachmentResource,
+        ResourceCatalogSource,
+        assemble_resource_catalog,
+    )
+
+    entries = assemble_resource_catalog(
+        ResourceCatalogSource(
+            user_message_id=source_message_id,
+            user_text=user_text,
+            attachments=[
+                AttachmentResource(
+                    file_id=attachment.file_id,
+                    mime_type=attachment.mime_type,
+                    size_bytes=attachment.size_bytes,
+                    content_digest=attachment.content_digest,
+                )
+                for attachment in (attachments or [])
+            ],
+        )
+    )
     refs = [
         PreparedResourceRef(
-            ref_id=attachment.file_id,
-            kind="attachment",
-            source_message_id=source_message_id,
-            mime_type=attachment.mime_type,
-            size_bytes=attachment.size_bytes,
-            content_digest=attachment.content_digest,
+            ref_id=entry.ref_id,
+            kind=entry.kind,
+            source_message_id=entry.source_message_id,
+            mime_type=entry.mime_type,
+            size_bytes=entry.size_bytes,
+            content_digest=entry.content_digest,
         )
-        for attachment in (attachments or [])
+        for entry in entries
     ]
     return RunResourceManifestSnapshot(
         manifest_id=f"manifest-{_sha256_hex(json.dumps([ref.model_dump(mode='json') for ref in refs]))}",
@@ -952,6 +976,7 @@ class DualRuntimeRouter:
             )
         resource_manifest = _build_resource_manifest(
             source_message_id=request.room_user_message_id or "",
+            user_text=envelope.message_text,
             attachments=envelope.attachments,
         )
 

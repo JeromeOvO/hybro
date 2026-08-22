@@ -194,6 +194,7 @@ def create_orchestrator_runtime(  # noqa: C901
     observation_authenticator: Any | None = None,
     session_listener: Any | None = None,
     projection_listener: ProjectionListener | None = None,
+    user_message_text_reader: Callable[[str], Any] | None = None,
 ) -> OrchestratorRuntime:
     """Compose the full orchestrator runtime over the registered Mongo stores.
 
@@ -278,6 +279,7 @@ def create_orchestrator_runtime(  # noqa: C901
     resources = RoomFilesResourceMaterializer(
         room_files=room_files,
         artifact_writer=artifact_writer,
+        context_text_reader=user_message_text_reader,
     )
 
     async def resolve_call_address(

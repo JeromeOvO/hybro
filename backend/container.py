@@ -444,6 +444,22 @@ async def _emit_working_card(
     )
 
 
+def _map_orchestrator_terminal_state(status: str | None) -> str:
+    """Map a kernel ToolResultStatus to its legacy TaskState value.
+
+    Kept as a module-level pure function (returning strings, not the
+    ``TaskState`` enum) so it stays import-cycle-free and unit-testable;
+    ``TaskState`` itself is imported lazily inside the projection worker.
+    """
+    return {
+        "completed": "completed",
+        "failed": "failed",
+        "canceled": "canceled",
+        "rejected": "rejected",
+        "expired": "expired",
+    }.get(status or "failed", "failed")
+
+
 async def _project_orchestrator_agent_activity(
     event: Any,
     runtime: Any,
@@ -522,11 +538,14 @@ async def _project_orchestrator_agent_activity(
         return
 
     # message_completed: durable result text and terminal task state.
+    # Map the kernel's ToolResultStatus faithfully instead of collapsing
+    # every non-completed outcome into "failed": a rejected/canceled/expired
+    # agent call must render as its own card state, not "Failed".
     result = facts["result"]
-    state = (
-        TaskState.completed
-        if result is not None and result.status == "completed"
-        else TaskState.failed
+    state = TaskState(
+        _map_orchestrator_terminal_state(
+            result.status if result is not None else "failed"
+        )
     )
     text_parts = [
         part.text
@@ -2268,6 +2287,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     )
 
         try:
+
+            async def _orchestrator_user_message_text(
+                message_id: str,
+            ) -> str | None:
+                message = await message_store.get_room_user_message_by_message_id(
+                    message_id
+                )
+                if message is None:
+                    return None
+                content = getattr(message, "message_content", None)
+                text = getattr(content, "message_text", None)
+                return text if isinstance(text, str) and text.strip() else None
+
             app.state.orchestrator_runtime = create_orchestrator_runtime(
                 mongo=mongo_dal,
                 settings_obj=runtime.settings,
@@ -2283,6 +2315,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 relay_service=_relay_svc,
                 projection_listener=publish_orchestrator_projection_status,
                 session_listener=_orchestrator_session_listener,
+                user_message_text_reader=_orchestrator_user_message_text,
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:

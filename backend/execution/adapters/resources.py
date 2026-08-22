@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from typing import Any, Protocol
 
@@ -50,6 +51,7 @@ class RoomFilesResourceMaterializer:
         *,
         room_files: RoomFileReader,
         artifact_writer: InboundArtifactWriter,
+        context_text_reader: (Callable[[str], Awaitable[str | None]] | None) = None,
         max_outbound_count: int = 20,
         max_outbound_bytes: int = 25 * 1024 * 1024,
         max_outbound_encoded_bytes: int = 34 * 1024 * 1024,
@@ -58,6 +60,7 @@ class RoomFilesResourceMaterializer:
         max_file_bytes: int = 50 * 1024 * 1024,
     ) -> None:
         self._room_files = room_files
+        self._context_text_reader = context_text_reader
         self._max_file_bytes = max_file_bytes
         self._bounded = BoundedResourceMaterializer(
             outbound_loader=self._load_outbound,
@@ -107,35 +110,64 @@ class RoomFilesResourceMaterializer:
         deadline_at: Any,
     ) -> MaterializedResourcePart:
         # Safe to ignore: the bounded materializer enforces ``deadline_at`` and
-        # bindings pre-filter ``allowed_input_modes`` at freeze time (see class
-        # docstring).
+        # ``allowed_input_modes`` is already enforced at freeze time via the
+        # agent binding's input modes (see freeze_call_manifest).
         del allowed_input_modes, deadline_at
-        raw = await self._room_files.get_bytes(
-            ref.ref_id, max_bytes=self._max_file_bytes
+        if ref.kind == "context":
+            return await self._load_context(ref)
+        file_id = (
+            _file_id_from_artifact_ref(ref.ref_id)
+            if ref.kind == "artifact"
+            else ref.ref_id
         )
+        raw = await self._room_files.get_bytes(file_id, max_bytes=self._max_file_bytes)
         if raw is None:
             raise ResourceSelectionError(f"resource {ref.ref_id!r} is unavailable")
         actual_digest = sha256(raw).hexdigest()
         if ref.content_digest and actual_digest != ref.content_digest:
             raise ResourceSelectionError(f"resource {ref.ref_id!r} content changed")
         content_digest = ref.materialization_digest or ref.content_digest
-        if ref.kind == "context":
-            return MaterializedResourcePart(
-                ref_id=ref.ref_id,
-                kind="text",
-                content_digest=content_digest,
-                payload=raw.decode("utf-8", errors="replace"),
-                mime_type=ref.mime_type or "text/plain",
-            )
         encoded = base64.b64encode(raw).decode("ascii")
         mime_type = ref.mime_type or "application/octet-stream"
         return MaterializedResourcePart(
             ref_id=ref.ref_id,
             kind="file",
             content_digest=content_digest,
-            payload={"name": ref.ref_id, "bytes": encoded, "mime_type": mime_type},
+            payload={"name": file_id, "bytes": encoded, "mime_type": mime_type},
             mime_type=mime_type,
         )
+
+    async def _load_context(
+        self, ref: FrozenCallResourceRef
+    ) -> MaterializedResourcePart:
+        if self._context_text_reader is None:
+            raise ResourceSelectionError("context resource reader is unavailable")
+        text = await self._context_text_reader(ref.source_message_id)
+        if text is None:
+            raise ResourceSelectionError(f"resource {ref.ref_id!r} is unavailable")
+        digest = sha256(text.encode("utf-8")).hexdigest()
+        if ref.content_digest and digest != ref.content_digest:
+            raise ResourceSelectionError(f"resource {ref.ref_id!r} content changed")
+        return MaterializedResourcePart(
+            ref_id=ref.ref_id,
+            kind="text",
+            content_digest=(ref.materialization_digest or ref.content_digest or digest),
+            payload=text,
+            mime_type=ref.mime_type or "text/plain",
+        )
+
+
+def _file_id_from_artifact_ref(ref_id: str) -> str:
+    """Extract the durable room file id from an owned artifact content URL.
+
+    Inbound artifacts are committed through the epoch-fenced owner, which
+    returns ``{prefix}/{file_id}/content``. For any ref that does not match
+    that shape, fall back to treating the ref verbatim as a file id.
+    """
+    parts = ref_id.rstrip("/").rsplit("/", 2)
+    if len(parts) == 3 and parts[-1] == "content" and parts[1]:
+        return parts[1]
+    return ref_id
 
 
 __all__ = ["RoomFilesResourceMaterializer"]

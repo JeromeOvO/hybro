@@ -20,6 +20,8 @@ from .models import (
     AssistantMessage,
     DataPart,
     OrchestratorRunState,
+    PreparedResourceRef,
+    RunResourceManifestSnapshot,
     SessionNotice,
     TextPart,
     ToolAcceptance,
@@ -228,6 +230,7 @@ class OrchestratorKernel:
                     run, status="budget_exhausted", reason=exc.reason
                 )
 
+            run = await self._refresh_resource_manifest(run)
             tools = (
                 []
                 if run.budget.wrap_up_requested
@@ -1209,6 +1212,42 @@ class OrchestratorKernel:
                 command_id=command,
             )
 
+    async def _refresh_resource_manifest(
+        self, run: OrchestratorRunState
+    ) -> OrchestratorRunState:
+        """Fold mid-run agent artifacts into the live resource manifest.
+
+        Artifacts produced by agent calls accumulate on ``run.artifact_refs``;
+        without registering them into the manifest the next turn's tool schema
+        cannot offer them as ``artifact_refs``. Idempotent: already-registered
+        refs are left untouched and no checkpoint is written when unchanged.
+        """
+        if run.resource_manifest is None:
+            return run
+        existing = {ref.ref_id for ref in run.resource_manifest.refs}
+        new_refs = [
+            PreparedResourceRef(
+                ref_id=ref_id,
+                kind="artifact",
+                source_message_id=run.request.user_message_id,
+                mime_type=None,
+                size_bytes=0,
+                content_digest="",
+            )
+            for ref_id in run.artifact_refs
+            if ref_id and ref_id not in existing
+        ]
+        if not new_refs:
+            return run
+        manifest = _resource_manifest_from_refs(
+            [*run.resource_manifest.refs, *new_refs]
+        )
+        return await self._checkpoint(
+            run,
+            updates={"resource_manifest": manifest},
+            command_id=f"resource-manifest:{run.run_id}",
+        )
+
     async def _checkpoint(
         self,
         run: OrchestratorRunState,
@@ -1295,6 +1334,23 @@ def _merge_artifact_refs(existing: list[str], results: list[ToolResult]) -> list
         dict.fromkeys(
             [*existing, *(ref for result in results for ref in result.artifact_refs)]
         )
+    )
+
+
+def _resource_manifest_from_refs(
+    refs: list[PreparedResourceRef],
+) -> RunResourceManifestSnapshot:
+    canonical = json.dumps(
+        [ref.model_dump(mode="json") for ref in refs],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    digest = sha256(canonical.encode()).hexdigest()
+    return RunResourceManifestSnapshot(
+        manifest_id=f"manifest-{digest}",
+        refs=refs,
+        content_digest=digest,
     )
 
 

@@ -132,7 +132,7 @@ def test_input_schema_omits_ref_fields_when_no_resources_available():
     """A free-form ref field invites the model to invent reference ids, which
     authorization then rejects. With no resources the schema exposes only
     ``task`` so the model inlines facts instead."""
-    schema = agent_tool_input_schema([])
+    schema = agent_tool_input_schema([], [], [])
     assert set(schema["properties"]) == {"task"}
     assert "context_refs" not in schema["properties"]
     assert "artifact_refs" not in schema["properties"]
@@ -140,11 +140,14 @@ def test_input_schema_omits_ref_fields_when_no_resources_available():
 
 
 def test_input_schema_bounds_ref_fields_to_available_resources():
-    schema = agent_tool_input_schema(["artifact-1", "artifact-2"])
+    schema = agent_tool_input_schema([], ["artifact-1", "artifact-2"], ["file:att-1"])
     assert schema["properties"]["artifact_refs"]["items"]["enum"] == [
         "artifact-1",
         "artifact-2",
     ]
+    assert schema["properties"]["attachment_refs"]["items"]["enum"] == ["file:att-1"]
+    # A family with no refs stays omitted so the model cannot invent ids.
+    assert "context_refs" not in schema["properties"]
 
 
 async def test_frozen_catalog_is_synchronous_and_run_bound():

@@ -461,6 +461,9 @@ class RunResourceManifestSnapshot(ContractModel):
 class FrozenToolCatalogEntry(ContractModel):
     definition: ToolDefinition
     binding: ToolBindingRef
+    # Denormalized input contract so the synchronous catalog can rebuild the
+    # per-turn ref enum without hitting the binding store.
+    input_modes: list[str] = Field(default_factory=list)
 
 
 class FrozenToolCatalogSnapshot(ContractModel):

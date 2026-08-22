@@ -49,7 +49,7 @@ def manifest():
 
 
 def test_selected_refs_are_frozen_with_room_epoch_and_digest():
-    bound = binding().model_copy(update={"compatible_resource_refs": ["attachment-1"]})
+    bound = binding().model_copy(update={"input_modes": ["application/pdf"]})
     frozen = freeze_call_manifest(
         arguments={"task": "review", "attachment_refs": ["attachment-1"]},
         run_manifest=manifest(),
@@ -63,7 +63,7 @@ def test_selected_refs_are_frozen_with_room_epoch_and_digest():
 
 
 def test_unknown_or_wrong_kind_resource_ref_is_rejected():
-    bound = binding().model_copy(update={"compatible_resource_refs": ["attachment-1"]})
+    bound = binding().model_copy(update={"input_modes": ["application/pdf"]})
     with pytest.raises(ResourceSelectionError, match="not allowed"):
         freeze_call_manifest(
             arguments={"task": "review", "attachment_refs": ["missing"]},
@@ -353,7 +353,7 @@ async def test_raw_and_encoded_limits_are_enforced_separately():
 
 
 def test_materialized_content_must_match_frozen_digest_exactly():
-    bound = binding().model_copy(update={"compatible_resource_refs": ["attachment-1"]})
+    bound = binding().model_copy(update={"input_modes": ["application/pdf"]})
     frozen = freeze_call_manifest(
         arguments={"task": "review", "attachment_refs": ["attachment-1"]},
         run_manifest=manifest(),

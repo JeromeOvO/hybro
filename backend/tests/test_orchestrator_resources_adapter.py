@@ -52,13 +52,24 @@ def _ref(ref_id, kind, content_digest=None, mime_type=None):
 async def test_context_ref_materializes_to_text_part():
     content = b"hello world"
     digest = sha256(content).hexdigest()
-    ref = _ref("ctx-1", "context", content_digest=digest, mime_type="text/plain")
+    ref = _ref(
+        "ctx:message:message-1",
+        "context",
+        content_digest=digest,
+        mime_type="text/plain",
+    )
     manifest = FrozenCallResourceManifest(
         manifest_id="m", refs=[ref], content_digest="manifest-digest"
     )
+
+    async def context_text_reader(message_id):
+        assert message_id == "message-1"
+        return "hello world"
+
     adapter = RoomFilesResourceMaterializer(
-        room_files=FakeRoomFiles({"ctx-1": content}),
+        room_files=FakeRoomFiles({}),
         artifact_writer=FakeWriter(),
+        context_text_reader=context_text_reader,
     )
     parts = await adapter.materialize(
         manifest,

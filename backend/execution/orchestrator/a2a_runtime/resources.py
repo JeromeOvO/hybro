@@ -202,6 +202,27 @@ class DurableProjectionResourceLoader:
             )
 
 
+def resource_is_compatible(
+    *, kind: str, mime_type: str | None, input_modes: list[str]
+) -> bool:
+    """Whether an agent accepts a resource of ``kind``/``mime_type``.
+
+    Single source of truth for resource-to-agent compatibility, shared by the
+    catalog assembler (schema enum) and ``freeze_call_manifest`` (authorization)
+    so the model can never be offered a ref that would later be denied.
+    """
+    modes = {mode.lower() for mode in input_modes}
+    if kind == "context":
+        return "text" in modes or "text/plain" in modes
+    if "file" in modes or "*/*" in modes:
+        return True
+    if mime_type is None:
+        return False
+    normalized = mime_type.lower()
+    major = normalized.split("/", 1)[0] + "/*" if "/" in normalized else normalized
+    return normalized in modes or major in modes
+
+
 def freeze_call_manifest(
     *,
     arguments: dict[str, object],
@@ -219,11 +240,18 @@ def freeze_call_manifest(
     if run_manifest is None and selected:
         raise ResourceSelectionError("Run has no prepared resources")
     inventory = {ref.ref_id: ref for ref in (run_manifest.refs if run_manifest else [])}
-    allowed = set(binding.compatible_resource_refs)
     frozen: list[FrozenCallResourceRef] = []
     for requested_kind, ref_id in selected:
         prepared = inventory.get(ref_id)
-        if prepared is None or ref_id not in allowed:
+        # Authorization is derived live from the run manifest + the bound
+        # agent's input modes rather than a run-start pre-filtered allowlist,
+        # so artifacts produced mid-run and registered into the manifest are
+        # authorizable without re-freezing the binding.
+        if prepared is None or not resource_is_compatible(
+            kind=prepared.kind,
+            mime_type=prepared.mime_type,
+            input_modes=binding.input_modes,
+        ):
             raise ResourceSelectionError(f"resource ref {ref_id!r} is not allowed")
         if prepared.kind != requested_kind:
             raise ResourceSelectionError(f"resource ref {ref_id!r} has wrong kind")
