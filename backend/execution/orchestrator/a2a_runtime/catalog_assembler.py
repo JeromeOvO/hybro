@@ -79,9 +79,17 @@ class AgentToolCatalogAssembler:
             if name in used_names:
                 raise ValueError("deterministic Agent tool name collision")
             used_names.add(name)
-            description = (candidate.description or candidate.display_name).strip()[
-                :500
+            description_parts = [
+                (candidate.description or candidate.display_name).strip()
             ]
+            io_parts: list[str] = []
+            if candidate.input_modes:
+                io_parts.append("Input: " + ", ".join(candidate.input_modes))
+            if candidate.output_modes:
+                io_parts.append("Output: " + ", ".join(candidate.output_modes))
+            if io_parts:
+                description_parts.append("; ".join(io_parts))
+            description = " ".join(part for part in description_parts if part)[:500]
             compatible_refs = [
                 ref.ref_id
                 for ref in resource_manifest.refs

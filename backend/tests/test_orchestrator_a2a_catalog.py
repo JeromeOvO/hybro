@@ -118,6 +118,11 @@ async def test_async_assembler_filters_candidates_and_persists_private_bindings(
     assert len(prepared.bindings) == 1
     assert (await store.load(prepared.bindings[0].binding_id)) == prepared.bindings[0]
     schema = prepared.snapshot.entries[0].definition.input_schema
+    # The tool description carries the agent's I/O contract so the kernel can
+    # match capabilities instead of relying on a one-line blurb.
+    description = prepared.snapshot.entries[0].definition.description
+    assert "Places insurance" in description
+    assert "Input: text, application/pdf" in description
     assert "agent_id" not in schema["properties"]
     assert schema["properties"]["artifact_refs"]["items"]["enum"] == ["artifact-1"]
 
