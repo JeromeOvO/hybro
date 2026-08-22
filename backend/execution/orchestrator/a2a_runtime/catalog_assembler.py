@@ -179,35 +179,46 @@ def deterministic_tool_name(agent_id: str, skill_id: str | None = None) -> str:
 
 
 def agent_tool_input_schema(resource_refs: list[str]) -> dict[str, object]:
-    ref_items: dict[str, object] = {"type": "string"}
+    # When no resource is available to reference, do not expose the ref
+    # fields at all. A free-form string field invites the model to invent
+    # reference ids (which are then rejected by authorization); with no ref
+    # fields the model inlines facts into ``task`` instead.
+    properties: dict[str, object] = {
+        "task": {"type": "string", "minLength": 1, "maxLength": 20_000},
+    }
     if resource_refs:
-        ref_items["enum"] = sorted(set(resource_refs))
+        ref_items: dict[str, object] = {
+            "type": "string",
+            "enum": sorted(set(resource_refs)),
+        }
+        properties.update(
+            {
+                "context_refs": {
+                    "type": "array",
+                    "items": ref_items,
+                    "uniqueItems": True,
+                    "maxItems": 100,
+                },
+                "artifact_refs": {
+                    "type": "array",
+                    "items": ref_items,
+                    "uniqueItems": True,
+                    "maxItems": 100,
+                },
+                "attachment_refs": {
+                    "type": "array",
+                    "items": ref_items,
+                    "uniqueItems": True,
+                    "maxItems": 20,
+                },
+            }
+        )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
         "required": ["task"],
-        "properties": {
-            "task": {"type": "string", "minLength": 1, "maxLength": 20_000},
-            "context_refs": {
-                "type": "array",
-                "items": {**ref_items},
-                "uniqueItems": True,
-                "maxItems": 100,
-            },
-            "artifact_refs": {
-                "type": "array",
-                "items": {**ref_items},
-                "uniqueItems": True,
-                "maxItems": 100,
-            },
-            "attachment_refs": {
-                "type": "array",
-                "items": {**ref_items},
-                "uniqueItems": True,
-                "maxItems": 20,
-            },
-        },
+        "properties": properties,
     }
 
 

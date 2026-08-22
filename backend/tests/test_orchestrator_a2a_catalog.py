@@ -3,6 +3,7 @@ from __future__ import annotations
 from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
 from execution.orchestrator.a2a_runtime.catalog_assembler import (
     AgentToolCatalogAssembler,
+    agent_tool_input_schema,
     deterministic_tool_name,
 )
 from execution.orchestrator.a2a_runtime.in_memory import (
@@ -125,6 +126,25 @@ async def test_async_assembler_filters_candidates_and_persists_private_bindings(
     assert "Input: text, application/pdf" in description
     assert "agent_id" not in schema["properties"]
     assert schema["properties"]["artifact_refs"]["items"]["enum"] == ["artifact-1"]
+
+
+def test_input_schema_omits_ref_fields_when_no_resources_available():
+    """A free-form ref field invites the model to invent reference ids, which
+    authorization then rejects. With no resources the schema exposes only
+    ``task`` so the model inlines facts instead."""
+    schema = agent_tool_input_schema([])
+    assert set(schema["properties"]) == {"task"}
+    assert "context_refs" not in schema["properties"]
+    assert "artifact_refs" not in schema["properties"]
+    assert "attachment_refs" not in schema["properties"]
+
+
+def test_input_schema_bounds_ref_fields_to_available_resources():
+    schema = agent_tool_input_schema(["artifact-1", "artifact-2"])
+    assert schema["properties"]["artifact_refs"]["items"]["enum"] == [
+        "artifact-1",
+        "artifact-2",
+    ]
 
 
 async def test_frozen_catalog_is_synchronous_and_run_bound():
