@@ -205,6 +205,57 @@ async def test_execute_dispatches_stable_command_and_suspends_for_remote_work():
     assert dispatch.commands[0].command_id == persisted.dispatch_command_id
 
 
+async def test_execute_input_required_returns_request_as_tool_result():
+    """The Agent's request for input must reach the kernel as a durable tool
+    result (not be polled away as a still-working task), so the kernel's next
+    model turn can satisfy it from context or ask the user."""
+    runtime, ledger, _, dispatch, ingress = await setup()
+    accepted = await runtime.accept(invocation())
+    record = await ledger.load("run-1", "call-1")
+    observation = NormalizedA2AObservation(
+        observation_id="obs-interaction-1",
+        call_record_id=record.call_record_id,
+        source_kind="direct",
+        source_identity="direct:endpoint:task-1:input_required:",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        agent_id="agent-1",
+        status=None,
+        content=[TextPart(text="Send me the client name and coverage limit.")],
+        artifact_refs=[],
+        interaction_spec=None,
+        error_code=None,
+        error_message=None,
+        cursor=None,
+    )
+    receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_observation=observation,
+    )
+    dispatch.receipt = receipt
+
+    outcome = await runtime.execute(invocation(), accepted, signal=NeverCancelled())
+
+    assert isinstance(outcome, ToolResult)
+    assert outcome.status == "completed"
+    assert outcome.content[0].text == "Send me the client name and coverage limit."
+    persisted = await ledger.load("run-1", "call-1")
+    assert persisted.state == "completed"
+    assert persisted.terminal_result == outcome
+    # The request is durably recorded and executor-checkpointed so the inbox
+    # processor completes it from the kernel's buffered outcome digest.
+    inbox_row = await ingress.inbox.load("obs-interaction-1")
+    assert inbox_row is not None
+    assert inbox_row.state == "outcome_pending"
+    assert inbox_row.delivery_route == "executor"
+    assert inbox_row.outcome_digest == persisted.terminal_result_digest
+
+
 async def test_dispatch_alias_conflict_fails_closed_without_divergent_identity():
     runtime, ledger, _, dispatch, _ = await setup()
     accepted = await runtime.accept(invocation())

@@ -531,6 +531,29 @@ class OrchestratorDirectA2AClient:
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
         self._remember(command, task_id=task.id, context_id=task.context_id)
+        event_kind = _event_kind(task)
+        if event_kind in {"input_required", "auth_required"}:
+            # The Agent answered immediately with a request for input. The
+            # request is the durable result of this invocation: the kernel
+            # decides on the next turn whether it can satisfy it from context
+            # (re-dispatch) or must ask the user.
+            observation = self._observation(
+                **_task_to_observation_kwargs(
+                    task,
+                    source_kind="direct",
+                    call_record_id=command.call_record_id,
+                    binding_scope=endpoint_scope_digest(command.endpoint_scope),
+                    agent_id=command.agent_id,
+                    task_id=task.id,
+                    context_id=task.context_id,
+                )
+            )
+            return self._receipt(
+                outcome="interaction",
+                task_id=task.id,
+                context_id=task.context_id,
+                interaction_observation=observation,
+            )
         status = _terminal_status(task)
         if status is None:
             return self._receipt(
@@ -600,6 +623,25 @@ class OrchestratorDirectA2AClient:
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
         self._remember(command, task_id=task.id, context_id=task.context_id)
+        event_kind = _event_kind(task)
+        if event_kind in {"input_required", "auth_required"}:
+            observation = self._observation(
+                **_task_to_observation_kwargs(
+                    task,
+                    source_kind="inspection",
+                    call_record_id=command.call_record_id,
+                    binding_scope=endpoint_scope_digest(address.endpoint_scope),
+                    agent_id=address.agent_id,
+                    task_id=task.id,
+                    context_id=task.context_id,
+                )
+            )
+            return self._receipt(
+                outcome="interaction",
+                task_id=task.id,
+                context_id=task.context_id,
+                interaction_observation=observation,
+            )
         status = _terminal_status(task)
         if status is None:
             return self._receipt(

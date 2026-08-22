@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 
 from common.utils.logger import get_logger
 
-from ..models import TextPart
+from ..models import TextPart, ToolResult
 from ..ports import InvocationCheckpointReader
 from .cancellation import A2ACancellationCoordinator
 from .errors import (
@@ -241,6 +242,47 @@ class A2ACallRecoveryService:
                 record,
                 observation,
                 recent_limit=record.runtime_policy.recent_observation_id_limit,
+            )
+            winner, exact = await self._cas_or_load_winner(
+                terminal, expected_state_version=record.state_version
+            )
+            return exact or (
+                winner is not None and winner.state in TERMINAL_AGENT_CALL_STATES
+            )
+        if (
+            inspected is not None
+            and inspected.outcome == "interaction"
+            and inspected.interaction_observation is not None
+        ):
+            # The remote task asked for input: the request is the invocation's
+            # durable answer. Record it and finalize the call so the run's
+            # observation pipeline can route the request instead of polling a
+            # task that will never complete on its own.
+            observation = inspected.interaction_observation
+            await self.observations.record(observation)
+            record = await self._renew(record, now=datetime.now(UTC))
+            if record is None:
+                return False
+            content = list(observation.content or [])
+            if not content:
+                content = [TextPart(text="The Agent requested additional input.")]
+            result = ToolResult(
+                call_id=record.invocation_id,
+                tool_name=record.tool_name,
+                status="completed",
+                content=content,
+                artifact_refs=list(observation.artifact_refs or []),
+                error_code=None,
+                error_message=None,
+            )
+            terminal = transition_call(
+                record,
+                to_state="completed",
+                updated_at=datetime.now(UTC),
+                terminal_result=result,
+                terminal_result_digest=sha256(
+                    result.model_dump_json().encode()
+                ).hexdigest(),
             )
             winner, exact = await self._cas_or_load_winner(
                 terminal, expected_state_version=record.state_version

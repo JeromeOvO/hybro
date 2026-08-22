@@ -127,7 +127,9 @@ class OpenAIProvider:
             "tool_choice": request.tool_choice,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": request.max_output_tokens,
+            # gpt-5/o-series models reject max_tokens; max_completion_tokens
+            # is accepted by every current chat model the gateway routes.
+            "max_completion_tokens": request.max_output_tokens,
         }
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature

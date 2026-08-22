@@ -26,6 +26,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2ADispatchReceipt,
     NormalizedA2AObservation,
 )
+from execution.orchestrator.models import TextPart
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW
@@ -257,6 +258,40 @@ async def test_direct_stream_wrong_call_identity_surfaces_contract_error():
     with pytest.raises(ValueError, match="call identity changed"):
         await adapter.dispatch(direct)
     assert stream.closed == ["process_death"]
+
+
+async def test_direct_stream_input_required_stops_with_interaction_receipt():
+    """A mid-stream input-required frame ends the stream: the Agent's request
+    is the invocation's durable result and must reach the kernel instead of
+    being polled away as a still-working task."""
+    ingress, inbox = await ingress_for_stream()
+    interaction = NormalizedA2AObservation(
+        observation_id="input-1",
+        source_kind="direct",
+        source_identity="direct:input-1",
+        binding_scope="endpoint",
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        content=[TextPart(text="Send the client name and coverage limit.")],
+    )
+    stream = EventStream([interaction])
+    adapter = DirectA2ADispatchAdapter(DirectClient(stream), observations=ingress)
+    direct = command().model_copy(
+        update={"transport_kind": "direct", "direct_mode": "stream"}
+    )
+
+    receipt = await adapter.dispatch(direct)
+
+    assert receipt.outcome == "interaction"
+    assert receipt.interaction_observation is not None
+    assert (
+        receipt.interaction_observation.content[0].text
+        == "Send the client name and coverage limit."
+    )
+    assert (await inbox.load("input-1")).room_id == "room-1"
+    assert stream.closed == ["interaction"]
 
 
 async def test_direct_stream_process_death_closes_and_recovers_by_inspection():

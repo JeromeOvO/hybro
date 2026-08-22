@@ -413,16 +413,28 @@ class NormalizedA2AObservation(A2ADurableModel):
 
 
 class A2ADispatchReceipt(ContractModel):
-    outcome: Literal["accepted", "terminal", "delivery_uncertain", "rejected"]
+    outcome: Literal[
+        "accepted",
+        "terminal",
+        "delivery_uncertain",
+        "rejected",
+        "interaction",
+    ]
     task_id: str | None = None
     context_id: str | None = None
     terminal_observation: NormalizedA2AObservation | None = None
+    # input-required/auth-required answers: the Agent's request for input is
+    # the durable result of the invocation and must reach the kernel as a tool
+    # result (not be polled away as "still working").
+    interaction_observation: NormalizedA2AObservation | None = None
     transport_journal_id: str | None = None
 
     @model_validator(mode="after")
     def _terminal_receipt_has_observation(self) -> A2ADispatchReceipt:
         if self.outcome == "terminal" and self.terminal_observation is None:
             raise ValueError("terminal receipt requires an observation")
+        if self.outcome == "interaction" and self.interaction_observation is None:
+            raise ValueError("interaction receipt requires an observation")
         return self
 
 

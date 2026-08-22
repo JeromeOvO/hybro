@@ -12,7 +12,7 @@ from a2a_adapter.task_status import (
     build_failed_text_task,
     build_task_status,
 )
-from common.types import Task, TaskState
+from common.types import Message, MessageRole, Task, TaskState, TextPart
 from execution.orchestrator.a2a_runtime.models import (
     A2ACancellationCommand,
     A2AContinuationCommand,
@@ -159,6 +159,38 @@ async def test_send_nonterminal_returns_accepted_with_task_identity():
     assert receipt.outcome == "accepted"
     assert receipt.task_id == "task-1"
     assert receipt.context_id == "ctx-1"
+
+
+async def test_send_input_required_builds_interaction_receipt():
+    """An immediate input-required answer is the invocation's durable result:
+    the receipt carries the Agent's request so the kernel can decide whether
+    to satisfy it from context instead of polling the still-open task."""
+    status = build_task_status(TaskState.input_required)
+    status.message = Message(
+        role=MessageRole.AGENT,
+        parts=[TextPart(text="I need the client name and coverage limit.")],
+        message_id="msg-1",
+    )
+    task = Task(
+        id="task-1",
+        context_id="ctx-1",
+        status=status,
+        artifacts=None,
+    )
+
+    async def send(card, message, kwargs):
+        return {"kind": "task", "result": _task_dict(task)}
+
+    receipt = await _client(FakeSdk(send=send)).send(_dispatch_command())
+
+    assert receipt.outcome == "interaction"
+    assert receipt.task_id == "task-1"
+    assert receipt.terminal_observation is None
+    observation = receipt.interaction_observation
+    assert observation is not None
+    assert observation.event_kind == "input_required"
+    assert observation.status is None
+    assert observation.content[0].text == ("I need the client name and coverage limit.")
 
 
 async def test_start_poll_requests_nonblocking_and_returns_accepted():

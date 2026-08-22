@@ -244,6 +244,24 @@ async def test_openai_structured_action_tools_are_strictified():
 
 
 @pytest.mark.asyncio
+async def test_openai_turn_uses_max_completion_tokens_not_deprecated_max_tokens():
+    """gpt-5/o-series routes reject max_tokens; the gateway must send
+    max_completion_tokens, which every current chat model accepts."""
+    stream = Stream([chunk(delta=SimpleNamespace(content="ok"), finish="stop")])
+    create = AsyncMock(return_value=stream)
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    async for _ in OpenAIProvider(client=client).stream_turn_once(request()):
+        pass
+
+    kwargs = create.await_args.kwargs
+    assert kwargs["max_completion_tokens"] == 100
+    assert "max_tokens" not in kwargs
+
+
+@pytest.mark.asyncio
 async def test_openai_usage_terminal_chunk_passes_runtime_and_assembler():
     stream = Stream(
         [

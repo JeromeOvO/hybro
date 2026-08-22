@@ -24,13 +24,19 @@ from .errors import (
     RecoverableResourceError,
     RecoverableTransportError,
 )
+from .ingress import ObservationIngressError
 from .ledger import (
     apply_observation,
     bind_authoritative_aliases,
     ownership_alias_keys,
     transition_call,
 )
-from .models import A2ADispatchCommand, A2ARuntimePolicy, AgentCallLedgerRecord
+from .models import (
+    A2ADispatchCommand,
+    A2ARuntimePolicy,
+    AgentCallLedgerRecord,
+    NormalizedA2AObservation,
+)
 from .ports import (
     A2ADispatchPort,
     AgentCallLedgerStore,
@@ -392,6 +398,13 @@ class A2AAgentToolRuntime:
                 uncertain, expected_state_version=record.state_version
             )
             return _suspension(invocation)
+        if (
+            receipt.outcome == "interaction"
+            and receipt.interaction_observation is not None
+        ):
+            return await self._interaction_result(
+                record, invocation, receipt.interaction_observation
+            )
         if receipt.outcome == "accepted":
             try:
                 aliases = bind_authoritative_aliases(
@@ -518,6 +531,64 @@ class A2AAgentToolRuntime:
             return _suspension(invocation)
         await self.terminal_finalizer.finalize(record)
         return record.terminal_result
+
+    async def _interaction_result(
+        self,
+        record: AgentCallLedgerRecord,
+        invocation: ToolInvocation,
+        observation: NormalizedA2AObservation,
+    ) -> ToolResult | ToolSuspension:
+        """Convert an input-required/auth-required answer into a durable result.
+
+        The Agent's request for input is the invocation's observable answer:
+        it is recorded in the observation inbox and returned to the kernel as
+        a tool result, so the kernel's next model turn decides between
+        re-dispatching with facts it already holds and asking the user for a
+        user-only blocker. Polling the still-open task would swallow the
+        request and deadlock the turn.
+        """
+        await self.observations.record(observation)
+        renewed = await self._renew_and_verify_epoch(record)
+        if renewed is None:
+            return _suspension(invocation)
+        record = renewed
+        content = list(observation.content or [])
+        if not content:
+            content = [TextPart(text="The Agent requested additional input.")]
+        result = ToolResult(
+            call_id=invocation.invocation_id,
+            tool_name=invocation.tool.definition.name,
+            status="completed",
+            content=content,
+            artifact_refs=list(observation.artifact_refs or []),
+            error_code=None,
+            error_message=None,
+        )
+        terminal = transition_call(
+            record,
+            to_state="completed",
+            updated_at=datetime.now(UTC),
+            terminal_result=result,
+            terminal_result_digest=sha256(
+                result.model_dump_json().encode()
+            ).hexdigest(),
+        )
+        outcome = await self.ledger.cas(
+            terminal, expected_state_version=record.state_version
+        )
+        if outcome not in {"accepted", "replayed"} or terminal.terminal_result is None:
+            return await self._persisted_outcome_or_suspension(invocation)
+        try:
+            await self.observations.mark_executor_outcome(
+                observation.observation_id,
+                outcome_digest=terminal.terminal_result_digest,
+            )
+        except ObservationIngressError:
+            # The inbox processor reconciles the row from the checkpointed
+            # outcome digest on its next pass.
+            pass
+        await self.terminal_finalizer.finalize(terminal)
+        return terminal.terminal_result
 
     async def _renew_and_verify_epoch(
         self, record: AgentCallLedgerRecord
