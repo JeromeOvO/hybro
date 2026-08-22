@@ -118,6 +118,8 @@ def orchestrator_lifecycle_log_message(
     label_text = label.strip() if isinstance(label, str) and label.strip() else None
     if event.event_type == "run_started":
         return "Planning the next actions", "collecting"
+    if event.event_type == "turn_started":
+        return "Thinking about the next step", "collecting"
     if event.event_type == "tool_execution_started" and label_text:
         return f"Delegating to {label_text}", "collecting"
     if event.event_type == "tool_execution_completed" and label_text:

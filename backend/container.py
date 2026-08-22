@@ -2239,22 +2239,33 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if _delivery_deps is None:
                 return
             mapped = orchestrator_lifecycle_log_message(event)
-            if mapped is None:
-                return
-            message, turn_phase = mapped
-            await _delivery_deps.event_publisher.emit(
-                ProcessingStatusEvent(
-                    room_id=event.room_id or "",
-                    message_id=(event.user_message_id or event.causation_id or ""),
-                    status="processing",
-                    client_request_id=event.client_request_id,
-                    details={"message": message, "turn_phase": turn_phase},
-                    delivery_id=(
-                        f"orchestrator:{event.run_id}:"
-                        f"{event.event_type}:{event.sequence}"
-                    ),
+            if mapped is not None:
+                message, turn_phase = mapped
+                await _delivery_deps.event_publisher.emit(
+                    ProcessingStatusEvent(
+                        room_id=event.room_id or "",
+                        message_id=(event.user_message_id or event.causation_id or ""),
+                        status="processing",
+                        client_request_id=event.client_request_id,
+                        details={"message": message, "turn_phase": turn_phase},
+                        delivery_id=(
+                            f"orchestrator:{event.run_id}:"
+                            f"{event.event_type}:{event.sequence}"
+                        ),
+                    )
                 )
-            )
+
+            if event.event_type == "run_final_answer_ready" and runtime is not None:
+                # Deliver the final answer immediately instead of waiting for
+                # the next projection-outbox tick (the <=10s dead stop). Runs
+                # after the work-log 'Preparing…' entry so the frontend shows
+                # the synthesis step before the terminal delivery.
+                try:
+                    await runtime.projection_worker.run_once(due_at=datetime.now(UTC))
+                except Exception:
+                    logger.warning(
+                        "orchestrator projection nudge failed", exc_info=True
+                    )
 
         try:
             app.state.orchestrator_runtime = create_orchestrator_runtime(

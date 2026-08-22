@@ -78,10 +78,16 @@ def test_waiting_and_terminal_preparation_entries():
     )
 
 
+def test_turn_started_maps_thinking_entry():
+    assert orchestrator_lifecycle_log_message(_event("turn_started")) == (
+        "Thinking about the next step",
+        "collecting",
+    )
+
+
 def test_internal_events_are_silent():
     for event_type in (
         "session_started",
-        "turn_started",
         "model_attempt_started",
         "model_retry_scheduled",
         "model_attempt_failed",
