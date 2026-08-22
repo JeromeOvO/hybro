@@ -109,7 +109,7 @@ class AgentResolverService:
 
     Combines lexical search, optional LLM-based ranking, and
     real-time health probing into a single ``resolve()`` call that both
-    RoomMessageCenter and WorkflowCenter can share.
+    legacy orchestration and WorkflowCenter can share.
     """
 
     def __init__(

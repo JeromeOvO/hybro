@@ -774,7 +774,7 @@ class AgentMessagePreparationService:
                     agent_message.parts.append(p)
 
         # Return the prepared message without sending
-        # RoomMessageCenter will handle the actual sending with streaming support
+        # The execution path will handle the actual sending with streaming support
         return RoomCenterAgentMessageResponse(
             message_id=message.message_id,
             message=message,

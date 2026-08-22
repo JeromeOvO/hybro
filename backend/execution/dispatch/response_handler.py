@@ -1445,7 +1445,7 @@ class AgentResponseHandler:
             )
         )
         if continuation is None:
-            # Inline direct dispatch is projected by QueueExecutor only after it
+            # Inline direct dispatch was projected by the legacy queue executor
             # durably saves the queue continuation.
             if e.skip_persist:
                 return

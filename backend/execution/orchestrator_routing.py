@@ -743,7 +743,7 @@ class DualRuntimeRouter:
         observation = _observation_from_webhook_payload(payload, call)
         await self._runtime.observation_ingress.record(observation)
 
-    # -- RoomMessageCenterPort adapter ------------------------------------
+    # -- Room message adapter ------------------------------------
 
     async def _resolve_envelope_and_profile(
         self, request: OrchestrationRequest

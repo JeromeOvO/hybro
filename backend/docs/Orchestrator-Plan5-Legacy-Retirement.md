@@ -16,11 +16,34 @@ the history stay in lockstep.
   seam and route every ingress to the orchestrator`). Owner constants, routing
   flags, `assign_runtime`, and every legacy fallback removed; every new Run is
   orchestrator-owned.
-- **Phase 2 — Delete the legacy Fast path** — pending.
-- **Phase 3 — Delete the legacy Ultimate path** — pending.
-- **Phase 4 — Delete the deterministic-semantics machinery** — pending.
-- **Phase 5 — Converge HITL, callbacks, and data compatibility** — pending.
-- **Phase 6 — Clean up configuration, tests, and docs** — pending.
+- **Phase 2 — Delete the legacy Fast path** — landed (`refactor: delete legacy
+  Fast/Ultimate executors and converge to the orchestrator`). `QueueExecutor`,
+  `transports/direct.py`, `agent_dispatcher.py`, `agent_message_processor.py`,
+  and the queue continuation path removed.
+- **Phase 3 — Delete the legacy Ultimate path** — landed (same commit as Phase 2).
+  `SupervisorExecutor`, `room_supervisor_service.py`, `planner*.py`,
+  `synthesis_coordinator.py`, and `room_message_center.py` removed; the facade,
+  stale-task checker, HITL continuation adapter, response handler, and relay
+  service were converged to drop the `room_message_center` dependency.
+- **Phase 4 — Delete the deterministic-semantics machinery** — landed
+  (`refactor: delete legacy deterministic-semantics orchestration modules`).
+  The planner-side rule engine (`action_validator`, `completion_policy`,
+  `context_builder`, `context_ref_resolution`, `continuation_policy`,
+  `dispatch_payload`, `file_turn`, `goal_fingerprinting`, `goal_progress`,
+  `recovery_policy`, `terminal_summary`) is deleted. The
+  `obligation`/`goal_fingerprint`/`completion_evidence` fields that still back
+  the legacy `run_store`/`run_reducer`/HITL adapters are removed together with
+  Phase 5.
+- **Phase 5 — Converge HITL, callbacks, and data compatibility** — partially
+  landed (forced convergence). The queue continuation, legacy recovery
+  scheduler, and `room_message_center` reach-through are gone. Still remaining:
+  deleting the legacy `HITLService`/`response_handler`/`transports`/
+  `run_store`/`run_reducer` and building the hub-relay → orchestrator
+  observation bridge.
+- **Phase 6 — Clean up configuration, tests, and docs** — partially landed.
+  Legacy-seam tests deleted/rewritten; the `use_supervisor` switch and the
+  `obligation`/`goal_fingerprint`/`completion_evidence` model fields are the
+  remaining `rg` invariants.
 
 > **Convergence decision (accepted).** In the actual code the legacy
 > executors are not leaf modules: deleting `room_message_center.py` forces the

@@ -1324,7 +1324,7 @@ class RoomServices:
         client_request_id: str | None = None,
     ) -> RoomAgentMessage:
         """Public wrapper around ``_generate_new_agent_message`` for use by
-        ``SupervisorExecutor`` and other external callers that need to create
+        the supervisor executor and other external callers that need to create
         individual agent messages without accessing a private method."""
         return self._generate_new_agent_message(
             room_id=room_id,
@@ -2253,7 +2253,7 @@ class RoomServices:
             )
 
         # Create a CancellationToken early in the pipeline so the parse step
-        # (and later the queue step in RoomMessageCenter) can detect cancels
+        # (and later the queue step) can detect cancels
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
         token = self.cancellation_control.create_token(user_message.message_id)
