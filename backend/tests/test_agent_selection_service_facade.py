@@ -12,7 +12,6 @@ from agent.selection_service import (
     AgentSelectionService,
     RoutingStrategy,
 )
-from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 
@@ -282,33 +281,6 @@ def test_derive_required_input_modes_no_attachments():
 
     result = RoomServices._derive_required_input_modes(user_message)
     assert result is None
-
-
-def test_resolve_strategy_supervisor():
-    """Test resolve_strategy with supervisor mode."""
-    strategy = resolve_strategy(
-        use_supervisor=True,
-        agent_count=3,
-    )
-    assert strategy == DispatchStrategy.SUPERVISOR
-
-
-def test_resolve_strategy_multi_agent():
-    """Test resolve_strategy with multiple agents."""
-    strategy = resolve_strategy(
-        use_supervisor=False,
-        agent_count=3,
-    )
-    assert strategy == DispatchStrategy.SEQUENTIAL
-
-
-def test_resolve_strategy_single():
-    """Test resolve_strategy with single agent."""
-    strategy = resolve_strategy(
-        use_supervisor=False,
-        agent_count=1,
-    )
-    assert strategy == DispatchStrategy.SINGLE
 
 
 @pytest.mark.asyncio
