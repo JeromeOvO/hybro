@@ -64,6 +64,11 @@ class AgentToolCatalogAssembler:
             if candidate.active and candidate.authorized and not candidate.excluded
         ]
         subject_digest = _digest(requesting_subject_id)
+        authorization_kind = (
+            candidate_scope.authorization_basis.kind
+            if candidate_scope.authorization_basis is not None
+            else None
+        )
         bindings: list[AgentToolBindingRecord] = []
         entries: list[FrozenToolCatalogEntry] = []
         used_names: set[str] = set()
@@ -103,6 +108,7 @@ class AgentToolCatalogAssembler:
                 "candidate_scope_id": candidate_scope.snapshot_id,
                 "candidate_scope_revision": candidate_scope.revision,
                 "authorization_basis_digest": authorization_basis_digest,
+                "authorization_kind": authorization_kind,
                 "input_modes": candidate.input_modes,
                 "output_modes": candidate.output_modes,
                 "direct_capabilities": candidate.direct_capabilities,
@@ -128,6 +134,7 @@ class AgentToolCatalogAssembler:
                 candidate_scope_id=candidate_scope.snapshot_id,
                 candidate_scope_revision=candidate_scope.revision,
                 authorization_basis_digest=authorization_basis_digest,
+                authorization_kind=authorization_kind,
                 requesting_subject_digest=subject_digest,
                 input_modes=candidate.input_modes,
                 output_modes=candidate.output_modes,

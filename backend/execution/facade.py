@@ -823,6 +823,7 @@ class ExecutionFacade:
                     client_request_id=request.client_request_id,
                     user_id=request.sender_id,
                     mode=request.mode,
+                    agent_scope=orchestration_request.agent_scope,
                 )
             except Exception:
                 logger.warning(
@@ -871,6 +872,8 @@ class ExecutionFacade:
             room_related_message_id=request.parent_message_id,
             user_id=request.sender_id,
             client_request_id=request.client_request_id,
+            mode=request.mode,
+            agent_scope=request.agent_scope.model_dump(mode="json"),
         )
         with bind_log_context(
             client_request_id=request.client_request_id,
@@ -897,6 +900,8 @@ class ExecutionFacade:
             room_related_message_id=request.parent_message_id,
             user_id=request.sender_id,
             client_request_id=request.client_request_id,
+            mode=request.mode,
+            agent_scope=request.agent_scope.model_dump(mode="json"),
         )
         with bind_log_context(
             client_request_id=request.client_request_id,

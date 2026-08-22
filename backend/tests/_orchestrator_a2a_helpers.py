@@ -36,7 +36,11 @@ def definition(name: str = "agent_abc") -> ToolDefinition:
 
 
 def binding(
-    *, run_id: str = "run-1", transport_kind: str = "direct"
+    *,
+    run_id: str = "run-1",
+    transport_kind: str = "direct",
+    agent_id: str = "agent-1",
+    authorization_kind: str | None = None,
 ) -> AgentToolBindingRecord:
     tool = definition()
     return AgentToolBindingRecord(
@@ -47,7 +51,7 @@ def binding(
         room_epoch=1,
         tool_name=tool.name,
         definition=tool,
-        agent_id="agent-1",
+        agent_id=agent_id,
         card_digest="card",
         endpoint_scope="https://agent.example/a2a",
         endpoint_scope_digest="endpoint",
@@ -55,6 +59,7 @@ def binding(
         candidate_scope_id="scope",
         candidate_scope_revision=1,
         authorization_basis_digest="basis",
+        authorization_kind=authorization_kind,
         requesting_subject_digest=sha256(b"user-1").hexdigest(),
         input_modes=["text"],
         output_modes=["text"],

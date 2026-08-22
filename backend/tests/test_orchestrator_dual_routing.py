@@ -188,6 +188,41 @@ async def test_assign_runtime_missing_profile_is_legacy():
     assert owner == LEGACY
 
 
+@pytest.mark.asyncio
+async def test_assign_runtime_rejects_unservable_scope():
+    router = _router(settings=_settings(orchestrator_fast_ratio=100))
+    owner = await router.assign_runtime(
+        room_id="room-1",
+        client_request_id="req-1",
+        user_id=None,
+        mode="direct",
+        agent_scope={"source": "legacy_team"},
+    )
+    assert owner == LEGACY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "agent_scope",
+    [
+        {"source": "mention", "agent_ids": ["agent-1"]},
+        {"source": "room_default"},
+        {"source": "all_agents"},
+        {"source": "saved_group", "group_id": "group-1"},
+    ],
+)
+async def test_assign_runtime_serves_the_closed_scope_enumeration(agent_scope):
+    router = _router(settings=_settings(orchestrator_fast_ratio=100))
+    owner = await router.assign_runtime(
+        room_id="room-1",
+        client_request_id="req-1",
+        user_id=None,
+        mode="direct",
+        agent_scope=agent_scope,
+    )
+    assert owner == OWNER
+
+
 # -- Persisted ownership -------------------------------------------------
 
 
@@ -352,6 +387,82 @@ async def test_envelope_resolver_reconstructs_supervisor_candidate_scope():
     )
     assert envelope.mode == "supervisor"
     assert envelope.candidate_agent_ids == ["agent-9"]
+
+
+@pytest.mark.asyncio
+async def test_envelope_resolver_prefers_live_request_scope_and_mode():
+    """The live route-validated mode/scope are authoritative for Run creation;
+    the persisted extend_info is only the recovery/re-entry fallback."""
+    get_user_message = AsyncMock(return_value=_user_message(text="hi", mode="direct"))
+    listed_user_ids: list[str | None] = []
+
+    async def list_all(user_id):
+        listed_user_ids.append(user_id)
+        return ["agent-all-1", "agent-all-2"]
+
+    resolver = RoomMessageEnvelopeResolver(
+        get_user_message=get_user_message,
+        list_room_agent_ids=AsyncMock(return_value=["room-agent"]),
+        list_all_active_agent_ids=list_all,
+    )
+    envelope = await resolver.load_envelope(
+        OrchestrationRequest(
+            room_id="room-1",
+            room_user_message_id="msg-1",
+            user_id="user-7",
+            mode="supervisor",
+            agent_scope={"source": "all_agents"},
+        )
+    )
+    assert envelope.mode == "supervisor"
+    assert envelope.candidate_agent_ids == ["agent-all-1", "agent-all-2"]
+    assert envelope.requesting_subject_id == "user-7"
+    # The visibility-filtered listing receives the requesting user.
+    assert listed_user_ids == ["user-7"]
+
+
+@pytest.mark.asyncio
+async def test_envelope_resolver_all_agents_requires_bound_callback():
+    get_user_message = AsyncMock(return_value=_user_message(text="hi"))
+    resolver = RoomMessageEnvelopeResolver(
+        get_user_message=get_user_message,
+        list_room_agent_ids=AsyncMock(return_value=[]),
+    )
+    with pytest.raises(UnsupportedEnvelopeError):
+        await resolver.load_envelope(
+            OrchestrationRequest(
+                room_id="room-1",
+                room_user_message_id="msg-1",
+                agent_scope={"source": "all_agents"},
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_process_room_user_message_empty_scope_falls_back():
+    host = _FakeSessionHost()
+    envelope = RoomMessageEnvelope(
+        message_text="hello agents",
+        mode="direct",
+        candidate_agent_ids=[],
+        requesting_subject_id="user-1",
+    )
+    router = _router(
+        runtime=_adapter_runtime(host),
+        envelope_source=_FakeEnvelopeSource(envelope),
+    )
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-1",
+        user_id="user-1",
+        client_request_id="req-1",
+    )
+
+    with pytest.raises(UnsupportedEnvelopeError):
+        await router.process_room_user_message(request)
+
+    host.create_session.assert_not_awaited()
+    host.prompt.assert_not_awaited()
 
 
 @pytest.mark.asyncio

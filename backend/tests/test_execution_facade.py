@@ -548,6 +548,36 @@ async def test_execute_continues_when_active_run_lookup_fails():
 
 
 @pytest.mark.asyncio
+async def test_schedule_orchestration_carries_live_mode_and_scope():
+    facade, _deps = _make_facade()
+    facade._route_orchestration = AsyncMock()
+    request = ExecutionRequest(
+        room_id="room-1",
+        sender_id="user-1",
+        client_request_id="cr-1",
+        mode="supervisor",
+        agent_scope={"source": "all_agents"},
+    )
+    ack = ExecutionAck(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        should_start_orchestration=True,
+        preflight_outcome="ready",
+    )
+
+    facade.schedule_orchestration(request, ack)
+    await asyncio.sleep(0)
+
+    routed_request, orchestration_request = facade._route_orchestration.call_args.args
+    assert routed_request is request
+    # The route-validated mode and scope travel with the orchestration
+    # request so routing never depends on the persisted extend_info rewrite.
+    assert orchestration_request.mode == "supervisor"
+    assert orchestration_request.agent_scope == {"source": "all_agents"}
+
+
+@pytest.mark.asyncio
 async def test_execute_emits_processing_for_ready_room_preflight():
     facade, deps = _make_facade()
     deps[

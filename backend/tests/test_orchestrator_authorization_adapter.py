@@ -52,6 +52,27 @@ async def test_authorized_when_member_active_and_visible():
     assert outcome == "authorized"
 
 
+async def test_authorized_all_active_agents_skips_room_membership():
+    """all_agents is an explicit user selection: the visibility-filtered
+    candidate listing already authorized the agent, so room membership must
+    not gate it."""
+    adapter = MembershipAuthorizationRefresh(
+        agents=FakeRegistry(_info(provider_id="user-1")),
+        room_ownership=FakeRoomOwnership(member=False),
+    )
+    outcome = await adapter.authorize(
+        binding=binding(
+            agent_id="agent-9",
+            authorization_kind="all_active_agents",
+        ),
+        requesting_subject_id="user-1",
+        room_id="room-1",
+        room_epoch=1,
+        resource_refs=[],
+    )
+    assert outcome == "authorized"
+
+
 async def test_denied_when_not_member():
     adapter = MembershipAuthorizationRefresh(
         agents=FakeRegistry(_info()),

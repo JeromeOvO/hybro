@@ -51,12 +51,19 @@ class MembershipAuthorizationRefresh:
             return "denied"
         if _digest(requesting_subject_id) != binding.requesting_subject_digest:
             return "denied"
-        try:
-            member = await self._room_ownership.verify_room_agent_membership(
-                room_id, binding.agent_id
-            )
+        if getattr(binding, "authorization_kind", None) != "all_active_agents":
+            # The user explicitly asked to coordinate every active agent; the
+            # visibility-filtered candidate listing is the authorization for
+            # that scope. Every other scope is gated by room membership.
+            try:
+                member = await self._room_ownership.verify_room_agent_membership(
+                    room_id, binding.agent_id
+                )
+            except (ConnectionError, TimeoutError):
+                return "transient_failure"
             if not member:
                 return "denied"
+        try:
             info = await self._agents.get_agent(binding.agent_id)
         except (ConnectionError, TimeoutError):
             return "transient_failure"

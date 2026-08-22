@@ -1996,10 +1996,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 group = await agent_room_store.get_agent_group_by_id(group_id)
                 return list(getattr(group, "agents", []) or [])
 
+            async def _list_all_active_agent_ids(
+                user_id: str | None = None,
+            ) -> list[str]:
+                # Same visibility-filtered listing the legacy all_agents scope
+                # uses, so both engines resolve identical candidate sets.
+                agents = await agent_room_store.get_all_active_agents(user_id)
+                return [agent.agent_id for agent in agents or []]
+
             envelope_source = RoomMessageEnvelopeResolver(
                 get_user_message=message_store.get_room_user_message_by_message_id,
                 list_room_agent_ids=_list_room_agent_ids,
                 list_group_agent_ids=_list_group_agent_ids,
+                list_all_active_agent_ids=_list_all_active_agent_ids,
             )
             orchestrator_router = DualRuntimeRouter(
                 runtime=_orchestrator_runtime,

@@ -48,6 +48,7 @@ from common.utils.logger import get_logger
 from execution.hitl.exceptions import HITLRoomMismatchError
 from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
 from execution.orchestrator.models import (
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     PreparedResourceRef,
     RunResourceManifestSnapshot,
@@ -73,6 +74,14 @@ MODE_PROFILE_MAP = {
     "ultimate": "ultimate",
     "supervisor": "ultimate",
 }
+
+# The closed agent-scope enumeration shared with the API boundary
+# (api_gateway/routes/room_routes.py) and the frontend AgentScopeInput. A
+# scope outside this set means the seam cannot serve the request and the
+# legacy executor must take it.
+_SERVABLE_SCOPE_SOURCES = frozenset(
+    {"mention", "room_default", "all_agents", "saved_group"}
+)
 
 _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
 _PROFILE_PINNED_FINALIZATION = "pass_through"
@@ -110,6 +119,10 @@ class RoomMessageEnvelope:
     candidate_agent_ids: list[str]
     attachments: list[AttachmentEnvelope] | None = None
     requesting_subject_id: str | None = None
+    # The canonical scope source the candidates were resolved from; it feeds
+    # the Run's frozen AuthorizationBasis (membership vs all-active-agents).
+    scope_source: str = "explicit_selection"
+    group_id: str | None = None
 
 
 class RoomEnvelopeSource(Protocol):
@@ -139,7 +152,8 @@ class RoomMessageEnvelopeResolver:
         get_user_message: Callable[[str], Awaitable[Any | None]],
         list_room_agent_ids: Callable[[str], Awaitable[list[str]]],
         list_group_agent_ids: Callable[[str], Awaitable[list[str]]] | None = None,
-        list_all_active_agent_ids: Callable[[], Awaitable[list[str]]] | None = None,
+        list_all_active_agent_ids: Callable[[str | None], Awaitable[list[str]]]
+        | None = None,
     ) -> None:
         self._get_user_message = get_user_message
         self._list_room_agent_ids = list_room_agent_ids
@@ -165,16 +179,34 @@ class RoomMessageEnvelopeResolver:
             )
 
         extend_info = getattr(message, "extend_info", None)
+        # The live request carries the route-validated mode and scope; they
+        # are authoritative for Run creation. The persisted extend_info is the
+        # fallback for recovery/re-entry paths without a live request (and for
+        # the legacy supervisor preflight's whitelist rewrite).
+        live_mode = getattr(request, "mode", None)
         mode = (
-            extend_info.get("execution_mode") if isinstance(extend_info, dict) else None
+            live_mode
+            if isinstance(live_mode, str) and live_mode.strip()
+            else (
+                extend_info.get("execution_mode")
+                if isinstance(extend_info, dict)
+                else None
+            )
         )
         if not isinstance(mode, str) or not mode.strip():
             raise UnsupportedEnvelopeError(
                 "orchestrator envelope is missing execution_mode"
             )
 
+        live_scope = getattr(request, "agent_scope", None)
         scope = (
-            extend_info.get("agent_scope") if isinstance(extend_info, dict) else None
+            live_scope
+            if isinstance(live_scope, dict)
+            else (
+                extend_info.get("agent_scope")
+                if isinstance(extend_info, dict)
+                else None
+            )
         )
         if not isinstance(scope, dict):
             # The legacy supervisor preflight whitelists extend_info keys and
@@ -202,7 +234,11 @@ class RoomMessageEnvelopeResolver:
                     if isinstance(group_id, str) and group_id.strip():
                         scope["group_id"] = group_id.strip()
         candidate_agent_ids = await self._resolve_candidate_agent_ids(
-            request.room_id, scope
+            request.room_id, scope, user_id=request.user_id
+        )
+        scope_source = str(scope.get("source") or "explicit_selection")
+        group_id = (
+            scope.get("group_id") if isinstance(scope.get("group_id"), str) else None
         )
 
         attachments = _attachments_from_message(content)
@@ -213,10 +249,12 @@ class RoomMessageEnvelopeResolver:
             candidate_agent_ids=candidate_agent_ids,
             attachments=attachments,
             requesting_subject_id=requesting_subject_id,
+            scope_source=scope_source,
+            group_id=group_id,
         )
 
     async def _resolve_candidate_agent_ids(
-        self, room_id: str | None, scope: Any
+        self, room_id: str | None, scope: Any, *, user_id: str | None = None
     ) -> list[str]:
         if not isinstance(scope, dict):
             raise UnsupportedEnvelopeError(
@@ -237,7 +275,7 @@ class RoomMessageEnvelopeResolver:
                 raise UnsupportedEnvelopeError(
                     "orchestrator all_agents scope is not bound"
                 )
-            return await self._list_all_active_agent_ids()
+            return await self._list_all_active_agent_ids(user_id)
         if source == "saved_group":
             if self._list_group_agent_ids is None:
                 raise UnsupportedEnvelopeError(
@@ -314,14 +352,38 @@ def _allowlist(values: Any) -> set[str]:
     return {str(item) for item in values if item}
 
 
+# Scope source → AuthorizationBasis.kind. Scopes outside this map (and the
+# closed API enumeration) fall back to explicit_selection, which still
+# requires room membership like every non-all_agents kind.
+_SCOPE_AUTHORIZATION_KINDS = {
+    "mention": "mention",
+    "room_default": "room_member",
+    "saved_group": "saved_group_member",
+    "all_agents": "all_active_agents",
+}
+
+
 def _build_candidate_scope(
-    *, room_id: str, agent_ids: list[str]
+    *,
+    room_id: str,
+    agent_ids: list[str],
+    scope_source: str = "explicit_selection",
+    group_id: str | None = None,
+    requesting_subject_id: str | None = None,
 ) -> CandidateScopeSnapshot:
-    return CandidateScopeSnapshot(
-        snapshot_id=f"scope-{_sha256_hex(json.dumps([room_id, sorted(agent_ids)]))}",
-        source="routing_seam",
+    basis = AuthorizationBasis(
+        kind=_SCOPE_AUTHORIZATION_KINDS.get(scope_source, "explicit_selection"),
         room_id=room_id,
+        group_id=group_id,
+        selected_by_user_id=requesting_subject_id or None,
+    )
+    return CandidateScopeSnapshot(
+        snapshot_id=f"scope-{_sha256_hex(json.dumps([room_id, sorted(agent_ids), scope_source, group_id or '']))}",
+        source=scope_source,
+        room_id=room_id,
+        group_id=group_id,
         agent_ids=list(dict.fromkeys(agent_ids)),
+        authorization_basis=basis,
     )
 
 
@@ -576,6 +638,7 @@ class DualRuntimeRouter:
         client_request_id: str | None,
         user_id: str | None,
         mode: str,
+        agent_scope: dict[str, Any] | None = None,
     ) -> str:
         """Decide the runtime for a *new* Run. Never re-evaluated afterwards."""
         if self._runtime is None or self._settings is None:
@@ -584,6 +647,15 @@ class DualRuntimeRouter:
             return OWNER_LEGACY
         if not getattr(self._settings, "orchestrator_routing_enabled", False):
             return OWNER_LEGACY
+        if agent_scope is not None:
+            # The agent scope is part of the orchestration request; the seam
+            # must be able to serve it before ownership is decided. Scopes
+            # outside the closed API enumeration stay on the legacy executor.
+            source = (
+                agent_scope.get("source") if isinstance(agent_scope, dict) else None
+            )
+            if source not in _SERVABLE_SCOPE_SOURCES:
+                return OWNER_LEGACY
         profile_id = map_mode_to_profile(mode)
         profiles = getattr(self._runtime, "profiles", None)
         if profiles is not None and profile_id not in profiles:
@@ -839,8 +911,19 @@ class DualRuntimeRouter:
 
         requesting_subject_id = envelope.requesting_subject_id or request.user_id or ""
         candidate_scope = _build_candidate_scope(
-            room_id=room_id, agent_ids=envelope.candidate_agent_ids
+            room_id=room_id,
+            agent_ids=envelope.candidate_agent_ids,
+            scope_source=envelope.scope_source,
+            group_id=envelope.group_id,
+            requesting_subject_id=requesting_subject_id,
         )
+        if not candidate_scope.agent_ids:
+            # An empty scope cannot produce a meaningful kernel run; keep the
+            # legacy executor's empty-scope behavior until the seam grows a
+            # zero-candidate synthesis path.
+            raise UnsupportedEnvelopeError(
+                "orchestrator candidate scope resolved to zero agents"
+            )
         resource_manifest = _build_resource_manifest(
             source_message_id=request.room_user_message_id or "",
             attachments=envelope.attachments,
@@ -868,11 +951,8 @@ class DualRuntimeRouter:
             resource_manifest=resource_manifest,
             authorization_basis_digest=_sha256_hex(
                 json.dumps(
-                    {
-                        "room_id": room_id,
-                        "subject": requesting_subject_id,
-                        "scope": candidate_scope.agent_ids,
-                    }
+                    candidate_scope.authorization_basis.model_dump(mode="json"),
+                    sort_keys=True,
                 )
             ),
             created_at=datetime.now(UTC),
@@ -910,6 +990,7 @@ __all__ = [
     "DualRuntimeRouter",
     "MODE_PROFILE_MAP",
     "OWNER_LEGACY",
+    "_SERVABLE_SCOPE_SOURCES",
     "OWNER_ORCHESTRATOR",
     "OrchestratorRoutingError",
     "RoomEnvelopeSource",
