@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,7 +16,9 @@ from jsonschema import Draft202012Validator
 from .budget import BudgetExceeded, BudgetPolicy
 from .context import ContextCompiler, UnresolvedToolBatchError
 from .models import (
+    ArtifactRefPart,
     AssistantMessage,
+    DataPart,
     OrchestratorRunState,
     SessionNotice,
     TextPart,
@@ -82,6 +85,29 @@ class SystemClock:
 class UUIDFactory:
     def new_id(self, prefix: str) -> str:
         return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def _task_text(arguments: object) -> str:
+    if isinstance(arguments, dict):
+        task = arguments.get("task")
+        if isinstance(task, str) and task.strip():
+            return task.strip()[:4000]
+    return ""
+
+
+def _result_text(result: ToolResult) -> str:
+    parts: list[str] = []
+    for part in result.content:
+        if isinstance(part, TextPart):
+            if part.text:
+                parts.append(part.text)
+        elif isinstance(part, DataPart):
+            parts.append(
+                json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
+            )
+        elif isinstance(part, ArtifactRefPart):
+            parts.append(f"[artifact reference: {part.artifact_ref}]")
+    return "\n".join(parts)[:8000]
 
 
 class OrchestratorKernel:
@@ -463,14 +489,31 @@ class OrchestratorKernel:
                 {
                     "call_id": item.call_id,
                     "message_kind": "tool_result",
-                    "agent_label": self._tool_label(
-                        run, item.buffered_terminal_result.tool_name
-                    )
-                    if item.buffered_terminal_result is not None
+                    "agent_label": self._tool_label(run, result.tool_name)
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                    "binding_id": self._tool_binding_id(run, result.tool_name)
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                    "result_text": _result_text(result)
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                    "result_status": result.status
+                    if (result := item.buffered_terminal_result) is not None
                     else None,
                 },
             )
         return await self.run(run_id, signal=signal, lifecycle=lifecycle)
+
+    @staticmethod
+    def _tool_binding_id(run: OrchestratorRunState, tool_name: str) -> str | None:
+        """Resolve the frozen binding id for a tool name."""
+        if run.tool_catalog is None:
+            return None
+        for entry in run.tool_catalog.entries:
+            if entry.definition.name == tool_name:
+                return entry.binding.binding_id
+        return None
 
     @staticmethod
     def _tool_label(run: OrchestratorRunState, tool_name: str) -> str | None:

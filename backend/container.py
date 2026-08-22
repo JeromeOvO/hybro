@@ -5,6 +5,7 @@ import sys
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -344,6 +345,171 @@ def validate_runtime_bindings(
         )
 
     logger.info("All startup bindings verified")
+
+
+async def _resolve_orchestrator_agent_facts(
+    *,
+    run: Any,
+    runtime: Any,
+    call_id: str,
+) -> dict[str, Any] | None:
+    """Resolve label/agent/task/result facts for a call from the durable Run."""
+    from execution.orchestrator.models import AssistantMessage
+
+    entry = next(
+        (
+            item
+            for batch in run.tool_batches
+            for item in batch.entries
+            if item.call_id == call_id
+        ),
+        None,
+    )
+    tool_name = (
+        entry.invocation.tool.definition.name
+        if entry is not None and entry.invocation is not None
+        else None
+    )
+    catalog_entry = next(
+        (
+            item
+            for item in run.tool_catalog.entries
+            if tool_name is not None and item.definition.name == tool_name
+        ),
+        None,
+    )
+    label = (
+        catalog_entry.definition.label.strip()
+        if catalog_entry is not None and catalog_entry.definition.label.strip()
+        else "Agent"
+    )
+    agent_id: str | None = None
+    if catalog_entry is not None:
+        try:
+            binding = await runtime.binding_store.load(catalog_entry.binding.binding_id)
+        except Exception:
+            binding = None
+        agent_id = binding.agent_id if binding is not None else None
+    task_text = ""
+    for message in run.transcript:
+        if not isinstance(message, AssistantMessage):
+            continue
+        for call in message.tool_calls:
+            if call.call_id == call_id and isinstance(call.arguments, dict):
+                task = call.arguments.get("task")
+                if isinstance(task, str) and task.strip():
+                    task_text = task.strip()[:4000]
+    result = entry.buffered_terminal_result if entry is not None else None
+    return {
+        "label": label,
+        "agent_id": agent_id or "",
+        "task_text": task_text or f"Delegate work to {label}.",
+        "result": result,
+    }
+
+
+async def _project_orchestrator_agent_activity(
+    event: Any,
+    runtime: Any,
+    message_store: Any,
+) -> None:
+    """Project a kernel tool lifecycle event into room_agent_messages.
+
+    Facts are derived from the durable Run, never from the in-flight event
+    payload alone, so concurrent lifecycle listeners cannot race each other
+    into inconsistent documents. The ``orchestrator_run_id`` extend field
+    fences these rows from the legacy orphan detector.
+    """
+    from common.types import Task, TaskState, TaskStatus
+    from models.room import MessageContent, RoomAgentMessage
+
+    payload = event.payload or {}
+    call_id = payload.get("call_id")
+    if not isinstance(call_id, str) or not call_id:
+        return
+    run = await runtime.run_store.load(event.run_id)
+    if run is None or run.tool_catalog is None:
+        return
+    facts = await _resolve_orchestrator_agent_facts(
+        run=run, runtime=runtime, call_id=call_id
+    )
+    label = facts["label"]
+    now = datetime.now(UTC)
+    message_id = f"orchestrator:{run.run_id}:{call_id}"
+    common = dict(
+        room_id=run.room_id,
+        message_id=message_id,
+        message_created_at=now,
+        message_type="agent",
+        user_id=run.request.requesting_subject_id,
+        agent_id=facts["agent_id"],
+        run_id=run.run_id,
+        client_request_id=run.client_request_id,
+        related_message_id=run.request.user_message_id,
+        task_content=f"Requesting {label}",
+    )
+    task_id = f"orchestrator-task-{call_id}"
+
+    if event.event_type == "tool_execution_started":
+        document = RoomAgentMessage(
+            **common,
+            message_content=MessageContent(
+                message_text=facts["task_text"],
+                message_task=Task(
+                    id=task_id,
+                    kind="task",
+                    status=TaskStatus(
+                        state=TaskState.working, timestamp=now.isoformat()
+                    ),
+                    artifacts=[],
+                ),
+            ),
+            extend_info={
+                "public_task_label": f"Requesting {label}",
+                "public_dispatch_text": facts["task_text"],
+                "orchestrator_run_id": run.run_id,
+            },
+        )
+        await message_store.upsert_room_agent_message(document)
+        return
+
+    # message_completed: durable result text and terminal task state.
+    result = facts["result"]
+    state = (
+        TaskState.completed
+        if result is not None and result.status == "completed"
+        else TaskState.failed
+    )
+    parts: list[str] = []
+    if result is not None:
+        import json as _json
+
+        for part in result.content:
+            if hasattr(part, "text") and part.text:
+                parts.append(part.text)
+            elif hasattr(part, "data"):
+                parts.append(
+                    _json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
+                )
+    result_text = "\n".join(parts)[:8000] or facts["task_text"]
+    document = RoomAgentMessage(
+        **common,
+        message_content=MessageContent(
+            message_text=result_text,
+            message_task=Task(
+                id=task_id,
+                kind="task",
+                status=TaskStatus(state=state, timestamp=now.isoformat()),
+                artifacts=[],
+            ),
+        ),
+        extend_info={
+            "public_task_label": f"Requesting {label}",
+            "public_dispatch_text": facts["task_text"],
+            "orchestrator_run_id": run.run_id,
+        },
+    )
+    await message_store.upsert_room_agent_message(document)
 
 
 @asynccontextmanager
@@ -1967,6 +2133,32 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
 
         async def _orchestrator_session_listener(event: Any) -> None:
+            # Project agent activity into room_agent_messages so the legacy
+            # conversation surface (agent cards) reflects the kernel's
+            # dispatches. Best-effort: durable Run state stays authoritative.
+            runtime = getattr(app.state, "orchestrator_runtime", None)
+            call_id = (event.payload or {}).get("call_id")
+            if (
+                runtime is not None
+                and isinstance(call_id, str)
+                and call_id
+                and event.room_id
+                and event.event_type in {"tool_execution_started", "message_completed"}
+            ):
+                try:
+                    await _project_orchestrator_agent_activity(
+                        event, runtime, message_store
+                    )
+                except Exception:
+                    logger.warning(
+                        "orchestrator agent message projection failed",
+                        extra={
+                            "run_id": event.run_id,
+                            "event_type": event.event_type,
+                        },
+                        exc_info=True,
+                    )
+
             if _delivery_deps is None:
                 return
             mapped = orchestrator_lifecycle_log_message(event)
