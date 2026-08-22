@@ -306,7 +306,11 @@ export function deriveFinalAnswer(
     return buildFailedFinalAnswer()
   }
 
-  // --- 3. Single Agent Fast-Path ---
+  // --- 3. Single Agent (source card, no inline full content) ---
+  // A lone agent answer is shown as a compact source card with a
+  // deterministic intro ("1 agent responded. Expand below…") instead of
+  // being inlined into the body. This keeps a single-agent turn from
+  // flashing full content that then collapses once a second agent joins.
   const activeSupervisorTurn =
     turn.isSupervisorTurn
     && !isTurnTerminal(turn.status)
@@ -320,11 +324,10 @@ export function deriveFinalAnswer(
     && !activeSupervisorTurn
     && !(orchestrator && orchestrator.content.trim().length > 0)
   ) {
-    return {
-      kind: "single",
-      label: "Working",
-      primaryMessageId: real[0].messageId,
+    if (allRealTerminal(real)) {
+      return buildDeterministicDoneFinalAnswer(turn, real, agentMessageIds, summary)
     }
+    return { kind: "pending", label: "Working" }
   }
 
   // --- 4. Orchestrator-driven Derivation (New System Agent Architecture) ---

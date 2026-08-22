@@ -1288,11 +1288,11 @@ describe('displayMode from finalAnswer', () => {
     expect(turns[0].displayMode).toBe('awaiting_input')
   })
 
-  it('active turn with single working agent uses single_agent mode', () => {
+  it('active turn with single working agent stays in working mode (no inline flash)', () => {
     const user = makeUserEntity({ id: 'u1' })
     const agent = makeAgentEntity({ id: 'a1', taskStatus: 'working' as any, content: '' })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
-    expect(turns[0].displayMode).toBe('single_agent')
+    expect(turns[0].displayMode).toBe('working')
   })
 
   it('empty summary agent falls back to deterministic_done', () => {
@@ -1489,8 +1489,8 @@ describe('primaryStreamMessageId', () => {
     const user = makeUserEntity({ id: 'u1' })
     const agent = makeAgentEntity({ id: 'a1', taskStatus: 'working', content: '' })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
-    expect(turns[0].finalAnswer.kind).toBe('single')
-    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBe('a1')
+    expect(turns[0].finalAnswer.kind).toBe('pending')
+    expect(derivePrimaryStreamFromFinalAnswer(turns[0].finalAnswer)).toBeUndefined()
   })
 
   it('prefers summary agent when synthesizing', () => {
@@ -1798,8 +1798,9 @@ describe('primaryStreamMessageId', () => {
     const agent = makeAgentEntity({ id: 'a1', taskStatus: 'completed', content: 'Done' })
     const turns = buildTurns(entitiesToMap([user, agent]), ['u1', 'a1'], [])
     expect(turns[0].phase).toBe('completed')
-    expect(turns[0].primaryStreamMessageId).toBe('a1')
-    expect(turns[0].primaryMessageId).toBe('a1')
+    expect(turns[0].finalAnswer.kind).toBe('deterministic_done')
+    expect(turns[0].primaryStreamMessageId).toBeUndefined()
+    expect(turns[0].primaryMessageId).toBeUndefined()
   })
 
   it('derives processing status logs from the user message onto the turn', () => {

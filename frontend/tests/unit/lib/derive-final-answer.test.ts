@@ -269,23 +269,21 @@ describe('deriveFinalAnswer', () => {
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('deterministic_done')
   })
 
-  it('returns single for one substantive agent', () => {
+  it('resolves a single substantive agent to a deterministic source card', () => {
     const turn = makeTurn({
       agentResults: [makeAgent({ messageId: 'a1', content: 'Only answer' })],
     })
     const result = deriveFinalAnswer(turn, ['a1'])
-    expect(result.kind).toBe('single')
-    expect(result.primaryMessageId).toBe('a1')
+    expect(result.kind).toBe('deterministic_done')
   })
 
-  it('returns single for a streaming single agent', () => {
+  it('keeps a single streaming agent pending (no inline flash)', () => {
     const turn = makeTurn({
       status: 'active',
       agentResults: [makeAgent({ messageId: 'a1', status: 'working', content: '' })],
     })
     const result = deriveFinalAnswer(turn, ['a1'])
-    expect(result.kind).toBe('single')
-    expect(result.primaryMessageId).toBe('a1')
+    expect(result.kind).toBe('pending')
   })
 
   it('stays pending while turn is active even if all agents are terminal (anti-flash)', () => {
