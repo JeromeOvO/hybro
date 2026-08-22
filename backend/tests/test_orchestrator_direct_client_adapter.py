@@ -12,7 +12,15 @@ from a2a_adapter.task_status import (
     build_failed_text_task,
     build_task_status,
 )
-from common.types import Message, MessageRole, Task, TaskState, TextPart
+from common.types import (
+    Artifact,
+    DataPart,
+    Message,
+    MessageRole,
+    Task,
+    TaskState,
+    TextPart,
+)
 from execution.orchestrator.a2a_runtime.models import (
     A2ACancellationCommand,
     A2AContinuationCommand,
@@ -191,6 +199,41 @@ async def test_send_input_required_builds_interaction_receipt():
     assert observation.event_kind == "input_required"
     assert observation.status is None
     assert observation.content[0].text == ("I need the client name and coverage limit.")
+
+
+async def test_send_inline_data_artifact_reaches_observation_with_text():
+    """Agents attach structured documents (JSON data parts) alongside a text
+    summary; both must reach the kernel or it cannot read the real document
+    and re-dispatches the same Agent until the budget runs out."""
+    status = build_task_status(TaskState.completed)
+    status.message = Message(
+        role=MessageRole.AGENT,
+        parts=[TextPart(text="Quote ready, see attached document.")],
+        message_id="msg-1",
+    )
+    artifact = Artifact(
+        artifact_id="artifact-1",
+        name="cyber_quote",
+        parts=[DataPart(data={"premium": "USD 35,700", "limit": 5000000})],
+    )
+    task = Task(
+        id="task-1",
+        context_id="ctx-1",
+        status=status,
+        artifacts=[artifact],
+    )
+
+    async def send(card, message, kwargs):
+        return {"kind": "task", "result": _task_dict(task)}
+
+    receipt = await _client(FakeSdk(send=send)).send(_dispatch_command())
+
+    observation = receipt.terminal_observation
+    assert observation is not None
+    texts = [part.text for part in observation.content if part.kind == "text"]
+    assert texts == ["Quote ready, see attached document."]
+    data = [part.data for part in observation.content if part.kind == "data"]
+    assert data == [{"premium": "USD 35,700", "limit": 5000000}]
 
 
 async def test_start_poll_requests_nonblocking_and_returns_accepted():

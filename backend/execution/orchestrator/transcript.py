@@ -63,6 +63,11 @@ def agent_messages_to_model(
                 raise TranscriptCorruptionError("duplicate tool result")
             results.add(message.call_id)
             text = _content_text(message.content)
+            refs = "\n".join(
+                f"[artifact reference: {ref}]" for ref in message.artifact_refs
+            )
+            if refs:
+                text = f"{text}\n{refs}".strip()
             if message.error_message:
                 text = f"{text}\n{message.error_message}".strip()
             result.append(

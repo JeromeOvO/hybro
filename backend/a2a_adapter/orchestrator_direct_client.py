@@ -237,22 +237,31 @@ def _task_to_observation_kwargs(
     artifact_refs: list[str] = []
 
     text = get_text_from_message(getattr(task.status, "message", None))
-    if not text and task.artifacts:
-        extracted = extract_parts_from_artifacts(task.artifacts)
-        text = extracted.text
-        for data_part in extracted.data_parts:
-            content.append(
-                {
-                    "kind": "data",
-                    "data": data_part.get("data", {}),
-                    "mime_type": data_part.get("mime_type", "application/json"),
-                }
-            )
-        for file_part in extracted.file_parts:
-            file = file_part.get("file") if isinstance(file_part, Mapping) else None
-            uri = file.get("uri") if isinstance(file, Mapping) else None
-            if isinstance(uri, str) and uri:
-                artifact_refs.append(uri)
+    # A2A puts task output in artifacts. Agents attach structured documents
+    # (JSON data parts) alongside a text summary; both must reach the kernel
+    # or it cannot read the real document and re-dispatches the same Agent
+    # until the budget runs out.
+    extracted = extract_parts_from_artifacts(list(task.artifacts or []))
+    if extracted.text_parts:
+        artifact_text = extracted.text
+        text = f"{text}\n{artifact_text}".strip() if text else artifact_text
+    for data_part in extracted.data_parts:
+        content.append(
+            {
+                "kind": "data",
+                "data": data_part.get("data", {}),
+                "mime_type": data_part.get("mime_type", "application/json"),
+            }
+        )
+    for file_part in extracted.file_parts:
+        file = file_part.get("file") if isinstance(file_part, Mapping) else None
+        uri = file.get("uri") if isinstance(file, Mapping) else None
+        if isinstance(uri, str) and uri:
+            artifact_refs.append(uri)
+    for artifact in list(task.artifacts or []):
+        uri = getattr(artifact, "uri", None)
+        if isinstance(uri, str) and uri and not getattr(artifact, "parts", None):
+            artifact_refs.append(uri)
     if text:
         content.append({"kind": "text", "text": text})
 

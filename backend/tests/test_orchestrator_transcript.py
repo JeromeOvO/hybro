@@ -64,6 +64,10 @@ def test_lossless_conversion_preserves_complete_tool_pairs_and_notices():
     assert converted[2].content[0].call_id == "call-1"
     assert converted[2].content[0].tool_name == "echo"
     assert '{"a":1,"b":2}' in converted[2].content[0].content[0].text
+    # File-backed artifact references must stay visible to the model turn;
+    # otherwise the kernel cannot see that a document is attached and keeps
+    # re-dispatching the same Agent.
+    assert "[artifact reference: artifact-1]" in converted[2].content[0].content[0].text
     assert converted[3].content[0].text == "[runtime:wrap_up] finish"
     assert unresolved_call_ids([assistant(), result()]) == set()
 
