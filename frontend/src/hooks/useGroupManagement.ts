@@ -81,6 +81,17 @@ export function useGroupManagement(
   const [overrideGroup, setOverrideGroup] = useState<string | null>(null)
   const [overrideGroupName, setOverrideGroupName] = useState<string | null>(null)
 
+  useEffect(() => {
+    if (!roomId) {
+      setOverrideGroup(null)
+      setOverrideGroupName(null)
+      return
+    }
+
+    setOverrideGroup(localStorage.getItem(`room-${roomId}-override-group`))
+    setOverrideGroupName(localStorage.getItem(`room-${roomId}-override-group-name`))
+  }, [roomId])
+
   const groupExists = useCallback(
     (groupId: string) => groups.some(group => group.type === 'user' && group.group_id === groupId),
     [groups],

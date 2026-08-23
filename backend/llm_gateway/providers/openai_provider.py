@@ -115,11 +115,21 @@ class OpenAIProvider:
         kwargs: dict[str, Any] = {
             "model": request.model_id,
             "messages": _gateway_messages(request),
-            "tools": [_gateway_tool(tool) for tool in request.tools],
+            # Native tool calling must not use OpenAI strict mode: strict
+            # rejects third-party agent schemas (``uniqueItems``, missing
+            # ``additionalProperties``, ...) and buys nothing when the
+            # caller validates arguments itself. Strict is reserved for the
+            # structured-action strategy.
+            "tools": [
+                _gateway_tool(tool, strict=request.tool_strategy == "structured_action")
+                for tool in request.tools
+            ],
             "tool_choice": request.tool_choice,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": request.max_output_tokens,
+            # gpt-5/o-series models reject max_tokens; max_completion_tokens
+            # is accepted by every current chat model the gateway routes.
+            "max_completion_tokens": request.max_output_tokens,
         }
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
@@ -342,16 +352,53 @@ def _gateway_messages(request: GatewayTurnRequest) -> list[dict[str, Any]]:
     return messages
 
 
-def _gateway_tool(tool: Any) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
-            "strict": True,
-        },
+def _strictify_schema(schema: Any) -> Any:
+    """Normalize a tool input schema for OpenAI strict mode.
+
+    Strict function calling requires ``additionalProperties: false`` at every
+    object level and rejects keywords such as ``uniqueItems`` and ``$schema``.
+    Agent cards are third-party input, so the provider normalizes instead of
+    failing the turn.
+    """
+    if isinstance(schema, dict):
+        result: dict[str, Any] = {}
+        for key, value in schema.items():
+            if key == "$schema":
+                continue
+            if key == "uniqueItems":
+                continue
+            if key in ("properties", "patternProperties", "$defs", "definitions"):
+                result[key] = {
+                    name: _strictify_schema(item)
+                    for name, item in (value or {}).items()
+                }
+            elif key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+                result[key] = [_strictify_schema(item) for item in value]
+            elif key in ("items", "additionalProperties"):
+                if isinstance(value, dict):
+                    result[key] = _strictify_schema(value)
+                else:
+                    result[key] = value
+            else:
+                result[key] = value
+        if result.get("type") == "object":
+            result.setdefault("additionalProperties", False)
+        return result
+    if isinstance(schema, list):
+        return [_strictify_schema(item) for item in schema]
+    return schema
+
+
+def _gateway_tool(tool: Any, *, strict: bool) -> dict[str, Any]:
+    parameters = _strictify_schema(tool.input_schema) if strict else tool.input_schema
+    function: dict[str, Any] = {
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": parameters,
     }
+    if strict:
+        function["strict"] = True
+    return {"type": "function", "function": function}
 
 
 def _normalize_finish_reason(reason: str) -> str:

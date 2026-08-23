@@ -19,16 +19,16 @@ Absent or invalid typed metadata fails with `unsupported_interaction` and the
 fixed public message `The agent requested an unsupported interaction.`
 
 
-## Production-unbound Orchestrator V3 A2A runtime
+## Orchestrator A2A runtime
 
-The Plan 3 runtime remains outside `container.py`, routes, and jobs until the
-Plan 4 cutover. Pre-cutover contracts pinned before wiring:
+The orchestrator runtime currently remains outside `container.py`, routes,
+and jobs until the production cutover. Contracts pinned before wiring:
 
 - `OrchestratorRunState` (schema version 5) persists an explicit
   `runtime_generation` (always `"orchestrator"` in this store) fixed at Run
   creation and never re-evaluated; legacy-owned Runs are identified by their
-  absence from this store. Plan 4 dual routing and recovery must key off this
-  persisted ownership, never off a live feature flag.
+  absence from this store. Production dual routing and recovery must key off
+  this persisted ownership, never off a live feature flag.
 - `ProfileConfiguration.initial_routing` and `finalization` are frozen per Run
   but reserved: no code consumes them yet. Production composition pins
   `explicit_agent_first` (API pre-filters the candidate scope) and
@@ -88,8 +88,8 @@ in the accepted dispatch snapshot. The provider-neutral direct client port
 contains SDK types behind its implementation boundary. Stream events enter the
 same durable ingress before they affect lifecycle state; deadline, cancellation,
 and process-death paths close the stream and reconcile through inspection.
-Inbound remote artifacts may be enabled only with the Plan 3 guarded adapter,
-which uses the existing SSRF-pinned fetch primitive and an unbound
+Inbound remote artifacts may be enabled only with the guarded adapter, which
+uses the existing SSRF-pinned fetch primitive and an epoch-fenced
 `RoomFilesEpochFencedArtifactOwner`. After a long fetch, that owner holds the
 existing Room deletion/write lease while checking the exact Room epoch and
 committing; a recreated Room cannot receive an old-incarnation artifact. Room
@@ -393,7 +393,7 @@ embedding, and streaming operations through protocols in `common.protocols`.
 `LLMGatewayConfig.from_settings()` reads typed `LLM_GATEWAY_*` policy fields;
 `LLM_GATEWAY_GENERATION_PROVIDER` explicitly selects `openai` or `deepseek` and
 API-key presence never changes that route. `ModelRegistryImpl` maps logical
-routes to concrete provider model IDs and exposes route-specific v3 capability
+routes to concrete provider model IDs and exposes route-specific capability
 metadata. When DeepSeek is explicitly selected, the existing `lead_ai_model`,
 `classifier_ai_model`, `context_memory_json_model`, and `supervisor_model`
 routes resolve to `DEEPSEEK_MODEL_NAME`; embeddings remain OpenAI-backed. A
@@ -514,18 +514,18 @@ The main orchestration invariant is that `RoomMessageCenter` serializes
 processing per room. It uses a process-local `asyncio.Lock`, and in multi-worker
 mode this is supplemented by a Redis distributed lock configured at startup.
 
-Execution also contains an additive, production-unbound orchestrator-v3 Agent
-Core. Its gateway-owned turn contract supports one official OpenAI or DeepSeek
+Execution also contains an additive orchestrator Agent Core, currently unbound
+from production composition. Its gateway-owned turn contract supports one official OpenAI or DeepSeek
 attempt without importing Execution or Room models. `GatewayModelRuntime` owns
 bounded retries, hard-deadline handling, typed provider failures, and per-attempt
 durable usage/retry accounting; `OrchestratorKernel` owns the provider-neutral
 model/tool loop, CAS checkpoints, durable compaction summaries, atomic recoverable
 tool batches, two-phase tool acceptance, suspension, correlated observation, and
 terminal settlement.
-`RoomAgentSession` is an unbound exactly-once lifecycle facade, while
+`RoomAgentSession` is an exactly-once lifecycle facade, while
 `ContextCompiler`, non-destructive explicitly budgeted compaction, and
-`BudgetPolicy` bound each turn. Plan 3 adds a sibling, production-unbound
-`execution.orchestrator.a2a_runtime` adapter layer: async authorized Agent Card
+`BudgetPolicy` bound each turn. The `execution.orchestrator.a2a_runtime`
+adapter layer: async authorized Agent Card
 projection produces a frozen synchronous catalog and private bindings; a separate
 call ledger enforces accept-before-dispatch, scoped task/context ownership,
 Room-epoch fences, cancellation, and leased recovery; authenticated direct,
@@ -535,7 +535,8 @@ trusted call-bound auth-reference verification and an answer-applied reconciler
 that closes answer-to-command crash windows; frozen resource manifests and
 durable/regenerable projections remain adapter-owned. The Kernel/session/context/budget layer
 still imports none of A2A, Room, persistence, SSE, or provider SDK concerns, and
-Plan 3 constructs nothing in `container.py`, routes, or production jobs. OpenAI
+the orchestrator layer constructs nothing in `container.py`, routes, or
+production jobs. OpenAI
 uses native streamed tool calls; DeepSeek uses the named locally validated
 structured-action route. Gemini credentials remain only as fail-fast migration
 input and cannot select an adapter.

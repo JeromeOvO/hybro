@@ -64,6 +64,68 @@ class Settings(BaseSettings):
     llm_gateway_default_embedding_model: str = "embedding_model"
     llm_gateway_default_supervisor_model: str = "supervisor_model"
 
+    # Orchestrator runtime profile parameters (Fast/Ultimate). Fast and Ultimate
+    # share one Kernel and differ only in these resolved parameters. The
+    # initial_routing dimension is pinned to explicit_agent_first (the API
+    # pre-filters the candidate scope) and finalization to pass_through until
+    # those reserved dimensions are consumed by the kernel.
+    orchestrator_fast_model_route: str = "supervisor_model"
+    orchestrator_fast_prompt_id: str = "orchestrator_fast"
+    orchestrator_fast_prompt_version: str = "1"
+    orchestrator_fast_thinking_level: str | None = None
+    orchestrator_fast_max_model_turns: int = 6
+    orchestrator_fast_grace_model_turns: int = 1
+    orchestrator_fast_max_agent_calls: int = 10
+    orchestrator_fast_max_parallel_calls: int = 3
+    orchestrator_fast_max_transport_retries_per_call: int = 2
+    orchestrator_fast_max_compactions: int = 2
+    orchestrator_fast_deadline_seconds: float = 300.0
+    orchestrator_fast_initial_routing: str = "explicit_agent_first"
+    orchestrator_fast_tool_execution: str = "parallel"
+    orchestrator_fast_finalization: str = "pass_through"
+
+    orchestrator_ultimate_model_route: str = "supervisor_model"
+    orchestrator_ultimate_prompt_id: str = "orchestrator_ultimate"
+    orchestrator_ultimate_prompt_version: str = "1"
+    orchestrator_ultimate_thinking_level: str | None = None
+    orchestrator_ultimate_max_model_turns: int = 12
+    orchestrator_ultimate_grace_model_turns: int = 2
+    orchestrator_ultimate_max_agent_calls: int = 20
+    orchestrator_ultimate_max_parallel_calls: int = 4
+    orchestrator_ultimate_max_transport_retries_per_call: int = 3
+    orchestrator_ultimate_max_compactions: int = 3
+    orchestrator_ultimate_deadline_seconds: float = 600.0
+    orchestrator_ultimate_initial_routing: str = "explicit_agent_first"
+    orchestrator_ultimate_tool_execution: str = "parallel"
+    orchestrator_ultimate_finalization: str = "pass_through"
+
+    # Orchestrator background workers (step 6). Both default OFF: legacy jobs
+    # already run and no traffic is routed to the orchestrator until step 8.
+    orchestrator_recovery_enabled: bool = False
+    orchestrator_projection_enabled: bool = False
+    orchestrator_worker_interval_seconds: int = Field(default=30, gt=0)
+
+    # Orchestrator dual-routing (step 7). Every switch defaults OFF/0/empty so
+    # the orchestrator receives zero traffic until explicitly enabled. Routing
+    # happens only at Run creation; these flags never change an existing Run's
+    # owner.
+    orchestrator_routing_enabled: bool = False
+    orchestrator_fast_ratio: int = Field(default=0, ge=0, le=100)
+    orchestrator_ultimate_ratio: int = Field(default=0, ge=0, le=100)
+    orchestrator_user_allowlist: str | list[str] = []
+    orchestrator_room_allowlist: str | list[str] = []
+    orchestrator_kill_switch: bool = False
+
+    # Orchestrator canary observability (step 8). The canary job is disabled by
+    # default and reads only the existing orchestrator durable stores. Thresholds
+    # follow the suggested §8.2 initial values and are tuned before launch.
+    orchestrator_canary_enabled: bool = False
+    orchestrator_canary_run_failure_rate_max: float = Field(default=0.01, ge=0)
+    orchestrator_canary_run_failure_window_seconds: int = Field(default=300, gt=0)
+    orchestrator_canary_blocked_intent_max_age_seconds: int = Field(default=600, gt=0)
+    orchestrator_canary_recovery_cycle_max_age_seconds: int = Field(default=60, gt=0)
+    orchestrator_canary_observation_conflicts_max: int = Field(default=0, ge=0)
+
     log_level: str = "INFO"
     log_format: str = "auto"
 
@@ -353,6 +415,47 @@ class Settings(BaseSettings):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator(
+        "orchestrator_recovery_enabled",
+        "orchestrator_projection_enabled",
+        "orchestrator_routing_enabled",
+        "orchestrator_kill_switch",
+        "orchestrator_canary_enabled",
+        mode="before",
+    )
+    @classmethod
+    def normalize_orchestrator_worker_switch(cls, value):
+        if value is None or str(value).strip() == "":
+            return False
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @field_validator(
+        "orchestrator_user_allowlist", "orchestrator_room_allowlist", mode="before"
+    )
+    @classmethod
+    def parse_orchestrator_allowlist(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return []
+
+    @field_validator(
+        "orchestrator_fast_ratio", "orchestrator_ultimate_ratio", mode="before"
+    )
+    @classmethod
+    def normalize_orchestrator_ratio(cls, value):
+        if value is None or str(value).strip() == "":
+            return 0
+        try:
+            return max(0, min(100, int(value)))
+        except (TypeError, ValueError):
+            return 0
 
     @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
     @classmethod

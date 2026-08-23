@@ -1,4 +1,4 @@
-"""Private durable contracts for the production-unbound Orchestrator V3 A2A runtime."""
+"""Private durable contracts for the orchestrator A2A runtime."""
 
 from __future__ import annotations
 
@@ -112,6 +112,19 @@ class AgentToolBindingRecord(A2ADurableModel):
     candidate_scope_id: str
     candidate_scope_revision: int = Field(ge=1)
     authorization_basis_digest: str
+    # Denormalized AuthorizationBasis.kind so the refresh adapter can honor
+    # scope semantics without re-resolving the Run (all_active_agents skips
+    # the room-membership gate; every other kind requires membership).
+    authorization_kind: (
+        Literal[
+            "room_member",
+            "saved_group_member",
+            "explicit_selection",
+            "mention",
+            "all_active_agents",
+        ]
+        | None
+    ) = None
     requesting_subject_digest: str
     input_modes: list[str]
     output_modes: list[str]
@@ -400,16 +413,28 @@ class NormalizedA2AObservation(A2ADurableModel):
 
 
 class A2ADispatchReceipt(ContractModel):
-    outcome: Literal["accepted", "terminal", "delivery_uncertain", "rejected"]
+    outcome: Literal[
+        "accepted",
+        "terminal",
+        "delivery_uncertain",
+        "rejected",
+        "interaction",
+    ]
     task_id: str | None = None
     context_id: str | None = None
     terminal_observation: NormalizedA2AObservation | None = None
+    # input-required/auth-required answers: the Agent's request for input is
+    # the durable result of the invocation and must reach the kernel as a tool
+    # result (not be polled away as "still working").
+    interaction_observation: NormalizedA2AObservation | None = None
     transport_journal_id: str | None = None
 
     @model_validator(mode="after")
     def _terminal_receipt_has_observation(self) -> A2ADispatchReceipt:
         if self.outcome == "terminal" and self.terminal_observation is None:
             raise ValueError("terminal receipt requires an observation")
+        if self.outcome == "interaction" and self.interaction_observation is None:
+            raise ValueError("interaction receipt requires an observation")
         return self
 
 

@@ -1,4 +1,4 @@
-"""Deterministic agent-shaped fake tools for Plan 2 tests."""
+"""Deterministic agent-shaped fake tools for kernel and session tests."""
 
 from __future__ import annotations
 

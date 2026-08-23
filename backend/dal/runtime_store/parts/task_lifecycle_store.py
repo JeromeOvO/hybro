@@ -412,6 +412,10 @@ class TaskLifecycleRuntimeStorePart:
             {
                 "message_type": "agent",
                 "message_created_at": {"$lt": threshold},
+                # Orchestrator-projected messages (final answers, future
+                # intermediate projections) are owned by the orchestrator
+                # runtime's recovery, never by the legacy orphan detector.
+                "extend_info.orchestrator_run_id": {"$exists": False},
                 "$and": [
                     {
                         "$or": [

@@ -292,7 +292,7 @@ class HITLRouteSnapshot(_HITLContract):
 
 
 class HITLRouteSnapshotV2(_HITLContract):
-    """Invocation-owned route added for the unbound Orchestrator V3 runtime."""
+    """Invocation-owned route added for the orchestrator runtime."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 

@@ -1,10 +1,12 @@
-"""Unbound Mongo collection and index metadata for orchestrator v3."""
+"""Mongo collection and index metadata for orchestrator persistence."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
+
+from common.orchestrator_constants import RELAY_COMMAND_JOURNAL_COLLECTION
 
 ORCHESTRATOR_RUNS_COLLECTION = "orchestrator_runs"
 ORCHESTRATOR_RUN_EVENTS_COLLECTION = "orchestrator_run_events"
@@ -81,6 +83,16 @@ ORCHESTRATOR_EVENT_INDEXES = (
         keys=(("run_id", 1), ("sequence", 1)),
         unique=True,
     ),
+    MongoIndexDefinition(
+        name="orchestrator_event_epoch_cleanup",
+        keys=(("room_id", 1), ("room_epoch", 1)),
+    ),
+)
+
+RELAY_COMMAND_JOURNAL_INDEXES = (
+    MongoIndexDefinition(
+        name="relay_command_id_unique", keys=(("command_id", 1),), unique=True
+    ),
 )
 
 ORCHESTRATOR_COLLECTIONS = (
@@ -89,5 +101,8 @@ ORCHESTRATOR_COLLECTIONS = (
     ),
     MongoCollectionDefinition(
         name=ORCHESTRATOR_RUN_EVENTS_COLLECTION, indexes=ORCHESTRATOR_EVENT_INDEXES
+    ),
+    MongoCollectionDefinition(
+        name=RELAY_COMMAND_JOURNAL_COLLECTION, indexes=RELAY_COMMAND_JOURNAL_INDEXES
     ),
 )

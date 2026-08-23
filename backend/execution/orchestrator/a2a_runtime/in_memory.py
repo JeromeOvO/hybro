@@ -1,4 +1,4 @@
-"""Deterministic in-memory repositories for Plan 3 conformance and failure tests."""
+"""Deterministic in-memory repositories for conformance and failure tests."""
 
 from __future__ import annotations
 
@@ -178,6 +178,17 @@ class InMemoryAgentCallLedgerStore:
                 for alias in record.ownership_aliases
             ):
                 matches.append(record)
+        return _clone(matches[0]) if len(matches) == 1 else None
+
+    async def find_by_task_id(self, task_id: str) -> AgentCallLedgerRecord | None:
+        matches = [
+            record
+            for record in self._records.values()
+            if any(
+                alias.kind == "task" and alias.value == task_id
+                for alias in record.ownership_aliases
+            )
+        ]
         return _clone(matches[0]) if len(matches) == 1 else None
 
     async def cas(
@@ -561,6 +572,10 @@ class InMemoryObservationConflictStore:
 class InMemoryRoomEpochStore:
     def __init__(self) -> None:
         self._records: dict[str, RoomEpoch] = {}
+
+    async def read(self, room_id: str) -> RoomEpoch | None:
+        record = self._records.get(room_id)
+        return _clone(record) if record is not None else None
 
     async def read_active(self, room_id: str) -> RoomEpoch | None:
         record = self._records.get(room_id)

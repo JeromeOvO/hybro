@@ -14,6 +14,22 @@ class MongoCollectionAdapter:
     def __init__(self, collection: Any) -> None:
         self._collection = collection
 
+    @property
+    def name(self) -> str:
+        return str(self._collection.name)
+
+    @property
+    def raw_collection(self) -> Any:
+        """The underlying Motor collection.
+
+        Consumers that need Motor semantics (cursor-returning ``find`` /
+        ``aggregate``, result objects carrying ``modified_count`` /
+        ``deleted_count``) must use this accessor: this adapter's awaitable,
+        list-returning ``find``/``aggregate`` and bool/int results
+        deliberately do not match that protocol.
+        """
+        return self._collection
+
     async def find_one(self, query: dict, **kwargs) -> dict | None:
         return await self._collection.find_one(query, **kwargs)
 

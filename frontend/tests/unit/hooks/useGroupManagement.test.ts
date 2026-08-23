@@ -149,6 +149,28 @@ describe('useGroupManagement', () => {
     expect(result.current.isOverride).toBe(true)
   })
 
+  it('should restore a persisted room override after mount', async () => {
+    localStorage.setItem('room-room-42-override-group', 'grp-1')
+    localStorage.setItem('room-room-42-override-group-name', 'My Group')
+    mockListAgentGroups.mockResolvedValue({ success: true, groups: [fakeGroup] })
+
+    const { result } = renderHook(() => useGroupManagement({
+      ...defaultOptions(),
+      roomId: 'room-42',
+    }))
+
+    await waitFor(() => {
+      expect(result.current.selectedGroup).toBe('grp-1')
+      expect(result.current.groups).toEqual([fakeGroup])
+    })
+    expect(result.current.selectedGroupName).toBe('My Group')
+    expect(result.current.isOverride).toBe(true)
+    expect(result.current.resolvedTargetMode).toEqual({
+      message_target_mode: 'saved_group',
+      target_group_id: 'grp-1',
+    })
+  })
+
   it('should apply group override via handleGroupChange', async () => {
     mockListAgentGroups.mockResolvedValue({ success: true, groups: [fakeGroup] })
     const opts = { ...defaultOptions(), roomId: 'room-42' }

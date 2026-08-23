@@ -1,4 +1,4 @@
-"""Unbound direct and relay adapters behind the transport-neutral dispatch port."""
+"""Direct and relay adapters behind the transport-neutral dispatch port."""
 
 from __future__ import annotations
 
@@ -150,6 +150,17 @@ class DirectA2ADispatchAdapter:
                             task_id=task_id,
                             context_id=context_id,
                             terminal_observation=normalized,
+                        )
+                    if normalized.event_kind in {"input_required", "auth_required"}:
+                        # The Agent asked for input mid-stream. Stop streaming:
+                        # the request is the invocation's durable result and must
+                        # reach the kernel instead of being polled as working.
+                        close_reason = "interaction"
+                        return A2ADispatchReceipt(
+                            outcome="interaction",
+                            task_id=task_id,
+                            context_id=context_id,
+                            interaction_observation=normalized,
                         )
             return A2ADispatchReceipt(
                 outcome="delivery_uncertain",

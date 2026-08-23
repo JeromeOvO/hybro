@@ -1175,7 +1175,6 @@ describe('useRoomWebhook SSE message handling', () => {
       .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
 
     expect(userAfterFirstDetail?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Dispatching agents',
     ])
 
@@ -1222,7 +1221,6 @@ describe('useRoomWebhook SSE message handling', () => {
       .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
 
     expect(userBeforeTerminal?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Dispatching agents',
       'Collecting agent results',
     ])
@@ -1240,7 +1238,6 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities[userBeforeTerminal!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Dispatching agents',
       'Collecting agent results',
     ])
@@ -1258,7 +1255,6 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities[userBeforeTerminal!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Dispatching agents',
       'Collecting agent results',
       'Resuming after input',
@@ -1278,7 +1274,6 @@ describe('useRoomWebhook SSE message handling', () => {
 
     const userAfterTerminal = useMessageStore.getState().entities[userBeforeTerminal!.id]
     expect(userAfterTerminal.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Dispatching agents',
       'Collecting agent results',
       'Resuming after input',
@@ -1298,7 +1293,6 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities[userBeforeTerminal!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Dispatching agents',
       'Collecting agent results',
       'Resuming after input',
@@ -1345,7 +1339,6 @@ describe('useRoomWebhook SSE message handling', () => {
       .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
 
     expect(userEntity?.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Planning next action...',
     ])
 
@@ -1377,7 +1370,6 @@ describe('useRoomWebhook SSE message handling', () => {
 
     expect(flags().processing).toBe(false)
     expect(useMessageStore.getState().entities[userEntity!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Planning next action...',
     ])
   })
@@ -1661,7 +1653,6 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities[userEntity!.id].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Agent task is working',
     ])
 
@@ -1747,7 +1738,6 @@ describe('useRoomWebhook SSE message handling', () => {
     })
 
     expect(useMessageStore.getState().entities['msg-new'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
-      'Thinking...',
       'Early next-turn detail',
     ])
   })
@@ -2190,7 +2180,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .orderedIds
         .map((id) => useMessageStore.getState().entities[id])
         .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
-      expect(userBeforeTerminal?.processingStatusLogs).toHaveLength(2)
+      expect(userBeforeTerminal?.processingStatusLogs).toHaveLength(1)
       const userMessageId = userBeforeTerminal!.id
 
       await act(async () => {
@@ -2207,7 +2197,6 @@ describe('useRoomWebhook SSE message handling', () => {
 
       const terminalUser = useMessageStore.getState().entities[userBeforeTerminal!.id]
       expect(terminalUser.processingStatusLogs?.map((entry) => entry.message)).toEqual([
-        'Thinking...',
         'Processing before terminal',
       ])
       expect(terminalUser.turnTerminalStatus).toBe(
@@ -2256,7 +2245,7 @@ describe('useRoomWebhook SSE message handling', () => {
         .orderedIds
         .map((id) => useMessageStore.getState().entities[id])
         .find((entity) => entity?.messageType === 'user' && entity.clientRequestId === clientRequestId)
-      expect(userBeforeAgentTerminal?.processingStatusLogs).toHaveLength(2)
+      expect(userBeforeAgentTerminal?.processingStatusLogs).toHaveLength(1)
 
       await act(async () => {
         await capturedOnMessage!(makeSSEMessage({
@@ -2272,7 +2261,7 @@ describe('useRoomWebhook SSE message handling', () => {
       })
 
       const userAfterAgentTerminal = useMessageStore.getState().entities[userBeforeAgentTerminal!.id]
-      expect(userAfterAgentTerminal.processingStatusLogs).toHaveLength(2)
+      expect(userAfterAgentTerminal.processingStatusLogs).toHaveLength(1)
       expect(userAfterAgentTerminal.turnTerminalStatus).toBeUndefined()
       expect(flags().processing).toBe(true)
     },

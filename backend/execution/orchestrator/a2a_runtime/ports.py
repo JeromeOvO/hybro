@@ -1,4 +1,4 @@
-"""Narrow owner and transport ports for the unbound A2A runtime."""
+"""Narrow owner and transport ports for the A2A runtime."""
 
 from __future__ import annotations
 

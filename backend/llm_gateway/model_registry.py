@@ -53,7 +53,7 @@ class ModelRegistryImpl:
             return self._routes[logical_name]
         except KeyError as exc:
             raise LLMModelRoutingError(
-                f"No v3 model route configured for {logical_name!r}"
+                f"No orchestrator model route configured for {logical_name!r}"
             ) from exc
 
     def supports_capability(self, model: str, capability: str) -> bool:

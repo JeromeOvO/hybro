@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from api_gateway.dependencies import get_webhook_receiver
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.protocols import JsonMap, WebhookReceiver
-from common.utils.logger import get_logger
-
-logger = get_logger(__name__)
+from execution.orchestrator_routing import (
+    OWNER_LEGACY,
+    OWNER_ORCHESTRATOR,
+    WebhookAuthenticationError,
+)
 
 router = APIRouter()
 MAX_A2A_WEBHOOK_BODY_BYTES = 139_810_136 + 2 * 1024 * 1024
@@ -66,8 +68,24 @@ async def handle_a2a_webhook(
     )
 
     assert isinstance(transport, WebhookReceiver)
-    await transport.authenticate_webhook(message_id, token)
     payload = await _bounded_json_object(request)
+    # The parsed payload is reused below by both the routing seam and the
+    # legacy transport, so the body is parsed exactly once.
+    routing_state = getattr(getattr(request, "app", None), "state", None)
+    router = getattr(routing_state, "orchestrator_routing", None)
+    owner = OWNER_LEGACY
+    if router is not None:
+        try:
+            owner = await router.route_webhook(
+                message_id=message_id, payload=payload, token=token
+            )
+        except WebhookAuthenticationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except HTTPException:
+            raise
+    if owner == OWNER_ORCHESTRATOR:
+        return {"status": "accepted"}
+    await transport.authenticate_webhook(message_id, token)
     return await transport.handle_webhook(message_id, payload, token)
 
 

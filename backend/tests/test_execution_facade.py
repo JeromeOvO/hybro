@@ -33,6 +33,7 @@ from models.orchestration import (
     OrchestrationRunState,
     OrchestrationStatus,
 )
+from models.request import OrchestrationRequest
 from models.response import RoomCenterUserMessageResponse
 from models.run import RunState
 from room.route_adapter import RoomRouteAdapter
@@ -545,6 +546,100 @@ async def test_execute_continues_when_active_run_lookup_fails():
     deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
     deps["room_center"].send_message_to_room.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_orchestration_carries_live_mode_and_scope():
+    facade, _deps = _make_facade()
+    facade._route_orchestration = AsyncMock()
+    request = ExecutionRequest(
+        room_id="room-1",
+        sender_id="user-1",
+        client_request_id="cr-1",
+        mode="supervisor",
+        agent_scope={"source": "all_agents"},
+    )
+    ack = ExecutionAck(
+        room_id="room-1",
+        message_id="msg-1",
+        success=True,
+        should_start_orchestration=True,
+        preflight_outcome="ready",
+    )
+
+    facade.schedule_orchestration(request, ack)
+    await asyncio.sleep(0)
+
+    routed_request, orchestration_request = facade._route_orchestration.call_args.args
+    assert routed_request is request
+    # The route-validated mode and scope travel with the orchestration
+    # request so routing never depends on the persisted extend_info rewrite.
+    assert orchestration_request.mode == "supervisor"
+    assert orchestration_request.agent_scope == {"source": "all_agents"}
+
+
+@pytest.mark.asyncio
+async def test_recovery_skips_orchestrator_owned_user_messages():
+    """Legacy recovery must never re-enter a turn owned by the orchestrator
+    runtime: the orchestrator's own recovery cycle owns those runs."""
+    facade, deps = _make_facade(
+        orchestrator_router=SimpleNamespace(
+            resolve_run_owner_by_user_message=AsyncMock(return_value="orchestrator")
+        )
+    )
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-1",
+        client_request_id="cr-1",
+        is_recovery=True,
+    )
+
+    facade.schedule_recovery_orchestration(request, reason="orphan")
+    await asyncio.sleep(0)
+
+    deps["room_message_center"].process_room_user_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovery_proceeds_for_legacy_owned_user_messages():
+    facade, deps = _make_facade(
+        orchestrator_router=SimpleNamespace(
+            resolve_run_owner_by_user_message=AsyncMock(return_value="legacy")
+        )
+    )
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-1",
+        client_request_id="cr-1",
+        is_recovery=True,
+    )
+
+    facade.schedule_recovery_orchestration(request, reason="orphan")
+    await asyncio.sleep(0)
+
+    deps["room_message_center"].process_room_user_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_recovery_falls_back_to_legacy_when_ownership_lookup_fails():
+    facade, deps = _make_facade(
+        orchestrator_router=SimpleNamespace(
+            resolve_run_owner_by_user_message=AsyncMock(
+                side_effect=RuntimeError("store down")
+            )
+        )
+    )
+    request = OrchestrationRequest(
+        room_id="room-1",
+        room_user_message_id="msg-1",
+        client_request_id="cr-1",
+        is_recovery=True,
+    )
+
+    facade.schedule_recovery_orchestration(request, reason="orphan")
+    await asyncio.sleep(0)
+
+    deps["room_message_center"].process_room_user_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio

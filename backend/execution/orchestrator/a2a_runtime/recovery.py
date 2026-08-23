@@ -1,11 +1,15 @@
-"""Unbound leased recovery services; production scheduling is deferred to Plan 4."""
+"""Leased recovery services for the orchestrator A2A runtime."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 
-from ..models import TextPart
+from common.utils.logger import get_logger
+
+from ..models import TextPart, ToolResult
 from ..ports import InvocationCheckpointReader
 from .cancellation import A2ACancellationCoordinator
 from .errors import (
@@ -34,6 +38,8 @@ from .ports import (
     ObservationInboxStore,
     RoomEpochStore,
 )
+
+logger = get_logger(__name__)
 
 RecoverDispatch = Callable[[AgentCallLedgerRecord], Awaitable[None]]
 RecoverPhase = Callable[[], Awaitable[None]]
@@ -213,7 +219,7 @@ class A2ACallRecoveryService:
                 is not None
             )
 
-        command = _dispatch_command(record)
+        command = dispatch_command(record)
         try:
             inspected = await self.dispatch.inspect(command)
         except (
@@ -236,6 +242,47 @@ class A2ACallRecoveryService:
                 record,
                 observation,
                 recent_limit=record.runtime_policy.recent_observation_id_limit,
+            )
+            winner, exact = await self._cas_or_load_winner(
+                terminal, expected_state_version=record.state_version
+            )
+            return exact or (
+                winner is not None and winner.state in TERMINAL_AGENT_CALL_STATES
+            )
+        if (
+            inspected is not None
+            and inspected.outcome == "interaction"
+            and inspected.interaction_observation is not None
+        ):
+            # The remote task asked for input: the request is the invocation's
+            # durable answer. Record it and finalize the call so the run's
+            # observation pipeline can route the request instead of polling a
+            # task that will never complete on its own.
+            observation = inspected.interaction_observation
+            await self.observations.record(observation)
+            record = await self._renew(record, now=datetime.now(UTC))
+            if record is None:
+                return False
+            content = list(observation.content or [])
+            if not content:
+                content = [TextPart(text="The Agent requested additional input.")]
+            result = ToolResult(
+                call_id=record.invocation_id,
+                tool_name=record.tool_name,
+                status="completed",
+                content=content,
+                artifact_refs=list(observation.artifact_refs or []),
+                error_code=None,
+                error_message=None,
+            )
+            terminal = transition_call(
+                record,
+                to_state="completed",
+                updated_at=datetime.now(UTC),
+                terminal_result=result,
+                terminal_result_digest=sha256(
+                    result.model_dump_json().encode()
+                ).hexdigest(),
             )
             winner, exact = await self._cas_or_load_winner(
                 terminal, expected_state_version=record.state_version
@@ -546,21 +593,34 @@ class A2ARecoveryCycle:
         calls: RecoverPhase,
         artifacts: RecoverPhase,
         generic_runs: RecoverPhase,
+        projection: RecoverPhase,
         watchdog: RecoverPhase,
     ) -> None:
         self.phases = (
-            cancellation,
-            continuation,
-            observations,
-            calls,
-            artifacts,
-            generic_runs,
-            watchdog,
+            ("cancellation", cancellation),
+            ("continuation", continuation),
+            ("observations", observations),
+            ("calls", calls),
+            ("artifacts", artifacts),
+            ("generic_runs", generic_runs),
+            ("projection", projection),
+            ("watchdog", watchdog),
         )
 
     async def run_once(self) -> None:
-        for phase in self.phases:
-            await phase()
+        """Run phases in order, isolating one phase failure from the rest.
+
+        Cancellation is still propagated so job shutdown remains responsive; any
+        other phase exception is logged and the cycle continues to the next
+        phase. Watchdog remains the last phase by construction.
+        """
+        for name, phase in self.phases:
+            try:
+                await phase()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.error("A2A recovery phase failed: %s", name, exc_info=True)
 
 
 def _general_call_recovery_progressed(
@@ -627,7 +687,7 @@ def _call_recovery_progressed(
     )
 
 
-def _dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
+def dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
     return A2ADispatchCommand(
         command_id=record.dispatch_snapshot.command_id,
         call_record_id=record.call_record_id,

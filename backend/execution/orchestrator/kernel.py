@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -15,8 +16,12 @@ from jsonschema import Draft202012Validator
 from .budget import BudgetExceeded, BudgetPolicy
 from .context import ContextCompiler, UnresolvedToolBatchError
 from .models import (
+    ArtifactRefPart,
     AssistantMessage,
+    DataPart,
     OrchestratorRunState,
+    PreparedResourceRef,
+    RunResourceManifestSnapshot,
     SessionNotice,
     TextPart,
     ToolAcceptance,
@@ -82,6 +87,29 @@ class SystemClock:
 class UUIDFactory:
     def new_id(self, prefix: str) -> str:
         return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def _task_text(arguments: object) -> str:
+    if isinstance(arguments, dict):
+        task = arguments.get("task")
+        if isinstance(task, str) and task.strip():
+            return task.strip()[:4000]
+    return ""
+
+
+def _result_text(result: ToolResult) -> str:
+    parts: list[str] = []
+    for part in result.content:
+        if isinstance(part, TextPart):
+            if part.text:
+                parts.append(part.text)
+        elif isinstance(part, DataPart):
+            parts.append(
+                json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
+            )
+        elif isinstance(part, ArtifactRefPart):
+            parts.append(f"[artifact reference: {part.artifact_ref}]")
+    return "\n".join(parts)[:8000]
 
 
 class OrchestratorKernel:
@@ -202,6 +230,7 @@ class OrchestratorKernel:
                     run, status="budget_exhausted", reason=exc.reason
                 )
 
+            run = await self._refresh_resource_manifest(run)
             tools = (
                 []
                 if run.budget.wrap_up_requested
@@ -460,9 +489,45 @@ class OrchestratorKernel:
                 lifecycle,
                 "message_completed",
                 run,
-                {"call_id": item.call_id, "message_kind": "tool_result"},
+                {
+                    "call_id": item.call_id,
+                    "message_kind": "tool_result",
+                    "agent_label": self._tool_label(run, result.tool_name)
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                    "binding_id": self._tool_binding_id(run, result.tool_name)
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                    "result_text": _result_text(result)
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                    "result_status": result.status
+                    if (result := item.buffered_terminal_result) is not None
+                    else None,
+                },
             )
         return await self.run(run_id, signal=signal, lifecycle=lifecycle)
+
+    @staticmethod
+    def _tool_binding_id(run: OrchestratorRunState, tool_name: str) -> str | None:
+        """Resolve the frozen binding id for a tool name."""
+        if run.tool_catalog is None:
+            return None
+        for entry in run.tool_catalog.entries:
+            if entry.definition.name == tool_name:
+                return entry.binding.binding_id
+        return None
+
+    @staticmethod
+    def _tool_label(run: OrchestratorRunState, tool_name: str) -> str | None:
+        """Resolve the user-facing agent label for a tool name."""
+        if run.tool_catalog is None:
+            return None
+        for entry in run.tool_catalog.entries:
+            if entry.definition.name == tool_name:
+                label = entry.definition.label.strip()
+                return label or None
+        return None
 
     async def _ensure_tool_batch(
         self, run: OrchestratorRunState, assistant: AssistantMessage
@@ -640,7 +705,11 @@ class OrchestratorKernel:
                     lifecycle,
                     "tool_execution_started",
                     run,
-                    {"call_id": call.call_id, "tool_name": call.tool_name},
+                    {
+                        "call_id": call.call_id,
+                        "tool_name": call.tool_name,
+                        "agent_label": self._tool_label(run, call.tool_name),
+                    },
                 )
                 outcome = await self._execute_one(invocation, acceptance, signal=signal)
                 await self._emit(
@@ -663,7 +732,11 @@ class OrchestratorKernel:
                         lifecycle,
                         "tool_execution_started",
                         run,
-                        {"call_id": call.call_id, "tool_name": call.tool_name},
+                        {
+                            "call_id": call.call_id,
+                            "tool_name": call.tool_name,
+                            "agent_label": self._tool_label(run, call.tool_name),
+                        },
                     )
                     outcome = await self._execute_one(
                         invocation, acceptance, signal=signal
@@ -727,7 +800,15 @@ class OrchestratorKernel:
                     lifecycle,
                     "message_completed",
                     run,
-                    {"call_id": entry.call_id, "message_kind": "tool_result"},
+                    {
+                        "call_id": entry.call_id,
+                        "message_kind": "tool_result",
+                        "agent_label": self._tool_label(
+                            run, entry.buffered_terminal_result.tool_name
+                        )
+                        if entry.buffered_terminal_result is not None
+                        else None,
+                    },
                 )
             return None
         status = _wait_status(batch)
@@ -1131,6 +1212,42 @@ class OrchestratorKernel:
                 command_id=command,
             )
 
+    async def _refresh_resource_manifest(
+        self, run: OrchestratorRunState
+    ) -> OrchestratorRunState:
+        """Fold mid-run agent artifacts into the live resource manifest.
+
+        Artifacts produced by agent calls accumulate on ``run.artifact_refs``;
+        without registering them into the manifest the next turn's tool schema
+        cannot offer them as ``artifact_refs``. Idempotent: already-registered
+        refs are left untouched and no checkpoint is written when unchanged.
+        """
+        if run.resource_manifest is None:
+            return run
+        existing = {ref.ref_id for ref in run.resource_manifest.refs}
+        new_refs = [
+            PreparedResourceRef(
+                ref_id=ref_id,
+                kind="artifact",
+                source_message_id=run.request.user_message_id,
+                mime_type=None,
+                size_bytes=0,
+                content_digest="",
+            )
+            for ref_id in run.artifact_refs
+            if ref_id and ref_id not in existing
+        ]
+        if not new_refs:
+            return run
+        manifest = _resource_manifest_from_refs(
+            [*run.resource_manifest.refs, *new_refs]
+        )
+        return await self._checkpoint(
+            run,
+            updates={"resource_manifest": manifest},
+            command_id=f"resource-manifest:{run.run_id}",
+        )
+
     async def _checkpoint(
         self,
         run: OrchestratorRunState,
@@ -1217,6 +1334,23 @@ def _merge_artifact_refs(existing: list[str], results: list[ToolResult]) -> list
         dict.fromkeys(
             [*existing, *(ref for result in results for ref in result.artifact_refs)]
         )
+    )
+
+
+def _resource_manifest_from_refs(
+    refs: list[PreparedResourceRef],
+) -> RunResourceManifestSnapshot:
+    canonical = json.dumps(
+        [ref.model_dump(mode="json") for ref in refs],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    digest = sha256(canonical.encode()).hexdigest()
+    return RunResourceManifestSnapshot(
+        manifest_id=f"manifest-{digest}",
+        refs=refs,
+        content_digest=digest,
     )
 
 

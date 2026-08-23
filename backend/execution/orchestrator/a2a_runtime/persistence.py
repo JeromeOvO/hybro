@@ -1,4 +1,4 @@
-"""Unbound Mongo collection/index metadata for Plan 3 private runtime state."""
+"""Mongo collection and index metadata for private A2A runtime state."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ AGENT_CALLS_COLLECTION = "orchestrator_agent_calls"
 A2A_OBSERVATIONS_COLLECTION = "orchestrator_a2a_observations"
 A2A_OBSERVATION_CONFLICTS_COLLECTION = "orchestrator_a2a_observation_conflicts"
 ROOM_EPOCHS_COLLECTION = "orchestrator_room_epochs"
+HITL_INTERACTIONS_COLLECTION = "orchestrator_hitl_interactions"
 
 AGENT_TOOL_BINDING_INDEXES = (
     MongoIndexDefinition("binding_id_unique", (("binding_id", 1),), unique=True),
@@ -82,6 +83,11 @@ ROOM_EPOCH_INDEXES = (
         "room_epoch_high_water", (("room_id", 1), ("high_water_mark", -1))
     ),
 )
+HITL_INTERACTION_INDEXES = (
+    MongoIndexDefinition(
+        "hitl_interaction_id_unique", (("interaction_id", 1),), unique=True
+    ),
+)
 A2A_RUNTIME_COLLECTIONS = (
     MongoCollectionDefinition(
         AGENT_TOOL_BINDINGS_COLLECTION, AGENT_TOOL_BINDING_INDEXES
@@ -92,4 +98,5 @@ A2A_RUNTIME_COLLECTIONS = (
         A2A_OBSERVATION_CONFLICTS_COLLECTION, OBSERVATION_CONFLICT_INDEXES
     ),
     MongoCollectionDefinition(ROOM_EPOCHS_COLLECTION, ROOM_EPOCH_INDEXES),
+    MongoCollectionDefinition(HITL_INTERACTIONS_COLLECTION, HITL_INTERACTION_INDEXES),
 )

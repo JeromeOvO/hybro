@@ -1,4 +1,4 @@
-"""Provider-neutral and durable contracts for orchestrator v3."""
+"""Provider-neutral and durable orchestrator contracts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ContractModel(BaseModel):
-    """Strict base for persisted v3 contracts."""
+    """Strict base for persisted orchestrator contracts."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -461,6 +461,9 @@ class RunResourceManifestSnapshot(ContractModel):
 class FrozenToolCatalogEntry(ContractModel):
     definition: ToolDefinition
     binding: ToolBindingRef
+    # Denormalized input contract so the synchronous catalog can rebuild the
+    # per-turn ref enum without hitting the binding store.
+    input_modes: list[str] = Field(default_factory=list)
 
 
 class FrozenToolCatalogSnapshot(ContractModel):
@@ -599,7 +602,7 @@ class OrchestratorRunState(ContractModel):
     schema_version: Literal[5] = 5
     run_id: str
     # Explicit persisted execution-engine ownership, fixed at Run creation and
-    # never re-evaluated afterwards (Plan 4 cutover invariant). Runs owned by
+    # never re-evaluated afterwards (production cutover invariant). Runs owned by
     # the legacy executor are identified by their absence from this store, so
     # this schema only ever persists the "orchestrator" generation today; the
     # discriminator exists so future runtime generations can be routed the same
@@ -694,11 +697,13 @@ EventType = Literal[
 
 
 class OrchestratorEvent(ContractModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     event_id: str
     event_type: EventType
     session_id: str
     run_id: str
+    room_id: str
+    room_epoch: int = Field(ge=1)
     sequence: int = Field(gt=0)
     state_version: int = Field(ge=0)
     causation_id: str

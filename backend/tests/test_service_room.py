@@ -622,12 +622,16 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
         assert user_message.processing_claimed_at is None
         assert user_message.quote_id is None
         expected_legacy_quote = (
-            {"execution_mode": "direct"}
+            {
+                "execution_mode": "direct",
+                "agent_scope": {"source": "room_default"},
+            }
             if with_structured_quote
             else {
                 "quoted_text": "allowed quote",
                 "quoted_sender_name": "Allowed Sender",
                 "execution_mode": "direct",
+                "agent_scope": {"source": "room_default"},
             }
         )
         assert user_message.extend_info == expected_legacy_quote

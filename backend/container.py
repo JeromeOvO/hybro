@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -88,6 +89,7 @@ from delivery.facade import DeliveryFacade
 from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
+from execution.adapters.canary_metrics import collect_metrics
 from execution.cancellation import (
     CancellationConfig,
     CancellationRuntime,
@@ -100,8 +102,22 @@ from jobs.cleanup_orphaned_uploads import (
 )
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
 from jobs.constants import ALL_JOB_NAMES
+from jobs.orchestrator_workers import (
+    OrchestratorCanaryDeps,
+    OrchestratorProjectionDeps,
+    OrchestratorRecoveryDeps,
+    orchestrator_canary_job,
+    orchestrator_projection_job,
+    orchestrator_recovery_job,
+)
 from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from models.request import RoomCenterAgentMessageRequest
+from models.room import UserAttachment
+from orchestrator_composition import (
+    OrchestratorCompositionError,
+    create_orchestrator_runtime,
+    validate_orchestrator_runtime,
+)
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room.membership_source import RepositoryRoomMembershipSeedSource
 from room.repository import RoomQuoteMongoRepository
@@ -331,6 +347,254 @@ def validate_runtime_bindings(
     logger.info("All startup bindings verified")
 
 
+async def _resolve_orchestrator_agent_facts(
+    *,
+    run: Any,
+    runtime: Any,
+    call_id: str,
+) -> dict[str, Any] | None:
+    """Resolve label/agent/task/result facts for a call from the durable Run."""
+    from execution.orchestrator.models import AssistantMessage
+
+    entry = next(
+        (
+            item
+            for batch in run.tool_batches
+            for item in batch.entries
+            if item.call_id == call_id
+        ),
+        None,
+    )
+    tool_name = (
+        entry.invocation.tool.definition.name
+        if entry is not None and entry.invocation is not None
+        else None
+    )
+    catalog_entry = next(
+        (
+            item
+            for item in run.tool_catalog.entries
+            if tool_name is not None and item.definition.name == tool_name
+        ),
+        None,
+    )
+    label = (
+        catalog_entry.definition.label.strip()
+        if catalog_entry is not None and catalog_entry.definition.label.strip()
+        else "Agent"
+    )
+    agent_id: str | None = None
+    if catalog_entry is not None:
+        try:
+            binding = await runtime.binding_store.load(catalog_entry.binding.binding_id)
+        except Exception:
+            binding = None
+        agent_id = binding.agent_id if binding is not None else None
+    task_text = ""
+    for message in run.transcript:
+        if not isinstance(message, AssistantMessage):
+            continue
+        for call in message.tool_calls:
+            if call.call_id == call_id and isinstance(call.arguments, dict):
+                task = call.arguments.get("task")
+                if isinstance(task, str) and task.strip():
+                    task_text = task.strip()[:4000]
+    result = entry.buffered_terminal_result if entry is not None else None
+    return {
+        "label": label,
+        "agent_id": agent_id or "",
+        "task_text": task_text or f"Delegate work to {label}.",
+        "result": result,
+    }
+
+
+async def _emit_working_card(
+    *,
+    delivery: Any,
+    run: Any,
+    message_id: str,
+    task_id: str,
+    label: str,
+    agent_id: str,
+    task_text: str,
+    now: datetime,
+) -> None:
+    """Emit task_submitted + working task_update for a live agent card."""
+    await delivery.send_task_submitted(
+        room_id=run.room_id,
+        message_id=message_id,
+        task_id=task_id,
+        agent_name=label,
+        agent_id=agent_id or None,
+        status="working",
+        related_message_id=run.request.user_message_id,
+        created_at=now.isoformat(),
+        step_number=None,
+        total_steps=None,
+        task_content=f"Requesting {label}",
+        client_request_id=run.client_request_id,
+    )
+    await delivery.send_task_update(
+        room_id=run.room_id,
+        message_id=message_id,
+        status="working",
+        status_message=f"Requesting {label}",
+        agent_id=agent_id or None,
+        client_request_id=run.client_request_id,
+    )
+
+
+def _map_orchestrator_terminal_state(status: str | None) -> str:
+    """Map a kernel ToolResultStatus to its legacy TaskState value.
+
+    Kept as a module-level pure function (returning strings, not the
+    ``TaskState`` enum) so it stays import-cycle-free and unit-testable;
+    ``TaskState`` itself is imported lazily inside the projection worker.
+    """
+    return {
+        "completed": "completed",
+        "failed": "failed",
+        "canceled": "canceled",
+        "rejected": "rejected",
+        "expired": "expired",
+    }.get(status or "failed", "failed")
+
+
+async def _project_orchestrator_agent_activity(
+    event: Any,
+    runtime: Any,
+    message_store: Any,
+    delivery: Any = None,
+) -> None:
+    """Project a kernel tool lifecycle event into room_agent_messages.
+
+    Facts are derived from the durable Run, never from the in-flight event
+    payload alone, so concurrent lifecycle listeners cannot race each other
+    into inconsistent documents. The ``orchestrator_run_id`` extend field
+    fences these rows from the legacy orphan detector.
+    """
+    from common.types import Task, TaskState, TaskStatus
+    from models.room import MessageContent, RoomAgentMessage
+
+    payload = event.payload or {}
+    call_id = payload.get("call_id")
+    if not isinstance(call_id, str) or not call_id:
+        return
+    run = await runtime.run_store.load(event.run_id)
+    if run is None or run.tool_catalog is None:
+        return
+    facts = await _resolve_orchestrator_agent_facts(
+        run=run, runtime=runtime, call_id=call_id
+    )
+    label = facts["label"]
+    now = datetime.now(UTC)
+    message_id = f"orchestrator:{run.run_id}:{call_id}"
+    common = dict(
+        room_id=run.room_id,
+        message_id=message_id,
+        message_created_at=now,
+        message_type="agent",
+        user_id=run.request.requesting_subject_id,
+        agent_id=facts["agent_id"],
+        run_id=run.run_id,
+        client_request_id=run.client_request_id,
+        related_message_id=run.request.user_message_id,
+        task_content=f"Requesting {label}",
+    )
+    task_id = f"orchestrator-task-{call_id}"
+
+    if event.event_type == "tool_execution_started":
+        document = RoomAgentMessage(
+            **common,
+            message_content=MessageContent(
+                message_text=facts["task_text"],
+                message_task=Task(
+                    id=task_id,
+                    kind="task",
+                    status=TaskStatus(
+                        state=TaskState.working, timestamp=now.isoformat()
+                    ),
+                    artifacts=[],
+                ),
+            ),
+            extend_info={
+                "public_task_label": f"Requesting {label}",
+                "public_dispatch_text": facts["task_text"],
+                "orchestrator_run_id": run.run_id,
+            },
+        )
+        await message_store.upsert_room_agent_message(document)
+        if delivery is not None:
+            await _emit_working_card(
+                delivery=delivery,
+                run=run,
+                message_id=message_id,
+                task_id=task_id,
+                label=label,
+                agent_id=facts["agent_id"],
+                task_text=facts["task_text"],
+                now=now,
+            )
+        return
+
+    # message_completed: durable result text and terminal task state.
+    # Map the kernel's ToolResultStatus faithfully instead of collapsing
+    # every non-completed outcome into "failed": a rejected/canceled/expired
+    # agent call must render as its own card state, not "Failed".
+    result = facts["result"]
+    state = TaskState(
+        _map_orchestrator_terminal_state(
+            result.status if result is not None else "failed"
+        )
+    )
+    text_parts = [
+        part.text
+        for part in result.content
+        if result is not None and hasattr(part, "text") and part.text
+    ]
+    if text_parts:
+        result_text = "\n".join(text_parts)[:8000]
+    else:
+        import json as _json
+
+        data_parts = [
+            _json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
+            for part in (result.content if result is not None else [])
+            if hasattr(part, "data")
+        ]
+        result_text = "\n".join(data_parts)[:8000] or facts["task_text"]
+    document = RoomAgentMessage(
+        **common,
+        message_content=MessageContent(
+            message_text=result_text,
+            message_task=Task(
+                id=task_id,
+                kind="task",
+                status=TaskStatus(state=state, timestamp=now.isoformat()),
+                artifacts=[],
+            ),
+        ),
+        extend_info={
+            "public_task_label": f"Requesting {label}",
+            "public_dispatch_text": facts["task_text"],
+            "orchestrator_run_id": run.run_id,
+        },
+    )
+    await message_store.upsert_room_agent_message(document)
+    if delivery is not None:
+        await delivery.send_task_update(
+            room_id=run.room_id,
+            message_id=message_id,
+            status=str(state.value),
+            content=result_text,
+            agent_name=label,
+            agent_id=facts["agent_id"] or None,
+            related_message_id=run.request.user_message_id,
+            client_request_id=run.client_request_id,
+            task_content=f"Requesting {label}",
+        )
+
+
 @asynccontextmanager
 async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C901
     """Lifespan context manager to handle startup and shutdown events.
@@ -394,6 +658,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
+            from dal.orchestrator.epoch_bindings import (
+                EpochScopedOrchestratorCleanup,
+                bind_room_epoch_store,
+                require_room_epoch_store,
+                reset_room_epoch_store,
+            )
+            from dal.orchestrator.event_store import MongoOrchestratorEventStore
+            from dal.orchestrator.stores import (
+                MongoAgentCallLedgerStore,
+                MongoAgentToolBindingStore,
+                MongoObservationConflictStore,
+                MongoObservationInboxStore,
+                MongoRoomEpochStore,
+            )
             from execution.orchestration.room_supervisor_service import (
                 SupervisorPlanningError,
                 room_supervisor_service,
@@ -429,6 +707,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # The compatibility runtime is process-global. Clear bindings from a
             # previous failed or completed lifespan before composing this one.
             room_runtime.reset_bindings()
+            reset_room_epoch_store()
+
+            bind_room_epoch_store(
+                MongoRoomEpochStore(
+                    mongo_dal.collection("orchestrator_room_epochs").raw_collection
+                )
+            )
 
             room_files_collection = mongo_dal.collection("room_files")
             file_storage = create_file_storage(
@@ -454,8 +739,24 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "hitl_interactions",
                         "hitl_resume_commands",
                         "cancelled_messages",
+                        "orchestrator_runs",
+                        "orchestrator_run_events",
+                        "orchestrator_agent_tool_bindings",
+                        "orchestrator_agent_calls",
+                        "orchestrator_a2a_observations",
+                        "orchestrator_a2a_observation_conflicts",
+                        "orchestrator_room_epochs",
                     )
                 ],
+                excluded_from_room_state_delete=(
+                    "orchestrator_room_epochs",
+                    "orchestrator_run_events",
+                    "orchestrator_runs",
+                    "orchestrator_agent_tool_bindings",
+                    "orchestrator_agent_calls",
+                    "orchestrator_a2a_observations",
+                    "orchestrator_a2a_observation_conflicts",
+                ),
                 file_dir=runtime.settings.hybro_file_dir,
                 content_url_prefix=f"{runtime.settings.api_prefix.rstrip('/')}/files",
             )
@@ -718,6 +1019,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_registry=_agent_deps.agent_registry,
                 membership_source=membership_source,
                 attachment_metadata_reader=file_storage,
+                epoch_store=require_room_epoch_store(),
             )
             _room_facade = _room_deps.room_registry
             # Runtime store aggregate: callers below receive focused runtime-store parts.
@@ -1304,6 +1606,31 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     delete_room_state=file_storage.delete_room_state,
                 ),
                 memory_cleanup=context_memory_facade,
+                epoch_store=require_room_epoch_store(),
+                orchestrator_epoch_cleanup=EpochScopedOrchestratorCleanup(
+                    bindings=MongoAgentToolBindingStore(
+                        mongo_dal.collection(
+                            "orchestrator_agent_tool_bindings"
+                        ).raw_collection
+                    ),
+                    calls=MongoAgentCallLedgerStore(
+                        mongo_dal.collection("orchestrator_agent_calls").raw_collection
+                    ),
+                    observations=MongoObservationInboxStore(
+                        mongo_dal.collection(
+                            "orchestrator_a2a_observations"
+                        ).raw_collection
+                    ),
+                    conflicts=MongoObservationConflictStore(
+                        mongo_dal.collection(
+                            "orchestrator_a2a_observation_conflicts"
+                        ).raw_collection
+                    ),
+                    runs=mongo_dal.collection("orchestrator_runs").raw_collection,
+                    run_events=MongoOrchestratorEventStore(
+                        mongo_dal.collection("orchestrator_run_events").raw_collection
+                    ),
+                ),
             )
             room_runtime.bind_room_deletion(room_deletion)
             agent_message_preparation = AgentMessagePreparationService(
@@ -1840,6 +2167,295 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             ),
         )
 
+        # ── Orchestrator runtime composition (dark launch, 0% traffic) ──
+        #
+        # The composition is constructed eagerly so a misconfigured model
+        # route, prompt asset, or profile parameter is detected during startup
+        # even though nothing routes into it yet. Adapter-level failures
+        # degrade the dark launch; programming errors still fail startup.
+        from common.dto import ProcessingStatusEvent
+        from execution.orchestrator.projection import public_terminal_status
+
+        async def publish_orchestrator_projection_status(run, intent) -> None:
+            # SSE is non-authoritative: it is published only after the durable
+            # public run/processing projection has completed AND the Run
+            # reached projection_state == "settled" (all mandatory intents
+            # durable). The status is derived from the settled Run, never from
+            # the intent payload, so intent completion order cannot leak an
+            # early terminal event.
+            del intent
+            status = public_terminal_status(str(run.status or ""))
+            if status is None or _delivery_deps is None:
+                return
+            terminal_message = {
+                "completed": "Completed.",
+                "failed": "Failed.",
+                "canceled": "Canceled.",
+                "budget_exhausted": "Stopped: step budget exhausted.",
+            }.get(str(run.status or ""), None)
+            await _delivery_deps.event_publisher.emit(
+                ProcessingStatusEvent(
+                    room_id=run.room_id,
+                    message_id=run.request.user_message_id,
+                    status=status,
+                    client_request_id=run.client_request_id,
+                    delivery_id=f"orchestrator:{run.run_id}:{run.status}",
+                    details=(
+                        {"message": terminal_message, "turn_phase": "terminal"}
+                        if terminal_message
+                        else None
+                    ),
+                )
+            )
+
+        # Non-terminal lifecycle events (agent delegation, responses,
+        # waiting) flow to the room work log over SSE. SSE is
+        # non-authoritative: durable state stays in the Run store.
+        from execution.orchestrator.lifecycle import (
+            orchestrator_lifecycle_log_message,
+        )
+
+        # Lifecycle events are dispatched concurrently (create_task), so a
+        # per-run lock re-serializes the work-log SSE and the agent-card
+        # projection into the kernel's durable event order. Without it the
+        # frontend sees "Waiting…" before "…responded" and drops entries
+        # that arrive after the terminal status.
+        _orchestrator_session_locks: dict[str, asyncio.Lock] = {}
+
+        async def _orchestrator_session_listener(event: Any) -> None:
+            lock = _orchestrator_session_locks.setdefault(event.run_id, asyncio.Lock())
+            async with lock:
+                await _orchestrator_session_event(event)
+                return
+
+        async def _orchestrator_session_event(event: Any) -> None:
+            # Project agent activity into room_agent_messages so the legacy
+            # conversation surface (agent cards) reflects the kernel's
+            # dispatches. Best-effort: durable Run state stays authoritative.
+            runtime = getattr(app.state, "orchestrator_runtime", None)
+            call_id = (event.payload or {}).get("call_id")
+            if (
+                runtime is not None
+                and isinstance(call_id, str)
+                and call_id
+                and event.room_id
+                and event.event_type in {"tool_execution_started", "message_completed"}
+            ):
+                try:
+                    await _project_orchestrator_agent_activity(
+                        event, runtime, message_store, _delivery_facade
+                    )
+                except Exception:
+                    logger.warning(
+                        "orchestrator agent message projection failed",
+                        extra={
+                            "run_id": event.run_id,
+                            "event_type": event.event_type,
+                        },
+                        exc_info=True,
+                    )
+
+            if _delivery_deps is None:
+                return
+            mapped = orchestrator_lifecycle_log_message(event)
+            if mapped is not None:
+                message, turn_phase = mapped
+                await _delivery_deps.event_publisher.emit(
+                    ProcessingStatusEvent(
+                        room_id=event.room_id or "",
+                        message_id=(event.user_message_id or event.causation_id or ""),
+                        status="processing",
+                        client_request_id=event.client_request_id,
+                        details={"message": message, "turn_phase": turn_phase},
+                        delivery_id=(
+                            f"orchestrator:{event.run_id}:"
+                            f"{event.event_type}:{event.sequence}"
+                        ),
+                    )
+                )
+
+            if event.event_type == "run_final_answer_ready" and runtime is not None:
+                # Deliver the final answer immediately instead of waiting for
+                # the next projection-outbox tick (the <=10s dead stop). Runs
+                # after the work-log 'Preparing…' entry so the frontend shows
+                # the synthesis step before the terminal delivery.
+                try:
+                    await runtime.projection_worker.run_once(due_at=datetime.now(UTC))
+                except Exception:
+                    logger.warning(
+                        "orchestrator projection nudge failed", exc_info=True
+                    )
+
+        try:
+
+            async def _orchestrator_user_message_text(
+                message_id: str,
+            ) -> str | None:
+                message = await message_store.get_room_user_message_by_message_id(
+                    message_id
+                )
+                if message is None:
+                    return None
+                content = getattr(message, "message_content", None)
+                text = getattr(content, "message_text", None)
+                return text if isinstance(text, str) and text.strip() else None
+
+            app.state.orchestrator_runtime = create_orchestrator_runtime(
+                mongo=mongo_dal,
+                settings_obj=runtime.settings,
+                llm_gateway=llm_provider,
+                model_registry=model_registry,
+                agent_registry=_agent_deps.agent_registry,
+                exclusion_reader=CapabilityIssueExclusionReader(
+                    agent_capability_issue_service
+                ),
+                room_ownership_reader=_room_deps.room_registry,
+                epoch_store=require_room_epoch_store(),
+                room_files=file_storage,
+                relay_service=_relay_svc,
+                projection_listener=publish_orchestrator_projection_status,
+                session_listener=_orchestrator_session_listener,
+                user_message_text_reader=_orchestrator_user_message_text,
+            )
+            missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
+            if missing:
+                logger.warning(
+                    "Orchestrator runtime composition incomplete: %s",
+                    ", ".join(missing),
+                )
+                app.state.orchestrator_runtime = None
+            else:
+                logger.info(
+                    "Orchestrator runtime composition ready (dark launch, 0%% traffic)"
+                )
+        except OrchestratorCompositionError as exc:
+            logger.warning("Orchestrator runtime composition disabled: %s", exc)
+            app.state.orchestrator_runtime = None
+
+        # ── Dual-routing seam (step 7) ──
+        # Routes and the execution facade reach the orchestrator ONLY through
+        # this seam; it is attached here after the composition is ready.
+        _orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+        if _orchestrator_runtime is not None:
+            from execution.orchestrator_routing import (
+                DualRuntimeRouter,
+                RoomMessageEnvelopeResolver,
+            )
+
+            async def _list_room_agent_ids(room_id: str) -> list[str]:
+                room = await agent_room_store.get_room_by_room_id(room_id)
+                return list((room.room_agent_set or {}).keys()) if room else []
+
+            async def _list_group_agent_ids(group_id: str) -> list[str]:
+                group = await agent_room_store.get_agent_group_by_id(group_id)
+                return list(getattr(group, "agents", []) or [])
+
+            async def _list_all_active_agent_ids(
+                user_id: str | None = None,
+            ) -> list[str]:
+                # Same visibility-filtered listing the legacy all_agents scope
+                # uses, so both engines resolve identical candidate sets.
+                agents = await agent_room_store.get_all_active_agents(user_id)
+                return [agent.agent_id for agent in agents or []]
+
+            # PDF projection reuses the legacy attachment projection service;
+            # text/* attachments are decoded directly. Bounded to keep the
+            # kernel turn within its context window.
+            attachment_projection = AttachmentProjectionService(
+                content_reader=file_storage
+            )
+            _MAX_ATTACHMENT_TEXT_CHARS = 120_000
+            _MAX_TEXT_BYTES = 1_000_000
+
+            async def _attachment_text(
+                attachment: Any,
+            ) -> str | None:
+                mime_type = attachment.mime_type or ""
+                if mime_type == "application/pdf":
+                    _ref, payload = await attachment_projection.ensure_projection(
+                        UserAttachment(
+                            file_id=attachment.file_id,
+                            mime_type=mime_type,
+                            file_name="",
+                            size_bytes=attachment.size_bytes,
+                        )
+                    )
+                    return payload.text if payload is not None else None
+                if mime_type.startswith("text/"):
+                    data = await file_storage.get_bytes(
+                        attachment.file_id, max_bytes=_MAX_TEXT_BYTES
+                    )
+                    if not data:
+                        return None
+                    return data.decode("utf-8", errors="replace")[
+                        :_MAX_ATTACHMENT_TEXT_CHARS
+                    ]
+                return None
+
+            envelope_source = RoomMessageEnvelopeResolver(
+                get_user_message=message_store.get_room_user_message_by_message_id,
+                list_room_agent_ids=_list_room_agent_ids,
+                list_group_agent_ids=_list_group_agent_ids,
+                list_all_active_agent_ids=_list_all_active_agent_ids,
+                attachment_text_reader=_attachment_text,
+            )
+            orchestrator_router = DualRuntimeRouter(
+                runtime=_orchestrator_runtime,
+                settings=runtime.settings,
+                envelope_source=envelope_source,
+                webhook_token_verifier=task_store.verify_webhook_token_for_task,
+            )
+            app.state.orchestrator_routing = orchestrator_router
+            execution_facade.bind_orchestrator_router(orchestrator_router)
+            logger.info("Orchestrator dual-routing seam ready (0%% traffic)")
+        else:
+            app.state.orchestrator_routing = None
+
+        # ── Orchestrator background workers (dark launch, default OFF) ──
+        if _orchestrator_runtime is not None:
+            orchestrator_recovery_job.set_leader_election(_leader)
+            orchestrator_recovery_job.interval_seconds = (
+                runtime.settings.orchestrator_worker_interval_seconds
+            )
+            orchestrator_recovery_job.set_recovery_deps(
+                OrchestratorRecoveryDeps(
+                    recover_once=_orchestrator_runtime.recovery_cycle.run_once
+                )
+            )
+            orchestrator_projection_job.set_leader_election(_leader)
+            orchestrator_projection_job.interval_seconds = (
+                runtime.settings.orchestrator_worker_interval_seconds
+            )
+            orchestrator_projection_job.set_projection_deps(
+                OrchestratorProjectionDeps(
+                    project_once=_orchestrator_runtime.projection_worker.run_once
+                )
+            )
+
+            async def collect_orchestrator_canary() -> dict[str, Any]:
+                return await collect_metrics(
+                    _orchestrator_runtime.run_store.collection,
+                    _orchestrator_runtime.call_ledger.collection,
+                    _orchestrator_runtime.observation_conflicts.collection,
+                    recovery_cycle_last_run_at=(
+                        orchestrator_recovery_job.last_completed_at
+                    ),
+                    window_seconds=(
+                        runtime.settings.orchestrator_canary_run_failure_window_seconds
+                    ),
+                )
+
+            orchestrator_canary_job.set_leader_election(_leader)
+            orchestrator_canary_job.interval_seconds = (
+                runtime.settings.orchestrator_worker_interval_seconds
+            )
+            orchestrator_canary_job.set_canary_deps(
+                OrchestratorCanaryDeps(collect=collect_orchestrator_canary)
+            )
+            await orchestrator_recovery_job.start()
+            await orchestrator_projection_job.start()
+            await orchestrator_canary_job.start()
+
     except BaseException:
         # Startup cleanup never replaces the original failure. Every opened
         # stage is attempted even if an earlier close fails.
@@ -1851,6 +2467,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if _bg_started:
             startup_steps.extend(
                 [
+                    ("orchestrator-canary", orchestrator_canary_job.stop),
+                    ("orchestrator-projection", orchestrator_projection_job.stop),
+                    ("orchestrator-recovery", orchestrator_recovery_job.stop),
                     ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
                     ("compaction-sweep", compaction_sweep.stop),
                     ("stale-task-checker", stale_task_checker.stop),
@@ -1900,6 +2519,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         )
 
         async def cancel_execution() -> None:
+            orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+            if orchestrator_runtime is not None:
+                # Cancels in-process kernel tasks without persisting terminal
+                # state; recovery workers re-enter the Runs later.
+                await orchestrator_runtime.session_host.shutdown()
             execution_deps = app.state.execution_deps
             cancelled = await execution_deps.execution_engine.cancel_inflight_tasks()
             if cancelled:
@@ -1922,6 +2546,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             shutdown_steps.append(("relay", _relay_svc_shutdown.stop))
         shutdown_steps.extend(
             [
+                ("orchestrator-canary", orchestrator_canary_job.stop),
+                ("orchestrator-projection", orchestrator_projection_job.stop),
+                ("orchestrator-recovery", orchestrator_recovery_job.stop),
                 ("stale-task-checker", stale_task_checker.stop),
                 ("compaction-sweep", compaction_sweep.stop),
                 ("orphan-upload-cleaner", orphaned_upload_cleaner.stop),
@@ -2126,6 +2753,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestration_run_indexes(mongo)
+    await _ensure_orchestrator_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_room_history_indexes(mongo)
     await _ensure_user_message_indexes(mongo)
@@ -2437,6 +3065,28 @@ async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
         [("run_id", 1), ("created_at", 1)],
         name="orchestration_run_created_at",
     )
+
+
+async def _ensure_orchestrator_indexes(mongo: MongoDAL) -> None:
+    from execution.orchestrator.a2a_runtime.persistence import (
+        A2A_RUNTIME_COLLECTIONS,
+    )
+    from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+
+    for collection_definition in (*ORCHESTRATOR_COLLECTIONS, *A2A_RUNTIME_COLLECTIONS):
+        for index in collection_definition.indexes:
+            kwargs: dict[str, Any] = {}
+            if index.partial_filter is not None:
+                kwargs["partialFilterExpression"] = dict(index.partial_filter)
+            await _create_index(
+                mongo,
+                collection_definition.name,
+                list(index.keys),
+                name=index.name,
+                unique=index.unique,
+                critical=index.unique,
+                **kwargs,
+            )
 
 
 async def _ensure_room_quote_indexes(mongo: MongoDAL) -> None:
@@ -2992,6 +3642,7 @@ def create_file_storage(
     room_messages_collection: MongoCollection,
     room_agent_messages_collection: MongoCollection,
     room_owned_collections: list[MongoCollection],
+    excluded_from_room_state_delete: Iterable[str] = (),
     file_dir: str = "",
     max_upload_bytes: int = 5 * 1024 * 1024,
     content_url_prefix: str = "/api/v1/files",
@@ -3006,6 +3657,7 @@ def create_file_storage(
         messages=room_messages_collection,
         agent_messages=room_agent_messages_collection,
         room_owned_collections=room_owned_collections,
+        excluded_from_room_state_delete=excluded_from_room_state_delete,
         lease_writes=True,
         max_upload_bytes=max_upload_bytes,
         content_url_prefix=content_url_prefix,
@@ -3310,6 +3962,7 @@ def create_room_deps(
     agent_registry: AgentRegistry,
     membership_source: RoomMembershipSeedSource,
     attachment_metadata_reader: AttachmentMetadataReader | None = None,
+    epoch_store: Any | None = None,
 ) -> RoomDeps:
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
@@ -3323,6 +3976,7 @@ def create_room_deps(
         attachment_metadata_reader=attachment_metadata_reader,
         id_factory=lambda: uuid4().hex,
         now=utcnow,
+        epoch_store=epoch_store,
     )
     return RoomDeps(
         room_registry=facade,

@@ -45,7 +45,7 @@ vi.mock("@/hooks/useGroupManagement", () => ({
       loadingGroups: false,
       selectedGroup: "all_agents",
       isOverride: false,
-      resolvedTargetMode: { message_target_mode: "room_default" },
+      resolvedTargetMode: { message_target_mode: "all_agents" },
       groupManagementOpen: false,
       groupAction: null,
       handleGroupsChange: vi.fn(),
@@ -102,7 +102,7 @@ beforeEach(async () => {
 })
 
 describe("Room page — prefill handoff consumer", () => {
-  it("derives room-default routing from a non-empty room snapshot", async () => {
+  it("defaults room routing to all agents", async () => {
     render(<RoomChatPage />)
 
     await waitFor(() => {
@@ -110,7 +110,7 @@ describe("Room page — prefill handoff consumer", () => {
     })
     expect(mockUseGroupManagement.mock.calls.at(-1)?.[0]).toMatchObject({
       defaultGroup: "all_agents",
-      defaultTargetMode: { message_target_mode: "room_default" },
+      defaultTargetMode: { message_target_mode: "all_agents" },
     })
   })
 

@@ -8,6 +8,8 @@ from ..models import (
     ResolvedTool,
     ToolDefinition,
 )
+from .catalog_assembler import agent_tool_input_schema
+from .resources import resource_is_compatible
 
 
 class FrozenToolCatalog:
@@ -17,7 +19,35 @@ class FrozenToolCatalog:
 
     def list_tools(self, run: OrchestratorRunState) -> list[ToolDefinition]:
         self._verify_run(run)
-        return [entry.definition for entry in self.snapshot.entries]
+        manifest = run.resource_manifest
+        if manifest is None:
+            return [entry.definition for entry in self.snapshot.entries]
+        rebuilt: list[ToolDefinition] = []
+        for entry in self.snapshot.entries:
+            context_refs: list[str] = []
+            artifact_refs: list[str] = []
+            attachment_refs: list[str] = []
+            for ref in manifest.refs:
+                if not resource_is_compatible(
+                    kind=ref.kind,
+                    mime_type=ref.mime_type,
+                    input_modes=entry.input_modes,
+                ):
+                    continue
+                if ref.kind == "context":
+                    context_refs.append(ref.ref_id)
+                elif ref.kind == "artifact":
+                    artifact_refs.append(ref.ref_id)
+                elif ref.kind == "attachment":
+                    attachment_refs.append(ref.ref_id)
+            schema = agent_tool_input_schema(
+                context_refs, artifact_refs, attachment_refs
+            )
+            if schema == entry.definition.input_schema:
+                rebuilt.append(entry.definition)
+                continue
+            rebuilt.append(entry.definition.model_copy(update={"input_schema": schema}))
+        return rebuilt
 
     def resolve(self, run: OrchestratorRunState, tool_name: str) -> ResolvedTool:
         self._verify_run(run)

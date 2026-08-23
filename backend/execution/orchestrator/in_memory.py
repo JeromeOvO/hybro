@@ -1,4 +1,4 @@
-"""Unbound async in-memory ports for Plan 2 execution tests."""
+"""Async in-memory ports for kernel and session tests."""
 
 from __future__ import annotations
 
@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .events import evaluate_event_append
-from .models import OrchestratorEvent, OrchestratorRunState, RecoveryClaim
+from .models import (
+    OrchestratorEvent,
+    OrchestratorRunState,
+    ProjectionIntent,
+    RecoveryClaim,
+)
 from .settlement import transition_projection_intent, transition_projection_settlement
 
 
@@ -52,6 +57,18 @@ class InMemoryOrchestratorRunStore:
 
     async def load(self, run_id: str) -> OrchestratorRunState | None:
         return self.runs.get(run_id)
+
+    async def load_by_user_message_id(
+        self, user_message_id: str
+    ) -> OrchestratorRunState | None:
+        return next(
+            (
+                run
+                for run in self.runs.values()
+                if run.request.user_message_id == user_message_id
+            ),
+            None,
+        )
 
     async def cas_mutate(
         self,
@@ -231,6 +248,55 @@ class InMemoryOrchestratorRunStore:
             blocked_reason=reason,
         )
 
+    async def release_projection_intent(
+        self,
+        run_id: str,
+        intent_id: str,
+        *,
+        expected_state_version: int,
+        owner_id: str,
+        next_attempt_at: datetime,
+        now: datetime,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        item = _intent(run, intent_id)
+        if item is None or item.status != "claimed":
+            return InMemoryRunStoreResult("conflict", run)
+        lease_expired = (
+            item.claim_expires_at is not None and item.claim_expires_at <= now
+        )
+        if item.claim_owner != owner_id and not lease_expired:
+            return InMemoryRunStoreResult("conflict", run)
+        return await self._transition_intent(
+            run_id,
+            intent_id,
+            expected_state_version=expected_state_version,
+            command_id=f"release-intent:{intent_id}:{expected_state_version}",
+            to_status="pending",
+            next_attempt_at=next_attempt_at,
+        )
+
+    async def list_due_projection_intents(
+        self, *, due_at: datetime, limit: int
+    ) -> list[tuple[str, ProjectionIntent]]:
+        due: list[tuple[datetime, str, ProjectionIntent]] = []
+        for run in self.runs.values():
+            for intent in run.projection_outbox:
+                if intent.status == "pending" and (
+                    intent.next_attempt_at is None or intent.next_attempt_at <= due_at
+                ):
+                    due.append(
+                        (intent.next_attempt_at or run.updated_at, run.run_id, intent)
+                    )
+                elif (
+                    intent.status == "claimed"
+                    and intent.claim_expires_at is not None
+                    and intent.claim_expires_at <= due_at
+                ):
+                    due.append((intent.claim_expires_at, run.run_id, intent))
+        due.sort(key=lambda item: (item[0], item[1]))
+        return [(run_id, intent) for _, run_id, intent in due[:limit]]
+
     async def _transition_intent(
         self,
         run_id: str,
@@ -301,6 +367,21 @@ class InMemoryOrchestratorEventStore:
             if event.sequence > after_sequence
         ]
 
+    async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int:
+        deleted = 0
+        for run_id, events in list(self.events.items()):
+            kept = [
+                event
+                for event in events
+                if not (event.room_id == room_id and event.room_epoch == room_epoch)
+            ]
+            deleted += len(events) - len(kept)
+            if kept:
+                self.events[run_id] = kept
+            else:
+                self.events.pop(run_id, None)
+        return deleted
+
 
 class InMemoryProjectionDriver:
     """Claim and complete required intents without external side effects."""
@@ -358,7 +439,7 @@ def _intent(run: OrchestratorRunState | None, intent_id: str):
     )
 
 
-# concise aliases used by Plan 2 kernel/session tests
+# concise aliases used by kernel/session tests
 InMemoryRunStore = InMemoryOrchestratorRunStore
 
 __all__ = [

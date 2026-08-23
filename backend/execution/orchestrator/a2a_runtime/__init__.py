@@ -1,4 +1,4 @@
-"""Production-unbound durable A2A tools and process managers for Orchestrator V3."""
+"""Durable A2A tools and process managers for the orchestrator runtime."""
 
 from .authorization import (
     CallableAuthorizationRefresh,

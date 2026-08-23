@@ -1,4 +1,4 @@
-"""Private in-process lifecycle events for the unbound Plan 2 session."""
+"""Private in-process lifecycle events for the room session."""
 
 from __future__ import annotations
 
@@ -39,6 +39,11 @@ class SessionEvent(ContractModel):
     sequence: int
     timestamp: datetime
     payload: dict[str, object]
+    # Correlation fields carried from the Run so delivery listeners (SSE)
+    # can address the right room/user-message without a store round trip.
+    room_id: str | None = None
+    user_message_id: str | None = None
+    client_request_id: str | None = None
 
 
 SessionEventListener = Callable[[SessionEvent], Awaitable[None] | None]
@@ -93,7 +98,42 @@ class LifecycleEmitter:
 
 __all__ = [
     "LifecycleEmitter",
+    "orchestrator_lifecycle_log_message",
     "SessionEvent",
     "SessionEventListener",
     "SessionEventType",
 ]
+
+
+def orchestrator_lifecycle_log_message(
+    event: SessionEvent,
+) -> tuple[str, str] | None:
+    """Map a session lifecycle event to a (message, turn_phase) work-log entry.
+
+    Returns None for events that should not surface in the user-facing work
+    log (internal noise, terminal events handled by the projection listener).
+    """
+    payload = event.payload or {}
+    label = payload.get("agent_label")
+    label_text = label.strip() if isinstance(label, str) and label.strip() else None
+    if event.event_type == "run_started":
+        return "Planning the next actions", "collecting"
+    if event.event_type == "turn_started":
+        return "Thinking about the next step", "collecting"
+    if event.event_type == "tool_execution_started" and label_text:
+        return f"Delegating to {label_text}", "collecting"
+    if event.event_type == "tool_execution_completed" and label_text:
+        return f"{label_text} finished", "collecting"
+    if (
+        event.event_type == "message_completed"
+        and payload.get("message_kind") == "tool_result"
+        and label_text
+    ):
+        return f"{label_text} responded", "collecting"
+    if event.event_type in {"run_waiting_external", "turn_completed"}:
+        return "Waiting for agents to respond", "collecting"
+    if event.event_type == "run_awaiting_user":
+        return "Waiting for your input", "collecting"
+    if event.event_type == "run_final_answer_ready":
+        return "Preparing the final answer", "synthesizing"
+    return None

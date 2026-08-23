@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from inspect import isawaitable
 from typing import Any
+from uuid import uuid4
 
 from common.a2a_constants import is_terminal_state
 from common.a2a_task_projection import public_persisted_task_data
@@ -80,6 +81,7 @@ class RoomFacade:
         id_factory: Callable[[], str],
         now: Callable[[], datetime],
         tracer: Any | None = None,
+        epoch_store: Any | None = None,
     ) -> None:
         self._repository = repository
         self._message_repository = message_repository
@@ -90,6 +92,7 @@ class RoomFacade:
         self._id_factory = id_factory
         self._now = now
         self._tracer = tracer or NoopTracingProvider()
+        self._epoch_store = epoch_store
 
     async def get_room(self, room_id: str) -> RoomInfo | None:
         doc = await self._repository.get_by_id(room_id)
@@ -113,7 +116,11 @@ class RoomFacade:
             agent_registry=self._agent_registry,
             membership_source=self._membership_source,
         )
+        if self._epoch_store is None:
+            raise RuntimeError("Room epoch store is not bound")
+        epoch_store = self._epoch_store
         room_id = self._id_factory()
+        creation_id = uuid4().hex
         doc = create_room_doc(
             room_id=room_id,
             owner_id=request.owner_id,
@@ -128,7 +135,30 @@ class RoomFacade:
             extend_info=request.extend_info,
         )
         await self._repository.create(doc)
+        try:
+            outcome, _ = await epoch_store.activate(
+                room_id, creation_id, activated_at=self._now()
+            )
+        except Exception as exc:
+            await self._compensate_room_creation(room_id)
+            logger.error(
+                "Room epoch activation failed for room_id=%s", room_id, exc_info=True
+            )
+            raise ValueError("Room epoch activation failed") from exc
+        if outcome == "conflict":
+            await self._compensate_room_creation(room_id)
+            raise ValueError("Room epoch activation conflict")
         return room_info_from_doc(doc)
+
+    async def _compensate_room_creation(self, room_id: str) -> None:
+        try:
+            await self._repository.delete(room_id)
+        except Exception:
+            logger.warning(
+                "Failed to compensate room creation for room_id=%s",
+                room_id,
+                exc_info=True,
+            )
 
     async def delete_room(self, room_id: str, owner_id: str) -> bool:
         doc = await self._repository.get_by_id(room_id)
