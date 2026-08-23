@@ -350,7 +350,8 @@ def create_orchestrator_runtime(  # noqa: C901
             mongo.collection("room_agent_messages")
         ).project,
         "project_terminal_run_status": MongoTerminalRunStatusProjector(
-            mongo.collection("runs")
+            mongo.collection("runs"),
+            mongo.collection("room_agent_messages"),
         ).project,
     }
     projection_worker = ProjectionOutboxWorker(

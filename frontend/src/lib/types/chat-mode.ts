@@ -13,7 +13,14 @@ export function chatModeToExecutionMode(mode: ChatMode): ExecutionMode {
   return mode === CHAT_MODE.ULTIMATE ? 'supervisor' : 'direct'
 }
 
-/** Legacy room flags are UI defaults only; debateMode is intentionally ignored. */
-export function roomDefaultToChatMode(useSupervisor: boolean): ChatMode {
-  return useSupervisor ? CHAT_MODE.ULTIMATE : CHAT_MODE.FAST
+/** An explicit false is the only room-level override of the product default. */
+export function roomUsesSupervisorByDefault(useSupervisor?: boolean): boolean {
+  return useSupervisor !== false
+}
+
+/** Legacy room flags are UI defaults only; an absent flag uses the product default. */
+export function roomDefaultToChatMode(useSupervisor?: boolean): ChatMode {
+  return roomUsesSupervisorByDefault(useSupervisor)
+    ? DEFAULT_CHAT_MODE
+    : CHAT_MODE.FAST
 }

@@ -53,3 +53,13 @@ In handoff summaries, include changed behavior, tests run, documentation updates
 ## Security & Configuration Tips
 
 Copy required environment keys from the repo-root `.env.example` into repo-root `.env`; `install.sh` writes a filtered `frontend/.env.local` for non-Docker `npm run dev`. Do not commit local secrets. Keep generated output such as `.next`, `coverage`, and `playwright-report` out of commits.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

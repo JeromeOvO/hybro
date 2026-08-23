@@ -319,7 +319,19 @@ class RoomAgentSession:
         run: OrchestratorRunState,
         payload: dict[str, object],
     ) -> None:
-        await self._emit(event_type, run, payload=payload)
+        # A completed tool-result message is the durable boundary for the
+        # corresponding agent card. Await listener settlement so its terminal
+        # projection cannot be lost to the short best-effort listener timeout.
+        settle_agent_projection = (
+            event_type == "message_completed"
+            and payload.get("message_kind") == "tool_result"
+        )
+        await self._emit(
+            event_type,
+            run,
+            terminal=settle_agent_projection,
+            payload=payload,
+        )
 
     async def _emit(
         self,

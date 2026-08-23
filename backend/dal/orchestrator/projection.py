@@ -7,6 +7,7 @@ unique indexes make crash replay harmless.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from pymongo.errors import DuplicateKeyError
 
 from execution.orchestrator.models import (
     AssistantMessage,
+    DataPart,
     OrchestratorEvent,
     OrchestratorRunState,
     ProjectionIntent,
@@ -85,8 +87,9 @@ class MongoTerminalRunStatusProjector:
     ``processing``.
     """
 
-    def __init__(self, runs: Any) -> None:
+    def __init__(self, runs: Any, messages: Any | None = None) -> None:
         self.runs = runs
+        self.messages = messages
 
     async def project(
         self, intent: ProjectionIntent, run: OrchestratorRunState
@@ -130,7 +133,70 @@ class MongoTerminalRunStatusProjector:
             return "conflict"
         if existing.get("state") != state.value:
             return "conflict"
+        if self.messages is not None:
+            await _repair_terminal_agent_cards(self.messages, run)
         return "replayed" if already_terminal else "accepted"
+
+
+async def _repair_terminal_agent_cards(
+    messages: Any,
+    run: OrchestratorRunState,
+) -> None:
+    """Converge live compatibility cards from the durable terminal Run.
+
+    The real-time lifecycle projection is only a latency optimization. This
+    outbox-owned repair makes a checkpoint/crash or transient listener failure
+    replay-safe and prevents a durable ``working`` card after the Run settles.
+    """
+    state_map = {
+        "completed": "completed",
+        "failed": "failed",
+        "canceled": "canceled",
+        "rejected": "rejected",
+        "expired": "expired",
+    }
+    terminal_at = run.updated_at
+    unresolved_state = "canceled" if run.status == "canceled" else "failed"
+    for batch in run.tool_batches:
+        for entry in batch.entries:
+            result = entry.buffered_terminal_result
+            state = (
+                state_map.get(result.status, "failed")
+                if result is not None
+                else unresolved_state
+            )
+            updates: dict[str, Any] = {
+                "message_content.message_task.status.state": state,
+                "message_content.message_task.status.timestamp": (
+                    terminal_at.isoformat()
+                ),
+                "task_updated_at": terminal_at,
+            }
+            if result is not None:
+                rendered_parts = [
+                    part.text
+                    if isinstance(part, TextPart)
+                    else json.dumps(
+                        part.data,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    )
+                    for part in result.content
+                    if isinstance(part, (TextPart, DataPart))
+                ]
+                text = "\n".join(part for part in rendered_parts if part).strip()
+                if text:
+                    updates["message_content.message_text"] = text
+            await messages.update_one(
+                {
+                    "room_id": run.room_id,
+                    "message_id": f"orchestrator:{run.run_id}:{entry.call_id}",
+                    "extend_info.orchestrator_run_id": run.run_id,
+                },
+                {"$set": updates},
+                upsert=False,
+            )
 
 
 def _final_assistant_message(

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
+import pytest
+
 from execution.orchestrator.lifecycle import (
+    LifecycleEmitter,
     SessionEvent,
     orchestrator_lifecycle_log_message,
 )
@@ -20,6 +24,37 @@ def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
         timestamp=datetime.now(UTC),
         payload=payload or {},
     )
+
+
+@pytest.mark.asyncio
+async def test_terminal_settlement_runs_listeners_concurrently_with_full_timeout():
+    release_slow = asyncio.Event()
+    fast_started = asyncio.Event()
+    errors: list[BaseException] = []
+
+    async def slow_listener(_event):
+        await release_slow.wait()
+
+    async def fast_listener(_event):
+        fast_started.set()
+
+    emitter = LifecycleEmitter(
+        listener_timeout_seconds=0.01,
+        settlement_timeout_seconds=1,
+        error_hook=errors.append,
+    )
+    emitter.subscribe(slow_listener)
+    emitter.subscribe(fast_listener)
+
+    emit_task = asyncio.create_task(emitter.emit(_event("session_idle"), terminal=True))
+    await fast_started.wait()
+    await asyncio.sleep(0.02)
+
+    assert emit_task.done() is False
+    assert errors == []
+    release_slow.set()
+    await emit_task
+    assert errors == []
 
 
 def test_run_started_maps_to_planning_entry():

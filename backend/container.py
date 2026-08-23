@@ -459,6 +459,8 @@ async def _project_orchestrator_agent_activity(
         client_request_id=run.client_request_id,
         related_message_id=run.request.user_message_id,
         task_content=f"Requesting {label}",
+        task_created_at=now,
+        task_updated_at=now,
     )
     task_id = f"orchestrator-task-{call_id}"
 
@@ -1803,7 +1805,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         details={"message": message, "turn_phase": turn_phase},
                         delivery_id=(
                             f"orchestrator:{event.run_id}:"
-                            f"{event.event_type}:{event.sequence}"
+                            f"{event.event_type}:{event.sequence}:"
+                            f"{call_id or 'run'}"
                         ),
                     )
                 )
