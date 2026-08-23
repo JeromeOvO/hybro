@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Protocol
 
 from a2a_adapter.remote_task import fetch_remote_task
@@ -919,6 +920,16 @@ class StaleTaskChecker:
             self._store.is_message_cancelled,
         )
         return await strict_reader(message_id)
+
+    async def _reconcile_pending_cancellations(self) -> None:
+        """Trigger Execution-owned reconciliation of pending markers."""
+        if self._cancellation_reconciliation_deps is None:
+            logger.warning("Cancellation reconciliation dependency is not bound")
+            return
+        settle_cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
+        await self._cancellation_reconciliation_deps.reconciliation.reconcile_pending(
+            settle_cutoff=settle_cutoff
+        )
 
 
 # Singleton instance. Application startup binds runtime dependencies and settings.
