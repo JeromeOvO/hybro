@@ -78,12 +78,19 @@ export function useGroupManagement(
   const [groups, setGroups] = useState<AgentGroup[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [groupsLoadStatus, setGroupsLoadStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [overrideGroup, setOverrideGroup] = useState<string | null>(() =>
-    roomId ? localStorage.getItem(`room-${roomId}-override-group`) : null
-  )
-  const [overrideGroupName, setOverrideGroupName] = useState<string | null>(() =>
-    roomId ? localStorage.getItem(`room-${roomId}-override-group-name`) : null
-  )
+  const [overrideGroup, setOverrideGroup] = useState<string | null>(null)
+  const [overrideGroupName, setOverrideGroupName] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!roomId) {
+      setOverrideGroup(null)
+      setOverrideGroupName(null)
+      return
+    }
+
+    setOverrideGroup(localStorage.getItem(`room-${roomId}-override-group`))
+    setOverrideGroupName(localStorage.getItem(`room-${roomId}-override-group-name`))
+  }, [roomId])
 
   const groupExists = useCallback(
     (groupId: string) => groups.some(group => group.type === 'user' && group.group_id === groupId),
