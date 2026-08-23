@@ -319,7 +319,7 @@ describe('Room lifecycle characterization tests', () => {
       ])
     })
 
-    it('keeps polling until a later missed terminal SSE is recovered', async () => {
+    it('recovers a missed terminal only from a durable-confirmed frame (no polling)', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
       vi.mocked(inquiryActiveRuns)
@@ -368,23 +368,31 @@ describe('Room lifecycle characterization tests', () => {
       })
       expect(flags('room-1').processing).toBe(true)
 
+      // Phase 3 (§8): the 5 s safety-net poll is removed. Advancing timers
+      // must NOT recover anything — the lifecycle stays live until the
+      // durable-confirmed terminal frame arrives.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000)
+        await vi.advanceTimersByTimeAsync(30_000)
       })
       expect(flags('room-1').processing).toBe(true)
 
+      // The terminal frame is the only recovery path.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000)
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'processing_status',
+          data: {
+            status: 'failed',
+            message_id: 'msg-late-terminal',
+            client_request_id: 'req-late-terminal',
+            details: null,
+          },
+        }))
       })
-
-      await waitFor(() => {
-        expect(flags('room-1').processing).toBe(false)
-      })
-      expect(vi.mocked(inquiryActiveRuns).mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(flags('room-1').processing).toBe(false)
       expect(useMessageStore.getState().entities['msg-late-terminal'].turnTerminalStatus).toBe('failed')
     })
 
-    it('preserves live processing logs when backend says active runs ended after a missed terminal SSE', async () => {
+    it('preserves live processing logs without the removed polling loop', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       const { inquiryActiveRuns, inquiryRoomMessagesByRoomId } = await import('@/lib/api/room')
       vi.mocked(inquiryActiveRuns).mockResolvedValue({ success: true, active_runs: [] })
@@ -436,9 +444,22 @@ describe('Room lifecycle characterization tests', () => {
         await Promise.resolve()
       })
 
-      await waitFor(() => {
-        expect(flags('room-1').processing).toBe(false)
+      // No polling recovery (§8): the lifecycle stays live until the
+      // durable-confirmed terminal frame arrives, and the live log is
+      // preserved in the meantime.
+      expect(flags('room-1').processing).toBe(true)
+      await act(async () => {
+        await capturedOnMessage!(makeSSEMessage({
+          type: 'processing_status',
+          data: {
+            status: 'completed',
+            message_id: 'msg-missed-terminal',
+            client_request_id: 'req-missed-terminal',
+            details: null,
+          },
+        }))
       })
+      expect(flags('room-1').processing).toBe(false)
       expect(useMessageStore.getState().entities['msg-missed-terminal'].processingStatusLogs?.map((entry) => entry.message)).toEqual([
         'Thinking...',
       ])

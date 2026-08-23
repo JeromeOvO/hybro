@@ -11,8 +11,7 @@ import { scheduleTurnTerminalBackendTruthCheck } from '@/lib/room-timeline/turn-
 import type { SummaryOrigin } from '@/lib/room-timeline/types'
 import { partsToReplacementArtifacts } from '../artifacts'
 import type { SSEHandlerDeps } from '../types'
-import type { CorrelationResult } from '../correlation'
-import { getResolvedMessageId } from '../pending-turn-buffer'
+import { resolveUserMessageId } from '../client-request'
 
 function isSummaryAgentResponse(agentId: string | undefined, messageId: string): boolean {
   if (messageId.startsWith('summary-')) return true
@@ -76,7 +75,7 @@ function artifactsEqual(a: ArtifactData[] | undefined, b: ArtifactData[] | undef
 export function handleAgentResponsePartial(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['agent_response_partial'],
-  correlation: CorrelationResult,
+  clientReqId: string | null,
 ): void {
   const { message_id, content_delta } = sseMessage.data
   if (!message_id || typeof content_delta !== 'string') return
@@ -91,10 +90,8 @@ export function handleAgentResponsePartial(
     textPartialToArtifact(message_id, content_delta),
     hasPartialArtifact,
     {
-      clientRequestId: correlation.clientReqId,
-      userMessageId: correlation.clientReqId
-        ? getResolvedMessageId(correlation.clientReqId)
-        : undefined,
+      clientRequestId: clientReqId ?? undefined,
+      userMessageId: resolveUserMessageId(ctx.roomId, clientReqId),
     },
   )
 }

@@ -98,6 +98,10 @@ export function handleRunEvent(
   if (sub === 'run_failed' || sub === 'run_completed' || sub === 'run_canceled') {
     const runId = sseMessage.data?.run_id
     if (runId) {
+      useTraceStore.getState().setRunStatus(
+        runId,
+        sub === 'run_completed' ? 'completed' : sub === 'run_canceled' ? 'canceled' : 'failed',
+      )
       void ensureTurnTerminalStampedFromBackendTruth(
         ctx.roomId,
         lifecycle,

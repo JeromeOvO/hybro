@@ -81,7 +81,7 @@ describe('handleHitlRequest', () => {
           question_index: 0,
         },
       },
-      { shouldDrop: false, shouldBuffer: false },
+      'req-1',
     )
 
     expect(useMessageStore.getState().entities['placeholder-room-1']).toBeDefined()
@@ -124,7 +124,7 @@ describe('handleHitlRequest', () => {
         question_count: 1,
         question_index: 0,
       },
-    }, { shouldDrop: false, shouldBuffer: false })
+    }, 'req-1')
 
     expect(useMessageStore.getState().entities['auth-message']).toMatchObject({
       hitlPromptType: 'authentication',
@@ -148,7 +148,7 @@ describe('handleHitlRequest', () => {
         question_index: 0,
         client_request_id: 'client-1',
       },
-    }, { shouldDrop: false, shouldBuffer: false })
+    }, 'req-1')
 
     expect(useMessageStore.getState().entities['auth-message']).toMatchObject({
       hitlResolved: false,
@@ -174,7 +174,7 @@ describe('handleHitlRequest', () => {
         question_index: 0,
         client_request_id: 'client-1',
       },
-    }, { shouldDrop: false, shouldBuffer: false })
+    }, 'req-1')
 
     expect(useMessageStore.getState().entities['auth-message'].hitlResolved).toBe(true)
     expect(index.current.has('auth-hitl')).toBe(false)

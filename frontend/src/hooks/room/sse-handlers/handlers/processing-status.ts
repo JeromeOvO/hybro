@@ -9,89 +9,54 @@ import {
   parseTurnPhaseFromDetails,
   processingDetailsToLogMessage,
 } from '../../processing-status-log'
-import { getResolvedMessageId } from '../pending-turn-buffer'
+import { resolveUserMessageId } from '../client-request'
 import { applyRoomCommands } from '../apply-commands'
-import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
-function isTurnLevelTerminalProcessingStatus(
+// ── Turn-level gating (post-heuristic, Room Stream Snapshot plan §8) ───────
+// Terminal frames are durable-confirmed (§4 rule 4), so the old id-matching
+// chains are gone. A status belongs to the current live turn when its client
+// request matches the lifecycle's pending ack or when it resolves to the
+// lifecycle's own message. Everything else is stamped on its resolved entity
+// without touching the live lifecycle.
+
+function belongsToCurrentTurn(
+  lifecycle: SSEHandlerDeps['lifecycle'],
+  clientReqId: string | null,
+  resolvedEntityId: string | undefined,
+): boolean {
+  const pendingAck = lifecycle.getPendingRunEventAck()
+  if (pendingAck && clientReqId && pendingAck === clientReqId) return true
+  const lifecycleMessageId = lifecycle.getMessageId()
+  if (lifecycleMessageId && resolvedEntityId && lifecycleMessageId === resolvedEntityId) {
+    return true
+  }
+  return !lifecycleMessageId
+}
+
+/**
+ * Turn-level terminal gate: terminal processing_status frames are
+ * durable-confirmed turn facts. Per-agent terminal statuses (message_id
+ * pointing at a child agent task with a related user message) are NOT turn
+ * facts and are dropped here.
+ */
+function isTurnLevelTerminal(
   sseMessageId: string | undefined,
   lifecycleMessageId: string | null,
-  resolvedMessageId: string | undefined,
-  userEntity: MessageEntity | undefined,
+  terminalUser: MessageEntity | undefined,
   relatedMessageId: string | null | undefined,
-  clientRequestId: string | null | undefined,
+  clientReqId: string | null,
 ): boolean {
   if (!sseMessageId) return true
   if (lifecycleMessageId && sseMessageId === lifecycleMessageId) return true
-  if (resolvedMessageId && sseMessageId === resolvedMessageId) return true
-  if (userEntity?.id === sseMessageId) return true
-  // HITL resume can introduce a new backend request id while pointing back to the original user turn.
-  if (
-    relatedMessageId &&
-    userEntity?.id === relatedMessageId &&
-    resolvedMessageId === userEntity.id &&
-    userEntity.clientRequestId !== clientRequestId
-  ) {
+  if (terminalUser?.id === sseMessageId) return true
+  if (terminalUser && clientReqId && terminalUser.clientRequestId === clientReqId) {
+    // Per-agent terminal: the frame addresses a child task while pointing
+    // back at the turn user message via related_message_id.
+    if (relatedMessageId && relatedMessageId === terminalUser.id) return false
     return true
   }
   return false
-}
-
-function isCurrentProcessingUser(
-  roomId: string,
-  lifecycleMessageId: string | null,
-  userEntity: MessageEntity | undefined,
-  lifecycle: SSEHandlerDeps['lifecycle'],
-  clientRequestId: string | null | undefined,
-  relatedMessageId?: string | null,
-): boolean {
-  if (lifecycleMessageId && relatedMessageId === lifecycleMessageId) return true
-  if (lifecycleMessageId && userEntity?.id === lifecycleMessageId) return true
-
-  const activeClientRequestId = lifecycle.getPendingRunEventAck()
-  if (activeClientRequestId && clientRequestId) {
-    return activeClientRequestId === clientRequestId
-  }
-
-  if (activeClientRequestId && userEntity?.clientRequestId) {
-    return activeClientRequestId === userEntity.clientRequestId
-  }
-
-  const placeholderClientRequestId =
-    useMessageStore.getState().entities[lifecycle.placeholderId(roomId)]?.clientRequestId
-  if (placeholderClientRequestId && clientRequestId) {
-    return placeholderClientRequestId === clientRequestId
-  }
-
-  if (placeholderClientRequestId && userEntity?.clientRequestId) {
-    return placeholderClientRequestId === userEntity.clientRequestId
-  }
-
-  if (lifecycleMessageId) return false
-
-  return true
-}
-
-function scheduleTerminalReconcile(
-  ctx: SSEHandlerDeps,
-  roomId: string,
-  lifecycle: SSEHandlerDeps['lifecycle'],
-  clientRequestId: string | null | undefined,
-  delayMs: number,
-): void {
-  setTimeout(() => {
-    const placeholderClientRequestId =
-      useMessageStore.getState().entities[lifecycle.placeholderId(roomId)]?.clientRequestId
-    if (
-      placeholderClientRequestId &&
-      clientRequestId &&
-      placeholderClientRequestId !== clientRequestId
-    ) {
-      return
-    }
-    void ctx.reconcileWithDb(roomId)
-  }, delayMs)
 }
 
 const PROCESSING_STATUS_VALUES = new Set<string>(Object.values(PROCESSING_STATUS))
@@ -116,7 +81,7 @@ function isProcessingStatusData(data: unknown): data is ProcessingStatusData {
 export function handleProcessingStatus(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['processing_status'],
-  correlation: CorrelationResult,
+  clientReqId: string | null,
 ): void {
   if (!isProcessingStatusData(sseMessage.data)) {
     const details = sseMessage.data && typeof sseMessage.data === 'object'
@@ -148,8 +113,8 @@ export function handleProcessingStatus(
     const pendingAckClientRequestId = lifecycle.getPendingRunEventAck()
     if (
       pendingAckClientRequestId
-      && correlation.clientReqId
-      && correlation.clientReqId !== pendingAckClientRequestId
+      && clientReqId
+      && clientReqId !== pendingAckClientRequestId
     ) {
       return
     }
@@ -157,9 +122,7 @@ export function handleProcessingStatus(
     const lifecycleMessageId = lifecycle.getMessageId()
     const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
 
-    const resolvedClientMessageId = correlation.clientReqId
-      ? getResolvedMessageId(correlation.clientReqId)
-      : undefined
+    const resolvedClientMessageId = resolveUserMessageId(roomId, clientReqId)
     const userMsgId =
       resolvedClientMessageId ??
       relatedMessageId ??
@@ -167,7 +130,7 @@ export function handleProcessingStatus(
       lifecycleMessageId
     const processingUserEntity = findProcessingStatusUserEntity(roomId, {
       messageId: userMsgId,
-      clientRequestId: correlation.clientReqId,
+      clientRequestId: clientReqId,
       relatedMessageId,
       preferClientRequestId: true,
     })
@@ -192,14 +155,14 @@ export function handleProcessingStatus(
       }
     }
 
-    if (!isCurrentProcessingUser(
-      roomId,
-      lifecycleMessageId,
-      processingUserEntity,
-      lifecycle,
-      correlation.clientReqId,
-      relatedMessageId,
-    )) {
+    if (!belongsToCurrentTurn(lifecycle, clientReqId, processingUserEntity?.id)) {
+      return
+    }
+
+    // A non-terminal update must be attributable to a resolvable turn: the
+    // user entity, the lifecycle message, or the pending ack. Unattributable
+    // updates are ignored (previously they sat in the correlation buffer).
+    if (!processingUserEntity && !lifecycleMessageId && !pendingAckClientRequestId) {
       return
     }
 
@@ -221,43 +184,37 @@ export function handleProcessingStatus(
   }
 
   const lifecycleMessageId = lifecycle.getMessageId()
-  const sseMessageId = sseMessage.data.message_id as string | undefined
   const relatedMessageId = (sseMessage.data as { related_message_id?: string | null }).related_message_id ?? undefined
-  const resolvedClientMessageId = correlation.clientReqId
-    ? getResolvedMessageId(correlation.clientReqId)
-    : undefined
-  const terminalUserMsgId = resolvedClientMessageId ?? relatedMessageId ?? sseMessageId ?? lifecycleMessageId
+  const resolvedClientMessageId = resolveUserMessageId(roomId, clientReqId)
+  const terminalUserMsgId = resolvedClientMessageId ?? relatedMessageId ?? sseMessage.data.message_id ?? lifecycleMessageId
   const terminalUser = findProcessingStatusUserEntity(roomId, {
     messageId: terminalUserMsgId,
-    clientRequestId: correlation.clientReqId,
+    clientRequestId: clientReqId,
     relatedMessageId,
     preferClientRequestId: true,
   })
-  const hasTurnMessageReference =
-    !!lifecycleMessageId || !!resolvedClientMessageId || !!terminalUser
 
+  const resolvedTerminalUserMsgId = terminalUser?.id ?? terminalUserMsgId
+
+  // Per-agent terminal statuses are not turn facts: drop them before any
+  // lifecycle resolution or entity stamping.
   if (
-    hasTurnMessageReference &&
-    !isTurnLevelTerminalProcessingStatus(
-      sseMessageId,
+    (lifecycleMessageId || resolvedClientMessageId || terminalUser)
+    && !isTurnLevelTerminal(
+      sseMessage.data.message_id as string | undefined,
       lifecycleMessageId,
-      resolvedClientMessageId,
       terminalUser,
       relatedMessageId,
-      correlation.clientReqId,
+      clientReqId,
     )
   ) {
     return
   }
 
-  const resolvedTerminalUserMsgId = terminalUser?.id ?? terminalUserMsgId
-  const isCurrentLifecycleTerminal = isCurrentProcessingUser(
-    roomId,
-    lifecycleMessageId,
-    terminalUser,
+  const isCurrentLifecycleTerminal = belongsToCurrentTurn(
     lifecycle,
-    correlation.clientReqId,
-    relatedMessageId,
+    clientReqId,
+    terminalUser?.id,
   )
 
   if (isCurrentLifecycleTerminal) {
@@ -268,7 +225,7 @@ export function handleProcessingStatus(
     store.removeMessage(lifecycle.placeholderId(roomId))
     lifecycle.dismissPlaceholder()
 
-    const turnClientRequestId = correlation.clientReqId ?? sseMessage.data.client_request_id
+    const turnClientRequestId = clientReqId ?? sseMessage.data.client_request_id
     if (turnClientRequestId) {
       applyRoomCommands([
         { type: 'stream_clear_client_request', clientRequestId: turnClientRequestId },
@@ -344,12 +301,7 @@ export function handleProcessingStatus(
     }
   }
 
-  if (isCurrentLifecycleTerminal) {
-    if (lifecycle.hadSseDisconnection()) {
-      scheduleTerminalReconcile(ctx, roomId, lifecycle, correlation.clientReqId, 1500)
-      lifecycle.clearSseDisconnection()
-    } else {
-      scheduleTerminalReconcile(ctx, roomId, lifecycle, correlation.clientReqId, 150)
-    }
-  }
+  // Terminal frames are durable-confirmed (§4 rule 4): no fixed-delay
+  // reconciliation is scheduled. Gap recovery is the reducer's snapshot
+  // re-request — the only self-heal path.
 }

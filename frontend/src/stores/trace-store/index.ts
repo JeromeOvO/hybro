@@ -71,6 +71,8 @@ interface TraceStoreState {
   nodes: Record<string, TraceNode>
   /** run id → ordered node ids (append order within the run) */
   runOrder: Record<string, string[]>
+  /** run id → terminal status (snapshot runs section / run_event) */
+  runStatuses: Record<string, string>
   version: number
 
   applyRunEvent: (payload: {
@@ -80,6 +82,18 @@ interface TraceStoreState {
     payload: Record<string, unknown>
     correlationId: string | null
   }) => void
+  setRunStatus: (runId: string, status: string) => void
+  /** Snapshot replace (plan §4): rebuild run trees + run statuses from a
+   *  snapshot's trace/runs sections, then apply ordered deltas on top. */
+  hydrateFromSnapshot: (snapshot: {
+    trace: Record<string, {
+      run_id: string
+      nodes: Array<Record<string, unknown>>
+      usage: unknown
+      duration_ms: number
+    }>
+    runs: Array<{ run_id: string; status: string }>
+  }) => void
   setRoom: (roomId: string) => void
   clearRoom: () => void
 }
@@ -88,6 +102,7 @@ const INITIAL_STATE = {
   roomId: null as string | null,
   nodes: {} as Record<string, TraceNode>,
   runOrder: {} as Record<string, string[]>,
+  runStatuses: {} as Record<string, string>,
   version: 0,
 }
 
@@ -125,6 +140,74 @@ function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
   const items = value.filter((item): item is string => typeof item === 'string')
   return items.length > 0 ? items : undefined
+}
+
+function nodeFromSnapshotNode(
+  runId: string,
+  raw: Record<string, unknown>,
+): TraceNode | null {
+  const kind = raw.kind
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : `${runId}:node:${Date.now()}${Math.random()}`
+  const asStr = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? value : undefined
+  const asInt = (value: unknown): number | null | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : undefined
+
+  switch (kind) {
+    case 'llm_call':
+      return {
+        id,
+        kind: 'llm_call',
+        runId,
+        clientRequestId: null,
+        receivedAt: Date.now(),
+        model: asStr(raw.model),
+        provider: asStr(raw.provider),
+        attempt: asInt(raw.attempt),
+        outcome: asStr(raw.outcome),
+        durationMs: asInt(raw.duration_ms),
+        usage: asUsage(raw.usage),
+        finishReason: asStr(raw.finish_reason),
+      }
+    case 'retry':
+      return {
+        id,
+        kind: 'retry',
+        runId,
+        clientRequestId: null,
+        receivedAt: Date.now(),
+        attempt: asInt(raw.attempt),
+        errorClass: asStr(raw.error_class),
+        retryDelayMs: asInt(raw.retry_delay_ms),
+      }
+    case 'decision':
+      return {
+        id,
+        kind: 'decision',
+        runId,
+        clientRequestId: null,
+        receivedAt: Date.now(),
+        chosenAgents: asStringArray(raw.chosen_agents),
+        planSteps: asPlanSteps(raw.plan_steps),
+        reason: asStr(raw.reason),
+      }
+    case 'tool_call':
+      return {
+        id,
+        kind: 'tool_call',
+        runId,
+        clientRequestId: null,
+        receivedAt: Date.now(),
+        status: typeof raw.status === 'string' ? raw.status : undefined,
+        toolName: asStr(raw.tool_name),
+        argSummary: raw.arg_summary ?? undefined,
+        resultSummary: asStr(raw.result_summary),
+        exitCode: asInt(raw.exit_code) ?? null,
+        durationMs: asInt(raw.duration_ms),
+      }
+    default:
+      return null
+  }
 }
 
 function nodeFromRunEvent(payload: {
@@ -230,6 +313,39 @@ export const useTraceStore = create<TraceStoreState>()(
           version: state.version + 1,
         }
       })
+    },
+
+    setRunStatus: (runId, status) => {
+      if (!runId || !status) return
+      set((state) => ({
+        runStatuses: { ...state.runStatuses, [runId]: status },
+        version: state.version + 1,
+      }))
+    },
+
+    hydrateFromSnapshot: (snapshot) => {
+      const nodes: Record<string, TraceNode> = {}
+      const runOrder: Record<string, string[]> = {}
+      for (const [runId, traceRun] of Object.entries(snapshot.trace)) {
+        const order: string[] = []
+        for (const raw of traceRun.nodes) {
+          const node = nodeFromSnapshotNode(runId, raw)
+          if (!node) continue
+          nodes[node.id] = node
+          order.push(node.id)
+        }
+        runOrder[runId] = order
+      }
+      const runStatuses: Record<string, string> = {}
+      for (const run of snapshot.runs) {
+        if (run.run_id) runStatuses[run.run_id] = run.status
+      }
+      set((state) => ({
+        nodes,
+        runOrder,
+        runStatuses,
+        version: state.version + 1,
+      }))
     },
 
     setRoom: (roomId) => set({ ...INITIAL_STATE, roomId }),

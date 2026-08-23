@@ -35,7 +35,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     handleAgentResponsePartial(
@@ -51,7 +51,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     expect(useStreamingStore.getState().buffers['agent-1']?.text).toBe('Hello world')
@@ -74,7 +74,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-turn',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-turn' },
+      'req-turn',
     )
 
     handleAgentResponsePartial(
@@ -90,7 +90,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-turn',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-turn' },
+      'req-turn',
     )
 
     expect(useStreamingStore.getState().buffers['hermes-1']?.text).toBe('Hermes text')
@@ -121,7 +121,7 @@ describe('handleAgentResponsePartial', () => {
           last_chunk: true,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     handleArtifactUpdate(
@@ -143,7 +143,7 @@ describe('handleAgentResponsePartial', () => {
           last_chunk: true,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     const artifactText = useStreamingStore.getState().buffers['msg-artifact']?.text
@@ -162,7 +162,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     handleAgentResponsePartial(
@@ -178,7 +178,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     const partialText = useStreamingStore.getState().buffers['msg-partial']?.text

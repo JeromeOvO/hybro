@@ -149,4 +149,62 @@ describe('trace-store', () => {
     expect(state.roomId).toBe('room-2')
     expect(Object.keys(state.nodes)).toHaveLength(0)
   })
+
+  it('records terminal run statuses', () => {
+    useTraceStore.getState().setRunStatus('run-1', 'failed')
+    expect(useTraceStore.getState().runStatuses['run-1']).toBe('failed')
+  })
+
+  it('hydrates trace trees and run statuses from a snapshot', () => {
+    useTraceStore.getState().hydrateFromSnapshot({
+      trace: {
+        'run-1': {
+          run_id: 'run-1',
+          nodes: [
+            {
+              id: 'run-1:llm_call:e1',
+              kind: 'llm_call',
+              model: 'gpt-4o',
+              provider: 'openai',
+              attempt: 1,
+              outcome: 'completed',
+              duration_ms: 800,
+              usage: { input: 10, output: 2 },
+              finish_reason: 'stop',
+            },
+            {
+              id: 'run-1:tool_call:weather',
+              kind: 'tool_call',
+              tool_name: 'weather',
+              status: 'completed',
+              result_summary: 'Sunny',
+              exit_code: 0,
+              duration_ms: 100,
+            },
+          ],
+          usage: { input: 10, output: 2 },
+          duration_ms: 800,
+        },
+      },
+      runs: [{ run_id: 'run-1', status: 'completed' }],
+    })
+
+    const state = useTraceStore.getState()
+    expect(state.runStatuses['run-1']).toBe('completed')
+    expect(state.runOrder['run-1']).toEqual([
+      'run-1:llm_call:e1',
+      'run-1:tool_call:weather',
+    ])
+    expect(state.nodes['run-1:llm_call:e1']).toMatchObject({
+      kind: 'llm_call',
+      model: 'gpt-4o',
+      durationMs: 800,
+    })
+    expect(state.nodes['run-1:tool_call:weather']).toMatchObject({
+      kind: 'tool_call',
+      toolName: 'weather',
+      resultSummary: 'Sunny',
+      exitCode: 0,
+    })
+  })
 })

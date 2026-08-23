@@ -7,7 +7,6 @@ import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import { partsToArtifacts } from '../artifacts'
 import { applyRoomCommands } from '../apply-commands'
-import type { CorrelationResult } from '../correlation'
 import { stampLiveTurnTerminalIfInferable } from '@/lib/room-timeline/stamp-live-turn-terminal'
 import {
   buildTurnForRecoveryHint,
@@ -49,10 +48,8 @@ function maybeScheduleTurnTerminalRecovery(
 export async function handleTaskUpdate(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['task_update'],
-  correlation: CorrelationResult,
+  _clientReqId: string | null,
 ): Promise<void> {
-  if (correlation.shouldDrop) return
-  if (correlation.shouldBuffer && correlation.clientReqId) return
   if (!sseMessage.data.message_id) return
 
   const messageId = sseMessage.data.message_id

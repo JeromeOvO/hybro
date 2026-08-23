@@ -3,13 +3,12 @@ import { TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
-import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
 export async function handleTaskSubmitted(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['task_submitted'],
-  correlation: CorrelationResult,
+  _clientReqId: string | null,
 ): Promise<void> {
   if (!sseMessage.data.message_id) return
 
