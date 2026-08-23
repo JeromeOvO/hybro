@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from typing import Any
 
 from common.dto.hitl import (
     A2AInteractionSpec,
@@ -759,10 +762,8 @@ class A2AContinuationCoordinator:
             return await self._finalized_state(persisted)
         call = persisted
         try:
-            receipt = (
-                await self.dispatch.inspect_continuation(command)
-                if inspect
-                else await self.dispatch.continue_task(command)
+            receipt, call = await self._run_fenced_continuation(
+                call, command, inspect=inspect
             )
         except (
             RecoverableAdapterError,
@@ -770,13 +771,13 @@ class A2AContinuationCoordinator:
             AmbiguousRemoteEffectError,
             TimeoutError,
         ):
+            latest = await self.ledger.load_by_record_id(call.call_record_id)
+            if latest is not None and latest.claim_owner == self.worker_id:
+                call = latest
             renewed = await self._renew_and_verify(call)
             if renewed is None:
                 return "delivery_uncertain"
             return await self._mark_uncertain(renewed)
-        call = await self._renew_and_verify(call)
-        if call is None:
-            return "delivery_uncertain"
         if receipt.terminal_observation is not None:
             observation = receipt.terminal_observation
             if observation.call_record_id is None:
@@ -969,6 +970,64 @@ class A2AContinuationCoordinator:
         ):
             return None
         return renewed
+
+    async def _run_fenced_continuation(
+        self,
+        call: AgentCallLedgerRecord,
+        command: A2AContinuationCommand,
+        *,
+        inspect: bool,
+    ) -> tuple[Any, AgentCallLedgerRecord]:
+        current_record = [call]
+        stop_heartbeat = asyncio.Event()
+
+        async def _heartbeat_loop() -> None:
+            interval = self.policy.claim_renew_interval_seconds
+            renewed = await self._renew_and_verify(current_record[0])
+            if renewed is None:
+                return
+            current_record[0] = renewed
+
+            while not stop_heartbeat.is_set():
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=interval)
+                    break
+                except TimeoutError:
+                    pass
+                if stop_heartbeat.is_set():
+                    break
+                renewed = await self._renew_and_verify(current_record[0])
+                if renewed is None:
+                    break
+                current_record[0] = renewed
+
+        heartbeat_task = asyncio.create_task(_heartbeat_loop())
+        continuation_task = asyncio.create_task(
+            self.dispatch.inspect_continuation(command)
+            if inspect
+            else self.dispatch.continue_task(command)
+        )
+
+        done, _ = await asyncio.wait(
+            {continuation_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+
+        if not stop_heartbeat.is_set() and continuation_task not in done:
+            continuation_task.cancel()
+            await asyncio.gather(continuation_task, return_exceptions=True)
+            stop_heartbeat.set()
+            raise RecoverableAdapterError(
+                "claim lease or room epoch was lost during continuation"
+            )
+
+        try:
+            receipt = await continuation_task
+            return receipt, current_record[0]
+        finally:
+            stop_heartbeat.set()
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await heartbeat_task
 
     async def _release(self, call: AgentCallLedgerRecord) -> None:
         await self.ledger.release(

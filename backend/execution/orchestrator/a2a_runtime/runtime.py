@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
@@ -33,6 +35,7 @@ from .ledger import (
 )
 from .models import (
     A2ADispatchCommand,
+    A2ADispatchReceipt,
     A2ARuntimePolicy,
     AgentCallLedgerRecord,
     NormalizedA2AObservation,
@@ -356,13 +359,18 @@ class A2AAgentToolRuntime:
 
         command = _dispatch_command(record, materialized_resources=materialized)
         try:
-            receipt = await self.dispatch.dispatch(command)
+            receipt, record = await self._run_fenced_dispatch(record, command)
         except (
             RecoverableAdapterError,
             RecoverableTransportError,
+            RecoverableEpochError,
             AmbiguousRemoteEffectError,
             TimeoutError,
         ):
+            # Reload latest record in case heartbeat loop advanced state_version
+            latest = await self.ledger.load(invocation.run_id, invocation.invocation_id)
+            if latest is not None and latest.claim_owner == self.worker_id:
+                record = latest
             # The expired dispatching record is intentionally left for recovery to
             # classify as uncertain when lease ownership was lost during the await.
             renewed = await self._renew_and_verify_epoch(record)
@@ -380,8 +388,26 @@ class A2AAgentToolRuntime:
                 uncertain, expected_state_version=renewed.state_version
             )
             return _suspension(invocation)
+
+        # ------------------------------------------------------------------
+        # Evidence preservation: record terminal or interaction observation immediately.
+        # ------------------------------------------------------------------
+        if receipt.terminal_observation is not None:
+            obs = receipt.terminal_observation
+            if obs.call_record_id is None:
+                obs = obs.model_copy(update={"call_record_id": record.call_record_id})
+            await self.observations.record(obs)
+            receipt = receipt.model_copy(update={"terminal_observation": obs})
+        elif receipt.interaction_observation is not None:
+            obs = receipt.interaction_observation
+            if obs.call_record_id is None:
+                obs = obs.model_copy(update={"call_record_id": record.call_record_id})
+            await self.observations.record(obs)
+            receipt = receipt.model_copy(update={"interaction_observation": obs})
+
         renewed = await self._renew_and_verify_epoch(record)
         if renewed is None:
+            # Lease was lost, but observation is durably preserved.
             return _suspension(invocation)
         record = renewed
 
@@ -464,15 +490,6 @@ class A2AAgentToolRuntime:
         if observation is None:
             status = "rejected" if receipt.outcome == "rejected" else "failed"
             return await self._terminal(record, invocation, status, "dispatch_rejected")
-        if observation.call_record_id is None:
-            observation = observation.model_copy(
-                update={"call_record_id": record.call_record_id}
-            )
-        await self.observations.record(observation)
-        renewed = await self._renew_and_verify_epoch(record)
-        if renewed is None:
-            return _suspension(invocation)
-        record = renewed
         terminal = apply_observation(
             record, observation, recent_limit=self.policy.recent_observation_id_limit
         )
@@ -608,6 +625,57 @@ class A2AAgentToolRuntime:
         ):
             return None
         return renewed
+
+    async def _run_fenced_dispatch(
+        self, record: AgentCallLedgerRecord, command: A2ADispatchCommand
+    ) -> tuple[A2ADispatchReceipt, AgentCallLedgerRecord]:
+        current_record = [record]
+        stop_heartbeat = asyncio.Event()
+
+        async def _heartbeat_loop() -> None:
+            interval = self.policy.claim_renew_interval_seconds
+            # Initial immediate renewal to verify ownership & epoch
+            renewed = await self._renew_and_verify_epoch(current_record[0])
+            if renewed is None:
+                return
+            current_record[0] = renewed
+
+            while not stop_heartbeat.is_set():
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=interval)
+                    break
+                except TimeoutError:
+                    pass
+                if stop_heartbeat.is_set():
+                    break
+                renewed = await self._renew_and_verify_epoch(current_record[0])
+                if renewed is None:
+                    break
+                current_record[0] = renewed
+
+        heartbeat_task = asyncio.create_task(_heartbeat_loop())
+        dispatch_task = asyncio.create_task(self.dispatch.dispatch(command))
+
+        done, _ = await asyncio.wait(
+            {dispatch_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+
+        if not stop_heartbeat.is_set() and dispatch_task not in done:
+            dispatch_task.cancel()
+            await asyncio.gather(dispatch_task, return_exceptions=True)
+            stop_heartbeat.set()
+            raise RecoverableEpochError(
+                "claim lease or room epoch was lost during dispatch"
+            )
+
+        try:
+            receipt = await dispatch_task
+            return receipt, current_record[0]
+        finally:
+            stop_heartbeat.set()
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await heartbeat_task
 
     async def _release(self, record: AgentCallLedgerRecord) -> None:
         await self.ledger.release(

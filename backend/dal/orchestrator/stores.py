@@ -418,7 +418,7 @@ class MongoAgentCallLedgerStore:
             or record.state_version != expected_state_version
             or record.claim_owner != owner_id
             or record.claim_expires_at is None
-            or record.claim_expires_at <= renewed_at
+            or lease_expires_at <= renewed_at
             or lease_expires_at <= record.claim_expires_at
         ):
             return None

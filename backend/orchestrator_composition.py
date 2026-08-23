@@ -293,6 +293,7 @@ def create_orchestrator_runtime(  # noqa: C901
         fetch_agent_card=sdk_fetch_agent_card,
         receipt_factory=A2ADispatchReceipt,
         observation_factory=NormalizedA2AObservation,
+        epoch_owner=artifact_writer.epoch_owner,
         call_resolver=resolve_call_address,
     )
     direct = DirectA2ADispatchAdapter(direct_client, observations=observation_ingress)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -16,6 +17,13 @@ from .models import (
     FrozenCallResourceRef,
     MaterializedResourcePart,
 )
+
+_OWNED_ROOM_FILE_URL_PATTERN = re.compile(r"^/api/v1/files/[a-zA-Z0-9_-]+/content$")
+
+
+def _is_owned_room_file_url(ref: str) -> bool:
+    return bool(_OWNED_ROOM_FILE_URL_PATTERN.match(ref))
+
 
 OutboundLoader = Callable[
     [FrozenCallResourceRef, list[str], datetime],
@@ -102,6 +110,9 @@ class BoundedResourceMaterializer:
             raise ResourceSelectionError("inbound encoded bytes exceed limit")
         durable = []
         for artifact_ref in artifact_refs:
+            if isinstance(artifact_ref, str) and _is_owned_room_file_url(artifact_ref):
+                durable.append(artifact_ref)
+                continue
             if not artifact_ref or artifact_ref.startswith("/"):
                 raise ResourceSelectionError("raw path artifact refs are forbidden")
             if "://" in artifact_ref and not self.allow_guarded_remote_artifact_refs:
