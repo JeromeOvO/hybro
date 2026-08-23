@@ -1082,6 +1082,25 @@ async def test_facade_cancel_routes_orchestrator_run():
 
 
 @pytest.mark.asyncio
+async def test_facade_cancel_does_not_fall_back_when_orchestrator_routing_fails():
+    router = SimpleNamespace(
+        resolve_run_owner_by_user_message=AsyncMock(return_value=OWNER),
+        route_cancellation_by_user_message=AsyncMock(
+            side_effect=RuntimeError("routing failed")
+        ),
+    )
+    facade, deps = _make_facade(orchestrator_router=router)
+
+    with pytest.raises(RuntimeError, match="routing failed"):
+        await facade.cancel("room-1", "msg-1", requested_by_user_id="user-1")
+
+    router.route_cancellation_by_user_message.assert_awaited_once_with(
+        "msg-1", reason="user:user-1"
+    )
+    deps["cancellation_repository"].request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_facade_cancel_ack_reflects_partial_failure():
     router = SimpleNamespace(
         resolve_run_owner_by_user_message=AsyncMock(return_value=OWNER),

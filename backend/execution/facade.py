@@ -1094,11 +1094,11 @@ class ExecutionFacade:
                     )
                     return _orchestrator_cancellation_ack(results)
                 except Exception:
-                    logger.warning(
-                        "orchestrator cancellation routing failed; "
-                        "falling back to legacy",
-                        exc_info=True,
+                    logger.exception(
+                        "orchestrator cancellation routing failed after ownership "
+                        "was resolved"
                     )
+                    raise
         return await self._cancellation_service.cancel(
             room_id=room_id,
             message_id=message_id,
