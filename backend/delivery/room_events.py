@@ -129,7 +129,7 @@ class MongoRoomEventStore:
             OperationFailure,
         )
 
-        async with await session_factory() as session:
+        async with session_factory() as session:
             try:
                 async with session.start_transaction():
                     counter = await self._seq.raw_collection.find_one_and_update(

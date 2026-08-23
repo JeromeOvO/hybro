@@ -141,3 +141,141 @@ async def test_skipped_tombstones_are_hidden_from_replay_but_foldable():
     folded = await store.read_range("room-1", include_skipped=True)
     assert [record["room_seq"] for record in folded] == [1, 2, 3]
     assert folded[2]["kind"] == "skipped"
+
+
+class _FakeMongoDAL:
+    """Faithful stand-in for MongoDALImpl: ``start_session`` returns an async
+    context manager OBJECT (not an awaitable), mirroring the real adapter's
+    ``asynccontextmanager`` contract. Guards against ``await`` misuse in the
+    transactional append path.
+    """
+
+    def __init__(self) -> None:
+        self.collections: dict[str, _FakeSeqCollection | _FakeEventsCollection] = {}
+        self.counter = 0
+
+    def collection(self, name: str):
+        if name not in self.collections:
+            if name == "room_event_seq":
+                self.collections[name] = _FakeCollection(_FakeSeqCollection(self))
+            else:
+                self.collections[name] = _FakeCollection(_FakeEventsCollection())
+        return self.collections[name]
+
+    def start_session(self):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def session_context():
+            @asynccontextmanager
+            async def start_transaction():
+                yield None
+
+            yield _FakeSession(start_transaction=start_transaction)
+
+        return session_context()
+
+
+class _FakeSession:
+    """Mirrors the Motor session surface used by the transactional append:
+    ``start_transaction()`` returns an async context manager."""
+
+    def __init__(self, *, start_transaction) -> None:
+        self.start_transaction = start_transaction
+
+
+class _FakeCollection:
+    """Mirrors MongoCollectionAdapter: exposes ``raw_collection`` and the
+    awaitable collection operations used by MongoRoomEventStore."""
+
+    def __init__(self, impl) -> None:
+        self.raw_collection = impl
+        self._impl = impl
+
+    async def find_one(self, query, **kwargs):
+        return await self._impl.find_one(query, **kwargs)
+
+    async def find(self, query, **kwargs):
+        return await self._impl.find(query, **kwargs)
+
+
+class _FakeSeqCollection:
+    def __init__(self, dal: _FakeMongoDAL) -> None:
+        self._dal = dal
+        self._counters: dict[str, int] = {}
+
+    async def find_one(self, query):
+        return {"seq": self._counters.get(query.get("_id"), 0)}
+
+    async def find_one_and_update(self, filter_, update, **kwargs):
+        room_id = filter_["_id"]
+        current = self._counters.get(room_id, 0) + update.get("$inc", {}).get("seq", 0)
+        self._counters[room_id] = current
+        return {"seq": current}
+
+
+class _FakeEventsCollection:
+    def __init__(self) -> None:
+        self.docs: list[dict] = []
+
+    async def find(self, query, **kwargs):
+        limit = kwargs.get("limit")
+
+        def matches(doc: dict) -> bool:
+            for key, expected in query.items():
+                value = doc.get(key)
+                if isinstance(expected, dict):
+                    for op, operand in expected.items():
+                        if op == "$gt" and not (value is not None and value > operand):
+                            return False
+                        if op == "$ne" and value == operand:
+                            return False
+                elif value != expected:
+                    return False
+            return True
+
+        results = [d for d in self.docs if matches(d)]
+        if limit is not None:
+            results = results[:limit]
+        return results
+
+    async def insert_one(self, doc, **kwargs):
+        self.docs.append(doc)
+        return object()
+
+    async def find_one(self, query):
+        for doc in self.docs:
+            if all(doc.get(k) == v for k, v in query.items()):
+                return doc
+        return None
+
+
+@pytest.mark.asyncio
+async def test_mongo_store_transactional_append_with_real_session_contract():
+    """The transactional append must consume the async context manager from
+    ``MongoDALImpl.start_session`` directly (no ``await``), exactly as the
+    real adapter returns it. Regression: ``async with await ...`` crashed
+    every production append with TypeError and silently dead-lettered every
+    emit, leaving room_events empty (found via docker E2E)."""
+    from delivery.room_events import MongoRoomEventStore
+
+    store = MongoRoomEventStore(mongo=_FakeMongoDAL())
+
+    first = await store.append(
+        room_id="room-1",
+        kind="processing_status",
+        payload_public=_payload("a"),
+        event_id="evt-a",
+    )
+    second = await store.append(
+        room_id="room-1",
+        kind="run_event",
+        payload_public=_payload("b"),
+        event_id="evt-b",
+    )
+
+    assert (first.room_seq, second.room_seq) == (1, 2)
+    assert await store.latest_seq("room-1") == 2
+    records = await store.read_range("room-1")
+    assert [record["room_seq"] for record in records] == [1, 2]
+    assert records[0]["kind"] == "processing_status"
