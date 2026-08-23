@@ -115,10 +115,13 @@ class BoundedResourceMaterializer:
             if isinstance(artifact_ref, str):
                 match = _OWNED_ROOM_FILE_URL_PATTERN.match(artifact_ref)
                 if match:
-                    if self.verify_room_file_ownership:
-                        await self.verify_room_file_ownership(
-                            getattr(call, "room_id", ""), match.group(1)
+                    if self.verify_room_file_ownership is None:
+                        raise ResourceSelectionError(
+                            "owned room file refs require room ownership verification"
                         )
+                    await self.verify_room_file_ownership(
+                        getattr(call, "room_id", ""), match.group(1)
+                    )
                     durable.append(artifact_ref)
                     continue
             if not artifact_ref or artifact_ref.startswith("/"):

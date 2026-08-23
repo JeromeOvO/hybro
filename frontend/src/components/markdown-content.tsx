@@ -218,18 +218,28 @@ function MarkdownImage({
 }) {
   let fileId: string | undefined
   if (typeof src === 'string') {
-    try {
-      const url = new URL(src, 'http://localhost')
-      const isRelative = url.hostname === 'localhost'
-      const isSameOrigin = typeof window !== 'undefined' && url.origin === window.location.origin
-      if (isRelative || isSameOrigin) {
-        const match = url.pathname.match(/^\/api\/v1\/files\/([a-zA-Z0-9_-]+)\/content$/)
-        if (match) {
-          fileId = match[1]
-        }
+    const roomFilePath = /^\/api\/v1\/files\/([a-zA-Z0-9_-]+)\/content$/
+    // Path-relative only (not protocol-relative //host/...). Absolute URLs must
+    // be same-origin — never treat bare localhost-shaped hosts as room files.
+    if (src.startsWith('/') && !src.startsWith('//')) {
+      const match = src.match(roomFilePath)
+      if (match) {
+        fileId = match[1]
       }
-    } catch {
-      // Ignore invalid URLs
+    } else {
+      try {
+        const url = new URL(src)
+        const isSameOrigin =
+          typeof window !== 'undefined' && url.origin === window.location.origin
+        if (isSameOrigin) {
+          const match = url.pathname.match(roomFilePath)
+          if (match) {
+            fileId = match[1]
+          }
+        }
+      } catch {
+        // Ignore invalid URLs
+      }
     }
   }
   const { objectUrl, error } = useRoomFile(fileId, Boolean(fileId))

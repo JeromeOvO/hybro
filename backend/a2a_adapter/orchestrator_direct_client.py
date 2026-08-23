@@ -315,6 +315,8 @@ _RECOVERABLE_MATERIALIZATION_ERROR_NAMES = frozenset(
         "RecoverableAdapterError",
         "RecoverableEpochError",
         "RecoverableResourceError",
+        "StaleRoomEpochError",
+        "AmbiguousRemoteEffectError",
     }
 )
 

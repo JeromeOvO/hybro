@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from dal.orchestrator.artifacts import GuardedRoomFileArtifactWriter
+from execution.orchestrator.a2a_runtime.errors import StaleRoomEpochError
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from execution.orchestrator.a2a_runtime.models import (
     FrozenCallResourceManifest,
@@ -225,7 +226,7 @@ async def test_guarded_artifact_commit_rejects_fetch_time_epoch_recreation():
         room_epochs=epochs,
         guarded_fetcher=guarded_fetch,
     )
-    with pytest.raises(ValueError, match="epoch is no longer active"):
+    with pytest.raises(StaleRoomEpochError, match="epoch is no longer active"):
         await writer(
             ledger_record(), "https://files.example/old.txt", "observation-race"
         )

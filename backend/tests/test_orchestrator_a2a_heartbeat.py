@@ -256,6 +256,81 @@ async def test_sync_dispatch_epoch_loss_cancels_and_suspends():
 
 
 @pytest.mark.asyncio
+async def test_client_cancel_signal_stops_fenced_dispatch_and_suspends():
+    """Client abort during slow dispatch must cancel work and stop lease renewals."""
+    from execution.orchestrator.session import EventCancellationSignal
+
+    renew_count = {"n": 0}
+
+    class CountingLedger(InMemoryAgentCallLedgerStore):
+        async def renew(self, *args, **kwargs):
+            renew_count["n"] += 1
+            return await super().renew(*args, **kwargs)
+
+    ledger = CountingLedger()
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "creation-1", activated_at=NOW)
+    inbox = InMemoryObservationInboxStore()
+    conflicts = InMemoryObservationConflictStore()
+    ingress = A2AObservationIngress(
+        inbox=inbox,
+        conflicts=conflicts,
+        ledger=ledger,
+        authenticator=RejectExternalIngressAuthenticator(),
+    )
+    hitl = InMemoryHITLApplicationPort()
+    finalizer = TerminalInteractionFinalizer(hitl)
+    prep = prepared()
+    prep_reader = InMemoryPreparedInvocationSnapshotReader()
+    prep_reader.put(prep)
+
+    policy = A2ARuntimePolicy(
+        claim_lease_seconds=5.0,
+        claim_renew_interval_seconds=0.05,
+    )
+
+    cancelled_event = asyncio.Event()
+
+    class LongDispatch:
+        async def dispatch(self, command):
+            try:
+                await asyncio.sleep(5.0)
+            except asyncio.CancelledError:
+                cancelled_event.set()
+                raise
+
+    runtime = A2AAgentToolRuntime(
+        ledger=ledger,
+        prepared_reader=prep_reader,
+        checkpoint_reader=SimpleCheckpoints(),
+        authorization=SimpleAuthorization(),
+        room_epochs=epochs,
+        resources=SimpleResources(),
+        dispatch=LongDispatch(),
+        observations=ingress,
+        terminal_finalizer=finalizer,
+        policy=policy,
+    )
+
+    inv = invocation()
+    accepted = await runtime.accept(inv)
+    signal = EventCancellationSignal()
+
+    async def _cancel_soon():
+        await asyncio.sleep(0.12)
+        signal.cancel()
+
+    cancel_task = asyncio.create_task(_cancel_soon())
+    suspension = await runtime.execute(inv, accepted, signal=signal)
+    await cancel_task
+
+    assert isinstance(suspension, ToolSuspension)
+    assert cancelled_event.is_set()
+    # Heartbeat must not keep renewing after cancel won the race.
+    assert renew_count["n"] < 20
+
+
+@pytest.mark.asyncio
 async def test_evidence_preservation_when_terminal_observation_returned_on_lost_lease():
     """Test that if a dispatch returns a terminal observation, it is durably recorded before lease loss causes suspension."""
     ledger = InMemoryAgentCallLedgerStore()
@@ -502,9 +577,15 @@ async def test_failed_materialization_observation_kwargs_creates_valid_normalize
 @pytest.mark.asyncio
 async def test_bounded_resource_materializer_passes_owned_content_url_and_rejects_malformed():
     """Test that BoundedResourceMaterializer accepts /api/v1/files/... durable room content URLs and rejects malformed."""
+
+    async def verify_owned(room_id: str, file_id: str) -> None:
+        assert room_id == ""
+        assert file_id == "durable-123"
+
     materializer = BoundedResourceMaterializer(
         outbound_loader=lambda *a: None,
         inbound_writer=lambda *a: None,
+        verify_room_file_ownership=verify_owned,
     )
     # Valid format
     refs = await materializer.materialize_inbound_artifacts(
