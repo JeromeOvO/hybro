@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Download, X, ZoomIn } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -47,6 +48,56 @@ export function ImageLightbox({ src, alt, className, caption, onError }: ImageLi
 
   if (loadError) return null
 
+  const dialog =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="fixed inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+            onClick={close}
+            role="dialog"
+            aria-modal="true"
+            aria-label={alt}
+          >
+            <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="rounded-full bg-white/15 p-2.5 text-white backdrop-blur-sm transition-colors hover:bg-white/25"
+                aria-label="Download image"
+              >
+                <Download className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={close}
+                className="rounded-full bg-white/15 p-2.5 text-white backdrop-blur-sm transition-colors hover:bg-white/25"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={src}
+              alt={alt}
+              className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl animate-in zoom-in-95 duration-200"
+              onClick={(e) => e.stopPropagation()}
+            />
+
+            {caption && (
+              <div
+                className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-lg bg-black/60 px-4 py-2 text-sm text-white backdrop-blur-sm"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {caption}
+              </div>
+            )}
+          </div>,
+          document.body,
+        )
+      : null
+
   return (
     <>
       <button
@@ -68,52 +119,7 @@ export function ImageLightbox({ src, alt, className, caption, onError }: ImageLi
           </div>
         </div>
       </button>
-
-      {open && (
-        <div
-          className="fixed inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
-          onClick={close}
-          role="dialog"
-          aria-modal="true"
-          aria-label={alt}
-        >
-          <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="rounded-full bg-white/15 p-2.5 text-white backdrop-blur-sm transition-colors hover:bg-white/25"
-              aria-label="Download image"
-            >
-              <Download className="h-5 w-5" />
-            </button>
-            <button
-              type="button"
-              onClick={close}
-              className="rounded-full bg-white/15 p-2.5 text-white backdrop-blur-sm transition-colors hover:bg-white/25"
-              aria-label="Close"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={src}
-            alt={alt}
-            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl animate-in zoom-in-95 duration-200"
-            onClick={(e) => e.stopPropagation()}
-          />
-
-          {caption && (
-            <div
-              className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-lg bg-black/60 px-4 py-2 text-sm text-white backdrop-blur-sm"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {caption}
-            </div>
-          )}
-        </div>
-      )}
+      {dialog}
     </>
   )
 }

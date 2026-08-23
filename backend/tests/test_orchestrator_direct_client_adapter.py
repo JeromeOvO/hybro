@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
@@ -28,6 +29,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2ADispatchReceipt,
     NormalizedA2AObservation,
 )
+from execution.orchestrator.models import ToolResult
 
 NOW = datetime.now(UTC)
 
@@ -295,6 +297,77 @@ async def test_open_stream_assigns_per_frame_identity_and_registers_address():
     assert events[1].cursor == "2"
     assert client._addresses[command.call_record_id].task_id == "task-1"
     assert client._addresses[command.call_record_id].context_id == "ctx-1"
+
+
+async def test_open_stream_accumulates_artifact_refs_into_terminal_tool_result():
+    """artifact-update materializes bytes; terminal status-update must keep refs."""
+    image_bytes = b"png-binary-for-stream-accumulation"
+    encoded_b64 = base64.b64encode(image_bytes).decode()
+
+    class EpochOwner:
+        async def commit(self, **kwargs):
+            return "/api/v1/files/stream-file-1/content"
+
+    async def stream(card, message, kwargs):
+        yield {
+            "result": {
+                "append": False,
+                "artifact": {
+                    "artifactId": "art-img",
+                    "name": "cover.png",
+                    "parts": [
+                        {
+                            "kind": "file",
+                            "file": {
+                                "name": "cover.png",
+                                "mimeType": "image/png",
+                                "bytes": encoded_b64,
+                            },
+                        }
+                    ],
+                },
+                "contextId": "ctx-1",
+                "kind": "artifact-update",
+                "lastChunk": True,
+                "taskId": "task-1",
+            }
+        }
+        yield {
+            "result": {
+                "contextId": "ctx-1",
+                "final": True,
+                "kind": "status-update",
+                "status": {
+                    "message": {
+                        "parts": [{"kind": "text", "text": "cover ready"}],
+                        "role": "agent",
+                    },
+                    "state": "completed",
+                },
+                "taskId": "task-1",
+            }
+        }
+
+    client = _client(FakeSdk(stream=stream), epoch_owner=EpochOwner())
+    stream_obj = await client.open_stream(_dispatch_command())
+    events = [event async for event in stream_obj]
+    await stream_obj.close(reason="terminal")
+
+    assert len(events) == 2
+    assert events[0].artifact_refs == ["/api/v1/files/stream-file-1/content"]
+    assert events[1].event_kind == "terminal"
+    assert events[1].artifact_refs == ["/api/v1/files/stream-file-1/content"]
+
+    tool_result = ToolResult(
+        call_id="inv-1",
+        tool_name="agent_tool",
+        status="completed",
+        content=list(events[1].content or []),
+        artifact_refs=list(events[1].artifact_refs or []),
+        error_code=None,
+        error_message=None,
+    )
+    assert tool_result.artifact_refs == ["/api/v1/files/stream-file-1/content"]
 
 
 async def test_inspect_terminal_uses_resolved_task_identity():

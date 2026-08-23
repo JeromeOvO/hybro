@@ -7,6 +7,7 @@ import json
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from typing import Any
 
 from ..models import (
     AgentToolInput,
@@ -359,7 +360,9 @@ class A2AAgentToolRuntime:
 
         command = _dispatch_command(record, materialized_resources=materialized)
         try:
-            receipt, record = await self._run_fenced_dispatch(record, command)
+            receipt, record = await self._run_fenced_dispatch(
+                record, command, signal=signal
+            )
         except (
             RecoverableAdapterError,
             RecoverableTransportError,
@@ -627,7 +630,11 @@ class A2AAgentToolRuntime:
         return renewed
 
     async def _run_fenced_dispatch(
-        self, record: AgentCallLedgerRecord, command: A2ADispatchCommand
+        self,
+        record: AgentCallLedgerRecord,
+        command: A2ADispatchCommand,
+        *,
+        signal: Any = None,
     ) -> tuple[A2ADispatchReceipt, AgentCallLedgerRecord]:
         current_record = [record]
         stop_heartbeat = asyncio.Event()
@@ -650,26 +657,40 @@ class A2AAgentToolRuntime:
 
         heartbeat_task = asyncio.create_task(_heartbeat_loop())
         dispatch_task = asyncio.create_task(self.dispatch.dispatch(command))
-
-        done, _ = await asyncio.wait(
-            {dispatch_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
+        cancellation_task = (
+            asyncio.create_task(signal.wait())
+            if signal is not None
+            else asyncio.create_task(asyncio.Event().wait())
         )
 
-        if not stop_heartbeat.is_set() and dispatch_task not in done:
-            dispatch_task.cancel()
-            await asyncio.gather(dispatch_task, return_exceptions=True)
-            stop_heartbeat.set()
-            raise RecoverableEpochError(
-                "claim lease or room epoch was lost during dispatch"
+        try:
+            done, _ = await asyncio.wait(
+                {dispatch_task, heartbeat_task, cancellation_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-        try:
+            if cancellation_task in done or (signal is not None and signal.cancelled):
+                raise RecoverableEpochError("dispatch cancelled by client signal")
+
+            if not stop_heartbeat.is_set() and dispatch_task not in done:
+                raise RecoverableEpochError(
+                    "claim lease or room epoch was lost during dispatch"
+                )
+
             receipt = await dispatch_task
             return receipt, current_record[0]
         finally:
             stop_heartbeat.set()
+            for task in (dispatch_task, heartbeat_task, cancellation_task):
+                if not task.done():
+                    task.cancel()
             with suppress(asyncio.CancelledError, Exception):
-                await heartbeat_task
+                await asyncio.gather(
+                    dispatch_task,
+                    heartbeat_task,
+                    cancellation_task,
+                    return_exceptions=True,
+                )
 
     async def _release(self, record: AgentCallLedgerRecord) -> None:
         await self.ledger.release(

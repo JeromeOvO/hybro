@@ -116,6 +116,7 @@ class OrchestratorRuntime:
     run_store: Any
     event_store: Any
     epoch_store: Any
+    room_files: Any
     binding_store: Any
     call_ledger: Any
     observation_inbox: Any
@@ -141,6 +142,7 @@ _RUNTIME_BINDINGS = (
     "run_store",
     "event_store",
     "epoch_store",
+    "room_files",
     "binding_store",
     "call_ledger",
     "observation_inbox",
@@ -454,6 +456,7 @@ def create_orchestrator_runtime(  # noqa: C901
         run_store=run_store,
         event_store=event_store,
         epoch_store=epoch_store,
+        room_files=room_files,
         binding_store=binding_store,
         call_ledger=call_ledger,
         observation_inbox=observation_inbox,

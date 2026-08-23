@@ -216,32 +216,46 @@ function MarkdownImage({
 }: React.ImgHTMLAttributes<HTMLImageElement> & {
   conversationTypography: boolean
 }) {
-  const roomFileMatch = typeof src === 'string' ? src.match(/\/api\/v1\/files\/([a-zA-Z0-9_-]+)\/content/) : null
-  const fileId = roomFileMatch ? roomFileMatch[1] : undefined
+  let fileId: string | undefined
+  if (typeof src === 'string') {
+    try {
+      const url = new URL(src, 'http://localhost')
+      const isRelative = url.hostname === 'localhost'
+      const isSameOrigin = typeof window !== 'undefined' && url.origin === window.location.origin
+      if (isRelative || isSameOrigin) {
+        const match = url.pathname.match(/^\/api\/v1\/files\/([a-zA-Z0-9_-]+)\/content$/)
+        if (match) {
+          fileId = match[1]
+        }
+      }
+    } catch {
+      // Ignore invalid URLs
+    }
+  }
   const { objectUrl, error } = useRoomFile(fileId, Boolean(fileId))
 
   if (fileId) {
     if (objectUrl) {
       return (
-        <div className="my-1">
+        <span className="my-1 inline-block">
           <ImageLightbox
             src={objectUrl}
             alt={alt || 'image'}
             caption={alt || undefined}
           />
-        </div>
+        </span>
       )
     }
     if (error) {
       return (
-        <div className="my-1 flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+        <span className="my-1 inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           <span>This image is no longer available</span>
-        </div>
+        </span>
       )
     }
     return (
-      <div className="my-1 h-48 w-full animate-pulse rounded-md bg-muted/50" />
+      <span className="my-1 inline-block h-48 w-full animate-pulse rounded-md bg-muted/50" />
     )
   }
 

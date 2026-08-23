@@ -1004,25 +1004,27 @@ class A2AContinuationCoordinator:
             else self.dispatch.continue_task(command)
         )
 
-        done, _ = await asyncio.wait(
-            {continuation_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-
-        if not stop_heartbeat.is_set() and continuation_task not in done:
-            continuation_task.cancel()
-            await asyncio.gather(continuation_task, return_exceptions=True)
-            stop_heartbeat.set()
-            raise RecoverableAdapterError(
-                "claim lease or room epoch was lost during continuation"
+        try:
+            done, _ = await asyncio.wait(
+                {continuation_task, heartbeat_task}, return_when=asyncio.FIRST_COMPLETED
             )
 
-        try:
+            if not stop_heartbeat.is_set() and continuation_task not in done:
+                raise RecoverableAdapterError(
+                    "claim lease or room epoch was lost during continuation"
+                )
+
             receipt = await continuation_task
             return receipt, current_record[0]
         finally:
             stop_heartbeat.set()
+            for task in (continuation_task, heartbeat_task):
+                if not task.done():
+                    task.cancel()
             with suppress(asyncio.CancelledError, Exception):
-                await heartbeat_task
+                await asyncio.gather(
+                    continuation_task, heartbeat_task, return_exceptions=True
+                )
 
     async def _release(self, call: AgentCallLedgerRecord) -> None:
         await self.ledger.release(

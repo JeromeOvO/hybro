@@ -26,7 +26,9 @@ class FakeRoomFiles:
         return self.files.get(file_id)
 
     async def get_for_room_file(self, room_id, file_id):
-        return None
+        if file_id not in self.files:
+            return None
+        return {"room_id": room_id, "file_id": file_id}
 
 
 class FakeWriter:

@@ -310,6 +310,26 @@ def _task_to_observation_kwargs(  # noqa: C901
     }
 
 
+_RECOVERABLE_MATERIALIZATION_ERROR_NAMES = frozenset(
+    {
+        "RecoverableAdapterError",
+        "RecoverableEpochError",
+        "RecoverableResourceError",
+    }
+)
+
+
+def _is_recoverable_materialization_error(exc: BaseException) -> bool:
+    """True when storage/epoch failures must stay non-terminal for recovery.
+
+    ``a2a_adapter`` cannot import orchestrator error types, so recoverable
+    subclasses are matched by class name across the module boundary.
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    return exc.__class__.__name__ in _RECOVERABLE_MATERIALIZATION_ERROR_NAMES
+
+
 def _failed_materialization_observation_kwargs(
     *,
     source_kind: str,
@@ -366,7 +386,7 @@ def _response_to_task(
     return None
 
 
-async def _materialize_task_artifacts_epoch_fenced(
+async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
     task: Any,
     *,
     epoch_owner: Any | None,
@@ -399,12 +419,16 @@ async def _materialize_task_artifacts_epoch_fenced(
                 raise RuntimeError(
                     "epoch_owner, room_id, and active room_epoch are required to persist inline agent file artifacts"
                 )
+            if len(encoded) > (50 * 1024 * 1024 * 4 // 3) + 4:
+                raise ValueError("encoded payload exceeds max 50 MiB base64 length")
             try:
                 data = base64.b64decode(encoded, validate=True)
             except Exception as exc:
                 raise ValueError(
                     f"invalid base64 encoding in inline agent file artifact {getattr(file_content, 'name', None)!r}: {exc}"
                 ) from exc
+            if len(data) > 50 * 1024 * 1024:
+                raise ValueError("payload exceeds 50 MiB limit")
 
             content_sha256 = sha256(data).hexdigest()
             file_name = (
@@ -491,6 +515,7 @@ class DirectA2AStream:
         self._frame_counter = 0
         self._last_task_id: str | None = None
         self._last_context_id: str | None = None
+        self._accumulated_artifact_refs: list[str] = []
 
     def __aiter__(self) -> DirectA2AStream:
         return self
@@ -516,6 +541,8 @@ class DirectA2AStream:
                 message_id=getattr(self._command, "message_id", None),
             )
         except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
             logger.error("failed to materialize stream frame artifacts: %s", exc)
             self._frame_counter += 1
             kwargs = _failed_materialization_observation_kwargs(
@@ -551,6 +578,11 @@ class DirectA2AStream:
             context_id=context_id,
             cursor=cursor,
         )
+
+        current_refs = kwargs.get("artifact_refs", [])
+        self._accumulated_artifact_refs.extend(current_refs)
+        kwargs["artifact_refs"] = list(dict.fromkeys(self._accumulated_artifact_refs))
+
         return self._observation_factory(**kwargs)
 
     async def close(self, *, reason: str) -> None:
@@ -724,6 +756,8 @@ class OrchestratorDirectA2AClient:
                 message_id=getattr(command, "message_id", None),
             )
         except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
             logger.error("failed to materialize task artifacts for send: %s", exc)
             kwargs = _failed_materialization_observation_kwargs(
                 source_kind="direct",
@@ -844,6 +878,8 @@ class OrchestratorDirectA2AClient:
                 message_id=getattr(command, "message_id", None),
             )
         except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
             logger.error("failed to materialize task artifacts for inspect: %s", exc)
             kwargs = _failed_materialization_observation_kwargs(
                 source_kind="inspection",
@@ -929,6 +965,8 @@ class OrchestratorDirectA2AClient:
                 message_id=getattr(command, "command_id", None),
             )
         except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
             logger.error(
                 "failed to materialize task artifacts for continue_task: %s", exc
             )
@@ -981,6 +1019,38 @@ class OrchestratorDirectA2AClient:
         )
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(command, "room_id", None),
+                room_epoch=getattr(command, "room_epoch", None),
+                call_record_id=getattr(command, "call_record_id", None),
+                message_id=getattr(command, "command_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error(
+                "failed to materialize task artifacts for inspect_continuation: %s", exc
+            )
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="inspection",
+                call_record_id=command.call_record_id,
+                binding_scope=endpoint_scope_digest(address.endpoint_scope),
+                agent_id=address.agent_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                error_message=f"Failed to materialize agent file artifact: {exc}",
+            )
+            obs = self._observation(**kwargs)
+            return self._receipt(
+                outcome="terminal",
+                task_id=task.id,
+                context_id=task.context_id,
+                terminal_observation=obs,
+            )
+
         status = _terminal_status(task)
         if status is None:
             return self._receipt(
