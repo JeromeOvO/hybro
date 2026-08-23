@@ -208,6 +208,74 @@ describe('applySnapshotToStores', () => {
     expect(buffers['m2']?.text).toBe('Par')
   })
 
+  it('retains turn logs when snapshot arrives before DB hydration', () => {
+    applySnapshotToStores('room-1', {
+      room_seq: 2,
+      messages: [
+        {
+          message_id: 'user-1',
+          agent_id: null,
+          content: null,
+          parts: null,
+          related_message_id: null,
+          client_request_id: 'cr-1',
+          status: 'completed',
+          task_status: null,
+          task_content: null,
+          task_error: null,
+          requires_input: false,
+          requires_auth: false,
+          step_number: null,
+          total_steps: null,
+          created_at: null,
+          ts: null,
+          artifacts: null,
+          status_logs: [
+            {
+              message: 'Planning the next actions',
+              timestamp: '2026-07-02T00:00:01.000Z',
+              turn_phase: 'collecting',
+            },
+          ],
+        },
+      ],
+      tasks: [],
+      runs: [],
+      hitl: { requests: [], resolved: [] },
+      streaming: {},
+      trace: {},
+    })
+
+    expect(useMessageStore.getState().entities['user-1']).toMatchObject({
+      messageType: 'user',
+      clientRequestId: 'cr-1',
+      turnTerminalStatus: 'completed',
+      processingStatusLogs: [
+        expect.objectContaining({
+          message: 'Planning the next actions',
+          turnPhase: 'collecting',
+        }),
+      ],
+    })
+
+    useMessageStore.getState().upsertMessage({
+      id: 'user-1',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'Actual persisted prompt',
+      senderName: 'Developer Local',
+      timestamp: '2026-07-02T00:00:00.000Z',
+    }, 'db')
+
+    expect(useMessageStore.getState().entities['user-1']).toMatchObject({
+      content: 'Actual persisted prompt',
+      turnTerminalStatus: 'completed',
+      processingStatusLogs: [
+        expect.objectContaining({ message: 'Planning the next actions' }),
+      ],
+    })
+  })
+
   it('hydrates the trace store from snapshot trace and runs', () => {
     applySnapshotToStores('room-1', {
       room_seq: 2,
@@ -219,6 +287,7 @@ describe('applySnapshotToStores', () => {
       trace: {
         'run-1': {
           run_id: 'run-1',
+          client_request_id: 'cr-1',
           nodes: [
             {
               id: 'run-1:llm_call:e1',
@@ -242,6 +311,7 @@ describe('applySnapshotToStores', () => {
     expect(trace.runStatuses['run-1']).toBe('completed')
     expect(trace.nodes['run-1:llm_call:e1']).toMatchObject({
       kind: 'llm_call',
+      clientRequestId: 'cr-1',
       model: 'gpt-4o',
       durationMs: 800,
     })

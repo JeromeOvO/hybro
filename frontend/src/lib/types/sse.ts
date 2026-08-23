@@ -82,7 +82,11 @@ export interface RoomSnapshotMessage {
   created_at: string | null
   ts: string | null
   artifacts: unknown
-  status_logs: Array<{ message: string; timestamp: string }>
+  status_logs: Array<{
+    message: string
+    timestamp: string
+    turn_phase?: 'collecting' | 'synthesizing' | 'terminal'
+  }>
 }
 
 export interface RoomSnapshotTask {
@@ -122,11 +126,14 @@ export interface RoomSnapshotStream {
 export interface RoomSnapshotTraceNode {
   id: string
   kind: string
+  client_request_id?: string | null
+  ts?: string
   [key: string]: unknown
 }
 
 export interface RoomSnapshotTraceRun {
   run_id: string
+  client_request_id: string | null
   nodes: RoomSnapshotTraceNode[]
   usage: unknown
   duration_ms: number

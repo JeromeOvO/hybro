@@ -1,13 +1,27 @@
 'use client'
 
-import { useState } from 'react'
-import { ChevronRight, Cpu, GitBranch, RotateCw, Wrench } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Activity,
+  ChevronRight,
+  Cpu,
+  GitBranch,
+  RotateCw,
+  Wrench,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { ProcessingStatusLogEntry } from '@/stores/message-store/types'
 import type { TraceNode } from '@/stores/trace-store'
 
 interface TurnTracePanelProps {
   nodes: TraceNode[]
+  statusEntries: ProcessingStatusLogEntry[]
+  isRunning?: boolean
 }
+
+type TraceTimelineItem =
+  | { kind: 'status'; key: string; timestamp: number; entry: ProcessingStatusLogEntry }
+  | { kind: 'trace'; key: string; timestamp: number; node: TraceNode }
 
 function formatMs(value: number | null | undefined): string | null {
   if (value === null || value === undefined) return null
@@ -126,18 +140,88 @@ function renderNode(node: TraceNode, key: string) {
   }
 }
 
-export function TurnTracePanel({ nodes }: TurnTracePanelProps) {
+function renderStatus(entry: ProcessingStatusLogEntry, key: string, active: boolean) {
+  return (
+    <div
+      key={key}
+      className={cn(
+        'conversation-trace-node',
+        active && 'conversation-processing-log-row-active',
+      )}
+      data-kind="status"
+    >
+      <span className="conversation-trace-icon"><Activity aria-hidden="true" /></span>
+      <div className="conversation-trace-content">
+        <span
+          className={cn(
+            'conversation-trace-title',
+            active && 'conversation-processing-log-message-active',
+          )}
+        >
+          {entry.message}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export function TurnTracePanel({
+  nodes,
+  statusEntries,
+  isRunning = false,
+}: TurnTracePanelProps) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const nodeCountLabel = `${nodes.length} ${nodes.length === 1 ? 'event' : 'events'}`
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const items = useMemo<TraceTimelineItem[]>(() => {
+    const timeline: TraceTimelineItem[] = []
+    for (let index = 0; index < statusEntries.length; index++) {
+      const entry = statusEntries[index]
+      const parsed = Date.parse(entry.timestamp)
+      timeline.push({
+        kind: 'status',
+        key: `status:${entry.id}`,
+        timestamp: Number.isFinite(parsed) ? parsed : index,
+        entry,
+      })
+    }
+    for (const node of nodes) {
+      timeline.push({
+        kind: 'trace',
+        key: `trace:${node.id}`,
+        timestamp: node.receivedAt,
+        node,
+      })
+    }
+    timeline.sort((a, b) => a.timestamp - b.timestamp || a.key.localeCompare(b.key))
+    return timeline
+  }, [nodes, statusEntries])
+
+  useEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return
+    scroll.scrollTop = scroll.scrollHeight
+  }, [items.length, isExpanded])
+
+  if (items.length === 0) return null
+
+  const eventCountLabel = `${items.length} ${items.length === 1 ? 'event' : 'events'}`
+  const activeStatusKey = isRunning
+    ? [...items].reverse().find((item) => item.kind === 'status')?.key
+    : undefined
 
   return (
-    <section className="conversation-processing-log conversation-trace">
+    <section
+      className={cn(
+        'conversation-processing-log conversation-trace',
+        isRunning && 'conversation-processing-log-running',
+      )}
+    >
       <button
         type="button"
         className="conversation-processing-log-trigger"
         style={{ justifyContent: 'flex-start' }}
         aria-expanded={isExpanded}
-        aria-label={`Turn Trace, ${nodeCountLabel}`}
+        aria-label={`Turn Trace, ${eventCountLabel}`}
         onClick={() => setIsExpanded((expanded) => !expanded)}
       >
         <ChevronRight
@@ -150,7 +234,10 @@ export function TurnTracePanel({ nodes }: TurnTracePanelProps) {
         <span className="conversation-processing-log-title">Turn Trace</span>
       </button>
       <div
+        ref={scrollRef}
         className="conversation-processing-log-scroll"
+        role="log"
+        aria-live={isRunning ? 'polite' : 'off'}
         data-state={isExpanded ? 'expanded' : 'compact'}
         style={{
           height: isExpanded
@@ -158,14 +245,10 @@ export function TurnTracePanel({ nodes }: TurnTracePanelProps) {
             : 'var(--conversation-processing-log-compact-height)',
         }}
       >
-        {nodes.length === 0 ? (
-          <div className="conversation-processing-log-row">
-            <span className="conversation-processing-log-message">
-              No trace events for this turn.
-            </span>
-          </div>
-        ) : (
-          nodes.map((node) => renderNode(node, node.id))
+        {items.map((item) =>
+          item.kind === 'status'
+            ? renderStatus(item.entry, item.key, item.key === activeStatusKey)
+            : renderNode(item.node, item.key),
         )}
       </div>
     </section>

@@ -146,7 +146,52 @@ def test_fold_projects_terminal_processing_status_and_log():
     message = state["messages"][0]
     assert message["status"] == "completed"
     assert message["status_logs"] == [
-        {"message": "Thinking…", "timestamp": NOW.isoformat()}
+        {
+            "message": "Thinking…",
+            "timestamp": NOW.isoformat(),
+            "turn_phase": "collecting",
+        }
+    ]
+
+
+def test_fold_projects_processing_detail_aliases():
+    fold = RoomEventFold()
+    fold.apply(
+        _record(
+            "processing_status",
+            {
+                "message_id": "m1",
+                "status": "processing",
+                "details": {"status_message": "Contacting agent"},
+            },
+        )
+    )
+
+    state = fold.state(room_seq=1)
+    assert state["messages"][0]["status_logs"] == [
+        {"message": "Contacting agent", "timestamp": NOW.isoformat()}
+    ]
+
+
+def test_fold_stringifies_non_json_processing_details():
+    fold = RoomEventFold()
+    fold.apply(
+        _record(
+            "processing_status",
+            {
+                "message_id": "m1",
+                "status": "processing",
+                "details": {"observed_at": NOW},
+            },
+        )
+    )
+
+    state = fold.state(room_seq=1)
+    assert state["messages"][0]["status_logs"] == [
+        {
+            "message": f'{{"observed_at":"{NOW}"}}',
+            "timestamp": NOW.isoformat(),
+        }
     ]
 
 
@@ -228,9 +273,14 @@ def test_fold_projects_runs_and_trace_nodes():
             "ts": NOW.isoformat(),
         }
     ]
-    nodes = state["trace"]["run-1"]["nodes"]
+    trace_run = state["trace"]["run-1"]
+    assert trace_run["client_request_id"] == "cr-1"
+    nodes = trace_run["nodes"]
     assert [node["kind"] for node in nodes] == ["llm_call", "tool_call"]
+    assert nodes[0]["client_request_id"] == "cr-1"
+    assert nodes[0]["ts"] == NOW.isoformat()
     assert nodes[1]["status"] == "completed"
+    assert nodes[1]["client_request_id"] == "cr-1"
     assert nodes[1]["result_summary"] == "Sunny"
     assert state["trace"]["run-1"]["duration_ms"] == 812
 

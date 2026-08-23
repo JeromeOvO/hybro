@@ -156,10 +156,11 @@ describe('trace-store', () => {
   })
 
   it('hydrates trace trees and run statuses from a snapshot', () => {
-    useTraceStore.getState().hydrateFromSnapshot({
+    useTraceStore.getState().hydrateFromSnapshot('room-1', {
       trace: {
         'run-1': {
           run_id: 'run-1',
+          client_request_id: 'crid-1',
           nodes: [
             {
               id: 'run-1:llm_call:e1',
@@ -186,7 +187,7 @@ describe('trace-store', () => {
           duration_ms: 800,
         },
       },
-      runs: [{ run_id: 'run-1', status: 'completed' }],
+      runs: [{ run_id: 'run-1', status: 'completed', client_request_id: 'crid-1' }],
     })
 
     const state = useTraceStore.getState()
@@ -197,14 +198,31 @@ describe('trace-store', () => {
     ])
     expect(state.nodes['run-1:llm_call:e1']).toMatchObject({
       kind: 'llm_call',
+      clientRequestId: 'crid-1',
       model: 'gpt-4o',
       durationMs: 800,
     })
     expect(state.nodes['run-1:tool_call:weather']).toMatchObject({
       kind: 'tool_call',
+      clientRequestId: 'crid-1',
       toolName: 'weather',
       resultSummary: 'Sunny',
       exitCode: 0,
     })
+  })
+
+  it('ignores a delayed snapshot from the room being left', () => {
+    useTraceStore.getState().setRoom('room-current')
+    apply('llm_call_completed', { model: 'gpt-current' }, 'cr-current')
+    const before = useTraceStore.getState().nodes
+
+    useTraceStore.getState().hydrateFromSnapshot('room-stale', {
+      trace: {},
+      runs: [],
+    })
+
+    const state = useTraceStore.getState()
+    expect(state.roomId).toBe('room-current')
+    expect(state.nodes).toEqual(before)
   })
 })

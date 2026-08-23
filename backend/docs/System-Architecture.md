@@ -1161,7 +1161,10 @@ SSE emission steps, and `EventPublisherImpl` backs that up with a
 `ProjectionSettlementReader` over the private `run_events` log. Every connect
 yields a `snapshot` frame right after `connected`, folded from the event log
 by `SnapshotService` (incrementally materialized; `?snapshot=1` forces a fresh
-fold). Settled terminal frames also force a boundary snapshot fanout. A
+fold). The fold preserves processing-log phase metadata and trace
+`client_request_id` on both run and node records, so a refreshed frontend can
+reattach persisted activity to the originating user turn without heuristic
+matching. Settled terminal frames also force a boundary snapshot fanout. A
 fallback read path `GET /sse/room/{room_id}/events?after=<seq>&limit=N`
 replays persisted events; auth matches the stream route.
 

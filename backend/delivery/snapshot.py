@@ -9,6 +9,7 @@ the ``?snapshot=1`` recovery path to rule out checkpoint staleness).
 
 from __future__ import annotations
 
+import json
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
@@ -119,13 +120,29 @@ class RoomEventFold:
         if status in _TERMINAL_PROCESSING_STATUSES:
             message["status"] = status
         details = data.get("details")
-        if isinstance(details, dict) and details.get("message"):
-            message["status_logs"].append(
-                {
-                    "message": str(details["message"]),
+        if isinstance(details, dict):
+            log_message = _first_present(
+                details, "message", "status_message", "stage", "description"
+            )
+            if not isinstance(log_message, str) or not log_message.strip():
+                log_message = json.dumps(
+                    details,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+                if log_message == "{}":
+                    log_message = None
+            if log_message:
+                entry = {
+                    "message": str(log_message).strip(),
                     "timestamp": str(record.get("ts") or ""),
                 }
-            )
+                turn_phase = details.get("turn_phase")
+                if turn_phase in {"collecting", "synthesizing", "terminal"}:
+                    entry["turn_phase"] = turn_phase
+                message["status_logs"].append(entry)
         self._carry_correlation(message, data)
 
     def _agent_response_partial(
@@ -310,10 +327,13 @@ class RoomEventFold:
         run_id = str(data.get("run_id") or "")
         sub_type = data.get("type")
         if sub_type in {"run_completed", "run_failed", "run_canceled"} and run_id:
+            trace_run = self.trace.get(run_id) or {}
             self.runs[run_id] = {
                 "run_id": run_id,
                 "status": str(sub_type).removeprefix("run_"),
-                "client_request_id": data.get("correlation_id"),
+                "client_request_id": (
+                    data.get("correlation_id") or trace_run.get("client_request_id")
+                ),
                 "ts": str(record.get("ts") or ""),
             }
         if sub_type in _TRACE_KINDS and run_id:
@@ -327,13 +347,28 @@ class RoomEventFold:
         record: dict[str, Any],
     ) -> None:
         trace_run = self.trace.setdefault(
-            run_id, {"run_id": run_id, "nodes": [], "usage": None, "duration_ms": 0}
+            run_id,
+            {
+                "run_id": run_id,
+                "client_request_id": None,
+                "nodes": [],
+                "usage": None,
+                "duration_ms": 0,
+            },
         )
+        correlation_id = data.get("correlation_id")
+        if correlation_id:
+            trace_run["client_request_id"] = correlation_id
         payload = data.get("payload") or {}
         node_id = f"{run_id}:{sub_type}:{data.get('event_id') or ''}"
+        node_base = {
+            "id": node_id,
+            "client_request_id": correlation_id or trace_run["client_request_id"],
+            "ts": str(record.get("ts") or ""),
+        }
         if sub_type == "llm_call_completed":
             node = {
-                "id": node_id,
+                **node_base,
                 "kind": "llm_call",
                 "model": payload.get("model"),
                 "provider": payload.get("provider"),
@@ -351,7 +386,7 @@ class RoomEventFold:
         elif sub_type == "llm_retry_scheduled":
             trace_run["nodes"].append(
                 {
-                    "id": node_id,
+                    **node_base,
                     "kind": "retry",
                     "attempt": _as_int(payload.get("attempt")),
                     "error_class": payload.get("error_class"),
@@ -361,7 +396,7 @@ class RoomEventFold:
         elif sub_type == "orchestrator_decision":
             trace_run["nodes"].append(
                 {
-                    "id": node_id,
+                    **node_base,
                     "kind": "decision",
                     "chosen_agents": payload.get("chosen_agents"),
                     "plan_steps": payload.get("plan_steps"),
@@ -381,6 +416,7 @@ class RoomEventFold:
             )
             if existing is None:
                 existing = {
+                    **node_base,
                     "id": merged_id,
                     "kind": "tool_call",
                     "tool_name": tool_name,
@@ -391,6 +427,9 @@ class RoomEventFold:
                     "duration_ms": None,
                 }
                 trace_run["nodes"].append(existing)
+            if correlation_id:
+                existing["client_request_id"] = correlation_id
+            existing["ts"] = str(record.get("ts") or "")
             if sub_type == "tool_call_accepted":
                 existing["status"] = "accepted"
                 existing["arg_summary"] = payload.get("arg_summary")

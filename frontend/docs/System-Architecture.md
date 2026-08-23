@@ -313,7 +313,10 @@ single state entry:
   window (~500 ms); a gap that outlasts it triggers a `?snapshot=1` reconnect
   (the only recovery path).
 - Snapshots fold into message / streaming / trace stores through the same fold
-  functions used for live deltas.
+  functions used for live deltas. A processing-state snapshot may arrive before
+  DB message hydration; the reducer creates a correlation-preserving user shell
+  so durable status logs and terminal state are retained, then DB hydration
+  fills the prompt without removing the snapshot overlay.
 
 There are no fixed-delay reconciliation timers, no correlation buffers, and no
 polling safety net.
@@ -323,7 +326,12 @@ polling safety net.
 Decision-visibility surface (plan §6): public `run_event` payload kinds
 (`llm_call_completed`, `llm_retry_scheduled`, `orchestrator_decision`,
 `tool_call_accepted`, `tool_call_completed`) fold into a per-run tree rendered
-by the Turn Trace panel.
+by the Turn Trace panel. Snapshot trace runs and nodes retain
+`client_request_id`, so refresh/reconnect restores the same turn association.
+The panel is the single per-turn activity surface: high-level
+`processing_status` progress and structured decision/LLM/tool events share one
+ordered timeline; the former separate Work Logs panel is not rendered by the
+conversation timeline.
 
 ### Agent Dispatch Privacy
 

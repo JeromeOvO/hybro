@@ -541,6 +541,7 @@
   height: 12px;
 }
 
+.conversation-trace-node[data-kind='status'] .conversation-trace-icon,
 .conversation-trace-node[data-kind='decision'] .conversation-trace-icon {
   color: var(--conversation-accent);
 }

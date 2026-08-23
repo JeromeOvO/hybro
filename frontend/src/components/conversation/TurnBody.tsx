@@ -12,6 +12,7 @@ interface TurnBodyProps {
   onOpenDetail?: (messageId: string) => void
   primarySurfaceRef?: Ref<HTMLDivElement>
   isLastTurn?: boolean
+  renderProcessingLog?: boolean
 }
 
 export function TurnBody({
@@ -20,6 +21,7 @@ export function TurnBody({
   onOpenDetail,
   primarySurfaceRef,
   isLastTurn = false,
+  renderProcessingLog = true,
 }: TurnBodyProps) {
   const sourceResults = getStripSourceResults(turn)
 
@@ -37,6 +39,7 @@ export function TurnBody({
         surfaceRef={primarySurfaceRef}
         selectedAgentMessageId={selectedAgentMessageId}
         onOpenDetail={onOpenDetail}
+        renderProcessingLog={renderProcessingLog}
       />
 
       {showIndex && onOpenDetail && (

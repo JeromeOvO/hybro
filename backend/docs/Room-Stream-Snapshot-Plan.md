@@ -1,7 +1,7 @@
 # Room Stream: Snapshot-Driven Delivery (Plan)
 
-> Status: Draft design proposal for review. Nothing in this document is
-> implemented yet.
+> Status: Implemented. This document is the acceptance contract for the
+> snapshot-driven room stream and its frontend activity projection.
 >
 > Scope: `backend/delivery` + `backend/execution` public projection +
 > frontend room sync (`frontend/src/lib/room-sync`,

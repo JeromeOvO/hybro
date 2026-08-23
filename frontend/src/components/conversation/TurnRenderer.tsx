@@ -37,10 +37,12 @@ export function TurnRenderer({
     nodes.sort((a, b) => a.receivedAt - b.receivedAt)
     return nodes
   }, [traceNodesById, clientRequestId])
-  const hasAssistantSurface =
-    turn.agentResults.length > 0 ||
-    turn.processingStatusLogs.length > 0 ||
-    traceNodes.length > 0
+  const hasActivity = turn.processingStatusLogs.length > 0 || traceNodes.length > 0
+  const hasAssistantSurface = turn.agentResults.length > 0 || hasActivity
+  const isActivityRunning =
+    turn.status === 'active' &&
+    turn.phase !== 'completed' &&
+    turn.finalAnswer.kind !== 'hitl'
 
   return (
     <div className="conversation-turn">
@@ -62,8 +64,15 @@ export function TurnRenderer({
             onOpenDetail={onOpenAgentDetail}
             primarySurfaceRef={primarySurfaceRef}
             isLastTurn={isLastTurn}
+            renderProcessingLog={false}
           />
-          <TurnTracePanel nodes={traceNodes} />
+          {hasActivity ? (
+            <TurnTracePanel
+              nodes={traceNodes}
+              statusEntries={turn.processingStatusLogs}
+              isRunning={isActivityRunning}
+            />
+          ) : null}
         </div>
       )}
     </div>

@@ -263,7 +263,6 @@ function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
   if (store.roomId && store.roomId !== roomId) return
 
   for (const message of snapshot.messages) {
-    const entity = store.entities[message.message_id]
     if (message.content !== null || message.agent_id) {
       // Agent-side record: upsert the committed message content.
       store.upsertMessage(
@@ -290,12 +289,33 @@ function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
         'sse',
       )
     }
-    if (message.status) {
-      // Turn-level processing status stamps the USER entity (terminal only).
-      const userEntity =
-        entity && entity.messageType === 'user' ? entity : undefined
+    if (message.status || message.status_logs.length > 0) {
+      // Turn-level processing state belongs to the USER entity. Snapshot may
+      // arrive before DB hydration; create a correlation-preserving shell so
+      // the durable logs/status are never discarded because of arrival order.
+      // DB hydration later fills content/sender fields and preserves the SSE
+      // overlay through the normal message-store merge rules.
+      let userEntity = useMessageStore.getState().entities[message.message_id]
+      if (!userEntity || userEntity.messageType !== 'user') {
+        const firstLogTimestamp = message.status_logs[0]?.timestamp
+        store.upsertMessage(
+          {
+            id: message.message_id,
+            roomId,
+            messageType: 'user',
+            content: '',
+            senderName: 'You',
+            timestamp: firstLogTimestamp || message.ts || new Date().toISOString(),
+            clientRequestId: message.client_request_id ?? undefined,
+            isEphemeral: false,
+          },
+          'sse',
+        )
+        userEntity = useMessageStore.getState().entities[message.message_id]
+      }
+      if (!userEntity || userEntity.messageType !== 'user') continue
+
       const turnTerminalStatus = mapSnapshotStatusToTerminal(message.status)
-      if (!userEntity) continue
       if (turnTerminalStatus) {
         store.upsertMessage(
           {
@@ -312,7 +332,13 @@ function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
         )
       }
       for (const log of message.status_logs) {
-        appendSnapshotStatusLog(roomId, userEntity, log.message, log.timestamp)
+        appendSnapshotStatusLog(
+          roomId,
+          userEntity,
+          log.message,
+          log.timestamp,
+          log.turn_phase,
+        )
       }
     }
   }
@@ -323,6 +349,7 @@ function appendSnapshotStatusLog(
   userEntity: MessageEntity,
   message: string,
   timestamp: string,
+  turnPhase?: 'collecting' | 'synthesizing' | 'terminal',
 ): void {
   const trimmed = message.trim()
   if (!trimmed) return
@@ -340,7 +367,12 @@ function appendSnapshotStatusLog(
       timestamp: latest.timestamp,
       processingStatusLogs: [
         ...existing,
-        { id: `processing-log-${timestamp}-${existing.length}`, message: trimmed, timestamp },
+        {
+          id: `processing-log-${timestamp}-${existing.length}`,
+          message: trimmed,
+          timestamp,
+          ...(turnPhase ? { turnPhase } : {}),
+        },
       ],
     },
     'sse',
@@ -416,8 +448,8 @@ function applySnapshotHitl(
   }
 }
 
-function applySnapshotTrace(snapshot: SnapshotData): void {
-  useTraceStore.getState().hydrateFromSnapshot(snapshot)
+function applySnapshotTrace(roomId: string, snapshot: SnapshotData): void {
+  useTraceStore.getState().hydrateFromSnapshot(roomId, snapshot)
 }
 
 /** Snapshot replace: fold every snapshot section into the stores. */
@@ -428,7 +460,7 @@ export function applySnapshotToStores(
 ): void {
   applySnapshotMessages(roomId, snapshot)
   applySnapshotStreaming(roomId, snapshot)
-  applySnapshotTrace(snapshot)
+  applySnapshotTrace(roomId, snapshot)
   if (hitlRequestIndex) {
     applySnapshotHitl(roomId, snapshot, hitlRequestIndex)
   }

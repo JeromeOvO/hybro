@@ -85,14 +85,15 @@ interface TraceStoreState {
   setRunStatus: (runId: string, status: string) => void
   /** Snapshot replace (plan §4): rebuild run trees + run statuses from a
    *  snapshot's trace/runs sections, then apply ordered deltas on top. */
-  hydrateFromSnapshot: (snapshot: {
+  hydrateFromSnapshot: (roomId: string, snapshot: {
     trace: Record<string, {
       run_id: string
+      client_request_id: string | null
       nodes: Array<Record<string, unknown>>
       usage: unknown
       duration_ms: number
     }>
-    runs: Array<{ run_id: string; status: string }>
+    runs: Array<{ run_id: string; status: string; client_request_id?: string | null }>
   }) => void
   setRoom: (roomId: string) => void
   clearRoom: () => void
@@ -145,9 +146,14 @@ function asStringArray(value: unknown): string[] | undefined {
 function nodeFromSnapshotNode(
   runId: string,
   raw: Record<string, unknown>,
+  runClientRequestId: string | null,
+  index: number,
 ): TraceNode | null {
   const kind = raw.kind
-  const id = typeof raw.id === 'string' && raw.id ? raw.id : `${runId}:node:${Date.now()}${Math.random()}`
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : `${runId}:node:${index}`
+  const clientRequestId = asString(raw.client_request_id) ?? runClientRequestId
+  const timestamp = typeof raw.ts === 'string' ? Date.parse(raw.ts) : Number.NaN
+  const receivedAt = Number.isFinite(timestamp) ? timestamp : index
   const asStr = (value: unknown): string | undefined =>
     typeof value === 'string' && value.length > 0 ? value : undefined
   const asInt = (value: unknown): number | null | undefined =>
@@ -159,8 +165,8 @@ function nodeFromSnapshotNode(
         id,
         kind: 'llm_call',
         runId,
-        clientRequestId: null,
-        receivedAt: Date.now(),
+        clientRequestId,
+        receivedAt,
         model: asStr(raw.model),
         provider: asStr(raw.provider),
         attempt: asInt(raw.attempt),
@@ -174,8 +180,8 @@ function nodeFromSnapshotNode(
         id,
         kind: 'retry',
         runId,
-        clientRequestId: null,
-        receivedAt: Date.now(),
+        clientRequestId,
+        receivedAt,
         attempt: asInt(raw.attempt),
         errorClass: asStr(raw.error_class),
         retryDelayMs: asInt(raw.retry_delay_ms),
@@ -185,8 +191,8 @@ function nodeFromSnapshotNode(
         id,
         kind: 'decision',
         runId,
-        clientRequestId: null,
-        receivedAt: Date.now(),
+        clientRequestId,
+        receivedAt,
         chosenAgents: asStringArray(raw.chosen_agents),
         planSteps: asPlanSteps(raw.plan_steps),
         reason: asStr(raw.reason),
@@ -196,8 +202,8 @@ function nodeFromSnapshotNode(
         id,
         kind: 'tool_call',
         runId,
-        clientRequestId: null,
-        receivedAt: Date.now(),
+        clientRequestId,
+        receivedAt,
         status: typeof raw.status === 'string' ? raw.status : undefined,
         toolName: asStr(raw.tool_name),
         argSummary: raw.arg_summary ?? undefined,
@@ -300,6 +306,7 @@ export const useTraceStore = create<TraceStoreState>()(
             // A completed tool call supersedes its accepted counterpart but
             // keeps the argument summary the accepted event carried.
             argSummary: node.argSummary ?? existing.argSummary,
+            clientRequestId: node.clientRequestId ?? existing.clientRequestId,
             receivedAt: node.status === 'completed' ? node.receivedAt : existing.receivedAt,
           }
         : node
@@ -323,13 +330,19 @@ export const useTraceStore = create<TraceStoreState>()(
       }))
     },
 
-    hydrateFromSnapshot: (snapshot) => {
+    hydrateFromSnapshot: (roomId, snapshot) => {
       const nodes: Record<string, TraceNode> = {}
       const runOrder: Record<string, string[]> = {}
+      const runClientRequestIds = new Map(
+        snapshot.runs.map((run) => [run.run_id, run.client_request_id ?? null]),
+      )
       for (const [runId, traceRun] of Object.entries(snapshot.trace)) {
         const order: string[] = []
-        for (const raw of traceRun.nodes) {
-          const node = nodeFromSnapshotNode(runId, raw)
+        const clientRequestId =
+          traceRun.client_request_id ?? runClientRequestIds.get(runId) ?? null
+        for (let index = 0; index < traceRun.nodes.length; index++) {
+          const raw = traceRun.nodes[index]
+          const node = nodeFromSnapshotNode(runId, raw, clientRequestId, index)
           if (!node) continue
           nodes[node.id] = node
           order.push(node.id)
@@ -340,12 +353,19 @@ export const useTraceStore = create<TraceStoreState>()(
       for (const run of snapshot.runs) {
         if (run.run_id) runStatuses[run.run_id] = run.status
       }
-      set((state) => ({
-        nodes,
-        runOrder,
-        runStatuses,
-        version: state.version + 1,
-      }))
+      set((state) => {
+        // A stream callback from the room being left may finish after the
+        // new room reset. Never let that stale snapshot replace the current
+        // room's trace projection.
+        if (state.roomId && state.roomId !== roomId) return state
+        return {
+          roomId,
+          nodes,
+          runOrder,
+          runStatuses,
+          version: state.version + 1,
+        }
+      })
     },
 
     setRoom: (roomId) => set({ ...INITIAL_STATE, roomId }),
