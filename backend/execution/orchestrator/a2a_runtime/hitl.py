@@ -983,10 +983,6 @@ class A2AContinuationCoordinator:
 
         async def _heartbeat_loop() -> None:
             interval = self.policy.claim_renew_interval_seconds
-            renewed = await self._renew_and_verify(current_record[0])
-            if renewed is None:
-                return
-            current_record[0] = renewed
 
             while not stop_heartbeat.is_set():
                 try:
@@ -1025,7 +1021,6 @@ class A2AContinuationCoordinator:
             return receipt, current_record[0]
         finally:
             stop_heartbeat.set()
-            heartbeat_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await heartbeat_task
 

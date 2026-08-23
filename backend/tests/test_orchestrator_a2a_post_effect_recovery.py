@@ -102,7 +102,7 @@ class AfterReceiptRenewLedger(InMemoryAgentCallLedgerStore):
 
     async def renew(self, *args, **kwargs):
         self.renew_count += 1
-        if self.renew_count == 5:
+        if self.renew_count == 4:
             raise self.error
         return await super().renew(*args, **kwargs)
 

@@ -634,11 +634,6 @@ class A2AAgentToolRuntime:
 
         async def _heartbeat_loop() -> None:
             interval = self.policy.claim_renew_interval_seconds
-            # Initial immediate renewal to verify ownership & epoch
-            renewed = await self._renew_and_verify_epoch(current_record[0])
-            if renewed is None:
-                return
-            current_record[0] = renewed
 
             while not stop_heartbeat.is_set():
                 try:
@@ -673,7 +668,6 @@ class A2AAgentToolRuntime:
             return receipt, current_record[0]
         finally:
             stop_heartbeat.set()
-            heartbeat_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await heartbeat_task
 
