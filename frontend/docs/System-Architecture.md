@@ -282,7 +282,6 @@ Main responsibilities:
 - Convert backend messages into `IncomingMessage`.
 - Filter hydration data.
 - Detect stale tasks.
-- Infer terminal state from active-run context.
 - Resolve display type for renderer consumers.
 
 Key files:
@@ -293,8 +292,38 @@ Key files:
 - `convert-api-message.ts`
 - `hydration-filter.ts`
 - `stale-detection.ts`
-- `infer-turn-terminal-status.ts`
 - `resolve-display-type.ts`
+
+Turn-terminal state now arrives as durable-confirmed frames over the
+snapshot-driven room stream; the former `infer-turn-terminal-status.ts`
+inference module has been removed.
+
+### Snapshot-driven room sync (`src/lib/room-sync/room-reducer.ts`)
+
+The room stream is snapshot-driven (backend `docs/Room-Stream-Snapshot-Plan.md`):
+state = latest full snapshot + ordered deltas after it. `RoomReducer` is the
+single state entry:
+
+- `connected` handshake carries `room_seq`; its presence enables the new
+  semantics (legacy fallback otherwise).
+- Deltas before the first snapshot are buffered and replayed in order;
+  a 500 ms bootstrap window (or the first pre-snapshot delta) re-requests a
+  snapshot.
+- After the snapshot watermark, out-of-order deltas enter a bounded reorder
+  window (~500 ms); a gap that outlasts it triggers a `?snapshot=1` reconnect
+  (the only recovery path).
+- Snapshots fold into message / streaming / trace stores through the same fold
+  functions used for live deltas.
+
+There are no fixed-delay reconciliation timers, no correlation buffers, and no
+polling safety net.
+
+### Turn Trace (`src/stores/trace-store/`)
+
+Decision-visibility surface (plan §6): public `run_event` payload kinds
+(`llm_call_completed`, `llm_retry_scheduled`, `orchestrator_decision`,
+`tool_call_accepted`, `tool_call_completed`) fold into a per-run tree rendered
+by the Turn Trace panel.
 
 ### Agent Dispatch Privacy
 
@@ -313,6 +342,9 @@ The room UI store contains ephemeral per-room UI state:
 - initial hydration marker
 - pending room handoff data
 - selected agent-response detail state
+
+The SSE reconnect surface also exposes `reconnectWithSnapshot` (gap-recovery
+reconnect with `?snapshot=1`).
 
 ### `src/stores/streaming-store/`
 

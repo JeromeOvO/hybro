@@ -90,6 +90,7 @@ def make_transport(
     config: DeliveryConfig | None = None,
     metrics: FakeMetrics | None = None,
     id_factory: IdFactory | None = None,
+    snapshot_provider=None,
 ):
     return SSETransportImpl(
         event_bus=event_bus or FakeEventBus(),
@@ -99,6 +100,7 @@ def make_transport(
         instance_id="worker-1",
         task_runner=task_runner,
         metrics=metrics,
+        snapshot_provider=snapshot_provider,
     )
 
 
@@ -490,3 +492,68 @@ async def test_draining_rejects_new_connections():
 
     with pytest.raises(ConnectionRefusedError):
         await transport.open_connection("room-1")
+
+
+@pytest.mark.asyncio
+async def test_terminal_frame_forces_boundary_snapshot():
+    # Boundary checkpoint (§7): a settled terminal frame triggers an
+    # immediate snapshot fanout so consumers converge on the final state.
+    snapshots: dict[str, dict] = {}
+
+    async def snapshot_provider(room_id: str):
+        snapshots[room_id] = {"room_seq": 9, "messages": []}
+        return snapshots[room_id]
+
+    config = DeliveryConfig()
+    transport = make_transport(
+        config=config,
+        snapshot_provider=snapshot_provider,
+    )
+    connection = await transport.open_connection("room-1")
+    await transport.broadcast_frame_to_room(
+        "room-1",
+        {
+            "type": "processing_status",
+            "timestamp": "2026-05-17T12:00:00+00:00",
+            "room_id": "room-1",
+            "data": {"message_id": "m1", "status": "completed"},
+        },
+    )
+    await transport._drain_room_cleanup_tasks()
+    for _ in range(20):
+        if snapshots:
+            break
+        await asyncio.sleep(0)
+
+    assert snapshots.get("room-1") == {"room_seq": 9, "messages": []}
+    frame = await connection.next_frame(timeout=0.01)
+    assert frame["type"] == "processing_status"
+    snapshot_frame = await connection.next_frame(timeout=0.01)
+    assert snapshot_frame["type"] == "snapshot"
+    assert snapshot_frame["data"]["room_seq"] == 9
+
+
+@pytest.mark.asyncio
+async def test_non_terminal_frame_does_not_force_snapshot():
+    calls: list[str] = []
+
+    async def snapshot_provider(room_id: str):
+        calls.append(room_id)
+        return {"room_seq": 0, "messages": []}
+
+    transport = make_transport(
+        config=DeliveryConfig(),
+        snapshot_provider=snapshot_provider,
+    )
+    await transport.open_connection("room-1")
+    await transport.broadcast_frame_to_room(
+        "room-1",
+        {
+            "type": "processing_status",
+            "timestamp": "2026-05-17T12:00:00+00:00",
+            "room_id": "room-1",
+            "data": {"message_id": "m1", "status": "processing"},
+        },
+    )
+    await asyncio.sleep(0)
+    assert calls == []

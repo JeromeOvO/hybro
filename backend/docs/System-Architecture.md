@@ -1130,8 +1130,10 @@ It is composed from:
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
 
 Each local SSE connection has a bounded, non-blocking queue. An overflowing
-queue closes and removes only that slow connection, so it cannot apply
-backpressure to other connections in the room. Per-room admission locks
+queue marks the connection for resync instead of disconnecting it: pending
+snapshot frames are evicted first so live deltas are never policy-dropped, the
+connection stays alive, and the client's gap detection re-requests a snapshot
+(Room Stream Snapshot plan §7). Per-room admission locks
 serialize first-subscribe and last-unsubscribe transitions; local removal still
 happens immediately, followed by a tracked background cleanup task that performs
 a locked empty-room recheck before Redis unsubscribe. Shutdown drains these
@@ -1141,6 +1143,27 @@ room-churn growth and lock replacement races. Delivery-start latency timestamps
 are likewise held in a configurable TTL/max-size cache. This also keeps Redis
 listener callbacks from synchronously unsubscribing and orphaning their own
 listener task.
+
+#### Snapshot-driven room stream
+
+The room stream is snapshot-driven (`docs/Room-Stream-Snapshot-Plan.md`): an
+append-only `room_events` collection is the source of truth for the realtime
+UI. Every emitted frame is persisted to `room_events` BEFORE broadcast
+(persist-before-broadcast), with a per-room monotonic `room_seq` allocated
+atomically with the insert (a Mongo counter document advanced in the same
+transaction; non-replica-set environments fall back to counter-then-insert
+plus idempotent `skipped` tombstones). Deltas carry `room_seq`,
+`room_event_id`, and optional `parent_event_id` inside `data`; the `connected`
+handshake and heartbeats carry the room's latest `room_seq`. Terminal
+`run_event`/`processing_status` frames are gated: the two-phase
+`TerminalProjectionFinalizer` runs every durable side-effect step before the
+SSE emission steps, and `EventPublisherImpl` backs that up with a
+`ProjectionSettlementReader` over the private `run_events` log. Every connect
+yields a `snapshot` frame right after `connected`, folded from the event log
+by `SnapshotService` (incrementally materialized; `?snapshot=1` forces a fresh
+fold). Settled terminal frames also force a boundary snapshot fanout. A
+fallback read path `GET /sse/room/{room_id}/events?after=<seq>&limit=N`
+replays persisted events; auth matches the stream route.
 
 When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
 operation has completed, while the subscription task owns the bounded readiness
@@ -1883,7 +1906,10 @@ typed SSE frames and cancellation state cross worker boundaries.
 
 For turn-correlated execution paths, emitters should include `client_request_id`
 when available and resolve it from message lineage when the event source does not
-provide it directly.
+provide it directly. Room-level sequencing (`room_seq`) is the frontend's
+ordering authority: the `RoomReducer` folds snapshots and ordered deltas, and
+gap detection re-requests a snapshot — there are no fixed-delay reconciliation
+timers, no correlation buffers, and no polling safety net.
 
 ## HITL Workflow
 

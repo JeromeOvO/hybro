@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
+import type { Dirent } from 'fs'
 import { join } from 'path'
 
 // Naming guards for the Room Stream Snapshot plan (§10): no versioned
@@ -29,7 +30,7 @@ function ownedFiles(): string[] {
   for (const dir of OWNED_DIRS) {
     const absolute = join(process.cwd(), dir)
     const walk = (current: string): void => {
-      for (const entry of require('fs').readdirSync(current, { withFileTypes: true }) as import('fs').Dirent[]) {
+      for (const entry of readdirSync(current, { withFileTypes: true }) as Dirent[]) {
         const full = join(current, entry.name)
         if (entry.isDirectory()) {
           walk(full)

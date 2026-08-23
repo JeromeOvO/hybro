@@ -97,7 +97,44 @@ class SSETransportImpl:
             )
             if room_became_empty:
                 self._schedule_room_cleanup(room_id)
+
+        # Boundary checkpoint (Room Stream Snapshot plan §7): a settled
+        # terminal frame forces an immediate snapshot so slow/reconnecting
+        # consumers converge on the final room state without waiting for
+        # their own gap recovery.
+        if self._snapshot_provider is not None and self._is_terminal_frame(frame):
+            self._task_runner(
+                self._enqueue_room_snapshot(room_id),
+                name=f"delivery-snapshot-boundary-{room_id}",
+            )
         return delivered
+
+    async def _enqueue_room_snapshot(self, room_id: str) -> None:
+        try:
+            data = await self._snapshot_provider(room_id)
+        except Exception:
+            return
+        if data is None:
+            return
+        frame = {
+            "type": "snapshot",
+            "timestamp": self._now().isoformat(),
+            "room_id": room_id,
+            "data": data,
+        }
+        await self.broadcast_frame_to_room(room_id, frame)
+
+    def _is_terminal_frame(self, frame: dict[str, Any]) -> bool:
+        frame_type = frame.get("type")
+        data = frame.get("data")
+        if not isinstance(data, dict):
+            return False
+        if frame_type in {"processing_status", "task_update"}:
+            return data.get("status") in self.config.terminal_processing_statuses
+        if frame_type == "run_event":
+            # Terminal run facts carry a delivery_id; public trace kinds do not.
+            return bool(data.get("delivery_id"))
+        return False
 
     async def close_all_connections(self) -> None:
         async with self._lock:
