@@ -1,7 +1,7 @@
 """Shared utilities for extracting content from A2A Task/Message objects.
 
 These are stateless, pure functions used by both WorkflowCenter
-and RoomMessageCenter.
+and the execution path.
 """
 
 import uuid

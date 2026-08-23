@@ -6,13 +6,13 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from execution.orchestration.outcome_evaluator import canonical_content_fingerprint
 from execution.orchestration.resources import (
     AttachmentProjectionService,
     OrchestrationResourceProvider,
     ResourcePayload,
     ResourceProjectionRef,
     attachment_resource_ref_id,
+    canonical_content_fingerprint,
     text_projection_ref_id,
 )
 from models.room import UserAttachment

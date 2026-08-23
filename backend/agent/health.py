@@ -350,10 +350,6 @@ class AgentHealthService:
                 query={
                     "agent_status": {"$ne": AgentStatus.deleted.value},
                     "source": {"$ne": "local"},
-                    "$or": [
-                        {"hub_id": None},
-                        {"hub_id": {"$exists": False}},
-                    ],
                 }
             )
             agents = [self._coerce_agent(agent) for agent in raw_agents]

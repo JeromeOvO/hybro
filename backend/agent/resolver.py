@@ -109,7 +109,7 @@ class AgentResolverService:
 
     Combines lexical search, optional LLM-based ranking, and
     real-time health probing into a single ``resolve()`` call that both
-    RoomMessageCenter and WorkflowCenter can share.
+    legacy orchestration and WorkflowCenter can share.
     """
 
     def __init__(
@@ -439,15 +439,8 @@ class AgentResolverService:
     async def _probe_agent(agent: Agent) -> bool:
         """Lightweight adapter probe to check if an agent is reachable.
 
-        Hub-associated agents are not probed over HTTP (their local URLs
-        are unreachable from the cloud server). Liveness is determined
-        by the relay heartbeat via ``is_hub_online``.
-
         Uses a short timeout (3 s) to keep the critical path fast.
         """
-        if agent.hub_id:
-            return agent.is_hub_online
-
         try:
             result = await probe_agent_card_for_health(
                 agent.agent_card.url,

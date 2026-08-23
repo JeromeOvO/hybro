@@ -8,7 +8,6 @@ from common.dto import (
     ErrorEvent,
     HITLRequestEvent,
     HITLResolvedEvent,
-    HubAgentEvent,
     ProcessingStatusEvent,
     RunEventNotification,
     TaskSubmittedEvent,
@@ -372,30 +371,6 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
         }
         assert private_keys.isdisjoint(request_frame["data"])
         assert private_keys.isdisjoint(resolved_frame["data"])
-
-
-def test_hub_agent_event_translation():
-    event = HubAgentEvent(
-        room_id="room-1",
-        hub_id="hub-1",
-        agent_id="agent-1",
-        message_id="msg-1",
-        status="working",
-        partial="hello",
-    )
-
-    assert to_sse_frame(event, timestamp=NOW) == {
-        "type": "hub_agent_event",
-        "timestamp": NOW.isoformat(),
-        "room_id": "room-1",
-        "data": {
-            "hub_id": "hub-1",
-            "agent_id": "agent-1",
-            "message_id": "msg-1",
-            "status": "working",
-            "partial": "hello",
-        },
-    }
 
 
 def test_task_submitted_translation():

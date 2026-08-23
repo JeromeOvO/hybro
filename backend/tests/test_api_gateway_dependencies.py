@@ -25,18 +25,15 @@ def _deps(**overrides):
         "file_storage": MagicMock(),
         "room_ownership_reader": MagicMock(),
         "hitl_manager": MagicMock(),
-        "hub_relay_service": MagicMock(),
         "inspection_center": MagicMock(),
         "gateway_service": MagicMock(),
         "gateway_rate_limiter": MagicMock(),
-        "relay_service": MagicMock(),
         "room_center": MagicMock(),
         "room_store": MagicMock(),
         "agent_selection_service": MagicMock(),
         "execution_engine": MagicMock(),
         "sse_store": MagicMock(),
         "sse_transport": MagicMock(),
-        "webhook_receiver": MagicMock(),
         "repository_provider": MagicMock(),
     }
     values.update(overrides)
@@ -68,18 +65,15 @@ PROVIDER_FIELD_NAMES = [
     ("get_file_storage", "file_storage"),
     ("get_room_ownership_reader", "room_ownership_reader"),
     ("get_hitl_manager", "hitl_manager"),
-    ("get_hub_relay_service", "hub_relay_service"),
     ("get_inspection_center", "inspection_center"),
     ("get_gateway_service", "gateway_service"),
     ("get_gateway_rate_limiter", "gateway_rate_limiter"),
-    ("get_relay_service", "relay_service"),
     ("get_room_center", "room_center"),
     ("get_room_store", "room_store"),
     ("get_agent_selection_service", "agent_selection_service"),
     ("get_execution_engine", "execution_engine"),
     ("get_sse_store", "sse_store"),
     ("get_sse_transport", "sse_transport"),
-    ("get_webhook_receiver", "webhook_receiver"),
     ("get_viewset_repository_provider", "repository_provider"),
 ]
 
@@ -102,9 +96,9 @@ def test_bind_api_gateway_deps_rejects_incomplete_bindings():
     from api_gateway.dependencies import bind_api_gateway_deps
 
     app = SimpleNamespace(state=SimpleNamespace())
-    deps = _deps(relay_service=None)
+    deps = _deps(room_center=None)
 
-    with pytest.raises(RuntimeError, match="relay_service"):
+    with pytest.raises(RuntimeError, match="room_center"):
         bind_api_gateway_deps(app, deps)
     assert not hasattr(app.state, "api_gateway_deps")
 

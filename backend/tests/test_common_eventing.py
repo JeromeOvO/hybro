@@ -7,7 +7,6 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel
 
-from common.dto.internal_events import HubAgentResponseInternal
 from common.eventing import (
     BoundedInternalEventBus,
     EventEnvelope,
@@ -15,7 +14,6 @@ from common.eventing import (
     EventModelRegistry,
 )
 from common.observability import get_current_trace_id, trace_id_context
-from container import RelayReadyHubInternalHandler
 
 
 class ExampleEvent(BaseModel):
@@ -556,32 +554,6 @@ async def test_worker_recovers_from_unexpected_queue_get_failure():
 
 
 @pytest.mark.asyncio
-async def test_relay_ready_gate_preserves_startup_event_and_shutdown_drain():
-    bus = make_bus()
-    gate = RelayReadyHubInternalHandler()
-    handled = []
-
-    class Router:
-        async def dispatch_hub_internal_response(self, event):
-            handled.append(event.value)
-
-    bus.register_handler("example", gate)
-    await bus.start()
-    await bus.publish(ExampleEvent(value=7), fanout=False)
-    await asyncio.sleep(0)
-    assert handled == []
-
-    stop_task = asyncio.create_task(bus.stop())
-    await asyncio.sleep(0)
-    assert not stop_task.done()
-    gate.bind(Router())
-    await stop_task
-
-    assert handled == [7]
-    assert bus.worker_tasks == ()
-
-
-@pytest.mark.asyncio
 async def test_cancelled_publisher_collects_cancellable_transport_publish():
     transport = RecordingTransport()
     entered = asyncio.Event()
@@ -962,102 +934,6 @@ async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadli
         await asyncio.sleep(0)
     assert bus.worker_tasks == ()
     assert bus._auxiliary_tasks == {}
-
-
-@pytest.mark.asyncio
-async def test_dead_letters_redact_hub_body_and_bound_redis_projection():
-    transport = RecordingTransport()
-    registry = EventModelRegistry()
-    registry.register("hub_agent_response_internal", HubAgentResponseInternal)
-    bus = BoundedInternalEventBus(
-        registry=registry,
-        instance_id="instance-a",
-        now=lambda: datetime(2025, 1, 1, tzinfo=UTC),
-        transport=transport,
-        config=EventingConfig(
-            handler_queue_maxsize=2,
-            enqueue_timeout_seconds=0.02,
-            shutdown_timeout_seconds=0.05,
-            dead_letter_memory_maxlen=10,
-        ),
-    )
-    secret = "PRIVATE_HUB_BODY_" + "x" * 100_000
-
-    exception_secret = "PRIVATE_PROMPT https://example.test/?token=SECRET_TOKEN"
-
-    async def fail(_event):
-        raise RuntimeError(exception_secret + "e" * 10_000)
-
-    bus.register_handler("hub_agent_response_internal", fail)
-    await bus.start()
-    event = HubAgentResponseInternal(
-        timestamp=datetime(2025, 1, 1, tzinfo=UTC),
-        hub_id="hub-1",
-        agent_id="agent-1",
-        task_id="task-1",
-        room_id="room-1",
-        is_terminal=True,
-        journal_id="journal-1",
-        idempotency_key="idem-1",
-        payload={
-            "id": "PRIVATE_NESTED_ID",
-            "request_id": "PRIVATE_NESTED_REQUEST_ID",
-            "content": secret,
-            "nested": {
-                "id": "PRIVATE_DEEPLY_NESTED_ID",
-                "prompt": secret,
-            },
-        },
-    )
-    await bus.publish(event, wait_for_handlers=True, fanout=False)
-    malformed_secret = f'{{"content":"{secret}"'
-    await bus.handle_remote_message(malformed_secret)
-    await bus._dead_letter(
-        "raw_payload",
-        {
-            "id": "PRIVATE_RAW_ID",
-            "request_id": "PRIVATE_RAW_REQUEST_ID",
-            "nested": {"room_id": "PRIVATE_RAW_NESTED_ROOM_ID"},
-        },
-        RuntimeError("raw payload failed"),
-    )
-
-    in_memory = "\n".join(item.model_dump_json() for item in bus.dead_letters)
-    published = "\n".join(transport.dead_letters)
-    assert secret not in in_memory
-    assert secret not in published
-    assert exception_secret not in in_memory
-    assert exception_secret not in published
-    assert "SECRET_TOKEN" not in in_memory
-    assert "SECRET_TOKEN" not in published
-    assert "PRIVATE_NESTED_ID" not in in_memory
-    assert "PRIVATE_NESTED_REQUEST_ID" not in in_memory
-    assert "PRIVATE_DEEPLY_NESTED_ID" not in in_memory
-    assert "PRIVATE_RAW_ID" not in in_memory
-    assert "PRIVATE_RAW_REQUEST_ID" not in in_memory
-    assert "PRIVATE_RAW_NESTED_ROOM_ID" not in in_memory
-    raw_dlt = next(
-        item for item in bus.dead_letters if item.failure_stage == "raw_payload"
-    )
-    assert "identifiers" not in raw_dlt.payload
-    assert all(
-        len(item.model_dump_json().encode()) <= 8192 for item in bus.dead_letters
-    )
-    handler_dlt = next(
-        item for item in bus.dead_letters if item.failure_stage == "handler"
-    )
-    assert handler_dlt.payload["identifiers"] == {
-        "hub_id": "hub-1",
-        "agent_id": "agent-1",
-        "task_id": "task-1",
-        "room_id": "room-1",
-        "journal_id": "journal-1",
-        "idempotency_key": "idem-1",
-    }
-    assert handler_dlt.exception_message.startswith("redacted:size_bytes=")
-    assert "sha256=" in handler_dlt.exception_message
-    assert "fingerprint=" in handler_dlt.exception_message
-    await bus.stop()
 
 
 def test_event_envelope_accepts_legacy_missing_timestamp():

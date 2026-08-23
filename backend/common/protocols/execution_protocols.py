@@ -6,7 +6,6 @@ from common.dto import (
     ExecutionRequest,
     HITLRequest,
     HITLResponse,
-    HubAgentResponseInternal,
     RunInfo,
 )
 from common.protocols.json_types import JsonValue
@@ -62,13 +61,6 @@ class HITLManager(Protocol):
 
 
 @runtime_checkable
-class HubAgentResponseSink(Protocol):
-    async def handle_hub_agent_response(
-        self, event: HubAgentResponseInternal
-    ) -> None: ...
-
-
-@runtime_checkable
 class RoomDistributedLock(Protocol):
     async def acquire(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
     async def renew(self, room_id: str, owner: str, ttl: int) -> bool | None: ...
@@ -87,7 +79,6 @@ class WebhookReceiver(Protocol):
 __all__ = [
     "ExecutionEngine",
     "HITLManager",
-    "HubAgentResponseSink",
     "RoomDistributedLock",
     "WebhookReceiver",
 ]

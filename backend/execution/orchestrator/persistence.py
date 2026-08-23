@@ -6,8 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from common.orchestrator_constants import RELAY_COMMAND_JOURNAL_COLLECTION
-
 ORCHESTRATOR_RUNS_COLLECTION = "orchestrator_runs"
 ORCHESTRATOR_RUN_EVENTS_COLLECTION = "orchestrator_run_events"
 
@@ -89,20 +87,11 @@ ORCHESTRATOR_EVENT_INDEXES = (
     ),
 )
 
-RELAY_COMMAND_JOURNAL_INDEXES = (
-    MongoIndexDefinition(
-        name="relay_command_id_unique", keys=(("command_id", 1),), unique=True
-    ),
-)
-
 ORCHESTRATOR_COLLECTIONS = (
     MongoCollectionDefinition(
         name=ORCHESTRATOR_RUNS_COLLECTION, indexes=ORCHESTRATOR_RUN_INDEXES
     ),
     MongoCollectionDefinition(
         name=ORCHESTRATOR_RUN_EVENTS_COLLECTION, indexes=ORCHESTRATOR_EVENT_INDEXES
-    ),
-    MongoCollectionDefinition(
-        name=RELAY_COMMAND_JOURNAL_COLLECTION, indexes=RELAY_COMMAND_JOURNAL_INDEXES
     ),
 )

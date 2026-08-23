@@ -492,9 +492,6 @@ def test_message_write_flows_do_not_call_context_memory_write_shims():
     }
     checked_paths = [
         Path("room/compat/runtime.py"),
-        Path("execution/orchestration/queue_executor.py"),
-        Path("execution/orchestration/supervisor_executor.py"),
-        Path("execution/orchestration/room_message_center.py"),
     ]
     violations: list[str] = []
     for path in checked_paths:

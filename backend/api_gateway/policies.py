@@ -27,17 +27,10 @@ ROUTE_POLICIES: dict[str, RoutePolicy] = {
     "discovery_api_key": RoutePolicy(auth="clerk-route-level", tags=("api_keys",)),
     "files": RoutePolicy(auth="clerk-route-level", tags=("files",)),
     "hitl": RoutePolicy(auth="clerk-route-level", tags=("hitl",)),
-    "hub": RoutePolicy(auth="clerk-route-level", tags=("hub",)),
     "inspection": RoutePolicy(auth="clerk-global", tags=("inspection",)),
     "platform_gateway": RoutePolicy(
         auth="api-key-route-level",
         tags=("gateway",),
-        cors="open",
-        api_key=True,
-    ),
-    "relay": RoutePolicy(
-        auth="api-key-route-level",
-        tags=("relay",),
         cors="open",
         api_key=True,
     ),

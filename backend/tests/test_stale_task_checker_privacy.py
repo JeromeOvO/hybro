@@ -1,11 +1,9 @@
 import json
-import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from common.observability.logging import StructuredFormatter
 from common.types import Task, TaskState, TaskStatus
 from jobs.stale_task_checker import StaleTaskChecker, StaleTaskCheckerDeps
 from models.room import MessageContent, RoomAgentMessage
@@ -91,53 +89,3 @@ async def test_polled_stale_task_persists_only_public_terminal_artifacts():
         "Visible terminal output"
     )
     store.touch_task_message.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_orphan_recovery_failure_logs_only_safe_exception_metadata(caplog):
-    private_sentinel = "PRIVATE_ORPHAN_RECOVERY_SENTINEL"
-    orphan = SimpleNamespace(
-        agent_id=None,
-        message_id="agent-message-1",
-        related_message_id="user-message-1",
-        room_id="room-1",
-    )
-    store = SimpleNamespace(
-        get_orphaned_agent_messages=AsyncMock(return_value=[orphan]),
-        is_message_cancelled=AsyncMock(return_value=False),
-    )
-    checker = StaleTaskChecker()
-    checker.set_runtime_deps(
-        StaleTaskCheckerDeps(
-            store=store,
-            rooms_collection=None,
-            notify_task_update=AsyncMock(),
-            increment_counter=MagicMock(),
-            a2a_service=MagicMock(),
-        )
-    )
-
-    def schedule_recovery(*_args, **_kwargs):
-        raise RuntimeError(private_sentinel)
-
-    checker.set_execution_recovery_deps(
-        SimpleNamespace(schedule_recovery=schedule_recovery)
-    )
-    caplog.set_level(logging.ERROR, logger="jobs.stale_task_checker")
-
-    await checker._recover_orphaned_messages()
-
-    record = next(
-        record
-        for record in caplog.records
-        if record.getMessage() == "orphan_recovery_schedule_failed"
-    )
-    formatted = StructuredFormatter(
-        output_format="json",
-        environment="test",
-        service_version="test",
-    ).format(record)
-    assert record.room_id == "room-1"
-    assert record.user_message_id == "user-message-1"
-    assert record.error_type == "RuntimeError"
-    assert private_sentinel not in formatted

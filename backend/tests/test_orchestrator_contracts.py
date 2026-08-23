@@ -805,7 +805,6 @@ def test_unbound_collection_metadata_contains_required_indexes():
     assert set(collections) == {
         "orchestrator_runs",
         "orchestrator_run_events",
-        "relay_command_journal",
     }
     run_names = {item.name for item in collections["orchestrator_runs"].indexes}
     assert {
@@ -826,10 +825,3 @@ def test_unbound_collection_metadata_contains_required_indexes():
         "orchestrator_a2a_task",
         "orchestrator_a2a_context",
     }.isdisjoint(indexes)
-    relay_names = {item.name for item in collections["relay_command_journal"].indexes}
-    assert relay_names == {"relay_command_id_unique"}
-    relay_indexes = {
-        item.name: item for item in collections["relay_command_journal"].indexes
-    }
-    assert relay_indexes["relay_command_id_unique"].keys == (("command_id", 1),)
-    assert relay_indexes["relay_command_id_unique"].unique is True

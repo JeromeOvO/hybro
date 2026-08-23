@@ -37,7 +37,6 @@ from execution.orchestration.candidate_scope import (
     SUPPORTED_CANDIDATE_SCOPE_SOURCES,
     normalize_candidate_scope,
 )
-from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from llm_gateway.errors import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import RoomMemory
@@ -118,7 +117,6 @@ class RoomMessagePreflightContext:
     user_message: RoomUserMessage
     client_request_id: str | None
     room: Room
-    use_supervisor: bool
     message_text: str
     pre_resolved_mentions: list[dict] | None
     pre_resolved_scope: ResolvedRoutingScope | None
@@ -1324,7 +1322,7 @@ class RoomServices:
         client_request_id: str | None = None,
     ) -> RoomAgentMessage:
         """Public wrapper around ``_generate_new_agent_message`` for use by
-        ``SupervisorExecutor`` and other external callers that need to create
+        the supervisor executor and other external callers that need to create
         individual agent messages without accessing a private method."""
         return self._generate_new_agent_message(
             room_id=room_id,
@@ -2039,7 +2037,6 @@ class RoomServices:
         execution_mode = orchestration_info.get("execution_mode")
         if execution_mode not in {"direct", "supervisor"}:
             execution_mode = "direct"
-        use_supervisor = execution_mode == "supervisor"
         scope = orchestration_info.get("agent_scope")
         scope = scope if isinstance(scope, dict) else {"source": "room_default"}
         user_extend_info = (
@@ -2048,9 +2045,8 @@ class RoomServices:
             else {}
         )
         # Persist the canonical scope alongside the mode: the orchestrator
-        # dual-routing seam reconstructs its envelope from the persisted
-        # user message (never from in-flight requests), so a missing
-        # agent_scope here silently demotes every message to the legacy path.
+        # ingress reconstructs its envelope from the persisted user message
+        # (never from in-flight requests).
         user_message.extend_info = {
             **user_extend_info,
             "execution_mode": execution_mode,
@@ -2067,15 +2063,10 @@ class RoomServices:
         pre_resolved_mentions: list[dict] | None = None
         pre_resolved_scope: ResolvedRoutingScope | None = None
         pre_resolved_selected_scope: ResolvedRoutingScope | None = None
-        required_input_modes = self._derive_required_input_modes(user_message)
         selected_agent_ids = self._selected_agent_ids_from_request(request)
-        orchestration_requested = use_supervisor
         candidate_scope_mode = str(scope.get("source") or "room_default")
 
-        if (
-            orchestration_requested
-            and candidate_scope_mode not in SUPPORTED_CANDIDATE_SCOPE_SOURCES
-        ):
+        if candidate_scope_mode not in SUPPORTED_CANDIDATE_SCOPE_SOURCES:
             supported_modes = ", ".join(sorted(SUPPORTED_CANDIDATE_SCOPE_SOURCES))
             error_msg = (
                 f"Unsupported candidate_scope_mode {candidate_scope_mode!r}; "
@@ -2097,22 +2088,20 @@ class RoomServices:
             )
         logger.info(
             "room_send_message_persist_started room_id=%s user_id=%s "
-            "client_request_id=%s target_group=%s supervisor=%s "
-            "orchestration_requested=%s candidate_scope_mode=%s "
+            "client_request_id=%s target_group=%s "
+            "candidate_scope_mode=%s "
             "selected_count=%d mentioned_count=%d message_len=%d",
             request.room_id,
             request.user_id,
             client_request_id,
             target_group,
-            use_supervisor,
-            orchestration_requested,
             candidate_scope_mode,
             len(selected_agent_ids or []),
             len(mentioned_agent_ids or []),
             len(message_text or ""),
         )
 
-        if orchestration_requested and selected_agent_ids is not None:
+        if selected_agent_ids is not None:
             metadata_error = await self._validate_candidate_scope_metadata(
                 request,
                 selected_agent_ids,
@@ -2166,7 +2155,7 @@ class RoomServices:
             mention_result = await self._validate_canonical_mentions(
                 mentioned_agent_ids,
                 sender_user_id=request.user_id,
-                required_input_modes=(None if use_supervisor else required_input_modes),
+                required_input_modes=None,
             )
             if isinstance(mention_result, RoomCenterUserMessageResponse):
                 return mention_result, None
@@ -2177,7 +2166,7 @@ class RoomServices:
                 message_text,
                 target_group,
                 sender_user_id=request.user_id,
-                required_input_modes=(None if use_supervisor else required_input_modes),
+                required_input_modes=None,
             )
             if isinstance(scope_result, RoomCenterUserMessageResponse):
                 return scope_result, None
@@ -2253,7 +2242,7 @@ class RoomServices:
             )
 
         # Create a CancellationToken early in the pipeline so the parse step
-        # (and later the queue step in RoomMessageCenter) can detect cancels
+        # (and later the queue step) can detect cancels
         # via the token.  If the user already hit cancel before we got here,
         # the token is pre-signalled.
         token = self.cancellation_control.create_token(user_message.message_id)
@@ -2266,11 +2255,10 @@ class RoomServices:
             raise
         logger.info(
             "room_send_message_persisted room_id=%s message_id=%s "
-            "client_request_id=%s supervisor=%s target_group=%s",
+            "client_request_id=%s target_group=%s",
             request.room_id,
             user_message.message_id,
             client_request_id,
-            use_supervisor,
             target_group,
         )
 
@@ -2291,7 +2279,6 @@ class RoomServices:
                 user_message=user_message,
                 client_request_id=client_request_id,
                 room=room,
-                use_supervisor=use_supervisor,
                 message_text=message_text,
                 pre_resolved_mentions=pre_resolved_mentions,
                 pre_resolved_scope=pre_resolved_scope,
@@ -2329,40 +2316,28 @@ class RoomServices:
         user_message = context.user_message
         client_request_id = context.client_request_id
         room = context.room
-        use_supervisor = context.use_supervisor
         message_text = context.message_text
         pre_resolved_mentions = context.pre_resolved_mentions
         pre_resolved_scope = context.pre_resolved_scope
         pre_resolved_selected_scope = context.pre_resolved_selected_scope
-        token = context.token
-        orchestration_active = use_supervisor
-        selected_scope_locked = (
-            orchestration_active and pre_resolved_selected_scope is not None
-        )
+        selected_scope_locked = pre_resolved_selected_scope is not None
 
         # ── Dispatch using pre-resolved scope ─────────────────────────────
-        # In non-supervisor rooms, explicit mentions are hard routing. In
-        # supervisor rooms, mentions are strong intent signals for the planner.
         if selected_scope_locked:
             selected_agent_set = pre_resolved_selected_scope.selected_agent_set
             auto_assign = pre_resolved_selected_scope.auto_assign_agents
             agents = pre_resolved_selected_scope.agents
         elif pre_resolved_mentions:
-            if use_supervisor:
-                selected_agent_set = {
-                    mention["agent_id"]: mention["agent_name"]
-                    for mention in pre_resolved_mentions
-                }
-                agents = []
-                for mention in pre_resolved_mentions:
-                    agent = await self._store.get_agent_by_agent_id(mention["agent_id"])
-                    if agent is not None:
-                        agents.append(agent)
-                auto_assign = False
-            else:
-                return await self._handle_mentions_flow(
-                    request, user_message, pre_resolved_mentions
-                )
+            selected_agent_set = {
+                mention["agent_id"]: mention["agent_name"]
+                for mention in pre_resolved_mentions
+            }
+            agents = []
+            for mention in pre_resolved_mentions:
+                agent = await self._store.get_agent_by_agent_id(mention["agent_id"])
+                if agent is not None:
+                    agents.append(agent)
+            auto_assign = False
 
         # Parse inline <@id|name> mentions from message text when the caller did
         # not provide canonical mentioned_agent_ids. This runs AFTER persistence,
@@ -2390,11 +2365,7 @@ class RoomServices:
                 mention_agents, _rejected = await self._sanitize_routing_scope(
                     [mention["agent_id"] for mention in mentions],
                     sender_user_id=request.user_id,
-                    required_input_modes=(
-                        None
-                        if use_supervisor
-                        else self._derive_required_input_modes(user_message)
-                    ),
+                    required_input_modes=None,
                 )
                 eligible_mention_ids = {agent.agent_id for agent in mention_agents}
                 mentions = [
@@ -2403,30 +2374,25 @@ class RoomServices:
                     if mention["agent_id"] in eligible_mention_ids
                 ]
             if mentions:
-                if use_supervisor:
-                    pre_resolved_mentions = mentions
-                    if not selected_scope_locked:
-                        selected_agent_set = {
-                            mention["agent_id"]: mention["agent_name"]
-                            for mention in mentions
-                        }
-                        agents = []
-                        for mention in mentions:
-                            agent = await self._store.get_agent_by_agent_id(
-                                mention["agent_id"]
-                            )
-                            if agent is not None:
-                                agents.append(agent)
-                        auto_assign = False
-                else:
-                    return await self._handle_mentions_flow(
-                        request, user_message, mentions
-                    )
+                pre_resolved_mentions = mentions
+                if not selected_scope_locked:
+                    selected_agent_set = {
+                        mention["agent_id"]: mention["agent_name"]
+                        for mention in mentions
+                    }
+                    agents = []
+                    for mention in mentions:
+                        agent = await self._store.get_agent_by_agent_id(
+                            mention["agent_id"]
+                        )
+                        if agent is not None:
+                            agents.append(agent)
+                    auto_assign = False
 
         # Target scope dispatch: reuse pre-resolved scope or run all_agents LLM.
         if selected_scope_locked:
             pass
-        elif pre_resolved_mentions and use_supervisor:
+        elif pre_resolved_mentions:
             pass
         elif target_group == "all_agents":
             selection_result = await self._resolve_explicit_target_scope(
@@ -2458,90 +2424,33 @@ class RoomServices:
             auto_assign = True
             agents = []
 
-        if not selected_agent_set and not use_supervisor:
-            return await self._handle_no_agents_fallback(
-                request, user_message, target_group
-            )
-
-        # Resolve dispatch strategy and annotate in-memory user_message for
-        # downstream dispatch logic. NOT persisted back to DB (message already written).
-        dispatch_strategy = resolve_strategy(use_supervisor, len(selected_agent_set))
-        user_message.extend_info = {
-            **(user_message.extend_info or {}),
-            "dispatch_strategy": dispatch_strategy.value,
-        }
         logger.info(
             "room_send_message_preflight_ready room_id=%s message_id=%s "
-            "client_request_id=%s supervisor=%s orchestration_active=%s "
-            "target_group=%s candidate_count=%d auto_assign=%s dispatch_strategy=%s",
+            "client_request_id=%s target_group=%s candidate_count=%d auto_assign=%s",
             request.room_id,
             user_message.message_id,
             client_request_id,
-            use_supervisor,
-            orchestration_active,
             target_group,
             len(selected_agent_set),
             auto_assign,
-            dispatch_strategy.value,
         )
 
-        # Queue/debate preparation may need a small routing context. Supervisor
-        # orchestration assembles its own context from the durable run state.
-        room_memory = None
-        if not use_supervisor and len(selected_agent_set) > 1:
-            room_memory = await self._store.get_room_memory_by_room_id(request.room_id)
-
-        # Build conversation context only for queue/debate message preparation.
-        conversation_context = None
-        if room_memory:
-            conversation_context = self._build_routing_context_from_memory(
-                room_memory,
-                message_text,
-            )
-        ext_q = (
-            user_message.extend_info.get("quoted_text")
-            if isinstance(user_message.extend_info, dict)
-            else None
+        # Orchestration assembles its own context from the durable run state.
+        parse_result = await self._prepare_orchestration_envelope(
+            request=request,
+            user_message=user_message,
+            selected_agent_set=selected_agent_set,
+            explicit_mentions=pre_resolved_mentions,
+            client_request_id=client_request_id,
         )
-        if isinstance(ext_q, str) and ext_q.strip():
-            qblock = f"\n\n[User quoted excerpt for routing]\n{ext_q.strip()[:2000]}"
-            conversation_context = (conversation_context or "") + qblock
-
-        # Supervisor: lightweight durable preparation without an LLM call or
-        # pre-generated agent messages.
-        if use_supervisor:
-            parse_result = await self._prepare_orchestration_envelope(
-                request=request,
-                user_message=user_message,
-                selected_agent_set=selected_agent_set,
-                explicit_mentions=pre_resolved_mentions,
-                client_request_id=client_request_id,
-            )
-        else:
-            parse_result = await self.parse_user_message(
-                request.room_id,
-                user_message.message_id,
-                message_text,
-                selected_agent_set,
-                user_message.user_id,
-                auto_assign_agents=auto_assign,
-                target_group=target_group,
-                agents=agents,
-                conversation_context=conversation_context,
-                token=token,
-                client_request_id=client_request_id,
-                explicit_mentions=pre_resolved_mentions,
-                required_input_modes=self._derive_required_input_modes(user_message),
-            )
 
         if not parse_result.success:
             logger.warning(
                 "room_send_message_preflight_failed room_id=%s message_id=%s "
-                "client_request_id=%s supervisor=%s canceled=%s",
+                "client_request_id=%s canceled=%s",
                 request.room_id,
                 user_message.message_id,
                 client_request_id,
-                use_supervisor,
                 parse_result.canceled,
             )
             return RoomCenterUserMessageResponse(
@@ -2560,13 +2469,10 @@ class RoomServices:
 
         logger.info(
             "room_send_message_preflight_completed room_id=%s message_id=%s "
-            "client_request_id=%s supervisor=%s orchestration_active=%s "
-            "preflight_outcome=ready",
+            "client_request_id=%s preflight_outcome=ready",
             request.room_id,
             user_message.message_id,
             client_request_id,
-            use_supervisor,
-            orchestration_active,
         )
         return RoomCenterUserMessageResponse(
             message_id=user_message.message_id,
@@ -3459,12 +3365,10 @@ room_services = room_runtime
 
 
 __all__ = [
-    "DispatchStrategy",
     "RoomServices",
     "_ResolvedAttachments",
     "_human_size",
     "build_turn_content",
-    "resolve_strategy",
     "room_runtime",
     "room_services",
 ]

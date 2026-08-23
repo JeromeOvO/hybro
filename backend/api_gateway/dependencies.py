@@ -25,14 +25,11 @@ from common.protocols import (
     GatewayDiscoveryProvider,
     GatewayService,
     HITLManager,
-    HubRelayManagement,
-    HubStatusReader,
     RoomOwnershipReader,
     RoomRouteReader,
     SSERouteTransport,
     SSEStateReader,
     ViewSetRepositoryProvider,
-    WebhookReceiver,
 )
 from local_agents.protocols import LocalAgentDiscovery
 from room.protocols import RoomCenterCompatibility
@@ -53,18 +50,15 @@ class APIGatewayDeps:
     file_storage: FileStorage
     room_ownership_reader: RoomOwnershipReader
     hitl_manager: HITLManager
-    hub_relay_service: HubStatusReader
     inspection_center: AgentInspection
     gateway_service: GatewayService | None
     gateway_rate_limiter: APIKeyRateLimiter | None
-    relay_service: HubRelayManagement
     room_center: RoomCenterCompatibility
     room_store: RoomRouteReader
     agent_selection_service: AgentSuggestionService
     execution_engine: ExecutionEngine
     sse_store: SSEStateReader
     sse_transport: SSERouteTransport
-    webhook_receiver: WebhookReceiver
     repository_provider: ViewSetRepositoryProvider
     local_agent_discovery: LocalAgentDiscovery | None = None
 
@@ -196,12 +190,6 @@ def get_hitl_manager(
     return deps.hitl_manager
 
 
-def get_hub_relay_service(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> HubStatusReader:
-    return deps.hub_relay_service
-
-
 def get_inspection_center(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> AgentInspection:
@@ -218,12 +206,6 @@ def get_gateway_rate_limiter(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> APIKeyRateLimiter:
     return deps.gateway_rate_limiter
-
-
-def get_relay_service(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> HubRelayManagement:
-    return deps.relay_service
 
 
 def get_room_center(
@@ -260,12 +242,6 @@ def get_sse_transport(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> SSERouteTransport:
     return deps.sse_transport
-
-
-def get_webhook_receiver(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> WebhookReceiver:
-    return deps.webhook_receiver
 
 
 def get_viewset_repository_provider(

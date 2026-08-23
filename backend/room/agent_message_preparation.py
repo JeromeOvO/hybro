@@ -229,12 +229,6 @@ class AgentMessagePreparationService:
             if not room or not room.room_agent_set:
                 return None
 
-            # Only inject room awareness for Supervisor-enabled rooms.
-            # Legacy multi-agent rooms opted out of this feature.
-            room_extend_info = room.extend_info or {}
-            if not room_extend_info.get("use_supervisor", False):
-                return None
-
             # Skip room awareness for single-agent rooms
             if len(room.room_agent_set) <= 1:
                 return None
@@ -774,7 +768,7 @@ class AgentMessagePreparationService:
                     agent_message.parts.append(p)
 
         # Return the prepared message without sending
-        # RoomMessageCenter will handle the actual sending with streaming support
+        # The execution path will handle the actual sending with streaming support
         return RoomCenterAgentMessageResponse(
             message_id=message.message_id,
             message=message,

@@ -10,7 +10,6 @@ from common.dto import (
     ErrorEvent,
     HITLRequestEvent,
     HITLResolvedEvent,
-    HubAgentEvent,
     ProcessingStatusEvent,
     RunEventNotification,
     TaskSubmittedEvent,
@@ -180,17 +179,6 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(event.room_id, "hitl_response", data, frame_timestamp)
-
-    if isinstance(event, HubAgentEvent):
-        data = {
-            "hub_id": event.hub_id,
-            "agent_id": event.agent_id,
-            "message_id": event.message_id,
-            "status": event.status,
-        }
-        _add_optional(data, "partial", event.partial)
-        _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "hub_agent_event", data, frame_timestamp)
 
     raise TypeError(f"Unsupported delivery event: {type(event)!r}")
 

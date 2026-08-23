@@ -420,31 +420,6 @@ def test_artifact_delivery_failure_is_not_recoverable_agent_failure():
     assert failure.recoverable is False
 
 
-def test_planner_rejection_terminal_reason_preserves_artifact_delivery_failure():
-    from types import SimpleNamespace
-
-    from execution.orchestration.failure_classifier import classify_agent_failure
-    from execution.orchestration.supervisor_executor import (
-        _planner_rejection_terminal_reason,
-    )
-
-    failure = classify_agent_failure(
-        agent_id="agent-1",
-        agent_message_id="message-1",
-        error="Agent output could not be processed.",
-        status_message=None,
-        error_code=OUTPUT_DELIVERY_FAILURE_CODE,
-        dispatch_intent_id="intent-1",
-    )
-
-    reason = _planner_rejection_terminal_reason(
-        SimpleNamespace(open_failures=[failure]),
-        "ask_user action references a non-validated blocker",
-    )
-
-    assert reason == ("artifact_delivery_failed: Agent output could not be processed.")
-
-
 def test_artifact_delivery_failure_identity_is_stable_across_dispatch_attempts():
     from execution.orchestration.failure_classifier import classify_agent_failure
 

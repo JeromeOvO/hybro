@@ -6,10 +6,7 @@ from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
     AgentMatchResult,
-    HubAgentCounts,
-    HubAgentDescriptor,
     LocalAgentUpsertResult,
-    SyncedHubAgent,
 )
 
 
@@ -65,18 +62,7 @@ class AgentManagement(Protocol):
 
 
 @runtime_checkable
-@runtime_checkable
 class AgentRegistryWriter(Protocol):
-    async def sync_hub_agents(
-        self,
-        hub_id: str,
-        owner_user_id: str,
-        agents: list[HubAgentDescriptor],
-        prune_missing: bool = True,
-    ) -> list[SyncedHubAgent]: ...
-
-    async def mark_hub_agents_offline(self, hub_id: str) -> None: ...
-
     async def upsert_local_agent(
         self,
         discovery_url: str,
@@ -86,11 +72,6 @@ class AgentRegistryWriter(Protocol):
     async def list_local_agent_ids(self) -> list[str]: ...
 
     async def mark_local_agents_inactive(self, agent_ids: list[str]) -> int: ...
-
-
-@runtime_checkable
-class HubAgentStatusReader(Protocol):
-    async def count_hub_agents(self, hub_id: str) -> HubAgentCounts: ...
 
 
 @runtime_checkable
@@ -108,5 +89,4 @@ __all__ = [
     "AgentMessageMatcher",
     "AgentRegistry",
     "AgentRegistryWriter",
-    "HubAgentStatusReader",
 ]

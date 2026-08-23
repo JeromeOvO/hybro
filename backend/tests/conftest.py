@@ -695,18 +695,15 @@ def make_api_gateway_deps(
             "file_storage": mock_s3_service,
             "room_ownership_reader": room_ownership_reader,
             "hitl_manager": mock_hitl_service,
-            "hub_relay_service": MagicMock(),
             "inspection_center": MagicMock(),
             "gateway_service": gateway_service,
             "gateway_rate_limiter": _rate_limiter(),
-            "relay_service": MagicMock(),
             "room_center": mock_room_center,
             "room_store": mock_db_service,
             "agent_selection_service": agent_selection_service,
             "execution_engine": execution_engine,
             "sse_store": mock_db_service,
             "sse_transport": mock_sse_transport,
-            "webhook_receiver": MagicMock(),
             "repository_provider": MagicMock(),
         }
         defaults.update(overrides)

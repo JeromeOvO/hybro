@@ -527,7 +527,7 @@ async def notify_task_update(
 
     Prefer ``AgentResponseHandler.notify_task_update`` when a handler
     instance is available.  This wrapper exists for background jobs
-    (``stale_task_checker``) and safety-net paths (``RoomMessageCenter``)
+    (``stale_task_checker``) and safety-net paths
     that have no handler context.
     """
     if _notification_store is None:

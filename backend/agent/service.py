@@ -377,8 +377,6 @@ def _agent_info_to_legacy_agent(info: AgentInfo | None) -> Agent | None:
         rate_limit_system_per_hour=info.rate_limit_system_per_hour,
         is_public=info.is_public,
         source=info.source,
-        hub_id=info.hub_id,
-        is_hub_online=bool(info.is_hub_online),
     )
 
 

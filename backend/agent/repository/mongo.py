@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from agent.constants import AGENT_CARD_NO_OVERWRITE
 from agent.url_utils import normalize_agent_url
 from common.protocols import MongoDAL
 
@@ -145,87 +144,11 @@ class AgentMongoRepository:
             {"$set": {"agent_status": "inactive"}},
         )
 
-    async def mark_hub_agents_offline(self, hub_id: str) -> int:
-        return await self._agents.update_many(
-            {"hub_id": hub_id, "agent_status": "active"},
-            {"$set": {"agent_status": "inactive"}},
-        )
-
-    async def count_hub_agents(self, hub_id: str) -> tuple[int, int]:
-        active = await self._agents.count({"hub_id": hub_id, "agent_status": "active"})
-        inactive = await self._agents.count(
-            {"hub_id": hub_id, "agent_status": "inactive"}
-        )
-        return active, inactive
-
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         update = {"$inc": {"call_count": 1}}
         if success:
             update["$inc"]["call_success_count"] = 1
         await self._agents.update_one({"agent_id": agent_id}, update)
-
-    async def upsert_hub_agent(
-        self, hub_id: str, local_agent_id: str, data: dict
-    ) -> str:
-        query = {"hub_id": hub_id, "local_agent_id": local_agent_id}
-        update = _hub_agent_upsert_update({**data, **query})
-        doc = await self._find_one_and_update_retrying_normalized_url_collision(
-            query,
-            update,
-            upsert=True,
-            return_document=True,
-        )
-        return doc["agent_id"]
-
-    async def _find_one_and_update_retrying_normalized_url_collision(
-        self,
-        query: dict,
-        update: dict,
-        **kwargs,
-    ) -> dict:
-        try:
-            doc = await self._agents.find_one_and_update(query, update, **kwargs)
-        except Exception as exc:
-            if update.get("$set", {}).get(
-                "normalized_url"
-            ) is None or not _is_duplicate_key_error(exc):
-                raise
-            retry_update = {
-                **update,
-                "$set": {**update["$set"], "normalized_url": None},
-            }
-            doc = await self._agents.find_one_and_update(
-                query,
-                retry_update,
-                **kwargs,
-            )
-        if doc is None:
-            raise RuntimeError("hub agent upsert did not return a document")
-        return doc
-
-    async def prune_missing_hub_agents(
-        self, hub_id: str, active_agent_ids: list[str]
-    ) -> int:
-        hub_pruned = await self._agents.update_many(
-            {
-                "hub_id": hub_id,
-                "source": "hub",
-                "agent_id": {"$nin": active_agent_ids},
-            },
-            {"$set": {"agent_status": "inactive"}},
-        )
-        enriched_pruned = await self._agents.update_many(
-            {
-                "hub_id": hub_id,
-                "source": {"$ne": "hub"},
-                "agent_id": {"$nin": active_agent_ids},
-            },
-            {
-                "$set": {"agent_status": "inactive"},
-                "$unset": {"hub_id": "", "local_agent_id": ""},
-            },
-        )
-        return hub_pruned + enriched_pruned
 
     async def activate_agents(self, agent_ids: list[str]) -> int:
         if not agent_ids:
@@ -234,27 +157,3 @@ class AgentMongoRepository:
             {"agent_id": {"$in": agent_ids}},
             {"$set": {"agent_status": "active"}},
         )
-
-
-def _hub_agent_upsert_update(data: dict) -> dict:
-    set_data = dict(data)
-    agent_id = set_data.pop("agent_id")
-    is_public = set_data.pop("is_public", None)
-    incoming_card = dict(set_data.pop("agent_card", {}) or {})
-    for key, value in incoming_card.items():
-        if key not in AGENT_CARD_NO_OVERWRITE:
-            set_data[f"agent_card.{key}"] = value
-    set_on_insert = {"agent_id": agent_id}
-    if is_public is not None:
-        set_on_insert["is_public"] = is_public
-    return {
-        "$set": set_data,
-        "$setOnInsert": set_on_insert,
-    }
-
-
-def _is_duplicate_key_error(exc: Exception) -> bool:
-    return (
-        exc.__class__.__name__ == "DuplicateKeyError"
-        or getattr(exc, "code", None) == 11000
-    )

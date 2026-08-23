@@ -102,12 +102,8 @@ class AgentServiceCandidateSource:
                 getattr(info, "is_public", True)
                 or getattr(info, "provider_id", None) == requesting_subject_id
             )
-            transport_kind = "relay" if getattr(info, "hub_id", None) else "direct"
-            endpoint_scope = (
-                str(info.hub_id)
-                if transport_kind == "relay"
-                else str(getattr(info, "url", None) or "")
-            )
+            transport_kind = "direct"
+            endpoint_scope = str(getattr(info, "url", None) or "")
             display_name = str(
                 raw_card.get("name") or getattr(info, "name", None) or info.agent_id
             )

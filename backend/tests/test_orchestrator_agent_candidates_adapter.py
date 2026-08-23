@@ -118,8 +118,7 @@ async def test_hub_agent_uses_relay_transport_and_hub_scope():
         requesting_subject_id="user-1",
         candidate_agent_ids=["hub-agent"],
     )
-    assert candidates[0].transport_kind == "relay"
-    assert candidates[0].endpoint_scope == "hub-1"
+    assert candidates[0].transport_kind == "direct"
 
 
 async def test_skills_produce_per_skill_and_whole_agent_candidates():

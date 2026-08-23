@@ -6,7 +6,6 @@ from typing import Protocol
 from common.dto import RunInfo
 from common.utils.cancellation import CancellationToken
 from common.utils.time import utcnow
-from execution.orchestration.run_reducer import mark_terminal
 from execution.orchestration.run_store import (
     DuplicateEventIdConflict,
     OrchestrationRunStore,
@@ -358,11 +357,11 @@ class CancellationFinalizer:
                     await self._ensure_terminal_event(current)
                 return current
 
-            canceled = mark_terminal(
-                current,
-                OrchestrationStatus.CANCELED,
-                reason="request canceled",
-            )
+            canceled = current.model_copy(deep=True)
+            canceled.status = OrchestrationStatus.CANCELED
+            canceled.terminal_reason = "request canceled"
+            canceled.state_version += 1
+            canceled.updated_at = utcnow()
             canceled.pending_hitl_request_ids.clear()
             canceled.pending_agent_continuations.clear()
             for question in canceled.open_questions:

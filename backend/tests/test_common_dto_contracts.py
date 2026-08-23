@@ -27,10 +27,6 @@ from common.dto import (
     HITLRequestEvent,
     HITLResolvedEvent,
     HITLResponse,
-    HubAgentEvent,
-    HubAgentResponseInternal,
-    HubAgentStatus,
-    HubConnectionInfo,
     InternalDomainEvent,
     LLMRequest,
     LLMResponse,
@@ -44,7 +40,6 @@ from common.dto import (
     ProcessingStatusEvent,
     QueryFilter,
     RateLimitInfo,
-    RelayPayload,
     RoomCreated,
     RoomCreationParams,
     RoomInfo,
@@ -183,18 +178,7 @@ def test_common_dtos_can_be_instantiated():
     TaskUpdateEvent(room_id="r1", message_id="m1", status="working")
     ArtifactUpdateEvent(room_id="r1", message_id="m1", agent_id="a1", artifact={})
     ErrorEvent(room_id="r1", error="failed")
-    HubAgentEvent(
-        room_id="r1",
-        hub_id="h1",
-        agent_id="a1",
-        message_id="m1",
-        status="working",
-        timestamp=now,
-    )
     NotificationPayload(room_id="r1", message="notice")
-    HubConnectionInfo(hub_id="h1", owner_id="u1", is_online=True)
-    HubAgentStatus(hub_id="h1", agent_id="a1", status="active")
-    RelayPayload(hub_id="h1", payload={})
     LLMRequest(messages=[{"role": "user", "content": "hi"}])
     LLMResponse(content="ok", model="test")
     EmbeddingResult(text="hi", embedding=[0.1])
@@ -224,15 +208,6 @@ def test_common_dtos_can_be_instantiated():
     InternalDomainEvent(timestamp=now)
     AgentRegistered(agent_id="a1", timestamp=now)
     RoomCreated(room_id="r1", owner_id="u1", timestamp=now)
-    HubAgentResponseInternal(
-        hub_id="h1",
-        agent_id="a1",
-        task_id="t1",
-        room_id="r1",
-        is_terminal=True,
-        payload={},
-        timestamp=now,
-    )
 
 
 def test_room_creation_params_default_seed_does_not_weaken_create_request():

@@ -28,7 +28,7 @@ def test_route_policy_matrix_matches_fixture():
 def test_open_cors_groups_are_explicitly_limited():
     from api_gateway.policies import open_cors_groups
 
-    assert open_cors_groups() == frozenset({"discovery", "platform_gateway", "relay"})
+    assert open_cors_groups() == frozenset({"discovery", "platform_gateway"})
 
 
 def test_every_public_route_group_has_policy():
@@ -77,28 +77,5 @@ def test_route_tags_follow_policy_matrix():
         tags = set(getattr(route, "tags", []) or [])
         if not set(policy.tags).issubset(tags):
             bad.append((path, group, sorted(tags), list(policy.tags)))
-
-    assert bad == []
-
-
-def test_relay_policy_matches_api_key_only_route_dependencies():
-    from api_gateway.policies import ROUTE_POLICIES
-    from main import app
-
-    assert ROUTE_POLICIES["relay"].auth == "api-key-route-level"
-
-    bad = []
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        if not path.startswith("/api/v1/relay"):
-            continue
-        dependencies = {
-            getattr(dependency.call, "__name__", repr(dependency.call))
-            for dependency in route.dependant.dependencies
-        }
-        if not dependencies & {"get_api_key", "get_api_key_no_track"}:
-            bad.append((path, getattr(route, "name", ""), sorted(dependencies)))
-        if dependencies & {"get_current_user", "get_optional_user"}:
-            bad.append((path, getattr(route, "name", ""), sorted(dependencies)))
 
     assert bad == []

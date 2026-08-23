@@ -29,7 +29,6 @@ class RuntimeHealthCheck:
             await cancellation_runtime.refresh_health()
         redis_runtime = getattr(request.app.state, "redis_runtime", None)
         redis_service = getattr(redis_runtime, "command_client", None)
-        relay_streams = getattr(redis_runtime, "relay_streams", None)
         result = self._compute_health_status(
             delivery_pubsub_connected=bool(
                 delivery_facade
@@ -45,7 +44,6 @@ class RuntimeHealthCheck:
                 delivery_facade and delivery_facade.delivery_kv_connected
             ),
             redis_runtime_connected=bool(redis_service and redis_service.is_connected),
-            relay_streams_available=bool(relay_streams and relay_streams.is_connected),
             redis_url=self._redis_url,
             change_stream_connected=bool(
                 cancellation_runtime and cancellation_runtime.change_stream_connected

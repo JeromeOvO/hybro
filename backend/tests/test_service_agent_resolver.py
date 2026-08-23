@@ -68,8 +68,6 @@ def _make_agent(agent_id: str, name: str):
     agent.agent_card.name = name
     agent.agent_card.url = f"https://{name}.example.com"
     agent.agent_card.default_input_modes = ["*/*"]
-    agent.hub_id = None
-    agent.is_hub_online = False
     return agent
 
 
@@ -158,31 +156,6 @@ async def test_probe_agent_delegates_to_adapter_health_probe(monkeypatch):
         "agent_url": "https://Alpha.example.com",
         "timeout": 3.0,
     }
-
-
-@pytest.mark.asyncio
-async def test_probe_agent_uses_hub_liveness_without_adapter_call(monkeypatch):
-    from agent import resolver as resolver_module
-
-    called = False
-
-    async def _probe(agent_url: str, *, timeout: float):
-        nonlocal called
-        called = True
-        return SimpleNamespace(
-            is_healthy=False,
-            card=None,
-            status_code=None,
-            error="should not run",
-        )
-
-    monkeypatch.setattr(resolver_module, "probe_agent_card_for_health", _probe)
-    agent = _make_agent("a1", "Alpha")
-    agent.hub_id = "hub-1"
-    agent.is_hub_online = True
-
-    assert await AgentResolverService._probe_agent(agent) is True
-    assert called is False
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from execution.orchestration.run_reducer import record_hitl_terminalization
+from common.utils.time import utcnow
 from execution.orchestration.run_store import (
     DuplicateEventIdConflict,
     OrchestrationStoreConflict,
@@ -33,9 +33,8 @@ class HITLDeliveryAdapter:
 
 
 class A2AHITLContinuationAdapter:
-    def __init__(self, agent_reply_transport, room_message_center_provider) -> None:
+    def __init__(self, agent_reply_transport) -> None:
         self._agent_reply_transport = agent_reply_transport
-        self._room_message_center_provider = room_message_center_provider
 
     async def reply_to_task(
         self,
@@ -63,23 +62,15 @@ class A2AHITLContinuationAdapter:
         task_result_text: str | None = None,
         failed: bool = False,
     ) -> bool:
-        room_message_center = self._room_message_center_provider()
-        return await room_message_center.resume_queue_from_continuation(
-            continuation_message_id,
-            task_result_text=task_result_text,
-            failed=failed,
-        )
+        # The legacy queue executor is retired; there is no direct continuation
+        # left to resume. Legacy-owned Runs have drained before this phase.
+        return False
 
     async def has_pending_queue_continuation(
         self,
         continuation_message_id: str,
     ) -> bool:
-        room_message_center = self._room_message_center_provider()
-        store = room_message_center.continuation_store
-        pending = await store.get_pending_continuation_on_message(
-            continuation_message_id
-        )
-        return bool(pending)
+        return False
 
 
 class HITLTerminalLifecycleAdapter:
@@ -89,7 +80,7 @@ class HITLTerminalLifecycleAdapter:
         self._orchestration_run_store = orchestration_run_store
         self._run_lifecycle = run_lifecycle
 
-    async def terminalize_owning_run(
+    async def terminalize_owning_run(  # noqa: C901
         self,
         request,
         *,
@@ -113,12 +104,36 @@ class HITLTerminalLifecycleAdapter:
                         if isinstance(entry, dict)
                     )
                     break
-                updated = record_hitl_terminalization(
-                    current,
-                    request_id=request.request_id,
-                    terminal_status=terminal_status,
-                    reason=reason,
+                updated = current.model_copy(deep=True)
+                resolved_at = utcnow().isoformat()
+                updated.pending_hitl_request_ids.clear()
+                for question in updated.open_questions:
+                    if not isinstance(question, dict):
+                        continue
+                    if question.get("status") not in {"open", "creating"}:
+                        continue
+                    question["status"] = terminal_status
+                    question["resolved"] = True
+                    question["resolved_at"] = resolved_at
+                    question["terminal_reason"] = reason
+                updated.pending_agent_continuations.clear()
+                updated.active_dispatches.clear()
+                updated.status = (
+                    OrchestrationStatus.CANCELED
+                    if terminal_status == "canceled"
+                    else OrchestrationStatus.FAILED
                 )
+                updated.terminal_reason = reason
+                updated.decision_log.append(
+                    {
+                        "code": f"hitl_{terminal_status}",
+                        "request_id": request.request_id,
+                        "reason": reason,
+                        "created_at": resolved_at,
+                    }
+                )
+                updated.state_version += 1
+                updated.updated_at = utcnow()
                 try:
                     orchestration_state = (
                         await self._orchestration_run_store.save_state(

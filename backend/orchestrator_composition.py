@@ -60,11 +60,7 @@ from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
 from execution.orchestrator.a2a_runtime.catalog_assembler import (
     AgentToolCatalogAssembler,
 )
-from execution.orchestrator.a2a_runtime.dispatch import (
-    DirectA2ADispatchAdapter,
-    RelayA2ADispatchAdapter,
-    RoutedA2ADispatchPort,
-)
+from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
     RecoverableAdapterError,
 )
@@ -106,11 +102,6 @@ from execution.orchestrator.projection import (
     ProjectionListener,
     ProjectionOutboxWorker,
     SettlingProjectionDriver,
-)
-from hub_runtime_bridge.orchestrator_relay import (
-    MongoRelayCommandJournalStore,
-    RelayCommandJournal,
-    RelayCommandSender,
 )
 
 logger = get_logger(__name__)
@@ -190,7 +181,6 @@ def create_orchestrator_runtime(  # noqa: C901
     room_ownership_reader: Any,
     epoch_store: Any,
     room_files: Any,
-    relay_service: Any,
     observation_authenticator: Any | None = None,
     session_listener: Any | None = None,
     projection_listener: ProjectionListener | None = None,
@@ -306,19 +296,7 @@ def create_orchestrator_runtime(  # noqa: C901
         call_resolver=resolve_call_address,
     )
     direct = DirectA2ADispatchAdapter(direct_client, observations=observation_ingress)
-
-    relay_store = MongoRelayCommandJournalStore(mongo)
-    relay_journal = RelayCommandJournal(
-        store=relay_store, receipt_factory=A2ADispatchReceipt
-    )
-    relay_sender = RelayCommandSender(
-        relay_service=relay_service,
-        store=relay_store,
-        receipt_factory=A2ADispatchReceipt,
-        call_resolver=resolve_call_address,
-    )
-    relay = RelayA2ADispatchAdapter(journal=relay_journal, sender=relay_sender)
-    dispatch = RoutedA2ADispatchPort(direct=direct, relay=relay)
+    dispatch = direct
 
     prepared_reader = RunPreparedInvocationSnapshotReader(
         run_store=run_store,

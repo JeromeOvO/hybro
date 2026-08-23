@@ -9,7 +9,6 @@ def test_open_cors_gateway_groups_allow_external_preflight():
     for path in (
         "/api/v1/discovery/agents",
         "/api/v1/gateway/agents/discover",
-        "/api/v1/relay/hub/status",
     ):
         response = client.options(
             path,
@@ -37,7 +36,7 @@ def test_open_cors_actual_responses_do_not_allow_credentials_with_wildcard():
     try:
         client = TestClient(app)
         response = client.get(
-            "/api/v1/relay/hub/status",
+            "/api/v1/gateway/agents/discover",
             headers={"Origin": "https://external.example"},
         )
     finally:

@@ -16,7 +16,6 @@ from common.protocols.agent_protocols import (
     AgentMessageMatcher,
     AgentRegistry,
     AgentRegistryWriter,
-    HubAgentStatusReader,
 )
 from common.protocols.context_memory_protocols import (
     CompactionPort,
@@ -46,19 +45,8 @@ from common.protocols.delivery_protocols import (
 from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
-    HubAgentResponseSink,
     RoomDistributedLock,
     WebhookReceiver,
-)
-from common.protocols.hub_protocols import (
-    HubDispatchPolicy,
-    HubDispatchPort,
-    HubInternalResponseDispatcher,
-    HubLivenessReader,
-    HubManagement,
-    HubRelayManagement,
-    HubStatusReader,
-    OfflineHubFailurePort,
 )
 from common.protocols.json_types import JsonMap, JsonScalar, JsonValue
 from common.protocols.llm_protocols import (
@@ -96,9 +84,6 @@ from common.protocols.repository_protocols import (
     AgentRepository,
     ContentStorageRepository,
     HITLRepository,
-    HubRepository,
-    HubResponseJournal,
-    HubTaskOwnershipStore,
     MemoryRepository,
     MessageRepository,
     QuoteRepository,
@@ -107,10 +92,7 @@ from common.protocols.repository_protocols import (
     RunRepository,
 )
 from common.protocols.room_protocols import (
-    HubPublishAuthorizationReader,
-    HubPublishLineageReader,
     MessageCancellationReader,
-    RoomAgentTaskTracker,
     RoomHistoryReader,
     RoomManagement,
     RoomMembershipSeedSource,
@@ -178,20 +160,6 @@ __all__ = [
     "HealthCheck",
     "HITLManager",
     "HITLRepository",
-    "HubAgentResponseSink",
-    "HubAgentStatusReader",
-    "HubDispatchPort",
-    "HubDispatchPolicy",
-    "HubInternalResponseDispatcher",
-    "HubLivenessReader",
-    "HubManagement",
-    "HubRelayManagement",
-    "HubStatusReader",
-    "HubRepository",
-    "HubResponseJournal",
-    "HubTaskOwnershipStore",
-    "HubPublishAuthorizationReader",
-    "HubPublishLineageReader",
     "IndexRegistry",
     "JsonMap",
     "JsonScalar",
@@ -217,7 +185,6 @@ __all__ = [
     "ModelSelectableEmbeddingServiceProtocol",
     "MongoCollection",
     "MongoDAL",
-    "OfflineHubFailurePort",
     "RateLimiter",
     "RedisKV",
     "RedisPubSub",
@@ -225,7 +192,6 @@ __all__ = [
     "RequiredEmbeddingServiceProtocol",
     "RoomHistoryReader",
     "RoomDistributedLock",
-    "RoomAgentTaskTracker",
     "RoomManagement",
     "RoomMemoryCleanupPort",
     "RoomMembershipSeedSource",

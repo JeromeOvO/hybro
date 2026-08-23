@@ -4,7 +4,7 @@ Integration tests for Agent Matching & Dispatch Pipeline
 End-to-end tests verifying data flow across:
 - AgentMatcher → AgentSelectionService
 - RoomServices explicit routing scopes
-- DispatchStrategy resolution
+- Scope resolution
 - required_input_modes threading
 
 Per design doc §Testing Strategy - Integration Tests.
@@ -22,7 +22,6 @@ from agent.matcher import (
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
-from execution.orchestration.dispatch_strategy import DispatchStrategy, resolve_strategy
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 from models.room_services_models import ResolvedRoutingScope
@@ -181,20 +180,6 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         ["agent1", "agent2"],
         sender_user_id="user123",
         required_input_modes=None,
-    )
-
-
-def test_dispatch_strategy_resolution_all_cases():
-    assert (
-        resolve_strategy(use_supervisor=True, agent_count=3)
-        == DispatchStrategy.SUPERVISOR
-    )
-    assert (
-        resolve_strategy(use_supervisor=False, agent_count=3)
-        == DispatchStrategy.SEQUENTIAL
-    )
-    assert (
-        resolve_strategy(use_supervisor=False, agent_count=1) == DispatchStrategy.SINGLE
     )
 
 
