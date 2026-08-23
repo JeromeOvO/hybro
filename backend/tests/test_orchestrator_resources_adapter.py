@@ -13,7 +13,9 @@ from execution.orchestrator.a2a_runtime.models import (
 )
 from execution.orchestrator.a2a_runtime.resources import ResourceSelectionError
 
-NOW = datetime.now(UTC)
+
+def _future_deadline() -> datetime:
+    return datetime.now(UTC) + timedelta(minutes=1)
 
 
 class FakeRoomFiles:
@@ -76,7 +78,7 @@ async def test_context_ref_materializes_to_text_part():
         room_id="room-1",
         room_epoch=1,
         allowed_input_modes=["text"],
-        deadline_at=NOW + timedelta(minutes=1),
+        deadline_at=_future_deadline(),
     )
     assert len(parts) == 1
     assert parts[0].kind == "text"
@@ -102,7 +104,7 @@ async def test_attachment_ref_materializes_to_file_part():
         room_id="room-1",
         room_epoch=1,
         allowed_input_modes=["application/pdf"],
-        deadline_at=NOW + timedelta(minutes=1),
+        deadline_at=_future_deadline(),
     )
     assert parts[0].kind == "file"
     assert parts[0].payload["bytes"] == base64.b64encode(content).decode("ascii")
@@ -124,7 +126,7 @@ async def test_changed_content_is_rejected():
             room_id="room-1",
             room_epoch=1,
             allowed_input_modes=["file"],
-            deadline_at=NOW + timedelta(minutes=1),
+            deadline_at=_future_deadline(),
         )
 
 

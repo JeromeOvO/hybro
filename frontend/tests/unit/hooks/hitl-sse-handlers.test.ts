@@ -12,6 +12,7 @@ import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { AnySSEFrame } from '@/lib/types/sse'
 import { ApiError } from '@/lib/api-client'
+import { createInitialProcessingStatusLog } from '@/hooks/room/processing-status-log'
 import {
   resetPendingTurnBufferForTests,
   resolveClientRequestMessageId,
@@ -580,6 +581,9 @@ describe('useRoomWebhook HITL SSE handling', () => {
         senderName: 'Test',
         timestamp: '2026-06-04T01:00:00.000Z',
         clientRequestId: 'client-batch',
+        processingStatusLogs: [
+          createInitialProcessingStatusLog('2026-06-04T01:00:00.001Z'),
+        ],
       }, 'db')
       for (const [index, requestId] of ['req-batch-1', 'req-batch-2'].entries()) {
         useMessageStore.getState().upsertMessage({
@@ -612,7 +616,6 @@ describe('useRoomWebhook HITL SSE handling', () => {
 
       const user = useMessageStore.getState().entities['user-batch-root']
       expect(user.processingStatusLogs?.map(entry => entry.message)).toEqual([
-        'Thinking...',
         'Applying your answers…',
       ])
       expect(useRoomUiStore.getState().getRoomFlags('room-1').processing).toBe(true)
