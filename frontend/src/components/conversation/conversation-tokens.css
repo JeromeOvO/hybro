@@ -498,6 +498,110 @@
   color: var(--conversation-text-secondary);
 }
 
+/* ---------- Turn Trace panel (decision-visibility surface) ---------- */
+
+.conversation-trace {
+  margin-top: 2px;
+}
+
+.conversation-trace .conversation-processing-log-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.conversation-trace-node {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.conversation-trace-node::before {
+  position: absolute;
+  top: 12px;
+  left: -13px;
+  width: 5px;
+  height: 5px;
+  content: '';
+  background: var(--conversation-border-light);
+  border-radius: 999px;
+}
+
+.conversation-trace-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--conversation-text-muted);
+}
+
+.conversation-trace-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.conversation-trace-node[data-kind='decision'] .conversation-trace-icon {
+  color: var(--conversation-accent);
+}
+
+.conversation-trace-node[data-kind='retry'] .conversation-trace-icon {
+  color: var(--conversation-warning, #b45309);
+}
+
+.conversation-trace-node[data-kind='tool_call'][data-status='completed'] .conversation-trace-icon {
+  color: var(--conversation-success, #15803d);
+}
+
+.conversation-trace-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.conversation-trace-title {
+  color: var(--conversation-text-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.conversation-trace-meta {
+  color: var(--conversation-text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-trace-detail {
+  color: var(--conversation-text-dim);
+  font-size: 11px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.conversation-trace-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 1px 0 0;
+  padding: 3px 0 0 10px;
+  border-left: 1px solid var(--conversation-border-light);
+}
+
+.conversation-trace-plan li {
+  color: var(--conversation-text-dim);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.conversation-trace-plan strong {
+  color: var(--conversation-text-secondary);
+  font-weight: 550;
+}
+
 @keyframes conversation-processing-text-shimmer {
   0% {
     background-position: 120% 0;

@@ -17,6 +17,8 @@ SessionEventType = Literal[
     "model_attempt_started",
     "model_retry_scheduled",
     "model_attempt_failed",
+    "model_turn_completed",
+    "orchestrator_decision",
     "message_completed",
     "tool_execution_started",
     "tool_execution_completed",

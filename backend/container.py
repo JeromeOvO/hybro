@@ -1654,8 +1654,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # route, prompt asset, or profile parameter is detected during startup
         # even though nothing routes into it yet. Adapter-level failures
         # degrade the dark launch; programming errors still fail startup.
-        from common.dto import ProcessingStatusEvent
+        from common.dto import ProcessingStatusEvent, RunEventNotification
         from execution.orchestrator.projection import public_terminal_status
+        from execution.orchestrator.public_projection import (
+            PublicProjectionTranslator,
+        )
+
+        public_projection_translator = PublicProjectionTranslator()
 
         async def publish_orchestrator_projection_status(run, intent) -> None:
             # SSE is non-authoritative: it is published only after the durable
@@ -1754,6 +1759,25 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         ),
                     )
                 )
+
+            # Decision-visibility projection (Room Stream Snapshot plan §6,
+            # Phase 1): public run_event payload types for LLM calls, retries,
+            # orchestrator decisions, and tool calls. Payloads are produced
+            # exclusively by the PublicProjectionTranslator (redaction).
+            if event.room_id and run_event_sse_enabled():
+                public_event = public_projection_translator.translate(event)
+                if public_event is not None:
+                    await _delivery_deps.event_publisher.emit(
+                        RunEventNotification(
+                            room_id=event.room_id,
+                            event_id=public_event.event_id,
+                            run_id=public_event.run_id,
+                            seq=public_event.seq,
+                            run_event_type=public_event.kind,
+                            payload=public_event.payload,
+                            correlation_id=public_event.client_request_id,
+                        )
+                    )
 
             if event.event_type == "run_final_answer_ready" and runtime is not None:
                 # Deliver the final answer immediately instead of waiting for

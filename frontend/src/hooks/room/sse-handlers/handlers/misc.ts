@@ -3,6 +3,7 @@ import type { ErrorData, RoomSSEFrameMap } from '@/lib/types/sse'
 import type { ProcessingLifecycle } from '../../processing-lifecycle'
 import type { SSEHandlerDeps } from '../types'
 import { ensureTurnTerminalStampedFromBackendTruth } from '@/lib/room-timeline/turn-terminal-stamp'
+import { useTraceStore } from '@/stores/trace-store'
 
 function isErrorDataObject(data: unknown): data is ErrorData {
   return Boolean(data && typeof data === 'object' && !Array.isArray(data))
@@ -79,6 +80,21 @@ export function handleRunEvent(
   }
 
   const sub = sseMessage.data?.type as string | undefined
+
+  // Decision-visibility projection (Phase 1): fold public trace kinds into
+  // the Turn Trace store. Non-trace run_event sub-types are ignored here.
+  if (sub && sseMessage.data?.run_id) {
+    useTraceStore.getState().applyRunEvent({
+      eventId: sseMessage.data.event_id,
+      runId: sseMessage.data.run_id,
+      type: sub,
+      payload: (sseMessage.data.payload ?? {}) as Record<string, unknown>,
+      correlationId: typeof correlationId === 'string' && correlationId.length > 0
+        ? correlationId
+        : null,
+    })
+  }
+
   if (sub === 'run_failed' || sub === 'run_completed' || sub === 'run_canceled') {
     const runId = sseMessage.data?.run_id
     if (runId) {

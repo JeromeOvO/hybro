@@ -1,9 +1,12 @@
 'use client'
 
+import { useMemo } from 'react'
 import { useMessageStore } from '@/stores/message-store'
+import { useTraceStore } from '@/stores/trace-store'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 import { UserMessageBlock } from './UserMessageBlock'
 import { TurnBody } from './TurnBody'
+import { TurnTracePanel } from './TurnTracePanel'
 import type { Ref } from 'react'
 
 interface TurnRendererProps {
@@ -24,9 +27,20 @@ export function TurnRenderer({
   const userEntity = useMessageStore(s =>
     turn.userMessageId ? s.entities[turn.userMessageId] : undefined,
   )
+  const traceNodesById = useTraceStore(s => s.nodes)
+  const clientRequestId = userEntity?.clientRequestId
+  const traceNodes = useMemo(() => {
+    if (!clientRequestId) return []
+    const nodes = Object.values(traceNodesById).filter(
+      (node) => node.clientRequestId === clientRequestId,
+    )
+    nodes.sort((a, b) => a.receivedAt - b.receivedAt)
+    return nodes
+  }, [traceNodesById, clientRequestId])
   const hasAssistantSurface =
     turn.agentResults.length > 0 ||
-    turn.processingStatusLogs.length > 0
+    turn.processingStatusLogs.length > 0 ||
+    traceNodes.length > 0
 
   return (
     <div className="conversation-turn">
@@ -49,6 +63,7 @@ export function TurnRenderer({
             primarySurfaceRef={primarySurfaceRef}
             isLastTurn={isLastTurn}
           />
+          <TurnTracePanel nodes={traceNodes} />
         </div>
       )}
     </div>
