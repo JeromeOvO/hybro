@@ -55,14 +55,6 @@
       "hitl"
     ]
   },
-  "hub": {
-    "api_key": false,
-    "auth": "clerk-route-level",
-    "cors": "default",
-    "tags": [
-      "hub"
-    ]
-  },
   "inspection": {
     "api_key": false,
     "auth": "clerk-global",
@@ -77,14 +69,6 @@
     "cors": "open",
     "tags": [
       "gateway"
-    ]
-  },
-  "relay": {
-    "api_key": true,
-    "auth": "api-key-route-level",
-    "cors": "open",
-    "tags": [
-      "relay"
     ]
   },
   "room": {

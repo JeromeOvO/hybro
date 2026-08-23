@@ -20,16 +20,14 @@ def _default_open_cors_path_prefixes(api_prefix: str) -> tuple[str, ...]:
     return (
         f"{api_prefix}/discovery",
         f"{api_prefix}/gateway",
-        f"{api_prefix}/relay",
     )
 
 
 class DiscoveryCORSMiddleware(BaseHTTPMiddleware):
     """
-    Middleware that adds permissive CORS headers for Discovery, Gateway, and Relay API endpoints.
+    Middleware that adds permissive CORS headers for Discovery and Gateway API endpoints.
 
-    Applies to paths starting with {api_prefix}/discovery, {api_prefix}/gateway,
-    or {api_prefix}/relay.
+    Applies to paths starting with {api_prefix}/discovery or {api_prefix}/gateway.
     Allows all origins, methods, and headers for external API access.
     """
 

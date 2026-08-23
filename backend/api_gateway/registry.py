@@ -60,12 +60,8 @@ def route_group_for_path(path: str) -> str:
         return "files"
     if matches("/gateway"):
         return "platform_gateway"
-    if matches("/hub"):
-        return "hub"
     if matches("/inspectionCenter"):
         return "inspection"
-    if matches("/relay"):
-        return "relay"
     if matches("/roomCenter"):
         return "room"
     if matches("/rooms") and "/hitl" in normalized:
@@ -87,7 +83,6 @@ def open_cors_path_prefixes(api_prefix: str) -> tuple[str, ...]:
     suffixes = {
         "discovery": "/discovery",
         "platform_gateway": "/gateway",
-        "relay": "/relay",
     }
     return tuple(
         f"{api_prefix}{suffixes[group]}"

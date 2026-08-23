@@ -1448,7 +1448,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         if _redis_service:
             redis_kv_ready = await _redis_service.ping()
             if redis_kv_ready:
-                logger.info("DAL Redis KV connected (leader election/relay enabled)")
+                logger.info("DAL Redis KV connected (leader election enabled)")
             else:
                 logger.warning("DAL Redis KV unavailable; Redis KV features disabled")
         else:
@@ -1461,7 +1461,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if redis_streams_ready:
                 logger.info("DAL Redis Streams connected")
             else:
-                logger.warning("DAL Redis Streams unavailable; relay streams disabled")
+                logger.warning("DAL Redis Streams unavailable")
 
         # ── Guard: fail if gunicorn without fully connected Redis ──
         check_multi_worker_safety(
