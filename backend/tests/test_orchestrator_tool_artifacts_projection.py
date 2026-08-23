@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from common.types import Artifact, RoomArtifactPart, TaskState
 from container import (
     _project_orchestrator_agent_activity,
@@ -193,9 +194,7 @@ async def test_project_orchestrator_agent_activity_emits_artifacts_and_sse_parts
     assert task.status.state == TaskState.completed
     assert len(task.artifacts) == 1
     assert task.artifacts[0].name == "cat.png"
-    assert (
-        task.artifacts[0].parts[0].root.file.uri == "/api/v1/files/img-456/content"
-    )
+    assert task.artifacts[0].parts[0].root.file.uri == "/api/v1/files/img-456/content"
 
     delivery.send_task_update.assert_awaited_once()
     kwargs = delivery.send_task_update.call_args.kwargs
