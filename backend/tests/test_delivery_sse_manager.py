@@ -287,6 +287,8 @@ async def test_broadcast_frame_to_room_preserves_order_and_empty_room_is_noop():
 
 @pytest.mark.asyncio
 async def test_slow_connection_overflow_does_not_block_fast_connection():
+    # Room Stream Snapshot plan §7: a slow consumer is marked for resync,
+    # NOT disconnected. Both connections stay alive and keep receiving.
     config = DeliveryConfig(sse_connection_queue_maxsize=1)
     transport = make_transport(config=config)
     slow = await transport.open_connection("room-1")
@@ -296,13 +298,16 @@ async def test_slow_connection_overflow_does_not_block_fast_connection():
     assert await fast.next_frame(timeout=0.01) == {"type": "first"}
     await transport.broadcast_frame_to_room("room-1", {"type": "second"})
 
-    assert slow.is_active is False
-    assert slow.connection_id not in transport.room_connections["room-1"]
+    assert slow.is_active is True
+    assert slow.needs_resync is True
+    assert slow.connection_id in transport.room_connections["room-1"]
     assert await fast.next_frame(timeout=0.01) == {"type": "second"}
 
 
 @pytest.mark.asyncio
-async def test_overflow_broadcast_does_not_wait_for_background_unsubscribe():
+async def test_overflow_broadcast_does_not_disconnect_or_unsubscribe():
+    # Slow-consumer overflow marks the connection for resync (§7); no
+    # unsubscribe task is scheduled because the connection stays alive.
     event_bus = FakeEventBus()
     event_bus.unsubscribe_waiter = asyncio.Event()
     transport = make_transport(
@@ -316,16 +321,12 @@ async def test_overflow_broadcast_does_not_wait_for_background_unsubscribe():
         transport.broadcast_frame_to_room("room-1", {"type": "overflow"})
     )
     await asyncio.wait_for(broadcast, timeout=0.1)
-    await event_bus.unsubscribe_entered.wait()
 
-    assert connection.is_active is False
-    assert transport.room_connections == {}
-    assert transport._room_cleanup_tasks
-    assert event_bus.unsubscribe_tasks != [broadcast]
-
-    event_bus.unsubscribe_waiter.set()
-    await transport._drain_room_cleanup_tasks()
-    assert transport._room_cleanup_tasks == {}
+    assert connection.is_active is True
+    assert connection.needs_resync is True
+    assert "room-1" in transport.room_connections
+    assert not transport._room_cleanup_tasks
+    assert event_bus.unsubscribed == []
 
 
 @pytest.mark.asyncio

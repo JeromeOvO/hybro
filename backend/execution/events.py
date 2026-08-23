@@ -319,6 +319,11 @@ async def emit_processing_status(
                     exc_info=True,
                 )
             return payload
+        # No bound finalizer: the terminal fallback direct emit is eliminated
+        # (Room Stream Snapshot plan §4.1). Terminal frames are delivered
+        # exclusively by durable projection recovery; in production the
+        # finalizer is always bound (``RunLifecycleAdapter``).
+        return payload
     elif record_lifecycle:
         payload = await run_lifecycle.record_processing_status(
             room_id,
@@ -328,6 +333,9 @@ async def emit_processing_status(
             details=typed_details,
             error_message=error_message,
         )
+    # Non-terminal statuses are the main direct-emit path (work log and
+    # spinner lifecycle). Terminal frames never reach this block: the
+    # terminal branch returns above, so only the finalizer emits them.
     if payload and run_event_enabled():
         await event_publisher.emit(
             run_event_notification_from_payload(

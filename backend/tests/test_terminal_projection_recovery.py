@@ -188,19 +188,31 @@ async def test_terminal_projection_failure_retry_and_duplicate_recovery_are_idem
         head_healer=head_healer,
     )
 
+    # Two-phase finalize (Room Stream Snapshot plan §4 rule 4): the SSE
+    # emission steps run ONLY after every durable side-effect step is
+    # completed or blocked. The retryable system_task failure therefore
+    # defers BOTH SSE steps to a later pass.
     assert not await finalizer.finalize(deepcopy(lifecycle.fact))
     steps = lifecycle.fact["terminal_projection"]["steps"]
-    assert steps["run_event_sse"]["state"] == "completed"
+    assert steps["run_event_sse"]["state"] == "pending"
     assert steps["processing_sse"]["state"] == "pending"
     assert steps["system_task"]["state"] == "pending"
     assert steps["completion_metadata"]["state"] == "completed"
     assert steps["turn_event"]["state"] == "completed"
     assert lifecycle.fact["type"] == "run_completed"
 
+    # Second pass: the durable steps settle and run_event_sse emits, but the
+    # first processing_status emit fails and is retried again.
+    assert await finalizer.recover_pending(limit=100) == 0
+    assert steps["system_task"]["state"] == "completed"
+    assert steps["run_event_sse"]["state"] == "completed"
+    assert steps["processing_sse"]["state"] == "pending"
+
+    # Third pass: the processing_status emit is delivered; the fact settles.
     assert await finalizer.recover_pending(limit=100) == 1
-    head_healer.assert_awaited_once_with("msg-1")
     assert all(step["state"] == "completed" for step in steps.values())
     assert publisher.processing_attempts == 2
+    head_healer.assert_awaited_with("msg-1")
     delivery.send_task_update.assert_awaited_once_with(
         room_id="room-1",
         message_id="sys-msg-1",

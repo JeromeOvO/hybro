@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,6 +28,9 @@ class SSETransportImpl:
         instance_id: str,
         task_runner: TaskRunner,
         metrics: MetricsCollector | None = None,
+        room_seq_reader: Callable[[str], Awaitable[int | None]] | None = None,
+        snapshot_provider: Callable[[str], Awaitable[dict[str, Any] | None]]
+        | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.config = config
@@ -36,6 +39,8 @@ class SSETransportImpl:
         self.instance_id = instance_id
         self._task_runner = task_runner
         self._metrics = metrics or NoopMetricsCollector()
+        self._room_seq_reader = room_seq_reader
+        self._snapshot_provider = snapshot_provider
         self.room_connections: dict[str, dict[str, SSEConnection]] = {}
         self.connection_rooms: dict[str, str] = {}
         self._lock = asyncio.Lock()
@@ -160,6 +165,8 @@ class SSETransportImpl:
                     heartbeat_interval=self.config.heartbeat_interval_seconds,
                     queue_maxsize=self.config.sse_connection_queue_maxsize,
                     now=self._now,
+                    room_seq_reader=self._room_seq_reader,
+                    snapshot_provider=self._snapshot_provider,
                 )
                 async with self._lock:
                     room_connections = self.room_connections.setdefault(room_id, {})

@@ -736,11 +736,44 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 redis_url=runtime.settings.redis_url,
                 config=_delivery_config,
             )
+            # ── Room event log + snapshot materialization ────────────────
+            # (Room Stream Snapshot plan §5). The snapshot service serves the
+            # per-connect snapshot and the per-connection resync provider;
+            # the store is also exposed on app.state for the replay endpoint.
+            from delivery.room_events import MongoRoomEventStore
+            from delivery.snapshot import SnapshotService
+
+            _room_event_store = MongoRoomEventStore(mongo=mongo_dal)
+            try:
+                await _room_event_store.ensure_indexes()
+            except Exception:
+                logger.warning("room_events index creation failed", exc_info=True)
+            app.state.room_event_store = _room_event_store
+            _room_snapshot_service = SnapshotService(store=_room_event_store)
+            app.state.room_snapshot_service = _room_snapshot_service
+
+            async def _room_seq_reader(room_id: str) -> int | None:
+                return await _room_event_store.latest_seq(room_id)
+
+            async def _snapshot_provider(room_id: str) -> dict[str, Any] | None:
+                try:
+                    return await _room_snapshot_service.snapshot(room_id)
+                except Exception:
+                    logger.warning(
+                        "resync snapshot build failed",
+                        extra={"room_id": room_id},
+                        exc_info=True,
+                    )
+                    return None
+
             _delivery_facade = create_delivery_facade(
                 redis_kv=delivery_redis_kv,
                 redis_pubsub=delivery_redis_pubsub,
                 config=_delivery_config,
                 instance_id=runtime_instance_id,
+                room_events=_room_event_store,
+                snapshot_provider=_snapshot_provider,
+                room_seq_reader=_room_seq_reader,
             )
             await _delivery_facade.start()
             _delivery_deps = create_delivery_deps(_delivery_facade)
@@ -823,6 +856,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_files=file_storage,
             )
             bind_run_lifecycle_service(run_command_handler)
+
+            # ── Terminal settlement reader (defense-in-depth) ────────────
+            # The publisher consults the private run_events fact log before
+            # emitting terminal run_event/processing_status frames (Room
+            # Stream Snapshot plan §4 rule 4). Bound here because the fact
+            # repository only exists after execution composition.
+            from execution.terminal_projection import (
+                RunEventProjectionSettlementReader,
+            )
+
+            _delivery_facade.event_publisher.projection_settlement = (
+                RunEventProjectionSettlementReader(
+                    _execution_repos["run_event_repository"]
+                )
+            )
 
             async def notify_task_update_with_string_state(**kwargs):
                 state = kwargs.get("state")
@@ -3278,6 +3326,9 @@ def create_delivery_facade(
     instance_id: str | None = None,
     task_runner: TaskRunner | None = None,
     metrics: MetricsCollector | None = None,
+    room_events: Any | None = None,
+    snapshot_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    room_seq_reader: Callable[[str], Awaitable[int | None]] | None = None,
 ) -> DeliveryFacade:
     resolved_config = config or DeliveryConfig()
     resolved_now = now or utcnow
@@ -3302,6 +3353,8 @@ def create_delivery_facade(
         instance_id=resolved_instance_id,
         task_runner=resolved_task_runner,
         metrics=metrics,
+        room_seq_reader=room_seq_reader,
+        snapshot_provider=snapshot_provider,
     )
     deduplicator = TerminalStatusDeduplicator(
         redis_kv=redis_kv,
@@ -3315,6 +3368,7 @@ def create_delivery_facade(
         now=resolved_now,
         instance_id=resolved_instance_id,
         metrics=metrics,
+        room_events=room_events,
     )
     event_bus.set_sse_callback(sse_transport.broadcast_frame_to_room)
 
