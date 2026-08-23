@@ -164,26 +164,9 @@ class RoomTimelinePage:
 RoomMessageInfo = MessageRecord
 
 
-class HubPublishLineageSnapshot(FrozenDTO):
-    room_id: str
-    room_owner_id: str
-    agent_message_id: str
-    agent_id: str
-    agent_hub_id: str
-    related_message_id: str | None = None
-    turn_id: str | None = None
-    run_id: str | None = None
-    root_user_message_id: str | None = None
-    tracked_task_id: str | None = None
-    lifecycle_message_id: str | None = None
-    client_request_id: str | None = None
-    cancellation_message_ids: list[str] = Field(default_factory=list)
-
-
 __all__ = [
     "AgentMessageInput",
     "CreateRoomRequest",
-    "HubPublishLineageSnapshot",
     "MembershipSeed",
     "MembershipUpdateRequest",
     "MessageRecord",

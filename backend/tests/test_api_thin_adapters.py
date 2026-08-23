@@ -862,8 +862,6 @@ def test_route_owner_protocols_match_handler_calls():
         A2ATaskStatusReader,
         AgentRegistry,
         HealthCheck,
-        HubRelayManagement,
-        HubStatusReader,
         RoomRouteReader,
         SSEStateReader,
         ViewSetRepository,
@@ -925,17 +923,6 @@ def test_route_owner_protocols_match_handler_calls():
         },
         WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         HealthCheck: {"check"},
-        HubStatusReader: {
-            "get_hub_status",
-        },
-        HubRelayManagement: {
-            "connect_hub",
-            "get_hub_status",
-            "process_publish",
-            "record_hub_heartbeat",
-            "register_hub",
-            "sync_agents",
-        },
     }
 
     missing: list[str] = []

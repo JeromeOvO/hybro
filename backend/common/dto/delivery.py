@@ -195,15 +195,6 @@ class HITLResolvedEvent(DeliveryEventBase):
     client_request_id: str | None = None
 
 
-class HubAgentEvent(DeliveryEventBase):
-    event_type: Literal["hub_agent_event"] = "hub_agent_event"
-    hub_id: str
-    agent_id: str
-    message_id: str
-    status: str
-    partial: str | None = None
-
-
 DeliveryEvent = Annotated[
     ProcessingStatusEvent
     | RunEventNotification
@@ -215,8 +206,7 @@ DeliveryEvent = Annotated[
     | ErrorEvent
     | CancellationEvent
     | HITLRequestEvent
-    | HITLResolvedEvent
-    | HubAgentEvent,
+    | HITLResolvedEvent,
     Field(discriminator="event_type"),
 ]
 
@@ -232,7 +222,6 @@ __all__ = [
     "ErrorEvent",
     "HITLRequestEvent",
     "HITLResolvedEvent",
-    "HubAgentEvent",
     "NotificationPayload",
     "ProcessingStatusEvent",
     "RunEventNotification",

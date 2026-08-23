@@ -5,7 +5,6 @@ import pytest
 
 from common.dto import (
     DeliveryEmitStatus,
-    HubAgentResponseInternal,
     MessageCommitted,
     ProcessingStatusEvent,
     RunEventNotification,
@@ -907,15 +906,6 @@ async def test_stop_cancels_blocked_handler_after_configured_timeout():
             new_state="processing",
             timestamp=NOW,
         ),
-        HubAgentResponseInternal(
-            hub_id="hub-1",
-            agent_id="agent-1",
-            task_id="task-1",
-            room_id="room-1",
-            is_terminal=False,
-            payload={"delta": "hello"},
-            timestamp=NOW,
-        ),
     ],
 )
 async def test_all_internal_event_union_members_schedule_local_handlers(event):
@@ -954,15 +944,6 @@ async def test_remote_internal_events_cover_all_union_members_and_multiple_handl
             new_state="processing",
             timestamp=NOW,
         ),
-        HubAgentResponseInternal(
-            hub_id="hub-1",
-            agent_id="agent-1",
-            task_id="task-1",
-            room_id="room-1",
-            is_terminal=True,
-            payload={"content": "done"},
-            timestamp=NOW,
-        ),
     ]
 
     for event in events:
@@ -995,12 +976,11 @@ async def test_emit_internal_with_no_subscribers_is_noop_for_handlers():
     runner = RecordingTaskRunner()
     bus = FakeBus()
     publisher = make_publisher(bus=bus, task_runner=runner)
-    event = HubAgentResponseInternal(
-        hub_id="hub-1",
-        agent_id="agent-1",
-        task_id="task-1",
+    event = RunStateChanged(
+        run_id="run-1",
         room_id="room-1",
-        is_terminal=False,
+        old_state="queued",
+        new_state="processing",
         timestamp=NOW,
     )
 

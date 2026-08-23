@@ -22,7 +22,6 @@ from common.dto import (
     ErrorEvent,
     HITLRequestEvent,
     HITLResolvedEvent,
-    HubAgentEvent,
     InternalDomainEvent,
     ProcessingStatusEvent,
     RoomInfo,
@@ -367,44 +366,6 @@ def test_common_json_aliases_are_protocol_safe():
     assert get_args(JsonMap) == (str, JsonValue)
 
 
-def test_hub_liveness_validation_rejects_sync_runtime_protocol_match():
-    import common.protocols as protocols
-    from common.protocols.hub_protocols import validate_hub_liveness_reader
-
-    class SyncHubLivenessReader:
-        def is_hub_online(self, hub_id: str) -> bool:
-            return True
-
-        async def get_hub_owner_id(self, hub_id: str) -> str | None:
-            return "user-1"
-
-    reader = SyncHubLivenessReader()
-
-    assert isinstance(reader, protocols.HubLivenessReader)
-    with pytest.raises(TypeError, match="is_hub_online must be async"):
-        validate_hub_liveness_reader(reader)
-
-
-def test_hub_liveness_reader_validation_rejects_non_callable_method():
-    import common.protocols as protocols
-    from common.protocols.hub_protocols import validate_hub_liveness_reader
-
-    class NonCallableHubLivenessReader:
-        is_hub_online = True
-
-        async def get_hub_owner_id(self, hub_id: str) -> str | None:
-            return "user-1"
-
-    reader = NonCallableHubLivenessReader()
-
-    assert isinstance(reader, protocols.HubLivenessReader)
-    with pytest.raises(
-        TypeError,
-        match="HubLivenessReader.is_hub_online must be callable",
-    ):
-        validate_hub_liveness_reader(reader)
-
-
 def test_event_exports_are_distinct():
     assert DeliveryEvent is not InternalDomainEvent
     assert InternalDomainEvent.__name__ == "InternalDomainEvent"
@@ -576,17 +537,6 @@ def test_delivery_event_schemas_match_design_doc():
             "system_requests_limit",
             "client_request_id",
         },
-        HubAgentEvent: {
-            "room_id",
-            "timestamp",
-            "trace_id",
-            "event_type",
-            "hub_id",
-            "agent_id",
-            "message_id",
-            "status",
-            "partial",
-        },
     }
 
     for dto, fields in expected_fields.items():
@@ -618,7 +568,6 @@ def test_delivery_event_schemas_match_design_doc():
         TaskUpdateEvent: {"room_id", "message_id", "status"},
         ArtifactUpdateEvent: {"room_id", "message_id", "agent_id", "artifact"},
         ErrorEvent: {"room_id", "error"},
-        HubAgentEvent: {"room_id", "hub_id", "agent_id", "message_id", "status"},
     }
 
     for dto, fields in expected_required_fields.items():
@@ -670,8 +619,6 @@ def test_protocol_methods_match_design_doc():
             "list_public_agents",
         },
         protocols.AgentRegistryWriter: {
-            "sync_hub_agents",
-            "mark_hub_agents_offline",
             "upsert_local_agent",
             "list_local_agent_ids",
             "mark_local_agents_inactive",
@@ -697,7 +644,6 @@ def test_protocol_methods_match_design_doc():
         protocols.RoomOwnershipReader: {
             "get_room_owner",
             "verify_room_agent_membership",
-            "verify_room_hub_ownership",
         },
         protocols.ContextAssemblyPort: {
             "assemble_supervisor_context_from_memory",
@@ -730,7 +676,6 @@ def test_protocol_methods_match_design_doc():
             "get_pending_hitl",
             "cancel_hitl_interaction",
         },
-        protocols.HubAgentResponseSink: {"handle_hub_agent_response"},
         protocols.A2ATaskStatusReader: {
             "get_room_agent_message_by_message_id",
             "get_task_messages_for_room",
@@ -949,46 +894,8 @@ def test_protocol_methods_match_design_doc():
             "verify_webhook_token_for_task",
             "verify_webhook_token_on_message",
         },
-        protocols.HubStatusReader: {"get_hub_status"},
-        protocols.HubRelayManagement: {
-            "connect_hub",
-            "get_hub_status",
-            "process_publish",
-            "record_hub_heartbeat",
-            "register_hub",
-            "sync_agents",
-        },
-        protocols.HubManagement: {
-            "register_hub",
-            "get_hub",
-            "list_hubs",
-            "connect_hub",
-            "connect_hub_stream",
-            "process_publish",
-            "publish_from_hub",
-            "sync_agents",
-            "get_hub_status",
-            "record_hub_heartbeat",
-            "hub_status_for_user",
-            "start_heartbeat_monitor",
-            "stop",
-        },
-        protocols.HubLivenessReader: {"is_hub_online", "get_hub_owner_id"},
-        protocols.HubDispatchPort: {
-            "send_to_hub",
-            "cancel_hub_task",
-            "reply_to_hub_task",
-            "is_hub_online",
-        },
-        protocols.HubDispatchPolicy: {"can_dispatch_to_hub"},
-        protocols.HubInternalResponseDispatcher: {"dispatch_hub_internal_response"},
-        protocols.OfflineHubFailurePort: {"mark_hub_message_failed"},
-        protocols.HubAgentStatusReader: {"count_hub_agents"},
         protocols.AgentCallCounter: {"increment_agent_call_count"},
-        protocols.HubPublishAuthorizationReader: {"authorize_hub_publish"},
-        protocols.HubPublishLineageReader: {"get_hub_publish_lineage"},
         protocols.MessageCancellationReader: {"is_message_cancelled"},
-        protocols.RoomAgentTaskTracker: {"track_hub_task"},
         protocols.GatewayService: {
             "discover_agents",
             "get_agent_card",
@@ -1077,15 +984,11 @@ def test_protocol_methods_match_design_doc():
             "delete",
             "update_health",
             "mark_agents_inactive",
-            "mark_hub_agents_offline",
-            "count_hub_agents",
             "increment_agent_call_count",
             "find_by_normalized_url",
             "list_visible",
             "update",
             "public_url_exists",
-            "upsert_hub_agent",
-            "prune_missing_hub_agents",
             "activate_agents",
             "text_search",
         },
@@ -1179,31 +1082,6 @@ def test_protocol_methods_match_design_doc():
             "scan_text_search",
             "hydrate_turn_content",
         },
-        protocols.HubRepository: {
-            "get_by_id",
-            "get_by_owner",
-            "upsert",
-            "update_heartbeat",
-            "get_stale",
-            "list_online_hubs_for_liveness",
-            "list_offline_hubs_for_recovery",
-            "update_hub_status",
-            "update_hub_status_if_current",
-        },
-        protocols.HubResponseJournal: {
-            "ensure_indexes",
-            "create_or_get",
-            "claim_for_processing",
-            "mark_processed",
-            "mark_dead_letter",
-            "find_replayable",
-        },
-        protocols.HubTaskOwnershipStore: {
-            "ensure_indexes",
-            "claim_or_refresh",
-            "resolve_owner",
-            "release",
-        },
     }
 
     for protocol, methods in expected_methods.items():
@@ -1255,7 +1133,6 @@ def test_protocol_methods_match_design_doc():
             "required_input_modes",
         ],
     )
-    assert inspect.iscoroutinefunction(protocols.HubLivenessReader.is_hub_online)
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])
     _assert_params(
         protocols.ExecutionEngine.cancel,
