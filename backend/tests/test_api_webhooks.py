@@ -493,7 +493,7 @@ class TestWebhookRouteAdapter:
         transport.handle_webhook.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_route_falls_back_to_legacy_on_seam_error(self):
+    async def test_route_propagates_seam_error_without_legacy_fallback(self):
         class FakeState:
             orchestrator_routing = AsyncMock()
 
@@ -514,6 +514,40 @@ class TestWebhookRouteAdapter:
         transport.authenticate_webhook = AsyncMock(return_value=None)
         transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
 
+        with pytest.raises(RuntimeError, match="store unavailable"):
+            await webhooks.handle_a2a_webhook(
+                request=FakeRequest(),
+                message_id="msg-001",
+                authorization="Bearer token",
+                x_a2a_notification_token="",
+                transport=transport,
+            )
+
+        transport.authenticate_webhook.assert_not_awaited()
+        transport.handle_webhook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_uses_legacy_when_seam_returns_legacy_owner(self):
+        class FakeState:
+            orchestrator_routing = AsyncMock()
+
+        class FakeApp:
+            state = FakeState()
+
+        class FakeRequest:
+            app = FakeApp()
+            headers = {}
+
+            async def stream(self):
+                yield b'{"task":{"id":"task-001"}}'
+
+        FakeState.orchestrator_routing.route_webhook = AsyncMock(
+            return_value=webhooks.OWNER_LEGACY
+        )
+        transport = MagicMock()
+        transport.authenticate_webhook = AsyncMock(return_value=None)
+        transport.handle_webhook = AsyncMock(return_value={"status": "accepted"})
+
         result = await webhooks.handle_a2a_webhook(
             request=FakeRequest(),
             message_id="msg-001",
@@ -524,7 +558,9 @@ class TestWebhookRouteAdapter:
 
         assert result == {"status": "accepted"}
         transport.authenticate_webhook.assert_awaited_once_with("msg-001", "token")
-        transport.handle_webhook.assert_awaited_once()
+        transport.handle_webhook.assert_awaited_once_with(
+            "msg-001", {"task": {"id": "task-001"}}, "token"
+        )
 
     @pytest.mark.asyncio
     async def test_route_translates_seam_auth_failure_to_http(self):
