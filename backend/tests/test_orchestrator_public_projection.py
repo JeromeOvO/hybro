@@ -158,7 +158,9 @@ def test_tool_call_accepted_redacts_arguments():
     )
     assert public is not None
     assert public.kind == "tool_call_accepted"
-    assert public.payload["tool_name"] == "weather_lookup"
+    assert public.payload["call_id"].startswith("inv_")
+    assert public.payload["call_id"] != "call-1"
+    assert public.payload["tool_name"] == "Weather Agent"
     assert public.payload["arg_summary"]["city"] == "Shanghai"
     assert public.payload["arg_summary"]["days"] == 3
     # Full argument values are truncated to short summaries and nested
@@ -198,7 +200,9 @@ def test_tool_call_completed_carries_result_summary_and_exit_code():
     )
     assert public is not None
     assert public.kind == "tool_call_completed"
-    assert public.payload == {
+    assert public.payload["call_id"].startswith("inv_")
+    assert public.payload | {"call_id": "<opaque>"} == {
+        "call_id": "<opaque>",
         "tool_name": "weather_lookup",
         "result_summary": "Sunny, 24C",
         "exit_code": 0,

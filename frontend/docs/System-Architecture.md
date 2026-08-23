@@ -328,10 +328,25 @@ Decision-visibility surface (plan §6): public `run_event` payload kinds
 `tool_call_accepted`, `tool_call_completed`) fold into a per-run tree rendered
 by the Turn Trace panel. Snapshot trace runs and nodes retain
 `client_request_id`, so refresh/reconnect restores the same turn association.
-The panel is the single per-turn activity surface: high-level
-`processing_status` progress and structured decision/LLM/tool events share one
-ordered timeline; the former separate Work Logs panel is not rendered by the
-conversation timeline.
+The panel is the single per-turn activity surface, but it does not flatten all
+facts to generic log rows. Structured events render as an assistant plan, quiet
+model metadata, and per-call tool blocks with bounded public Input/Output;
+free-text `processing_status` updates live in a subordinate Progress disclosure.
+Tool accepted/completed pairs use public `call_id` as identity, so repeated calls
+to the same tool remain separate. The former Work Logs panel is not rendered by
+the conversation timeline.
+
+### Live turn presentation
+
+A turn has four independently sourced surfaces. The optimistic user entity is
+created before `sendMessage`; Agent Cards come from per-invocation
+`task_submitted` / `task_update` entities; the HYBRO answer comes from the
+outbox-owned final `agent_response`; Turn Trace comes from public `run_event`
+nodes plus progress updates. Agent Cards are keyed by message/call identity and
+are rendered even when the optional detail drawer callback is unavailable. A
+single Agent called twice therefore produces two cards, while contributor
+summary copy may still report one unique Agent. Final answer and terminal card
+frames are durable room deltas and restore through snapshot replay.
 
 ### Agent Dispatch Privacy
 
@@ -362,7 +377,7 @@ Live buffer text is derived via `extractStreamTextFromArtifacts`, which concaten
 
 **Streaming invariants** (enforced after the convergence plan in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md)):
 
-- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that maps `content_delta` to a synthetic artifact and calls the same append.
+- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that first creates a correlation-preserving message shell, then maps `content_delta` to a synthetic artifact and calls the same append; a live buffer is never left without a renderable turn entity.
 - **I2** — Live buffer key is always `message_id`. `client_request_id` is correlation/cleanup metadata, never a buffer key or display merge dimension.
 - **I3** — Live text equals persisted text. `extractStreamTextFromArtifacts` over the live artifact list equals backend `extract_parts_from_artifacts` over the persisted artifact list at terminal.
 - **I4** — Detail pane content for terminal entities comes from `message-store`, never from the live buffer (strict terminal guard in `selectAgentResponseDetail`).

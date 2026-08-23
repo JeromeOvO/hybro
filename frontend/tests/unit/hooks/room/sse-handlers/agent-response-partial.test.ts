@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { handleAgentResponsePartial } from '@/hooks/room/sse-handlers/handlers/agent-response'
 import { handleArtifactUpdate } from '@/hooks/room/sse-handlers/handlers/artifact-update'
+import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 
@@ -16,6 +17,7 @@ function makeLifecycle(): ProcessingLifecycle {
 
 describe('handleAgentResponsePartial', () => {
   beforeEach(() => {
+    useMessageStore.getState().clearRoom()
     useStreamingStore.setState({ buffers: {} })
   })
 
@@ -56,6 +58,13 @@ describe('handleAgentResponsePartial', () => {
 
     expect(useStreamingStore.getState().buffers['agent-1']?.text).toBe('Hello world')
     expect(useStreamingStore.getState().buffers['req-1']).toBeUndefined()
+    expect(useMessageStore.getState().entities['agent-1']).toMatchObject({
+      id: 'agent-1',
+      roomId: 'room-1',
+      agentId: 'agent-a',
+      clientRequestId: 'req-1',
+      taskStatus: 'working',
+    })
   })
 
   it('keeps parallel agent buffers isolated under the same client_request_id', () => {

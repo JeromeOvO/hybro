@@ -67,6 +67,7 @@ export type HeartbeatData = { room_seq?: number }
 export interface RoomSnapshotMessage {
   message_id: string
   agent_id: string | null
+  agent_name?: string | null
   content: string | null
   parts: unknown
   related_message_id: string | null

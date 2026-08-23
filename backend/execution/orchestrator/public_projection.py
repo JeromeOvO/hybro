@@ -12,6 +12,7 @@ generated short summaries and metadata only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -215,12 +216,13 @@ class PublicProjectionTranslator:
 
     @staticmethod
     def _tool_accepted_payload(
-        _event: SessionEvent, raw: dict[str, Any]
+        event: SessionEvent, raw: dict[str, Any]
     ) -> dict[str, Any] | None:
-        tool_name = str(raw.get("tool_name") or "").strip()
+        tool_name = str(raw.get("agent_label") or raw.get("tool_name") or "").strip()
         if not tool_name:
             return None
         return {
+            "call_id": _public_call_id(event, raw),
             "tool_name": tool_name,
             "arg_summary": _argument_summary(raw.get("arguments")),
         }
@@ -228,10 +230,11 @@ class PublicProjectionTranslator:
     def _tool_completed_payload(
         self, _event: SessionEvent, raw: dict[str, Any]
     ) -> dict[str, Any] | None:
-        tool_name = str(raw.get("tool_name") or "").strip()
+        tool_name = str(raw.get("agent_label") or raw.get("tool_name") or "").strip()
         if not tool_name:
             return None
         return {
+            "call_id": _public_call_id(_event, raw),
             "tool_name": tool_name,
             "result_summary": self._summarize(raw.get("result_text")),
             "exit_code": _exit_code(raw),
@@ -240,6 +243,16 @@ class PublicProjectionTranslator:
 
     def _summarize(self, value: Any) -> str:
         return _summary_text(value, limit=self._summary_limit)
+
+
+def _public_call_id(event: SessionEvent, raw: dict[str, Any]) -> str:
+    private_call_id = str(raw.get("call_id") or "")
+    if not private_call_id:
+        return ""
+    digest = hashlib.sha256(f"{event.run_id}:{private_call_id}".encode()).hexdigest()[
+        :16
+    ]
+    return f"inv_{digest}"
 
 
 def _as_int(value: Any) -> int | None:

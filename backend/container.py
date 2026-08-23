@@ -18,6 +18,7 @@ from api_gateway.dependencies import (
 )
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
+from common.dto import AgentMessageFinal, DeliveryEmitStatus
 from common.eventing import (
     BoundedInternalEventBus,
     EventingConfig,
@@ -481,6 +482,7 @@ async def _project_orchestrator_agent_activity(
             extend_info={
                 "public_task_label": f"Requesting {label}",
                 "public_dispatch_text": facts["task_text"],
+                "public_agent_name": label,
                 "orchestrator_run_id": run.run_id,
             },
         )
@@ -538,6 +540,7 @@ async def _project_orchestrator_agent_activity(
         extend_info={
             "public_task_label": f"Requesting {label}",
             "public_dispatch_text": facts["task_text"],
+            "public_agent_name": label,
             "orchestrator_run_id": run.run_id,
         },
     )
@@ -1856,6 +1859,41 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 text = getattr(content, "message_text", None)
                 return text if isinstance(text, str) and text.strip() else None
 
+            async def _deliver_orchestrator_final_message(
+                run: Any,
+                final: Any,
+                content: str,
+            ) -> bool:
+                (
+                    status,
+                    room_event_id,
+                ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                    AgentMessageFinal(
+                        room_id=run.room_id,
+                        message_id=final.message_id,
+                        agent_id="system:hybro",
+                        content={
+                            "content": content,
+                            "related_message_id": run.request.user_message_id,
+                            "client_request_id": run.client_request_id,
+                        },
+                        delivery_id=(
+                            f"orchestrator:{run.run_id}:final:{final.message_id}"
+                        ),
+                    )
+                )
+                # Persisted room-event identity is the durable delivery
+                # boundary. A transient fanout miss self-heals through the
+                # heartbeat watermark/snapshot path and must not duplicate the
+                # outbox event.
+                if room_event_id is not None:
+                    return True
+                return status in {
+                    DeliveryEmitStatus.DELIVERED,
+                    DeliveryEmitStatus.ALREADY_DELIVERED,
+                    DeliveryEmitStatus.DEDUPLICATED,
+                }
+
             app.state.orchestrator_runtime = create_orchestrator_runtime(
                 mongo=mongo_dal,
                 settings_obj=runtime.settings,
@@ -1871,6 +1909,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 projection_listener=publish_orchestrator_projection_status,
                 session_listener=_orchestrator_session_listener,
                 user_message_text_reader=_orchestrator_user_message_text,
+                final_message_delivery=_deliver_orchestrator_final_message,
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:

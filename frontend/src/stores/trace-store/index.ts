@@ -59,6 +59,7 @@ export interface TraceNode {
   reason?: string
 
   // tool_call fields
+  callId?: string
   toolName?: string
   argSummary?: unknown
   resultSummary?: string
@@ -205,6 +206,7 @@ function nodeFromSnapshotNode(
         clientRequestId,
         receivedAt,
         status: typeof raw.status === 'string' ? raw.status : undefined,
+        callId: asStr(raw.call_id),
         toolName: asStr(raw.tool_name),
         argSummary: raw.arg_summary ?? undefined,
         resultSummary: asStr(raw.result_summary),
@@ -260,28 +262,32 @@ function nodeFromRunEvent(payload: {
         planSteps: asPlanSteps(data.plan_steps),
         reason: typeof data.reason === 'string' ? data.reason : undefined,
       }
-    case 'tool_call_accepted':
+    case 'tool_call_accepted': {
+      const callId = asString(data.call_id)
       return {
         ...base,
-        // Phase 1 merges accepted/completed pairs by tool name within the run;
-        // Phase 2 replaces this with parent_event_id correlation.
-        id: `${payload.runId}:tool_call:${asString(data.tool_name) ?? 'unknown'}`,
+        id: `${payload.runId}:tool_call:${callId ?? asString(data.tool_name) ?? 'unknown'}`,
         kind: 'tool_call',
         status: 'accepted',
+        callId,
         toolName: asString(data.tool_name),
         argSummary: data.arg_summary ?? undefined,
       }
-    case 'tool_call_completed':
+    }
+    case 'tool_call_completed': {
+      const callId = asString(data.call_id)
       return {
         ...base,
-        id: `${payload.runId}:tool_call:${asString(data.tool_name) ?? 'unknown'}`,
+        id: `${payload.runId}:tool_call:${callId ?? asString(data.tool_name) ?? 'unknown'}`,
         kind: 'tool_call',
         status: 'completed',
+        callId,
         toolName: asString(data.tool_name),
         resultSummary: typeof data.result_summary === 'string' ? data.result_summary : undefined,
         exitCode: asInt(data.exit_code),
         durationMs: asInt(data.duration_ms),
       }
+    }
     default:
       return null
   }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from common.dto import (
+    AgentMessageFinal,
     DeliveryEmitStatus,
     ProcessingStatusEvent,
     RunEventNotification,
@@ -79,6 +80,54 @@ async def test_non_terminal_retry_reuses_same_sequence():
     assert await store.latest_seq("room-1") == 1
     assert transport.frames[0][1]["data"]["room_seq"] == 1
     assert transport.frames[1][1]["data"]["room_seq"] == 1
+
+
+@pytest.mark.asyncio
+async def test_final_message_retry_reuses_one_durable_room_event():
+    store = InMemoryRoomEventStore()
+    transport = FakeTransport()
+    publisher = make_publisher(transport=transport, room_events=store)
+    event = AgentMessageFinal(
+        room_id="room-1",
+        message_id="assistant-1",
+        agent_id="system:hybro",
+        content={"content": "Final answer"},
+        delivery_id="orchestrator:run-1:final:assistant-1",
+    )
+
+    first_status, first_id = await publisher.emit_checked_identified(event)
+    second_status, second_id = await publisher.emit_checked_identified(event)
+
+    assert first_status == DeliveryEmitStatus.DELIVERED
+    assert second_status == DeliveryEmitStatus.DELIVERED
+    assert first_id == second_id
+    assert await store.latest_seq("room-1") == 1
+    records = await store.read_range("room-1")
+    assert len(records) == 1
+    assert records[0]["kind"] == "agent_response"
+
+
+@pytest.mark.asyncio
+async def test_failed_final_fanout_still_returns_persisted_identity():
+    store = InMemoryRoomEventStore()
+    transport = FakeTransport()
+    transport.delivered_count = 0
+    publisher = make_publisher(transport=transport, room_events=store)
+    publisher.event_bus.sse_accepted = False
+
+    status, room_event_id = await publisher.emit_checked_identified(
+        AgentMessageFinal(
+            room_id="room-1",
+            message_id="assistant-1",
+            agent_id="system:hybro",
+            content={"content": "Final answer"},
+            delivery_id="orchestrator:run-1:final:assistant-1",
+        )
+    )
+
+    assert status == DeliveryEmitStatus.FAILED
+    assert room_event_id is not None
+    assert await store.latest_seq("room-1") == 1
 
 
 @pytest.mark.asyncio

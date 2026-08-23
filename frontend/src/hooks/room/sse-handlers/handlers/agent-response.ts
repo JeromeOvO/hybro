@@ -80,7 +80,27 @@ export function handleAgentResponsePartial(
   const { message_id, content_delta } = sseMessage.data
   if (!message_id || typeof content_delta !== 'string') return
 
+  const store = useMessageStore.getState()
   const streaming = useStreamingStore.getState()
+  if (!store.entities[message_id]) {
+    const agentId = sseMessage.data.agent_id
+    const userMessageId = resolveUserMessageId(ctx.roomId, clientReqId)
+    store.upsertMessage({
+      id: message_id,
+      roomId: ctx.roomId,
+      messageType: 'agent',
+      content: '',
+      senderName: agentId || 'Agent',
+      agentId,
+      agentSource: agentId ? ctx.getAgentSource?.(agentId) : undefined,
+      clientRequestId: clientReqId ?? undefined,
+      relatedMessageId: userMessageId ?? undefined,
+      timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
+      taskStatus: TASK_STATE.WORKING,
+      taskContent: '',
+      isEphemeral: false,
+    }, 'sse')
+  }
   const hasPartialArtifact = (streaming.buffers[message_id]?.artifacts ?? [])
     .some(a => a.artifactId === partialStreamArtifactId(message_id))
 

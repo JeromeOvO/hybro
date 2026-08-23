@@ -271,7 +271,7 @@ function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
           roomId,
           messageType: 'agent',
           content: message.content ?? '',
-          senderName: message.agent_id ?? 'Agent',
+          senderName: message.agent_name ?? message.agent_id ?? 'Agent',
           agentId: message.agent_id ?? undefined,
           clientRequestId: message.client_request_id ?? undefined,
           relatedMessageId: message.related_message_id ?? undefined,

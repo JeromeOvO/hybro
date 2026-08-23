@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
 import { useTraceStore } from '@/stores/trace-store'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
@@ -27,16 +27,17 @@ export function TurnRenderer({
   const userEntity = useMessageStore(s =>
     turn.userMessageId ? s.entities[turn.userMessageId] : undefined,
   )
-  const traceNodesById = useTraceStore(s => s.nodes)
   const clientRequestId = userEntity?.clientRequestId
-  const traceNodes = useMemo(() => {
+  const traceNodes = useTraceStore(useShallow((state) => {
     if (!clientRequestId) return []
-    const nodes = Object.values(traceNodesById).filter(
-      (node) => node.clientRequestId === clientRequestId,
-    )
-    nodes.sort((a, b) => a.receivedAt - b.receivedAt)
-    return nodes
-  }, [traceNodesById, clientRequestId])
+    return Object.values(state.nodes)
+      .filter((node) => node.clientRequestId === clientRequestId)
+      .sort((a, b) => a.receivedAt - b.receivedAt)
+  }))
+  const traceRunIds = traceNodes.map((node) => node.runId)
+  const traceRunStatus = useTraceStore((state) => (
+    traceRunIds.map((runId) => state.runStatuses[runId]).find(Boolean)
+  ))
   const hasActivity = turn.processingStatusLogs.length > 0 || traceNodes.length > 0
   const hasAssistantSurface = turn.agentResults.length > 0 || hasActivity
   const isActivityRunning =
@@ -71,6 +72,7 @@ export function TurnRenderer({
               nodes={traceNodes}
               statusEntries={turn.processingStatusLogs}
               isRunning={isActivityRunning}
+              runStatus={traceRunStatus}
             />
           ) : null}
         </div>

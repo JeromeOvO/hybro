@@ -160,6 +160,50 @@ async def test_final_message_projector_dedupes_on_message_id():
     assert len(messages.documents) == 1
 
 
+async def test_final_message_projector_delivers_on_insert_and_replay():
+    store, run = await _stored_terminal_run()
+    stored = await store.load(run.run_id)
+    intent = next(
+        item
+        for item in stored.projection_outbox
+        if item.kind == "deliver_final_message"
+    )
+    messages = _FakeMessageCollection()
+    deliveries: list[tuple[str, str, str]] = []
+
+    async def deliver(current_run, final, content):
+        deliveries.append((current_run.run_id, final.message_id, content))
+        return True
+
+    projector = MongoFinalMessageProjector(messages, deliver)
+    assert await projector.project(intent, stored) == "accepted"
+    assert await projector.project(intent, stored) == "replayed"
+    assert deliveries == [
+        (stored.run_id, intent.payload["message_id"], "final answer"),
+        (stored.run_id, intent.payload["message_id"], "final answer"),
+    ]
+
+
+async def test_final_message_projector_retries_failed_room_delivery():
+    store, run = await _stored_terminal_run()
+    stored = await store.load(run.run_id)
+    intent = next(
+        item
+        for item in stored.projection_outbox
+        if item.kind == "deliver_final_message"
+    )
+    attempts = 0
+
+    async def deliver(_run, _final, _content):
+        nonlocal attempts
+        attempts += 1
+        return attempts > 1
+
+    projector = MongoFinalMessageProjector(_FakeMessageCollection(), deliver)
+    assert await projector.project(intent, stored) == "error"
+    assert await projector.project(intent, stored) == "replayed"
+
+
 async def test_terminal_run_outbox_repairs_working_agent_card():
     messages = _RecordingMessageUpdates()
     run = SimpleNamespace(

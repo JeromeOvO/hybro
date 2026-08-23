@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen, within } from '../../../utils/test-utils'
+import { cleanup, fireEvent, render, screen, within } from '../../../utils/test-utils'
 import { TurnRenderer } from '@/components/conversation/TurnRenderer'
 import { useMessageStore } from '@/stores/message-store'
 import { useTraceStore } from '@/stores/trace-store'
@@ -65,8 +65,75 @@ describe('TurnRenderer', () => {
 
     expect(screen.getByText('how are you?')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /work logs/i })).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /turn trace/i })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /turn trace/i }))
     expect(within(screen.getByRole('log')).getByText('Thinking...')).toBeInTheDocument()
+  })
+
+  it('renders agent cards even when the detail drawer callback is absent', () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'user-1',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'weather?',
+      senderName: 'Test',
+      timestamp: '2026-06-04T01:00:00.000Z',
+    }, 'db')
+
+    render(<TurnRenderer isLastTurn turn={makeTurn({
+      status: 'completed',
+      phase: 'completed',
+      processingStatusLogs: [],
+      finalAnswer: {
+        kind: 'deterministic_done',
+        label: 'Combined agent responses',
+        deterministicIntro: '1 agent responded.',
+      },
+      agentResults: [{
+        agentId: 'weather-agent',
+        agentName: 'Weather Agent',
+        messageId: 'call-1',
+        status: 'completed',
+        content: 'Sunny',
+        artifacts: [],
+        isSummaryAgent: false,
+        isEphemeral: false,
+      }],
+    })} />)
+
+    expect(screen.getByRole('status', { name: 'Weather Agent — Completed' })).toBeInTheDocument()
+  })
+
+  it('renders separate cards for repeated calls to the same agent', () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'user-1',
+      roomId: 'room-1',
+      messageType: 'user',
+      content: 'weather twice',
+      senderName: 'Test',
+      timestamp: '2026-06-04T01:00:00.000Z',
+    }, 'db')
+    const result = {
+      agentId: 'weather-agent',
+      agentName: 'Weather Agent',
+      status: 'completed' as const,
+      content: 'Sunny',
+      artifacts: [],
+      isSummaryAgent: false,
+      isEphemeral: false,
+    }
+
+    render(<TurnRenderer isLastTurn turn={makeTurn({
+      status: 'completed',
+      phase: 'completed',
+      processingStatusLogs: [],
+      finalAnswer: { kind: 'deterministic_done', label: 'Combined agent responses' },
+      agentResults: [
+        { ...result, messageId: 'call-1' },
+        { ...result, messageId: 'call-2', content: 'Cloudy' },
+      ],
+    })} />)
+
+    expect(screen.getAllByRole('status', { name: 'Weather Agent — Completed' })).toHaveLength(2)
   })
 
   it('combines work updates and technical trace into one persisted panel', () => {
@@ -90,8 +157,9 @@ describe('TurnRenderer', () => {
     render(<TurnRenderer turn={makeTurn()} />)
 
     expect(screen.queryByRole('button', { name: /work logs/i })).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /turn trace/i })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /turn trace/i }))
     expect(within(screen.getByRole('log')).getByText('Thinking...')).toBeInTheDocument()
-    expect(within(screen.getByRole('log')).getByText(/LLM call · gpt-5-mini/)).toBeInTheDocument()
+    expect(within(screen.getByRole('log')).getByText('Model response')).toBeInTheDocument()
+    expect(within(screen.getByRole('log')).getByText('gpt-5-mini')).toBeInTheDocument()
   })
 })

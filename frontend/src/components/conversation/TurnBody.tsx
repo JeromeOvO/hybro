@@ -30,7 +30,7 @@ export function TurnBody({
       ? sourceResults.filter(r => r.status === 'completed')
       : sourceResults
 
-  const showIndex = shouldShowAgentIndex(turn, onOpenDetail)
+  const showIndex = shouldShowAgentIndex(turn)
 
   return (
     <div className="turn-body flex flex-col" style={{ gap: 'var(--conversation-gap-block)' }}>
@@ -42,7 +42,7 @@ export function TurnBody({
         renderProcessingLog={renderProcessingLog}
       />
 
-      {showIndex && onOpenDetail && (
+      {showIndex ? (
         <AgentIndex
           turn={turn}
           sourceResults={stripResults.length > 0 ? stripResults : sourceResults}
@@ -50,7 +50,7 @@ export function TurnBody({
           onOpenDetail={onOpenDetail}
           isLastTurn={isLastTurn}
         />
-      )}
+      ) : null}
     </div>
   )
 }

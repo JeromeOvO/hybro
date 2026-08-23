@@ -95,6 +95,7 @@ class RoomEventFold:
             {
                 "message_id": key,
                 "agent_id": None,
+                "agent_name": None,
                 "content": None,
                 "parts": None,
                 "related_message_id": None,
@@ -221,6 +222,7 @@ class RoomEventFold:
         task["task_content"] = data.get("task_content") or task["task_content"]
         message = self._message(message_id)
         message["agent_id"] = data.get("agent_id") or message["agent_id"]
+        message["agent_name"] = data.get("agent_name") or message["agent_name"]
         message["task_status"] = data.get("status")
         message["task_content"] = data.get("task_content")
         message["related_message_id"] = (
@@ -250,6 +252,7 @@ class RoomEventFold:
                 )
         message = self._message(message_id)
         message["task_status"] = status
+        message["agent_name"] = data.get("agent_name") or message["agent_name"]
         message["task_error"] = data.get("error") or message["task_error"]
         message["requires_input"] = bool(data.get("requires_input", False))
         message["requires_auth"] = bool(data.get("requires_auth", False))
@@ -405,7 +408,8 @@ class RoomEventFold:
             )
         elif sub_type in {"tool_call_accepted", "tool_call_completed"}:
             tool_name = payload.get("tool_name") or "unknown"
-            merged_id = f"{run_id}:tool_call:{tool_name}"
+            call_id = payload.get("call_id") or tool_name
+            merged_id = f"{run_id}:tool_call:{call_id}"
             existing = next(
                 (
                     node
@@ -419,6 +423,7 @@ class RoomEventFold:
                     **node_base,
                     "id": merged_id,
                     "kind": "tool_call",
+                    "call_id": payload.get("call_id"),
                     "tool_name": tool_name,
                     "status": None,
                     "arg_summary": None,

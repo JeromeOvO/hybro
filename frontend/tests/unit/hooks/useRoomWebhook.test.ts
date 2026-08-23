@@ -230,7 +230,7 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(entity.isEphemeral).toBe(false)
   })
 
-  it('streams agent_response_partial into the transient buffer with correlation metadata', async () => {
+  it('streams agent_response_partial and creates its renderable message shell', async () => {
     await mountHook()
     resolveClientRequestMessageId('req-partial-response', 'user-partial-1')
 
@@ -250,7 +250,13 @@ describe('useRoomWebhook SSE message handling', () => {
     expect(buffer.text).toBe('Partial text')
     expect(buffer.clientRequestId).toBe('req-partial-response')
     expect(buffer.userMessageId).toBe('user-partial-1')
-    expect(useMessageStore.getState().entities['agent-partial-1']).toBeUndefined()
+    expect(useMessageStore.getState().entities['agent-partial-1']).toMatchObject({
+      messageType: 'agent',
+      agentId: 'agent-1',
+      taskStatus: TASK_STATE.WORKING,
+      clientRequestId: 'req-partial-response',
+      relatedMessageId: 'user-partial-1',
+    })
   })
 
   it('applies agent_response_partial directly without a resolution buffer', async () => {

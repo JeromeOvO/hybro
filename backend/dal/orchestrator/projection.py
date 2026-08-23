@@ -8,6 +8,7 @@ unique indexes make crash replay harmless.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,6 +28,9 @@ from models.run import TERMINAL_RUN_STATES, RunState
 from room.timeline import normalize_timeline_document
 
 _TERMINAL_RUN_STATE_VALUES = [state.value for state in TERMINAL_RUN_STATES]
+FinalMessageDelivery = Callable[
+    [OrchestratorRunState, AssistantMessage, str], Awaitable[bool]
+]
 
 
 class MongoAppendEventProjector:
@@ -46,8 +50,13 @@ class MongoAppendEventProjector:
 class MongoFinalMessageProjector:
     """Deliver the terminal assistant message into ``room_agent_messages``."""
 
-    def __init__(self, messages: Any) -> None:
+    def __init__(
+        self,
+        messages: Any,
+        delivery: FinalMessageDelivery | None = None,
+    ) -> None:
         self.messages = messages
+        self.delivery = delivery
 
     async def project(
         self, intent: ProjectionIntent, run: OrchestratorRunState
@@ -63,17 +72,25 @@ class MongoFinalMessageProjector:
         # frontend/terminal-state consumers read this shape; enrich with the
         # full message_task surface only if a consumer requires it.
         document = _final_message_document(run, final)
+        outcome: StoreOutcome = "accepted"
         existing = await self.messages.find_one({"message_id": message_id})
         if existing is not None:
-            return "replayed" if existing.get("room_id") == run.room_id else "conflict"
-        try:
-            await self.messages.insert_one(document)
-        except DuplicateKeyError:
-            existing = await self.messages.find_one({"message_id": message_id})
-            if existing is not None and existing.get("room_id") == run.room_id:
-                return "replayed"
-            return "conflict"
-        return "accepted"
+            if existing.get("room_id") != run.room_id:
+                return "conflict"
+            outcome = "replayed"
+        else:
+            try:
+                await self.messages.insert_one(document)
+            except DuplicateKeyError:
+                existing = await self.messages.find_one({"message_id": message_id})
+                if existing is None or existing.get("room_id") != run.room_id:
+                    return "conflict"
+                outcome = "replayed"
+        if self.delivery is not None:
+            delivered = await self.delivery(run, final, _assistant_text(final))
+            if not delivered:
+                return "error"
+        return outcome
 
 
 class MongoTerminalRunStatusProjector:

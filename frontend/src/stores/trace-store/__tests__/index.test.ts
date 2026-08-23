@@ -98,12 +98,14 @@ describe('trace-store', () => {
     })
   })
 
-  it('merges accepted and completed tool calls by tool name within a run', () => {
+  it('merges accepted and completed tool calls by call id within a run', () => {
     apply('tool_call_accepted', {
+      call_id: 'call-1',
       tool_name: 'weather_lookup',
       arg_summary: { city: 'Shanghai' },
     })
     apply('tool_call_completed', {
+      call_id: 'call-1',
       tool_name: 'weather_lookup',
       result_summary: 'Sunny, 24C',
       exit_code: 0,
@@ -114,12 +116,24 @@ describe('trace-store', () => {
     expect(nodes[0]).toMatchObject({
       kind: 'tool_call',
       status: 'completed',
+      callId: 'call-1',
       toolName: 'weather_lookup',
       argSummary: { city: 'Shanghai' },
       resultSummary: 'Sunny, 24C',
       exitCode: 0,
       durationMs: 120,
     })
+  })
+
+  it('keeps repeated calls to the same tool as separate nodes', () => {
+    apply('tool_call_accepted', { call_id: 'call-1', tool_name: 'weather_lookup' })
+    apply('tool_call_completed', { call_id: 'call-1', tool_name: 'weather_lookup' })
+    apply('tool_call_accepted', { call_id: 'call-2', tool_name: 'weather_lookup' })
+    apply('tool_call_completed', { call_id: 'call-2', tool_name: 'weather_lookup' })
+
+    const nodes = Object.values(useTraceStore.getState().nodes)
+    expect(nodes).toHaveLength(2)
+    expect(nodes.map((node) => node.callId)).toEqual(['call-1', 'call-2'])
   })
 
   it('selects nodes for a client request in receive order', () => {

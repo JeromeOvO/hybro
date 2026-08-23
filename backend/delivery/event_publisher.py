@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from common.dto import (
+    AgentMessageFinal,
     DeliveryEmitStatus,
     DeliveryEvent,
     HITLRequestEvent,
@@ -418,6 +419,7 @@ class EventPublisherImpl:
                 isinstance(event, RunEventNotification)
                 and event.delivery_id is not None
             )
+            or (isinstance(event, AgentMessageFinal) and event.delivery_id is not None)
         )
 
     @staticmethod

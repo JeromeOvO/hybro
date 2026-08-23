@@ -58,6 +58,7 @@ def test_fold_projects_agent_response_and_partials():
     assert state["messages"][0] == {
         "message_id": "m1",
         "agent_id": "a1",
+        "agent_name": None,
         "content": "Hello",
         "parts": None,
         "related_message_id": None,
@@ -227,6 +228,7 @@ def test_fold_projects_runs_and_trace_nodes():
                 "seq": 5,
                 "type": "tool_call_accepted",
                 "payload": {
+                    "call_id": "call-1",
                     "tool_name": "weather_lookup",
                     "arg_summary": {"city": "SH"},
                 },
@@ -242,6 +244,7 @@ def test_fold_projects_runs_and_trace_nodes():
                 "seq": 8,
                 "type": "tool_call_completed",
                 "payload": {
+                    "call_id": "call-1",
                     "tool_name": "weather_lookup",
                     "result_summary": "Sunny",
                     "exit_code": 0,
@@ -280,9 +283,50 @@ def test_fold_projects_runs_and_trace_nodes():
     assert nodes[0]["client_request_id"] == "cr-1"
     assert nodes[0]["ts"] == NOW.isoformat()
     assert nodes[1]["status"] == "completed"
+    assert nodes[1]["call_id"] == "call-1"
     assert nodes[1]["client_request_id"] == "cr-1"
     assert nodes[1]["result_summary"] == "Sunny"
     assert state["trace"]["run-1"]["duration_ms"] == 812
+
+
+def test_fold_keeps_repeated_calls_to_same_tool_separate():
+    fold = RoomEventFold()
+    for seq, call_id in enumerate(("call-1", "call-2"), start=1):
+        fold.apply(
+            _record(
+                "run_event",
+                {
+                    "run_id": "run-1",
+                    "event_id": f"accepted-{call_id}",
+                    "type": "tool_call_accepted",
+                    "payload": {
+                        "call_id": call_id,
+                        "tool_name": "weather_lookup",
+                    },
+                },
+                room_seq=seq * 2 - 1,
+            )
+        )
+        fold.apply(
+            _record(
+                "run_event",
+                {
+                    "run_id": "run-1",
+                    "event_id": f"completed-{call_id}",
+                    "type": "tool_call_completed",
+                    "payload": {
+                        "call_id": call_id,
+                        "tool_name": "weather_lookup",
+                        "result_summary": call_id,
+                    },
+                },
+                room_seq=seq * 2,
+            )
+        )
+
+    nodes = fold.state(room_seq=4)["trace"]["run-1"]["nodes"]
+    assert len(nodes) == 2
+    assert [node["call_id"] for node in nodes] == ["call-1", "call-2"]
 
 
 def test_fold_projects_hitl_requests_and_responses():

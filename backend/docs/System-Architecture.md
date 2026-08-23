@@ -1168,6 +1168,16 @@ matching. Settled terminal frames also force a boundary snapshot fanout. A
 fallback read path `GET /sse/room/{room_id}/events?after=<seq>&limit=N`
 replays persisted events; auth matches the stream route.
 
+Orchestrator UI projection follows the same boundary. Each A2A invocation owns
+one compatibility Agent Card keyed by `orchestrator:{run_id}:{call_id}`; repeated
+calls to the same Agent therefore remain separate cards. Lifecycle projection
+writes `room_agent_messages` and emits durable `task_submitted` / `task_update`
+room events for low latency, while terminal Run outbox replay repairs card state
+from durable tool results. The `deliver_final_message` outbox step is complete
+only after both the final `system:hybro` message is in Mongo and an idempotent
+`agent_response` has entered `room_events`; a browser no longer needs DB refresh
+to discover the final answer.
+
 When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
 operation has completed, while the subscription task owns the bounded readiness
 timeout. Concurrent admissions share one shielded readiness future, and
