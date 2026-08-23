@@ -21,6 +21,7 @@ from execution.orchestrator.a2a_runtime.resources import (
 
 class RoomFileReader(Protocol):
     async def get_bytes(self, file_id: str, *, max_bytes: int) -> bytes | None: ...
+    async def get_for_room_file(self, room_id: str, file_id: str) -> Any: ...
 
 
 class InboundArtifactWriter(Protocol):
@@ -71,7 +72,12 @@ class RoomFilesResourceMaterializer:
             max_inbound_count=max_inbound_count,
             max_inbound_encoded_bytes=max_inbound_encoded_bytes,
             allow_guarded_remote_artifact_refs=True,
+            verify_room_file_ownership=self.verify_room_file_ownership,
         )
+
+    async def verify_room_file_ownership(self, room_id: str, file_id: str) -> None:
+        if not await self._room_files.get_for_room_file(room_id, file_id):
+            raise ResourceSelectionError("artifact is not owned by the room")
 
     async def materialize(
         self,
@@ -120,6 +126,10 @@ class RoomFilesResourceMaterializer:
             if ref.kind == "artifact"
             else ref.ref_id
         )
+        if not await self._room_files.get_for_room_file(ref.room_id, file_id):
+            raise ResourceSelectionError(
+                f"resource {ref.ref_id!r} is not owned by the room"
+            )
         raw = await self._room_files.get_bytes(file_id, max_bytes=self._max_file_bytes)
         if raw is None:
             raise ResourceSelectionError(f"resource {ref.ref_id!r} is unavailable")

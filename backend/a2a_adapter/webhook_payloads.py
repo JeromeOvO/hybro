@@ -136,40 +136,95 @@ def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
     )
 
 
+def _stream_kind(payload: dict[str, Any]) -> str | None:
+    """Normalize StreamResponse ``kind`` (hyphen or underscore) when present."""
+    kind = payload.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return None
+    return kind.strip().replace("_", "-").lower()
+
+
+def _status_update_raw(
+    payload: dict[str, Any], *, kind: str | None
+) -> dict[str, Any] | None:
+    """Resolve a status-update event from kind-based or wrapped envelopes."""
+    if kind == "status-update":
+        return payload
+    if "statusUpdate" in payload or "status_update" in payload:
+        raw = payload.get("statusUpdate") or payload.get("status_update")
+        return raw if isinstance(raw, dict) else None
+    return None
+
+
+def _artifact_update_raw(
+    payload: dict[str, Any], *, kind: str | None
+) -> dict[str, Any] | None:
+    """Resolve an artifact-update event from kind-based or wrapped envelopes."""
+    if kind == "artifact-update":
+        return payload
+    if "artifactUpdate" in payload or "artifact_update" in payload:
+        raw = payload.get("artifactUpdate") or payload.get("artifact_update")
+        return raw if isinstance(raw, dict) else None
+    return None
+
+
+def _task_from_status_update_raw(raw: dict[str, Any], message_id: str) -> Task:
+    if _is_proto_format(raw):
+        raw = _normalize_proto_payload(raw)
+    try:
+        status_event = TaskStatusUpdateEvent.model_validate(raw)
+    except ValueError:
+        # pydantic ValidationError subclasses ValueError. v1.x (proto/gRPC)
+        # agents emit status updates whose embedded agent ``message``
+        # (``ROLE_AGENT`` role, ``content`` parts, no ``kind`` discriminator)
+        # does not validate against the current Pydantic model. Current JSON-RPC
+        # SSE frames also omit ``messageId`` on embedded status messages.
+        # Rebuild from the fields we need so terminal ``completed`` is not lost.
+        return _task_from_status_update_dict(raw, message_id)
+    return Task(
+        id=status_event.task_id,
+        context_id=status_event.context_id,
+        status=status_event.status,
+    )
+
+
+def _task_from_artifact_update_raw(raw: dict[str, Any]) -> Task:
+    if isinstance(raw, dict) and ("artifactId" in raw or "contextId" in raw):
+        raw = _normalize_proto_payload(raw)
+    artifact_event = TaskArtifactUpdateEvent.model_validate(raw)
+    return Task(
+        id=artifact_event.task_id,
+        context_id=artifact_event.context_id,
+        status=TaskStatus(state=TaskState.working),
+        artifacts=[artifact_event.artifact],
+    )
+
+
 def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> Task:
-    """Parse A2A StreamResponse variants into an SDK Task."""
+    """Parse A2A StreamResponse variants into an SDK Task.
+
+    Accepts both legacy wrapped envelopes (``statusUpdate`` / ``artifactUpdate``)
+    and current JSON-RPC SSE frames where ``result`` is the event itself with
+    ``kind`` of ``task``, ``status-update``, ``artifact-update``, or ``message``.
+    """
     result = payload.get("result")
     if isinstance(result, dict):
         payload = result
 
-    if "task" in payload:
+    kind = _stream_kind(payload)
+
+    if "task" in payload and kind != "task":
         task_data = payload["task"]
         if _is_proto_format(task_data):
             task_data = _normalize_proto_payload(task_data)
         return Task.model_validate(task_data)
 
-    if "statusUpdate" in payload or "status_update" in payload:
-        raw = payload.get("statusUpdate") or payload.get("status_update")
-        if _is_proto_format(raw):
-            raw = _normalize_proto_payload(raw)
-        try:
-            status_event = TaskStatusUpdateEvent.model_validate(raw)
-        except ValueError:
-            # pydantic ValidationError subclasses ValueError. v1.x (proto/gRPC)
-            # agents emit status updates whose embedded
-            # agent ``message`` (``ROLE_AGENT`` role, ``content`` parts, no
-            # ``kind`` discriminator) does not validate against the v0.x
-            # Pydantic model. Rather than reject the (often terminal) signal
-            # with HTTP 400, rebuild the Task from the fields we need.
-            return _task_from_status_update_dict(raw, message_id)
-        return Task(
-            id=status_event.task_id,
-            context_id=status_event.context_id,
-            status=status_event.status,
-        )
+    status_raw = _status_update_raw(payload, kind=kind)
+    if status_raw is not None:
+        return _task_from_status_update_raw(status_raw, message_id)
 
-    if "message" in payload:
-        msg_data = payload["message"]
+    if kind == "message" or "message" in payload:
+        msg_data = payload if kind == "message" else payload["message"]
         if isinstance(msg_data, dict) and "contextId" in msg_data:
             msg_data = _normalize_proto_payload(msg_data)
         message = Message.model_validate(msg_data)
@@ -186,26 +241,18 @@ def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> T
             ],
         )
 
-    if "artifactUpdate" in payload or "artifact_update" in payload:
-        raw = payload.get("artifactUpdate") or payload.get("artifact_update")
-        if isinstance(raw, dict) and ("artifactId" in raw or "contextId" in raw):
-            raw = _normalize_proto_payload(raw)
-        artifact_event = TaskArtifactUpdateEvent.model_validate(raw)
-        return Task(
-            id=artifact_event.task_id,
-            context_id=artifact_event.context_id,
-            status=TaskStatus(state=TaskState.working),
-            artifacts=[artifact_event.artifact],
-        )
+    artifact_raw = _artifact_update_raw(payload, kind=kind)
+    if artifact_raw is not None:
+        return _task_from_artifact_update_raw(artifact_raw)
 
-    if "id" in payload and "status" in payload:
+    if kind == "task" or ("id" in payload and "status" in payload):
         if _is_proto_format(payload):
             payload = _normalize_proto_payload(payload)
         return Task.model_validate(payload)
 
     raise ValueError(
         "Invalid StreamResponse: expected 'task', 'statusUpdate', 'message', "
-        "or 'artifactUpdate' key"
+        "or 'artifactUpdate' key (or kind-based status-update/artifact-update)"
     )
 
 

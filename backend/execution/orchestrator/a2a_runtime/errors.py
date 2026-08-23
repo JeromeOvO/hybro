@@ -12,10 +12,6 @@ class RecoverableAdapterError(RuntimeError):
     """
 
 
-class StaleRoomEpochError(ValueError):
-    """A side effect targeted a Room incarnation that is no longer active."""
-
-
 class RecoverableCheckpointError(RecoverableAdapterError):
     """A durable generic checkpoint could not be read temporarily."""
 
@@ -26,6 +22,15 @@ class RecoverableAuthorizationError(RecoverableAdapterError):
 
 class RecoverableEpochError(RecoverableAdapterError):
     """Room epoch authority is temporarily unavailable."""
+
+
+class StaleRoomEpochError(RecoverableEpochError):
+    """A side effect targeted a Room incarnation that is no longer active.
+
+    Raised when a write-lease fence observes an inactive room epoch. Treated as
+    recoverable so callers suspend into delivery-uncertain recovery instead of
+    converting epoch loss into a terminal agent failure.
+    """
 
 
 class RecoverableResourceError(RecoverableAdapterError):

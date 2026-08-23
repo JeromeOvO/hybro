@@ -528,11 +528,21 @@ terminal settlement.
 adapter layer: async authorized Agent Card
 projection produces a frozen synchronous catalog and private bindings; a separate
 call ledger enforces accept-before-dispatch, scoped task/context ownership,
-Room-epoch fences, cancellation, and leased recovery; authenticated direct,
-relay, webhook, and inspection evidence converges through an immutable observation
-inbox before generic `ToolObservation` delivery. Typed V2 HITL routes use
-trusted call-bound auth-reference verification and an answer-applied reconciler
-that closes answer-to-command crash windows; frozen resource manifests and
+Room-epoch fences, cancellation, and leased recovery. In-flight direct dispatch and
+HITL continuation execution maintain an active claim lease via a background fenced
+heartbeat loop (`_run_fenced_dispatch` / `_run_fenced_continuation`), with cancellation
+and suspension if lease ownership or room epoch is invalidated. Terminal observations
+follow strict evidence preservation: the observation is durably recorded in the inbox
+before renewal verification so valuable agent work is not lost if the lease expired
+at dispatch return. Direct client inbound artifacts (e.g. `FileWithBytes`) undergo
+pre-observation materialization under the epoch-fenced artifact owner write lease
+(`orchestrator-v3-a2a-artifact`), converting raw binary data to room file content URLs
+(`/api/v1/files/{file_id}/content`) before constructing observations to enforce the
+256KB observation limit, with `BoundedResourceMaterializer` allowing owned content URLs
+to pass through safely. Authenticated direct, relay, webhook, and inspection evidence
+converges through an immutable observation inbox before generic `ToolObservation` delivery.
+Typed V2 HITL routes use trusted call-bound auth-reference verification and an answer-applied
+reconciler that closes answer-to-command crash windows; frozen resource manifests and
 durable/regenerable projections remain adapter-owned. The Kernel/session/context/budget layer
 still imports none of A2A, Room, persistence, SSE, or provider SDK concerns, and
 the orchestrator layer constructs nothing in `container.py`, routes, or
@@ -1281,7 +1291,10 @@ in-memory/offline queues for single-process/degraded operation.
   `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
   strictly validated. JSON-RPC webhook request IDs provide the durable
   idempotency key when the update metadata does not provide one.
-- Parse webhook stream response payloads.
+- Parse webhook and direct-stream response payloads. Direct A2A
+  `message/stream` SSE frames use top-level `kind` values
+  (`task`, `status-update`, `artifact-update`, `message`); legacy wrapped
+  envelopes (`statusUpdate` / `artifactUpdate`) remain accepted.
 - Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
 - Materialize inline or remote file artifacts into room-owned storage.

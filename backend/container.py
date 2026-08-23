@@ -419,6 +419,96 @@ def _map_orchestrator_terminal_state(status: str | None) -> str:
     }.get(status or "failed", "failed")
 
 
+async def _resolve_orchestrator_tool_artifacts(
+    *,
+    runtime: Any,
+    run: Any,
+    label: str,
+    task_id: str,
+    result: Any,
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    if result is None or not getattr(result, "artifact_refs", None):
+        return [], []
+
+    from common.types import Artifact, FileContent, Part, RoomArtifactPart
+
+    artifacts = []
+    sse_parts = []
+    file_storage = getattr(runtime, "file_storage", None) or getattr(
+        runtime, "room_files", None
+    )
+    for pos, ref in enumerate(result.artifact_refs):
+        if not isinstance(ref, str) or not ref:
+            continue
+        file_id = None
+        if "/files/" in ref:
+            file_id = (
+                ref.rsplit("/", 2)[-2]
+                if ref.endswith("/content")
+                else ref.rsplit("/", 1)[-1]
+            )
+
+        file_meta = None
+        if file_storage and file_id:
+            try:
+                file_meta = await file_storage.get_for_room_file(run.room_id, file_id)
+            except Exception:
+                file_meta = None
+
+        is_image = "image" in label.lower() or (
+            file_meta and str(file_meta.get("mime_type", "")).startswith("image/")
+        )
+        file_name = (file_meta.get("file_name") if file_meta else None) or (
+            "generated_image.png" if is_image else f"artifact-{pos}"
+        )
+        mime_type = (file_meta.get("mime_type") if file_meta else None) or (
+            "image/png"
+            if is_image or file_name.endswith(".png")
+            else "application/octet-stream"
+        )
+        size_bytes = file_meta.get("size_bytes") if file_meta else None
+        sha256 = file_meta.get("sha256") if file_meta else None
+
+        meta_dict = {
+            "file_id": file_id or f"file-{pos}",
+            "file_name": file_name,
+            "mime_type": mime_type,
+        }
+        if size_bytes is not None:
+            meta_dict["size_bytes"] = size_bytes
+        if sha256 is not None:
+            meta_dict["sha256"] = sha256
+
+        file_content = FileContent(
+            uri=ref,
+            name=file_name,
+            mime_type=mime_type,
+        )
+        part = Part(
+            root=RoomArtifactPart(kind="file", file=file_content, metadata=meta_dict)
+        )
+        artifacts.append(
+            Artifact(
+                artifact_id=f"art-{task_id}-{pos}",
+                name=file_name,
+                parts=[part],
+                metadata=meta_dict,
+            )
+        )
+        sse_parts.append(
+            {
+                "kind": "file",
+                "file": {
+                    "uri": ref,
+                    "name": file_name,
+                    "mime_type": mime_type,
+                },
+                "metadata": meta_dict,
+            }
+        )
+    return artifacts, sse_parts
+
+
 async def _project_orchestrator_agent_activity(
     event: Any,
     runtime: Any,
@@ -522,6 +612,15 @@ async def _project_orchestrator_agent_activity(
             if hasattr(part, "data")
         ]
         result_text = "\n".join(data_parts)[:8000] or facts["task_text"]
+
+    artifacts, sse_parts = await _resolve_orchestrator_tool_artifacts(
+        runtime=runtime,
+        run=run,
+        label=label,
+        task_id=task_id,
+        result=result,
+    )
+
     document = RoomAgentMessage(
         **common,
         message_content=MessageContent(
@@ -530,7 +629,7 @@ async def _project_orchestrator_agent_activity(
                 id=task_id,
                 kind="task",
                 status=TaskStatus(state=state, timestamp=now.isoformat()),
-                artifacts=[],
+                artifacts=artifacts,
             ),
         ),
         extend_info={
@@ -551,6 +650,7 @@ async def _project_orchestrator_agent_activity(
             related_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
             task_content=f"Requesting {label}",
+            parts=sse_parts if sse_parts else None,
         )
 
 

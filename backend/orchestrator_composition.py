@@ -116,6 +116,7 @@ class OrchestratorRuntime:
     run_store: Any
     event_store: Any
     epoch_store: Any
+    room_files: Any
     binding_store: Any
     call_ledger: Any
     observation_inbox: Any
@@ -141,6 +142,7 @@ _RUNTIME_BINDINGS = (
     "run_store",
     "event_store",
     "epoch_store",
+    "room_files",
     "binding_store",
     "call_ledger",
     "observation_inbox",
@@ -293,6 +295,7 @@ def create_orchestrator_runtime(  # noqa: C901
         fetch_agent_card=sdk_fetch_agent_card,
         receipt_factory=A2ADispatchReceipt,
         observation_factory=NormalizedA2AObservation,
+        epoch_owner=artifact_writer.epoch_owner,
         call_resolver=resolve_call_address,
     )
     direct = DirectA2ADispatchAdapter(direct_client, observations=observation_ingress)
@@ -453,6 +456,7 @@ def create_orchestrator_runtime(  # noqa: C901
         run_store=run_store,
         event_store=event_store,
         epoch_store=epoch_store,
+        room_files=room_files,
         binding_store=binding_store,
         call_ledger=call_ledger,
         observation_inbox=observation_inbox,

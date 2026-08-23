@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -16,6 +17,13 @@ from .models import (
     FrozenCallResourceRef,
     MaterializedResourcePart,
 )
+
+_OWNED_ROOM_FILE_URL_PATTERN = re.compile(r"^/api/v1/files/([a-zA-Z0-9_-]+)/content$")
+
+
+def _is_owned_room_file_url(ref: str) -> bool:
+    return bool(_OWNED_ROOM_FILE_URL_PATTERN.match(ref))
+
 
 OutboundLoader = Callable[
     [FrozenCallResourceRef, list[str], datetime],
@@ -42,6 +50,7 @@ class BoundedResourceMaterializer:
         max_outbound_encoded_bytes: int = 34 * 1024 * 1024,
         max_inbound_encoded_bytes: int = 34 * 1024 * 1024,
         allow_guarded_remote_artifact_refs: bool = False,
+        verify_room_file_ownership: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self.outbound_loader = outbound_loader
         self.inbound_writer = inbound_writer
@@ -51,6 +60,7 @@ class BoundedResourceMaterializer:
         self.max_outbound_encoded_bytes = max_outbound_encoded_bytes
         self.max_inbound_encoded_bytes = max_inbound_encoded_bytes
         self.allow_guarded_remote_artifact_refs = allow_guarded_remote_artifact_refs
+        self.verify_room_file_ownership = verify_room_file_ownership
 
     async def materialize(
         self,
@@ -102,6 +112,18 @@ class BoundedResourceMaterializer:
             raise ResourceSelectionError("inbound encoded bytes exceed limit")
         durable = []
         for artifact_ref in artifact_refs:
+            if isinstance(artifact_ref, str):
+                match = _OWNED_ROOM_FILE_URL_PATTERN.match(artifact_ref)
+                if match:
+                    if self.verify_room_file_ownership is None:
+                        raise ResourceSelectionError(
+                            "owned room file refs require room ownership verification"
+                        )
+                    await self.verify_room_file_ownership(
+                        getattr(call, "room_id", ""), match.group(1)
+                    )
+                    durable.append(artifact_ref)
+                    continue
             if not artifact_ref or artifact_ref.startswith("/"):
                 raise ResourceSelectionError("raw path artifact refs are forbidden")
             if "://" in artifact_ref and not self.allow_guarded_remote_artifact_refs:

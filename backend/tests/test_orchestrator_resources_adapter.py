@@ -11,7 +11,10 @@ from execution.orchestrator.a2a_runtime.models import (
     FrozenCallResourceManifest,
     FrozenCallResourceRef,
 )
-from execution.orchestrator.a2a_runtime.resources import ResourceSelectionError
+from execution.orchestrator.a2a_runtime.resources import (
+    BoundedResourceMaterializer,
+    ResourceSelectionError,
+)
 
 
 def _future_deadline() -> datetime:
@@ -19,14 +22,17 @@ def _future_deadline() -> datetime:
 
 
 class FakeRoomFiles:
-    def __init__(self, files):
+    def __init__(self, files, *, room_id="room-1"):
         self.files = files
+        self.room_id = room_id
 
     async def get_bytes(self, file_id, *, max_bytes):
         return self.files.get(file_id)
 
     async def get_for_room_file(self, room_id, file_id):
-        return None
+        if file_id not in self.files or room_id != self.room_id:
+            return None
+        return {"room_id": room_id, "file_id": file_id}
 
 
 class FakeWriter:
@@ -143,3 +149,35 @@ async def test_inbound_artifacts_delegate_to_writer():
     )
     assert refs == ["durable:https://example/file.bin"]
     assert writer.calls[0][1] == "https://example/file.bin"
+
+
+async def test_owned_room_file_url_rejects_cross_room_file():
+    writer = FakeWriter()
+    adapter = RoomFilesResourceMaterializer(
+        room_files=FakeRoomFiles({"stolen-file": b"secret"}, room_id="other-room"),
+        artifact_writer=writer,
+    )
+
+    class Call:
+        room_id = "room-1"
+
+    with pytest.raises(ResourceSelectionError, match="not owned by the room"):
+        await adapter.materialize_inbound_artifacts(
+            call=Call(),
+            artifact_refs=["/api/v1/files/stolen-file/content"],
+            observation_id="observation-1",
+        )
+    assert writer.calls == []
+
+
+async def test_owned_room_file_url_requires_ownership_verifier():
+    materializer = BoundedResourceMaterializer(
+        outbound_loader=lambda *a: None,
+        inbound_writer=lambda *a: None,
+    )
+    with pytest.raises(ResourceSelectionError, match="ownership verification"):
+        await materializer.materialize_inbound_artifacts(
+            call=object(),
+            artifact_refs=["/api/v1/files/file-1/content"],
+            observation_id="obs-1",
+        )

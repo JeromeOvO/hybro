@@ -4,12 +4,14 @@ import React, { useCallback, useRef, useState } from 'react'
 import { Streamdown, defaultRehypePlugins } from 'streamdown'
 import type { PluggableList } from 'unified'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, ChevronRight, Code2, Copy } from 'lucide-react'
+import { AlertCircle, Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
 import { getPlainTextFromRange } from '@/lib/selection-plain-text'
 import { preprocessConversationMarkdown } from '@/lib/markdown/normalize-conversation'
 import { conversationRemarkPlugins } from '@/lib/markdown/conversation-remark-plugins'
 import { isHashNumberedListItemText } from '@/lib/markdown/hash-numbered-list-item'
+import { useRoomFile } from '@/hooks/useRoomFile'
+import { ImageLightbox } from './image-lightbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
@@ -205,6 +207,79 @@ function MarkdownOrderedList({
   )
 }
 
+function MarkdownImage({
+  src,
+  alt,
+  className,
+  conversationTypography,
+  ...props
+}: React.ImgHTMLAttributes<HTMLImageElement> & {
+  conversationTypography: boolean
+}) {
+  let fileId: string | undefined
+  if (typeof src === 'string') {
+    const roomFilePath = /^\/api\/v1\/files\/([a-zA-Z0-9_-]+)\/content$/
+    // Path-relative only (not protocol-relative //host/...). Absolute URLs must
+    // be same-origin — never treat bare localhost-shaped hosts as room files.
+    if (src.startsWith('/') && !src.startsWith('//')) {
+      const match = src.match(roomFilePath)
+      if (match) {
+        fileId = match[1]
+      }
+    } else {
+      try {
+        const url = new URL(src)
+        const isSameOrigin =
+          typeof window !== 'undefined' && url.origin === window.location.origin
+        if (isSameOrigin) {
+          const match = url.pathname.match(roomFilePath)
+          if (match) {
+            fileId = match[1]
+          }
+        }
+      } catch {
+        // Ignore invalid URLs
+      }
+    }
+  }
+  const { objectUrl, error } = useRoomFile(fileId, Boolean(fileId))
+
+  if (fileId) {
+    if (objectUrl) {
+      return (
+        <span className="my-1 inline-block">
+          <ImageLightbox
+            src={objectUrl}
+            alt={alt || 'image'}
+            caption={alt || undefined}
+          />
+        </span>
+      )
+    }
+    if (error) {
+      return (
+        <span className="my-1 inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          <span>This image is no longer available</span>
+        </span>
+      )
+    }
+    return (
+      <span className="my-1 inline-block h-48 w-full animate-pulse rounded-md bg-muted/50" />
+    )
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt ?? ''}
+      className={cn('max-w-full h-auto rounded-md', !conversationTypography && 'my-2', className)}
+      {...props}
+    />
+  )
+}
+
 /** Shared custom component overrides used by all Streamdown instances. */
 function makeComponents(
   isStreaming: boolean,
@@ -349,11 +424,12 @@ function makeComponents(
       {children}
     </td>
   ),
-  img: ({ alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      alt={alt ?? ''}
-      className={cn('max-w-full h-auto rounded-md', !conversationTypography && 'my-2')}
+  img: ({ alt, src, className, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => (
+    <MarkdownImage
+      src={src}
+      alt={alt}
+      className={className}
+      conversationTypography={conversationTypography}
       {...props}
     />
   ),

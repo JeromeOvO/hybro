@@ -21,6 +21,8 @@ classes, and this module stays provider-neutral.
 
 from __future__ import annotations
 
+import base64
+import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
@@ -43,6 +45,8 @@ from .card_data import sdk_agent_card_data
 from .message_factory import from_sdk_task, to_sdk_message
 from .translators import facade_result_to_model, message_to_completed_task
 from .webhook_payloads import parse_stream_response_payload
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Provider-neutral command mirrors (structural, never imported from the
@@ -219,7 +223,7 @@ def _extract_interaction_spec(task: Any) -> dict[str, Any] | None:
     return spec.model_dump(mode="json")
 
 
-def _task_to_observation_kwargs(
+def _task_to_observation_kwargs(  # noqa: C901
     task: Any,
     *,
     source_kind: str,
@@ -262,6 +266,18 @@ def _task_to_observation_kwargs(
         uri = getattr(artifact, "uri", None)
         if isinstance(uri, str) and uri and not getattr(artifact, "parts", None):
             artifact_refs.append(uri)
+    if not text and extracted.file_parts:
+        descriptions = []
+        for file_part in extracted.file_parts:
+            file = file_part.get("file") if isinstance(file_part, Mapping) else None
+            name = (file.get("name") if isinstance(file, Mapping) else None) or "file"
+            mime = (
+                file.get("mime_type") or file.get("mimeType")
+                if isinstance(file, Mapping)
+                else None
+            ) or "binary"
+            descriptions.append(f"{name} ({mime})")
+        text = f"[Generated file: {', '.join(descriptions)}]"
     if text:
         content.append({"kind": "text", "text": text})
 
@@ -294,6 +310,63 @@ def _task_to_observation_kwargs(
     }
 
 
+_RECOVERABLE_MATERIALIZATION_ERROR_NAMES = frozenset(
+    {
+        "RecoverableAdapterError",
+        "RecoverableEpochError",
+        "RecoverableResourceError",
+        "StaleRoomEpochError",
+        "AmbiguousRemoteEffectError",
+    }
+)
+
+
+def _is_recoverable_materialization_error(exc: BaseException) -> bool:
+    """True when storage/epoch failures must stay non-terminal for recovery.
+
+    ``a2a_adapter`` cannot import orchestrator error types, so recoverable
+    subclasses are matched by class name across the module boundary.
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    return exc.__class__.__name__ in _RECOVERABLE_MATERIALIZATION_ERROR_NAMES
+
+
+def _failed_materialization_observation_kwargs(
+    *,
+    source_kind: str,
+    call_record_id: str,
+    binding_scope: str,
+    agent_id: str | None,
+    task_id: str,
+    context_id: str | None,
+    error_message: str,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    stable_id = f"{source_kind}-{call_record_id}-{task_id}-materialization-failed"
+    if cursor:
+        stable_id = f"{stable_id}-{cursor}"
+    return {
+        "observation_id": stable_id,
+        "call_record_id": call_record_id,
+        "source_kind": source_kind,
+        "source_identity": f"{source_kind}:{binding_scope}:{task_id}:terminal:{cursor or ''}",
+        "binding_scope": binding_scope,
+        "event_kind": "terminal",
+        "observed_at": utcnow(),
+        "task_id": task_id,
+        "context_id": context_id,
+        "agent_id": agent_id,
+        "status": "failed",
+        "content": [{"kind": "text", "text": error_message}],
+        "artifact_refs": [],
+        "interaction_spec": None,
+        "error_code": "artifact_materialization_failed",
+        "error_message": error_message,
+        "cursor": cursor,
+    }
+
+
 def _response_to_task(
     response: dict[str, Any], *, command_message_id: str
 ) -> Task | None:
@@ -315,6 +388,107 @@ def _response_to_task(
     return None
 
 
+async def _materialize_task_artifacts_epoch_fenced(  # noqa: C901
+    task: Any,
+    *,
+    epoch_owner: Any | None,
+    room_id: str | None,
+    room_epoch: int | None,
+    call_record_id: str | None,
+    message_id: str | None,
+) -> None:
+    """Commit inline FileWithBytes under the orchestrator's epoch write-lease fence."""
+    if not getattr(task, "artifacts", None):
+        return
+    for artifact_position, artifact in enumerate(task.artifacts or []):
+        artifact_id = (
+            getattr(artifact, "artifact_id", None)
+            or getattr(artifact, "id", None)
+            or f"art-{artifact_position}"
+        )
+        parts = getattr(artifact, "parts", None) or []
+        for part_slot, part in enumerate(parts):
+            root = getattr(part, "root", part)
+            if getattr(root, "kind", None) != "file":
+                continue
+            file_content = getattr(root, "file", None)
+            if file_content is None:
+                continue
+            encoded = getattr(file_content, "bytes", None)
+            if not isinstance(encoded, str) or not encoded:
+                continue
+            if epoch_owner is None or not room_id or room_epoch is None:
+                raise RuntimeError(
+                    "epoch_owner, room_id, and active room_epoch are required to persist inline agent file artifacts"
+                )
+            if len(encoded) > (50 * 1024 * 1024 * 4 // 3) + 4:
+                raise ValueError("encoded payload exceeds max 50 MiB base64 length")
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except Exception as exc:
+                raise ValueError(
+                    f"invalid base64 encoding in inline agent file artifact {getattr(file_content, 'name', None)!r}: {exc}"
+                ) from exc
+            if len(data) > 50 * 1024 * 1024:
+                raise ValueError("payload exceeds 50 MiB limit")
+
+            content_sha256 = sha256(data).hexdigest()
+            file_name = (
+                getattr(file_content, "name", None)
+                or f"artifact-{artifact_position}-{part_slot}"
+            )
+            mime_type = (
+                getattr(file_content, "mime_type", None)
+                or getattr(file_content, "mimeType", None)
+                or "application/octet-stream"
+            )
+            # Origin key uses "orchestrator-v3-a2a-inline" to distinguish direct inline
+            # materializations from remote fetch origin keys ("orchestrator-v3-a2a").
+            origin_key = sha256(
+                "|".join(
+                    (
+                        "orchestrator-v3-a2a-inline",
+                        str(call_record_id or "direct"),
+                        str(artifact_id),
+                        str(part_slot),
+                        content_sha256,
+                    )
+                ).encode()
+            ).hexdigest()
+            content_url = await epoch_owner.commit(
+                room_id=room_id,
+                room_epoch=room_epoch,
+                source_message_id=message_id or "direct",
+                origin_key=origin_key,
+                content=data,
+                content_sha256=content_sha256,
+                file_name=file_name,
+                mime_type=mime_type,
+                max_bytes=50 * 1024 * 1024,
+            )
+            file_content.uri = content_url
+            file_content.bytes = None
+            file_content.mime_type = mime_type
+            file_content.name = file_name
+            metadata = getattr(root, "metadata", None)
+            if metadata is None or not isinstance(metadata, dict):
+                metadata = {}
+            metadata.update(
+                {
+                    "file_id": (
+                        content_url.rsplit("/", 2)[-2]
+                        if "/" in content_url
+                        else content_url
+                    ),
+                    "file_name": file_name,
+                    "mime_type": mime_type,
+                    "size_bytes": len(data),
+                    "sha256": content_sha256,
+                }
+            )
+            root.metadata = metadata
+
+
 # ---------------------------------------------------------------------------
 # Direct stream wrapper.
 # ---------------------------------------------------------------------------
@@ -330,17 +504,20 @@ class DirectA2AStream:
         stream: AsyncIterator[dict[str, Any]],
         observation_factory: ObservationFactory,
         binding_scope: str,
+        epoch_owner: Any | None = None,
         on_frame_identity: Callable[[str | None, str | None], None] | None = None,
     ) -> None:
         self._command = command
         self._stream = stream
         self._observation_factory = observation_factory
         self._binding_scope = binding_scope
+        self._epoch_owner = epoch_owner
         self._on_frame_identity = on_frame_identity
         self._closed = False
         self._frame_counter = 0
         self._last_task_id: str | None = None
         self._last_context_id: str | None = None
+        self._accumulated_artifact_refs: list[str] = []
 
     def __aiter__(self) -> DirectA2AStream:
         return self
@@ -356,6 +533,31 @@ class DirectA2AStream:
             # the stream and recovery/inspection can reconcile missing evidence.
             return await self.__anext__()
         internal_task = from_sdk_task(task)
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                internal_task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(self._command, "room_id", None),
+                room_epoch=getattr(self._command, "room_epoch", None),
+                call_record_id=getattr(self._command, "call_record_id", None),
+                message_id=getattr(self._command, "message_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error("failed to materialize stream frame artifacts: %s", exc)
+            self._frame_counter += 1
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="direct",
+                call_record_id=self._command.call_record_id,
+                binding_scope=self._binding_scope,
+                agent_id=self._command.agent_id,
+                task_id=internal_task.id or self._last_task_id or "",
+                context_id=internal_task.context_id or self._last_context_id,
+                error_message=f"Failed to materialize stream file artifact: {exc}",
+                cursor=str(self._frame_counter),
+            )
+            return self._observation_factory(**kwargs)
         task_id = internal_task.id or self._last_task_id or ""
         context_id = internal_task.context_id or self._last_context_id
         self._last_task_id = task_id
@@ -378,6 +580,11 @@ class DirectA2AStream:
             context_id=context_id,
             cursor=cursor,
         )
+
+        current_refs = kwargs.get("artifact_refs", [])
+        self._accumulated_artifact_refs.extend(current_refs)
+        kwargs["artifact_refs"] = list(dict.fromkeys(self._accumulated_artifact_refs))
+
         return self._observation_factory(**kwargs)
 
     async def close(self, *, reason: str) -> None:
@@ -408,6 +615,7 @@ class OrchestratorDirectA2AClient:
         fetch_agent_card: FetchAgentCardFn,
         receipt_factory: ReceiptFactory,
         observation_factory: ObservationFactory,
+        epoch_owner: Any | None = None,
         call_resolver: CallResolver | None = None,
         timeout: float = 600.0,
         poll_timeout: float = 30.0,
@@ -421,6 +629,7 @@ class OrchestratorDirectA2AClient:
         self._fetch_agent_card = fetch_agent_card
         self._receipt = receipt_factory
         self._observation = observation_factory
+        self._epoch_owner = epoch_owner
         self._call_resolver = call_resolver
         self._timeout = timeout
         self._poll_timeout = poll_timeout
@@ -539,6 +748,35 @@ class OrchestratorDirectA2AClient:
         task = _response_to_task(response, command_message_id=command.message_id)
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(command, "room_id", None),
+                room_epoch=getattr(command, "room_epoch", None),
+                call_record_id=getattr(command, "call_record_id", None),
+                message_id=getattr(command, "message_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error("failed to materialize task artifacts for send: %s", exc)
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="direct",
+                call_record_id=command.call_record_id,
+                binding_scope=endpoint_scope_digest(command.endpoint_scope),
+                agent_id=command.agent_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                error_message=f"Failed to materialize agent file artifact: {exc}",
+            )
+            obs = self._observation(**kwargs)
+            return self._receipt(
+                outcome="terminal",
+                task_id=task.id,
+                context_id=task.context_id,
+                terminal_observation=obs,
+            )
         self._remember(command, task_id=task.id, context_id=task.context_id)
         event_kind = _event_kind(task)
         if event_kind in {"input_required", "auth_required"}:
@@ -616,6 +854,7 @@ class OrchestratorDirectA2AClient:
             stream=generator,
             observation_factory=self._observation,
             binding_scope=endpoint_scope_digest(command.endpoint_scope),
+            epoch_owner=self._epoch_owner,
             on_frame_identity=lambda task_id, context_id: self._remember(
                 command, task_id=task_id, context_id=context_id
             ),
@@ -631,6 +870,35 @@ class OrchestratorDirectA2AClient:
         )
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(command, "room_id", None),
+                room_epoch=getattr(command, "room_epoch", None),
+                call_record_id=getattr(command, "call_record_id", None),
+                message_id=getattr(command, "message_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error("failed to materialize task artifacts for inspect: %s", exc)
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="inspection",
+                call_record_id=command.call_record_id,
+                binding_scope=endpoint_scope_digest(address.endpoint_scope),
+                agent_id=address.agent_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                error_message=f"Failed to materialize agent file artifact: {exc}",
+            )
+            obs = self._observation(**kwargs)
+            return self._receipt(
+                outcome="terminal",
+                task_id=task.id,
+                context_id=task.context_id,
+                terminal_observation=obs,
+            )
         self._remember(command, task_id=task.id, context_id=task.context_id)
         event_kind = _event_kind(task)
         if event_kind in {"input_required", "auth_required"}:
@@ -689,6 +957,37 @@ class OrchestratorDirectA2AClient:
         task = _response_to_task(response, command_message_id=command.command_id)
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(command, "room_id", None),
+                room_epoch=getattr(command, "room_epoch", None),
+                call_record_id=getattr(command, "call_record_id", None),
+                message_id=getattr(command, "command_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error(
+                "failed to materialize task artifacts for continue_task: %s", exc
+            )
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="direct",
+                call_record_id=command.call_record_id,
+                binding_scope=endpoint_scope_digest(address.endpoint_scope),
+                agent_id=address.agent_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                error_message=f"Failed to materialize agent file artifact: {exc}",
+            )
+            obs = self._observation(**kwargs)
+            return self._receipt(
+                outcome="terminal",
+                task_id=task.id,
+                context_id=task.context_id,
+                terminal_observation=obs,
+            )
         status = _terminal_status(task)
         if status is None:
             return self._receipt(
@@ -722,6 +1021,38 @@ class OrchestratorDirectA2AClient:
         )
         if task is None:
             return self._receipt(outcome="delivery_uncertain")
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(command, "room_id", None),
+                room_epoch=getattr(command, "room_epoch", None),
+                call_record_id=getattr(command, "call_record_id", None),
+                message_id=getattr(command, "command_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error(
+                "failed to materialize task artifacts for inspect_continuation: %s", exc
+            )
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="inspection",
+                call_record_id=command.call_record_id,
+                binding_scope=endpoint_scope_digest(address.endpoint_scope),
+                agent_id=address.agent_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                error_message=f"Failed to materialize agent file artifact: {exc}",
+            )
+            obs = self._observation(**kwargs)
+            return self._receipt(
+                outcome="terminal",
+                task_id=task.id,
+                context_id=task.context_id,
+                terminal_observation=obs,
+            )
+
         status = _terminal_status(task)
         if status is None:
             return self._receipt(
