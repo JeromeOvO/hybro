@@ -1146,7 +1146,9 @@ listener task.
 
 #### Snapshot-driven room stream
 
-The room stream is snapshot-driven (`docs/Room-Stream-Snapshot-Plan.md`): an
+The room stream is snapshot-driven. The implemented delivery foundation is
+retained by the proposed
+[`Pi-Aligned-Turn-Lifecycle-Plan.md`](Pi-Aligned-Turn-Lifecycle-Plan.md): an
 append-only `room_events` collection is the source of truth for the realtime
 UI. Every emitted frame is persisted to `room_events` BEFORE broadcast
 (persist-before-broadcast), with a per-room monotonic `room_seq` allocated

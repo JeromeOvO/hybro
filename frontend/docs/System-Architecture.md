@@ -300,9 +300,11 @@ inference module has been removed.
 
 ### Snapshot-driven room sync (`src/lib/room-sync/room-reducer.ts`)
 
-The room stream is snapshot-driven (backend `docs/Room-Stream-Snapshot-Plan.md`):
-state = latest full snapshot + ordered deltas after it. `RoomReducer` is the
-single state entry:
+The room stream is snapshot-driven: state = latest full snapshot + ordered
+deltas after it. The proposed Pi-aligned lifecycle and rendering cutover is
+specified in backend
+[`docs/Pi-Aligned-Turn-Lifecycle-Plan.md`](../../backend/docs/Pi-Aligned-Turn-Lifecycle-Plan.md).
+`RoomReducer` is the current single state entry:
 
 - `connected` handshake carries `room_seq`; its presence enables the new
   semantics (legacy fallback otherwise).

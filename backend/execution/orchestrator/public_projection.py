@@ -1,8 +1,9 @@
 """Public decision-visibility projection for the room SSE stream.
 
-Phase 1 of the Room Stream Snapshot plan (``backend/docs/Room-Stream-Snapshot-Plan.md``
-§6): translate private kernel lifecycle ``SessionEvent`` values into public
-``run_event`` payload types carried over the existing SSE ``run_event`` frame.
+Legacy decision-visibility projection retained during the proposed
+``backend/docs/Pi-Aligned-Turn-Lifecycle-Plan.md`` cutover: translate private
+kernel lifecycle ``SessionEvent`` values into public ``run_event`` payload types
+carried over the existing SSE ``run_event`` frame.
 
 The payloads produced here are the only public surface for decisions, LLM
 calls, retries, and tool calls. Raw system/user prompts, full tool arguments,
