@@ -1,7 +1,16 @@
 import { create } from 'zustand'
+import type { Agent } from '@/lib/types/agent'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { AgentScopeInput, ExecutionMode } from '@/lib/types/request'
 import type { ConversationScrollSnapshot } from '@/lib/conversation/conversation-scroll'
+
+/** One-shot handoff from an Agent detail page to the new-chat composer. */
+export interface PendingChatHandoff {
+  /** Prefill text only — not an @mention. */
+  draft: string
+  /** Seed room membership with these agents (single-agent chat ≠ mention). */
+  seedAgents?: Agent[]
+}
 
 type RoomId = string
 
@@ -51,6 +60,8 @@ export interface RoomFlags {
   sseConnected: boolean
   sseError: string | null
   turnBasedTimeline: boolean
+  /** User message ids that still have an open backend room run. */
+  activeRunTriggerMessageIds: string[]
 }
 
 export const DEFAULT_ROOM_FLAGS: RoomFlags = {
@@ -62,6 +73,7 @@ export const DEFAULT_ROOM_FLAGS: RoomFlags = {
   sseConnected: false,
   sseError: null,
   turnBasedTimeline: false,
+  activeRunTriggerMessageIds: [],
 }
 
 function patchRoom(rooms: Record<RoomId, RoomFlags>, roomId: RoomId, patch: Partial<RoomFlags>): Record<RoomId, RoomFlags> {
@@ -72,8 +84,8 @@ interface RoomUiState {
   rooms: Record<RoomId, RoomFlags>
   /** Pending initial messages for rooms (replaces sessionStorage) */
   pendingRoomData: Record<RoomId, PendingRoomData>
-  /** One-shot draft handed from an Agent detail page to the new-chat composer. */
-  pendingChatDraft: string | null
+  /** One-shot handoff from an Agent detail page to the new-chat composer. */
+  pendingChatHandoff: PendingChatHandoff | null
   pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
   localSendSeqByRoom: Record<RoomId, number>
   initialHydrationSeqByRoom: Record<RoomId, number>
@@ -90,6 +102,7 @@ interface RoomUiState {
   setSseConnected: (roomId: RoomId, v: boolean) => void
   setSseError: (roomId: RoomId, v: string | null) => void
   setTurnBasedTimeline: (roomId: RoomId, v: boolean) => void
+  setActiveRunTriggerMessageIds: (roomId: RoomId, ids: string[]) => void
 
   // Non-reactive getter for getState() callers
   getRoomFlags: (roomId: RoomId) => RoomFlags
@@ -101,8 +114,8 @@ interface RoomUiState {
   setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
   /** Consume (read + delete) pending data for a room */
   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
-  setPendingChatDraft: (value: string) => void
-  clearPendingChatDraft: () => void
+  setPendingChatHandoff: (handoff: PendingChatHandoff) => void
+  clearPendingChatHandoff: () => void
   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
   markLocalSend: (roomId: RoomId) => void
   markInitialHydrated: (roomId: RoomId) => void
@@ -117,7 +130,7 @@ interface RoomUiState {
 export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   rooms: {},
   pendingRoomData: {},
-  pendingChatDraft: null,
+  pendingChatHandoff: null,
   pendingTurnSkeletons: {},
   localSendSeqByRoom: {},
   initialHydrationSeqByRoom: {},
@@ -126,13 +139,20 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
   selectedAgentMessageIdByRoom: {},
 
   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
-  setProcessing: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { processing: v }) })),
+  setProcessing: (roomId, v) => set(s => ({
+    rooms: patchRoom(s.rooms, roomId, v
+      ? { processing: true }
+      : { processing: false, activeRunTriggerMessageIds: [] }),
+  })),
   setCancelling: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { cancelling: v }) })),
   setUpdatingRoom: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { updatingRoom: v }) })),
   setSseEnabled: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseEnabled: v }) })),
   setSseConnected: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseConnected: v }) })),
   setSseError: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseError: v }) })),
   setTurnBasedTimeline: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { turnBasedTimeline: v }) })),
+  setActiveRunTriggerMessageIds: (roomId, ids) => set(s => ({
+    rooms: patchRoom(s.rooms, roomId, { activeRunTriggerMessageIds: ids }),
+  })),
 
   getRoomFlags: (roomId) => get().rooms[roomId] ?? DEFAULT_ROOM_FLAGS,
 
@@ -153,7 +173,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     set({
       rooms: {},
       pendingRoomData: {},
-      pendingChatDraft: null,
+      pendingChatHandoff: null,
       pendingTurnSkeletons: {},
       localSendSeqByRoom: {},
       initialHydrationSeqByRoom: {},
@@ -180,8 +200,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
     }
     return data
   },
-  setPendingChatDraft: (value) => set({ pendingChatDraft: value }),
-  clearPendingChatDraft: () => set({ pendingChatDraft: null }),
+  setPendingChatHandoff: (handoff) => set({ pendingChatHandoff: handoff }),
+  clearPendingChatHandoff: () => set({ pendingChatHandoff: null }),
   setPendingTurnSkeleton: (roomId, value) =>
     set((state) => {
       const copy = { ...state.pendingTurnSkeletons }

@@ -312,9 +312,17 @@ class A2AObservationProcessor:
                 # is now suspended for this invocation, deliver through the
                 # sink (kernel application is idempotent) instead of leaving
                 # the row in outcome_pending forever.
-                suspended = await self.checkpoint_reader.is_suspension_checkpointed(
-                    record.run_id, record.invocation_id, "waiting_external"
-                )
+                suspended = False
+                for suspended_status in (
+                    "waiting_external",
+                    "input_required",
+                    "auth_required",
+                ):
+                    if await self.checkpoint_reader.is_suspension_checkpointed(
+                        record.run_id, record.invocation_id, suspended_status
+                    ):
+                        suspended = True
+                        break
                 if suspended:
                     try:
                         await self.sink.deliver(

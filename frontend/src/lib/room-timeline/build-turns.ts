@@ -19,14 +19,21 @@ import {
 } from './derive-final-answer'
 import {
   hasActiveSynthesisGap,
+  shouldHoldTurnActiveForOpenRoomRun,
   shouldShowSynthesizingPhase,
   shouldShowSynthesizingPhaseForResults,
+  type OpenRoomRunContext,
 } from './multi-agent-turn-complete'
 import { getStripSourceResults } from './turn-live-shell'
 
 // ── Constants ──────────────────────────────────────────────────
 
 const SYSTEM_TURN_ID = 'system-turn'
+
+export interface TurnBuildOptions {
+  roomProcessingActive?: boolean
+  activeRunTriggerMessageIds?: ReadonlySet<string>
+}
 
 function publicAgentStatusMessage(
   entity: MessageEntity,
@@ -69,6 +76,7 @@ export function buildTurns(
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
   events: readonly RawTimelineEvent[],
+  options: TurnBuildOptions = {},
 ): TurnViewModel[] {
   if (orderedIds.length === 0) return []
 
@@ -147,7 +155,7 @@ export function buildTurns(
 
   // System turn first (if any)
   if (systemTurnScaffold) {
-    turns.push(assembleTurn(SYSTEM_TURN_ID, systemTurnScaffold, entities, events))
+    turns.push(assembleTurn(SYSTEM_TURN_ID, systemTurnScaffold, entities, events, options))
   }
 
   for (let i = 0; i < turnScaffolds.length; i++) {
@@ -158,7 +166,17 @@ export function buildTurns(
     // in both turns.
     const nextScaffold = turnScaffolds[i + 1]
     const nextTurnStart = nextScaffold?.userEntity?.timestamp
-    turns.push(assembleTurn(turnId, scaffold, entities, events, nextTurnStart))
+    turns.push(assembleTurn(
+      turnId,
+      scaffold,
+      entities,
+      events,
+      options,
+      {
+        nextTurnStart,
+        isLatestUserTurn: i === turnScaffolds.length - 1,
+      },
+    ))
   }
 
   return turns
@@ -213,8 +231,23 @@ function assembleTurn(
   },
   entities: Record<string, MessageEntity>,
   events: readonly RawTimelineEvent[],
-  nextTurnStart?: string,
+  buildOptions: TurnBuildOptions = {},
+  assembleOptions: {
+    nextTurnStart?: string
+    isLatestUserTurn?: boolean
+  } = {},
 ): TurnViewModel {
+  const { nextTurnStart, isLatestUserTurn = false } = assembleOptions
+  const openRoomRunContext: OpenRoomRunContext = {
+    userMessageId: scaffold.userMessageId,
+    turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+    turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
+    processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
+    activeRunTriggerMessageIds: buildOptions.activeRunTriggerMessageIds,
+    roomProcessingActive: buildOptions.roomProcessingActive,
+    isLatestUserTurn,
+  }
+
   // Filter events for this turn first (needed by buildAgentResult for inline chips)
   const turnEvents = filterEventsForTurn(scaffold, entities, events, nextTurnStart)
 
@@ -245,6 +278,7 @@ function assembleTurn(
     turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
     turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
     processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
+    openRoomRunContext,
   })
   const summary = selectSummary(agentResults)
   const activeAgentIds = agentResults
@@ -289,11 +323,16 @@ function assembleTurn(
     processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
     displayMode: 'single_agent', // placeholder, set below
     finalAnswer: { kind: 'pending', label: 'Working' }, // placeholder
+    liveRunBuildContext: {
+      roomProcessingActive: buildOptions.roomProcessingActive,
+      isLatestUserTurn,
+      activeRunTriggerMessageIds: buildOptions.activeRunTriggerMessageIds,
+    },
   }
 
   turn.finalAnswer = deriveFinalAnswer(turn, scaffold.agentMessageIds)
   turn.displayMode = deriveDisplayModeFromFinalAnswer(turn, turn.finalAnswer)
-  turn.phase = deriveTurnPhase(turn)
+  turn.phase = deriveTurnPhase(turn, openRoomRunContext)
   turn.primaryStreamMessageId = derivePrimaryStreamFromFinalAnswer(turn.finalAnswer)
   turn.primaryMessageId = turn.primaryStreamMessageId
 
@@ -618,7 +657,19 @@ function suppressEphemeralResults(
 
 // ── Turn phase derivation ──────────────────────────────────────
 
-export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
+export function deriveTurnPhase(
+  turn: TurnViewModel,
+  openRoomRunContext?: OpenRoomRunContext,
+): TurnPhase {
+  const resolvedOpenRoomRunContext: OpenRoomRunContext = {
+    userMessageId: turn.userMessageId,
+    turnTerminalStatus: turn.turnTerminalStatus,
+    turnCompletionKind: turn.turnCompletionKind,
+    processingStatusLogs: turn.processingStatusLogs,
+    isSupervisorTurn: turn.isSupervisorTurn,
+    ...turn.liveRunBuildContext,
+    ...openRoomRunContext,
+  }
   const orchestrator = turn.agentResults.find(r => r.agentId === "system:hybro")
   const real = getStripSourceResults(turn)
   const allRealTerminal =
@@ -649,7 +700,7 @@ export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
   if (
     summaryResult?.status === 'working'
     || (allRealTerminal && hasActiveSynthesisGap(turn))
-    || shouldShowSynthesizingPhase(turn, real)
+    || shouldShowSynthesizingPhase(turn, real, resolvedOpenRoomRunContext)
   ) {
     return 'synthesizing'
   }
@@ -690,6 +741,7 @@ function deriveTurnStatus(
     turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
     turnCompletionKind?: TurnViewModel['turnCompletionKind']
     processingStatusLogs?: TurnViewModel['processingStatusLogs']
+    openRoomRunContext: OpenRoomRunContext
   },
 ): TurnStatus {
   if (opts.turnTerminalStatus === 'canceled') return 'failed'
@@ -742,7 +794,8 @@ function deriveTurnStatus(
     agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
     || (summaryAgent?.status === 'working' && (summaryAgent.content.trim().length ?? 0) === 0)
     || (opts.processingStatusLogs ?? []).some(entry =>
-      entry.message.toLowerCase().includes('synthesiz'),
+      entry.turnPhase === 'synthesizing'
+      || entry.message.toLowerCase().includes('synthesiz'),
     )
 
   const hasPlanningEphemeral = agentResults.some(
@@ -764,11 +817,23 @@ function deriveTurnStatus(
     && synthesisGapActive
     && !isPersistedTerminalTurn(opts.turnTerminalStatus)
 
-  const awaitingMultiAgentSynthesis = shouldShowSynthesizingPhaseForResults(agentResults, {
+  const awaitingMultiAgentSynthesis = shouldShowSynthesizingPhaseForResults(
+    agentResults,
+    {
+      ...opts.openRoomRunContext,
+      isSupervisorTurn: opts.isSupervisorTurn,
+      turnTerminalStatus: opts.turnTerminalStatus,
+      turnCompletionKind: opts.turnCompletionKind,
+      processingStatusLogs: opts.processingStatusLogs,
+    },
+  )
+
+  const awaitingOpenRoomRun = shouldHoldTurnActiveForOpenRoomRun(agentResults, {
+    ...opts.openRoomRunContext,
+    isSupervisorTurn: opts.isSupervisorTurn,
     turnTerminalStatus: opts.turnTerminalStatus,
     turnCompletionKind: opts.turnCompletionKind,
     processingStatusLogs: opts.processingStatusLogs,
-    isSupervisorTurn: opts.isSupervisorTurn,
   })
 
   if (hasWorking) return 'active'
@@ -776,7 +841,13 @@ function deriveTurnStatus(
   if (allRealTerminal && hasRealFailed && hasRealCompleted) return 'partial'
   if (allRealTerminal && hasRealFailed) return 'failed'
   if (hasSupervisorContinuationLogs && allCompleted) return 'active'
-  if (inSynthesisGap || awaitingSynthesisGap || preOrchestrationGap || awaitingMultiAgentSynthesis) {
+  if (
+    inSynthesisGap
+    || awaitingSynthesisGap
+    || preOrchestrationGap
+    || awaitingMultiAgentSynthesis
+    || awaitingOpenRoomRun
+  ) {
     return 'active'
   }
   if (allFailed) return 'failed'
@@ -933,14 +1004,15 @@ export function buildTurnsIncremental(
   entities: Record<string, MessageEntity>,
   orderedIds: string[],
   events: readonly RawTimelineEvent[],
+  options: TurnBuildOptions = {},
 ): TurnViewModel[] {
   // If no previous turns, delegate to full build
   if (prevTurns.length === 0) {
-    return buildTurns(entities, orderedIds, events)
+    return buildTurns(entities, orderedIds, events, options)
   }
 
   // Full rebuild to get the "truth"
-  const fullTurns = buildTurns(entities, orderedIds, events)
+  const fullTurns = buildTurns(entities, orderedIds, events, options)
 
   if (fullTurns.length === 0) return fullTurns
 

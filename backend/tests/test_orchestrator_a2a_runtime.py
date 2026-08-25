@@ -159,6 +159,7 @@ async def setup(
         dispatch=transport,
         observations=ingress,
         terminal_finalizer=TerminalInteractionFinalizer(hitl),
+        hitl=hitl,
     )
     return runtime, ledger, authorization, transport, ingress
 
@@ -254,6 +255,104 @@ async def test_execute_input_required_returns_request_as_tool_result():
     assert inbox_row.state == "outcome_pending"
     assert inbox_row.delivery_route == "executor"
     assert inbox_row.outcome_digest == persisted.terminal_result_digest
+
+
+async def test_execute_typed_input_required_suspends_and_activates_hitl():
+    runtime, ledger, _, dispatch, _ = await setup()
+    accepted = await runtime.accept(invocation())
+    record = await ledger.load("run-1", "call-1")
+    interaction = {
+        "schema_version": 1,
+        "interaction_id": "travel-planner:clarify-1",
+        "questions": [
+            {
+                "question_id": "travel-details:clarify-1",
+                "interaction_kind": "questionnaire",
+                "prompt": "Which city should I plan for?",
+                "answer_kind": "text",
+                "required": True,
+            }
+        ],
+    }
+    observation = NormalizedA2AObservation(
+        observation_id="obs-typed-1",
+        call_record_id=record.call_record_id,
+        source_kind="direct",
+        source_identity="direct:endpoint:task-1:input_required:typed",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        agent_id="agent-1",
+        status=None,
+        content=[TextPart(text="Which city should I plan for?")],
+        artifact_refs=[],
+        interaction_spec=interaction,
+        error_code=None,
+        error_message=None,
+        cursor=None,
+    )
+    dispatch.receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_observation=observation,
+    )
+
+    outcome = await runtime.execute(invocation(), accepted, signal=NeverCancelled())
+
+    assert isinstance(outcome, ToolSuspension)
+    persisted = await ledger.load("run-1", "call-1")
+    assert persisted.state == "input_required"
+    assert persisted.pending_interaction_id == "travel-planner:clarify-1"
+    assert persisted.interaction_revision == 1
+    assert persisted.interaction_fingerprint is not None
+    stored = await runtime.hitl.read_interaction("travel-planner:clarify-1")
+    assert stored is not None
+    spec, route, fingerprint = stored
+    assert fingerprint == persisted.interaction_fingerprint
+    assert route.call_record_id == persisted.call_record_id
+    assert A2AInteractionSpec.model_validate(interaction) == spec
+
+
+async def test_execute_invalid_interaction_spec_fails_closed():
+    runtime, ledger, _, dispatch, _ = await setup()
+    accepted = await runtime.accept(invocation())
+    record = await ledger.load("run-1", "call-1")
+    observation = NormalizedA2AObservation(
+        observation_id="obs-invalid-1",
+        call_record_id=record.call_record_id,
+        source_kind="direct",
+        source_identity="direct:endpoint:task-1:input_required:invalid",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        agent_id="agent-1",
+        status=None,
+        content=[TextPart(text="broken")],
+        artifact_refs=[],
+        interaction_spec={"unsupported": True},
+        error_code=None,
+        error_message=None,
+        cursor=None,
+    )
+    dispatch.receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_observation=observation,
+    )
+
+    outcome = await runtime.execute(invocation(), accepted, signal=NeverCancelled())
+
+    assert isinstance(outcome, ToolResult)
+    assert outcome.status == "failed"
+    assert outcome.error_code == "invalid_interaction_metadata"
+    persisted = await ledger.load("run-1", "call-1")
+    assert persisted.state == "failed"
 
 
 async def test_dispatch_alias_conflict_fails_closed_without_divergent_identity():

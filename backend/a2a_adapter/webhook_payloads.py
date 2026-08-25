@@ -94,6 +94,45 @@ def _extract_text_from_message_dict(message: Any) -> str:
     return "".join(texts)
 
 
+def _rebuild_status_message(
+    raw_message: Any, *, fallback_message_id: str
+) -> Message | None:
+    """Best-effort Message rebuild that keeps interaction metadata.
+
+    Strict ``TaskStatusUpdateEvent`` validation often fails when agents omit
+    ``messageId`` or use proto role/content shapes. Dropping the message
+    entirely also drops ``hybro.ai/a2a/interaction`` and turns typed HITL into
+    an untyped completed tool result.
+    """
+    if not isinstance(raw_message, dict):
+        return None
+    text = _extract_text_from_message_dict(raw_message)
+    metadata = raw_message.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = None
+    message_id = (
+        raw_message.get("messageId")
+        or raw_message.get("message_id")
+        or fallback_message_id
+    )
+    role = raw_message.get("role") or "agent"
+    if isinstance(role, str) and role.upper().startswith("ROLE_"):
+        role = role.split("_", 1)[-1].lower()
+    if role not in {"agent", "user"}:
+        role = "agent"
+    if not text and metadata is None:
+        return None
+    try:
+        return Message(
+            message_id=str(message_id),
+            role=role,
+            parts=[Part(root=TextPart(text=text or ""))],
+            metadata=metadata,
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
     """Build a Task from a status-update payload that failed strict validation.
 
@@ -102,6 +141,7 @@ def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
     the v0.x Pydantic ``TaskStatusUpdateEvent`` model. Extract the state and
     any response text defensively so the terminal ``completed`` signal is not
     lost (which would otherwise stall the task until the stale-task poller).
+    Preserve status.message metadata when present so typed HITL specs survive.
     """
     raw = raw if isinstance(raw, dict) else {}
     status = raw.get("status") if isinstance(raw.get("status"), dict) else {}
@@ -128,10 +168,15 @@ def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
             )
         ]
 
+    status_message = _rebuild_status_message(
+        status.get("message"),
+        fallback_message_id=f"{task_id}-status",
+    )
+
     return Task(
         id=task_id,
         context_id=context_id,
-        status=TaskStatus(state=state),
+        status=TaskStatus(state=state, message=status_message),
         artifacts=artifacts,
     )
 

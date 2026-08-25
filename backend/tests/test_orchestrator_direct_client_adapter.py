@@ -7,6 +7,7 @@ from hashlib import sha256
 import pytest
 
 from a2a_adapter.orchestrator_direct_client import (
+    DirectCallAddress,
     OrchestratorDirectA2AClient,
     endpoint_scope_digest,
 )
@@ -507,6 +508,137 @@ async def test_continue_task_uses_command_task_and_context():
         _dispatch_command(),
         task_id="task-1",
         context_id="ctx-1",
+    )
+    receipt = await client.continue_task(_continuation_command())
+    assert receipt.outcome == "terminal"
+
+
+async def test_continue_task_input_required_builds_interaction_receipt():
+    status = build_task_status(TaskState.input_required)
+    status.message = Message(
+        role=MessageRole.AGENT,
+        parts=[TextPart(text="How many days will you stay?")],
+        message_id="msg-1",
+    )
+    task = Task(
+        id="task-1",
+        context_id="ctx-1",
+        status=status,
+        artifacts=None,
+    )
+
+    async def send(card, message, kwargs):
+        return {"kind": "task", "result": _task_dict(task)}
+
+    client = _client(FakeSdk(send=send))
+    client._remember(
+        _dispatch_command(),
+        task_id="task-1",
+        context_id="ctx-1",
+    )
+    receipt = await client.continue_task(_continuation_command())
+
+    assert receipt.outcome == "interaction"
+    observation = receipt.interaction_observation
+    assert observation is not None
+    assert observation.event_kind == "input_required"
+    assert observation.content[0].text == "How many days will you stay?"
+
+
+async def test_extract_interaction_spec_requires_status_message_metadata():
+    """History-only metadata must not be treated as the live challenge.
+
+    After HITL continuation the prior status message moves into history. Using
+    that stale interaction_id would re-park / resend the answered challenge
+    instead of waiting for the Agent's next typed status.message.
+    """
+    from a2a_adapter.orchestrator_direct_client import _extract_interaction_spec
+    from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
+
+    interaction = {
+        "schema_version": 1,
+        "interaction_id": "travel-planner:hist-1",
+        "questions": [
+            {
+                "question_id": "travel-details:hist-1",
+                "interaction_kind": "questionnaire",
+                "prompt": "How many days?",
+                "answer_kind": "text",
+                "required": True,
+            }
+        ],
+    }
+    history_message = Message(
+        role=MessageRole.AGENT,
+        parts=[TextPart(text="How many days?")],
+        message_id="hist-msg",
+        metadata={HYBRO_A2A_INTERACTION_METADATA_KEY: interaction},
+    )
+    status = build_task_status(TaskState.input_required)
+    status.message = None
+    task = Task(
+        id="task-1",
+        context_id="ctx-1",
+        status=status,
+        history=[history_message],
+        artifacts=None,
+    )
+
+    assert _extract_interaction_spec(task) is None
+
+
+async def test_continue_task_preserves_endpoint_scope_for_later_rounds():
+    """Continuation commands have no endpoint_scope. Remembering them must not
+    wipe the dispatch address, or the next HITL round returns delivery_uncertain.
+    """
+    task = build_completed_text_task(
+        task_id="task-1", text="continued", context_id="ctx-1"
+    )
+    send_count = 0
+
+    async def send(card, message, kwargs):
+        nonlocal send_count
+        send_count += 1
+        return {"kind": "task", "result": _task_dict(task)}
+
+    client = _client(FakeSdk(send=send))
+    client._remember(
+        _dispatch_command(),
+        task_id="task-1",
+        context_id="ctx-1",
+    )
+    first = await client.continue_task(_continuation_command())
+    second = await client.continue_task(_continuation_command())
+
+    assert first.outcome == "terminal"
+    assert second.outcome == "terminal"
+    assert send_count == 2
+
+
+async def test_continue_task_refreshes_poisoned_address_from_resolver():
+    task = build_completed_text_task(
+        task_id="task-1", text="continued", context_id="ctx-1"
+    )
+
+    async def send(card, message, kwargs):
+        return {"kind": "task", "result": _task_dict(task)}
+
+    async def resolve(call_record_id: str):
+        assert call_record_id == "call-1"
+        return {
+            "task_id": "task-1",
+            "context_id": "ctx-1",
+            "endpoint_scope": "https://agent.example/a2a",
+            "agent_id": "agent-1",
+        }
+
+    client = _client(FakeSdk(send=send), call_resolver=resolve)
+    client._addresses["call-1"] = DirectCallAddress(
+        call_record_id="call-1",
+        task_id="task-1",
+        context_id="ctx-1",
+        endpoint_scope=None,
+        agent_id=None,
     )
     receipt = await client.continue_task(_continuation_command())
     assert receipt.outcome == "terminal"

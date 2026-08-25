@@ -102,6 +102,7 @@ export function useSendMessage(
       ],
     }, 'optimistic')
     lifecycle.startProcessing(optimisticUserMessageId)
+    useRoomUiStore.getState().setActiveRunTriggerMessageIds(roomId, [optimisticUserMessageId])
 
     useRoomUiStore.getState().markLocalSend(roomId)
     const queryClient = getActiveQueryClient()

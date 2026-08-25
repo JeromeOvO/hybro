@@ -147,6 +147,17 @@ function mergeIncoming(
     && existing.hitlInteractionVersion !== undefined
     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
   )
+  const finalizesExistingHitl = Boolean(
+    existing.hitlRequestId
+    && existing.hitlUserAnswer
+    && incoming.taskStatus
+    && isTerminalState(incoming.taskStatus)
+    && incoming.hitlRequestId === undefined
+    && incoming.hitlPrompt === undefined
+    && incoming.hitlInteractionStatus === undefined
+    && incoming.hitlApplicationStatus === undefined
+    && incoming.hitlResolved === undefined
+  )
 
   return {
     id: incoming.id,
@@ -178,11 +189,23 @@ function mergeIncoming(
     hitlPromptType: acceptsHitlUpdate && incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
     hitlChoices: acceptsHitlUpdate && incoming.hitlChoices !== undefined ? incoming.hitlChoices : existing.hitlChoices,
     hitlExpiresAt: acceptsHitlUpdate && incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
-    hitlResolved: acceptsHitlUpdate && incoming.hitlResolved !== undefined ? incoming.hitlResolved : existing.hitlResolved,
+    hitlResolved: finalizesExistingHitl
+      ? true
+      : acceptsHitlUpdate && incoming.hitlResolved !== undefined
+        ? incoming.hitlResolved
+        : existing.hitlResolved,
     hitlInteractionId: acceptsHitlUpdate && incoming.hitlInteractionId !== undefined ? incoming.hitlInteractionId : existing.hitlInteractionId,
-    hitlInteractionStatus: acceptsHitlUpdate && incoming.hitlInteractionStatus !== undefined ? incoming.hitlInteractionStatus : existing.hitlInteractionStatus,
+    hitlInteractionStatus: finalizesExistingHitl
+      ? 'responded'
+      : acceptsHitlUpdate && incoming.hitlInteractionStatus !== undefined
+        ? incoming.hitlInteractionStatus
+        : existing.hitlInteractionStatus,
     hitlInteractionVersion: acceptsHitlUpdate && incoming.hitlInteractionVersion !== undefined ? incoming.hitlInteractionVersion : existing.hitlInteractionVersion,
-    hitlApplicationStatus: acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined ? incoming.hitlApplicationStatus : existing.hitlApplicationStatus,
+    hitlApplicationStatus: finalizesExistingHitl
+      ? 'applied'
+      : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
+        ? incoming.hitlApplicationStatus
+        : existing.hitlApplicationStatus,
     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
     hitlGroupTotal: acceptsHitlUpdate && incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: acceptsHitlUpdate && incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,

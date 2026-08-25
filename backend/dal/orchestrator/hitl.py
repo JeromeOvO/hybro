@@ -70,6 +70,14 @@ class MongoHITLApplicationStore:
             return None
         return _interaction_from_doc(doc)
 
+    async def get_eligible_interactions(
+        self, room_id: str
+    ) -> list[StoredHITLInteraction]:
+        cursor = self._collection.find(
+            {"route.room_id": room_id, "eligible": True, "abandoned": None}
+        )
+        return [_interaction_from_doc(doc) for doc in await cursor.to_list(None)]
+
     async def mark_eligible(self, interaction_id: str) -> str:
         doc = await self._collection.find_one({"interaction_id": interaction_id})
         if doc is None:

@@ -6,7 +6,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from typing import Any
 
+from common.dto.hitl import A2AInteractionSpec
 from common.utils.logger import get_logger
 
 from ..models import TextPart, ToolResult
@@ -15,10 +17,15 @@ from .cancellation import A2ACancellationCoordinator
 from .errors import (
     AmbiguousRemoteEffectError,
     RecoverableAdapterError,
+    RecoverableCheckpointError,
     RecoverableTransportError,
 )
 from .hitl import A2AContinuationCoordinator
 from .ingress import A2AObservationProcessor
+from .interaction_outcome import (
+    emit_hitl_request_events,
+    park_call_for_interaction,
+)
 from .ledger import (
     TERMINAL_AGENT_CALL_STATES,
     apply_observation,
@@ -34,6 +41,7 @@ from .models import (
 from .ports import (
     A2ADispatchPort,
     AgentCallLedgerStore,
+    HITLApplicationPort,
     NormalizedObservationRecorder,
     ObservationInboxStore,
     RoomEpochStore,
@@ -57,6 +65,9 @@ class A2ACallRecoveryService:
         recover_dispatch: RecoverDispatch,
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-call-recovery",
+        hitl: HITLApplicationPort | None = None,
+        hitl_delivery: Any | None = None,
+        run_store: Any | None = None,
     ) -> None:
         self.ledger = ledger
         self.checkpoints = checkpoints
@@ -66,6 +77,9 @@ class A2ACallRecoveryService:
         self.recover_dispatch = recover_dispatch
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
+        self.hitl = hitl
+        self.hitl_delivery = hitl_delivery
+        self.run_store = run_store
 
     async def recover_due(self, *, due_at: datetime) -> int:
         records = await self.ledger.list_due(
@@ -209,6 +223,20 @@ class A2ACallRecoveryService:
                 )
                 is not None
             )
+        # Continuation-owned delivery uncertainty is reconciled by the
+        # continuation recovery phase, not dispatch inspect.
+        if (
+            record.state == "delivery_uncertain"
+            and record.continuation_command is not None
+        ):
+            return (
+                await self._release(
+                    record,
+                    now=now,
+                    delay=record.runtime_policy.retry_backoff_initial_seconds,
+                )
+                is not None
+            )
         if record.state not in {"delivery_uncertain", "working", "resuming"}:
             return (
                 await self._release(
@@ -254,42 +282,99 @@ class A2ACallRecoveryService:
             and inspected.outcome == "interaction"
             and inspected.interaction_observation is not None
         ):
-            # The remote task asked for input: the request is the invocation's
-            # durable answer. Record it and finalize the call so the run's
-            # observation pipeline can route the request instead of polling a
-            # task that will never complete on its own.
             observation = inspected.interaction_observation
+            if observation.call_record_id is None:
+                observation = observation.model_copy(
+                    update={"call_record_id": record.call_record_id}
+                )
             await self.observations.record(observation)
             record = await self._renew(record, now=datetime.now(UTC))
             if record is None:
                 return False
-            content = list(observation.content or [])
-            if not content:
-                content = [TextPart(text="The Agent requested additional input.")]
-            result = ToolResult(
-                call_id=record.invocation_id,
-                tool_name=record.tool_name,
-                status="completed",
-                content=content,
-                artifact_refs=list(observation.artifact_refs or []),
-                error_code=None,
-                error_message=None,
-            )
-            terminal = transition_call(
-                record,
-                to_state="completed",
-                updated_at=datetime.now(UTC),
-                terminal_result=result,
-                terminal_result_digest=sha256(
-                    result.model_dump_json().encode()
-                ).hexdigest(),
-            )
-            winner, exact = await self._cas_or_load_winner(
-                terminal, expected_state_version=record.state_version
-            )
-            return exact or (
-                winner is not None and winner.state in TERMINAL_AGENT_CALL_STATES
-            )
+            if self.hitl is None:
+                # Without a HITL port, only the legacy untyped silent-complete
+                # path is safe; typed specs must wait for a wired composition.
+                if observation.interaction_spec is not None:
+                    return (
+                        await self._release(
+                            record,
+                            now=now,
+                            delay=record.runtime_policy.retry_backoff_initial_seconds,
+                        )
+                        is not None
+                    )
+                content = list(observation.content or [])
+                if not content:
+                    content = [TextPart(text="The Agent requested additional input.")]
+                result = ToolResult(
+                    call_id=record.invocation_id,
+                    tool_name=record.tool_name,
+                    status="completed",
+                    content=content,
+                    artifact_refs=list(observation.artifact_refs or []),
+                    error_code=None,
+                    error_message=None,
+                )
+                terminal = transition_call(
+                    record,
+                    to_state="completed",
+                    updated_at=datetime.now(UTC),
+                    terminal_result=result,
+                    terminal_result_digest=sha256(
+                        result.model_dump_json().encode()
+                    ).hexdigest(),
+                )
+                winner, exact = await self._cas_or_load_winner(
+                    terminal, expected_state_version=record.state_version
+                )
+                return exact or (
+                    winner is not None and winner.state in TERMINAL_AGENT_CALL_STATES
+                )
+            try:
+
+                async def _cas(
+                    candidate: AgentCallLedgerRecord, expected: int
+                ) -> AgentCallLedgerRecord:
+                    winner, _exact = await self._cas_or_load_winner(
+                        candidate, expected_state_version=expected
+                    )
+                    if winner is None:
+                        raise RecoverableCheckpointError(
+                            "call recovery CAS winner unavailable"
+                        )
+                    return winner
+
+                persisted, kind = await park_call_for_interaction(
+                    call=record,
+                    observation=observation,
+                    hitl=self.hitl,
+                    cas=_cas,
+                )
+            except RecoverableCheckpointError:
+                return (
+                    await self._release(
+                        record,
+                        now=now,
+                        delay=record.runtime_policy.retry_backoff_initial_seconds,
+                    )
+                    is not None
+                )
+            if kind == "typed_waiting" and persisted.pending_interaction_id is not None:
+                raw_spec = observation.interaction_spec
+                if raw_spec is not None:
+                    interaction = A2AInteractionSpec.model_validate(raw_spec)
+                    await emit_hitl_request_events(
+                        record=persisted,
+                        interaction=interaction,
+                        interaction_id=persisted.pending_interaction_id,
+                        hitl_delivery=self.hitl_delivery,
+                        run_store=self.run_store,
+                    )
+            return persisted.state in {
+                "input_required",
+                "auth_required",
+                *TERMINAL_AGENT_CALL_STATES,
+            }
         if inspected is not None and inspected.outcome == "accepted":
             if record.state != "working":
                 working = transition_call(
@@ -325,6 +410,15 @@ class A2ACallRecoveryService:
                     is not None
                 )
         if record.state == "working":
+            if record.continuation_command is not None:
+                return (
+                    await self._release(
+                        record,
+                        now=now,
+                        delay=record.runtime_policy.retry_backoff_initial_seconds,
+                    )
+                    is not None
+                )
             return (
                 await self._release(
                     record,
@@ -537,7 +631,10 @@ class A2AContinuationRecoveryService:
             if call.continuation_command is None or call.state not in {
                 "resuming",
                 "delivery_uncertain",
+                "working",
             }:
+                continue
+            if call.state == "working" and call.continuation_state != "accepted":
                 continue
             await self.coordinator.recover_call(call_record_id=call.call_record_id)
             try:

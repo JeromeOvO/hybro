@@ -74,9 +74,18 @@ export default function RoomChatPage() {
   const effectiveChatMode = localChatMode ?? roomDefaultToChatMode(roomSupervisorMode)
 
   // A room seeded from a saved team follows that team while it still exists.
+  // Manual room_agent_set snapshots (e.g. "Chat with this agent") keep room_default
+  // routing; the selector label shows the agent/team name, not All Agents.
+  const roomAgentEntries = Object.entries(room?.room_agent_set || {})
+  const hasRoomAgents = roomAgentEntries.length > 0
   const roomDefaultTeamId = room?.source_group_id
     ?? room?.applied_from_group
     ?? undefined
+  const manualRoomLabel = !roomDefaultTeamId && hasRoomAgents
+    ? (roomAgentEntries.length === 1
+      ? roomAgentEntries[0][1]
+      : `Room Team (${roomAgentEntries.length})`)
+    : undefined
 
   // Group management (extracted hook)
   const gm = useGroupManagement({
@@ -84,8 +93,10 @@ export default function RoomChatPage() {
     getToken,
     isLoaded,
     defaultGroup: roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS,
-    defaultGroupName: room?.source_group_name ?? undefined,
-    defaultTargetMode: { message_target_mode: 'all_agents' },
+    defaultGroupName: room?.source_group_name ?? manualRoomLabel,
+    defaultTargetMode: hasRoomAgents
+      ? { message_target_mode: 'room_default' }
+      : { message_target_mode: 'all_agents' },
     roomId,
   })
 

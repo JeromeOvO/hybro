@@ -596,6 +596,60 @@ async def test_auto_fail_stale_agent_message_rebuilds_public_task_before_persist
 
 
 @pytest.mark.asyncio
+async def test_auto_fail_stale_skips_orchestrator_managed_working_messages():
+    facade, _, messages, _, _ = _facade(ids=["orchestrator-working-message"])
+    messages.agent_messages["a1"] = {
+        "room_id": "r1",
+        "message_id": "orchestrator:run-test:call-1",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "related_message_id": "u1",
+        "message_content": {
+            "message_text": "Generate a travel plan",
+            "message_task": {
+                "id": "orchestrator-task-call-1",
+                "kind": "task",
+                "status": {"state": "working"},
+            },
+        },
+        "extend_info": {"orchestrator_run_id": "run-test"},
+        "message_created_at": NOW,
+    }
+
+    returned = await facade.get_agent_messages_for_room("r1")
+
+    assert len(returned) == 1
+    stored_task = messages.agent_messages["a1"]["message_content"]["message_task"]
+    assert stored_task["status"]["state"] == "working"
+
+
+@pytest.mark.asyncio
+async def test_auto_fail_stale_does_not_fail_working_messages_without_task_timestamps():
+    facade, _, messages, _, _ = _facade(ids=["working-without-timestamps"])
+    messages.agent_messages["a1"] = {
+        "room_id": "r1",
+        "message_id": "a1",
+        "message_type": "agent",
+        "agent_id": "agent",
+        "related_message_id": "u1",
+        "message_content": {
+            "message_task": {
+                "id": "task-1",
+                "status": {"state": "working"},
+            },
+        },
+        "has_task_tracking": True,
+        "message_created_at": NOW,
+    }
+
+    returned = await facade.get_agent_messages_for_room("r1")
+
+    assert len(returned) == 1
+    stored_task = messages.agent_messages["a1"]["message_content"]["message_task"]
+    assert stored_task["status"]["state"] == "working"
+
+
+@pytest.mark.asyncio
 async def test_legacy_user_message_persistence_strips_ephemeral_fields():
     facade, _, messages, _, _ = _facade(ids=["unused-id"])
     user_message = RoomUserMessage(

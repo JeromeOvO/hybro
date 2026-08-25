@@ -102,6 +102,54 @@ def test_parse_kind_based_completed_status_without_message_id():
     assert task.artifacts[0].parts[0].root.text == "Trip plan ready"
 
 
+def test_parse_input_required_status_preserves_interaction_metadata():
+    """Omitting messageId must not drop hybro.ai/a2a/interaction metadata."""
+    payload = {
+        "id": "1",
+        "jsonrpc": "2.0",
+        "result": {
+            "contextId": "ctx-1",
+            "final": True,
+            "kind": "status-update",
+            "status": {
+                "message": {
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "How many days will you stay in NYC?",
+                        }
+                    ],
+                    "role": "agent",
+                    "metadata": {
+                        "hybro.ai/a2a/interaction": {
+                            "schema_version": 1,
+                            "interaction_id": "travel-planner:abc123",
+                            "questions": [
+                                {
+                                    "question_id": "travel-details:abc123",
+                                    "interaction_kind": "questionnaire",
+                                    "prompt": "How many days will you stay in NYC?",
+                                    "answer_kind": "text",
+                                    "required": True,
+                                }
+                            ],
+                        }
+                    },
+                },
+                "state": "input-required",
+            },
+            "taskId": "task-1",
+        },
+    }
+
+    task = parse_stream_response_payload(payload, "msg-1")
+
+    assert task.status.state == TaskState.input_required
+    assert task.status.message is not None
+    assert task.status.message.metadata is not None
+    assert "hybro.ai/a2a/interaction" in task.status.message.metadata
+
+
 def test_parse_legacy_wrapped_status_update_still_works():
     payload = {
         "statusUpdate": {

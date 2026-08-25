@@ -1,7 +1,7 @@
 [project]
 name = "travel_planner"
 version = "0.1.0"
-description = "travel planner agent example that only returns Messages"
+description = "A2A travel planner agent for trip itineraries and travel recommendations"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

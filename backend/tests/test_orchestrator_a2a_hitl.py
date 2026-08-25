@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
@@ -10,7 +13,11 @@ from common.dto.hitl import (
     HITLRouteSnapshotUnion,
     HITLRouteSnapshotV2,
 )
+from execution.orchestrator.a2a_runtime.interaction_outcome import (
+    emit_hitl_request_events,
+)
 from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
+from execution.orchestrator_routing import DualRuntimeRouter
 
 from ._orchestrator_a2a_helpers import ledger_record
 
@@ -126,3 +133,78 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
             verified_auth_reference_digests=[],
             verified_auth_references=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_emit_hitl_request_events_use_public_activity_message_id():
+    emitted: list[object] = []
+    delivery = SimpleNamespace(emit=AsyncMock(side_effect=lambda event: emitted.append(event)))
+    run_store = SimpleNamespace(
+        load=AsyncMock(
+            return_value=SimpleNamespace(
+                request=SimpleNamespace(user_message_id="user-1"),
+                client_request_id="cr-1",
+            )
+        )
+    )
+    record = ledger_record(run_id="run-1", call_id="call-1")
+
+    await emit_hitl_request_events(
+        record=record,
+        interaction=interaction(),
+        interaction_id="interaction-1",
+        hitl_delivery=delivery,
+        run_store=run_store,
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0].message_id == "orchestrator:run-1:call-1"
+    assert emitted[0].related_message_id == "user-1"
+    assert emitted[0].client_request_id == "cr-1"
+
+
+@pytest.mark.asyncio
+async def test_router_pending_hitl_uses_public_activity_message_id():
+    record = ledger_record(run_id="run-1", call_id="call-1").model_copy(
+        update={
+            "state": "input_required",
+            "pending_interaction_id": "interaction-1",
+        }
+    )
+    router = DualRuntimeRouter.__new__(DualRuntimeRouter)
+    router._runtime = SimpleNamespace(
+        hitl_port=SimpleNamespace(
+            get_eligible_interactions=AsyncMock(
+                return_value=[
+                    (
+                        interaction(),
+                        SimpleNamespace(
+                            orchestration_run_id="run-1",
+                            call_record_id=record.call_record_id,
+                            invocation_id="call-1",
+                            agent_id="agent-1",
+                            task_id="task-1",
+                            context_id="context-1",
+                            interaction_revision=1,
+                        ),
+                        "fingerprint",
+                    )
+                ]
+            )
+        ),
+        run_store=SimpleNamespace(
+            load=AsyncMock(
+                return_value=SimpleNamespace(
+                    request=SimpleNamespace(user_message_id="user-1"),
+                    client_request_id="cr-1",
+                )
+            )
+        ),
+        call_ledger=SimpleNamespace(load_by_record_id=AsyncMock(return_value=record)),
+    )
+
+    pending = await router.get_pending_hitl("room-1")
+
+    assert len(pending) == 1
+    assert pending[0].message_id == "orchestrator:run-1:call-1"
+    assert pending[0].display_message_id == "orchestrator:run-1:call-1"

@@ -68,6 +68,24 @@ describe('useGroupManagement – default team behavior', () => {
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
   })
 
+  it('surfaces a manual room agent label with room_default routing', async () => {
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
+        defaultGroupName: 'Story Agent',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.loadingGroups).toBe(false)
+    })
+
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.selectedGroupName).toBe('Story Agent')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+  })
+
   it('reselecting All Agents restores a manual room snapshot', async () => {
     mockListAgentGroups.mockResolvedValue({
       success: true,

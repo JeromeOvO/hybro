@@ -61,6 +61,20 @@ describe('GroupSelector', () => {
     expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument()
   })
 
+  it('shows a manual room agent label instead of All Agents when provided', () => {
+    render(
+      <GroupSelector
+        selectedGroup="all_agents"
+        selectedGroupName="Story Agent"
+        onGroupChange={vi.fn()}
+        groups={[]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /story agent/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^all agents$/i })).not.toBeInTheDocument()
+  })
+
   it('uses team terminology for saved agent collections', async () => {
     const user = userEvent.setup()
     render(

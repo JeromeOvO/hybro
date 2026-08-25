@@ -1541,6 +1541,139 @@ async def test_hitl_pending_and_cancel_delegate_and_translate():
     )
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_hitl_answer_falls_back_only_for_missing_interaction():
+    from execution.hitl.exceptions import HITLDeliveryUncertainError
+
+    facade, deps = _make_facade()
+    router = SimpleNamespace(
+        route_hitl_answer=AsyncMock(side_effect=KeyError("interaction-missing")),
+        get_pending_hitl=AsyncMock(return_value=[]),
+        cancel_hitl_interaction=AsyncMock(side_effect=KeyError("interaction-missing")),
+    )
+    facade.bind_orchestrator_router(router)
+    deps["hitl_manager"].handle_batch_response.return_value = {
+        "request_id": "interaction-missing",
+        "status": "accepted",
+        "responder_id": "user-1",
+    }
+
+    response = await facade.resolve_hitl_batch(
+        "room-1",
+        "interaction-missing",
+        [{"request_id": "q1", "user_input": "NYC"}],
+        "user-1",
+    )
+    assert response.status == "accepted"
+    deps["hitl_manager"].handle_batch_response.assert_awaited_once()
+
+    canceled = await facade.cancel_hitl_interaction("room-1", "interaction-missing", 1)
+    assert canceled == 6
+    deps["hitl_manager"].cancel_interaction_by_user.assert_awaited_once()
+
+    router.route_hitl_answer = AsyncMock(side_effect=KeyError("call-record-1"))
+    with pytest.raises(KeyError, match="call-record-1"):
+        await facade.resolve_hitl_batch(
+            "room-1",
+            "interaction-owned",
+            [{"request_id": "q1", "user_input": "NYC"}],
+            "user-1",
+        )
+
+    router.route_hitl_answer = AsyncMock(
+        side_effect=HITLDeliveryUncertainError("uncertain")
+    )
+    with pytest.raises(HITLDeliveryUncertainError):
+        await facade.resolve_hitl_batch(
+            "room-1",
+            "interaction-owned",
+            [{"request_id": "q1", "user_input": "NYC"}],
+            "user-1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_hitl_pending_and_cancel_use_router_when_bound():
+    facade, deps = _make_facade()
+    from common.dto.execution import HITLRequest
+
+    orch_pending = HITLRequest(
+        request_id="q1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        source="agent",
+        prompt="Where?",
+        message_id="assistant-1",
+        interaction_id="orch-1",
+    )
+    router = SimpleNamespace(
+        get_pending_hitl=AsyncMock(return_value=[orch_pending]),
+        cancel_hitl_interaction=AsyncMock(return_value=1),
+        route_hitl_answer=AsyncMock(return_value="completed"),
+    )
+    facade.bind_orchestrator_router(router)
+
+    pending = await facade.get_pending_hitl("room-1")
+    assert len(pending) == 1
+    assert pending[0].interaction_id == "orch-1"
+
+    canceled = await facade.cancel_hitl_interaction("room-1", "orch-1", 1)
+    assert canceled == 1
+    router.cancel_hitl_interaction.assert_awaited_once()
+    deps["hitl_manager"].cancel_interaction_by_user.assert_not_awaited()
+
+    await facade.resolve_hitl_batch(
+        "room-1",
+        "orch-1",
+        [{"request_id": "q1", "user_input": "NYC"}],
+        "user-1",
+        client_request_id="cr-1",
+    )
+    router.route_hitl_answer.assert_awaited_once()
+    deps["hitl_manager"].handle_batch_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_pending_hitl_dedupes_legacy_and_orchestrator_by_interaction_request():
+    facade, deps = _make_facade()
+    from common.dto.execution import HITLRequest
+
+    legacy = SimpleNamespace(
+        request_id="q1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        public_source="agent",
+        interaction_id="shared-1",
+        question_count=1,
+        question_index=0,
+        prompt="Legacy prompt",
+        prompt_type="text",
+        status="pending",
+        display_message_id="legacy-msg",
+    )
+    deps["hitl_manager"].get_pending_requests.return_value = [legacy]
+    orch_pending = HITLRequest(
+        request_id="q1",
+        room_id="room-1",
+        user_message_id="user-msg-1",
+        source="agent",
+        prompt="Orchestrator prompt",
+        message_id="orch-msg",
+        interaction_id="shared-1",
+    )
+    router = SimpleNamespace(
+        get_pending_hitl=AsyncMock(return_value=[orch_pending]),
+    )
+    facade.bind_orchestrator_router(router)
+
+    pending = await facade.get_pending_hitl("room-1")
+
+    assert len(pending) == 1
+    assert pending[0].interaction_id == "shared-1"
+    assert pending[0].prompt == "Orchestrator prompt"
+    assert pending[0].message_id == "orch-msg"
+
+
 def test_room_response_to_execution_ack_preserves_missing_message_error_shape():
     response = RoomCenterUserMessageResponse(
         success=False,

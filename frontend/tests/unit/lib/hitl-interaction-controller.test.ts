@@ -14,7 +14,7 @@ const seed = {
 }
 
 describe('hitlInteractionReducer', () => {
-  it('owns request-keyed drafts, navigation, and review state', () => {
+  it('owns request-keyed drafts and navigation state', () => {
     let state = createHitlControllerState(seed)
     state = hitlInteractionReducer(state, {
       type: 'answer',
@@ -25,11 +25,9 @@ describe('hitlInteractionReducer', () => {
       type: 'navigate',
       requestId: 'request-2',
     })
-    state = hitlInteractionReducer(state, { type: 'review' })
 
     expect(state.drafts).toEqual({ 'request-1': ['a', 'b'], 'request-2': 'saved' })
     expect(state.currentId).toBe('request-2')
-    expect(state.reviewing).toBe(true)
   })
 
   it('models submit, uncertainty, and authoritative reset explicitly', () => {

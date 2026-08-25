@@ -39,10 +39,17 @@ export function useProcessingRestore(
     if (lifecycle.isProcessingResolved()) return
 
     const activeRuns = room.active_runs ?? []
-    const activeRunTriggerMessageId =
-      activeRuns.find((run) => !!run.trigger_message_id)?.trigger_message_id ?? null
+    const activeRunTriggerMessageIds = activeRuns
+      .map(run => run.trigger_message_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    const activeRunTriggerMessageId = activeRunTriggerMessageIds[0] ?? null
     const lifecycleMessageId = activeRunTriggerMessageId
     const hasActiveLifecycle = activeRuns.length > 0
+
+    useRoomUiStore.getState().setActiveRunTriggerMessageIds(
+      roomId,
+      activeRunTriggerMessageIds,
+    )
 
     const finishStaleActiveRunIfTerminal = async () => {
       if (!lifecycleMessageId) return

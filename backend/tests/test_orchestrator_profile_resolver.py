@@ -7,6 +7,7 @@ import pytest
 from common.config.settings import Settings
 from execution.adapters.profiles import (
     FAST_ORCHESTRATOR_SYSTEM_PROMPT,
+    ULTIMATE_ORCHESTRATOR_SYSTEM_PROMPT,
     OrchestratorProfileResolutionError,
     OrchestratorProfileResolver,
     PromptAssetRegistry,
@@ -70,6 +71,17 @@ def test_parameter_table_defaults_are_pinned():
         "explicit_agent_first"
     )
     assert fields["orchestrator_ultimate_finalization"].default == "pass_through"
+
+
+def test_orchestrator_prompts_require_specialist_dispatch_before_user_clarify():
+    for prompt in (
+        FAST_ORCHESTRATOR_SYSTEM_PROMPT,
+        ULTIMATE_ORCHESTRATOR_SYSTEM_PROMPT,
+    ):
+        assert "DELEGATION FIRST" in prompt
+        assert "MUST call that agent on the first turn" in prompt
+        assert "Never ask the user instead of calling a matching agent" in prompt
+        assert "Missing details alone are not a reason to skip tools" in prompt
 
 
 def test_fast_and_ultimate_profiles_resolve_from_defaults():

@@ -98,6 +98,15 @@ export function GroupSelector({
     }
 
     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
+      // Manual room snapshots keep the all_agents sentinel for restore semantics
+      // but surface the room agent/team label when provenance provides one.
+      if (selectedGroupName) {
+        return {
+          icon: <Users className="h-3.5 w-3.5" />,
+          label: selectedGroupName,
+          description: 'Agents in this room',
+        }
+      }
       return {
         icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
         label: 'All Agents',

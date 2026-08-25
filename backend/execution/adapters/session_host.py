@@ -156,6 +156,7 @@ class RoomSessionHost:
             run_store=self._run_store,
             kernel_factory=kernel_for_run,
             signal_factory=EventCancellationSignal,
+            listener=self._listener,
         )
 
     async def shutdown(self) -> None:

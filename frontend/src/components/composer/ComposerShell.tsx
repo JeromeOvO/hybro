@@ -116,8 +116,11 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   const isHitlMode = composerState.mode === 'hitl_responding'
   const isProcessing = composerState.isProcessing || adapter.isProcessing
 
-  const firstHitl = composerState.pendingHitls[0]
-  const activeInteractionId = firstHitl?.interactionId
+  // Prefer an actionable open prompt over a transient applying recovery
+  // state so follow-up HITL questions are not covered by "Applying…".
+  const preferredHitl = composerState.pendingHitls.find(hitl => hitl.lifecycleState === 'open')
+    ?? composerState.pendingHitls[0]
+  const activeInteractionId = preferredHitl?.interactionId
   const activeHitls = activeInteractionId
     ? composerState.pendingHitls.filter(hitl => hitl.interactionId === activeInteractionId)
     : []

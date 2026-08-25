@@ -51,10 +51,15 @@ class MembershipAuthorizationRefresh:
             return "denied"
         if _digest(requesting_subject_id) != binding.requesting_subject_digest:
             return "denied"
-        if getattr(binding, "authorization_kind", None) != "all_active_agents":
-            # The user explicitly asked to coordinate every active agent; the
-            # visibility-filtered candidate listing is the authorization for
-            # that scope. Every other scope is gated by room membership.
+        # Per-turn explicit scopes already authorized the agent when the
+        # candidate catalog was assembled (visibility-filtered listing). Room
+        # membership only gates scopes that are derived from the room/group
+        # roster (room_member / saved_group_member / unspecified legacy).
+        if getattr(binding, "authorization_kind", None) not in {
+            "all_active_agents",
+            "mention",
+            "explicit_selection",
+        }:
             try:
                 member = await self._room_ownership.verify_room_agent_membership(
                     room_id, binding.agent_id

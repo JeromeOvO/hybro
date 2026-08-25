@@ -16,6 +16,7 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useGroupManagement } from "@/hooks/useGroupManagement"
 import type { QuoteData } from "@/lib/types/quote"
 import type { PendingAttachment } from "@/lib/types/attachments"
+import type { Agent } from "@/lib/types/agent"
 import type { ChatMode } from "@/lib/types/chat-mode"
 import { DEFAULT_CHAT_MODE, chatModeToExecutionMode } from "@/lib/types/chat-mode"
 import { cn } from "@/lib/utils"
@@ -34,6 +35,7 @@ function ChatPageContent() {
     const { user, isLoaded } = useUser()
     const { getToken } = useAuth()
     const [promptPrefill, setPromptPrefill] = useState("")
+    const [seedAgents, setSeedAgents] = useState<Agent[]>([])
     const [hasError, setHasError] = useState(false)
     const [settingUpTemplate, setSettingUpTemplate] = useState<string | null>(null)
 
@@ -43,8 +45,17 @@ function ChatPageContent() {
     useEffect(() => {
         // Peek first so an App Router/Strict Mode remount cannot consume the
         // handoff before the composer has actually applied it.
-        const draft = useRoomUiStore.getState().pendingChatDraft
-        if (draft) setPromptPrefill(draft)
+        const handoff = useRoomUiStore.getState().pendingChatHandoff
+        if (!handoff) return
+        setPromptPrefill(handoff.draft)
+        if (handoff.seedAgents?.length) {
+            setSeedAgents(handoff.seedAgents)
+        }
+        // Empty drafts never reach RoomChatInput's consumer; clear the store
+        // once seed agents are copied into local state.
+        if (!handoff.draft) {
+            useRoomUiStore.getState().clearPendingChatHandoff()
+        }
     }, [])
 
     const handleRequireAuth = useCallback(() => {
@@ -91,10 +102,18 @@ function ChatPageContent() {
         try {
             setHasError(false)
 
+            // Single-agent handoff seeds room membership and uses room_default,
+            // unless the user explicitly @mentioned agents in this message.
+            const seeded = seedAgents.length > 0
             const options = {
                 useSupervisor: chatModeToExecutionMode(localChatMode) === 'supervisor',
-                dispatch,
-                targetGroup: isMentionDispatchInput(dispatch) ? undefined : gm.selectedGroup,
+                selectedAgents: seeded ? seedAgents : undefined,
+                dispatch: seeded && !isMentionDispatchInput(dispatch)
+                    ? { message_target_mode: 'room_default' as const }
+                    : dispatch,
+                targetGroup: isMentionDispatchInput(dispatch) || seeded
+                    ? undefined
+                    : gm.selectedGroup,
                 attachments,
             }
 
@@ -103,6 +122,7 @@ function ChatPageContent() {
             if (!success) {
                 throw new Error('Failed to create room')
             }
+            setSeedAgents([])
         } catch (error) {
             console.error('Error creating room:', error)
             setHasError(true)
@@ -152,7 +172,7 @@ function ChatPageContent() {
 
     const handlePromptPrefillConsumed = useCallback(() => {
         setPromptPrefill("")
-        useRoomUiStore.getState().clearPendingChatDraft()
+        useRoomUiStore.getState().clearPendingChatHandoff()
     }, [])
 
     if (!isLoaded) {
@@ -257,9 +277,24 @@ function ChatPageContent() {
                             groups={gm.groups}
                             loadingGroups={gm.loadingGroups}
                             selectedGroup={gm.selectedGroup}
-                            selectedGroupName={gm.selectedGroupName}
-                            selectedGroupDispatch={gm.resolvedTargetMode}
-                            onGroupChange={gm.handleGroupChange}
+                            selectedGroupName={
+                              seedAgents.length === 1
+                                ? seedAgents[0].agent_card.name
+                                : seedAgents.length > 1
+                                  ? `Room Team (${seedAgents.length})`
+                                  : gm.selectedGroupName
+                            }
+                            selectedGroupDispatch={
+                              seedAgents.length > 0
+                                ? { message_target_mode: 'room_default' }
+                                : gm.resolvedTargetMode
+                            }
+                            onGroupChange={(groupId) => {
+                              // User took over scope selection; stop forcing the
+                              // single-agent seed label/dispatch.
+                              setSeedAgents([])
+                              gm.handleGroupChange(groupId)
+                            }}
                             onCreateGroup={gm.handleCreateGroup}
                             onEditGroup={gm.handleEditGroup}
                             onDeleteGroup={gm.handleDeleteGroup}

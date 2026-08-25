@@ -238,6 +238,25 @@ def _assert_completed_text(result: dict, label: str) -> None:
     assert text, f"{label} returned no text: {result}"
 
 
+def test_travel_planner_card_content() -> None:
+    if "travel_planner_agent" not in AGENTS:
+        pytest.skip("travel_planner_agent not in manifest")
+    agent_url = _agent_url(AGENTS["travel_planner_agent"])
+    card = _get_card(agent_url)
+    if card is None:
+        _fail_missing_stack("travel_planner_agent not reachable; is the stack running?")
+
+    assert card.get("name") == "Travel Planner Agent", card
+    description = (card.get("description") or "").lower()
+    assert "trip planning" in description or "itinerar" in description, card
+
+    skills = card.get("skills") or []
+    assert skills, card
+    examples = skills[0].get("examples") or []
+    assert "Generate a travel plan" in examples, card
+    assert "hello" not in examples, card
+
+
 def test_travel_planner_functional() -> None:
     if "travel_planner_agent" not in AGENTS:
         pytest.skip("travel_planner_agent not in manifest")

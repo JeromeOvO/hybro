@@ -373,9 +373,11 @@ export default function ConsumerAgentProfilePage() {
   const quickPrompts = collectQuickPrompts(card.skills)
 
   const navigateToChat = (prompt?: string) => {
-    const mention = `<@${agentId}|${card.name}>`
-    const draft = prompt ? `${mention} ${prompt}` : `${mention} `
-    useRoomUiStore.getState().setPendingChatDraft(draft)
+    // Single-agent chat seeds room membership; it is not an @mention handoff.
+    useRoomUiStore.getState().setPendingChatHandoff({
+      draft: prompt?.trim() ? prompt.trim() : '',
+      seedAgents: [agent],
+    })
     router.push(routes.chat)
   }
 

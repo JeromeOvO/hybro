@@ -188,6 +188,182 @@ describe('FinalAnswerSurface processing logs', () => {
     expect(screen.queryByText('Agents working on your request…')).not.toBeInTheDocument()
   })
 
+  it('keeps work-log running during HITL without replacing Needs Input with Working', () => {
+    const { container } = render(
+      <FinalAnswerSurface
+        turn={makeTurn({
+          status: 'awaiting_input',
+          phase: 'collecting',
+          finalAnswer: {
+            kind: 'hitl',
+            label: 'Needs input',
+            hitl: {
+              source: 'agent',
+              prompts: [{
+                messageId: 'hitl-1',
+                agentName: 'Travel Planner Agent',
+                prompt: 'Where are you going?',
+              }],
+            },
+          },
+          agentResults: [
+            {
+              messageId: 'hitl-1',
+              agentId: 'travel-planner',
+              agentName: 'Travel Planner Agent',
+              status: 'awaiting_input',
+              content: 'Where are you going?',
+              artifacts: [],
+              isSummaryAgent: false,
+              hitlPending: { prompt: 'Where are you going?', source: 'agent' },
+            },
+          ],
+          processingStatusLogs: [
+            {
+              id: 'processing-log-1',
+              message: 'Delegating to Travel Planner Agent',
+              timestamp: '2026-06-03T12:00:01.000Z',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Where are you going?')).toBeInTheDocument()
+    expect(screen.queryByLabelText('HYBRO AI — Working')).not.toBeInTheDocument()
+    expect(container.querySelector('.conversation-processing-log')).toHaveClass(
+      'conversation-processing-log-running',
+    )
+  })
+
+  it('keeps the HYBRO AI Working spinner after HITL while the turn is still pending', () => {
+    const { container } = render(
+      <FinalAnswerSurface
+        turn={makeTurn({
+          status: 'active',
+          phase: 'collecting',
+          finalAnswer: { kind: 'pending', label: 'Working' },
+          agentResults: [
+            {
+              messageId: 'agent-1',
+              agentId: 'travel-planner',
+              agentName: 'Travel Planner Agent',
+              status: 'working',
+              content: '',
+              artifacts: [],
+              isSummaryAgent: false,
+              hitlResolved: { prompt: 'Where are you going?', answer: 'New York City' },
+            },
+          ],
+          processingStatusLogs: [
+            {
+              id: 'processing-log-1',
+              message: 'Applying your answers…',
+              timestamp: '2026-06-03T12:00:02.000Z',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByLabelText('HYBRO AI — Working')).toBeInTheDocument()
+    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
+  })
+
+  it('keeps the spinner while an active turn already shows deterministic_done', () => {
+    const { container } = render(
+      <FinalAnswerSurface
+        turn={makeTurn({
+          status: 'active',
+          phase: 'collecting',
+          finalAnswer: {
+            kind: 'deterministic_done',
+            label: 'Combined agent responses',
+            deterministicIntro: '1 agent responded. Expand below to read each answer.',
+            sections: [],
+          },
+          agentResults: [
+            {
+              messageId: 'agent-1',
+              agentId: 'travel-planner',
+              agentName: 'Travel Planner Agent',
+              status: 'completed',
+              content: 'Five-day NYC itinerary…',
+              artifacts: [],
+              isSummaryAgent: false,
+            },
+          ],
+          processingStatusLogs: [
+            {
+              id: 'processing-log-1',
+              message: 'Synthesizing responses',
+              timestamp: '2026-06-03T12:00:02.000Z',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByLabelText('HYBRO AI — Combined agent responses')).toBeInTheDocument()
+    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
+    expect(container.querySelector('.conversation-processing-log')).toHaveClass(
+      'conversation-processing-log-running',
+    )
+  })
+
+  it('stops the HYBRO AI Working spinner after the turn completes', () => {
+    const { container } = render(
+      <FinalAnswerSurface
+        turn={makeTurn({
+          status: 'completed',
+          phase: 'completed',
+          finalAnswer: {
+            kind: 'deterministic_done',
+            label: 'Combined agent responses',
+            deterministicIntro: '1 agent responded. Expand below to read each answer.',
+            sections: [],
+          },
+          agentResults: [
+            {
+              messageId: 'agent-1',
+              agentId: 'travel-planner',
+              agentName: 'Travel Planner Agent',
+              status: 'completed',
+              content: 'Five-day NYC itinerary…',
+              artifacts: [],
+              isSummaryAgent: false,
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByLabelText('HYBRO AI — Combined agent responses')).toBeInTheDocument()
+    expect(container.querySelector('.conversation-avatar-working')).toBeNull()
+  })
+
+  it('shows Synthesizing CollectingBlock while phase is synthesizing', () => {
+    const { container } = render(
+      <FinalAnswerSurface
+        turn={makeTurn({
+          status: 'active',
+          phase: 'synthesizing',
+          finalAnswer: { kind: 'pending', label: 'Working' },
+          processingStatusLogs: [
+            {
+              id: 'processing-log-1',
+              message: 'Synthesizing responses',
+              timestamp: '2026-06-03T12:00:02.000Z',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByLabelText('HYBRO AI — Synthesizing')).toBeInTheDocument()
+    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
+  })
+
   it('keeps processing status logs visible after a single-agent turn completes', () => {
     const { container } = render(
       <FinalAnswerSurface

@@ -124,7 +124,7 @@ let ConsumerAgentProfilePage: React.ComponentType
 
 beforeEach(async () => {
   vi.clearAllMocks()
-  useRoomUiStore.setState({ pendingChatDraft: null })
+  useRoomUiStore.setState({ pendingChatHandoff: null })
   mockDeleteAgent.mockResolvedValue({ success: true })
   mockParamId.mockReturnValue('agent-test-1')
   const mod = await import('@/app/(portal)/agents/[id]/page')
@@ -402,7 +402,7 @@ describe('ConsumerAgentProfilePage', () => {
   })
 
   describe('CTA', () => {
-    it('hands a mention to the chat composer without URL parameters', async () => {
+    it('hands a seeded single-agent chat to the composer without URL parameters', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse())
 
       render(<ConsumerAgentProfilePage />)
@@ -419,9 +419,11 @@ describe('ConsumerAgentProfilePage', () => {
 
       expect(mockPush).toHaveBeenCalledWith('/chat')
       expect(mockPush).toHaveBeenCalledTimes(1)
-      expect(useRoomUiStore.getState().pendingChatDraft).toBe(
-        '<@agent-test-1|Test Agent> ',
-      )
+      const handoff = useRoomUiStore.getState().pendingChatHandoff
+      expect(handoff?.draft).toBe('')
+      expect(handoff?.seedAgents).toHaveLength(1)
+      expect(handoff?.seedAgents?.[0].agent_id).toBe('agent-test-1')
+      expect(handoff?.seedAgents?.[0].agent_card.name).toBe('Test Agent')
     })
   })
 

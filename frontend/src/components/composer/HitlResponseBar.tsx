@@ -56,6 +56,7 @@ interface HitlResponseBarProps {
 type DraftValue = HitlDraftValue
 
 const GENERIC_PROMPT = /^the agent needs additional information\.?$/i
+const APPLYING_REFRESH_MS = 1500
 
 function answerText(value: DraftValue | undefined): string {
   if (Array.isArray(value)) return value.join(', ')
@@ -89,7 +90,7 @@ function RecoveryState({
   const copy = {
     applying: {
       title: 'Applying your answers',
-      body: 'Your responses are saved. Hybro is waiting for the agent or supervisor to confirm the next step.',
+      body: 'Your responses are saved. Hybro is continuing the run.',
       icon: LoaderCircle,
     },
     expired: {
@@ -148,7 +149,7 @@ function RecoveryState({
         ) : null}
       </div>
       <div className="conversation-hitl-recovery-actions">
-        {(state === 'applying' || state === 'delivery_uncertain') && onRefresh ? (
+        {state === 'delivery_uncertain' && onRefresh ? (
           <Button variant="outline" disabled={working} onClick={() => run(onRefresh)}>
             <RefreshCw className="h-4 w-4" aria-hidden="true" />
             Check status
@@ -224,11 +225,13 @@ function PromptControl({
   value,
   onChange,
   inputRef,
+  onSubmit,
 }: {
   hitl: HitlPromptView
   value: DraftValue | undefined
   onChange: (value: DraftValue) => void
   inputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>
+  onSubmit?: () => void
 }) {
   const textValue = Array.isArray(value) ? value.join(', ') : value ?? ''
 
@@ -293,6 +296,12 @@ function PromptControl({
       autoComplete="off"
       value={textValue}
       onChange={event => onChange(event.target.value)}
+      onKeyDown={event => {
+        if (event.key === 'Enter' && !event.shiftKey && onSubmit) {
+          event.preventDefault()
+          onSubmit()
+        }
+      }}
       placeholder="Type your answer…"
       className="conversation-hitl-text-input"
     />
@@ -315,7 +324,6 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   const {
     currentId,
     drafts,
-    reviewing,
     errorState,
     errorMessage: submissionError,
   } = controller
@@ -333,6 +341,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   const currentIndex = Math.max(0, ordered.findIndex(hitl => hitl.hitlId === currentId))
   const current = ordered[currentIndex] ?? ordered[0]
   const allAnswered = ordered.every(hitl => hasAnswer(hitl, drafts[hitl.hitlId]))
+  const isLastQuestion = currentIndex === ordered.length - 1
 
   // Authoritative lifecycle reconciliation: local submit/recovery state must
   // never override a fresher store lifecycle (e.g. SSE/refresh reporting
@@ -349,9 +358,9 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   }, [authoritativeLifecycle, dispatch])
 
   useEffect(() => {
-    const target = reviewing ? headingRef.current : inputRef.current ?? headingRef.current
+    const target = inputRef.current ?? headingRef.current
     target?.focus()
-  }, [currentId, reviewing, submissionError])
+  }, [currentId, submissionError])
 
   const setDraft = useCallback((requestId: string, value: DraftValue) => {
     dispatch({ type: 'answer', requestId, value })
@@ -421,14 +430,52 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
     }
   }, [allAnswered, dispatch, drafts, interactionId, onSubmit, ordered, submitting])
 
+  const handlePrimaryAction = useCallback(() => {
+    if (!current) return
+    if (!hasAnswer(current, drafts[current.hitlId])) return
+    if (isLastQuestion) {
+      void handleSubmit()
+      return
+    }
+    goTo(currentIndex + 1)
+  }, [current, currentIndex, drafts, goTo, handleSubmit, isLastQuestion])
+
+  const lifecycleState = errorState ?? current?.lifecycleState
+  const invalidPrompt = !current?.prompt.trim() || GENERIC_PROMPT.test(current?.prompt.trim() ?? '')
+  // Local submit or server applying both show the transient recovery state.
+  // A follow-up open prompt arrives with a new interactionKey, which resets
+  // the controller and replaces this UI automatically.
+  const showApplying = Boolean(current && (submitted || lifecycleState === 'applying'))
+
+  // While answers are applying, poll pending HITL so a follow-up prompt
+  // replaces this recovery state automatically instead of waiting on
+  // a manual "Check status" click.
+  useEffect(() => {
+    if (!showApplying || !onRefresh) return
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        await onRefresh()
+      } catch {
+        // Keep polling; transient refresh failures should not sticky-block UX.
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => {
+      if (!cancelled) void refresh()
+    }, APPLYING_REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [onRefresh, showApplying])
+
   if (!current) return null
 
-  const lifecycleState = errorState ?? current.lifecycleState
-  const invalidPrompt = !current.prompt.trim() || GENERIC_PROMPT.test(current.prompt.trim())
-  if (submitted || lifecycleState === 'applying') {
+  if (showApplying) {
     return (
       <section className="conversation-hitl-panel" data-testid="hitl-response-bar" aria-label="Human input status">
-        <RecoveryState state="applying" onRefresh={onRefresh} />
+        <RecoveryState state="applying" />
       </section>
     )
   }
@@ -454,48 +501,35 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
         <MessageCircleQuestion className="h-5 w-5 conversation-hitl-panel-icon" aria-hidden="true" />
         <div className="conversation-hitl-panel-heading-copy">
           <span className="conversation-hitl-panel-title">{sourceLabel} needs your input</span>
-          <span className="conversation-hitl-panel-progress" aria-live="polite">
-            {reviewing ? 'Review answers' : `Question ${currentIndex + 1} of ${ordered.length}`}
-          </span>
+          {ordered.length > 1 ? (
+            <span className="conversation-hitl-panel-progress" aria-live="polite">
+              Question {currentIndex + 1} of {ordered.length}
+            </span>
+          ) : null}
         </div>
-        <div className="conversation-hitl-progress-dots" aria-hidden="true">
-          {ordered.map((hitl, index) => (
-            <span
-              key={hitl.hitlId}
-              data-state={hasAnswer(hitl, drafts[hitl.hitlId]) ? 'answered' : index === currentIndex ? 'current' : 'pending'}
-            />
-          ))}
-        </div>
+        {ordered.length > 1 ? (
+          <div className="conversation-hitl-progress-dots" aria-hidden="true">
+            {ordered.map((hitl, index) => (
+              <span
+                key={hitl.hitlId}
+                data-state={hasAnswer(hitl, drafts[hitl.hitlId]) ? 'answered' : index === currentIndex ? 'current' : 'pending'}
+              />
+            ))}
+          </div>
+        ) : null}
       </header>
 
-      {reviewing ? (
-        <div className="conversation-hitl-review">
-          <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>Review before sending</h2>
-          <p>Hybro will send these answers together and resume the run once.</p>
-          <ol className="conversation-hitl-review-list">
-            {ordered.map((hitl, index) => (
-              <li key={hitl.hitlId}>
-                <div>
-                  <span>{hitl.prompt}</span>
-                  <strong>{answerText(drafts[hitl.hitlId]) || 'Not answered'}</strong>
-                </div>
-                <Button variant="ghost" size="sm" onClick={() => goTo(index)}>Edit</Button>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : (
-        <div className="conversation-hitl-question" key={current.hitlId}>
-          <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>{current.prompt}</h2>
-          <label className="sr-only" htmlFor={`hitl-answer-${current.hitlId}`}>Answer</label>
-          <PromptControl
-            hitl={current}
-            value={drafts[current.hitlId]}
-            onChange={value => setDraft(current.hitlId, value)}
-            inputRef={inputRef}
-          />
-        </div>
-      )}
+      <div className="conversation-hitl-question" key={current.hitlId}>
+        <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>{current.prompt}</h2>
+        <label className="sr-only" htmlFor={`hitl-answer-${current.hitlId}`}>Answer</label>
+        <PromptControl
+          hitl={current}
+          value={drafts[current.hitlId]}
+          onChange={value => setDraft(current.hitlId, value)}
+          inputRef={inputRef}
+          onSubmit={handlePrimaryAction}
+        />
+      </div>
 
       {submissionError ? (
         <div className="conversation-hitl-error" role="alert">{submissionError}</div>
@@ -510,31 +544,34 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
           ) : null}
         </div>
         <div className="conversation-hitl-navigation">
-          <Button
-            variant="outline"
-            disabled={submitting || (!reviewing && currentIndex === 0)}
-            onClick={() => reviewing ? goTo(ordered.length - 1) : goTo(currentIndex - 1)}
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            Back
-          </Button>
-          {reviewing ? (
-            <Button disabled={submitting || !allAnswered} onClick={handleSubmit}>
-              {submitting ? <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
-              {submitting ? 'Submitting…' : 'Submit all answers'}
-            </Button>
-          ) : (
+          {ordered.length > 1 ? (
             <Button
-              disabled={!hasAnswer(current, drafts[current.hitlId])}
-              onClick={() => {
-                if (currentIndex === ordered.length - 1) dispatch({ type: 'review' })
-                else goTo(currentIndex + 1)
-              }}
+              variant="outline"
+              disabled={submitting || currentIndex === 0}
+              onClick={() => goTo(currentIndex - 1)}
             >
-              {currentIndex === ordered.length - 1 ? 'Review answers' : 'Next'}
-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+              Back
             </Button>
-          )}
+          ) : null}
+          <Button
+            disabled={submitting || !hasAnswer(current, drafts[current.hitlId]) || (isLastQuestion && !allAnswered)}
+            onClick={handlePrimaryAction}
+          >
+            {isLastQuestion ? (
+              <>
+                {submitting
+                  ? <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+                {submitting ? 'Submitting…' : 'Submit'}
+              </>
+            ) : (
+              <>
+                Next
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </>
+            )}
+          </Button>
         </div>
       </footer>
     </section>

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   hasActiveSynthesisGap,
+  hasLiveRunEvidence,
   isBackendRunConfirmedNonSynthesisCompletion,
   isDeterministicCompletionExpected,
   isMixedTerminalMultiAgentTurn,
   isMultiAgentTurnReadyForDeterministicDone,
   isPreSynthesisGap,
+  isSynthesisKindWithoutActualSynthesis,
+  shouldHoldTurnActiveForOpenRoomRun,
   shouldShowSynthesizingPhase,
 } from '@/lib/room-timeline/multi-agent-turn-complete'
 import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/types'
@@ -473,11 +476,24 @@ describe('isPreSynthesisGap', () => {
 })
 
 describe('shouldShowSynthesizingPhase', () => {
-  it('returns false when only delegation logs exist after agents finish', () => {
+  it('returns true when only delegation logs exist after agents finish on a live run', () => {
     const turn = makeTurn({
       status: 'active',
       isSupervisorTurn: false,
       processingStatusLogs: [{ id: 'l1', message: 'Delegating to 2 agent(s)...', timestamp: '2026-01-01T00:00:01.000Z' }],
+      agentResults: [
+        makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
+        makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
+      ],
+    })
+    expect(shouldShowSynthesizingPhase(turn)).toBe(true)
+  })
+
+  it('returns false without live run evidence on a hydrated turn', () => {
+    const turn = makeTurn({
+      status: 'completed',
+      isSupervisorTurn: false,
+      processingStatusLogs: [],
       agentResults: [
         makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
         makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
@@ -508,5 +524,51 @@ describe('shouldShowSynthesizingPhase', () => {
       ],
     })
     expect(shouldShowSynthesizingPhase(turn)).toBe(true)
+  })
+})
+
+describe('open room run helpers', () => {
+  const agents = [
+    makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
+    makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
+  ]
+
+  it('hasLiveRunEvidence accepts processing logs and active run ids', () => {
+    expect(hasLiveRunEvidence({
+      userMessageId: 'u1',
+      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
+    })).toBe(true)
+    expect(hasLiveRunEvidence({
+      userMessageId: 'u1',
+      activeRunTriggerMessageIds: new Set(['u1']),
+    })).toBe(true)
+    expect(hasLiveRunEvidence({
+      userMessageId: 'u1',
+      roomProcessingActive: true,
+      isLatestUserTurn: true,
+    })).toBe(true)
+    expect(hasLiveRunEvidence({ userMessageId: 'u1' })).toBe(false)
+  })
+
+  it('shouldHoldTurnActiveForOpenRoomRun stays false for synthesis kind without actual synthesis', () => {
+    expect(shouldHoldTurnActiveForOpenRoomRun(agents, {
+      userMessageId: 'u1',
+      turnCompletionKind: 'synthesis',
+      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
+    })).toBe(false)
+    expect(isSynthesisKindWithoutActualSynthesis(agents, {
+      userMessageId: 'u1',
+      turnCompletionKind: 'synthesis',
+      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
+    })).toBe(true)
+  })
+
+  it('shouldHoldTurnActiveForOpenRoomRun stays false once the room run is terminal', () => {
+    expect(shouldHoldTurnActiveForOpenRoomRun(agents, {
+      userMessageId: 'u1',
+      turnTerminalStatus: 'completed',
+      turnCompletionKind: 'deterministic',
+      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
+    })).toBe(false)
   })
 })

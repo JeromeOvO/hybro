@@ -459,6 +459,11 @@ implementations directly from `container.py`.
 - Read room history and message threads.
 - Verify room ownership and hub publish lineage.
 
+On history read, Room may auto-fail legacy working agent tasks that are past the
+stale threshold. Agent messages stamped with `extend_info.orchestrator_run_id`
+are skipped (orchestrator recovery owns them). Working tasks with no
+`task_updated_at` / `task_created_at` are not treated as stale.
+
 Mongo persistence is implemented by `room.repository.mongo`.
 
 ### `execution`
@@ -890,6 +895,25 @@ does not return to the planner or consume the remaining orchestration budget. In
 particular, when the Agent already received selected context, artifact, or
 attachment refs and no new payload resolves the request, Execution promotes the
 existing A2A continuation to HITL instead of dispatching the same task again.
+
+Typed A2A interaction metadata (`hybro.ai/a2a/interaction`) parks the call in
+`input_required` / `auth_required` and emits durable HITL. Untyped
+`input_required` (no interaction spec) completes as a silent tool result so the
+kernel can satisfy cyber-style recovery from context. During an in-flight HITL
+continuation, a missing interaction spec must not take that untyped-complete
+path: the A2A server can clear `status.message` while state remains
+`input-required`, and completing the call lets the kernel narrate the ask as a
+final HYBRO answer. Continuation inspect retries the send (or stays
+`delivery_uncertain`) until a *new* typed challenge arrives on
+`status.message`; the answered challenge's metadata in task history is ignored
+so it cannot be re-parked. Stream status-update fallbacks preserve message
+metadata when rebuilding tasks.
+
+Orchestrator HITL answers with authorization proofs fail closed until a real
+auth-reference verifier is bound (text / choice HITL is unaffected). Local
+Compose sets `ORCHESTRATOR_RECOVERY_ENABLED=true` so continuation recovery runs
+alongside inbox/call recovery. User cancellation of an orchestrator HITL
+interaction abandons the interaction and cancels the owning orchestration run.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
 HITL status messages pass through a bounded public-text sanitizer across both initial
@@ -2159,6 +2183,10 @@ public targeting fields (`selected_agent_ids`, `candidate_scope_*`,
 `mentioned_agent_ids`). Room, all-Agent, and saved-group membership are expanded
 and authorized by Room Services; clients never send expanded group members.
 Mention IDs define the Supervisor candidate scope, not mandatory dispatch targets.
+At A2A call acceptance, `MembershipAuthorizationRefresh` re-checks live agent
+visibility. Per-turn explicit scopes (`mention`, `explicit_selection`,
+`all_active_agents`) do not require the agent to already be in `room_agent_set`;
+roster-derived scopes (`room_member`, `saved_group_member`) do.
 
 The resolved `execution_mode` is persisted in the user-message orchestration
 envelope. `mode=supervisor` is the only Supervisor gate; `room.use_supervisor` is

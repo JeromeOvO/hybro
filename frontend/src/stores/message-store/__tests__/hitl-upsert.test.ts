@@ -141,6 +141,63 @@ describe('upsert HITL fields', () => {
       expect(entity.hitlGroupTotal).toBeNull()
       expect(entity.hitlGroupIndex).toBeNull()
     })
+
+    it('resets stale applying state and answer when a follow-up HITL reuses the same message id', () => {
+      const existing = makeEntity({
+        hitlRequestId: 'req-old',
+        hitlPrompt: 'Where do you want to go?',
+        hitlResolved: true,
+        hitlInteractionStatus: 'responded',
+        hitlApplicationStatus: 'applying',
+        hitlUserAnswer: 'New York City',
+      })
+      const incoming = makeIncoming({
+        hitlRequestId: 'req-new',
+        hitlPrompt: 'How many days or nights do you plan to spend in New York City?',
+        hitlResolved: false,
+        hitlInteractionStatus: 'open',
+        hitlApplicationStatus: 'open',
+        hitlUserAnswer: '',
+        taskStatus: 'input-required',
+      })
+
+      const result = applyUpsert({ 'msg-1': existing }, ['msg-1'], incoming, 'sse')
+
+      expect(result).not.toBeNull()
+      const entity = result!.entities['msg-1']
+      expect(entity.hitlRequestId).toBe('req-new')
+      expect(entity.hitlPrompt).toBe('How many days or nights do you plan to spend in New York City?')
+      expect(entity.hitlResolved).toBe(false)
+      expect(entity.hitlInteractionStatus).toBe('open')
+      expect(entity.hitlApplicationStatus).toBe('open')
+      expect(entity.hitlUserAnswer).toBe('')
+    })
+
+    it('finalizes stale applying HITL state when a terminal completion arrives without new HITL fields', () => {
+      const existing = makeEntity({
+        hitlRequestId: 'req-final',
+        hitlPrompt: 'How many days or nights do you plan to spend in New York City?',
+        hitlResolved: false,
+        hitlInteractionStatus: 'responded',
+        hitlApplicationStatus: 'applying',
+        hitlUserAnswer: '5 days',
+        taskStatus: 'input-required',
+      })
+      const incoming = makeIncoming({
+        content: 'Great! Here is a detailed 5-day itinerary for your trip to New York City.',
+        taskStatus: 'completed',
+      })
+
+      const result = applyUpsert({ 'msg-1': existing }, ['msg-1'], incoming, 'db')
+
+      expect(result).not.toBeNull()
+      const entity = result!.entities['msg-1']
+      expect(entity.taskStatus).toBe('completed')
+      expect(entity.hitlResolved).toBe(true)
+      expect(entity.hitlInteractionStatus).toBe('responded')
+      expect(entity.hitlApplicationStatus).toBe('applied')
+      expect(entity.hitlUserAnswer).toBe('5 days')
+    })
   })
 
   describe('isNoOpUpdate — HITL-aware', () => {

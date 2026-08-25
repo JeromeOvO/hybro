@@ -113,8 +113,9 @@ class AgentToolBindingRecord(A2ADurableModel):
     candidate_scope_revision: int = Field(ge=1)
     authorization_basis_digest: str
     # Denormalized AuthorizationBasis.kind so the refresh adapter can honor
-    # scope semantics without re-resolving the Run (all_active_agents skips
-    # the room-membership gate; every other kind requires membership).
+    # scope semantics without re-resolving the Run. Per-turn explicit scopes
+    # (all_active_agents, mention, explicit_selection) skip the room-membership
+    # gate; roster-derived kinds (room_member, saved_group_member) require it.
     authorization_kind: (
         Literal[
             "room_member",

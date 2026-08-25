@@ -123,13 +123,23 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
       // Derive membership: Room Settings config (selectedAgents) takes priority,
       // then saved group selection, then empty snapshot.
+      // Selected agents seed a room team — default dispatch is room_default, not
+      // a mention and not all_agents, unless the caller passed an explicit scope.
       const dispatch = explicitDispatch
-        ?? resolveSelectedGroupDispatch(targetGroup ?? BUILTIN_GROUP_ALL_AGENTS)
+        ?? (selectedAgents.length > 0
+          ? { message_target_mode: 'room_default' as const }
+          : resolveSelectedGroupDispatch(targetGroup ?? BUILTIN_GROUP_ALL_AGENTS))
       const handoffTargetGroup = !explicitDispatch && selectedAgents.length === 0 && !isMentionDispatchInput(dispatch)
         ? targetGroup
         : undefined
 
       let membership: RoomMembershipWriteInput | undefined = explicitMembership
+      if (!membership && selectedAgents.length > 0) {
+        membership = {
+          membership_seed_input: 'manual',
+          room_agent_ids: selectedAgents.map((agent) => agent.agent_id),
+        }
+      }
       if (
         !membership
         && selectedAgents.length === 0
@@ -174,9 +184,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
           throw new Error('Room created but no room_id returned')
         }
 
-        // Store the initial message and target team for the room page. Rooms
-        // seeded from a saved team derive their selector label from provenance;
-        // manual snapshots display All Agents while retaining room-default routing.
+        // Store the initial message and target scope for the room page. Manual
+        // agent snapshots use room_default routing; the selector shows the
+        // seeded agent/team name via room membership provenance.
         useRoomUiStore.getState().setPendingRoomData(roomId, {
           initialMessage: userMessage,
           mode: useSupervisor ? 'supervisor' : 'direct',
