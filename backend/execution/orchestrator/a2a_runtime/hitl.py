@@ -872,6 +872,9 @@ class A2AContinuationCoordinator:
                 return await self._mark_uncertain(call)
             return await self._park_interaction(call, receipt.interaction_observation)
         if receipt.outcome == "accepted":
+            # Healthy still-working receipt is not delivery uncertainty —
+            # reset the inspection budget so ordinary polls cannot expire
+            # a live remote task.
             if call.state == "working":
                 # Recovery can re-enter an already-working call whose
                 # continuation was accepted. Reschedule without an illegal
@@ -879,6 +882,7 @@ class A2AContinuationCoordinator:
                 rescheduled = call.model_copy(
                     update={
                         "continuation_state": "accepted",
+                        "continuation_attempts": 0,
                         "claim_owner": None,
                         "claim_expires_at": None,
                         "next_attempt_at": datetime.now(UTC)
@@ -896,6 +900,7 @@ class A2AContinuationCoordinator:
                 to_state="working",
                 updated_at=datetime.now(UTC),
                 continuation_state="accepted",
+                continuation_attempts=0,
                 claim_owner=None,
                 claim_expires_at=None,
                 next_attempt_at=datetime.now(UTC)

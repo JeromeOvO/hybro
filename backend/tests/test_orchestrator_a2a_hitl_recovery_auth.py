@@ -1471,7 +1471,7 @@ async def test_continuation_same_answered_challenge_stays_uncertain():
 
 
 async def test_accepted_continuation_still_working_during_inspect_reschedules():
-    """Inspect returning accepted for an already-working call must not raise."""
+    """Healthy working polls must not expire via the inspection budget."""
     dispatch = Dispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -1490,15 +1490,21 @@ async def test_accepted_continuation_still_working_during_inspect_reschedules():
     persisted = await ledger.load_by_record_id(call.call_record_id)
     assert persisted.state == "working"
     assert persisted.continuation_state == "accepted"
+    max_attempts = persisted.runtime_policy.max_uncertain_inspection_attempts
 
-    await make_due(ledger, call.call_record_id)
-    recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
+    # Poll past the uncertainty budget; healthy accepted receipts must reset it.
+    for _ in range(max_attempts + 2):
+        await make_due(ledger, call.call_record_id)
+        recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
+        assert recovered == "working"
+        current = await ledger.load_by_record_id(call.call_record_id)
+        assert current.state == "working"
+        assert current.continuation_state == "accepted"
+        assert current.continuation_attempts == 0
 
-    assert recovered == "working"
     final = await ledger.load_by_record_id(call.call_record_id)
     assert final.state == "working"
-    assert final.continuation_state == "accepted"
-    assert len(dispatch.inspections) == 1
+    assert len(dispatch.inspections) == max_attempts + 2
 
 
 async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persistence():

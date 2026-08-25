@@ -485,6 +485,98 @@ def _answer_for_kind(kind: HITLAnswerKind, user_input: str) -> Any:
     )
 
 
+def _webhook_event_body(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result")
+    return result if isinstance(result, dict) else payload
+
+
+def _first_mapping(*values: Any) -> dict[str, Any] | None:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _protocol_message_id_from_mapping(raw: dict[str, Any] | None) -> str | None:
+    if raw is None:
+        return None
+    return _first_str(raw.get("messageId"), raw.get("message_id"))
+
+
+def _webhook_protocol_message_id(
+    payload: dict[str, Any], *, task: Any | None = None
+) -> str | None:
+    """Prefer a protocol messageId over synthetic parser/task IDs."""
+    if task is not None:
+        status_message = getattr(getattr(task, "status", None), "message", None)
+        message_id = getattr(status_message, "message_id", None)
+        if isinstance(message_id, str) and message_id.strip():
+            return message_id.strip()
+
+    body = _webhook_event_body(payload)
+    status = body.get("status") if isinstance(body.get("status"), dict) else {}
+    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
+    status_update_status = (
+        status_update.get("status")
+        if isinstance(status_update, dict)
+        and isinstance(status_update.get("status"), dict)
+        else {}
+    )
+    message = _first_mapping(
+        body if body.get("kind") in {"message", "MESSAGE"} else None,
+        body.get("message"),
+        status.get("message") if isinstance(status, dict) else None,
+        status_update_status.get("message")
+        if isinstance(status_update_status, dict)
+        else None,
+    )
+    return _protocol_message_id_from_mapping(message)
+
+
+def _webhook_protocol_task_id(payload: dict[str, Any]) -> str | None:
+    body = _webhook_event_body(payload)
+    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
+    task = body.get("task") if isinstance(body.get("task"), dict) else None
+    return _first_str(
+        body.get("taskId"),
+        body.get("task_id"),
+        body.get("id") if body.get("kind") == "task" else None,
+        task.get("id") if isinstance(task, dict) else None,
+        status_update.get("taskId") if isinstance(status_update, dict) else None,
+        status_update.get("task_id") if isinstance(status_update, dict) else None,
+    )
+
+
+def _webhook_event_cursor(payload: dict[str, Any], *, task: Any | None = None) -> str:
+    """Stable per-event discriminator for webhook ingress identity."""
+    message_id = _webhook_protocol_message_id(payload, task=task)
+    if message_id is not None:
+        return f"msg:{message_id}"
+
+    if task is not None:
+        status_message = getattr(getattr(task, "status", None), "message", None)
+        metadata = getattr(status_message, "metadata", None)
+        if isinstance(metadata, dict):
+            interaction = metadata.get("hybro.ai/a2a/interaction")
+            if isinstance(interaction, dict):
+                interaction_id = interaction.get("interaction_id")
+                if isinstance(interaction_id, str) and interaction_id.strip():
+                    return f"interaction:{interaction_id.strip()}"
+
+    body = _webhook_event_body(payload)
+    return f"fp:{_sha256_hex(json.dumps(body, sort_keys=True, default=str))}"
+
+
+def _deterministic_observed_at(cursor: str) -> datetime:
+    """Stable observed_at for webhook event identity / payload digests.
+
+    Wall-clock arrival remains on the inbox ``received_at`` field. Using a
+    cursor-derived timestamp keeps identical webhook replays idempotent.
+    """
+    seconds = int(_sha256_hex(cursor)[:8], 16) % 1_700_000_000
+    return datetime.fromtimestamp(seconds, tz=UTC)
+
+
 def _observation_from_webhook_payload(
     payload: dict[str, Any], call: Any
 ) -> NormalizedA2AObservation:
@@ -501,44 +593,55 @@ def _observation_from_webhook_payload(
     message_id = getattr(call, "assistant_message_id", None) or call.call_record_id
     try:
         task = parse_stream_response_payload(payload, message_id)
-        task_id = task.id or call.a2a_task_id or message_id
+        # Prefer the ledger-bound task id (and protocol taskId) over parser
+        # UUIDs synthesized for kind=message frames so replays stay idempotent.
+        task_id = (
+            call.a2a_task_id
+            or _webhook_protocol_task_id(payload)
+            or task.id
+            or message_id
+        )
         context_id = task.context_id or call.a2a_context_id
-        kwargs = _task_to_observation_kwargs(
-            task,
-            source_kind="webhook",
-            call_record_id=call.call_record_id,
-            binding_scope=call.endpoint_scope_digest,
-            agent_id=call.agent_id,
-            task_id=task_id,
-            context_id=context_id,
+        cursor = _webhook_event_cursor(payload, task=task)
+        observation = NormalizedA2AObservation(
+            **_task_to_observation_kwargs(
+                task,
+                source_kind="webhook",
+                call_record_id=call.call_record_id,
+                binding_scope=call.endpoint_scope_digest,
+                agent_id=call.agent_id,
+                task_id=task_id,
+                context_id=context_id,
+                cursor=cursor,
+            )
         )
-        kwargs["observation_id"] = (
-            f"webhook-{_sha256_hex(json.dumps([call.call_record_id, task_id, kwargs['event_kind'], kwargs.get('interaction_spec')]))}"
+        return observation.model_copy(
+            update={"observed_at": _deterministic_observed_at(cursor)}
         )
-        kwargs["source_identity"] = (
-            f"webhook:{call.call_record_id}:{task_id or context_id or ''}"
-        )
-        return NormalizedA2AObservation(**kwargs)
-    except ValueError:
+    except (TypeError, ValueError):
         pass
 
-    source = (
-        payload.get("result") if isinstance(payload.get("result"), dict) else payload
-    )
+    source = _webhook_event_body(payload)
     task_id, context_id, status, text = _extract_webhook_identity(source)
     event_kind = _event_kind_for_status(status)
     content = [TextPart(text=text)] if text else []
+    resolved_task_id = task_id or call.a2a_task_id
+    cursor = _webhook_event_cursor(payload)
     return NormalizedA2AObservation(
         observation_id=(
-            f"webhook-{_sha256_hex(json.dumps([call.call_record_id, task_id, status, text]))}"
+            f"webhook-{call.call_record_id}-{resolved_task_id or ''}"
+            f"-{event_kind}-{cursor}"
         ),
         call_record_id=call.call_record_id,
         source_kind="webhook",
-        source_identity=f"webhook:{call.call_record_id}:{task_id or context_id or ''}",
+        source_identity=(
+            f"webhook:{call.endpoint_scope_digest}:{resolved_task_id or ''}:"
+            f"{event_kind}:{cursor}"
+        ),
         binding_scope=call.endpoint_scope_digest,
         event_kind=event_kind,
-        observed_at=datetime.now(UTC),
-        task_id=task_id or call.a2a_task_id,
+        observed_at=_deterministic_observed_at(cursor),
+        task_id=resolved_task_id,
         context_id=context_id or call.a2a_context_id,
         agent_id=call.agent_id,
         status=status if event_kind == "terminal" else None,
@@ -547,6 +650,7 @@ def _observation_from_webhook_payload(
         interaction_spec=None,
         error_code=None,
         error_message=None,
+        cursor=cursor,
     )
 
 
