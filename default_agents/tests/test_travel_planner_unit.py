@@ -5,6 +5,12 @@ from unittest.mock import MagicMock
 from langchain_core.messages import AIMessageChunk
 
 from travel_planner_agent.agent import TravelPlannerAgent
+from travel_planner_agent.agent_card import (
+    AGENT_NAME,
+    TRAVEL_PLANNER_EXAMPLES,
+    build_travel_planner_agent_card,
+    build_travel_planner_skill,
+)
 from travel_planner_agent.interaction_metadata import (
     HYBRO_A2A_INTERACTION_METADATA_KEY,
     build_input_required_metadata,
@@ -39,6 +45,22 @@ def test_input_required_metadata_is_exact_typed_and_stable():
         }
     ]
     assert spec["questions"][0]["question_id"].startswith("travel-details:")
+
+
+def test_travel_planner_agent_card_has_routing_friendly_metadata():
+    card = build_travel_planner_agent_card("http://travel-planner-agent:7002")
+    skill = build_travel_planner_skill()
+
+    assert card.name == AGENT_NAME
+    assert card.url == "http://travel-planner-agent:7002"
+    assert "trip planning" in card.description.lower()
+    assert "itinerar" in card.description.lower()
+    assert len(card.skills) == 1
+    assert card.skills[0].id == skill.id
+    assert card.skills[0].tags == skill.tags
+    assert card.skills[0].examples == list(TRAVEL_PLANNER_EXAMPLES)
+    assert "Generate a travel plan" in card.skills[0].examples
+    assert "hello" not in card.skills[0].examples
 
 
 @pytest.mark.asyncio

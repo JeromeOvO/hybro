@@ -90,6 +90,47 @@ export function markResolvedHitlFromHydrationBatch(
   }
 }
 
+/**
+ * Live applying refresh: drop local *applying* HITL projections that are no
+ * longer in the server pending set so the composer can leave "Applying your
+ * answers" without a full page reload. Open input-required prompts are left
+ * alone here — a brief empty pending window must not clear a still-open UI.
+ * Initial hydration still resolves absent open HITL via
+ * markResolvedHitlFromHydrationBatch.
+ */
+export function clearStaleHitlNotInPending(
+  targetRoomId: string,
+  pendingMessageIds: ReadonlySet<string>,
+): void {
+  const store = useMessageStore.getState()
+  if (store.roomId !== targetRoomId) return
+
+  for (const entity of Object.values(store.entities)) {
+    if (entity.roomId !== targetRoomId || !entity.hitlRequestId) continue
+    if (pendingMessageIds.has(entity.id)) continue
+    if (entity.hitlResolved === true) continue
+
+    const wasApplying =
+      entity.hitlApplicationStatus === 'applying'
+      || entity.hitlInteractionStatus === 'applying'
+      || entity.hitlInteractionStatus === 'answers_recorded'
+
+    if (!wasApplying) continue
+
+    store.upsertMessage({
+      id: entity.id,
+      roomId: targetRoomId,
+      messageType: 'agent',
+      content: entity.content,
+      senderName: entity.senderName,
+      timestamp: entity.timestamp,
+      hitlResolved: true,
+      hitlInteractionStatus: 'applied',
+      hitlApplicationStatus: 'applied',
+    }, 'sse')
+  }
+}
+
 export interface OverlayHitlOptions extends HydrateRoomAgentResolver {
   roomId: string
   getToken?: () => Promise<string | null>
@@ -119,6 +160,8 @@ export async function overlayHitlForRoom(
 
   if (hydratedIdsForResolve) {
     markResolvedHitlFromHydrationBatch(roomId, hydratedIdsForResolve, pendingMessageIds)
+  } else {
+    clearStaleHitlNotInPending(roomId, pendingMessageIds)
   }
 
   return pendingMessageIds

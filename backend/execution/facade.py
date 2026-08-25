@@ -725,18 +725,25 @@ class ExecutionFacade:
     ) -> HITLResponse:
         router = self._orchestrator_router
         if router is not None:
-            await router.route_hitl_answer(
-                interaction_id=interaction_id,
-                answers=answers,
-                responder_id=responder_id,
-                room_id=room_id,
-            )
-            return HITLResponse(
-                request_id=interaction_id,
-                status="accepted",
-                responder_id=responder_id,
-                client_request_id=client_request_id,
-            )
+            try:
+                await router.route_hitl_answer(
+                    interaction_id=interaction_id,
+                    answers=answers,
+                    responder_id=responder_id,
+                    room_id=room_id,
+                )
+                return HITLResponse(
+                    request_id=interaction_id,
+                    status="accepted",
+                    responder_id=responder_id,
+                    client_request_id=client_request_id,
+                )
+            except KeyError as exc:
+                # Only fall through when the interaction is absent from the
+                # orchestrator store; other KeyErrors from resume stay fatal.
+                if exc.args != (interaction_id,):
+                    raise
+
         result = await self._hitl_manager.handle_batch_response(
             room_id=room_id,
             interaction_id=interaction_id,
@@ -754,7 +761,25 @@ class ExecutionFacade:
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
         requests = await self._hitl_manager.get_pending_requests(room_id)
-        return [model_hitl_request_to_common(request) for request in requests]
+        public_requests = [
+            model_hitl_request_to_common(request) for request in requests
+        ]
+
+        if self._orchestrator_router is not None:
+            orchestrator_requests = await self._orchestrator_router.get_pending_hitl(
+                room_id
+            )
+            # Prefer orchestrator rows when legacy and orchestrator both surface
+            # the same question during dual-runtime overlap.
+            merged: dict[tuple[str, str], HITLRequest] = {
+                (item.interaction_id or "", item.request_id): item
+                for item in public_requests
+            }
+            for item in orchestrator_requests:
+                merged[(item.interaction_id or "", item.request_id)] = item
+            return list(merged.values())
+
+        return public_requests
 
     async def cancel_hitl_interaction(
         self,
@@ -762,6 +787,17 @@ class ExecutionFacade:
         interaction_id: str,
         expected_version: int,
     ) -> int:
+        router = self._orchestrator_router
+        if router is not None:
+            try:
+                return await router.cancel_hitl_interaction(
+                    room_id=room_id,
+                    interaction_id=interaction_id,
+                    expected_version=expected_version,
+                )
+            except KeyError as exc:
+                if exc.args != (interaction_id,):
+                    raise
         return await self._hitl_manager.cancel_interaction_by_user(
             interaction_id,
             room_id,

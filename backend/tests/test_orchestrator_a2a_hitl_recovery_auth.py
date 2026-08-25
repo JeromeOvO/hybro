@@ -51,9 +51,12 @@ class Dispatch:
         self.commands = []
         self.inspections = []
         self.terminal_status = terminal_status
+        self.interaction_receipt: A2ADispatchReceipt | None = None
 
     async def continue_task(self, command):
         self.commands.append(command)
+        if self.interaction_receipt is not None:
+            return self.interaction_receipt
         if self.terminal_status is not None:
             return A2ADispatchReceipt(
                 outcome="terminal",
@@ -74,6 +77,23 @@ class Dispatch:
 
     async def inspect_continuation(self, command):
         self.inspections.append(command)
+        if self.interaction_receipt is not None:
+            return self.interaction_receipt
+        return A2ADispatchReceipt(outcome="accepted")
+
+
+class AmbiguousThenRetryDispatch(Dispatch):
+    def __init__(self):
+        super().__init__()
+        self._fail_continue = True
+
+    async def continue_task(self, command):
+        self.commands.append(command)
+        if self._fail_continue:
+            self._fail_continue = False
+            raise AmbiguousRemoteEffectError(
+                "continuation acknowledgement is ambiguous"
+            )
         return A2ADispatchReceipt(outcome="accepted")
 
 
@@ -1209,6 +1229,282 @@ async def test_multiple_hitl_cycles_persist_distinct_deterministic_commands():
     ).continuation_command.command_id
     assert first_command_id != second_command_id
     assert len(dispatch.commands) == 2
+
+
+async def test_continuation_interaction_receipt_parks_typed_second_round():
+    second_spec = questionnaire_spec("interaction-2")
+    dispatch = Dispatch()
+    coordinator, ledger, hitl, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    current = await ledger.load_by_record_id(call.call_record_id)
+    dispatch.interaction_receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id=current.a2a_task_id,
+        context_id=current.a2a_context_id,
+        interaction_observation=NormalizedA2AObservation(
+            observation_id="obs-second-round",
+            call_record_id=current.call_record_id,
+            source_kind="direct",
+            source_identity="direct:endpoint:task-1:input_required:second",
+            binding_scope=current.endpoint_scope_digest,
+            event_kind="input_required",
+            observed_at=NOW,
+            task_id=current.a2a_task_id,
+            context_id=current.a2a_context_id,
+            agent_id=current.agent_id,
+            content=[],
+            artifact_refs=[],
+            interaction_spec=second_spec.model_dump(mode="json"),
+        ),
+    )
+
+    state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert state == "input_required"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "input_required"
+    assert persisted.pending_interaction_id == "interaction-2"
+    assert persisted.interaction_revision == 1
+    assert persisted.continuation_command is None
+    stored = hitl.read_interaction_for_test("interaction-2")
+    assert stored is not None
+    assert stored[2] == persisted.interaction_fingerprint
+    assert hitl.read_interaction_for_test("interaction-1") is None
+    assert len(dispatch.commands) == 1
+
+
+async def test_inspect_same_answered_interaction_retries_continuation_send():
+    spec = questionnaire_spec()
+    dispatch = AmbiguousThenRetryDispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    current = await ledger.load_by_record_id(call.call_record_id)
+    dispatch.interaction_receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id=current.a2a_task_id,
+        context_id=current.a2a_context_id,
+        interaction_observation=NormalizedA2AObservation(
+            observation_id="obs-same-challenge",
+            call_record_id=current.call_record_id,
+            source_kind="inspection",
+            source_identity="inspection:endpoint:task-1:input_required:",
+            binding_scope=current.endpoint_scope_digest,
+            event_kind="input_required",
+            observed_at=NOW,
+            task_id=current.a2a_task_id,
+            context_id=current.a2a_context_id,
+            agent_id=current.agent_id,
+            content=[],
+            artifact_refs=[],
+            interaction_spec=spec.model_dump(mode="json"),
+        ),
+    )
+
+    first = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+    assert first == "delivery_uncertain"
+
+    await make_due(ledger, call.call_record_id)
+    recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
+
+    assert recovered == "working"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "working"
+    assert persisted.pending_interaction_id == "interaction-1"
+    assert len(dispatch.inspections) == 1
+    assert len(dispatch.commands) == 2
+
+
+async def test_inspect_missing_interaction_spec_retries_continuation_send():
+    """Cleared status.message (no typed spec) must resend, not untyped-complete."""
+    dispatch = AmbiguousThenRetryDispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    current = await ledger.load_by_record_id(call.call_record_id)
+    dispatch.interaction_receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id=current.a2a_task_id,
+        context_id=current.a2a_context_id,
+        interaction_observation=NormalizedA2AObservation(
+            observation_id="obs-cleared-message",
+            call_record_id=current.call_record_id,
+            source_kind="inspection",
+            source_identity="inspection:endpoint:task-1:input_required:",
+            binding_scope=current.endpoint_scope_digest,
+            event_kind="input_required",
+            observed_at=NOW,
+            task_id=current.a2a_task_id,
+            context_id=current.a2a_context_id,
+            agent_id=current.agent_id,
+            content=[{"kind": "text", "text": "How many days will you stay in NYC?"}],
+            artifact_refs=[],
+            interaction_spec=None,
+        ),
+    )
+
+    first = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+    assert first == "delivery_uncertain"
+
+    await make_due(ledger, call.call_record_id)
+    recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
+
+    assert recovered == "working"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "working"
+    assert persisted.terminal_result is None
+    assert len(dispatch.inspections) == 1
+    assert len(dispatch.commands) == 2
+
+
+async def test_continuation_missing_spec_does_not_untyped_complete():
+    """Direct continue that returns input_required without a typed spec must not
+    finalize the call as a completed tool result (kernel would narrate the ask)."""
+    dispatch = Dispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    current = await ledger.load_by_record_id(call.call_record_id)
+    dispatch.interaction_receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id=current.a2a_task_id,
+        context_id=current.a2a_context_id,
+        interaction_observation=NormalizedA2AObservation(
+            observation_id="obs-no-spec-continue",
+            call_record_id=current.call_record_id,
+            source_kind="direct",
+            source_identity="direct:endpoint:task-1:input_required:nospec",
+            binding_scope=current.endpoint_scope_digest,
+            event_kind="input_required",
+            observed_at=NOW,
+            task_id=current.a2a_task_id,
+            context_id=current.a2a_context_id,
+            agent_id=current.agent_id,
+            content=[{"kind": "text", "text": "How many days will you stay in NYC?"}],
+            artifact_refs=[],
+            interaction_spec=None,
+        ),
+    )
+
+    state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert state == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.terminal_result is None
+    assert persisted.continuation_command is not None
+
+
+async def test_continuation_same_answered_challenge_stays_uncertain():
+    """Continue send that still returns the answered challenge must not re-park."""
+    spec = questionnaire_spec()
+    dispatch = Dispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    current = await ledger.load_by_record_id(call.call_record_id)
+    dispatch.interaction_receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id=current.a2a_task_id,
+        context_id=current.a2a_context_id,
+        interaction_observation=NormalizedA2AObservation(
+            observation_id="obs-stale-same-challenge",
+            call_record_id=current.call_record_id,
+            source_kind="direct",
+            source_identity="direct:endpoint:task-1:input_required:stale",
+            binding_scope=current.endpoint_scope_digest,
+            event_kind="input_required",
+            observed_at=NOW,
+            task_id=current.a2a_task_id,
+            context_id=current.a2a_context_id,
+            agent_id=current.agent_id,
+            content=[],
+            artifact_refs=[],
+            interaction_spec=spec.model_dump(mode="json"),
+        ),
+    )
+
+    state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert state == "delivery_uncertain"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.pending_interaction_id == "interaction-1"
+    assert persisted.terminal_result is None
+    assert len(dispatch.commands) == 1
+
+
+async def test_accepted_continuation_still_working_during_inspect_reschedules():
+    """Healthy working polls must not expire via the inspection budget."""
+    dispatch = Dispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    resume_kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
+
+    assert await coordinator.resume(**resume_kwargs) == "working"
+
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "working"
+    assert persisted.continuation_state == "accepted"
+    max_attempts = persisted.runtime_policy.max_uncertain_inspection_attempts
+
+    # Poll past the uncertainty budget; healthy accepted receipts must reset it.
+    for _ in range(max_attempts + 2):
+        await make_due(ledger, call.call_record_id)
+        recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
+        assert recovered == "working"
+        current = await ledger.load_by_record_id(call.call_record_id)
+        assert current.state == "working"
+        assert current.continuation_state == "accepted"
+        assert current.continuation_attempts == 0
+
+    final = await ledger.load_by_record_id(call.call_record_id)
+    assert final.state == "working"
+    assert len(dispatch.inspections) == max_attempts + 2
 
 
 async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persistence():

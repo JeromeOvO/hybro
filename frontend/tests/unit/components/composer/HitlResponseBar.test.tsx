@@ -26,7 +26,7 @@ function renderBar(hitls: HitlPromptView[], onSubmit = vi.fn().mockResolvedValue
 describe('HitlResponseBar', () => {
   afterEach(cleanup)
 
-  it('uses one-question focus, preserves drafts by request id, and reviews a batch', async () => {
+  it('uses one-question focus, preserves drafts by request id, and submits directly', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderBar([
       { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
@@ -42,12 +42,7 @@ describe('HitlResponseBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value).toBe('Acme')
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
-
-    expect(screen.getByText('Review before sending')).toBeDefined()
-    expect(screen.getByText('Acme')).toBeDefined()
-    expect(screen.getByText('2027-01-02')).toBeDefined()
-    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
       'interaction-1',
@@ -58,6 +53,77 @@ describe('HitlResponseBar', () => {
       undefined,
     ))
     expect(await screen.findByText('Applying your answers')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
+  })
+
+  it('submits a single question in one step without a review screen', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }], onSubmit)
+
+    expect(screen.queryByText('Question 1 of 1')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Review answers' })).toBeNull()
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'New York City' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'New York City' }],
+      undefined,
+    ))
+  })
+
+  it('auto-refreshes while applying and autofocuses the follow-up open prompt', async () => {
+    const onRefresh = vi.fn().mockResolvedValue(undefined)
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }]}
+        onSubmit={onSubmit}
+        onRefresh={onRefresh}
+      />,
+    )
+
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'New York City' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    expect(await screen.findByText('Applying your answers')).toBeDefined()
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled())
+
+    rerender(
+      <HitlResponseBar
+        hitls={[{
+          ...baseHitl,
+          hitlId: 'hitl-2',
+          interactionId: 'interaction-2',
+          prompt: 'How many days/nights do you plan to spend in New York City?',
+          promptType: 'text',
+          lifecycleState: 'open',
+        }]}
+        onSubmit={onSubmit}
+        onRefresh={onRefresh}
+      />,
+    )
+
+    expect(await screen.findByText('How many days/nights do you plan to spend in New York City?')).toBeDefined()
+    expect(screen.queryByText('Applying your answers')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer…'))
+    })
+  })
+
+  it('autofocuses the next question control when advancing within an interaction', async () => {
+    renderBar([
+      { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
+      { ...baseHitl, hitlId: 'hitl-2', prompt: 'Budget?', promptType: 'text', groupIndex: 1 },
+    ])
+
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Acme' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByText('Budget?')).toBeDefined()
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer…'))
+    })
   })
 
   it('renders accessible single and multi-choice controls', () => {
@@ -113,6 +179,8 @@ describe('HitlResponseBar', () => {
 
 
 describe('HitlResponseBar server lifecycle reconciliation', () => {
+  afterEach(cleanup)
+
   it('leaves applying when the authoritative lifecycle reports failed', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     const { rerender } = render(
@@ -124,8 +192,7 @@ describe('HitlResponseBar server lifecycle reconciliation', () => {
     )
 
     fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Ok' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
     expect(await screen.findByText('Applying your answers')).toBeDefined()
 
@@ -158,5 +225,32 @@ describe('HitlResponseBar server lifecycle reconciliation', () => {
     )
 
     expect(await screen.findByPlaceholderText('Type your answer…')).toBeDefined()
+  })
+
+  it('advances to the next question when Enter is pressed on an intermediate answer', () => {
+    renderBar([
+      { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
+      { ...baseHitl, hitlId: 'hitl-2', prompt: 'Renewal date?', promptType: 'date', groupIndex: 1 },
+    ])
+
+    const input = screen.getByPlaceholderText('Type your answer…')
+    fireEvent.change(input, { target: { value: 'Acme' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('Renewal date?')).toBeDefined()
+  })
+
+  it('submits from the last question when Enter is pressed', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }], onSubmit)
+
+    const input = screen.getByPlaceholderText('Type your answer…')
+    fireEvent.change(input, { target: { value: 'Tokyo' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'Tokyo' }],
+      undefined,
+    ))
   })
 })

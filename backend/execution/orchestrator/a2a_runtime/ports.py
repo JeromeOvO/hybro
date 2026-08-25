@@ -300,6 +300,10 @@ class HITLApplicationPort(Protocol):
         self, interaction_id: str
     ) -> tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str] | None: ...
 
+    async def get_eligible_interactions(
+        self, room_id: str
+    ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]: ...
+
     async def read_answers(
         self, interaction_id: str, interaction_revision: int
     ) -> list[HITLQuestionAnswer] | None: ...

@@ -57,6 +57,7 @@ export interface GroupManagementAdapter {
   loadingGroups: boolean
   selectedGroup: string
   selectedGroupName?: string
+  roomMembershipLabel?: string
   resolvedTargetMode: TargetModeDispatchInput
   handleGroupChange: (groupId: string) => void
   handleCreateGroup: () => void

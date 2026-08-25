@@ -78,6 +78,7 @@ services:
       - API_PREFIX=/api/v1
       - HYBRO_FILE_DIR=/var/lib/hybro/files
       - LOCAL_AGENT_DISCOVERY_ENABLED=true
+      - ORCHESTRATOR_RECOVERY_ENABLED=true
     volumes:
       - room_files:/var/lib/hybro/files
     extra_hosts:

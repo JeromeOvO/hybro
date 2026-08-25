@@ -62,6 +62,7 @@ function normalizePromptType(
 export function buildPendingHitlIncomingMessage(
   input: PendingHitlProjectionInput,
 ): IncomingMessage {
+  const normalizedApplicationStatus = input.applicationStatus ?? 'open'
   return {
     id: input.messageId,
     roomId: input.roomId,
@@ -83,10 +84,14 @@ export function buildPendingHitlIncomingMessage(
     hitlInteractionId: input.interactionId ?? input.groupId ?? input.requestId,
     hitlInteractionStatus: input.interactionStatus ?? 'open',
     hitlInteractionVersion: input.interactionVersion ?? undefined,
-    hitlApplicationStatus: input.applicationStatus ?? undefined,
+    // Pending follow-up prompts can reuse the same message id as the prior round.
+    // Reset application state so the UI stops showing "Applying your answers"
+    // and renders the fresh prompt as actionable.
+    hitlApplicationStatus: normalizedApplicationStatus,
     hitlGroupId: input.groupId ?? null,
     hitlGroupTotal: input.groupTotal ?? null,
     hitlGroupIndex: input.groupIndex ?? null,
+    hitlUserAnswer: '',
     stepNumber: input.stepNumber ?? undefined,
     totalSteps: input.totalSteps ?? undefined,
     relatedMessageId: input.relatedMessageId ?? undefined,

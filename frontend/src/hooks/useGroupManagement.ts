@@ -15,9 +15,13 @@ interface UseGroupManagementOptions {
   userId?: string
   getToken: () => Promise<string | null>
   isLoaded: boolean
-  /** Group ID shown when no override is active. */
+  /**
+   * Selection id when no override is active.
+   * Use `room_team` for room membership snapshots, `all_agents` for network
+   * broadcast, or a saved team id for source-team provenance.
+   */
   defaultGroup?: string
-  /** Persisted source-team name used while the team catalog is unavailable. */
+  /** Display label for room membership / source-team provenance. */
   defaultGroupName?: string
   /** Dispatch scope used when no explicit override is active. */
   defaultTargetMode?: TargetModeDispatchInput
@@ -35,6 +39,8 @@ interface GroupManagementState {
   selectedGroupName?: string
   isOverride: boolean
   resolvedTargetMode: TargetModeDispatchInput
+  /** When set, the selector should offer this as the room-membership menu row. */
+  roomMembershipLabel?: string
   // Modal state
   groupManagementOpen: boolean
   groupAction: { type: 'create' | 'edit' | 'delete'; group?: AgentGroup } | null
@@ -58,6 +64,10 @@ interface GroupManagementActions {
   // Agent loading
   loadAvailableAgents: () => Promise<void>
   setAvailableAgents: (agents: Agent[]) => void
+}
+
+function isBuiltinSelection(groupId: string): boolean {
+  return groupId === BUILTIN_GROUP_ALL_AGENTS || groupId === BUILTIN_GROUP_ROOM_TEAM
 }
 
 export function useGroupManagement(
@@ -97,14 +107,21 @@ export function useGroupManagement(
     [groups],
   )
 
+  // Missing saved teams fall back to room membership when that is the room's
+  // default dispatch; otherwise fall back to network broadcast.
+  const missingGroupFallback = defaultTargetMode?.message_target_mode === 'room_default'
+    ? BUILTIN_GROUP_ROOM_TEAM
+    : BUILTIN_GROUP_ALL_AGENTS
+
   // Do not mistake an unloaded or unavailable catalog for a deleted team.
   // Only a successful catalog response can invalidate a source team or override.
   const validateGroup = useCallback((groupId: string | undefined) => {
-    if (!groupId || groupId === BUILTIN_GROUP_ROOM_TEAM) return BUILTIN_GROUP_ALL_AGENTS
+    if (!groupId) return missingGroupFallback
+    if (groupId === BUILTIN_GROUP_ROOM_TEAM) return BUILTIN_GROUP_ROOM_TEAM
     if (groupId === BUILTIN_GROUP_ALL_AGENTS) return BUILTIN_GROUP_ALL_AGENTS
     if (groupsLoadStatus !== 'success') return groupId
-    return groupExists(groupId) ? groupId : BUILTIN_GROUP_ALL_AGENTS
-  }, [groupExists, groupsLoadStatus])
+    return groupExists(groupId) ? groupId : missingGroupFallback
+  }, [groupExists, groupsLoadStatus, missingGroupFallback])
 
   const validatedDefaultGroup = validateGroup(defaultGroup)
   const validatedOverrideGroup = overrideGroup === null
@@ -114,12 +131,26 @@ export function useGroupManagement(
     && validatedOverrideGroup === overrideGroup
   const selectedGroup = isOverride ? overrideGroup : validatedDefaultGroup
   const selectedGroupRecord = groups.find(group => group.group_id === selectedGroup)
-  const selectedGroupName = selectedGroupRecord?.name
-    ?? (isOverride && selectedGroup !== BUILTIN_GROUP_ALL_AGENTS
+
+  // Builtin catalog names ("All Agents" / "Room Team") never override provenance.
+  const catalogDisplayName = isBuiltinSelection(selectedGroup)
+    ? undefined
+    : selectedGroupRecord?.name
+
+  const selectedGroupName = catalogDisplayName
+    ?? (isOverride && !isBuiltinSelection(selectedGroup)
       ? overrideGroupName ?? 'Selected Team'
-      : selectedGroup === defaultGroup
-        ? defaultGroupName
-        : undefined)
+      : selectedGroup === BUILTIN_GROUP_ROOM_TEAM
+        ? defaultGroupName ?? 'Room Team'
+        : selectedGroup === validatedDefaultGroup || selectedGroup === defaultGroup
+          ? defaultGroupName
+          : undefined)
+
+  const roomMembershipLabel =
+    defaultTargetMode?.message_target_mode === 'room_default'
+    && validatedDefaultGroup === BUILTIN_GROUP_ROOM_TEAM
+      ? (defaultGroupName ?? 'Room Team')
+      : undefined
 
   const clearOverrideState = useCallback(() => {
     setOverrideGroup(null)
@@ -174,8 +205,7 @@ export function useGroupManagement(
     if (
       groupsLoadStatus !== 'success'
       || overrideGroup === null
-      || overrideGroup === BUILTIN_GROUP_ALL_AGENTS
-      || overrideGroup === BUILTIN_GROUP_ROOM_TEAM
+      || isBuiltinSelection(overrideGroup)
       || groupExists(overrideGroup)
     ) {
       return
@@ -255,6 +285,19 @@ export function useGroupManagement(
     setGroupManagementOpen(true)
   }, [userId, onRequireAuth, loadAvailableAgents])
 
+  const persistOverride = useCallback((groupId: string, groupName: string | null) => {
+    setOverrideGroup(groupId)
+    setOverrideGroupName(groupName)
+    if (roomId) {
+      localStorage.setItem(`room-${roomId}-override-group`, groupId)
+      if (groupName) {
+        localStorage.setItem(`room-${roomId}-override-group-name`, groupName)
+      } else {
+        localStorage.removeItem(`room-${roomId}-override-group-name`)
+      }
+    }
+  }, [roomId])
+
   const handleGroupCreated = useCallback((group: AgentGroup) => {
     setGroups(prev => {
       const exists = prev.some(g => g.group_id === group.group_id)
@@ -262,43 +305,43 @@ export function useGroupManagement(
         ? prev.map(g => g.group_id === group.group_id ? group : g)
         : [...prev, group]
     })
-    setOverrideGroup(group.group_id)
-    setOverrideGroupName(group.name)
+    persistOverride(group.group_id, group.name)
+  }, [persistOverride])
 
-    // Persist to localStorage for room pages
-    if (roomId) {
-      localStorage.setItem(`room-${roomId}-override-group`, group.group_id)
-      localStorage.setItem(`room-${roomId}-override-group-name`, group.name)
-    }
-  }, [roomId])
-
-  // Handle group change (override)
+  // Handle group change (override). Selecting the current default clears the override.
+  // all_agents always means network broadcast; room_team always means room membership.
   const handleGroupChange = useCallback((groupId: string, groupName?: string) => {
     const isConfirmedMissing = groupsLoadStatus === 'success'
-      && groupId !== BUILTIN_GROUP_ALL_AGENTS
-      && groupId !== BUILTIN_GROUP_ROOM_TEAM
+      && !isBuiltinSelection(groupId)
       && !groupExists(groupId)
     if (groupId === validatedDefaultGroup || isConfirmedMissing) {
       clearOverrideState()
       return
     }
 
+    if (groupId === BUILTIN_GROUP_ROOM_TEAM) {
+      persistOverride(BUILTIN_GROUP_ROOM_TEAM, groupName ?? defaultGroupName ?? 'Room Team')
+      return
+    }
+
+    if (groupId === BUILTIN_GROUP_ALL_AGENTS) {
+      persistOverride(BUILTIN_GROUP_ALL_AGENTS, null)
+      return
+    }
+
     const resolvedName = groupName
       ?? groups.find(group => group.group_id === groupId)?.name
       ?? null
-    setOverrideGroup(groupId)
-    setOverrideGroupName(resolvedName)
-
-    // Persist to localStorage for room pages
-    if (roomId) {
-      localStorage.setItem(`room-${roomId}-override-group`, groupId)
-      if (resolvedName) {
-        localStorage.setItem(`room-${roomId}-override-group-name`, resolvedName)
-      } else {
-        localStorage.removeItem(`room-${roomId}-override-group-name`)
-      }
-    }
-  }, [clearOverrideState, groupExists, groups, groupsLoadStatus, roomId, validatedDefaultGroup])
+    persistOverride(groupId, resolvedName)
+  }, [
+    clearOverrideState,
+    defaultGroupName,
+    groupExists,
+    groups,
+    groupsLoadStatus,
+    persistOverride,
+    validatedDefaultGroup,
+  ])
 
   // Handle clear override - revert to derived default
   const handleClearOverride = clearOverrideState
@@ -318,6 +361,7 @@ export function useGroupManagement(
     selectedGroupName,
     isOverride,
     resolvedTargetMode,
+    roomMembershipLabel,
     groupManagementOpen,
     groupAction,
     availableAgents,

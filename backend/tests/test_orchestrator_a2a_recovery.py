@@ -53,8 +53,9 @@ class Checkpoints:
 
 
 class Dispatch:
-    def __init__(self, *, outcome="delivery_uncertain"):
+    def __init__(self, *, outcome="delivery_uncertain", interaction_observation=None):
         self.outcome = outcome
+        self.interaction_observation = interaction_observation
 
     async def inspect(self, command):
         if self.outcome == "terminal":
@@ -70,6 +71,27 @@ class Dispatch:
                     observed_at=NOW,
                     status="completed",
                 ),
+            )
+        if self.outcome == "interaction":
+            observation = self.interaction_observation
+            if observation is None:
+                observation = NormalizedA2AObservation(
+                    observation_id="recovery-interaction",
+                    call_record_id=command.call_record_id,
+                    source_kind="inspection",
+                    source_identity="recovery:interaction",
+                    binding_scope="endpoint",
+                    event_kind="input_required",
+                    observed_at=NOW,
+                    task_id="task-1",
+                    context_id="context-1",
+                    content=[],
+                    artifact_refs=[],
+                    interaction_spec=None,
+                )
+            return A2ADispatchReceipt(
+                outcome="interaction",
+                interaction_observation=observation,
             )
         return A2ADispatchReceipt(outcome=self.outcome)
 
@@ -171,6 +193,7 @@ async def service(
     dispatch=None,
     ledger=None,
     recover_dispatch_error=None,
+    hitl=None,
 ):
     ledger = ledger or InMemoryAgentCallLedgerStore()
     await ledger.insert(record)
@@ -196,6 +219,7 @@ async def service(
         dispatch=dispatch or Dispatch(),
         observations=observations,
         recover_dispatch=recover_dispatch,
+        hitl=hitl,
     )
     return runtime, ledger, recovered
 
@@ -295,6 +319,122 @@ async def test_uncheckpointed_acceptance_schedules_once_at_orphan_ttl():
         seconds=record.runtime_policy.orphan_acceptance_ttl_seconds
     )
     assert await runtime.recover_due(due_at=NOW) == 0
+
+
+async def test_call_recovery_typed_interaction_parks_instead_of_completing():
+    from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
+
+    record = transition_call(
+        ledger_record(), to_state="ready_to_dispatch", updated_at=NOW
+    )
+    record = transition_call(record, to_state="dispatching", updated_at=NOW)
+    record = transition_call(record, to_state="delivery_uncertain", updated_at=NOW)
+    interaction = {
+        "schema_version": 1,
+        "interaction_id": "recovery:clarify-1",
+        "questions": [
+            {
+                "question_id": "q-1",
+                "interaction_kind": "questionnaire",
+                "prompt": "City?",
+                "answer_kind": "text",
+                "required": True,
+            }
+        ],
+    }
+    observation = NormalizedA2AObservation(
+        observation_id="recovery-typed-interaction",
+        call_record_id=record.call_record_id,
+        source_kind="inspection",
+        source_identity="recovery:typed-interaction",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        agent_id=record.agent_id,
+        content=[],
+        artifact_refs=[],
+        interaction_spec=interaction,
+    )
+    hitl = InMemoryHITLApplicationPort()
+    runtime, ledger, _ = await service(
+        record,
+        checkpointed=True,
+        dispatch=Dispatch(outcome="interaction", interaction_observation=observation),
+        hitl=hitl,
+    )
+
+    assert await runtime.recover_call(record, now=NOW + timedelta(seconds=1))
+    persisted = await ledger.load_by_record_id(record.call_record_id)
+    assert persisted.state == "input_required"
+    assert persisted.pending_interaction_id == "recovery:clarify-1"
+    assert persisted.terminal_result is None
+    assert hitl.read_interaction_for_test("recovery:clarify-1") is not None
+
+
+async def test_call_recovery_defers_continuation_owned_delivery_uncertain():
+    from execution.orchestrator.a2a_runtime.models import A2AContinuationCommand
+
+    record = transition_call(
+        ledger_record(), to_state="ready_to_dispatch", updated_at=NOW
+    )
+    record = transition_call(record, to_state="dispatching", updated_at=NOW)
+    record = transition_call(record, to_state="working", updated_at=NOW)
+    record = transition_call(record, to_state="continuation_pending", updated_at=NOW)
+    record = transition_call(
+        record,
+        to_state="input_required",
+        updated_at=NOW,
+        pending_interaction_id="interaction-1",
+        interaction_revision=1,
+        interaction_fingerprint="fingerprint",
+    )
+    command = A2AContinuationCommand(
+        command_id="continuation-1",
+        transport_kind="direct",
+        call_record_id=record.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        answer_digest="digest",
+        answers=[],
+        binding_id=record.binding_id,
+        binding_digest=record.binding_digest,
+        requesting_subject_digest=record.requesting_subject_digest,
+        task_id="task-1",
+        context_id="context-1",
+        room_id=record.room_id,
+        room_epoch=record.room_epoch,
+        created_at=NOW,
+    )
+    record = transition_call(
+        record,
+        to_state="resuming",
+        updated_at=NOW,
+        continuation_command=command,
+        continuation_state="dispatching",
+    )
+    record = transition_call(
+        record,
+        to_state="delivery_uncertain",
+        updated_at=NOW,
+        continuation_state="delivery_uncertain",
+    )
+    inspect_calls = []
+
+    class CountingDispatch(Dispatch):
+        async def inspect(self, command):
+            inspect_calls.append(command)
+            return await super().inspect(command)
+
+    runtime, ledger, _ = await service(
+        record, checkpointed=True, dispatch=CountingDispatch(outcome="interaction")
+    )
+    assert await runtime.recover_call(record, now=NOW + timedelta(seconds=1))
+    assert inspect_calls == []
+    persisted = await ledger.load_by_record_id(record.call_record_id)
+    assert persisted.state == "delivery_uncertain"
+    assert persisted.continuation_command is not None
 
 
 async def test_uncheckpointed_ready_and_waiting_schedule_bounded_retry():
@@ -527,13 +667,19 @@ async def test_inbox_recovery_load_outage_is_not_counted():
 
 
 @pytest.mark.parametrize(
-    "state,continuation",
-    [("input_required", False), ("resuming", True)],
+    "state,continuation,continuation_state",
+    [
+        ("input_required", False, None),
+        ("resuming", True, "dispatching"),
+        ("working", True, "accepted"),
+    ],
 )
 async def test_continuation_recovery_does_not_count_unchanged_calls(
-    state, continuation
+    state, continuation, continuation_state
 ):
     record = no_progress_call(state=state, continuation=continuation)
+    if continuation_state is not None:
+        record.continuation_state = continuation_state
     recovery = A2AContinuationRecoveryService(
         NoProgressCoordinator(), NoProgressCallLedger(record)
     )

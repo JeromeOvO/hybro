@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from execution.adapters.session_host import RoomSessionHost
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
+from execution.orchestrator.a2a_runtime.observations import (
+    RunAddressedToolObservationSink,
+)
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
 from execution.orchestrator.fake_tools import (
@@ -159,6 +164,50 @@ async def test_observation_sink_reenters_without_a_session_object(catalog):
                 observed_at=NOW,
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_run_addressed_observation_sink_attaches_lifecycle_listener():
+    kernel = SimpleNamespace(observe_tool=AsyncMock())
+    listener = AsyncMock()
+    sink = RunAddressedToolObservationSink(
+        run_store=SimpleNamespace(load=AsyncMock(return_value=SimpleNamespace())),
+        kernel_factory=lambda _run: kernel,
+        signal_factory=lambda: SimpleNamespace(),
+        listener=listener,
+    )
+
+    observation = ToolObservation(
+        observation_id="obs-1",
+        invocation_id="call-1",
+        outcome=ToolResult(
+            call_id="call-1",
+            tool_name="agent",
+            status="completed",
+            content=[],
+            artifact_refs=[],
+        ),
+        observed_at=NOW,
+    )
+
+    await sink.deliver("run-1", observation)
+
+    kwargs = kernel.observe_tool.await_args.kwargs
+    assert callable(kwargs["lifecycle"])
+
+    run = make_run()
+    await kwargs["lifecycle"](
+        "message_completed",
+        run,
+        {"call_id": "call-1", "message_kind": "tool_result"},
+    )
+
+    await asyncio.sleep(0)
+    listener.assert_awaited_once()
+    forwarded = listener.await_args.args[0]
+    assert forwarded.event_type == "message_completed"
+    assert forwarded.room_id == run.room_id
+    assert forwarded.run_id == run.run_id
 
 
 class BlockingModelRuntime:

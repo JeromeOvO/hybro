@@ -7,7 +7,6 @@ export type HitlControllerState = {
   interactionKey: string
   currentId: string | null
   drafts: HitlDrafts
-  reviewing: boolean
   submission: 'idle' | 'submitting' | 'submitted'
   errorState: HitlLifecycleState | null
   errorMessage: string | null
@@ -23,7 +22,6 @@ export type HitlControllerAction =
   | { type: 'reset'; seed: HitlControllerSeed }
   | { type: 'answer'; requestId: string; value: HitlDraftValue }
   | { type: 'navigate'; requestId: string }
-  | { type: 'review' }
   | { type: 'submit_started' }
   | { type: 'submit_succeeded' }
   | { type: 'submit_failed'; message: string; lifecycle?: HitlLifecycleState }
@@ -38,7 +36,6 @@ export function createHitlControllerState(seed: HitlControllerSeed): HitlControl
         .filter(item => item.answer)
         .map(item => [item.requestId, item.answer as string]),
     ),
-    reviewing: false,
     submission: 'idle',
     errorState: null,
     errorMessage: null,
@@ -59,9 +56,7 @@ export function hitlInteractionReducer(
         errorMessage: null,
       }
     case 'navigate':
-      return { ...state, currentId: action.requestId, reviewing: false }
-    case 'review':
-      return { ...state, reviewing: true }
+      return { ...state, currentId: action.requestId }
     case 'submit_started':
       if (state.submission === 'submitting') return state
       return { ...state, submission: 'submitting', errorMessage: null }

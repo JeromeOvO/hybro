@@ -13,6 +13,7 @@ import {
   ensureInitialProcessingStatusLog,
   findProcessingStatusUserEntity,
 } from './processing-status-log'
+import { hydrateRoomFromDb } from '@/lib/room-sync/hydrate-room'
 
 export function useRoomActions(
   roomId: string,
@@ -26,6 +27,8 @@ export function useRoomActions(
   setUpdatingRoom: (v: boolean) => void,
   sseEnabled: boolean,
   setSseEnabled: (v: boolean) => void,
+  getAgentName?: (agentId: string) => Promise<string>,
+  getAgentSource?: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
 ) {
   // Update room name and membership. Execution mode is request-scoped.
   const updateRoomSettings = useCallback(async (
@@ -265,10 +268,21 @@ export function useRoomActions(
     }
   }, [getToken, hitlRequestIndex, reconcileWithDb, roomId])
 
-  // Manually refresh messages — delegates to reconcileWithDb (Gap 14)
+  // Manually refresh messages — reconciles from DB and re-overlays any pending HITL questions
+  // that may have been missed by SSE (e.g. during the "Applying your answers" transition).
   const refreshMessages = useCallback(async () => {
     await reconcileWithDb(roomId)
-  }, [roomId, reconcileWithDb])
+    if (getAgentName && getAgentSource) {
+      await hydrateRoomFromDb({
+        roomId,
+        phase: 'hitl_overlay',
+        getToken,
+        hitlRequestIndex,
+        getAgentName,
+        getAgentSource,
+      })
+    }
+  }, [roomId, reconcileWithDb, getToken, hitlRequestIndex, getAgentName, getAgentSource])
 
   // Toggle SSE connection
   const toggleSSE = useCallback(() => {

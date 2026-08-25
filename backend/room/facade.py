@@ -638,6 +638,14 @@ class RoomFacade:
         user_message.quote = None
         return None
 
+    @staticmethod
+    def _is_orchestrator_managed_agent_message(msg: RoomAgentMessage) -> bool:
+        # Orchestrator recovery owns these cards; room hydrate must not
+        # auto-fail them as legacy stale tasks.
+        extend_info = msg.extend_info if isinstance(msg.extend_info, dict) else {}
+        run_id = extend_info.get("orchestrator_run_id")
+        return isinstance(run_id, str) and bool(run_id.strip())
+
     async def _auto_fail_stale_agent_messages(  # noqa: C901
         self,
         messages: list[RoomAgentMessage],
@@ -646,8 +654,10 @@ class RoomFacade:
 
         def is_task_stale(msg: RoomAgentMessage) -> bool:
             timestamp = msg.task_updated_at or msg.task_created_at
+            # Missing timestamps are not treated as stale — avoids false-failing
+            # working tasks before task timestamps are stamped.
             if timestamp is None:
-                return True
+                return False
             return (
                 utcnow() - ensure_utc(timestamp)
             ).total_seconds() > stale_task_threshold
@@ -668,6 +678,8 @@ class RoomFacade:
             msg.task_updated_at = utcnow()
 
         for msg in messages:
+            if self._is_orchestrator_managed_agent_message(msg):
+                continue
             task = msg.message_content.message_task if msg.message_content else None
             if task is None:
                 continue

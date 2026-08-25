@@ -60,6 +60,12 @@ export interface TurnViewModel {
   turnCompletionKind?: 'synthesis' | 'deterministic'
   /** Transient room-level processing status details shown while the turn is live. */
   processingStatusLogs: ProcessingStatusLogEntry[]
+  /** Ephemeral build-time live-run context; not persisted to the backend. */
+  liveRunBuildContext?: {
+    roomProcessingActive?: boolean
+    isLatestUserTurn?: boolean
+    activeRunTriggerMessageIds?: ReadonlySet<string>
+  }
   /** V3: unified final-answer slot (§17). */
   finalAnswer: FinalAnswerViewModel
 }

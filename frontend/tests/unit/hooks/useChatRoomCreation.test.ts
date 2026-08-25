@@ -185,8 +185,13 @@ describe('useChatRoomCreation', () => {
         { 'agent-1': 'Test Agent' },
         { use_supervisor: true, initialMessage: 'Hello world' },
         undefined,
-        undefined
+        {
+          membership_seed_input: 'manual',
+          room_agent_ids: ['agent-1'],
+        },
       )
+      const pending = useRoomUiStore.getState().pendingRoomData['room-123']
+      expect(pending?.agentScope).toEqual({ source: 'room_default' })
     })
 
     it('should auto-generate room name from message when not provided', async () => {
@@ -326,14 +331,14 @@ describe('useChatRoomCreation', () => {
       })
 
       const membershipArg = mockCreateNewRoom.mock.calls[0][7]
-      expect(membershipArg).toBeUndefined()
+      expect(membershipArg).toEqual({
+        membership_seed_input: 'manual',
+        room_agent_ids: ['agent-1'],
+      })
       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
       expect(Object.keys(roomAgentSet)).toContain('agent-1')
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual']
-      expect(pending?.agentScope).toEqual({
-        source: 'saved_group',
-        group_id: 'group-abc',
-      })
+      expect(pending?.agentScope).toEqual({ source: 'room_default' })
       expect(pending?.mode).toBe('supervisor')
     })
 
@@ -354,7 +359,10 @@ describe('useChatRoomCreation', () => {
       })
 
       const membershipArg = mockCreateNewRoom.mock.calls[0][7]
-      expect(membershipArg).toBeUndefined()
+      expect(membershipArg).toEqual({
+        membership_seed_input: 'manual',
+        room_agent_ids: ['agent-1'],
+      })
       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
       expect(Object.keys(roomAgentSet)).toContain('agent-1')
       const pending = useRoomUiStore.getState().pendingRoomData['room-manual-mention']

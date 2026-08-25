@@ -209,7 +209,7 @@ def _event_kind(task: Any) -> str:
 
 
 def _extract_interaction_spec(task: Any) -> dict[str, Any] | None:
-    message = getattr(task.status, "message", None)
+    message = getattr(getattr(task, "status", None), "message", None)
     metadata = getattr(message, "metadata", None)
     if not isinstance(metadata, Mapping):
         return None
@@ -642,26 +642,35 @@ class OrchestratorDirectA2AClient:
     def _remember(
         self, command: Any, *, task_id: str | None, context_id: str | None
     ) -> None:
+        existing = self._addresses.get(command.call_record_id)
         self._addresses[command.call_record_id] = DirectCallAddress(
             call_record_id=command.call_record_id,
-            task_id=task_id,
-            context_id=context_id,
-            endpoint_scope=getattr(command, "endpoint_scope", None),
-            agent_id=getattr(command, "agent_id", None),
+            task_id=task_id or (existing.task_id if existing is not None else None),
+            context_id=context_id
+            or (existing.context_id if existing is not None else None),
+            endpoint_scope=getattr(command, "endpoint_scope", None)
+            or (existing.endpoint_scope if existing is not None else None),
+            agent_id=getattr(command, "agent_id", None)
+            or (existing.agent_id if existing is not None else None),
         )
 
     async def _resolve_call(self, command: Any) -> DirectCallAddress:
         call_record_id = command.call_record_id
         resolved = self._addresses.get(call_record_id)
-        if resolved is None and self._call_resolver is not None:
+        needs_resolver = resolved is None or not resolved.endpoint_scope
+        if needs_resolver and self._call_resolver is not None:
             raw = await self._call_resolver(call_record_id)
             if raw is not None:
                 resolved = DirectCallAddress(
                     call_record_id=call_record_id,
-                    task_id=raw.get("task_id"),
-                    context_id=raw.get("context_id"),
-                    endpoint_scope=raw.get("endpoint_scope"),
-                    agent_id=raw.get("agent_id"),
+                    task_id=raw.get("task_id")
+                    or (resolved.task_id if resolved is not None else None),
+                    context_id=raw.get("context_id")
+                    or (resolved.context_id if resolved is not None else None),
+                    endpoint_scope=raw.get("endpoint_scope")
+                    or (resolved.endpoint_scope if resolved is not None else None),
+                    agent_id=raw.get("agent_id")
+                    or (resolved.agent_id if resolved is not None else None),
                 )
                 self._addresses[call_record_id] = resolved
         if resolved is None:
@@ -942,6 +951,59 @@ class OrchestratorDirectA2AClient:
             terminal_observation=observation,
         )
 
+    def _receipt_from_task(
+        self,
+        task: Any,
+        *,
+        source_kind: str,
+        call_record_id: str,
+        binding_scope: str,
+        agent_id: str | None,
+        task_id: str,
+        context_id: str | None,
+    ) -> Any:
+        event_kind = _event_kind(task)
+        if event_kind in {"input_required", "auth_required"}:
+            observation = self._observation(
+                **_task_to_observation_kwargs(
+                    task,
+                    source_kind=source_kind,
+                    call_record_id=call_record_id,
+                    binding_scope=binding_scope,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    context_id=context_id,
+                )
+            )
+            return self._receipt(
+                outcome="interaction",
+                task_id=task_id,
+                context_id=context_id,
+                interaction_observation=observation,
+            )
+        status = _terminal_status(task)
+        if status is None:
+            return self._receipt(
+                outcome="accepted", task_id=task_id, context_id=context_id
+            )
+        observation = self._observation(
+            **_task_to_observation_kwargs(
+                task,
+                source_kind=source_kind,
+                call_record_id=call_record_id,
+                binding_scope=binding_scope,
+                agent_id=agent_id,
+                task_id=task_id,
+                context_id=context_id,
+            )
+        )
+        return self._receipt(
+            outcome="terminal",
+            task_id=task_id,
+            context_id=context_id,
+            terminal_observation=observation,
+        )
+
     async def continue_task(self, command: _ContinuationCommand) -> Any:
         address = await self._resolve_call(command)
         if not address.task_id or not address.endpoint_scope:
@@ -988,27 +1050,15 @@ class OrchestratorDirectA2AClient:
                 context_id=task.context_id,
                 terminal_observation=obs,
             )
-        status = _terminal_status(task)
-        if status is None:
-            return self._receipt(
-                outcome="accepted", task_id=task.id, context_id=task.context_id
-            )
-        observation = self._observation(
-            **_task_to_observation_kwargs(
-                task,
-                source_kind="direct",
-                call_record_id=command.call_record_id,
-                binding_scope=endpoint_scope_digest(address.endpoint_scope),
-                agent_id=address.agent_id,
-                task_id=task.id,
-                context_id=task.context_id,
-            )
-        )
-        return self._receipt(
-            outcome="terminal",
+        self._remember(command, task_id=task.id, context_id=task.context_id)
+        return self._receipt_from_task(
+            task,
+            source_kind="direct",
+            call_record_id=command.call_record_id,
+            binding_scope=endpoint_scope_digest(address.endpoint_scope),
+            agent_id=address.agent_id,
             task_id=task.id,
             context_id=task.context_id,
-            terminal_observation=observation,
         )
 
     async def inspect_continuation(self, command: _ContinuationCommand) -> Any:
@@ -1052,28 +1102,14 @@ class OrchestratorDirectA2AClient:
                 context_id=task.context_id,
                 terminal_observation=obs,
             )
-
-        status = _terminal_status(task)
-        if status is None:
-            return self._receipt(
-                outcome="accepted", task_id=task.id, context_id=task.context_id
-            )
-        observation = self._observation(
-            **_task_to_observation_kwargs(
-                task,
-                source_kind="inspection",
-                call_record_id=command.call_record_id,
-                binding_scope=endpoint_scope_digest(address.endpoint_scope),
-                agent_id=address.agent_id,
-                task_id=task.id,
-                context_id=task.context_id,
-            )
-        )
-        return self._receipt(
-            outcome="terminal",
+        return self._receipt_from_task(
+            task,
+            source_kind="inspection",
+            call_record_id=command.call_record_id,
+            binding_scope=endpoint_scope_digest(address.endpoint_scope),
+            agent_id=address.agent_id,
             task_id=task.id,
             context_id=task.context_id,
-            terminal_observation=observation,
         )
 
     async def cancel(self, command: _CancellationCommand) -> Any:

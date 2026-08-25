@@ -82,6 +82,9 @@ def test_composition_binds_the_full_graph_without_io():
     assert runtime.session_host is not None
     assert runtime.observation_sink is not None
     assert runtime.dispatch is not None
+    assert runtime.continuation is not None
+    assert runtime.hitl_delivery is not None
+    assert runtime.tool_runtime.hitl is not None
 
 
 def test_profile_resolution_failure_degrades_to_composition_error():

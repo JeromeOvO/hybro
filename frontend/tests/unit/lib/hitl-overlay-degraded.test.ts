@@ -79,4 +79,52 @@ describe('degraded HITL pending hydration', () => {
       clientRequestId: 'client-1',
     })
   })
+
+  it('clears local applying HITL when the pending set is empty', async () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'agent-message-1',
+      roomId: 'room-1',
+      messageType: 'agent',
+      content: 'Which market?',
+      senderName: 'Broker',
+      timestamp: '2027-01-01T00:00:00Z',
+      taskStatus: 'input-required',
+      hitlRequestId: 'request-1',
+      hitlPrompt: 'Which market?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+      hitlUserAnswer: 'NYC',
+      hitlInteractionStatus: 'applying',
+      hitlApplicationStatus: 'applying',
+    }, 'optimistic')
+
+    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [] })
+
+    await overlayHitlForRoom({
+      roomId: 'room-1',
+      hitlRequestIndex: { current: new Map() },
+      getAgentName: async () => 'Broker',
+      getAgentSource: () => 'cloud',
+    })
+
+    const entity = useMessageStore.getState().entities['agent-message-1']
+    expect(entity.hitlResolved).toBe(true)
+    expect(entity.hitlApplicationStatus).toBe('applied')
+    expect(selectPendingHitls('room-1', useMessageStore.getState().entities, useMessageStore.getState().orderedIds)).toHaveLength(0)
+  })
+
+  it('preserves open HITL when live overlay sees an empty pending set', async () => {
+    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [] })
+
+    await overlayHitlForRoom({
+      roomId: 'room-1',
+      hitlRequestIndex: { current: new Map() },
+      getAgentName: async () => 'Broker',
+      getAgentSource: () => 'cloud',
+    })
+
+    const entity = useMessageStore.getState().entities['agent-message-1']
+    expect(entity.hitlResolved).toBe(false)
+    expect(selectPendingHitls('room-1', useMessageStore.getState().entities, useMessageStore.getState().orderedIds)).toHaveLength(1)
+  })
 })

@@ -392,8 +392,15 @@ requests therefore render the external agent name (for example,
 Raw agent task states such as `input-required`, `auth-required`, and
 `policy-required` are not actionable UI state by themselves: until the message
 has a durable `hitlRequestId`, the timeline and agent header continue to show
-Working while backend recovery runs silently. Only the durable HITL projection
-may show Needs Input or an interaction component.
+Working while backend recovery runs silently. Durable HITL replaces the primary
+surface with Needs Input (composer owns the answer form); work-log running
+state stays active through HITL wait. After answers apply, the HYBRO AI Working
+avatar spinner returns while the turn stays `active` (including synthesizing and
+any early `deterministic_done` surface) and stops when the turn leaves active /
+reaches `phase: completed`. Spinner state follows turn lifecycle, not finalAnswer
+kind alone — treating `deterministic_done` as “settled” would stop the spinner
+too early and skip the synthesizing wait. Only the durable HITL projection may
+show Needs Input or an interaction component.
 Hydration marks input-required messages that are absent from the pending set as
 resolved so canceled or expired request metadata cannot recreate stale HITL UI.
 
@@ -416,7 +423,7 @@ failures with zero agent tasks to recover without a page refresh.
 
 `turnCompletionKind` is delivered via three redundant paths: (1) SSE `processing_status` COMPLETED `details`, (2) DB `extend_info.turn_completion_kind` on the user message (read during hydration/reconcile), (3) `inquiryActiveRuns` response (queried during truth-check when `trigger_message_id` is passed and no active run matches). This ensures correctness across SSE drops, page refreshes, and reconnects.
 
-`hasActiveSynthesisGap` treats positive synthesis evidence (`turnPhase: 'synthesizing'` on processing logs, log lines containing "synthesiz" or "compiling summary", synthesis ephemerals, or a working non-deterministic summary agent) as synthesis in progress and drives `phase: synthesizing`. Stale synthesis logs are ignored once all real agents are terminal and at least one failed without an in-flight LLM summary entity — partial-failure turns promote to `deterministic_done` instead of staying on **Working**. Supervisor turns without `turnCompletionKind` stay pending in `deriveFinalAnswer` until synthesis resolves or backend truth stamps — preventing a flash of expanded `deterministic_done` bodies before synthesizing starts. Delegation logs, supervisor mode, and generic work logs are **not** synthesis evidence.
+`hasActiveSynthesisGap` treats positive synthesis evidence (`turnPhase: 'synthesizing'` on processing logs, log lines containing "synthesiz" or "compiling summary", synthesis ephemerals, or a working non-deterministic summary agent) as synthesis in progress and drives `phase: synthesizing`. Stale synthesis logs are ignored once all real agents are terminal and at least one failed without an in-flight LLM summary entity — partial-failure turns promote to `deterministic_done` instead of staying on **Working**. While the room run is still open (`!turnTerminalStatus`) and live-run evidence exists (transient processing logs, an active run trigger id, or room processing still active on the latest turn), multi-agent turns with all real agents terminal stay `status: active` and show **Synthesizing** until terminal processing_status or final answer content arrives. Hydrated historical turns without live-run evidence remain `completed`. Supervisor turns without `turnCompletionKind` stay pending in `deriveFinalAnswer` until synthesis resolves or backend truth stamps — preventing a flash of expanded `deterministic_done` bodies before synthesizing starts. Delegation logs alone on hydrated turns are **not** synthesis evidence.
 
 **Entity-first invariant:** When a non-deterministic `summary-*` entity has substantive LLM content, `deriveFinalAnswer` returns `llm_synthesis` even if `turnCompletionKind` was incorrectly stamped or inferred as `deterministic`. `turnHasSubstantiveLlmSynthesis` blocks backend-truth stamping and debounced recovery from overwriting synthesis turns.
 
@@ -572,9 +579,16 @@ segment.
 Remote agents use the persisted backend `agent_status` without frontend health
 probing. Local agents are shown only while `source === "hub"`, status is active,
 and the hub is online; stale Local agents are hidden. Agent-detail chat actions
-write a one-shot mention draft to `room-ui-store` and navigate to `/chat`; the
-composer consumes the draft, renders the Agent mention, and focuses the input
-without URL query parameters or creating a saved Team.
+write a one-shot `pendingChatHandoff` to `room-ui-store` (optional draft text plus
+`seedAgents`) and navigate to `/chat`. That handoff seeds room membership with
+the selected Agent and uses `room_default` scope on send; it is not an `@mention`.
+The composer consumes any draft text and focuses the input without URL query
+parameters or creating a saved Team. The group selector shows the seeded Agent
+name and sends with `room_default`. After the room is created, membership stays
+on `room_agent_set` and later turns keep `room_default` unless the user switches
+teams. Selection uses the `room_team` id for room membership and `all_agents`
+only for true network broadcast; the menu lists the room membership row and All
+Agents as separate options.
 
 Featured use-case cards on `/chat` stay on the page. A card resolves its declared
 Agents against the live catalog, finds the authenticated user's saved preset Team
@@ -689,19 +703,30 @@ it has no selection handler and can never create a Debate request. Historical ro
 An authoritative open HITL interaction replaces the normal room composer; the UI
 never stacks a second form over a disabled chat input. `selectPendingHitls` groups
 questions by durable `interaction_id`, and `HitlResponseBar` keeps drafts keyed by
-stable `request_id`, presents one question at a time, and requires a final review.
-The client submits the complete answer inventory to
-`POST /rooms/{room_id}/hitl/respond-batch`, preserving `client_request_id` for run
-correlation. A 409 is reconciled and surfaced rather than assumed successful; 410,
-delivery uncertainty, routing failure, timeout, and applying states remain explicit.
-The frontend has no single-request response pipeline; even singleton interactions
-use the batch endpoint. File-upload instructions arrive in the ordinary terminal
-HYBRO summary message, so they do not replace the composer. Historical `file` and
-`unknown` prompt records remain wire-compatible but share one unsupported-state
-renderer.
+stable `request_id`, presents one question at a time, and submits directly from the
+last answer step (no separate review screen). When the open answer surface mounts —
+including after "Applying…" is replaced by a follow-up interaction — the bar
+autofocuses the text/date control (or the prompt heading for choice prompts). While
+answers are applying, the bar
+auto-refreshes pending HITL so a follow-up open prompt replaces the recovery UI
+without a manual "Check status" click; that button remains only for
+`delivery_uncertain`. When both an applying recovery and a new open prompt exist,
+the composer prefers the open prompt. The client submits the complete answer
+inventory to `POST /rooms/{room_id}/hitl/respond-batch`, preserving
+`client_request_id` for run correlation. A 409 is reconciled and surfaced rather
+than assumed successful; 410, delivery uncertainty, routing failure, timeout, and
+applying states remain explicit. The frontend has no single-request response
+pipeline; even singleton interactions use the batch endpoint. File-upload
+instructions arrive in the ordinary terminal HYBRO summary message, so they do
+not replace the composer. Historical `file` and `unknown` prompt records remain
+wire-compatible but share one unsupported-state renderer.
 
 Pending HITL hydration is authoritative only after a successful `/pending` read.
 `HydrateRoomResult.hitlFetchFailed` distinguishes a degraded read from a real empty
-set so existing input requests are not marked resolved during an outage. Resolved
-answers remain non-actionable timeline summaries sourced from durable message
-projection.
+set so existing input requests are not marked resolved during an outage. Initial
+hydration may mark hydrated open HITL absent from pending as resolved via
+`markResolvedHitlFromHydrationBatch`. Live applying refresh (`hitl_overlay` /
+composer auto-refresh) only clears local *applying* projections that are no
+longer pending — open `input-required` prompts are left alone so a brief empty
+pending window cannot dismiss a still-open UI. Resolved answers remain
+non-actionable timeline summaries sourced from durable message projection.

@@ -18,6 +18,7 @@ orchestrator's ``RoomSessionHost`` inputs also lives here, so
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
+from common.dto.delivery import HITLResolvedEvent
+from common.dto.execution import HITLRequest
 from common.dto.hitl import (
     A2AInteractionSpec,
     HITLAnswerKind,
@@ -35,7 +38,12 @@ from common.dto.hitl import (
     HITLTextAnswer,
 )
 from common.utils.logger import get_logger
-from execution.hitl.exceptions import HITLRoomMismatchError
+from execution.hitl.exceptions import (
+    HITLConflictError,
+    HITLDeliveryUncertainError,
+    HITLRoomMismatchError,
+)
+from execution.orchestrator.a2a_runtime.hitl_prompt import prompt_type_for_question
 from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
 from execution.orchestrator.models import (
     AuthorizationBasis,
@@ -64,6 +72,10 @@ MODE_PROFILE_MAP = {
 
 _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
 _PROFILE_PINNED_FINALIZATION = "pass_through"
+
+
+def _public_activity_message_id(run_id: str, invocation_id: str) -> str:
+    return f"orchestrator:{run_id}:{invocation_id}"
 
 
 class UnsupportedEnvelopeError(ValueError):
@@ -342,9 +354,10 @@ def map_mode_to_profile(mode: str) -> str:
     return profile_id
 
 
-# Scope source → AuthorizationBasis.kind. Scopes outside this map (and the
-# closed API enumeration) fall back to explicit_selection, which still
-# requires room membership like every non-all_agents kind.
+# Scope source → AuthorizationBasis.kind. Scopes outside this map fall back to
+# explicit_selection (per-turn user selection; skips room-membership refresh).
+# Roster-derived kinds (room_member / saved_group_member) still require
+# membership at authorization refresh.
 _SCOPE_AUTHORIZATION_KINDS = {
     "mention": "mention",
     "room_default": "room_member",
@@ -472,32 +485,163 @@ def _answer_for_kind(kind: HITLAnswerKind, user_input: str) -> Any:
     )
 
 
+def _webhook_event_body(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result")
+    return result if isinstance(result, dict) else payload
+
+
+def _first_mapping(*values: Any) -> dict[str, Any] | None:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _protocol_message_id_from_mapping(raw: dict[str, Any] | None) -> str | None:
+    if raw is None:
+        return None
+    return _first_str(raw.get("messageId"), raw.get("message_id"))
+
+
+def _webhook_protocol_message_id(
+    payload: dict[str, Any], *, task: Any | None = None
+) -> str | None:
+    """Prefer a protocol messageId over synthetic parser/task IDs."""
+    if task is not None:
+        status_message = getattr(getattr(task, "status", None), "message", None)
+        message_id = getattr(status_message, "message_id", None)
+        if isinstance(message_id, str) and message_id.strip():
+            return message_id.strip()
+
+    body = _webhook_event_body(payload)
+    status = body.get("status") if isinstance(body.get("status"), dict) else {}
+    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
+    status_update_status = (
+        status_update.get("status")
+        if isinstance(status_update, dict)
+        and isinstance(status_update.get("status"), dict)
+        else {}
+    )
+    message = _first_mapping(
+        body if body.get("kind") in {"message", "MESSAGE"} else None,
+        body.get("message"),
+        status.get("message") if isinstance(status, dict) else None,
+        status_update_status.get("message")
+        if isinstance(status_update_status, dict)
+        else None,
+    )
+    return _protocol_message_id_from_mapping(message)
+
+
+def _webhook_protocol_task_id(payload: dict[str, Any]) -> str | None:
+    body = _webhook_event_body(payload)
+    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
+    task = body.get("task") if isinstance(body.get("task"), dict) else None
+    return _first_str(
+        body.get("taskId"),
+        body.get("task_id"),
+        body.get("id") if body.get("kind") == "task" else None,
+        task.get("id") if isinstance(task, dict) else None,
+        status_update.get("taskId") if isinstance(status_update, dict) else None,
+        status_update.get("task_id") if isinstance(status_update, dict) else None,
+    )
+
+
+def _webhook_event_cursor(payload: dict[str, Any], *, task: Any | None = None) -> str:
+    """Stable per-event discriminator for webhook ingress identity."""
+    message_id = _webhook_protocol_message_id(payload, task=task)
+    if message_id is not None:
+        return f"msg:{message_id}"
+
+    if task is not None:
+        status_message = getattr(getattr(task, "status", None), "message", None)
+        metadata = getattr(status_message, "metadata", None)
+        if isinstance(metadata, dict):
+            interaction = metadata.get("hybro.ai/a2a/interaction")
+            if isinstance(interaction, dict):
+                interaction_id = interaction.get("interaction_id")
+                if isinstance(interaction_id, str) and interaction_id.strip():
+                    return f"interaction:{interaction_id.strip()}"
+
+    body = _webhook_event_body(payload)
+    return f"fp:{_sha256_hex(json.dumps(body, sort_keys=True, default=str))}"
+
+
+def _deterministic_observed_at(cursor: str) -> datetime:
+    """Stable observed_at for webhook event identity / payload digests.
+
+    Wall-clock arrival remains on the inbox ``received_at`` field. Using a
+    cursor-derived timestamp keeps identical webhook replays idempotent.
+    """
+    seconds = int(_sha256_hex(cursor)[:8], 16) % 1_700_000_000
+    return datetime.fromtimestamp(seconds, tz=UTC)
+
+
 def _observation_from_webhook_payload(
     payload: dict[str, Any], call: Any
 ) -> NormalizedA2AObservation:
-    """Minimal webhook normalization for the step-7 dark-launch path.
+    """Normalize orchestrator webhook payloads into durable observations.
 
-    Handles the two most common A2A StreamResponse envelopes (``task`` and
-    ``statusUpdate``). The observation identity is derived from the resolved
-    ledger call, so lineage stays durable even when the payload omits task ids.
+    Prefer the shared StreamResponse parser so typed HITL metadata on
+    ``status.message`` survives asynchronous ``status-update`` envelopes.
+    Fall back to the legacy minimal extractor when the payload is not a
+    recognized A2A stream frame.
     """
-    source = (
-        payload.get("result") if isinstance(payload.get("result"), dict) else payload
-    )
+    from a2a_adapter.orchestrator_direct_client import _task_to_observation_kwargs
+    from a2a_adapter.webhook_payloads import parse_stream_response_payload
+
+    message_id = getattr(call, "assistant_message_id", None) or call.call_record_id
+    try:
+        task = parse_stream_response_payload(payload, message_id)
+        # Prefer the ledger-bound task id (and protocol taskId) over parser
+        # UUIDs synthesized for kind=message frames so replays stay idempotent.
+        task_id = (
+            call.a2a_task_id
+            or _webhook_protocol_task_id(payload)
+            or task.id
+            or message_id
+        )
+        context_id = task.context_id or call.a2a_context_id
+        cursor = _webhook_event_cursor(payload, task=task)
+        observation = NormalizedA2AObservation(
+            **_task_to_observation_kwargs(
+                task,
+                source_kind="webhook",
+                call_record_id=call.call_record_id,
+                binding_scope=call.endpoint_scope_digest,
+                agent_id=call.agent_id,
+                task_id=task_id,
+                context_id=context_id,
+                cursor=cursor,
+            )
+        )
+        return observation.model_copy(
+            update={"observed_at": _deterministic_observed_at(cursor)}
+        )
+    except (TypeError, ValueError):
+        pass
+
+    source = _webhook_event_body(payload)
     task_id, context_id, status, text = _extract_webhook_identity(source)
     event_kind = _event_kind_for_status(status)
     content = [TextPart(text=text)] if text else []
+    resolved_task_id = task_id or call.a2a_task_id
+    cursor = _webhook_event_cursor(payload)
     return NormalizedA2AObservation(
         observation_id=(
-            f"webhook-{_sha256_hex(json.dumps([call.call_record_id, task_id, status, text]))}"
+            f"webhook-{call.call_record_id}-{resolved_task_id or ''}"
+            f"-{event_kind}-{cursor}"
         ),
         call_record_id=call.call_record_id,
         source_kind="webhook",
-        source_identity=f"webhook:{call.call_record_id}:{task_id or context_id or ''}",
+        source_identity=(
+            f"webhook:{call.endpoint_scope_digest}:{resolved_task_id or ''}:"
+            f"{event_kind}:{cursor}"
+        ),
         binding_scope=call.endpoint_scope_digest,
         event_kind=event_kind,
-        observed_at=datetime.now(UTC),
-        task_id=task_id or call.a2a_task_id,
+        observed_at=_deterministic_observed_at(cursor),
+        task_id=resolved_task_id,
         context_id=context_id or call.a2a_context_id,
         agent_id=call.agent_id,
         status=status if event_kind == "terminal" else None,
@@ -506,6 +650,7 @@ def _observation_from_webhook_payload(
         interaction_spec=None,
         error_code=None,
         error_message=None,
+        cursor=cursor,
     )
 
 
@@ -684,15 +829,191 @@ class DualRuntimeRouter:
         if route.room_id != room_id:
             raise HITLRoomMismatchError("Room mismatch")
         mapped = _map_legacy_answers(spec, answers)
-        return await self._runtime.hitl_port.answer(
+        state = await self._runtime.continuation.resume(
+            call_record_id=route.call_record_id,
             interaction_id=interaction_id,
             interaction_revision=route.interaction_revision,
             route_fingerprint=route.fingerprint,
             answers=mapped,
             authenticated_answerer_id=responder_id,
-            verified_auth_reference_digests=[],
-            verified_auth_references=[],
         )
+        # Continuation delivery records observations into the inbox. With
+        # recovery often disabled locally, sync-process recent observations
+        # so a parked awaiting_user run can leave suspension.
+        await self._wake_after_hitl_resume(route.call_record_id)
+        if state == "delivery_uncertain":
+            raise HITLDeliveryUncertainError(
+                "HITL answer was recorded but continuation delivery is uncertain"
+            )
+        await self._emit_hitl_resolved_events(
+            room_id=room_id,
+            spec=spec,
+            route=route,
+            status="responded",
+        )
+        return state
+
+    async def cancel_hitl_interaction(
+        self,
+        *,
+        room_id: str,
+        interaction_id: str,
+        expected_version: int,
+    ) -> int:
+        if self._runtime is None:
+            raise OrchestratorRoutingError("orchestrator HITL ingress is not bound")
+        read = await self._runtime.hitl_port.read_interaction(interaction_id)
+        if read is None:
+            raise KeyError(interaction_id)
+        spec, route, _fingerprint = read
+        if route.room_id != room_id:
+            raise HITLRoomMismatchError("Room mismatch")
+        if route.interaction_revision != expected_version:
+            raise HITLConflictError("HITL interaction changed before cancellation")
+        abandoned = await self._runtime.hitl_port.abandon(
+            interaction_id,
+            call_record_id=route.call_record_id,
+            reason="user_canceled",
+        )
+        if abandoned not in {"accepted", "replayed", "absent"}:
+            raise HITLConflictError("HITL interaction could not be canceled")
+        await self._runtime.cancellation_coordinator.cancel_run(
+            route.orchestration_run_id,
+            reason="hitl_canceled",
+        )
+        await self._wake_after_hitl_resume(route.call_record_id)
+        await self._emit_hitl_resolved_events(
+            room_id=room_id,
+            spec=spec,
+            route=route,
+            status="canceled",
+        )
+        return expected_version
+
+    async def _wake_after_hitl_resume(self, call_record_id: str) -> None:
+        if self._runtime is None:
+            return
+        processor = getattr(self._runtime, "observation_processor", None)
+        ledger = getattr(self._runtime, "call_ledger", None)
+        if processor is None or ledger is None:
+            return
+        call = await ledger.load_by_record_id(call_record_id)
+        if call is None or not call.recent_observation_ids:
+            return
+        # Skip when still waiting on the original challenge — reprocessing the
+        # input_required observation would not unblock the kernel.
+        if call.state in {"input_required", "auth_required"}:
+            return
+        for observation_id in reversed(call.recent_observation_ids):
+            try:
+                await processor.process(observation_id)
+            except Exception:
+                logger.warning(
+                    "HITL wake failed to process observation; trying older id",
+                    extra={
+                        "call_record_id": call_record_id,
+                        "observation_id": observation_id,
+                    },
+                    exc_info=True,
+                )
+                continue
+            break
+
+    async def _emit_hitl_resolved_events(
+        self,
+        *,
+        room_id: str,
+        spec: A2AInteractionSpec,
+        route: Any,
+        status: str,
+    ) -> None:
+        if self._runtime is None:
+            return
+        delivery = getattr(self._runtime, "hitl_delivery", None)
+        if delivery is None:
+            return
+        run = await self._runtime.run_store.load(route.orchestration_run_id)
+        call = await self._runtime.call_ledger.load_by_record_id(route.call_record_id)
+        if call is None:
+            return
+        related_message_id = run.request.user_message_id if run is not None else None
+        client_request_id = run.client_request_id if run is not None else None
+        for index, question in enumerate(spec.questions):
+            event = HITLResolvedEvent(
+                room_id=room_id,
+                request_id=question.question_id,
+                message_id=_public_activity_message_id(
+                    route.orchestration_run_id, route.invocation_id
+                ),
+                source="agent",
+                status=status,
+                interaction_id=spec.interaction_id,
+                interaction_status=status,
+                interaction_version=route.interaction_revision,
+                question_count=len(spec.questions),
+                question_index=index,
+                related_message_id=related_message_id,
+                client_request_id=client_request_id,
+            )
+            result = delivery.emit(event)
+            if inspect.isawaitable(result):
+                await result
+
+    async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
+        if self._runtime is None:
+            return []
+
+        interactions = await self._runtime.hitl_port.get_eligible_interactions(room_id)
+        requests: list[HITLRequest] = []
+        for spec, route, _fingerprint in interactions:
+            run = await self._runtime.run_store.load(route.orchestration_run_id)
+            if run is None:
+                continue
+
+            call = await self._runtime.call_ledger.load_by_record_id(
+                route.call_record_id
+            )
+            if call is None:
+                continue
+            if call.state not in {"input_required", "auth_required"}:
+                continue
+            if call.pending_interaction_id != spec.interaction_id:
+                continue
+
+            user_message_id = run.request.user_message_id
+            for index, question in enumerate(spec.questions):
+                choices = (
+                    list(question.choices) if question.choices is not None else None
+                )
+                requests.append(
+                    HITLRequest(
+                        request_id=question.question_id,
+                        room_id=room_id,
+                        user_message_id=user_message_id,
+                        source="agent",
+                        prompt=question.prompt,
+                        message_id=_public_activity_message_id(
+                            route.orchestration_run_id, route.invocation_id
+                        ),
+                        display_message_id=_public_activity_message_id(
+                            route.orchestration_run_id, route.invocation_id
+                        ),
+                        source_step_id=route.call_record_id,
+                        agent_id=route.agent_id,
+                        a2a_task_id=route.task_id,
+                        a2a_context_id=route.context_id,
+                        orchestration_run_id=route.orchestration_run_id,
+                        client_request_id=run.client_request_id,
+                        prompt_type=prompt_type_for_question(question),
+                        choices=choices,
+                        interaction_id=spec.interaction_id,
+                        interaction_status="pending",
+                        interaction_version=route.interaction_revision,
+                        question_count=len(spec.questions),
+                        question_index=index,
+                    )
+                )
+        return requests
 
     async def _authenticate_webhook(self, message_id: str, token: str) -> None:
         """Authenticate an orchestrator webhook exactly like the legacy route."""

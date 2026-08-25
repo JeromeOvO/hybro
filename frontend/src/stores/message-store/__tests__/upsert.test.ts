@@ -114,6 +114,7 @@ describe('applyUpsert', () => {
       const entities = {
         'msg-1': makeEntity({
           hitlRequestId: 'request-1',
+          hitlInteractionId: 'interaction-1',
           hitlInteractionStatus: 'expired',
           hitlInteractionVersion: 5,
         }),
@@ -124,6 +125,7 @@ describe('applyUpsert', () => {
         ['msg-1'],
         makeIncoming({
           hitlRequestId: 'request-1',
+          hitlInteractionId: 'interaction-1',
           hitlInteractionStatus: 'open',
           hitlInteractionVersion: 4,
         }),
@@ -133,6 +135,40 @@ describe('applyUpsert', () => {
       expect(result).not.toBeNull()
       expect(result!.entities['msg-1'].hitlInteractionStatus).toBe('expired')
       expect(result!.entities['msg-1'].hitlInteractionVersion).toBe(5)
+    })
+
+    it('accepts a follow-up interaction on the same message id with a reset version', () => {
+      const entities = {
+        'msg-1': makeEntity({
+          hitlRequestId: 'request-1',
+          hitlInteractionId: 'interaction-1',
+          hitlInteractionStatus: 'responded',
+          hitlApplicationStatus: 'applied',
+          hitlInteractionVersion: 3,
+          hitlUserAnswer: 'first answer',
+        }),
+      }
+
+      const result = applyUpsert(
+        entities,
+        ['msg-1'],
+        makeIncoming({
+          hitlRequestId: 'request-2',
+          hitlInteractionId: 'interaction-2',
+          hitlInteractionStatus: 'open',
+          hitlInteractionVersion: 1,
+          hitlPrompt: 'Second question?',
+          hitlApplicationStatus: undefined,
+          hitlUserAnswer: undefined,
+        }),
+        'sse',
+      )
+
+      expect(result).not.toBeNull()
+      expect(result!.entities['msg-1'].hitlInteractionId).toBe('interaction-2')
+      expect(result!.entities['msg-1'].hitlInteractionVersion).toBe(1)
+      expect(result!.entities['msg-1'].hitlInteractionStatus).toBe('open')
+      expect(result!.entities['msg-1'].hitlPrompt).toBe('Second question?')
     })
   })
 

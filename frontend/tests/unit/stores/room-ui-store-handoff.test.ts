@@ -3,7 +3,7 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
 
 describe("PendingRoomData handoffMode", () => {
   beforeEach(() => {
-    useRoomUiStore.setState({ pendingRoomData: {}, pendingChatDraft: null })
+    useRoomUiStore.setState({ pendingRoomData: {}, pendingChatHandoff: null })
   })
 
   it("stores and consumes handoffMode: prefill", () => {
@@ -47,15 +47,25 @@ describe("PendingRoomData handoffMode", () => {
     expect(dataB!.handoffMode).toBeUndefined()
   })
 
-  it("keeps an Agent mention until the chat composer clears it", () => {
+  it("keeps a single-agent chat handoff until the composer clears it", () => {
     const store = useRoomUiStore.getState()
-    store.setPendingChatDraft("<@agent-1|Weather Agent> ")
+    store.setPendingChatHandoff({
+      draft: "Tell me a story",
+      seedAgents: [{
+        agent_id: "agent-1",
+        agent_card: { name: "Weather Agent" } as never,
+      }],
+    })
 
-    expect(useRoomUiStore.getState().pendingChatDraft).toBe(
-      "<@agent-1|Weather Agent> ",
-    )
+    expect(useRoomUiStore.getState().pendingChatHandoff).toEqual({
+      draft: "Tell me a story",
+      seedAgents: [{
+        agent_id: "agent-1",
+        agent_card: { name: "Weather Agent" },
+      }],
+    })
 
-    useRoomUiStore.getState().clearPendingChatDraft()
-    expect(useRoomUiStore.getState().pendingChatDraft).toBeNull()
+    useRoomUiStore.getState().clearPendingChatHandoff()
+    expect(useRoomUiStore.getState().pendingChatHandoff).toBeNull()
   })
 })

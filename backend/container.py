@@ -1896,6 +1896,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 projection_listener=publish_orchestrator_projection_status,
                 session_listener=_orchestrator_session_listener,
                 user_message_text_reader=_orchestrator_user_message_text,
+                hitl_delivery=(
+                    None if _delivery_deps is None else _delivery_deps.event_publisher
+                ),
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:

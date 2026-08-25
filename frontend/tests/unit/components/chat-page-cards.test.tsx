@@ -77,7 +77,7 @@ let ChatPage: React.ComponentType
 beforeEach(async () => {
   cleanup()
   vi.clearAllMocks()
-  useRoomUiStore.setState({ pendingChatDraft: null })
+  useRoomUiStore.setState({ pendingChatHandoff: null })
   gmState = {
     availableAgents: agents,
     loadingAgents: false,
@@ -194,10 +194,14 @@ describe("Chat page — Use Case Cards integration", () => {
     })
   })
 
-  it("applies an Agent handoff once under Strict Mode", async () => {
-    useRoomUiStore.getState().setPendingChatDraft(
-      "<@a1|YouTube Creator Finder Agent> ",
-    )
+  it("applies a single-agent handoff once under Strict Mode", async () => {
+    useRoomUiStore.getState().setPendingChatHandoff({
+      draft: "Find creators for my channel",
+      seedAgents: [{
+        agent_id: "a1",
+        agent_card: { name: "YouTube Creator Finder Agent" } as never,
+      }],
+    })
 
     const { container } = render(
       <StrictMode>
@@ -206,12 +210,60 @@ describe("Chat page — Use Case Cards integration", () => {
     )
 
     await waitFor(() => {
-      expect(container.querySelector('.room-mention')?.textContent).toBe(
-        'YouTube Creator Finder Agent',
+      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Find creators for my channel',
       )
     })
     expect(document.activeElement).toHaveAttribute('contenteditable', 'true')
-    expect(useRoomUiStore.getState().pendingChatDraft).toBeNull()
+    expect(useRoomUiStore.getState().pendingChatHandoff).toBeNull()
+  })
+
+  it('clears a single-agent handoff seed when a use case takes over scope', async () => {
+    useRoomUiStore.getState().setPendingChatHandoff({
+      draft: 'Chat with this agent',
+      seedAgents: [{
+        agent_id: 'handoff-agent',
+        agent_card: { name: 'Handoff Agent' } as never,
+      }],
+    })
+    const handleGroupCreated = vi.fn((team) => {
+      gmState = {
+        ...gmState,
+        selectedGroup: team.group_id,
+        selectedGroupName: team.name,
+      }
+    })
+    gmState = { ...gmState, handleGroupCreated }
+
+    const { container } = render(<ChatPage />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Chat with this agent',
+      )
+    })
+
+    fireEvent.click(screen.getByText('Travel Planner').closest('button')!)
+
+    await waitFor(() => {
+      expect(handleGroupCreated).toHaveBeenCalledWith(presetTeam)
+    })
+
+    const editor = container.querySelector('[contenteditable="true"]') as HTMLElement
+    editor.textContent = 'Plan my trip'
+    fireEvent.input(editor)
+
+    fireEvent.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => {
+      expect(mockCreateAndNavigate).toHaveBeenCalledWith(
+        'Plan my trip',
+        expect.objectContaining({
+          selectedAgents: undefined,
+          targetGroup: 'travel-team',
+        }),
+      )
+    })
   })
 
   it("shows To Be Continued when catalog load fails", async () => {

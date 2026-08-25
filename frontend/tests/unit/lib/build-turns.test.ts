@@ -1459,13 +1459,35 @@ describe('deriveTurnPhase', () => {
     expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
   })
 
-  it('does not enter synthesizing phase when only delegation logs exist after agents finish', () => {
+  it('keeps the turn active and synthesizing after agents finish on a live run', () => {
     const user = makeUserEntity({
       id: 'u1',
       processingStatusLogs: [
-        { id: 'l1', message: 'Delegating to 2 agent(s)...', timestamp: '2026-01-01T00:00:01.000Z' },
+        { id: 'l1', message: 'Delegating to Travel Planner Agent', timestamp: '2026-01-01T00:00:01.000Z', turnPhase: 'collecting' },
+        { id: 'l2', message: 'Travel Planner Agent finished', timestamp: '2026-01-01T00:00:02.000Z', turnPhase: 'collecting' },
+        { id: 'l3', message: 'Weather Agent finished', timestamp: '2026-01-01T00:00:03.000Z', turnPhase: 'collecting' },
       ],
     })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'travel-planner',
+      taskStatus: 'completed',
+      content: 'A',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'weather',
+      taskStatus: 'completed',
+      content: 'B',
+    })
+    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
+    expect(turns[0].status).toBe('active')
+    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
+    expect(turns[0].finalAnswer.kind).toBe('pending')
+  })
+
+  it('does not keep a hydrated historical turn active when no live run evidence exists', () => {
+    const user = makeUserEntity({ id: 'u1' })
     const agentA = makeAgentEntity({
       id: 'a1',
       agentId: 'agent-a',
@@ -1481,6 +1503,30 @@ describe('deriveTurnPhase', () => {
     const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
     expect(turns[0].status).toBe('completed')
     expect(deriveTurnPhase(turns[0])).not.toBe('synthesizing')
+  })
+
+  it('keeps the latest turn active after refresh when room processing is still open', () => {
+    const user = makeUserEntity({ id: 'u1' })
+    const agentA = makeAgentEntity({
+      id: 'a1',
+      agentId: 'travel-planner',
+      taskStatus: 'completed',
+      content: 'A',
+    })
+    const agentB = makeAgentEntity({
+      id: 'a2',
+      agentId: 'weather',
+      taskStatus: 'completed',
+      content: 'B',
+    })
+    const turns = buildTurns(
+      entitiesToMap([user, agentA, agentB]),
+      ['u1', 'a1', 'a2'],
+      [],
+      { roomProcessingActive: true },
+    )
+    expect(turns[0].status).toBe('active')
+    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
   })
 })
 

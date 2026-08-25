@@ -61,6 +61,42 @@ describe('GroupSelector', () => {
     expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument()
   })
 
+  it('shows a manual room agent label for room_team selection', () => {
+    render(
+      <GroupSelector
+        selectedGroup="room_team"
+        selectedGroupName="Story Agent"
+        roomMembershipLabel="Story Agent"
+        onGroupChange={vi.fn()}
+        groups={[]}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /story agent/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^all agents$/i })).not.toBeInTheDocument()
+  })
+
+  it('lists room membership and All Agents as distinct menu options', async () => {
+    const user = userEvent.setup()
+    const onGroupChange = vi.fn()
+    render(
+      <GroupSelector
+        selectedGroup="room_team"
+        selectedGroupName="Weather Agent"
+        roomMembershipLabel="Weather Agent"
+        onGroupChange={onGroupChange}
+        groups={[]}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: /weather agent/i }))
+    expect(await screen.findByText('Agents in this room')).toBeInTheDocument()
+    expect(screen.getByText('All Agents')).toBeInTheDocument()
+
+    await user.click(screen.getByText('All Agents'))
+    expect(onGroupChange).toHaveBeenCalledWith('all_agents')
+  })
+
   it('uses team terminology for saved agent collections', async () => {
     const user = userEvent.setup()
     render(

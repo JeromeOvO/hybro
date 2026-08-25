@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
+from common.dto.hitl import A2AInteractionSpec
+
 from ..models import (
     AgentToolInput,
     TextPart,
@@ -28,6 +30,10 @@ from .errors import (
     RecoverableTransportError,
 )
 from .ingress import ObservationIngressError
+from .interaction_outcome import (
+    emit_hitl_request_events,
+    park_call_for_interaction,
+)
 from .ledger import (
     apply_observation,
     bind_authoritative_aliases,
@@ -45,6 +51,7 @@ from .ports import (
     A2ADispatchPort,
     AgentCallLedgerStore,
     AuthorizationRefreshPort,
+    HITLApplicationPort,
     NormalizedObservationRecorder,
     PreparedInvocationSnapshotReader,
     ResourceMaterializerPort,
@@ -75,6 +82,9 @@ class A2AAgentToolRuntime:
         dispatch: A2ADispatchPort,
         observations: NormalizedObservationRecorder,
         terminal_finalizer: TerminalInteractionFinalizer,
+        hitl: HITLApplicationPort | None = None,
+        hitl_delivery: Any | None = None,
+        run_store: Any | None = None,
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-runtime",
     ) -> None:
@@ -87,6 +97,9 @@ class A2AAgentToolRuntime:
         self.dispatch = dispatch
         self.observations = observations
         self.terminal_finalizer = terminal_finalizer
+        self.hitl = hitl
+        self.hitl_delivery = hitl_delivery
+        self.run_store = run_store
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
 
@@ -558,57 +571,89 @@ class A2AAgentToolRuntime:
         invocation: ToolInvocation,
         observation: NormalizedA2AObservation,
     ) -> ToolResult | ToolSuspension:
-        """Convert an input-required/auth-required answer into a durable result.
+        """Bind typed HITL or return a silent completed request for untyped agents.
 
-        The Agent's request for input is the invocation's observable answer:
-        it is recorded in the observation inbox and returned to the kernel as
-        a tool result, so the kernel's next model turn decides between
-        re-dispatching with facts it already holds and asking the user for a
-        user-only blocker. Polling the still-open task would swallow the
-        request and deadlock the turn.
+        Typed ``interaction_spec`` (travel clarify): create/activate a durable
+        HITL aggregate, park the call in ``input_required`` /
+        ``auth_required``, and return ``ToolSuspension`` so the kernel waits
+        for the user answer + continuation.
+
+        Missing spec (cyber silent recovery): record the request text as a
+        completed tool result so the next model turn can continue without a
+        UI challenge.
+
+        Invalid spec: fail closed as a terminal failed tool result.
         """
         await self.observations.record(observation)
         renewed = await self._renew_and_verify_epoch(record)
         if renewed is None:
             return _suspension(invocation)
-        record = renewed
-        content = list(observation.content or [])
-        if not content:
-            content = [TextPart(text="The Agent requested additional input.")]
-        result = ToolResult(
-            call_id=invocation.invocation_id,
-            tool_name=invocation.tool.definition.name,
-            status="completed",
-            content=content,
-            artifact_refs=list(observation.artifact_refs or []),
-            error_code=None,
-            error_message=None,
-        )
-        terminal = transition_call(
-            record,
-            to_state="completed",
-            updated_at=datetime.now(UTC),
-            terminal_result=result,
-            terminal_result_digest=sha256(
-                result.model_dump_json().encode()
-            ).hexdigest(),
-        )
-        outcome = await self.ledger.cas(
-            terminal, expected_state_version=record.state_version
-        )
-        if outcome not in {"accepted", "replayed"} or terminal.terminal_result is None:
-            return await self._persisted_outcome_or_suspension(invocation)
+        if self.hitl is None and observation.interaction_spec is not None:
+            raise RuntimeError("HITL port not bound but interaction spec received")
         try:
-            await self.observations.mark_executor_outcome(
-                observation.observation_id,
-                outcome_digest=terminal.terminal_result_digest,
+            persisted, kind = await park_call_for_interaction(
+                call=renewed,
+                observation=observation,
+                hitl=self.hitl,
+                cas=self._cas_interaction_winner,
             )
-        except ObservationIngressError:
-            # The inbox processor reconciles the row from the checkpointed
-            # outcome digest on its next pass.
-            pass
-        await self.terminal_finalizer.finalize(terminal)
-        return terminal.terminal_result
+        except RecoverableCheckpointError:
+            return await self._persisted_outcome_or_suspension(invocation)
+        if kind == "typed_waiting":
+            await self._emit_parked_hitl_events(persisted, observation)
+            return _suspension(invocation)
+        return await self._finalize_interaction_terminal(
+            persisted, invocation, observation
+        )
+
+    async def _cas_interaction_winner(
+        self, candidate: AgentCallLedgerRecord, expected: int
+    ) -> AgentCallLedgerRecord:
+        outcome = await self.ledger.cas(candidate, expected_state_version=expected)
+        if outcome in {"accepted", "replayed"}:
+            return candidate
+        winner = await self.ledger.load_by_record_id(candidate.call_record_id)
+        if winner is None:
+            raise RecoverableCheckpointError(
+                "interaction CAS winner could not be classified"
+            )
+        return winner
+
+    async def _emit_parked_hitl_events(
+        self,
+        persisted: AgentCallLedgerRecord,
+        observation: NormalizedA2AObservation,
+    ) -> None:
+        if persisted.pending_interaction_id is None:
+            return
+        raw_spec = observation.interaction_spec
+        if raw_spec is None:
+            return
+        interaction = A2AInteractionSpec.model_validate(raw_spec)
+        await emit_hitl_request_events(
+            record=persisted,
+            interaction=interaction,
+            interaction_id=persisted.pending_interaction_id,
+            hitl_delivery=self.hitl_delivery,
+            run_store=self.run_store,
+        )
+
+    async def _finalize_interaction_terminal(
+        self,
+        persisted: AgentCallLedgerRecord,
+        invocation: ToolInvocation,
+        observation: NormalizedA2AObservation,
+    ) -> ToolResult | ToolSuspension:
+        if persisted.terminal_result is None:
+            return await self._persisted_outcome_or_suspension(invocation)
+        if persisted.terminal_result_digest is not None:
+            with suppress(ObservationIngressError):
+                await self.observations.mark_executor_outcome(
+                    observation.observation_id,
+                    outcome_digest=persisted.terminal_result_digest,
+                )
+        await self.terminal_finalizer.finalize(persisted)
+        return persisted.terminal_result
 
     async def _renew_and_verify_epoch(
         self, record: AgentCallLedgerRecord

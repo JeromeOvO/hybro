@@ -23,6 +23,10 @@ from .errors import (
     RecoverableCheckpointError,
     RecoverableTransportError,
 )
+from .interaction_outcome import (
+    emit_hitl_request_events,
+    park_call_for_interaction,
+)
 from .ledger import (
     TERMINAL_AGENT_CALL_STATES,
     apply_observation,
@@ -165,6 +169,27 @@ class InMemoryHITLApplicationPort:
     ) -> tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str] | None:
         return self.read_interaction_for_test(interaction_id)
 
+    async def get_eligible_interactions(
+        self, room_id: str
+    ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
+        interactions = []
+        for interaction_id, stored in self._interactions.items():
+            if interaction_id not in self._eligible_interactions:
+                continue
+            if interaction_id in self._abandoned_interactions:
+                continue
+            spec, route, fingerprint = stored
+            if route.room_id != room_id:
+                continue
+            interactions.append(
+                (
+                    A2AInteractionSpec.model_validate(spec.model_dump(mode="python")),
+                    HITLRouteSnapshotV2.model_validate(route.model_dump(mode="python")),
+                    fingerprint,
+                )
+            )
+        return interactions
+
     async def read_answers(
         self, interaction_id: str, interaction_revision: int
     ) -> list[HITLQuestionAnswer] | None:
@@ -247,6 +272,8 @@ class A2AContinuationCoordinator:
         observations: NormalizedObservationRecorder,
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-continuation",
+        hitl_delivery: Any | None = None,
+        run_store: Any | None = None,
     ) -> None:
         self.ledger = ledger
         self.bindings = bindings
@@ -259,6 +286,8 @@ class A2AContinuationCoordinator:
         self.observations = observations
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
+        self.hitl_delivery = hitl_delivery
+        self.run_store = run_store
 
     async def resume(
         self,
@@ -317,7 +346,7 @@ class A2AContinuationCoordinator:
                 if call.terminal_result is not None:
                     return await self._finalized_state(call)
                 if call.continuation_command is not None:
-                    if call.state in {"resuming", "delivery_uncertain"}:
+                    if call.state in {"resuming", "delivery_uncertain", "working"}:
                         return await self.recover_call(call_record_id=call_record_id)
                     return await self._finalized_state(call)
         if call.terminal_result is not None:
@@ -423,12 +452,19 @@ class A2AContinuationCoordinator:
             return await self._finalized_state(call)
         if call.continuation_command is None:
             return await self.reconcile_answer(call_record_id=call_record_id)
-        if call.state not in {"resuming", "delivery_uncertain"}:
+        recoverable_states = {"resuming", "delivery_uncertain"}
+        if call.state == "working" and call.continuation_state == "accepted":
+            recoverable_states = recoverable_states | {"working"}
+        if call.state not in recoverable_states:
             return call.state
         claimed = await self._claim(call)
         if claimed is None:
             return call.state
-        inspect = claimed.continuation_state in {"dispatching", "delivery_uncertain"}
+        inspect = claimed.continuation_state in {
+            "dispatching",
+            "delivery_uncertain",
+            "accepted",
+        }
         return await self._deliver(claimed, inspect=inspect)
 
     async def _validate_existing_answer_retry(
@@ -820,12 +856,51 @@ class A2AContinuationCoordinator:
                     outcome_digest=persisted.terminal_result_digest,
                 )
             return await self._finalized_state(persisted)
+        if (
+            receipt.outcome == "interaction"
+            and receipt.interaction_observation is not None
+        ):
+            if _should_retry_continuation_send(call, receipt.interaction_observation):
+                # Inspect still seeing the answered challenge (or a cleared
+                # status.message) means the continuation send may not have
+                # progressed the Agent. Resend once from inspect. If the
+                # continue send itself returns that same stale challenge,
+                # stay delivery_uncertain so recovery backs off — do not
+                # re-park the answered interaction or untyped-complete.
+                if inspect:
+                    return await self._deliver(call, inspect=False)
+                return await self._mark_uncertain(call)
+            return await self._park_interaction(call, receipt.interaction_observation)
         if receipt.outcome == "accepted":
+            # Healthy still-working receipt is not delivery uncertainty —
+            # reset the inspection budget so ordinary polls cannot expire
+            # a live remote task.
+            if call.state == "working":
+                # Recovery can re-enter an already-working call whose
+                # continuation was accepted. Reschedule without an illegal
+                # working -> working transition.
+                rescheduled = call.model_copy(
+                    update={
+                        "continuation_state": "accepted",
+                        "continuation_attempts": 0,
+                        "claim_owner": None,
+                        "claim_expires_at": None,
+                        "next_attempt_at": datetime.now(UTC)
+                        + timedelta(seconds=self.policy.retry_backoff_initial_seconds),
+                        "state_version": call.state_version + 1,
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+                persisted = await self._cas_or_load_winner(
+                    rescheduled, expected_state_version=call.state_version
+                )
+                return await self._finalized_state(persisted)
             working = transition_call(
                 call,
                 to_state="working",
                 updated_at=datetime.now(UTC),
                 continuation_state="accepted",
+                continuation_attempts=0,
                 claim_owner=None,
                 claim_expires_at=None,
                 next_attempt_at=datetime.now(UTC)
@@ -836,6 +911,101 @@ class A2AContinuationCoordinator:
             )
             return await self._finalized_state(persisted)
         return await self._mark_uncertain(call)
+
+    async def _park_interaction(
+        self, call: AgentCallLedgerRecord, observation: NormalizedA2AObservation
+    ) -> str:
+        if observation.call_record_id is None:
+            observation = observation.model_copy(
+                update={"call_record_id": call.call_record_id}
+            )
+        prior_interaction_id = call.pending_interaction_id
+        if prior_interaction_id is None and call.answer_applied is not None:
+            prior_interaction_id = call.answer_applied.interaction_id
+        _, inbox_record = await self.observations.record(observation)
+        call = await self._renew_and_verify(call)
+        if call is None:
+            return "delivery_uncertain"
+        observation = inbox_record.observation
+        if _blocks_untyped_interaction_completion(call, observation):
+            # Continuation mid-flight can observe input_required after the A2A
+            # server clears status.message (metadata lost). Completing that as
+            # an untyped tool result lets the kernel narrate the ask as a final
+            # answer and kills multi-round HITL. Stay uncertain so recovery
+            # can resend / wait for a typed challenge.
+            return await self._mark_uncertain(call)
+        try:
+            persisted, kind = await park_call_for_interaction(
+                call=call,
+                observation=observation,
+                hitl=self.hitl,
+                cas=self._cas_or_load_winner_for_park,
+            )
+        except RecoverableCheckpointError:
+            return await self._mark_uncertain(call)
+        if kind == "typed_waiting":
+            await self._after_typed_park(
+                persisted,
+                observation,
+                prior_interaction_id=prior_interaction_id,
+            )
+        elif kind in {"untyped_completed", "invalid_failed"}:
+            await self._mark_parked_terminal_outcome(persisted, observation)
+        return await self._finalized_state(persisted)
+
+    async def _cas_or_load_winner_for_park(
+        self, candidate: AgentCallLedgerRecord, expected: int
+    ) -> AgentCallLedgerRecord:
+        return await self._cas_or_load_winner(
+            candidate, expected_state_version=expected
+        )
+
+    async def _after_typed_park(
+        self,
+        persisted: AgentCallLedgerRecord,
+        observation: NormalizedA2AObservation,
+        *,
+        prior_interaction_id: str | None,
+    ) -> None:
+        if persisted.pending_interaction_id is None:
+            return
+        if (
+            prior_interaction_id is not None
+            and prior_interaction_id != persisted.pending_interaction_id
+        ):
+            with suppress(Exception):
+                await self.hitl.abandon(
+                    prior_interaction_id,
+                    call_record_id=persisted.call_record_id,
+                    reason="superseded_by_new_interaction",
+                )
+        raw_spec = observation.interaction_spec
+        if raw_spec is None:
+            return
+        interaction = A2AInteractionSpec.model_validate(raw_spec)
+        await emit_hitl_request_events(
+            record=persisted,
+            interaction=interaction,
+            interaction_id=persisted.pending_interaction_id,
+            hitl_delivery=self.hitl_delivery,
+            run_store=self.run_store,
+        )
+
+    async def _mark_parked_terminal_outcome(
+        self,
+        persisted: AgentCallLedgerRecord,
+        observation: NormalizedA2AObservation,
+    ) -> None:
+        if (
+            persisted.terminal_result_digest is None
+            or observation.observation_id not in persisted.recent_observation_ids
+        ):
+            return
+        with suppress(Exception):
+            await self.observations.mark_executor_outcome(
+                observation.observation_id,
+                outcome_digest=persisted.terminal_result_digest,
+            )
 
     async def _expire(self, call: AgentCallLedgerRecord) -> str:
         command = call.continuation_command
@@ -1034,6 +1204,42 @@ class A2AContinuationCoordinator:
             next_attempt_at=datetime.now(UTC),
             released_at=datetime.now(UTC),
         )
+
+
+def _should_retry_continuation_send(
+    call: AgentCallLedgerRecord, observation: NormalizedA2AObservation
+) -> bool:
+    """True when inspect still shows the challenge we already answered.
+
+    That means the continuation send never landed, so recovery must resend
+    instead of re-parking the same interaction.
+
+    Also true when the task is still interactive but the typed
+    ``interaction_spec`` is missing (status.message cleared into history
+    while state remains input-required). Missing-spec must not untyped-
+    complete during continuation — that completes the call and the kernel
+    writes the ask as a final HYBRO answer.
+    """
+    marker = call.answer_applied
+    if marker is None or call.continuation_command is None:
+        return False
+    if observation.event_kind not in {"input_required", "auth_required"}:
+        return False
+    raw = observation.interaction_spec
+    if not isinstance(raw, dict):
+        return True
+    return raw.get("interaction_id") == marker.interaction_id
+
+
+def _blocks_untyped_interaction_completion(
+    call: AgentCallLedgerRecord, observation: NormalizedA2AObservation
+) -> bool:
+    """Block untyped completion while a HITL continuation is still in flight."""
+    if call.answer_applied is None or call.continuation_command is None:
+        return False
+    if observation.event_kind not in {"input_required", "auth_required"}:
+        return False
+    return observation.interaction_spec is None
 
 
 def _answer_marker(record: DurableHITLAnswerRecord) -> HITLAnswerAppliedMarker:

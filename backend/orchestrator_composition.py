@@ -64,6 +64,7 @@ from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
     RecoverableAdapterError,
 )
+from execution.orchestrator.a2a_runtime.hitl import A2AContinuationCoordinator
 from execution.orchestrator.a2a_runtime.in_memory import RunCheckpointReader
 from execution.orchestrator.a2a_runtime.ingress import (
     A2AObservationIngress,
@@ -81,6 +82,7 @@ from execution.orchestrator.a2a_runtime.recovery import (
     A2AArtifactRecoveryService,
     A2ACallRecoveryService,
     A2ACancellationRecoveryService,
+    A2AContinuationRecoveryService,
     A2AInboxRecoveryService,
     A2ARecoveryCycle,
     dispatch_command,
@@ -133,6 +135,8 @@ class OrchestratorRuntime:
     session_host: Any
     observation_sink: Any
     cancellation_coordinator: Any
+    continuation: Any
+    hitl_delivery: Any
     kernel_factory: Callable[[FrozenToolCatalogSnapshot], OrchestratorKernel]
     projection_worker: Any
     recovery_cycle: Any
@@ -159,6 +163,8 @@ _RUNTIME_BINDINGS = (
     "session_host",
     "observation_sink",
     "cancellation_coordinator",
+    "continuation",
+    "hitl_delivery",
     "kernel_factory",
     "projection_worker",
     "recovery_cycle",
@@ -187,6 +193,7 @@ def create_orchestrator_runtime(  # noqa: C901
     session_listener: Any | None = None,
     projection_listener: ProjectionListener | None = None,
     user_message_text_reader: Callable[[str], Any] | None = None,
+    hitl_delivery: Any | None = None,
 ) -> OrchestratorRuntime:
     """Compose the full orchestrator runtime over the registered Mongo stores.
 
@@ -316,6 +323,9 @@ def create_orchestrator_runtime(  # noqa: C901
         dispatch=dispatch,
         observations=observation_ingress,
         terminal_finalizer=terminal_finalizer,
+        hitl=hitl_port,
+        hitl_delivery=hitl_delivery,
+        run_store=run_store,
     )
 
     model_runtime = GatewayModelRuntime(llm_gateway)
@@ -416,19 +426,22 @@ def create_orchestrator_runtime(  # noqa: C901
         dispatch=dispatch,
         observations=observation_ingress,
         recover_dispatch=recover_dispatch,
+        hitl=hitl_port,
+        hitl_delivery=hitl_delivery,
+        run_store=run_store,
     )
     artifact_recovery = A2AArtifactRecoveryService(inbox_recovery)
 
     async def _recovery_noop() -> None:
-        # HITL continuation (needs the step-7 auth-reference verifier), generic
-        # Run re-entry, and the orchestrator watchdog are bound in later steps.
+        # Generic Run re-entry and the orchestrator watchdog are bound in later
+        # steps. HITL continuation recovery is wired below.
         return None
 
     if getattr(settings_obj, "orchestrator_recovery_enabled", False):
         logger.warning(
-            "orchestrator recovery enabled while continuation/generic_runs/"
-            "watchdog phases are still no-ops; HITL continuations and generic "
-            "Run re-entry will not run until step 7 binds them"
+            "orchestrator recovery enabled while generic_runs/watchdog phases "
+            "are still no-ops; generic Run re-entry will not run until step 7 "
+            "binds them"
         )
 
     def _due_phase(recover: Callable[..., Any]) -> Callable[[], Any]:
@@ -437,13 +450,35 @@ def create_orchestrator_runtime(  # noqa: C901
 
         return run
 
+    # Auth-challenge HITL answers fail closed until a real verifier is bound.
+    class FailingAuthReferenceVerification:
+        async def verify(self, *args: Any, **kwargs: Any) -> str:
+            raise PermissionError("Auth references not implemented")
+
+    continuation_coordinator = A2AContinuationCoordinator(
+        ledger=call_ledger,
+        bindings=binding_store,
+        hitl=hitl_port,
+        room_epochs=epoch_store,
+        authorization=authorization,
+        auth_references=FailingAuthReferenceVerification(),
+        dispatch=dispatch,
+        observations=observation_ingress,
+        hitl_delivery=hitl_delivery,
+        run_store=run_store,
+    )
+    continuation_recovery = A2AContinuationRecoveryService(
+        coordinator=continuation_coordinator,
+        ledger=call_ledger,
+    )
+
     # Projection delivery is deliberately bound twice: as the recovery-cycle
     # projection phase AND as the standalone leader-gated projection job.
     # Both surfaces are idempotent (CAS + lease + dedupe) and re-drive the
     # same outbox; the redundancy self-heals whichever worker is behind.
     recovery_cycle = A2ARecoveryCycle(
         cancellation=_due_phase(cancellation_recovery.recover_due),
-        continuation=_recovery_noop,
+        continuation=_due_phase(continuation_recovery.recover_due),
         observations=_due_phase(inbox_recovery.recover_due),
         calls=_due_phase(call_recovery.recover_due),
         artifacts=_due_phase(artifact_recovery.recover_due),
@@ -473,10 +508,19 @@ def create_orchestrator_runtime(  # noqa: C901
         session_host=session_host,
         observation_sink=observation_sink,
         cancellation_coordinator=cancellation_coordinator,
+        continuation=continuation_coordinator,
+        hitl_delivery=hitl_delivery
+        if hitl_delivery is not None
+        else _NoopHitlDelivery(),
         kernel_factory=kernel_for_catalog,
         projection_worker=projection_worker,
         recovery_cycle=recovery_cycle,
     )
+
+
+class _NoopHitlDelivery:
+    async def emit(self, event: Any) -> None:
+        return None
 
 
 __all__ = [

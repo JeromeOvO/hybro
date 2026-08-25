@@ -196,6 +196,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     roomId, room, getToken, lifecycle, hitlRequestIndex, roomQuery,
     reconcileWithDb, setCancelling, setUpdatingRoom,
     sseEnabled, setSseEnabled,
+    getAgentName, getAgentSource,
   )
 
   return {

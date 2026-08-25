@@ -83,7 +83,10 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
         initialMessage: 'Hello',
       }),
       undefined,
-      undefined
+      {
+        membership_seed_input: 'manual',
+        room_agent_ids: ['agent-1'],
+      },
     )
   })
 

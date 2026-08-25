@@ -20,8 +20,16 @@ interface FinalAnswerSurfaceProps {
   onOpenDetail?: (messageId: string) => void
 }
 
+/**
+ * Avatar / work-log running state follows turn lifecycle, not finalAnswer kind.
+ * Do not stop on `deterministic_done` / `single` content alone — those can
+ * appear while the turn is still active (e.g. before synthesis or terminal
+ * stamp). The old `kind !== 'hitl'` exclusion stopped the spinner during Needs
+ * Input; keep HITL running without that exclusion.
+ */
 function isProcessingStatusRunning(turn: TurnViewModel): boolean {
-  return turn.status === 'active' && turn.phase !== 'completed' && turn.finalAnswer.kind !== 'hitl'
+  if (turn.finalAnswer.kind === 'hitl') return true
+  return turn.status === 'active' && turn.phase !== 'completed'
 }
 
 function CollectingBlock({
@@ -147,17 +155,21 @@ function DeterministicDoneBlock({
   summaryResult,
   turnArtifacts,
   turnId,
+  isRunning,
 }: {
   intro: string
   summaryResult?: AgentResultViewModel
   turnArtifacts?: TurnViewModel['agentResults'][number]['artifacts']
   turnId?: string
+  isRunning: boolean
 }) {
   const theme = getAgentTheme('system:hybro', 'HYBRO AI')
   const display = {
     label: 'Combined agent responses',
     tone: 'muted' as const,
-    isAnimated: false,
+    // Keep the avatar spinning while the turn is still active (e.g. single
+    // agent already terminal but room processing_status has not completed).
+    isAnimated: isRunning,
     ariaLabel: 'HYBRO AI — Combined agent responses',
   }
 
@@ -333,6 +345,7 @@ export function FinalAnswerSurface({
           }
           turnArtifacts={turn.agentResults.flatMap(r => r.artifacts ?? [])}
           turnId={turn.id}
+          isRunning={processingStatusRunning}
         />
       )
       break

@@ -49,6 +49,10 @@ class HITLApplicationStore(Protocol):
         self, interaction_id: str
     ) -> StoredHITLInteraction | None: ...
 
+    async def get_eligible_interactions(
+        self, room_id: str
+    ) -> list[StoredHITLInteraction]: ...
+
     async def mark_eligible(self, interaction_id: str) -> str: ...
 
     async def abandon(
@@ -113,6 +117,15 @@ class InMemoryHITLApplicationStore:
         self, interaction_id: str
     ) -> StoredHITLInteraction | None:
         return self._interactions.get(interaction_id)
+
+    async def get_eligible_interactions(
+        self, room_id: str
+    ) -> list[StoredHITLInteraction]:
+        return [
+            i
+            for i in self._interactions.values()
+            if i.route.room_id == room_id and i.eligible and i.abandoned is None
+        ]
 
     async def mark_eligible(self, interaction_id: str) -> str:
         stored = self._interactions.get(interaction_id)
@@ -231,6 +244,19 @@ class DurableHITLApplicationPort:
         ):
             return "conflict"
         return await self._hitl_store.mark_eligible(interaction_id)
+
+    async def get_eligible_interactions(
+        self, room_id: str
+    ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
+        docs = await self._hitl_store.get_eligible_interactions(room_id)
+        return [
+            (
+                A2AInteractionSpec.model_validate(doc.spec.model_dump(mode="python")),
+                HITLRouteSnapshotV2.model_validate(doc.route.model_dump(mode="python")),
+                doc.fingerprint,
+            )
+            for doc in docs
+        ]
 
     async def abandon(
         self,

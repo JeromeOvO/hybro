@@ -1,5 +1,133 @@
+import { isSupervisorClarifyAgent } from '@/lib/system-agents'
 import type { AgentResultViewModel, TurnViewModel } from './types'
 import { getStripSourceResults } from './turn-live-shell'
+
+export interface OpenRoomRunContext {
+  userMessageId?: string | null
+  turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
+  turnCompletionKind?: TurnViewModel['turnCompletionKind']
+  processingStatusLogs?: TurnViewModel['processingStatusLogs']
+  activeRunTriggerMessageIds?: ReadonlySet<string>
+  roomProcessingActive?: boolean
+  isLatestUserTurn?: boolean
+  isSupervisorTurn?: boolean
+}
+
+function isPersistedTerminalTurn(
+  status: TurnViewModel['turnTerminalStatus'] | undefined,
+): boolean {
+  return status === 'completed' || status === 'failed' || status === 'canceled'
+}
+
+/** True when the correlated room run is still live (not a hydrated historical turn). */
+export function hasLiveRunEvidence(context: OpenRoomRunContext): boolean {
+  if ((context.processingStatusLogs?.length ?? 0) > 0) return true
+  if (
+    context.userMessageId
+    && context.activeRunTriggerMessageIds?.has(context.userMessageId)
+  ) {
+    return true
+  }
+  if (context.roomProcessingActive && context.isLatestUserTurn) return true
+  return false
+}
+
+function buildTurnSnapshot(
+  agentResults: AgentResultViewModel[],
+  context: OpenRoomRunContext,
+): TurnViewModel {
+  return {
+    id: '',
+    roomId: '',
+    userMessageId: context.userMessageId ?? null,
+    userContent: '',
+    userAttachments: [],
+    timestamp: '',
+    status: 'active',
+    events: [],
+    summary: null,
+    agentResults,
+    activeAgentIds: [],
+    isSupervisorTurn: context.isSupervisorTurn ?? false,
+    displayMode: 'working',
+    finalAnswer: { kind: 'pending', label: 'Working' },
+    turnTerminalStatus: context.turnTerminalStatus,
+    turnCompletionKind: context.turnCompletionKind,
+    processingStatusLogs: context.processingStatusLogs ?? [],
+    phase: 'collecting',
+  }
+}
+
+function filterRealAgentResults(
+  agentResults: AgentResultViewModel[],
+): AgentResultViewModel[] {
+  return agentResults.filter(
+    r => !r.isEphemeral && !r.isSummaryAgent && !isSupervisorClarifyAgent(r.agentId),
+  )
+}
+
+/** Backend stamped synthesis but skipped LLM work — do not hold the turn active. */
+export function isSynthesisKindWithoutActualSynthesis(
+  agentResults: AgentResultViewModel[],
+  context: OpenRoomRunContext,
+): boolean {
+  if (context.turnCompletionKind !== 'synthesis') return false
+
+  const turn = buildTurnSnapshot(agentResults, context)
+  if (hasActiveSynthesisGap(turn)) return false
+  if (hasSynthesisSignalInProcessingLogs(turn)) return false
+
+  const summary = agentResults.find(r => r.isSummaryAgent)
+  if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) {
+    return false
+  }
+
+  return true
+}
+
+/**
+ * True while the room run is open, agents are done, and the primary surface is
+ * still waiting for terminal processing_status / final answer resolution.
+ */
+export function shouldHoldTurnActiveForOpenRoomRun(
+  agentResults: AgentResultViewModel[],
+  context: OpenRoomRunContext,
+): boolean {
+  if (isPersistedTerminalTurn(context.turnTerminalStatus)) return false
+  if (context.turnCompletionKind === 'deterministic') return false
+  if (!hasLiveRunEvidence(context)) return false
+
+  const real = filterRealAgentResults(agentResults)
+  if (real.length < 2 || !allRealTerminal(real)) return false
+  if (real.some(r => r.status === 'working')) return false
+  if (isMixedTerminalMultiAgentTurn(real)) return false
+  if (isSynthesisKindWithoutActualSynthesis(agentResults, context)) return false
+
+  const summary = agentResults.find(r => r.isSummaryAgent)
+  if (
+    summary
+    && isDeterministicSummary(summary)
+    && (summary.status === 'working' || summary.content.trim().length > 0)
+  ) {
+    return false
+  }
+
+  const turn = buildTurnSnapshot(agentResults, context)
+  if (isMultiAgentTurnReadyForDeterministicDone(turn, real)) return false
+
+  return true
+}
+
+/** True when the UI should show the synthesizing phase for an open room run. */
+export function shouldShowSynthesizingForOpenRoomRun(
+  agentResults: AgentResultViewModel[],
+  context: OpenRoomRunContext,
+): boolean {
+  if (!shouldHoldTurnActiveForOpenRoomRun(agentResults, context)) return false
+
+  const real = filterRealAgentResults(agentResults)
+  return real.every(r => r.status === 'completed')
+}
 
 function isSynthesisGapEphemeral(result: AgentResultViewModel): boolean {
   if (result.isSummaryAgent && result.status === 'working') return true
@@ -202,6 +330,7 @@ export function hasActiveSynthesisGap(turn: TurnViewModel): boolean {
 export function isPreSynthesisGap(
   turn: TurnViewModel,
   real: AgentResultViewModel[] = getStripSourceResults(turn),
+  openRoomRunContext?: OpenRoomRunContext,
 ): boolean {
   if (real.length < 2) return false
   if (!allRealTerminal(real)) return false
@@ -214,8 +343,27 @@ export function isPreSynthesisGap(
   if (summary && isDeterministicSummary(summary)) return false
   if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) return false
 
+  if (isSynthesisKindWithoutActualSynthesis(turn.agentResults, {
+    userMessageId: turn.userMessageId,
+    turnTerminalStatus: turn.turnTerminalStatus,
+    turnCompletionKind: turn.turnCompletionKind,
+    processingStatusLogs: turn.processingStatusLogs,
+    isSupervisorTurn: turn.isSupervisorTurn,
+  })) {
+    return false
+  }
+
   const hasOrchestrationContext =
-    turn.isSupervisorTurn || turn.turnCompletionKind === 'synthesis'
+    turn.isSupervisorTurn
+    || turn.turnCompletionKind === 'synthesis'
+    || hasLiveRunEvidence({
+      userMessageId: turn.userMessageId,
+      turnTerminalStatus: turn.turnTerminalStatus,
+      turnCompletionKind: turn.turnCompletionKind,
+      processingStatusLogs: turn.processingStatusLogs,
+      isSupervisorTurn: turn.isSupervisorTurn,
+      ...openRoomRunContext,
+    })
   if (!hasOrchestrationContext) return false
 
   return true
@@ -228,7 +376,17 @@ export function isPreSynthesisGap(
 export function shouldShowSynthesizingPhase(
   turn: TurnViewModel,
   real: AgentResultViewModel[] = getStripSourceResults(turn),
+  openRoomRunContext?: OpenRoomRunContext,
 ): boolean {
+  const liveContext: OpenRoomRunContext = {
+    userMessageId: turn.userMessageId,
+    turnTerminalStatus: turn.turnTerminalStatus,
+    turnCompletionKind: turn.turnCompletionKind,
+    processingStatusLogs: turn.processingStatusLogs,
+    isSupervisorTurn: turn.isSupervisorTurn,
+    ...turn.liveRunBuildContext,
+    ...openRoomRunContext,
+  }
   if (real.length < 2) return false
   if (!allRealTerminal(real)) return false
   if (real.some(r => r.status === 'working')) return false
@@ -250,40 +408,27 @@ export function shouldShowSynthesizingPhase(
   }
 
   if (hasActiveSynthesisGap(turn)) return true
-  if (turn.turnCompletionKind === 'synthesis' && !summary?.content?.trim()) return true
-  return isPreSynthesisGap(turn, real)
+  if (turn.turnCompletionKind === 'synthesis' && !summary?.content?.trim()) {
+    if (!isSynthesisKindWithoutActualSynthesis(turn.agentResults, {
+      userMessageId: turn.userMessageId,
+      turnTerminalStatus: turn.turnTerminalStatus,
+      turnCompletionKind: turn.turnCompletionKind,
+      processingStatusLogs: turn.processingStatusLogs,
+      isSupervisorTurn: turn.isSupervisorTurn,
+    })) {
+      return true
+    }
+  }
+  if (isPreSynthesisGap(turn, real, openRoomRunContext)) return true
+  return shouldShowSynthesizingForOpenRoomRun(turn.agentResults, liveContext)
 }
 
 /** Lighter entry point for deriveTurnStatus before a full TurnViewModel exists. */
 export function shouldShowSynthesizingPhaseForResults(
   agentResults: AgentResultViewModel[],
-  context: {
-    turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
-    turnCompletionKind?: TurnViewModel['turnCompletionKind']
-    processingStatusLogs?: TurnViewModel['processingStatusLogs']
-    isSupervisorTurn?: boolean
-  },
+  context: OpenRoomRunContext,
 ): boolean {
-  return shouldShowSynthesizingPhase({
-    id: '',
-    roomId: '',
-    userMessageId: null,
-    userContent: '',
-    userAttachments: [],
-    timestamp: '',
-    status: 'active',
-    events: [],
-    summary: null,
-    agentResults,
-    activeAgentIds: [],
-    isSupervisorTurn: context.isSupervisorTurn ?? false,
-    displayMode: 'working',
-    finalAnswer: { kind: 'pending', label: 'Working' },
-    turnTerminalStatus: context.turnTerminalStatus,
-    turnCompletionKind: context.turnCompletionKind,
-    processingStatusLogs: context.processingStatusLogs ?? [],
-    phase: 'collecting',
-  })
+  return shouldShowSynthesizingPhase(buildTurnSnapshot(agentResults, context))
 }
 
 export function hasActiveSupervisorPlanningEphemeral(turn: TurnViewModel): boolean {

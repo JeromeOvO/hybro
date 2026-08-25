@@ -102,15 +102,16 @@ beforeEach(async () => {
 })
 
 describe("Room page — prefill handoff consumer", () => {
-  it("defaults room routing to all agents", async () => {
+  it("defaults room routing to room_default when the room has agents", async () => {
     render(<RoomChatPage />)
 
     await waitFor(() => {
       expect(mockUseGroupManagement).toHaveBeenCalled()
     })
     expect(mockUseGroupManagement.mock.calls.at(-1)?.[0]).toMatchObject({
-      defaultGroup: "all_agents",
-      defaultTargetMode: { message_target_mode: "all_agents" },
+      defaultGroup: "room_team",
+      defaultGroupName: "Agent One",
+      defaultTargetMode: { message_target_mode: "room_default" },
     })
   })
 

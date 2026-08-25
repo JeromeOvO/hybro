@@ -73,13 +73,66 @@ async def test_authorized_all_active_agents_skips_room_membership():
     assert outcome == "authorized"
 
 
+async def test_authorized_mention_skips_room_membership():
+    """Single-agent @mention chats often create rooms with an empty
+    room_agent_set; the mention itself is the per-turn authorization."""
+    adapter = MembershipAuthorizationRefresh(
+        agents=FakeRegistry(_info(provider_id="user-1")),
+        room_ownership=FakeRoomOwnership(member=False),
+    )
+    outcome = await adapter.authorize(
+        binding=binding(
+            agent_id="agent-9",
+            authorization_kind="mention",
+        ),
+        requesting_subject_id="user-1",
+        room_id="room-1",
+        room_epoch=1,
+        resource_refs=[],
+    )
+    assert outcome == "authorized"
+
+
+async def test_authorized_explicit_selection_skips_room_membership():
+    adapter = MembershipAuthorizationRefresh(
+        agents=FakeRegistry(_info(provider_id="user-1")),
+        room_ownership=FakeRoomOwnership(member=False),
+    )
+    outcome = await adapter.authorize(
+        binding=binding(
+            agent_id="agent-9",
+            authorization_kind="explicit_selection",
+        ),
+        requesting_subject_id="user-1",
+        room_id="room-1",
+        room_epoch=1,
+        resource_refs=[],
+    )
+    assert outcome == "authorized"
+
+
 async def test_denied_when_not_member():
     adapter = MembershipAuthorizationRefresh(
         agents=FakeRegistry(_info()),
         room_ownership=FakeRoomOwnership(member=False),
     )
     outcome = await adapter.authorize(
-        binding=binding(),
+        binding=binding(authorization_kind="room_member"),
+        requesting_subject_id="user-1",
+        room_id="room-1",
+        room_epoch=1,
+        resource_refs=[],
+    )
+    assert outcome == "denied"
+
+
+async def test_denied_when_saved_group_member_not_in_room():
+    adapter = MembershipAuthorizationRefresh(
+        agents=FakeRegistry(_info()),
+        room_ownership=FakeRoomOwnership(member=False),
+    )
+    outcome = await adapter.authorize(
+        binding=binding(authorization_kind="saved_group_member"),
         requesting_subject_id="user-1",
         room_id="room-1",
         room_epoch=1,

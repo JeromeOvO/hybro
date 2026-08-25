@@ -65,6 +65,14 @@ class Checkpoints:
         return True
 
 
+class SuspendedAtInputRequiredOnly:
+    async def is_suspension_checkpointed(self, _run_id, _invocation_id, status):
+        return status == "input_required"
+
+    async def is_acceptance_checkpointed(self, *args):
+        return True
+
+
 class Outcomes:
     async def has_processed_observation(self, *args):
         return True
@@ -557,6 +565,80 @@ async def test_executor_observation_reroutes_to_sink_after_late_suspension():
         hitl=InMemoryHITLApplicationPort(),
         sink=sink,
         checkpoint_reader=Checkpoints(),
+        outcome_reader=outcomes,
+    )
+
+    assert await processor.process(obs.observation_id) == "accepted"
+    stored = await inbox.load(obs.observation_id)
+    assert stored.state == "completed"
+    assert stored.delivery_route == "observation_sink"
+    assert len(sink.values) == 1
+    assert sink.values[0][0] == "run-1"
+
+
+async def test_executor_observation_reroutes_to_sink_after_late_hitl_suspension():
+    """A terminal continuation result must re-enter the kernel when the durable
+    suspension checkpoint is HITL-owned input_required rather than
+    waiting_external.
+    """
+    ledger = await lineage_ledger()
+    record = await ledger.load("run-1", "call-1")
+    result = ToolResult(
+        call_id="call-1",
+        tool_name=record.tool_name,
+        status="completed",
+        content=[TextPart(text="done after hitl")],
+        artifact_refs=[],
+        error_code=None,
+        error_message=None,
+    )
+    outcome_digest = sha256(result.model_dump_json().encode()).hexdigest()
+    terminal = transition_call(
+        record,
+        to_state="completed",
+        updated_at=NOW,
+        terminal_result=result,
+        terminal_result_digest=outcome_digest,
+    )
+    assert await ledger.cas(terminal, expected_state_version=record.state_version) == (
+        "accepted"
+    )
+
+    inbox = InMemoryObservationInboxStore()
+    obs = observation(status="completed")
+    stuck = A2AObservationInboxRecord(
+        observation_id=obs.observation_id,
+        source_kind=obs.source_kind,
+        source_identity=obs.source_identity,
+        payload_digest="digest",
+        received_at=NOW,
+        binding_scope="endpoint",
+        room_id="room-1",
+        room_epoch=1,
+        event_kind=obs.event_kind,
+        observation=obs,
+        call_record_id=record.call_record_id,
+        task_id=obs.task_id,
+        context_id=obs.context_id,
+        state="outcome_pending",
+        delivery_route="executor",
+        delivery_state="checkpointed",
+        outcome_digest=outcome_digest,
+    )
+    assert await inbox.insert(stuck) == "accepted"
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "create-1", activated_at=NOW)
+    outcomes = _LateSuspensionOutcomes()
+    sink = _ApplyingSink(outcomes)
+    processor = A2AObservationProcessor(
+        inbox=inbox,
+        conflicts=InMemoryObservationConflictStore(),
+        ledger=ledger,
+        room_epochs=epochs,
+        artifacts=Artifacts(),
+        hitl=InMemoryHITLApplicationPort(),
+        sink=sink,
+        checkpoint_reader=SuspendedAtInputRequiredOnly(),
         outcome_reader=outcomes,
     )
 
