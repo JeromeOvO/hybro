@@ -109,7 +109,7 @@ describe("Room page — prefill handoff consumer", () => {
       expect(mockUseGroupManagement).toHaveBeenCalled()
     })
     expect(mockUseGroupManagement.mock.calls.at(-1)?.[0]).toMatchObject({
-      defaultGroup: "all_agents",
+      defaultGroup: "room_team",
       defaultGroupName: "Agent One",
       defaultTargetMode: { message_target_mode: "room_default" },
     })

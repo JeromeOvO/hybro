@@ -50,28 +50,13 @@ describe('useGroupManagement – default team behavior', () => {
 
     expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
+    expect(result.current.roomMembershipLabel).toBeUndefined()
   })
 
-  it('keeps All Agents as the label while routing a manual room snapshot', async () => {
+  it('selects room_team for manual room membership with room_default routing', async () => {
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
-        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
-        defaultTargetMode: { message_target_mode: 'room_default' },
-      }))
-    )
-
-    await waitFor(() => {
-      expect(result.current.loadingGroups).toBe(false)
-    })
-
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
-    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
-  })
-
-  it('surfaces a manual room agent label with room_default routing', async () => {
-    const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({
-        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
+        defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
         defaultGroupName: 'Story Agent',
         defaultTargetMode: { message_target_mode: 'room_default' },
       }))
@@ -81,12 +66,112 @@ describe('useGroupManagement – default team behavior', () => {
       expect(result.current.loadingGroups).toBe(false)
     })
 
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
     expect(result.current.selectedGroupName).toBe('Story Agent')
+    expect(result.current.roomMembershipLabel).toBe('Story Agent')
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
   })
 
-  it('reselecting All Agents restores a manual room snapshot', async () => {
+  it('keeps the manual room label even when the catalog includes builtin entries', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [
+        {
+          group_id: BUILTIN_GROUP_ALL_AGENTS,
+          name: 'All Agents',
+          type: 'builtin',
+          owner_id: null,
+          agents: [],
+          description: 'Search the entire agent network for the best match',
+        },
+        {
+          group_id: BUILTIN_GROUP_ROOM_TEAM,
+          name: 'Room Team',
+          type: 'builtin',
+          owner_id: null,
+          agents: [],
+        },
+        {
+          group_id: 'team-research',
+          name: 'Research Team',
+          type: 'user',
+          owner_id: 'user-1',
+          agents: ['agent-1'],
+        },
+      ],
+    })
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
+        defaultGroupName: 'Weather Agent',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.groups.length).toBeGreaterThan(0)
+    })
+
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
+    expect(result.current.selectedGroupName).toBe('Weather Agent')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+  })
+
+  it('selecting All Agents overrides to true network broadcast', async () => {
+    mockListAgentGroups.mockResolvedValue({
+      success: true,
+      groups: [
+        {
+          group_id: BUILTIN_GROUP_ALL_AGENTS,
+          name: 'All Agents',
+          type: 'builtin',
+          owner_id: null,
+          agents: [],
+        },
+        {
+          group_id: 'team-research',
+          name: 'Research Team',
+          type: 'user',
+          owner_id: 'user-1',
+          agents: ['agent-1'],
+        },
+      ],
+    })
+
+    const { result } = renderHook(() =>
+      useGroupManagement(defaultOptions({
+        roomId: 'room-manual',
+        defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
+        defaultGroupName: 'Weather Agent',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
+    )
+
+    await waitFor(() => {
+      expect(result.current.groups.length).toBeGreaterThan(0)
+    })
+
+    act(() => {
+      result.current.handleGroupChange(BUILTIN_GROUP_ALL_AGENTS)
+    })
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.selectedGroupName).toBeUndefined()
+    expect(result.current.isOverride).toBe(true)
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'all_agents' })
+    expect(localStorage.getItem('room-room-manual-override-group')).toBe(BUILTIN_GROUP_ALL_AGENTS)
+
+    act(() => {
+      result.current.handleGroupChange(BUILTIN_GROUP_ROOM_TEAM)
+    })
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
+    expect(result.current.selectedGroupName).toBe('Weather Agent')
+    expect(result.current.isOverride).toBe(false)
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+    expect(localStorage.getItem('room-room-manual-override-group')).toBeNull()
+  })
+
+  it('reselecting room membership restores after a saved team override', async () => {
     mockListAgentGroups.mockResolvedValue({
       success: true,
       groups: [{
@@ -101,13 +186,14 @@ describe('useGroupManagement – default team behavior', () => {
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
         roomId: 'room-manual',
-        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
+        defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
+        defaultGroupName: 'Weather Agent',
         defaultTargetMode: { message_target_mode: 'room_default' },
       }))
     )
 
     await waitFor(() => {
-      expect(result.current.groups).toHaveLength(1)
+      expect(result.current.groups.length).toBeGreaterThan(0)
     })
     act(() => {
       result.current.handleGroupChange('team-research')
@@ -118,9 +204,10 @@ describe('useGroupManagement – default team behavior', () => {
     })
 
     act(() => {
-      result.current.handleGroupChange(BUILTIN_GROUP_ALL_AGENTS)
+      result.current.handleGroupChange(BUILTIN_GROUP_ROOM_TEAM)
     })
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
+    expect(result.current.selectedGroupName).toBe('Weather Agent')
     expect(result.current.isOverride).toBe(false)
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
     expect(localStorage.getItem('room-room-manual-override-group')).toBeNull()
@@ -262,7 +349,7 @@ describe('useGroupManagement – default team behavior', () => {
     expect(result.current.isOverride).toBe(false)
   })
 
-  it('falls back to all_agents when the room source team was deleted', async () => {
+  it('falls back to room_team when the room source team was deleted', async () => {
     const { result } = renderHook(() =>
       useGroupManagement(defaultOptions({
         defaultGroup: 'deleted-team',
@@ -275,21 +362,27 @@ describe('useGroupManagement – default team behavior', () => {
       expect(result.current.loadingGroups).toBe(false)
     })
 
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
-    expect(result.current.selectedGroupName).toBeUndefined()
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
+    expect(result.current.selectedGroupName).toBe('Deleted Team')
     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
   })
 
-  it('treats the legacy room_team default as all_agents', async () => {
+  it('preserves room_team as the room_default selection id', async () => {
     const { result } = renderHook(() =>
-      useGroupManagement(defaultOptions({ defaultGroup: BUILTIN_GROUP_ROOM_TEAM }))
+      useGroupManagement(defaultOptions({
+        defaultGroup: BUILTIN_GROUP_ROOM_TEAM,
+        defaultGroupName: 'Room Agents',
+        defaultTargetMode: { message_target_mode: 'room_default' },
+      }))
     )
 
     await waitFor(() => {
       expect(result.current.loadingGroups).toBe(false)
     })
 
-    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
+    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ROOM_TEAM)
+    expect(result.current.selectedGroupName).toBe('Room Agents')
+    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
   })
 
   it('explicit override works when the selected team exists', async () => {

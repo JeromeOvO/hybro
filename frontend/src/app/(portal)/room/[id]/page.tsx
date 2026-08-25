@@ -13,6 +13,7 @@ import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import {
   BUILTIN_GROUP_ALL_AGENTS,
+  BUILTIN_GROUP_ROOM_TEAM,
   dispatchToAgentScope,
 } from '@/lib/types/agent-group'
 import type { MessageDispatchInput } from '@/lib/types/agent-group'
@@ -74,8 +75,8 @@ export default function RoomChatPage() {
   const effectiveChatMode = localChatMode ?? roomDefaultToChatMode(roomSupervisorMode)
 
   // A room seeded from a saved team follows that team while it still exists.
-  // Manual room_agent_set snapshots (e.g. "Chat with this agent") keep room_default
-  // routing; the selector label shows the agent/team name, not All Agents.
+  // Manual room_agent_set snapshots (e.g. "Chat with this agent") select
+  // room_team with room_default routing; All Agents is reserved for broadcast.
   const roomAgentEntries = Object.entries(room?.room_agent_set || {})
   const hasRoomAgents = roomAgentEntries.length > 0
   const roomDefaultTeamId = room?.source_group_id
@@ -92,7 +93,8 @@ export default function RoomChatPage() {
     userId: user?.id,
     getToken,
     isLoaded,
-    defaultGroup: roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS,
+    defaultGroup: roomDefaultTeamId
+      ?? (hasRoomAgents ? BUILTIN_GROUP_ROOM_TEAM : BUILTIN_GROUP_ALL_AGENTS),
     defaultGroupName: room?.source_group_name ?? manualRoomLabel,
     defaultTargetMode: hasRoomAgents
       ? { message_target_mode: 'room_default' }
@@ -202,6 +204,7 @@ export default function RoomChatPage() {
       loadingGroups: gm.loadingGroups,
       selectedGroup: gm.selectedGroup,
       selectedGroupName: gm.selectedGroupName,
+      roomMembershipLabel: gm.roomMembershipLabel,
       resolvedTargetMode: gm.resolvedTargetMode,
       handleGroupChange: gm.handleGroupChange,
       handleCreateGroup: gm.handleCreateGroup,

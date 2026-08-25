@@ -9,10 +9,10 @@
  * Later edits to the saved group do not change existing rooms.
  */
 
-// ── Legacy built-in group IDs (kept for backward compatibility) ──────────
+// ── Built-in group selection IDs ─────────────────────────────────────────
 
 export const BUILTIN_GROUP_ALL_AGENTS = "all_agents"
-/** @deprecated Use MessageTargetMode "room_default" instead of this sentinel. */
+/** UI selection id for room membership / room_default dispatch. */
 export const BUILTIN_GROUP_ROOM_TEAM = "room_team"
 
 // ── Canonical enums ──────────────────────────────────────────────────────

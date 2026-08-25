@@ -586,7 +586,9 @@ The composer consumes any draft text and focuses the input without URL query
 parameters or creating a saved Team. The group selector shows the seeded Agent
 name and sends with `room_default`. After the room is created, membership stays
 on `room_agent_set` and later turns keep `room_default` unless the user switches
-teams.
+teams. Selection uses the `room_team` id for room membership and `all_agents`
+only for true network broadcast; the menu lists the room membership row and All
+Agents as separate options.
 
 Featured use-case cards on `/chat` stay on the page. A card resolves its declared
 Agents against the live catalog, finds the authenticated user's saved preset Team
@@ -702,7 +704,10 @@ An authoritative open HITL interaction replaces the normal room composer; the UI
 never stacks a second form over a disabled chat input. `selectPendingHitls` groups
 questions by durable `interaction_id`, and `HitlResponseBar` keeps drafts keyed by
 stable `request_id`, presents one question at a time, and submits directly from the
-last answer step (no separate review screen). While answers are applying, the bar
+last answer step (no separate review screen). When the open answer surface mounts —
+including after "Applying…" is replaced by a follow-up interaction — the bar
+autofocuses the text/date control (or the prompt heading for choice prompts). While
+answers are applying, the bar
 auto-refreshes pending HITL so a follow-up open prompt replaces the recovery UI
 without a manual "Check status" click; that button remains only for
 `delivery_uncertain`. When both an applying recovery and a new open prompt exist,

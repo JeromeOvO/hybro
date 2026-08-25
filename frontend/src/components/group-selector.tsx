@@ -18,7 +18,10 @@ import {
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { AgentGroup } from '@/lib/types/agent-group'
-import { BUILTIN_GROUP_ALL_AGENTS } from '@/lib/types/agent-group'
+import {
+  BUILTIN_GROUP_ALL_AGENTS,
+  BUILTIN_GROUP_ROOM_TEAM,
+} from '@/lib/types/agent-group'
 
 interface MentionedAgent {
   id: string
@@ -28,6 +31,11 @@ interface MentionedAgent {
 interface GroupSelectorProps {
   selectedGroup: string
   selectedGroupName?: string
+  /**
+   * When set, the menu offers an explicit room-membership row (room_team).
+   * All Agents always means network broadcast.
+   */
+  roomMembershipLabel?: string
   onGroupChange: (groupId: string) => void
   groups: AgentGroup[]
   loadingGroups?: boolean
@@ -45,6 +53,7 @@ interface GroupSelectorProps {
 export function GroupSelector({
   selectedGroup,
   selectedGroupName,
+  roomMembershipLabel,
   onGroupChange,
   groups,
   loadingGroups = false,
@@ -97,16 +106,15 @@ export function GroupSelector({
       }
     }
 
-    if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
-      // Manual room snapshots keep the all_agents sentinel for restore semantics
-      // but surface the room agent/team label when provenance provides one.
-      if (selectedGroupName) {
-        return {
-          icon: <Users className="h-3.5 w-3.5" />,
-          label: selectedGroupName,
-          description: 'Agents in this room',
-        }
+    if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM) {
+      return {
+        icon: <Users className="h-3.5 w-3.5" />,
+        label: selectedGroupName ?? roomMembershipLabel ?? 'Room Team',
+        description: 'Agents in this room',
       }
+    }
+
+    if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
       return {
         icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
         label: 'All Agents',
@@ -223,8 +231,40 @@ export function GroupSelector({
           >
             <div className="max-h-[calc(70vh-3rem)] sm:max-h-60 overflow-y-auto overflow-x-hidden">
 
+              {/* Room membership — distinct from All Agents broadcast */}
+              {roomMembershipLabel && (
+                <Tooltip delayDuration={150}>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuItem
+                      onClick={readOnly ? undefined : () => handleGroupSelect(BUILTIN_GROUP_ROOM_TEAM)}
+                      className={cn(
+                        "flex items-start gap-3 py-2.5",
+                        selectedGroup === BUILTIN_GROUP_ROOM_TEAM && "bg-accent",
+                        readOnly && 'cursor-default',
+                      )}
+                    >
+                      <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{roomMembershipLabel}</div>
+                        <div className="text-xs text-muted-foreground">Agents in this room</div>
+                      </div>
+                    </DropdownMenuItem>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="left"
+                    align="end"
+                    sideOffset={0}
+                    alignOffset={0}
+                    className="max-w-xs w-fit whitespace-normal wrap-break-word"
+                  >
+                    <div className="text-xs text-muted-foreground">
+                      Route to the agents currently assigned to this room
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              )}
 
-              {/* All Agents option */}
+              {/* All Agents — always network broadcast */}
               <Tooltip delayDuration={150}>
                 <TooltipTrigger asChild>
                   <DropdownMenuItem

@@ -26,6 +26,9 @@ import { useCaseTemplates } from "@/lib/use-case-templates"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
 import { ensureUseCaseTeam } from '@/lib/use-case-team'
 import { isMentionDispatchInput, type MessageDispatchInput } from "@/lib/types/agent-group"
+import {
+  BUILTIN_GROUP_ROOM_TEAM,
+} from "@/lib/types/agent-group"
 
 export default function ChatPage() {
     return <ChatPageContent />
@@ -73,11 +76,22 @@ function ChatPageContent() {
     })
 
     // Group management (extracted hook)
+    const seedLabel = seedAgents.length === 1
+      ? seedAgents[0].agent_card.name
+      : seedAgents.length > 1
+        ? `Room Team (${seedAgents.length})`
+        : undefined
+
     const gm = useGroupManagement({
         userId: user?.id,
         getToken,
         isLoaded,
         onRequireAuth: handleRequireAuth,
+        defaultGroup: seedAgents.length > 0 ? BUILTIN_GROUP_ROOM_TEAM : undefined,
+        defaultGroupName: seedLabel,
+        defaultTargetMode: seedAgents.length > 0
+          ? { message_target_mode: 'room_default' }
+          : undefined,
     })
 
     // Agent list for mentions
@@ -279,18 +293,9 @@ function ChatPageContent() {
                             groups={gm.groups}
                             loadingGroups={gm.loadingGroups}
                             selectedGroup={gm.selectedGroup}
-                            selectedGroupName={
-                              seedAgents.length === 1
-                                ? seedAgents[0].agent_card.name
-                                : seedAgents.length > 1
-                                  ? `Room Team (${seedAgents.length})`
-                                  : gm.selectedGroupName
-                            }
-                            selectedGroupDispatch={
-                              seedAgents.length > 0
-                                ? { message_target_mode: 'room_default' }
-                                : gm.resolvedTargetMode
-                            }
+                            selectedGroupName={gm.selectedGroupName}
+                            roomMembershipLabel={gm.roomMembershipLabel}
+                            selectedGroupDispatch={gm.resolvedTargetMode}
                             onGroupChange={(groupId) => {
                               // User took over scope selection; stop forcing the
                               // single-agent seed label/dispatch.

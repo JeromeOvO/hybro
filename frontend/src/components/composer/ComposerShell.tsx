@@ -49,6 +49,7 @@ export interface ComposerShellAdapter {
     loadingGroups: boolean
     selectedGroup: string
     selectedGroupName?: string
+    roomMembershipLabel?: string
     resolvedTargetMode: TargetModeDispatchInput
     handleGroupChange: (groupId: string) => void
     handleCreateGroup: () => void
@@ -161,6 +162,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
         loadingGroups={adapter.groupManagement.loadingGroups}
         selectedGroup={adapter.groupManagement.selectedGroup}
         selectedGroupName={adapter.groupManagement.selectedGroupName}
+        roomMembershipLabel={adapter.groupManagement.roomMembershipLabel}
         selectedGroupDispatch={adapter.groupManagement.resolvedTargetMode}
         onGroupChange={adapter.groupManagement.handleGroupChange}
         onCreateGroup={adapter.groupManagement.handleCreateGroup}

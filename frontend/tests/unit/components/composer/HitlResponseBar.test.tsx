@@ -72,7 +72,7 @@ describe('HitlResponseBar', () => {
     ))
   })
 
-  it('auto-refreshes while applying and replaces recovery UI when an open prompt arrives', async () => {
+  it('auto-refreshes while applying and autofocuses the follow-up open prompt', async () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined)
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     const { rerender } = render(
@@ -107,6 +107,23 @@ describe('HitlResponseBar', () => {
     expect(await screen.findByText('How many days/nights do you plan to spend in New York City?')).toBeDefined()
     expect(screen.queryByText('Applying your answers')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer…'))
+    })
+  })
+
+  it('autofocuses the next question control when advancing within an interaction', async () => {
+    renderBar([
+      { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
+      { ...baseHitl, hitlId: 'hitl-2', prompt: 'Budget?', promptType: 'text', groupIndex: 1 },
+    ])
+
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Acme' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByText('Budget?')).toBeDefined()
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByPlaceholderText('Type your answer…'))
+    })
   })
 
   it('renders accessible single and multi-choice controls', () => {

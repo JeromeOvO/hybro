@@ -72,6 +72,7 @@ interface RoomChatInputProps {
   loadingGroups?: boolean
   selectedGroup?: string
   selectedGroupName?: string
+  roomMembershipLabel?: string
   selectedGroupDispatch?: TargetModeDispatchInput
   onGroupChange?: (groupId: string) => void
   onCreateGroup?: () => void
@@ -130,6 +131,7 @@ export function RoomChatInput({
   loadingGroups = false,
   selectedGroup = BUILTIN_GROUP_ALL_AGENTS,
   selectedGroupName,
+  roomMembershipLabel,
   selectedGroupDispatch,
   onGroupChange,
   onCreateGroup,
@@ -1110,6 +1112,7 @@ export function RoomChatInput({
                   className="w-36 min-w-0 shrink-0 max-[520px]:w-[calc(50%-0.25rem)] max-[520px]:max-w-36"
                   selectedGroup={selectedGroup}
                   selectedGroupName={selectedGroupName}
+                  roomMembershipLabel={roomMembershipLabel}
                   onGroupChange={handleGroupChange}
                   groups={groups}
                   loadingGroups={loadingGroups}

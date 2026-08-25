@@ -357,11 +357,6 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
     }
   }, [authoritativeLifecycle, dispatch])
 
-  useEffect(() => {
-    const target = inputRef.current ?? headingRef.current
-    target?.focus()
-  }, [currentId, submissionError])
-
   const setDraft = useCallback((requestId: string, value: DraftValue) => {
     dispatch({ type: 'answer', requestId, value })
   }, [dispatch])
@@ -446,6 +441,25 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   // A follow-up open prompt arrives with a new interactionKey, which resets
   // the controller and replaces this UI automatically.
   const showApplying = Boolean(current && (submitted || lifecycleState === 'applying'))
+  // Answer controls mount only on the open questionnaire surface. Focus must
+  // re-run when that surface appears — not only when `currentId` changes —
+  // because follow-up rounds often navigate to the new request id while still
+  // showing "Applying…", then mount the input without another `currentId` change.
+  const answerSurfaceReady = Boolean(
+    current
+    && !showApplying
+    && lifecycleState === 'open'
+    && !invalidPrompt,
+  )
+
+  useEffect(() => {
+    if (!answerSurfaceReady) return
+    const frame = window.requestAnimationFrame(() => {
+      const target = inputRef.current ?? headingRef.current
+      target?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [answerSurfaceReady, currentId, submissionError, interactionKey])
 
   // While answers are applying, poll pending HITL so a follow-up prompt
   // replaces this recovery state automatically instead of waiting on
