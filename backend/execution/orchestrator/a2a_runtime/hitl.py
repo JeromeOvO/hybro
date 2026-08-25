@@ -872,6 +872,25 @@ class A2AContinuationCoordinator:
                 return await self._mark_uncertain(call)
             return await self._park_interaction(call, receipt.interaction_observation)
         if receipt.outcome == "accepted":
+            if call.state == "working":
+                # Recovery can re-enter an already-working call whose
+                # continuation was accepted. Reschedule without an illegal
+                # working -> working transition.
+                rescheduled = call.model_copy(
+                    update={
+                        "continuation_state": "accepted",
+                        "claim_owner": None,
+                        "claim_expires_at": None,
+                        "next_attempt_at": datetime.now(UTC)
+                        + timedelta(seconds=self.policy.retry_backoff_initial_seconds),
+                        "state_version": call.state_version + 1,
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+                persisted = await self._cas_or_load_winner(
+                    rescheduled, expected_state_version=call.state_version
+                )
+                return await self._finalized_state(persisted)
             working = transition_call(
                 call,
                 to_state="working",

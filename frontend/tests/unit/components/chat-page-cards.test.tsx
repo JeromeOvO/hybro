@@ -218,6 +218,54 @@ describe("Chat page — Use Case Cards integration", () => {
     expect(useRoomUiStore.getState().pendingChatHandoff).toBeNull()
   })
 
+  it('clears a single-agent handoff seed when a use case takes over scope', async () => {
+    useRoomUiStore.getState().setPendingChatHandoff({
+      draft: 'Chat with this agent',
+      seedAgents: [{
+        agent_id: 'handoff-agent',
+        agent_card: { name: 'Handoff Agent' } as never,
+      }],
+    })
+    const handleGroupCreated = vi.fn((team) => {
+      gmState = {
+        ...gmState,
+        selectedGroup: team.group_id,
+        selectedGroupName: team.name,
+      }
+    })
+    gmState = { ...gmState, handleGroupCreated }
+
+    const { container } = render(<ChatPage />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Chat with this agent',
+      )
+    })
+
+    fireEvent.click(screen.getByText('Travel Planner').closest('button')!)
+
+    await waitFor(() => {
+      expect(handleGroupCreated).toHaveBeenCalledWith(presetTeam)
+    })
+
+    const editor = container.querySelector('[contenteditable="true"]') as HTMLElement
+    editor.textContent = 'Plan my trip'
+    fireEvent.input(editor)
+
+    fireEvent.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => {
+      expect(mockCreateAndNavigate).toHaveBeenCalledWith(
+        'Plan my trip',
+        expect.objectContaining({
+          selectedAgents: undefined,
+          targetGroup: 'travel-team',
+        }),
+      )
+    })
+  })
+
   it("shows To Be Continued when catalog load fails", async () => {
     gmState = { ...gmState, agentsError: "Network error", availableAgents: [] }
     render(<ChatPage />)

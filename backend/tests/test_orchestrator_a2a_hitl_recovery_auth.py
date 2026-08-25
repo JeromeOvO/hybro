@@ -1470,6 +1470,37 @@ async def test_continuation_same_answered_challenge_stays_uncertain():
     assert len(dispatch.commands) == 1
 
 
+async def test_accepted_continuation_still_working_during_inspect_reschedules():
+    """Inspect returning accepted for an already-working call must not raise."""
+    dispatch = Dispatch()
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
+        dispatch=dispatch
+    )
+    resume_kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
+
+    assert await coordinator.resume(**resume_kwargs) == "working"
+
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.state == "working"
+    assert persisted.continuation_state == "accepted"
+
+    await make_due(ledger, call.call_record_id)
+    recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
+
+    assert recovered == "working"
+    final = await ledger.load_by_record_id(call.call_record_id)
+    assert final.state == "working"
+    assert final.continuation_state == "accepted"
+    assert len(dispatch.inspections) == 1
+
+
 async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persistence():
     coordinator, ledger, hitl, refs, dispatch, call, route = await setup_waiting(
         auth_required=True

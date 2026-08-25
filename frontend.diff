@@ -1,0 +1,2497 @@
+diff --git a/frontend/docs/System-Architecture.md b/frontend/docs/System-Architecture.md
+index 73830968c..a5355949b 100644
+--- a/frontend/docs/System-Architecture.md
++++ b/frontend/docs/System-Architecture.md
+@@ -392,8 +392,15 @@ requests therefore render the external agent name (for example,
+ Raw agent task states such as `input-required`, `auth-required`, and
+ `policy-required` are not actionable UI state by themselves: until the message
+ has a durable `hitlRequestId`, the timeline and agent header continue to show
+-Working while backend recovery runs silently. Only the durable HITL projection
+-may show Needs Input or an interaction component.
++Working while backend recovery runs silently. Durable HITL replaces the primary
++surface with Needs Input (composer owns the answer form); work-log running
++state stays active through HITL wait. After answers apply, the HYBRO AI Working
++avatar spinner returns while the turn stays `active` (including synthesizing and
++any early `deterministic_done` surface) and stops when the turn leaves active /
++reaches `phase: completed`. Spinner state follows turn lifecycle, not finalAnswer
++kind alone — treating `deterministic_done` as “settled” would stop the spinner
++too early and skip the synthesizing wait. Only the durable HITL projection may
++show Needs Input or an interaction component.
+ Hydration marks input-required messages that are absent from the pending set as
+ resolved so canceled or expired request metadata cannot recreate stale HITL UI.
+ 
+@@ -416,7 +423,7 @@ failures with zero agent tasks to recover without a page refresh.
+ 
+ `turnCompletionKind` is delivered via three redundant paths: (1) SSE `processing_status` COMPLETED `details`, (2) DB `extend_info.turn_completion_kind` on the user message (read during hydration/reconcile), (3) `inquiryActiveRuns` response (queried during truth-check when `trigger_message_id` is passed and no active run matches). This ensures correctness across SSE drops, page refreshes, and reconnects.
+ 
+-`hasActiveSynthesisGap` treats positive synthesis evidence (`turnPhase: 'synthesizing'` on processing logs, log lines containing "synthesiz" or "compiling summary", synthesis ephemerals, or a working non-deterministic summary agent) as synthesis in progress and drives `phase: synthesizing`. Stale synthesis logs are ignored once all real agents are terminal and at least one failed without an in-flight LLM summary entity — partial-failure turns promote to `deterministic_done` instead of staying on **Working**. Supervisor turns without `turnCompletionKind` stay pending in `deriveFinalAnswer` until synthesis resolves or backend truth stamps — preventing a flash of expanded `deterministic_done` bodies before synthesizing starts. Delegation logs, supervisor mode, and generic work logs are **not** synthesis evidence.
++`hasActiveSynthesisGap` treats positive synthesis evidence (`turnPhase: 'synthesizing'` on processing logs, log lines containing "synthesiz" or "compiling summary", synthesis ephemerals, or a working non-deterministic summary agent) as synthesis in progress and drives `phase: synthesizing`. Stale synthesis logs are ignored once all real agents are terminal and at least one failed without an in-flight LLM summary entity — partial-failure turns promote to `deterministic_done` instead of staying on **Working**. While the room run is still open (`!turnTerminalStatus`) and live-run evidence exists (transient processing logs, an active run trigger id, or room processing still active on the latest turn), multi-agent turns with all real agents terminal stay `status: active` and show **Synthesizing** until terminal processing_status or final answer content arrives. Hydrated historical turns without live-run evidence remain `completed`. Supervisor turns without `turnCompletionKind` stay pending in `deriveFinalAnswer` until synthesis resolves or backend truth stamps — preventing a flash of expanded `deterministic_done` bodies before synthesizing starts. Delegation logs alone on hydrated turns are **not** synthesis evidence.
+ 
+ **Entity-first invariant:** When a non-deterministic `summary-*` entity has substantive LLM content, `deriveFinalAnswer` returns `llm_synthesis` even if `turnCompletionKind` was incorrectly stamped or inferred as `deterministic`. `turnHasSubstantiveLlmSynthesis` blocks backend-truth stamping and debounced recovery from overwriting synthesis turns.
+ 
+@@ -572,9 +579,14 @@ segment.
+ Remote agents use the persisted backend `agent_status` without frontend health
+ probing. Local agents are shown only while `source === "hub"`, status is active,
+ and the hub is online; stale Local agents are hidden. Agent-detail chat actions
+-write a one-shot mention draft to `room-ui-store` and navigate to `/chat`; the
+-composer consumes the draft, renders the Agent mention, and focuses the input
+-without URL query parameters or creating a saved Team.
++write a one-shot `pendingChatHandoff` to `room-ui-store` (optional draft text plus
++`seedAgents`) and navigate to `/chat`. That handoff seeds room membership with
++the selected Agent and uses `room_default` scope on send; it is not an `@mention`.
++The composer consumes any draft text and focuses the input without URL query
++parameters or creating a saved Team. The group selector shows the seeded Agent
++name and sends with `room_default`. After the room is created, membership stays
++on `room_agent_set` and later turns keep `room_default` unless the user switches
++teams.
+ 
+ Featured use-case cards on `/chat` stay on the page. A card resolves its declared
+ Agents against the live catalog, finds the authenticated user's saved preset Team
+@@ -689,19 +701,27 @@ it has no selection handler and can never create a Debate request. Historical ro
+ An authoritative open HITL interaction replaces the normal room composer; the UI
+ never stacks a second form over a disabled chat input. `selectPendingHitls` groups
+ questions by durable `interaction_id`, and `HitlResponseBar` keeps drafts keyed by
+-stable `request_id`, presents one question at a time, and requires a final review.
+-The client submits the complete answer inventory to
+-`POST /rooms/{room_id}/hitl/respond-batch`, preserving `client_request_id` for run
+-correlation. A 409 is reconciled and surfaced rather than assumed successful; 410,
+-delivery uncertainty, routing failure, timeout, and applying states remain explicit.
+-The frontend has no single-request response pipeline; even singleton interactions
+-use the batch endpoint. File-upload instructions arrive in the ordinary terminal
+-HYBRO summary message, so they do not replace the composer. Historical `file` and
+-`unknown` prompt records remain wire-compatible but share one unsupported-state
+-renderer.
++stable `request_id`, presents one question at a time, and submits directly from the
++last answer step (no separate review screen). While answers are applying, the bar
++auto-refreshes pending HITL so a follow-up open prompt replaces the recovery UI
++without a manual "Check status" click; that button remains only for
++`delivery_uncertain`. When both an applying recovery and a new open prompt exist,
++the composer prefers the open prompt. The client submits the complete answer
++inventory to `POST /rooms/{room_id}/hitl/respond-batch`, preserving
++`client_request_id` for run correlation. A 409 is reconciled and surfaced rather
++than assumed successful; 410, delivery uncertainty, routing failure, timeout, and
++applying states remain explicit. The frontend has no single-request response
++pipeline; even singleton interactions use the batch endpoint. File-upload
++instructions arrive in the ordinary terminal HYBRO summary message, so they do
++not replace the composer. Historical `file` and `unknown` prompt records remain
++wire-compatible but share one unsupported-state renderer.
+ 
+ Pending HITL hydration is authoritative only after a successful `/pending` read.
+ `HydrateRoomResult.hitlFetchFailed` distinguishes a degraded read from a real empty
+-set so existing input requests are not marked resolved during an outage. Resolved
+-answers remain non-actionable timeline summaries sourced from durable message
+-projection.
++set so existing input requests are not marked resolved during an outage. Initial
++hydration may mark hydrated open HITL absent from pending as resolved via
++`markResolvedHitlFromHydrationBatch`. Live applying refresh (`hitl_overlay` /
++composer auto-refresh) only clears local *applying* projections that are no
++longer pending — open `input-required` prompts are left alone so a brief empty
++pending window cannot dismiss a still-open UI. Resolved answers remain
++non-actionable timeline summaries sourced from durable message projection.
+diff --git a/frontend/src/app/(portal)/agents/[id]/page.tsx b/frontend/src/app/(portal)/agents/[id]/page.tsx
+index 549c7de7c..b1150f658 100644
+--- a/frontend/src/app/(portal)/agents/[id]/page.tsx
++++ b/frontend/src/app/(portal)/agents/[id]/page.tsx
+@@ -373,9 +373,11 @@ export default function ConsumerAgentProfilePage() {
+   const quickPrompts = collectQuickPrompts(card.skills)
+ 
+   const navigateToChat = (prompt?: string) => {
+-    const mention = `<@${agentId}|${card.name}>`
+-    const draft = prompt ? `${mention} ${prompt}` : `${mention} `
+-    useRoomUiStore.getState().setPendingChatDraft(draft)
++    // Single-agent chat seeds room membership; it is not an @mention handoff.
++    useRoomUiStore.getState().setPendingChatHandoff({
++      draft: prompt?.trim() ? prompt.trim() : '',
++      seedAgents: [agent],
++    })
+     router.push(routes.chat)
+   }
+ 
+diff --git a/frontend/src/app/(portal)/chat/page.tsx b/frontend/src/app/(portal)/chat/page.tsx
+index f61fe363e..02257566f 100644
+--- a/frontend/src/app/(portal)/chat/page.tsx
++++ b/frontend/src/app/(portal)/chat/page.tsx
+@@ -16,6 +16,7 @@ import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
+ import { useGroupManagement } from "@/hooks/useGroupManagement"
+ import type { QuoteData } from "@/lib/types/quote"
+ import type { PendingAttachment } from "@/lib/types/attachments"
++import type { Agent } from "@/lib/types/agent"
+ import type { ChatMode } from "@/lib/types/chat-mode"
+ import { DEFAULT_CHAT_MODE, chatModeToExecutionMode } from "@/lib/types/chat-mode"
+ import { cn } from "@/lib/utils"
+@@ -34,6 +35,7 @@ function ChatPageContent() {
+     const { user, isLoaded } = useUser()
+     const { getToken } = useAuth()
+     const [promptPrefill, setPromptPrefill] = useState("")
++    const [seedAgents, setSeedAgents] = useState<Agent[]>([])
+     const [hasError, setHasError] = useState(false)
+     const [settingUpTemplate, setSettingUpTemplate] = useState<string | null>(null)
+ 
+@@ -43,8 +45,17 @@ function ChatPageContent() {
+     useEffect(() => {
+         // Peek first so an App Router/Strict Mode remount cannot consume the
+         // handoff before the composer has actually applied it.
+-        const draft = useRoomUiStore.getState().pendingChatDraft
+-        if (draft) setPromptPrefill(draft)
++        const handoff = useRoomUiStore.getState().pendingChatHandoff
++        if (!handoff) return
++        setPromptPrefill(handoff.draft)
++        if (handoff.seedAgents?.length) {
++            setSeedAgents(handoff.seedAgents)
++        }
++        // Empty drafts never reach RoomChatInput's consumer; clear the store
++        // once seed agents are copied into local state.
++        if (!handoff.draft) {
++            useRoomUiStore.getState().clearPendingChatHandoff()
++        }
+     }, [])
+ 
+     const handleRequireAuth = useCallback(() => {
+@@ -91,10 +102,18 @@ function ChatPageContent() {
+         try {
+             setHasError(false)
+ 
++            // Single-agent handoff seeds room membership and uses room_default,
++            // unless the user explicitly @mentioned agents in this message.
++            const seeded = seedAgents.length > 0
+             const options = {
+                 useSupervisor: chatModeToExecutionMode(localChatMode) === 'supervisor',
+-                dispatch,
+-                targetGroup: isMentionDispatchInput(dispatch) ? undefined : gm.selectedGroup,
++                selectedAgents: seeded ? seedAgents : undefined,
++                dispatch: seeded && !isMentionDispatchInput(dispatch)
++                    ? { message_target_mode: 'room_default' as const }
++                    : dispatch,
++                targetGroup: isMentionDispatchInput(dispatch) || seeded
++                    ? undefined
++                    : gm.selectedGroup,
+                 attachments,
+             }
+ 
+@@ -103,6 +122,7 @@ function ChatPageContent() {
+             if (!success) {
+                 throw new Error('Failed to create room')
+             }
++            setSeedAgents([])
+         } catch (error) {
+             console.error('Error creating room:', error)
+             setHasError(true)
+@@ -152,7 +172,7 @@ function ChatPageContent() {
+ 
+     const handlePromptPrefillConsumed = useCallback(() => {
+         setPromptPrefill("")
+-        useRoomUiStore.getState().clearPendingChatDraft()
++        useRoomUiStore.getState().clearPendingChatHandoff()
+     }, [])
+ 
+     if (!isLoaded) {
+@@ -257,9 +277,24 @@ function ChatPageContent() {
+                             groups={gm.groups}
+                             loadingGroups={gm.loadingGroups}
+                             selectedGroup={gm.selectedGroup}
+-                            selectedGroupName={gm.selectedGroupName}
+-                            selectedGroupDispatch={gm.resolvedTargetMode}
+-                            onGroupChange={gm.handleGroupChange}
++                            selectedGroupName={
++                              seedAgents.length === 1
++                                ? seedAgents[0].agent_card.name
++                                : seedAgents.length > 1
++                                  ? `Room Team (${seedAgents.length})`
++                                  : gm.selectedGroupName
++                            }
++                            selectedGroupDispatch={
++                              seedAgents.length > 0
++                                ? { message_target_mode: 'room_default' }
++                                : gm.resolvedTargetMode
++                            }
++                            onGroupChange={(groupId) => {
++                              // User took over scope selection; stop forcing the
++                              // single-agent seed label/dispatch.
++                              setSeedAgents([])
++                              gm.handleGroupChange(groupId)
++                            }}
+                             onCreateGroup={gm.handleCreateGroup}
+                             onEditGroup={gm.handleEditGroup}
+                             onDeleteGroup={gm.handleDeleteGroup}
+diff --git a/frontend/src/app/(portal)/room/[id]/page.tsx b/frontend/src/app/(portal)/room/[id]/page.tsx
+index ce1def1ff..70fa9f66a 100644
+--- a/frontend/src/app/(portal)/room/[id]/page.tsx
++++ b/frontend/src/app/(portal)/room/[id]/page.tsx
+@@ -74,9 +74,18 @@ export default function RoomChatPage() {
+   const effectiveChatMode = localChatMode ?? roomDefaultToChatMode(roomSupervisorMode)
+ 
+   // A room seeded from a saved team follows that team while it still exists.
++  // Manual room_agent_set snapshots (e.g. "Chat with this agent") keep room_default
++  // routing; the selector label shows the agent/team name, not All Agents.
++  const roomAgentEntries = Object.entries(room?.room_agent_set || {})
++  const hasRoomAgents = roomAgentEntries.length > 0
+   const roomDefaultTeamId = room?.source_group_id
+     ?? room?.applied_from_group
+     ?? undefined
++  const manualRoomLabel = !roomDefaultTeamId && hasRoomAgents
++    ? (roomAgentEntries.length === 1
++      ? roomAgentEntries[0][1]
++      : `Room Team (${roomAgentEntries.length})`)
++    : undefined
+ 
+   // Group management (extracted hook)
+   const gm = useGroupManagement({
+@@ -84,8 +93,10 @@ export default function RoomChatPage() {
+     getToken,
+     isLoaded,
+     defaultGroup: roomDefaultTeamId ?? BUILTIN_GROUP_ALL_AGENTS,
+-    defaultGroupName: room?.source_group_name ?? undefined,
+-    defaultTargetMode: { message_target_mode: 'all_agents' },
++    defaultGroupName: room?.source_group_name ?? manualRoomLabel,
++    defaultTargetMode: hasRoomAgents
++      ? { message_target_mode: 'room_default' }
++      : { message_target_mode: 'all_agents' },
+     roomId,
+   })
+ 
+diff --git a/frontend/src/components/composer/ComposerShell.tsx b/frontend/src/components/composer/ComposerShell.tsx
+index b9b80d657..9d08cb035 100644
+--- a/frontend/src/components/composer/ComposerShell.tsx
++++ b/frontend/src/components/composer/ComposerShell.tsx
+@@ -116,8 +116,11 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
+   const isHitlMode = composerState.mode === 'hitl_responding'
+   const isProcessing = composerState.isProcessing || adapter.isProcessing
+ 
+-  const firstHitl = composerState.pendingHitls[0]
+-  const activeInteractionId = firstHitl?.interactionId
++  // Prefer an actionable open prompt over a transient applying recovery
++  // state so follow-up HITL questions are not covered by "Applying…".
++  const preferredHitl = composerState.pendingHitls.find(hitl => hitl.lifecycleState === 'open')
++    ?? composerState.pendingHitls[0]
++  const activeInteractionId = preferredHitl?.interactionId
+   const activeHitls = activeInteractionId
+     ? composerState.pendingHitls.filter(hitl => hitl.interactionId === activeInteractionId)
+     : []
+diff --git a/frontend/src/components/composer/HitlResponseBar.tsx b/frontend/src/components/composer/HitlResponseBar.tsx
+index 2654d11ec..f3a6a14c5 100644
+--- a/frontend/src/components/composer/HitlResponseBar.tsx
++++ b/frontend/src/components/composer/HitlResponseBar.tsx
+@@ -56,6 +56,7 @@ interface HitlResponseBarProps {
+ type DraftValue = HitlDraftValue
+ 
+ const GENERIC_PROMPT = /^the agent needs additional information\.?$/i
++const APPLYING_REFRESH_MS = 1500
+ 
+ function answerText(value: DraftValue | undefined): string {
+   if (Array.isArray(value)) return value.join(', ')
+@@ -89,7 +90,7 @@ function RecoveryState({
+   const copy = {
+     applying: {
+       title: 'Applying your answers',
+-      body: 'Your responses are saved. Hybro is waiting for the agent or supervisor to confirm the next step.',
++      body: 'Your responses are saved. Hybro is continuing the run.',
+       icon: LoaderCircle,
+     },
+     expired: {
+@@ -148,7 +149,7 @@ function RecoveryState({
+         ) : null}
+       </div>
+       <div className="conversation-hitl-recovery-actions">
+-        {(state === 'applying' || state === 'delivery_uncertain') && onRefresh ? (
++        {state === 'delivery_uncertain' && onRefresh ? (
+           <Button variant="outline" disabled={working} onClick={() => run(onRefresh)}>
+             <RefreshCw className="h-4 w-4" aria-hidden="true" />
+             Check status
+@@ -224,11 +225,13 @@ function PromptControl({
+   value,
+   onChange,
+   inputRef,
++  onSubmit,
+ }: {
+   hitl: HitlPromptView
+   value: DraftValue | undefined
+   onChange: (value: DraftValue) => void
+   inputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>
++  onSubmit?: () => void
+ }) {
+   const textValue = Array.isArray(value) ? value.join(', ') : value ?? ''
+ 
+@@ -293,6 +296,12 @@ function PromptControl({
+       autoComplete="off"
+       value={textValue}
+       onChange={event => onChange(event.target.value)}
++      onKeyDown={event => {
++        if (event.key === 'Enter' && !event.shiftKey && onSubmit) {
++          event.preventDefault()
++          onSubmit()
++        }
++      }}
+       placeholder="Type your answer…"
+       className="conversation-hitl-text-input"
+     />
+@@ -315,7 +324,6 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
+   const {
+     currentId,
+     drafts,
+-    reviewing,
+     errorState,
+     errorMessage: submissionError,
+   } = controller
+@@ -333,6 +341,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
+   const currentIndex = Math.max(0, ordered.findIndex(hitl => hitl.hitlId === currentId))
+   const current = ordered[currentIndex] ?? ordered[0]
+   const allAnswered = ordered.every(hitl => hasAnswer(hitl, drafts[hitl.hitlId]))
++  const isLastQuestion = currentIndex === ordered.length - 1
+ 
+   // Authoritative lifecycle reconciliation: local submit/recovery state must
+   // never override a fresher store lifecycle (e.g. SSE/refresh reporting
+@@ -349,9 +358,9 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
+   }, [authoritativeLifecycle, dispatch])
+ 
+   useEffect(() => {
+-    const target = reviewing ? headingRef.current : inputRef.current ?? headingRef.current
++    const target = inputRef.current ?? headingRef.current
+     target?.focus()
+-  }, [currentId, reviewing, submissionError])
++  }, [currentId, submissionError])
+ 
+   const setDraft = useCallback((requestId: string, value: DraftValue) => {
+     dispatch({ type: 'answer', requestId, value })
+@@ -421,14 +430,52 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
+     }
+   }, [allAnswered, dispatch, drafts, interactionId, onSubmit, ordered, submitting])
+ 
++  const handlePrimaryAction = useCallback(() => {
++    if (!current) return
++    if (!hasAnswer(current, drafts[current.hitlId])) return
++    if (isLastQuestion) {
++      void handleSubmit()
++      return
++    }
++    goTo(currentIndex + 1)
++  }, [current, currentIndex, drafts, goTo, handleSubmit, isLastQuestion])
++
++  const lifecycleState = errorState ?? current?.lifecycleState
++  const invalidPrompt = !current?.prompt.trim() || GENERIC_PROMPT.test(current?.prompt.trim() ?? '')
++  // Local submit or server applying both show the transient recovery state.
++  // A follow-up open prompt arrives with a new interactionKey, which resets
++  // the controller and replaces this UI automatically.
++  const showApplying = Boolean(current && (submitted || lifecycleState === 'applying'))
++
++  // While answers are applying, poll pending HITL so a follow-up prompt
++  // replaces this recovery state automatically instead of waiting on
++  // a manual "Check status" click.
++  useEffect(() => {
++    if (!showApplying || !onRefresh) return
++    let cancelled = false
++    const refresh = async () => {
++      try {
++        await onRefresh()
++      } catch {
++        // Keep polling; transient refresh failures should not sticky-block UX.
++      }
++    }
++    void refresh()
++    const timer = window.setInterval(() => {
++      if (!cancelled) void refresh()
++    }, APPLYING_REFRESH_MS)
++    return () => {
++      cancelled = true
++      window.clearInterval(timer)
++    }
++  }, [onRefresh, showApplying])
++
+   if (!current) return null
+ 
+-  const lifecycleState = errorState ?? current.lifecycleState
+-  const invalidPrompt = !current.prompt.trim() || GENERIC_PROMPT.test(current.prompt.trim())
+-  if (submitted || lifecycleState === 'applying') {
++  if (showApplying) {
+     return (
+       <section className="conversation-hitl-panel" data-testid="hitl-response-bar" aria-label="Human input status">
+-        <RecoveryState state="applying" onRefresh={onRefresh} />
++        <RecoveryState state="applying" />
+       </section>
+     )
+   }
+@@ -454,48 +501,35 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
+         <MessageCircleQuestion className="h-5 w-5 conversation-hitl-panel-icon" aria-hidden="true" />
+         <div className="conversation-hitl-panel-heading-copy">
+           <span className="conversation-hitl-panel-title">{sourceLabel} needs your input</span>
+-          <span className="conversation-hitl-panel-progress" aria-live="polite">
+-            {reviewing ? 'Review answers' : `Question ${currentIndex + 1} of ${ordered.length}`}
+-          </span>
+-        </div>
+-        <div className="conversation-hitl-progress-dots" aria-hidden="true">
+-          {ordered.map((hitl, index) => (
+-            <span
+-              key={hitl.hitlId}
+-              data-state={hasAnswer(hitl, drafts[hitl.hitlId]) ? 'answered' : index === currentIndex ? 'current' : 'pending'}
+-            />
+-          ))}
++          {ordered.length > 1 ? (
++            <span className="conversation-hitl-panel-progress" aria-live="polite">
++              Question {currentIndex + 1} of {ordered.length}
++            </span>
++          ) : null}
+         </div>
+-      </header>
+-
+-      {reviewing ? (
+-        <div className="conversation-hitl-review">
+-          <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>Review before sending</h2>
+-          <p>Hybro will send these answers together and resume the run once.</p>
+-          <ol className="conversation-hitl-review-list">
++        {ordered.length > 1 ? (
++          <div className="conversation-hitl-progress-dots" aria-hidden="true">
+             {ordered.map((hitl, index) => (
+-              <li key={hitl.hitlId}>
+-                <div>
+-                  <span>{hitl.prompt}</span>
+-                  <strong>{answerText(drafts[hitl.hitlId]) || 'Not answered'}</strong>
+-                </div>
+-                <Button variant="ghost" size="sm" onClick={() => goTo(index)}>Edit</Button>
+-              </li>
++              <span
++                key={hitl.hitlId}
++                data-state={hasAnswer(hitl, drafts[hitl.hitlId]) ? 'answered' : index === currentIndex ? 'current' : 'pending'}
++              />
+             ))}
+-          </ol>
+-        </div>
+-      ) : (
+-        <div className="conversation-hitl-question" key={current.hitlId}>
+-          <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>{current.prompt}</h2>
+-          <label className="sr-only" htmlFor={`hitl-answer-${current.hitlId}`}>Answer</label>
+-          <PromptControl
+-            hitl={current}
+-            value={drafts[current.hitlId]}
+-            onChange={value => setDraft(current.hitlId, value)}
+-            inputRef={inputRef}
+-          />
+-        </div>
+-      )}
++          </div>
++        ) : null}
++      </header>
++
++      <div className="conversation-hitl-question" key={current.hitlId}>
++        <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>{current.prompt}</h2>
++        <label className="sr-only" htmlFor={`hitl-answer-${current.hitlId}`}>Answer</label>
++        <PromptControl
++          hitl={current}
++          value={drafts[current.hitlId]}
++          onChange={value => setDraft(current.hitlId, value)}
++          inputRef={inputRef}
++          onSubmit={handlePrimaryAction}
++        />
++      </div>
+ 
+       {submissionError ? (
+         <div className="conversation-hitl-error" role="alert">{submissionError}</div>
+@@ -510,31 +544,34 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
+           ) : null}
+         </div>
+         <div className="conversation-hitl-navigation">
+-          <Button
+-            variant="outline"
+-            disabled={submitting || (!reviewing && currentIndex === 0)}
+-            onClick={() => reviewing ? goTo(ordered.length - 1) : goTo(currentIndex - 1)}
+-          >
+-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+-            Back
+-          </Button>
+-          {reviewing ? (
+-            <Button disabled={submitting || !allAnswered} onClick={handleSubmit}>
+-              {submitting ? <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+-              {submitting ? 'Submitting…' : 'Submit all answers'}
+-            </Button>
+-          ) : (
++          {ordered.length > 1 ? (
+             <Button
+-              disabled={!hasAnswer(current, drafts[current.hitlId])}
+-              onClick={() => {
+-                if (currentIndex === ordered.length - 1) dispatch({ type: 'review' })
+-                else goTo(currentIndex + 1)
+-              }}
++              variant="outline"
++              disabled={submitting || currentIndex === 0}
++              onClick={() => goTo(currentIndex - 1)}
+             >
+-              {currentIndex === ordered.length - 1 ? 'Review answers' : 'Next'}
+-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
++              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
++              Back
+             </Button>
+-          )}
++          ) : null}
++          <Button
++            disabled={submitting || !hasAnswer(current, drafts[current.hitlId]) || (isLastQuestion && !allAnswered)}
++            onClick={handlePrimaryAction}
++          >
++            {isLastQuestion ? (
++              <>
++                {submitting
++                  ? <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
++                  : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
++                {submitting ? 'Submitting…' : 'Submit'}
++              </>
++            ) : (
++              <>
++                Next
++                <ArrowRight className="h-4 w-4" aria-hidden="true" />
++              </>
++            )}
++          </Button>
+         </div>
+       </footer>
+     </section>
+diff --git a/frontend/src/components/conversation/FinalAnswerSurface.tsx b/frontend/src/components/conversation/FinalAnswerSurface.tsx
+index 3cf7b8e17..caa28dedf 100644
+--- a/frontend/src/components/conversation/FinalAnswerSurface.tsx
++++ b/frontend/src/components/conversation/FinalAnswerSurface.tsx
+@@ -20,8 +20,16 @@ interface FinalAnswerSurfaceProps {
+   onOpenDetail?: (messageId: string) => void
+ }
+ 
++/**
++ * Avatar / work-log running state follows turn lifecycle, not finalAnswer kind.
++ * Do not stop on `deterministic_done` / `single` content alone — those can
++ * appear while the turn is still active (e.g. before synthesis or terminal
++ * stamp). The old `kind !== 'hitl'` exclusion stopped the spinner during Needs
++ * Input; keep HITL running without that exclusion.
++ */
+ function isProcessingStatusRunning(turn: TurnViewModel): boolean {
+-  return turn.status === 'active' && turn.phase !== 'completed' && turn.finalAnswer.kind !== 'hitl'
++  if (turn.finalAnswer.kind === 'hitl') return true
++  return turn.status === 'active' && turn.phase !== 'completed'
+ }
+ 
+ function CollectingBlock({
+@@ -147,17 +155,21 @@ function DeterministicDoneBlock({
+   summaryResult,
+   turnArtifacts,
+   turnId,
++  isRunning,
+ }: {
+   intro: string
+   summaryResult?: AgentResultViewModel
+   turnArtifacts?: TurnViewModel['agentResults'][number]['artifacts']
+   turnId?: string
++  isRunning: boolean
+ }) {
+   const theme = getAgentTheme('system:hybro', 'HYBRO AI')
+   const display = {
+     label: 'Combined agent responses',
+     tone: 'muted' as const,
+-    isAnimated: false,
++    // Keep the avatar spinning while the turn is still active (e.g. single
++    // agent already terminal but room processing_status has not completed).
++    isAnimated: isRunning,
+     ariaLabel: 'HYBRO AI — Combined agent responses',
+   }
+ 
+@@ -333,6 +345,7 @@ export function FinalAnswerSurface({
+           }
+           turnArtifacts={turn.agentResults.flatMap(r => r.artifacts ?? [])}
+           turnId={turn.id}
++          isRunning={processingStatusRunning}
+         />
+       )
+       break
+diff --git a/frontend/src/components/group-selector.tsx b/frontend/src/components/group-selector.tsx
+index 1da0a0aa6..c27e5d0fe 100644
+--- a/frontend/src/components/group-selector.tsx
++++ b/frontend/src/components/group-selector.tsx
+@@ -98,6 +98,15 @@ export function GroupSelector({
+     }
+ 
+     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
++      // Manual room snapshots keep the all_agents sentinel for restore semantics
++      // but surface the room agent/team label when provenance provides one.
++      if (selectedGroupName) {
++        return {
++          icon: <Users className="h-3.5 w-3.5" />,
++          label: selectedGroupName,
++          description: 'Agents in this room',
++        }
++      }
+       return {
+         icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
+         label: 'All Agents',
+diff --git a/frontend/src/hooks/room/useProcessingRestore.ts b/frontend/src/hooks/room/useProcessingRestore.ts
+index b129343fe..eeabc29aa 100644
+--- a/frontend/src/hooks/room/useProcessingRestore.ts
++++ b/frontend/src/hooks/room/useProcessingRestore.ts
+@@ -39,11 +39,18 @@ export function useProcessingRestore(
+     if (lifecycle.isProcessingResolved()) return
+ 
+     const activeRuns = room.active_runs ?? []
+-    const activeRunTriggerMessageId =
+-      activeRuns.find((run) => !!run.trigger_message_id)?.trigger_message_id ?? null
++    const activeRunTriggerMessageIds = activeRuns
++      .map(run => run.trigger_message_id)
++      .filter((id): id is string => typeof id === 'string' && id.length > 0)
++    const activeRunTriggerMessageId = activeRunTriggerMessageIds[0] ?? null
+     const lifecycleMessageId = activeRunTriggerMessageId
+     const hasActiveLifecycle = activeRuns.length > 0
+ 
++    useRoomUiStore.getState().setActiveRunTriggerMessageIds(
++      roomId,
++      activeRunTriggerMessageIds,
++    )
++
+     const finishStaleActiveRunIfTerminal = async () => {
+       if (!lifecycleMessageId) return
+       if (!allAgentsTerminalForUserMessage(store.entities, roomId, lifecycleMessageId)) return
+diff --git a/frontend/src/hooks/room/useRoomActions.ts b/frontend/src/hooks/room/useRoomActions.ts
+index 3adb84b88..e7f55ba0b 100644
+--- a/frontend/src/hooks/room/useRoomActions.ts
++++ b/frontend/src/hooks/room/useRoomActions.ts
+@@ -13,6 +13,7 @@ import {
+   ensureInitialProcessingStatusLog,
+   findProcessingStatusUserEntity,
+ } from './processing-status-log'
++import { hydrateRoomFromDb } from '@/lib/room-sync/hydrate-room'
+ 
+ export function useRoomActions(
+   roomId: string,
+@@ -26,6 +27,8 @@ export function useRoomActions(
+   setUpdatingRoom: (v: boolean) => void,
+   sseEnabled: boolean,
+   setSseEnabled: (v: boolean) => void,
++  getAgentName?: (agentId: string) => Promise<string>,
++  getAgentSource?: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
+ ) {
+   // Update room name and membership. Execution mode is request-scoped.
+   const updateRoomSettings = useCallback(async (
+@@ -265,10 +268,21 @@ export function useRoomActions(
+     }
+   }, [getToken, hitlRequestIndex, reconcileWithDb, roomId])
+ 
+-  // Manually refresh messages — delegates to reconcileWithDb (Gap 14)
++  // Manually refresh messages — reconciles from DB and re-overlays any pending HITL questions
++  // that may have been missed by SSE (e.g. during the "Applying your answers" transition).
+   const refreshMessages = useCallback(async () => {
+     await reconcileWithDb(roomId)
+-  }, [roomId, reconcileWithDb])
++    if (getAgentName && getAgentSource) {
++      await hydrateRoomFromDb({
++        roomId,
++        phase: 'hitl_overlay',
++        getToken,
++        hitlRequestIndex,
++        getAgentName,
++        getAgentSource,
++      })
++    }
++  }, [roomId, reconcileWithDb, getToken, hitlRequestIndex, getAgentName, getAgentSource])
+ 
+   // Toggle SSE connection
+   const toggleSSE = useCallback(() => {
+diff --git a/frontend/src/hooks/room/useRoomWebhook.ts b/frontend/src/hooks/room/useRoomWebhook.ts
+index cb08518ef..b56462485 100644
+--- a/frontend/src/hooks/room/useRoomWebhook.ts
++++ b/frontend/src/hooks/room/useRoomWebhook.ts
+@@ -196,6 +196,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
+     roomId, room, getToken, lifecycle, hitlRequestIndex, roomQuery,
+     reconcileWithDb, setCancelling, setUpdatingRoom,
+     sseEnabled, setSseEnabled,
++    getAgentName, getAgentSource,
+   )
+ 
+   return {
+diff --git a/frontend/src/hooks/room/useSendMessage.ts b/frontend/src/hooks/room/useSendMessage.ts
+index e08e68eac..44d02d190 100644
+--- a/frontend/src/hooks/room/useSendMessage.ts
++++ b/frontend/src/hooks/room/useSendMessage.ts
+@@ -102,6 +102,7 @@ export function useSendMessage(
+       ],
+     }, 'optimistic')
+     lifecycle.startProcessing(optimisticUserMessageId)
++    useRoomUiStore.getState().setActiveRunTriggerMessageIds(roomId, [optimisticUserMessageId])
+ 
+     useRoomUiStore.getState().markLocalSend(roomId)
+     const queryClient = getActiveQueryClient()
+diff --git a/frontend/src/hooks/useChatRoomCreation.ts b/frontend/src/hooks/useChatRoomCreation.ts
+index c6e6d0c50..ce45943eb 100644
+--- a/frontend/src/hooks/useChatRoomCreation.ts
++++ b/frontend/src/hooks/useChatRoomCreation.ts
+@@ -123,13 +123,23 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth
+ 
+       // Derive membership: Room Settings config (selectedAgents) takes priority,
+       // then saved group selection, then empty snapshot.
++      // Selected agents seed a room team — default dispatch is room_default, not
++      // a mention and not all_agents, unless the caller passed an explicit scope.
+       const dispatch = explicitDispatch
+-        ?? resolveSelectedGroupDispatch(targetGroup ?? BUILTIN_GROUP_ALL_AGENTS)
++        ?? (selectedAgents.length > 0
++          ? { message_target_mode: 'room_default' as const }
++          : resolveSelectedGroupDispatch(targetGroup ?? BUILTIN_GROUP_ALL_AGENTS))
+       const handoffTargetGroup = !explicitDispatch && selectedAgents.length === 0 && !isMentionDispatchInput(dispatch)
+         ? targetGroup
+         : undefined
+ 
+       let membership: RoomMembershipWriteInput | undefined = explicitMembership
++      if (!membership && selectedAgents.length > 0) {
++        membership = {
++          membership_seed_input: 'manual',
++          room_agent_ids: selectedAgents.map((agent) => agent.agent_id),
++        }
++      }
+       if (
+         !membership
+         && selectedAgents.length === 0
+@@ -174,9 +184,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth
+           throw new Error('Room created but no room_id returned')
+         }
+ 
+-        // Store the initial message and target team for the room page. Rooms
+-        // seeded from a saved team derive their selector label from provenance;
+-        // manual snapshots display All Agents while retaining room-default routing.
++        // Store the initial message and target scope for the room page. Manual
++        // agent snapshots use room_default routing; the selector shows the
++        // seeded agent/team name via room membership provenance.
+         useRoomUiStore.getState().setPendingRoomData(roomId, {
+           initialMessage: userMessage,
+           mode: useSupervisor ? 'supervisor' : 'direct',
+diff --git a/frontend/src/hooks/useTurnViewModels.ts b/frontend/src/hooks/useTurnViewModels.ts
+index 4fed75d5b..cc21574c0 100644
+--- a/frontend/src/hooks/useTurnViewModels.ts
++++ b/frontend/src/hooks/useTurnViewModels.ts
+@@ -1,5 +1,6 @@
+ import React from 'react'
+ import { useMessageStore } from '@/stores/message-store'
++import { DEFAULT_ROOM_FLAGS, useRoomUiStore } from '@/stores/room-ui-store'
+ import { buildTurnsIncremental } from '@/lib/room-timeline/build-turns'
+ import type { TurnViewModel } from '@/lib/room-timeline/types'
+ import type { RawTimelineEvent } from '@/lib/room-timeline/types'
+@@ -20,13 +21,24 @@ function filterRoomMessages(
+  */
+ export function useTurnViewModels(roomId: string): TurnViewModel[] {
+   const version = useMessageStore(s => s.version)
++  const roomProcessingActive = useRoomUiStore(
++    s => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).processing,
++  )
++  // Use the shared default array so the selector stays referentially stable
++  // when a room has no flags yet (avoids getSnapshot infinite loops).
++  const activeRunTriggerMessageIds = useRoomUiStore(
++    s => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).activeRunTriggerMessageIds,
++  )
+   const prev = React.useRef<TurnViewModel[]>([])
+ 
+   const next = React.useMemo(() => {
+     const { entities, orderedIds } = useMessageStore.getState()
+     const roomOrderedIds = filterRoomMessages(roomId, entities, orderedIds)
+-    return buildTurnsIncremental(prev.current, entities, roomOrderedIds, EMPTY_EVENTS)
+-  }, [roomId, version])
++    return buildTurnsIncremental(prev.current, entities, roomOrderedIds, EMPTY_EVENTS, {
++      roomProcessingActive,
++      activeRunTriggerMessageIds: new Set(activeRunTriggerMessageIds),
++    })
++  }, [roomId, version, roomProcessingActive, activeRunTriggerMessageIds])
+ 
+   prev.current = next
+   return next
+diff --git a/frontend/src/lib/hitl/hitl-message-projection.ts b/frontend/src/lib/hitl/hitl-message-projection.ts
+index c7a078e65..e4584ec8f 100644
+--- a/frontend/src/lib/hitl/hitl-message-projection.ts
++++ b/frontend/src/lib/hitl/hitl-message-projection.ts
+@@ -62,6 +62,7 @@ function normalizePromptType(
+ export function buildPendingHitlIncomingMessage(
+   input: PendingHitlProjectionInput,
+ ): IncomingMessage {
++  const normalizedApplicationStatus = input.applicationStatus ?? 'open'
+   return {
+     id: input.messageId,
+     roomId: input.roomId,
+@@ -83,10 +84,14 @@ export function buildPendingHitlIncomingMessage(
+     hitlInteractionId: input.interactionId ?? input.groupId ?? input.requestId,
+     hitlInteractionStatus: input.interactionStatus ?? 'open',
+     hitlInteractionVersion: input.interactionVersion ?? undefined,
+-    hitlApplicationStatus: input.applicationStatus ?? undefined,
++    // Pending follow-up prompts can reuse the same message id as the prior round.
++    // Reset application state so the UI stops showing "Applying your answers"
++    // and renders the fresh prompt as actionable.
++    hitlApplicationStatus: normalizedApplicationStatus,
+     hitlGroupId: input.groupId ?? null,
+     hitlGroupTotal: input.groupTotal ?? null,
+     hitlGroupIndex: input.groupIndex ?? null,
++    hitlUserAnswer: '',
+     stepNumber: input.stepNumber ?? undefined,
+     totalSteps: input.totalSteps ?? undefined,
+     relatedMessageId: input.relatedMessageId ?? undefined,
+diff --git a/frontend/src/lib/hitl/interaction-controller.ts b/frontend/src/lib/hitl/interaction-controller.ts
+index e2cc69e1c..8b215176b 100644
+--- a/frontend/src/lib/hitl/interaction-controller.ts
++++ b/frontend/src/lib/hitl/interaction-controller.ts
+@@ -7,7 +7,6 @@ export type HitlControllerState = {
+   interactionKey: string
+   currentId: string | null
+   drafts: HitlDrafts
+-  reviewing: boolean
+   submission: 'idle' | 'submitting' | 'submitted'
+   errorState: HitlLifecycleState | null
+   errorMessage: string | null
+@@ -23,7 +22,6 @@ export type HitlControllerAction =
+   | { type: 'reset'; seed: HitlControllerSeed }
+   | { type: 'answer'; requestId: string; value: HitlDraftValue }
+   | { type: 'navigate'; requestId: string }
+-  | { type: 'review' }
+   | { type: 'submit_started' }
+   | { type: 'submit_succeeded' }
+   | { type: 'submit_failed'; message: string; lifecycle?: HitlLifecycleState }
+@@ -38,7 +36,6 @@ export function createHitlControllerState(seed: HitlControllerSeed): HitlControl
+         .filter(item => item.answer)
+         .map(item => [item.requestId, item.answer as string]),
+     ),
+-    reviewing: false,
+     submission: 'idle',
+     errorState: null,
+     errorMessage: null,
+@@ -59,9 +56,7 @@ export function hitlInteractionReducer(
+         errorMessage: null,
+       }
+     case 'navigate':
+-      return { ...state, currentId: action.requestId, reviewing: false }
+-    case 'review':
+-      return { ...state, reviewing: true }
++      return { ...state, currentId: action.requestId }
+     case 'submit_started':
+       if (state.submission === 'submitting') return state
+       return { ...state, submission: 'submitting', errorMessage: null }
+diff --git a/frontend/src/lib/room-sync/hitl-overlay.ts b/frontend/src/lib/room-sync/hitl-overlay.ts
+index 362479864..1bc9e1e7a 100644
+--- a/frontend/src/lib/room-sync/hitl-overlay.ts
++++ b/frontend/src/lib/room-sync/hitl-overlay.ts
+@@ -90,6 +90,47 @@ export function markResolvedHitlFromHydrationBatch(
+   }
+ }
+ 
++/**
++ * Live applying refresh: drop local *applying* HITL projections that are no
++ * longer in the server pending set so the composer can leave "Applying your
++ * answers" without a full page reload. Open input-required prompts are left
++ * alone here — a brief empty pending window must not clear a still-open UI.
++ * Initial hydration still resolves absent open HITL via
++ * markResolvedHitlFromHydrationBatch.
++ */
++export function clearStaleHitlNotInPending(
++  targetRoomId: string,
++  pendingMessageIds: ReadonlySet<string>,
++): void {
++  const store = useMessageStore.getState()
++  if (store.roomId !== targetRoomId) return
++
++  for (const entity of Object.values(store.entities)) {
++    if (entity.roomId !== targetRoomId || !entity.hitlRequestId) continue
++    if (pendingMessageIds.has(entity.id)) continue
++    if (entity.hitlResolved === true) continue
++
++    const wasApplying =
++      entity.hitlApplicationStatus === 'applying'
++      || entity.hitlInteractionStatus === 'applying'
++      || entity.hitlInteractionStatus === 'answers_recorded'
++
++    if (!wasApplying) continue
++
++    store.upsertMessage({
++      id: entity.id,
++      roomId: targetRoomId,
++      messageType: 'agent',
++      content: entity.content,
++      senderName: entity.senderName,
++      timestamp: entity.timestamp,
++      hitlResolved: true,
++      hitlInteractionStatus: 'applied',
++      hitlApplicationStatus: 'applied',
++    }, 'sse')
++  }
++}
++
+ export interface OverlayHitlOptions extends HydrateRoomAgentResolver {
+   roomId: string
+   getToken?: () => Promise<string | null>
+@@ -119,6 +160,8 @@ export async function overlayHitlForRoom(
+ 
+   if (hydratedIdsForResolve) {
+     markResolvedHitlFromHydrationBatch(roomId, hydratedIdsForResolve, pendingMessageIds)
++  } else {
++    clearStaleHitlNotInPending(roomId, pendingMessageIds)
+   }
+ 
+   return pendingMessageIds
+diff --git a/frontend/src/lib/room-timeline/build-turns.ts b/frontend/src/lib/room-timeline/build-turns.ts
+index 856de446f..8bcd889e1 100644
+--- a/frontend/src/lib/room-timeline/build-turns.ts
++++ b/frontend/src/lib/room-timeline/build-turns.ts
+@@ -19,8 +19,10 @@ import {
+ } from './derive-final-answer'
+ import {
+   hasActiveSynthesisGap,
++  shouldHoldTurnActiveForOpenRoomRun,
+   shouldShowSynthesizingPhase,
+   shouldShowSynthesizingPhaseForResults,
++  type OpenRoomRunContext,
+ } from './multi-agent-turn-complete'
+ import { getStripSourceResults } from './turn-live-shell'
+ 
+@@ -28,6 +30,11 @@ import { getStripSourceResults } from './turn-live-shell'
+ 
+ const SYSTEM_TURN_ID = 'system-turn'
+ 
++export interface TurnBuildOptions {
++  roomProcessingActive?: boolean
++  activeRunTriggerMessageIds?: ReadonlySet<string>
++}
++
+ function publicAgentStatusMessage(
+   entity: MessageEntity,
+   status: AgentResultViewModel['status'],
+@@ -69,6 +76,7 @@ export function buildTurns(
+   entities: Record<string, MessageEntity>,
+   orderedIds: string[],
+   events: readonly RawTimelineEvent[],
++  options: TurnBuildOptions = {},
+ ): TurnViewModel[] {
+   if (orderedIds.length === 0) return []
+ 
+@@ -147,7 +155,7 @@ export function buildTurns(
+ 
+   // System turn first (if any)
+   if (systemTurnScaffold) {
+-    turns.push(assembleTurn(SYSTEM_TURN_ID, systemTurnScaffold, entities, events))
++    turns.push(assembleTurn(SYSTEM_TURN_ID, systemTurnScaffold, entities, events, options))
+   }
+ 
+   for (let i = 0; i < turnScaffolds.length; i++) {
+@@ -158,7 +166,17 @@ export function buildTurns(
+     // in both turns.
+     const nextScaffold = turnScaffolds[i + 1]
+     const nextTurnStart = nextScaffold?.userEntity?.timestamp
+-    turns.push(assembleTurn(turnId, scaffold, entities, events, nextTurnStart))
++    turns.push(assembleTurn(
++      turnId,
++      scaffold,
++      entities,
++      events,
++      options,
++      {
++        nextTurnStart,
++        isLatestUserTurn: i === turnScaffolds.length - 1,
++      },
++    ))
+   }
+ 
+   return turns
+@@ -213,8 +231,23 @@ function assembleTurn(
+   },
+   entities: Record<string, MessageEntity>,
+   events: readonly RawTimelineEvent[],
+-  nextTurnStart?: string,
++  buildOptions: TurnBuildOptions = {},
++  assembleOptions: {
++    nextTurnStart?: string
++    isLatestUserTurn?: boolean
++  } = {},
+ ): TurnViewModel {
++  const { nextTurnStart, isLatestUserTurn = false } = assembleOptions
++  const openRoomRunContext: OpenRoomRunContext = {
++    userMessageId: scaffold.userMessageId,
++    turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
++    turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
++    processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
++    activeRunTriggerMessageIds: buildOptions.activeRunTriggerMessageIds,
++    roomProcessingActive: buildOptions.roomProcessingActive,
++    isLatestUserTurn,
++  }
++
+   // Filter events for this turn first (needed by buildAgentResult for inline chips)
+   const turnEvents = filterEventsForTurn(scaffold, entities, events, nextTurnStart)
+ 
+@@ -245,6 +278,7 @@ function assembleTurn(
+     turnTerminalStatus: scaffold.userEntity?.turnTerminalStatus,
+     turnCompletionKind: scaffold.userEntity?.turnCompletionKind,
+     processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
++    openRoomRunContext,
+   })
+   const summary = selectSummary(agentResults)
+   const activeAgentIds = agentResults
+@@ -289,11 +323,16 @@ function assembleTurn(
+     processingStatusLogs: scaffold.userEntity?.processingStatusLogs ?? [],
+     displayMode: 'single_agent', // placeholder, set below
+     finalAnswer: { kind: 'pending', label: 'Working' }, // placeholder
++    liveRunBuildContext: {
++      roomProcessingActive: buildOptions.roomProcessingActive,
++      isLatestUserTurn,
++      activeRunTriggerMessageIds: buildOptions.activeRunTriggerMessageIds,
++    },
+   }
+ 
+   turn.finalAnswer = deriveFinalAnswer(turn, scaffold.agentMessageIds)
+   turn.displayMode = deriveDisplayModeFromFinalAnswer(turn, turn.finalAnswer)
+-  turn.phase = deriveTurnPhase(turn)
++  turn.phase = deriveTurnPhase(turn, openRoomRunContext)
+   turn.primaryStreamMessageId = derivePrimaryStreamFromFinalAnswer(turn.finalAnswer)
+   turn.primaryMessageId = turn.primaryStreamMessageId
+ 
+@@ -618,7 +657,19 @@ function suppressEphemeralResults(
+ 
+ // ── Turn phase derivation ──────────────────────────────────────
+ 
+-export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
++export function deriveTurnPhase(
++  turn: TurnViewModel,
++  openRoomRunContext?: OpenRoomRunContext,
++): TurnPhase {
++  const resolvedOpenRoomRunContext: OpenRoomRunContext = {
++    userMessageId: turn.userMessageId,
++    turnTerminalStatus: turn.turnTerminalStatus,
++    turnCompletionKind: turn.turnCompletionKind,
++    processingStatusLogs: turn.processingStatusLogs,
++    isSupervisorTurn: turn.isSupervisorTurn,
++    ...turn.liveRunBuildContext,
++    ...openRoomRunContext,
++  }
+   const orchestrator = turn.agentResults.find(r => r.agentId === "system:hybro")
+   const real = getStripSourceResults(turn)
+   const allRealTerminal =
+@@ -649,7 +700,7 @@ export function deriveTurnPhase(turn: TurnViewModel): TurnPhase {
+   if (
+     summaryResult?.status === 'working'
+     || (allRealTerminal && hasActiveSynthesisGap(turn))
+-    || shouldShowSynthesizingPhase(turn, real)
++    || shouldShowSynthesizingPhase(turn, real, resolvedOpenRoomRunContext)
+   ) {
+     return 'synthesizing'
+   }
+@@ -690,6 +741,7 @@ function deriveTurnStatus(
+     turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
+     turnCompletionKind?: TurnViewModel['turnCompletionKind']
+     processingStatusLogs?: TurnViewModel['processingStatusLogs']
++    openRoomRunContext: OpenRoomRunContext
+   },
+ ): TurnStatus {
+   if (opts.turnTerminalStatus === 'canceled') return 'failed'
+@@ -742,7 +794,8 @@ function deriveTurnStatus(
+     agentResults.some(r => r.isEphemeral && isSynthesisGapEphemeral(r))
+     || (summaryAgent?.status === 'working' && (summaryAgent.content.trim().length ?? 0) === 0)
+     || (opts.processingStatusLogs ?? []).some(entry =>
+-      entry.message.toLowerCase().includes('synthesiz'),
++      entry.turnPhase === 'synthesizing'
++      || entry.message.toLowerCase().includes('synthesiz'),
+     )
+ 
+   const hasPlanningEphemeral = agentResults.some(
+@@ -764,11 +817,23 @@ function deriveTurnStatus(
+     && synthesisGapActive
+     && !isPersistedTerminalTurn(opts.turnTerminalStatus)
+ 
+-  const awaitingMultiAgentSynthesis = shouldShowSynthesizingPhaseForResults(agentResults, {
++  const awaitingMultiAgentSynthesis = shouldShowSynthesizingPhaseForResults(
++    agentResults,
++    {
++      ...opts.openRoomRunContext,
++      isSupervisorTurn: opts.isSupervisorTurn,
++      turnTerminalStatus: opts.turnTerminalStatus,
++      turnCompletionKind: opts.turnCompletionKind,
++      processingStatusLogs: opts.processingStatusLogs,
++    },
++  )
++
++  const awaitingOpenRoomRun = shouldHoldTurnActiveForOpenRoomRun(agentResults, {
++    ...opts.openRoomRunContext,
++    isSupervisorTurn: opts.isSupervisorTurn,
+     turnTerminalStatus: opts.turnTerminalStatus,
+     turnCompletionKind: opts.turnCompletionKind,
+     processingStatusLogs: opts.processingStatusLogs,
+-    isSupervisorTurn: opts.isSupervisorTurn,
+   })
+ 
+   if (hasWorking) return 'active'
+@@ -776,7 +841,13 @@ function deriveTurnStatus(
+   if (allRealTerminal && hasRealFailed && hasRealCompleted) return 'partial'
+   if (allRealTerminal && hasRealFailed) return 'failed'
+   if (hasSupervisorContinuationLogs && allCompleted) return 'active'
+-  if (inSynthesisGap || awaitingSynthesisGap || preOrchestrationGap || awaitingMultiAgentSynthesis) {
++  if (
++    inSynthesisGap
++    || awaitingSynthesisGap
++    || preOrchestrationGap
++    || awaitingMultiAgentSynthesis
++    || awaitingOpenRoomRun
++  ) {
+     return 'active'
+   }
+   if (allFailed) return 'failed'
+@@ -933,14 +1004,15 @@ export function buildTurnsIncremental(
+   entities: Record<string, MessageEntity>,
+   orderedIds: string[],
+   events: readonly RawTimelineEvent[],
++  options: TurnBuildOptions = {},
+ ): TurnViewModel[] {
+   // If no previous turns, delegate to full build
+   if (prevTurns.length === 0) {
+-    return buildTurns(entities, orderedIds, events)
++    return buildTurns(entities, orderedIds, events, options)
+   }
+ 
+   // Full rebuild to get the "truth"
+-  const fullTurns = buildTurns(entities, orderedIds, events)
++  const fullTurns = buildTurns(entities, orderedIds, events, options)
+ 
+   if (fullTurns.length === 0) return fullTurns
+ 
+diff --git a/frontend/src/lib/room-timeline/multi-agent-turn-complete.ts b/frontend/src/lib/room-timeline/multi-agent-turn-complete.ts
+index 57996fb95..2693fed6c 100644
+--- a/frontend/src/lib/room-timeline/multi-agent-turn-complete.ts
++++ b/frontend/src/lib/room-timeline/multi-agent-turn-complete.ts
+@@ -1,6 +1,134 @@
++import { isSupervisorClarifyAgent } from '@/lib/system-agents'
+ import type { AgentResultViewModel, TurnViewModel } from './types'
+ import { getStripSourceResults } from './turn-live-shell'
+ 
++export interface OpenRoomRunContext {
++  userMessageId?: string | null
++  turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
++  turnCompletionKind?: TurnViewModel['turnCompletionKind']
++  processingStatusLogs?: TurnViewModel['processingStatusLogs']
++  activeRunTriggerMessageIds?: ReadonlySet<string>
++  roomProcessingActive?: boolean
++  isLatestUserTurn?: boolean
++  isSupervisorTurn?: boolean
++}
++
++function isPersistedTerminalTurn(
++  status: TurnViewModel['turnTerminalStatus'] | undefined,
++): boolean {
++  return status === 'completed' || status === 'failed' || status === 'canceled'
++}
++
++/** True when the correlated room run is still live (not a hydrated historical turn). */
++export function hasLiveRunEvidence(context: OpenRoomRunContext): boolean {
++  if ((context.processingStatusLogs?.length ?? 0) > 0) return true
++  if (
++    context.userMessageId
++    && context.activeRunTriggerMessageIds?.has(context.userMessageId)
++  ) {
++    return true
++  }
++  if (context.roomProcessingActive && context.isLatestUserTurn) return true
++  return false
++}
++
++function buildTurnSnapshot(
++  agentResults: AgentResultViewModel[],
++  context: OpenRoomRunContext,
++): TurnViewModel {
++  return {
++    id: '',
++    roomId: '',
++    userMessageId: context.userMessageId ?? null,
++    userContent: '',
++    userAttachments: [],
++    timestamp: '',
++    status: 'active',
++    events: [],
++    summary: null,
++    agentResults,
++    activeAgentIds: [],
++    isSupervisorTurn: context.isSupervisorTurn ?? false,
++    displayMode: 'working',
++    finalAnswer: { kind: 'pending', label: 'Working' },
++    turnTerminalStatus: context.turnTerminalStatus,
++    turnCompletionKind: context.turnCompletionKind,
++    processingStatusLogs: context.processingStatusLogs ?? [],
++    phase: 'collecting',
++  }
++}
++
++function filterRealAgentResults(
++  agentResults: AgentResultViewModel[],
++): AgentResultViewModel[] {
++  return agentResults.filter(
++    r => !r.isEphemeral && !r.isSummaryAgent && !isSupervisorClarifyAgent(r.agentId),
++  )
++}
++
++/** Backend stamped synthesis but skipped LLM work — do not hold the turn active. */
++export function isSynthesisKindWithoutActualSynthesis(
++  agentResults: AgentResultViewModel[],
++  context: OpenRoomRunContext,
++): boolean {
++  if (context.turnCompletionKind !== 'synthesis') return false
++
++  const turn = buildTurnSnapshot(agentResults, context)
++  if (hasActiveSynthesisGap(turn)) return false
++  if (hasSynthesisSignalInProcessingLogs(turn)) return false
++
++  const summary = agentResults.find(r => r.isSummaryAgent)
++  if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) {
++    return false
++  }
++
++  return true
++}
++
++/**
++ * True while the room run is open, agents are done, and the primary surface is
++ * still waiting for terminal processing_status / final answer resolution.
++ */
++export function shouldHoldTurnActiveForOpenRoomRun(
++  agentResults: AgentResultViewModel[],
++  context: OpenRoomRunContext,
++): boolean {
++  if (isPersistedTerminalTurn(context.turnTerminalStatus)) return false
++  if (context.turnCompletionKind === 'deterministic') return false
++  if (!hasLiveRunEvidence(context)) return false
++
++  const real = filterRealAgentResults(agentResults)
++  if (real.length < 2 || !allRealTerminal(real)) return false
++  if (real.some(r => r.status === 'working')) return false
++  if (isMixedTerminalMultiAgentTurn(real)) return false
++  if (isSynthesisKindWithoutActualSynthesis(agentResults, context)) return false
++
++  const summary = agentResults.find(r => r.isSummaryAgent)
++  if (
++    summary
++    && isDeterministicSummary(summary)
++    && (summary.status === 'working' || summary.content.trim().length > 0)
++  ) {
++    return false
++  }
++
++  const turn = buildTurnSnapshot(agentResults, context)
++  if (isMultiAgentTurnReadyForDeterministicDone(turn, real)) return false
++
++  return true
++}
++
++/** True when the UI should show the synthesizing phase for an open room run. */
++export function shouldShowSynthesizingForOpenRoomRun(
++  agentResults: AgentResultViewModel[],
++  context: OpenRoomRunContext,
++): boolean {
++  if (!shouldHoldTurnActiveForOpenRoomRun(agentResults, context)) return false
++
++  const real = filterRealAgentResults(agentResults)
++  return real.every(r => r.status === 'completed')
++}
++
+ function isSynthesisGapEphemeral(result: AgentResultViewModel): boolean {
+   if (result.isSummaryAgent && result.status === 'working') return true
+   const stage = result.taskStatusMessage?.trim().toLowerCase() ?? ''
+@@ -202,6 +330,7 @@ export function hasActiveSynthesisGap(turn: TurnViewModel): boolean {
+ export function isPreSynthesisGap(
+   turn: TurnViewModel,
+   real: AgentResultViewModel[] = getStripSourceResults(turn),
++  openRoomRunContext?: OpenRoomRunContext,
+ ): boolean {
+   if (real.length < 2) return false
+   if (!allRealTerminal(real)) return false
+@@ -214,8 +343,27 @@ export function isPreSynthesisGap(
+   if (summary && isDeterministicSummary(summary)) return false
+   if (summary && !isDeterministicSummary(summary) && hasLlmSummaryWithContent(summary)) return false
+ 
++  if (isSynthesisKindWithoutActualSynthesis(turn.agentResults, {
++    userMessageId: turn.userMessageId,
++    turnTerminalStatus: turn.turnTerminalStatus,
++    turnCompletionKind: turn.turnCompletionKind,
++    processingStatusLogs: turn.processingStatusLogs,
++    isSupervisorTurn: turn.isSupervisorTurn,
++  })) {
++    return false
++  }
++
+   const hasOrchestrationContext =
+-    turn.isSupervisorTurn || turn.turnCompletionKind === 'synthesis'
++    turn.isSupervisorTurn
++    || turn.turnCompletionKind === 'synthesis'
++    || hasLiveRunEvidence({
++      userMessageId: turn.userMessageId,
++      turnTerminalStatus: turn.turnTerminalStatus,
++      turnCompletionKind: turn.turnCompletionKind,
++      processingStatusLogs: turn.processingStatusLogs,
++      isSupervisorTurn: turn.isSupervisorTurn,
++      ...openRoomRunContext,
++    })
+   if (!hasOrchestrationContext) return false
+ 
+   return true
+@@ -228,7 +376,17 @@ export function isPreSynthesisGap(
+ export function shouldShowSynthesizingPhase(
+   turn: TurnViewModel,
+   real: AgentResultViewModel[] = getStripSourceResults(turn),
++  openRoomRunContext?: OpenRoomRunContext,
+ ): boolean {
++  const liveContext: OpenRoomRunContext = {
++    userMessageId: turn.userMessageId,
++    turnTerminalStatus: turn.turnTerminalStatus,
++    turnCompletionKind: turn.turnCompletionKind,
++    processingStatusLogs: turn.processingStatusLogs,
++    isSupervisorTurn: turn.isSupervisorTurn,
++    ...turn.liveRunBuildContext,
++    ...openRoomRunContext,
++  }
+   if (real.length < 2) return false
+   if (!allRealTerminal(real)) return false
+   if (real.some(r => r.status === 'working')) return false
+@@ -250,40 +408,27 @@ export function shouldShowSynthesizingPhase(
+   }
+ 
+   if (hasActiveSynthesisGap(turn)) return true
+-  if (turn.turnCompletionKind === 'synthesis' && !summary?.content?.trim()) return true
+-  return isPreSynthesisGap(turn, real)
++  if (turn.turnCompletionKind === 'synthesis' && !summary?.content?.trim()) {
++    if (!isSynthesisKindWithoutActualSynthesis(turn.agentResults, {
++      userMessageId: turn.userMessageId,
++      turnTerminalStatus: turn.turnTerminalStatus,
++      turnCompletionKind: turn.turnCompletionKind,
++      processingStatusLogs: turn.processingStatusLogs,
++      isSupervisorTurn: turn.isSupervisorTurn,
++    })) {
++      return true
++    }
++  }
++  if (isPreSynthesisGap(turn, real, openRoomRunContext)) return true
++  return shouldShowSynthesizingForOpenRoomRun(turn.agentResults, liveContext)
+ }
+ 
+ /** Lighter entry point for deriveTurnStatus before a full TurnViewModel exists. */
+ export function shouldShowSynthesizingPhaseForResults(
+   agentResults: AgentResultViewModel[],
+-  context: {
+-    turnTerminalStatus?: TurnViewModel['turnTerminalStatus']
+-    turnCompletionKind?: TurnViewModel['turnCompletionKind']
+-    processingStatusLogs?: TurnViewModel['processingStatusLogs']
+-    isSupervisorTurn?: boolean
+-  },
++  context: OpenRoomRunContext,
+ ): boolean {
+-  return shouldShowSynthesizingPhase({
+-    id: '',
+-    roomId: '',
+-    userMessageId: null,
+-    userContent: '',
+-    userAttachments: [],
+-    timestamp: '',
+-    status: 'active',
+-    events: [],
+-    summary: null,
+-    agentResults,
+-    activeAgentIds: [],
+-    isSupervisorTurn: context.isSupervisorTurn ?? false,
+-    displayMode: 'working',
+-    finalAnswer: { kind: 'pending', label: 'Working' },
+-    turnTerminalStatus: context.turnTerminalStatus,
+-    turnCompletionKind: context.turnCompletionKind,
+-    processingStatusLogs: context.processingStatusLogs ?? [],
+-    phase: 'collecting',
+-  })
++  return shouldShowSynthesizingPhase(buildTurnSnapshot(agentResults, context))
+ }
+ 
+ export function hasActiveSupervisorPlanningEphemeral(turn: TurnViewModel): boolean {
+diff --git a/frontend/src/lib/room-timeline/types.ts b/frontend/src/lib/room-timeline/types.ts
+index de55d2531..c4a7b0bf8 100644
+--- a/frontend/src/lib/room-timeline/types.ts
++++ b/frontend/src/lib/room-timeline/types.ts
+@@ -60,6 +60,12 @@ export interface TurnViewModel {
+   turnCompletionKind?: 'synthesis' | 'deterministic'
+   /** Transient room-level processing status details shown while the turn is live. */
+   processingStatusLogs: ProcessingStatusLogEntry[]
++  /** Ephemeral build-time live-run context; not persisted to the backend. */
++  liveRunBuildContext?: {
++    roomProcessingActive?: boolean
++    isLatestUserTurn?: boolean
++    activeRunTriggerMessageIds?: ReadonlySet<string>
++  }
+   /** V3: unified final-answer slot (§17). */
+   finalAnswer: FinalAnswerViewModel
+ }
+diff --git a/frontend/src/stores/message-store/__tests__/hitl-upsert.test.ts b/frontend/src/stores/message-store/__tests__/hitl-upsert.test.ts
+index babb7c0fa..27e0f1d04 100644
+--- a/frontend/src/stores/message-store/__tests__/hitl-upsert.test.ts
++++ b/frontend/src/stores/message-store/__tests__/hitl-upsert.test.ts
+@@ -141,6 +141,63 @@ describe('upsert HITL fields', () => {
+       expect(entity.hitlGroupTotal).toBeNull()
+       expect(entity.hitlGroupIndex).toBeNull()
+     })
++
++    it('resets stale applying state and answer when a follow-up HITL reuses the same message id', () => {
++      const existing = makeEntity({
++        hitlRequestId: 'req-old',
++        hitlPrompt: 'Where do you want to go?',
++        hitlResolved: true,
++        hitlInteractionStatus: 'responded',
++        hitlApplicationStatus: 'applying',
++        hitlUserAnswer: 'New York City',
++      })
++      const incoming = makeIncoming({
++        hitlRequestId: 'req-new',
++        hitlPrompt: 'How many days or nights do you plan to spend in New York City?',
++        hitlResolved: false,
++        hitlInteractionStatus: 'open',
++        hitlApplicationStatus: 'open',
++        hitlUserAnswer: '',
++        taskStatus: 'input-required',
++      })
++
++      const result = applyUpsert({ 'msg-1': existing }, ['msg-1'], incoming, 'sse')
++
++      expect(result).not.toBeNull()
++      const entity = result!.entities['msg-1']
++      expect(entity.hitlRequestId).toBe('req-new')
++      expect(entity.hitlPrompt).toBe('How many days or nights do you plan to spend in New York City?')
++      expect(entity.hitlResolved).toBe(false)
++      expect(entity.hitlInteractionStatus).toBe('open')
++      expect(entity.hitlApplicationStatus).toBe('open')
++      expect(entity.hitlUserAnswer).toBe('')
++    })
++
++    it('finalizes stale applying HITL state when a terminal completion arrives without new HITL fields', () => {
++      const existing = makeEntity({
++        hitlRequestId: 'req-final',
++        hitlPrompt: 'How many days or nights do you plan to spend in New York City?',
++        hitlResolved: false,
++        hitlInteractionStatus: 'responded',
++        hitlApplicationStatus: 'applying',
++        hitlUserAnswer: '5 days',
++        taskStatus: 'input-required',
++      })
++      const incoming = makeIncoming({
++        content: 'Great! Here is a detailed 5-day itinerary for your trip to New York City.',
++        taskStatus: 'completed',
++      })
++
++      const result = applyUpsert({ 'msg-1': existing }, ['msg-1'], incoming, 'db')
++
++      expect(result).not.toBeNull()
++      const entity = result!.entities['msg-1']
++      expect(entity.taskStatus).toBe('completed')
++      expect(entity.hitlResolved).toBe(true)
++      expect(entity.hitlInteractionStatus).toBe('responded')
++      expect(entity.hitlApplicationStatus).toBe('applied')
++      expect(entity.hitlUserAnswer).toBe('5 days')
++    })
+   })
+ 
+   describe('isNoOpUpdate — HITL-aware', () => {
+diff --git a/frontend/src/stores/message-store/upsert.ts b/frontend/src/stores/message-store/upsert.ts
+index 529704439..3a8e1400b 100644
+--- a/frontend/src/stores/message-store/upsert.ts
++++ b/frontend/src/stores/message-store/upsert.ts
+@@ -147,6 +147,17 @@ function mergeIncoming(
+     && existing.hitlInteractionVersion !== undefined
+     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
+   )
++  const finalizesExistingHitl = Boolean(
++    existing.hitlRequestId
++    && existing.hitlUserAnswer
++    && incoming.taskStatus
++    && isTerminalState(incoming.taskStatus)
++    && incoming.hitlRequestId === undefined
++    && incoming.hitlPrompt === undefined
++    && incoming.hitlInteractionStatus === undefined
++    && incoming.hitlApplicationStatus === undefined
++    && incoming.hitlResolved === undefined
++  )
+ 
+   return {
+     id: incoming.id,
+@@ -178,11 +189,23 @@ function mergeIncoming(
+     hitlPromptType: acceptsHitlUpdate && incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
+     hitlChoices: acceptsHitlUpdate && incoming.hitlChoices !== undefined ? incoming.hitlChoices : existing.hitlChoices,
+     hitlExpiresAt: acceptsHitlUpdate && incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
+-    hitlResolved: acceptsHitlUpdate && incoming.hitlResolved !== undefined ? incoming.hitlResolved : existing.hitlResolved,
++    hitlResolved: finalizesExistingHitl
++      ? true
++      : acceptsHitlUpdate && incoming.hitlResolved !== undefined
++        ? incoming.hitlResolved
++        : existing.hitlResolved,
+     hitlInteractionId: acceptsHitlUpdate && incoming.hitlInteractionId !== undefined ? incoming.hitlInteractionId : existing.hitlInteractionId,
+-    hitlInteractionStatus: acceptsHitlUpdate && incoming.hitlInteractionStatus !== undefined ? incoming.hitlInteractionStatus : existing.hitlInteractionStatus,
++    hitlInteractionStatus: finalizesExistingHitl
++      ? 'responded'
++      : acceptsHitlUpdate && incoming.hitlInteractionStatus !== undefined
++        ? incoming.hitlInteractionStatus
++        : existing.hitlInteractionStatus,
+     hitlInteractionVersion: acceptsHitlUpdate && incoming.hitlInteractionVersion !== undefined ? incoming.hitlInteractionVersion : existing.hitlInteractionVersion,
+-    hitlApplicationStatus: acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined ? incoming.hitlApplicationStatus : existing.hitlApplicationStatus,
++    hitlApplicationStatus: finalizesExistingHitl
++      ? 'applied'
++      : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
++        ? incoming.hitlApplicationStatus
++        : existing.hitlApplicationStatus,
+     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
+     hitlGroupTotal: acceptsHitlUpdate && incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
+     hitlGroupIndex: acceptsHitlUpdate && incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
+diff --git a/frontend/src/stores/room-ui-store.ts b/frontend/src/stores/room-ui-store.ts
+index 8b9c9b00d..56bc236b9 100644
+--- a/frontend/src/stores/room-ui-store.ts
++++ b/frontend/src/stores/room-ui-store.ts
+@@ -1,8 +1,17 @@
+ import { create } from 'zustand'
++import type { Agent } from '@/lib/types/agent'
+ import type { PendingAttachment } from '@/lib/types/attachments'
+ import type { AgentScopeInput, ExecutionMode } from '@/lib/types/request'
+ import type { ConversationScrollSnapshot } from '@/lib/conversation/conversation-scroll'
+ 
++/** One-shot handoff from an Agent detail page to the new-chat composer. */
++export interface PendingChatHandoff {
++  /** Prefill text only — not an @mention. */
++  draft: string
++  /** Seed room membership with these agents (single-agent chat ≠ mention). */
++  seedAgents?: Agent[]
++}
++
+ type RoomId = string
+ 
+ /** Max detail-pane scroll snapshots retained (LRU by last access). */
+@@ -51,6 +60,8 @@ export interface RoomFlags {
+   sseConnected: boolean
+   sseError: string | null
+   turnBasedTimeline: boolean
++  /** User message ids that still have an open backend room run. */
++  activeRunTriggerMessageIds: string[]
+ }
+ 
+ export const DEFAULT_ROOM_FLAGS: RoomFlags = {
+@@ -62,6 +73,7 @@ export const DEFAULT_ROOM_FLAGS: RoomFlags = {
+   sseConnected: false,
+   sseError: null,
+   turnBasedTimeline: false,
++  activeRunTriggerMessageIds: [],
+ }
+ 
+ function patchRoom(rooms: Record<RoomId, RoomFlags>, roomId: RoomId, patch: Partial<RoomFlags>): Record<RoomId, RoomFlags> {
+@@ -72,8 +84,8 @@ interface RoomUiState {
+   rooms: Record<RoomId, RoomFlags>
+   /** Pending initial messages for rooms (replaces sessionStorage) */
+   pendingRoomData: Record<RoomId, PendingRoomData>
+-  /** One-shot draft handed from an Agent detail page to the new-chat composer. */
+-  pendingChatDraft: string | null
++  /** One-shot handoff from an Agent detail page to the new-chat composer. */
++  pendingChatHandoff: PendingChatHandoff | null
+   pendingTurnSkeletons: Record<RoomId, PendingTurnSkeleton | undefined>
+   localSendSeqByRoom: Record<RoomId, number>
+   initialHydrationSeqByRoom: Record<RoomId, number>
+@@ -90,6 +102,7 @@ interface RoomUiState {
+   setSseConnected: (roomId: RoomId, v: boolean) => void
+   setSseError: (roomId: RoomId, v: string | null) => void
+   setTurnBasedTimeline: (roomId: RoomId, v: boolean) => void
++  setActiveRunTriggerMessageIds: (roomId: RoomId, ids: string[]) => void
+ 
+   // Non-reactive getter for getState() callers
+   getRoomFlags: (roomId: RoomId) => RoomFlags
+@@ -101,8 +114,8 @@ interface RoomUiState {
+   setPendingRoomData: (roomId: RoomId, data: PendingRoomData) => void
+   /** Consume (read + delete) pending data for a room */
+   consumePendingRoomData: (roomId: RoomId) => PendingRoomData | null
+-  setPendingChatDraft: (value: string) => void
+-  clearPendingChatDraft: () => void
++  setPendingChatHandoff: (handoff: PendingChatHandoff) => void
++  clearPendingChatHandoff: () => void
+   setPendingTurnSkeleton: (roomId: RoomId, value?: PendingTurnSkeleton) => void
+   markLocalSend: (roomId: RoomId) => void
+   markInitialHydrated: (roomId: RoomId) => void
+@@ -117,7 +130,7 @@ interface RoomUiState {
+ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
+   rooms: {},
+   pendingRoomData: {},
+-  pendingChatDraft: null,
++  pendingChatHandoff: null,
+   pendingTurnSkeletons: {},
+   localSendSeqByRoom: {},
+   initialHydrationSeqByRoom: {},
+@@ -126,13 +139,20 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
+   selectedAgentMessageIdByRoom: {},
+ 
+   setSending: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sending: v }) })),
+-  setProcessing: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { processing: v }) })),
++  setProcessing: (roomId, v) => set(s => ({
++    rooms: patchRoom(s.rooms, roomId, v
++      ? { processing: true }
++      : { processing: false, activeRunTriggerMessageIds: [] }),
++  })),
+   setCancelling: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { cancelling: v }) })),
+   setUpdatingRoom: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { updatingRoom: v }) })),
+   setSseEnabled: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseEnabled: v }) })),
+   setSseConnected: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseConnected: v }) })),
+   setSseError: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { sseError: v }) })),
+   setTurnBasedTimeline: (roomId, v) => set(s => ({ rooms: patchRoom(s.rooms, roomId, { turnBasedTimeline: v }) })),
++  setActiveRunTriggerMessageIds: (roomId, ids) => set(s => ({
++    rooms: patchRoom(s.rooms, roomId, { activeRunTriggerMessageIds: ids }),
++  })),
+ 
+   getRoomFlags: (roomId) => get().rooms[roomId] ?? DEFAULT_ROOM_FLAGS,
+ 
+@@ -153,7 +173,7 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
+     set({
+       rooms: {},
+       pendingRoomData: {},
+-      pendingChatDraft: null,
++      pendingChatHandoff: null,
+       pendingTurnSkeletons: {},
+       localSendSeqByRoom: {},
+       initialHydrationSeqByRoom: {},
+@@ -180,8 +200,8 @@ export const useRoomUiStore = create<RoomUiState>((set, get) => ({
+     }
+     return data
+   },
+-  setPendingChatDraft: (value) => set({ pendingChatDraft: value }),
+-  clearPendingChatDraft: () => set({ pendingChatDraft: null }),
++  setPendingChatHandoff: (handoff) => set({ pendingChatHandoff: handoff }),
++  clearPendingChatHandoff: () => set({ pendingChatHandoff: null }),
+   setPendingTurnSkeleton: (roomId, value) =>
+     set((state) => {
+       const copy = { ...state.pendingTurnSkeletons }
+diff --git a/frontend/tests/unit/components/chat-page-cards.test.tsx b/frontend/tests/unit/components/chat-page-cards.test.tsx
+index 9c20839e5..426c37131 100644
+--- a/frontend/tests/unit/components/chat-page-cards.test.tsx
++++ b/frontend/tests/unit/components/chat-page-cards.test.tsx
+@@ -77,7 +77,7 @@ let ChatPage: React.ComponentType
+ beforeEach(async () => {
+   cleanup()
+   vi.clearAllMocks()
+-  useRoomUiStore.setState({ pendingChatDraft: null })
++  useRoomUiStore.setState({ pendingChatHandoff: null })
+   gmState = {
+     availableAgents: agents,
+     loadingAgents: false,
+@@ -194,10 +194,14 @@ describe("Chat page — Use Case Cards integration", () => {
+     })
+   })
+ 
+-  it("applies an Agent handoff once under Strict Mode", async () => {
+-    useRoomUiStore.getState().setPendingChatDraft(
+-      "<@a1|YouTube Creator Finder Agent> ",
+-    )
++  it("applies a single-agent handoff once under Strict Mode", async () => {
++    useRoomUiStore.getState().setPendingChatHandoff({
++      draft: "Find creators for my channel",
++      seedAgents: [{
++        agent_id: "a1",
++        agent_card: { name: "YouTube Creator Finder Agent" } as never,
++      }],
++    })
+ 
+     const { container } = render(
+       <StrictMode>
+@@ -206,12 +210,12 @@ describe("Chat page — Use Case Cards integration", () => {
+     )
+ 
+     await waitFor(() => {
+-      expect(container.querySelector('.room-mention')?.textContent).toBe(
+-        'YouTube Creator Finder Agent',
++      expect(container.querySelector('[contenteditable="true"]')?.textContent).toContain(
++        'Find creators for my channel',
+       )
+     })
+     expect(document.activeElement).toHaveAttribute('contenteditable', 'true')
+-    expect(useRoomUiStore.getState().pendingChatDraft).toBeNull()
++    expect(useRoomUiStore.getState().pendingChatHandoff).toBeNull()
+   })
+ 
+   it("shows To Be Continued when catalog load fails", async () => {
+diff --git a/frontend/tests/unit/components/composer/HitlResponseBar.test.tsx b/frontend/tests/unit/components/composer/HitlResponseBar.test.tsx
+index 21b54cb88..7a4b5c335 100644
+--- a/frontend/tests/unit/components/composer/HitlResponseBar.test.tsx
++++ b/frontend/tests/unit/components/composer/HitlResponseBar.test.tsx
+@@ -26,7 +26,7 @@ function renderBar(hitls: HitlPromptView[], onSubmit = vi.fn().mockResolvedValue
+ describe('HitlResponseBar', () => {
+   afterEach(cleanup)
+ 
+-  it('uses one-question focus, preserves drafts by request id, and reviews a batch', async () => {
++  it('uses one-question focus, preserves drafts by request id, and submits directly', async () => {
+     const onSubmit = vi.fn().mockResolvedValue(undefined)
+     renderBar([
+       { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
+@@ -42,12 +42,7 @@ describe('HitlResponseBar', () => {
+     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+     expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value).toBe('Acme')
+     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+-    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
+-
+-    expect(screen.getByText('Review before sending')).toBeDefined()
+-    expect(screen.getByText('Acme')).toBeDefined()
+-    expect(screen.getByText('2027-01-02')).toBeDefined()
+-    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+ 
+     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+       'interaction-1',
+@@ -58,6 +53,60 @@ describe('HitlResponseBar', () => {
+       undefined,
+     ))
+     expect(await screen.findByText('Applying your answers')).toBeDefined()
++    expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
++  })
++
++  it('submits a single question in one step without a review screen', async () => {
++    const onSubmit = vi.fn().mockResolvedValue(undefined)
++    renderBar([{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }], onSubmit)
++
++    expect(screen.queryByText('Question 1 of 1')).toBeNull()
++    expect(screen.queryByRole('button', { name: 'Review answers' })).toBeNull()
++    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'New York City' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
++
++    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
++      'interaction-1',
++      [{ requestId: 'hitl-1', answer: 'New York City' }],
++      undefined,
++    ))
++  })
++
++  it('auto-refreshes while applying and replaces recovery UI when an open prompt arrives', async () => {
++    const onRefresh = vi.fn().mockResolvedValue(undefined)
++    const onSubmit = vi.fn().mockResolvedValue(undefined)
++    const { rerender } = render(
++      <HitlResponseBar
++        hitls={[{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }]}
++        onSubmit={onSubmit}
++        onRefresh={onRefresh}
++      />,
++    )
++
++    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'New York City' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
++    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
++    expect(await screen.findByText('Applying your answers')).toBeDefined()
++    await waitFor(() => expect(onRefresh).toHaveBeenCalled())
++
++    rerender(
++      <HitlResponseBar
++        hitls={[{
++          ...baseHitl,
++          hitlId: 'hitl-2',
++          interactionId: 'interaction-2',
++          prompt: 'How many days/nights do you plan to spend in New York City?',
++          promptType: 'text',
++          lifecycleState: 'open',
++        }]}
++        onSubmit={onSubmit}
++        onRefresh={onRefresh}
++      />,
++    )
++
++    expect(await screen.findByText('How many days/nights do you plan to spend in New York City?')).toBeDefined()
++    expect(screen.queryByText('Applying your answers')).toBeNull()
++    expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
+   })
+ 
+   it('renders accessible single and multi-choice controls', () => {
+@@ -113,6 +162,8 @@ describe('HitlResponseBar', () => {
+ 
+ 
+ describe('HitlResponseBar server lifecycle reconciliation', () => {
++  afterEach(cleanup)
++
+   it('leaves applying when the authoritative lifecycle reports failed', async () => {
+     const onSubmit = vi.fn().mockResolvedValue(undefined)
+     const { rerender } = render(
+@@ -124,8 +175,7 @@ describe('HitlResponseBar server lifecycle reconciliation', () => {
+     )
+ 
+     fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Ok' } })
+-    fireEvent.click(screen.getByRole('button', { name: 'Review answers' }))
+-    fireEvent.click(screen.getByRole('button', { name: 'Submit all answers' }))
++    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+     expect(await screen.findByText('Applying your answers')).toBeDefined()
+ 
+@@ -159,4 +209,31 @@ describe('HitlResponseBar server lifecycle reconciliation', () => {
+ 
+     expect(await screen.findByPlaceholderText('Type your answer…')).toBeDefined()
+   })
++
++  it('advances to the next question when Enter is pressed on an intermediate answer', () => {
++    renderBar([
++      { ...baseHitl, hitlId: 'hitl-1', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
++      { ...baseHitl, hitlId: 'hitl-2', prompt: 'Renewal date?', promptType: 'date', groupIndex: 1 },
++    ])
++
++    const input = screen.getByPlaceholderText('Type your answer…')
++    fireEvent.change(input, { target: { value: 'Acme' } })
++    fireEvent.keyDown(input, { key: 'Enter' })
++    expect(screen.getByText('Renewal date?')).toBeDefined()
++  })
++
++  it('submits from the last question when Enter is pressed', async () => {
++    const onSubmit = vi.fn().mockResolvedValue(undefined)
++    renderBar([{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }], onSubmit)
++
++    const input = screen.getByPlaceholderText('Type your answer…')
++    fireEvent.change(input, { target: { value: 'Tokyo' } })
++    fireEvent.keyDown(input, { key: 'Enter' })
++
++    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
++      'interaction-1',
++      [{ requestId: 'hitl-1', answer: 'Tokyo' }],
++      undefined,
++    ))
++  })
+ })
+diff --git a/frontend/tests/unit/components/consumer-agent-profile.test.tsx b/frontend/tests/unit/components/consumer-agent-profile.test.tsx
+index fc65dd8a1..08c5d9ad9 100644
+--- a/frontend/tests/unit/components/consumer-agent-profile.test.tsx
++++ b/frontend/tests/unit/components/consumer-agent-profile.test.tsx
+@@ -124,7 +124,7 @@ let ConsumerAgentProfilePage: React.ComponentType
+ 
+ beforeEach(async () => {
+   vi.clearAllMocks()
+-  useRoomUiStore.setState({ pendingChatDraft: null })
++  useRoomUiStore.setState({ pendingChatHandoff: null })
+   mockDeleteAgent.mockResolvedValue({ success: true })
+   mockParamId.mockReturnValue('agent-test-1')
+   const mod = await import('@/app/(portal)/agents/[id]/page')
+@@ -402,7 +402,7 @@ describe('ConsumerAgentProfilePage', () => {
+   })
+ 
+   describe('CTA', () => {
+-    it('hands a mention to the chat composer without URL parameters', async () => {
++    it('hands a seeded single-agent chat to the composer without URL parameters', async () => {
+       mockGetAgent.mockResolvedValue(buildAgentResponse())
+ 
+       render(<ConsumerAgentProfilePage />)
+@@ -419,9 +419,11 @@ describe('ConsumerAgentProfilePage', () => {
+ 
+       expect(mockPush).toHaveBeenCalledWith('/chat')
+       expect(mockPush).toHaveBeenCalledTimes(1)
+-      expect(useRoomUiStore.getState().pendingChatDraft).toBe(
+-        '<@agent-test-1|Test Agent> ',
+-      )
++      const handoff = useRoomUiStore.getState().pendingChatHandoff
++      expect(handoff?.draft).toBe('')
++      expect(handoff?.seedAgents).toHaveLength(1)
++      expect(handoff?.seedAgents?.[0].agent_id).toBe('agent-test-1')
++      expect(handoff?.seedAgents?.[0].agent_card.name).toBe('Test Agent')
+     })
+   })
+ 
+diff --git a/frontend/tests/unit/components/conversation/final-answer-surface-processing-log.test.tsx b/frontend/tests/unit/components/conversation/final-answer-surface-processing-log.test.tsx
+index 6a9ebae43..fbf217587 100644
+--- a/frontend/tests/unit/components/conversation/final-answer-surface-processing-log.test.tsx
++++ b/frontend/tests/unit/components/conversation/final-answer-surface-processing-log.test.tsx
+@@ -188,6 +188,182 @@ describe('FinalAnswerSurface processing logs', () => {
+     expect(screen.queryByText('Agents working on your request…')).not.toBeInTheDocument()
+   })
+ 
++  it('keeps work-log running during HITL without replacing Needs Input with Working', () => {
++    const { container } = render(
++      <FinalAnswerSurface
++        turn={makeTurn({
++          status: 'awaiting_input',
++          phase: 'collecting',
++          finalAnswer: {
++            kind: 'hitl',
++            label: 'Needs input',
++            hitl: {
++              source: 'agent',
++              prompts: [{
++                messageId: 'hitl-1',
++                agentName: 'Travel Planner Agent',
++                prompt: 'Where are you going?',
++              }],
++            },
++          },
++          agentResults: [
++            {
++              messageId: 'hitl-1',
++              agentId: 'travel-planner',
++              agentName: 'Travel Planner Agent',
++              status: 'awaiting_input',
++              content: 'Where are you going?',
++              artifacts: [],
++              isSummaryAgent: false,
++              hitlPending: { prompt: 'Where are you going?', source: 'agent' },
++            },
++          ],
++          processingStatusLogs: [
++            {
++              id: 'processing-log-1',
++              message: 'Delegating to Travel Planner Agent',
++              timestamp: '2026-06-03T12:00:01.000Z',
++            },
++          ],
++        })}
++      />,
++    )
++
++    expect(screen.getByText('Where are you going?')).toBeInTheDocument()
++    expect(screen.queryByLabelText('HYBRO AI — Working')).not.toBeInTheDocument()
++    expect(container.querySelector('.conversation-processing-log')).toHaveClass(
++      'conversation-processing-log-running',
++    )
++  })
++
++  it('keeps the HYBRO AI Working spinner after HITL while the turn is still pending', () => {
++    const { container } = render(
++      <FinalAnswerSurface
++        turn={makeTurn({
++          status: 'active',
++          phase: 'collecting',
++          finalAnswer: { kind: 'pending', label: 'Working' },
++          agentResults: [
++            {
++              messageId: 'agent-1',
++              agentId: 'travel-planner',
++              agentName: 'Travel Planner Agent',
++              status: 'working',
++              content: '',
++              artifacts: [],
++              isSummaryAgent: false,
++              hitlResolved: { prompt: 'Where are you going?', answer: 'New York City' },
++            },
++          ],
++          processingStatusLogs: [
++            {
++              id: 'processing-log-1',
++              message: 'Applying your answers…',
++              timestamp: '2026-06-03T12:00:02.000Z',
++            },
++          ],
++        })}
++      />,
++    )
++
++    expect(screen.getByLabelText('HYBRO AI — Working')).toBeInTheDocument()
++    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
++  })
++
++  it('keeps the spinner while an active turn already shows deterministic_done', () => {
++    const { container } = render(
++      <FinalAnswerSurface
++        turn={makeTurn({
++          status: 'active',
++          phase: 'collecting',
++          finalAnswer: {
++            kind: 'deterministic_done',
++            label: 'Combined agent responses',
++            deterministicIntro: '1 agent responded. Expand below to read each answer.',
++            sections: [],
++          },
++          agentResults: [
++            {
++              messageId: 'agent-1',
++              agentId: 'travel-planner',
++              agentName: 'Travel Planner Agent',
++              status: 'completed',
++              content: 'Five-day NYC itinerary…',
++              artifacts: [],
++              isSummaryAgent: false,
++            },
++          ],
++          processingStatusLogs: [
++            {
++              id: 'processing-log-1',
++              message: 'Synthesizing responses',
++              timestamp: '2026-06-03T12:00:02.000Z',
++            },
++          ],
++        })}
++      />,
++    )
++
++    expect(screen.getByLabelText('HYBRO AI — Combined agent responses')).toBeInTheDocument()
++    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
++    expect(container.querySelector('.conversation-processing-log')).toHaveClass(
++      'conversation-processing-log-running',
++    )
++  })
++
++  it('stops the HYBRO AI Working spinner after the turn completes', () => {
++    const { container } = render(
++      <FinalAnswerSurface
++        turn={makeTurn({
++          status: 'completed',
++          phase: 'completed',
++          finalAnswer: {
++            kind: 'deterministic_done',
++            label: 'Combined agent responses',
++            deterministicIntro: '1 agent responded. Expand below to read each answer.',
++            sections: [],
++          },
++          agentResults: [
++            {
++              messageId: 'agent-1',
++              agentId: 'travel-planner',
++              agentName: 'Travel Planner Agent',
++              status: 'completed',
++              content: 'Five-day NYC itinerary…',
++              artifacts: [],
++              isSummaryAgent: false,
++            },
++          ],
++        })}
++      />,
++    )
++
++    expect(screen.getByLabelText('HYBRO AI — Combined agent responses')).toBeInTheDocument()
++    expect(container.querySelector('.conversation-avatar-working')).toBeNull()
++  })
++
++  it('shows Synthesizing CollectingBlock while phase is synthesizing', () => {
++    const { container } = render(
++      <FinalAnswerSurface
++        turn={makeTurn({
++          status: 'active',
++          phase: 'synthesizing',
++          finalAnswer: { kind: 'pending', label: 'Working' },
++          processingStatusLogs: [
++            {
++              id: 'processing-log-1',
++              message: 'Synthesizing responses',
++              timestamp: '2026-06-03T12:00:02.000Z',
++            },
++          ],
++        })}
++      />,
++    )
++
++    expect(screen.getByLabelText('HYBRO AI — Synthesizing')).toBeInTheDocument()
++    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
++  })
++
+   it('keeps processing status logs visible after a single-agent turn completes', () => {
+     const { container } = render(
+       <FinalAnswerSurface
+diff --git a/frontend/tests/unit/components/group-selector.test.tsx b/frontend/tests/unit/components/group-selector.test.tsx
+index 0bf73cf60..85f55f46b 100644
+--- a/frontend/tests/unit/components/group-selector.test.tsx
++++ b/frontend/tests/unit/components/group-selector.test.tsx
+@@ -61,6 +61,20 @@ describe('GroupSelector', () => {
+     expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument()
+   })
+ 
++  it('shows a manual room agent label instead of All Agents when provided', () => {
++    render(
++      <GroupSelector
++        selectedGroup="all_agents"
++        selectedGroupName="Story Agent"
++        onGroupChange={vi.fn()}
++        groups={[]}
++      />,
++    )
++
++    expect(screen.getByRole('button', { name: /story agent/i })).toBeInTheDocument()
++    expect(screen.queryByRole('button', { name: /^all agents$/i })).not.toBeInTheDocument()
++  })
++
+   it('uses team terminology for saved agent collections', async () => {
+     const user = userEvent.setup()
+     render(
+diff --git a/frontend/tests/unit/components/room-page-prefill.test.tsx b/frontend/tests/unit/components/room-page-prefill.test.tsx
+index 8a5d350b2..35b60c0e2 100644
+--- a/frontend/tests/unit/components/room-page-prefill.test.tsx
++++ b/frontend/tests/unit/components/room-page-prefill.test.tsx
+@@ -102,7 +102,7 @@ beforeEach(async () => {
+ })
+ 
+ describe("Room page — prefill handoff consumer", () => {
+-  it("defaults room routing to all agents", async () => {
++  it("defaults room routing to room_default when the room has agents", async () => {
+     render(<RoomChatPage />)
+ 
+     await waitFor(() => {
+@@ -110,7 +110,8 @@ describe("Room page — prefill handoff consumer", () => {
+     })
+     expect(mockUseGroupManagement.mock.calls.at(-1)?.[0]).toMatchObject({
+       defaultGroup: "all_agents",
+-      defaultTargetMode: { message_target_mode: "all_agents" },
++      defaultGroupName: "Agent One",
++      defaultTargetMode: { message_target_mode: "room_default" },
+     })
+   })
+ 
+diff --git a/frontend/tests/unit/hooks/supervisor-toggle-creation.test.ts b/frontend/tests/unit/hooks/supervisor-toggle-creation.test.ts
+index 194f6fdfe..10149a301 100644
+--- a/frontend/tests/unit/hooks/supervisor-toggle-creation.test.ts
++++ b/frontend/tests/unit/hooks/supervisor-toggle-creation.test.ts
+@@ -83,7 +83,10 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
+         initialMessage: 'Hello',
+       }),
+       undefined,
+-      undefined
++      {
++        membership_seed_input: 'manual',
++        room_agent_ids: ['agent-1'],
++      },
+     )
+   })
+ 
+diff --git a/frontend/tests/unit/hooks/useChatRoomCreation.test.ts b/frontend/tests/unit/hooks/useChatRoomCreation.test.ts
+index d99ca9ccf..8b1cbd0c9 100644
+--- a/frontend/tests/unit/hooks/useChatRoomCreation.test.ts
++++ b/frontend/tests/unit/hooks/useChatRoomCreation.test.ts
+@@ -185,8 +185,13 @@ describe('useChatRoomCreation', () => {
+         { 'agent-1': 'Test Agent' },
+         { use_supervisor: true, initialMessage: 'Hello world' },
+         undefined,
+-        undefined
++        {
++          membership_seed_input: 'manual',
++          room_agent_ids: ['agent-1'],
++        },
+       )
++      const pending = useRoomUiStore.getState().pendingRoomData['room-123']
++      expect(pending?.agentScope).toEqual({ source: 'room_default' })
+     })
+ 
+     it('should auto-generate room name from message when not provided', async () => {
+@@ -326,14 +331,14 @@ describe('useChatRoomCreation', () => {
+       })
+ 
+       const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+-      expect(membershipArg).toBeUndefined()
++      expect(membershipArg).toEqual({
++        membership_seed_input: 'manual',
++        room_agent_ids: ['agent-1'],
++      })
+       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
+       expect(Object.keys(roomAgentSet)).toContain('agent-1')
+       const pending = useRoomUiStore.getState().pendingRoomData['room-manual']
+-      expect(pending?.agentScope).toEqual({
+-        source: 'saved_group',
+-        group_id: 'group-abc',
+-      })
++      expect(pending?.agentScope).toEqual({ source: 'room_default' })
+       expect(pending?.mode).toBe('supervisor')
+     })
+ 
+@@ -354,7 +359,10 @@ describe('useChatRoomCreation', () => {
+       })
+ 
+       const membershipArg = mockCreateNewRoom.mock.calls[0][7]
+-      expect(membershipArg).toBeUndefined()
++      expect(membershipArg).toEqual({
++        membership_seed_input: 'manual',
++        room_agent_ids: ['agent-1'],
++      })
+       const roomAgentSet = mockCreateNewRoom.mock.calls[0][4]
+       expect(Object.keys(roomAgentSet)).toContain('agent-1')
+       const pending = useRoomUiStore.getState().pendingRoomData['room-manual-mention']
+diff --git a/frontend/tests/unit/hooks/useGroupManagement-empty-room.test.ts b/frontend/tests/unit/hooks/useGroupManagement-empty-room.test.ts
+index 88cd04e8d..7c6a8a222 100644
+--- a/frontend/tests/unit/hooks/useGroupManagement-empty-room.test.ts
++++ b/frontend/tests/unit/hooks/useGroupManagement-empty-room.test.ts
+@@ -68,6 +68,24 @@ describe('useGroupManagement – default team behavior', () => {
+     expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
+   })
+ 
++  it('surfaces a manual room agent label with room_default routing', async () => {
++    const { result } = renderHook(() =>
++      useGroupManagement(defaultOptions({
++        defaultGroup: BUILTIN_GROUP_ALL_AGENTS,
++        defaultGroupName: 'Story Agent',
++        defaultTargetMode: { message_target_mode: 'room_default' },
++      }))
++    )
++
++    await waitFor(() => {
++      expect(result.current.loadingGroups).toBe(false)
++    })
++
++    expect(result.current.selectedGroup).toBe(BUILTIN_GROUP_ALL_AGENTS)
++    expect(result.current.selectedGroupName).toBe('Story Agent')
++    expect(result.current.resolvedTargetMode).toEqual({ message_target_mode: 'room_default' })
++  })
++
+   it('reselecting All Agents restores a manual room snapshot', async () => {
+     mockListAgentGroups.mockResolvedValue({
+       success: true,
+diff --git a/frontend/tests/unit/lib/build-turns.test.ts b/frontend/tests/unit/lib/build-turns.test.ts
+index 3c66e4559..b452339d7 100644
+--- a/frontend/tests/unit/lib/build-turns.test.ts
++++ b/frontend/tests/unit/lib/build-turns.test.ts
+@@ -1459,13 +1459,35 @@ describe('deriveTurnPhase', () => {
+     expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
+   })
+ 
+-  it('does not enter synthesizing phase when only delegation logs exist after agents finish', () => {
++  it('keeps the turn active and synthesizing after agents finish on a live run', () => {
+     const user = makeUserEntity({
+       id: 'u1',
+       processingStatusLogs: [
+-        { id: 'l1', message: 'Delegating to 2 agent(s)...', timestamp: '2026-01-01T00:00:01.000Z' },
++        { id: 'l1', message: 'Delegating to Travel Planner Agent', timestamp: '2026-01-01T00:00:01.000Z', turnPhase: 'collecting' },
++        { id: 'l2', message: 'Travel Planner Agent finished', timestamp: '2026-01-01T00:00:02.000Z', turnPhase: 'collecting' },
++        { id: 'l3', message: 'Weather Agent finished', timestamp: '2026-01-01T00:00:03.000Z', turnPhase: 'collecting' },
+       ],
+     })
++    const agentA = makeAgentEntity({
++      id: 'a1',
++      agentId: 'travel-planner',
++      taskStatus: 'completed',
++      content: 'A',
++    })
++    const agentB = makeAgentEntity({
++      id: 'a2',
++      agentId: 'weather',
++      taskStatus: 'completed',
++      content: 'B',
++    })
++    const turns = buildTurns(entitiesToMap([user, agentA, agentB]), ['u1', 'a1', 'a2'], [])
++    expect(turns[0].status).toBe('active')
++    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
++    expect(turns[0].finalAnswer.kind).toBe('pending')
++  })
++
++  it('does not keep a hydrated historical turn active when no live run evidence exists', () => {
++    const user = makeUserEntity({ id: 'u1' })
+     const agentA = makeAgentEntity({
+       id: 'a1',
+       agentId: 'agent-a',
+@@ -1482,6 +1504,30 @@ describe('deriveTurnPhase', () => {
+     expect(turns[0].status).toBe('completed')
+     expect(deriveTurnPhase(turns[0])).not.toBe('synthesizing')
+   })
++
++  it('keeps the latest turn active after refresh when room processing is still open', () => {
++    const user = makeUserEntity({ id: 'u1' })
++    const agentA = makeAgentEntity({
++      id: 'a1',
++      agentId: 'travel-planner',
++      taskStatus: 'completed',
++      content: 'A',
++    })
++    const agentB = makeAgentEntity({
++      id: 'a2',
++      agentId: 'weather',
++      taskStatus: 'completed',
++      content: 'B',
++    })
++    const turns = buildTurns(
++      entitiesToMap([user, agentA, agentB]),
++      ['u1', 'a1', 'a2'],
++      [],
++      { roomProcessingActive: true },
++    )
++    expect(turns[0].status).toBe('active')
++    expect(deriveTurnPhase(turns[0])).toBe('synthesizing')
++  })
+ })
+ 
+ describe('primaryStreamMessageId', () => {
+diff --git a/frontend/tests/unit/lib/hitl-interaction-controller.test.ts b/frontend/tests/unit/lib/hitl-interaction-controller.test.ts
+index 076686a95..6e8a3e65c 100644
+--- a/frontend/tests/unit/lib/hitl-interaction-controller.test.ts
++++ b/frontend/tests/unit/lib/hitl-interaction-controller.test.ts
+@@ -14,7 +14,7 @@ const seed = {
+ }
+ 
+ describe('hitlInteractionReducer', () => {
+-  it('owns request-keyed drafts, navigation, and review state', () => {
++  it('owns request-keyed drafts and navigation state', () => {
+     let state = createHitlControllerState(seed)
+     state = hitlInteractionReducer(state, {
+       type: 'answer',
+@@ -25,11 +25,9 @@ describe('hitlInteractionReducer', () => {
+       type: 'navigate',
+       requestId: 'request-2',
+     })
+-    state = hitlInteractionReducer(state, { type: 'review' })
+ 
+     expect(state.drafts).toEqual({ 'request-1': ['a', 'b'], 'request-2': 'saved' })
+     expect(state.currentId).toBe('request-2')
+-    expect(state.reviewing).toBe(true)
+   })
+ 
+   it('models submit, uncertainty, and authoritative reset explicitly', () => {
+diff --git a/frontend/tests/unit/lib/hitl-overlay-degraded.test.ts b/frontend/tests/unit/lib/hitl-overlay-degraded.test.ts
+index adc19b562..36e46b5ec 100644
+--- a/frontend/tests/unit/lib/hitl-overlay-degraded.test.ts
++++ b/frontend/tests/unit/lib/hitl-overlay-degraded.test.ts
+@@ -79,4 +79,52 @@ describe('degraded HITL pending hydration', () => {
+       clientRequestId: 'client-1',
+     })
+   })
++
++  it('clears local applying HITL when the pending set is empty', async () => {
++    useMessageStore.getState().upsertMessage({
++      id: 'agent-message-1',
++      roomId: 'room-1',
++      messageType: 'agent',
++      content: 'Which market?',
++      senderName: 'Broker',
++      timestamp: '2027-01-01T00:00:00Z',
++      taskStatus: 'input-required',
++      hitlRequestId: 'request-1',
++      hitlPrompt: 'Which market?',
++      hitlPromptType: 'text',
++      hitlResolved: false,
++      hitlUserAnswer: 'NYC',
++      hitlInteractionStatus: 'applying',
++      hitlApplicationStatus: 'applying',
++    }, 'optimistic')
++
++    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [] })
++
++    await overlayHitlForRoom({
++      roomId: 'room-1',
++      hitlRequestIndex: { current: new Map() },
++      getAgentName: async () => 'Broker',
++      getAgentSource: () => 'cloud',
++    })
++
++    const entity = useMessageStore.getState().entities['agent-message-1']
++    expect(entity.hitlResolved).toBe(true)
++    expect(entity.hitlApplicationStatus).toBe('applied')
++    expect(selectPendingHitls('room-1', useMessageStore.getState().entities, useMessageStore.getState().orderedIds)).toHaveLength(0)
++  })
++
++  it('preserves open HITL when live overlay sees an empty pending set', async () => {
++    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [] })
++
++    await overlayHitlForRoom({
++      roomId: 'room-1',
++      hitlRequestIndex: { current: new Map() },
++      getAgentName: async () => 'Broker',
++      getAgentSource: () => 'cloud',
++    })
++
++    const entity = useMessageStore.getState().entities['agent-message-1']
++    expect(entity.hitlResolved).toBe(false)
++    expect(selectPendingHitls('room-1', useMessageStore.getState().entities, useMessageStore.getState().orderedIds)).toHaveLength(1)
++  })
+ })
+diff --git a/frontend/tests/unit/lib/multi-agent-turn-complete.test.ts b/frontend/tests/unit/lib/multi-agent-turn-complete.test.ts
+index b87750a40..8bc07e00d 100644
+--- a/frontend/tests/unit/lib/multi-agent-turn-complete.test.ts
++++ b/frontend/tests/unit/lib/multi-agent-turn-complete.test.ts
+@@ -1,11 +1,14 @@
+ import { describe, expect, it } from 'vitest'
+ import {
+   hasActiveSynthesisGap,
++  hasLiveRunEvidence,
+   isBackendRunConfirmedNonSynthesisCompletion,
+   isDeterministicCompletionExpected,
+   isMixedTerminalMultiAgentTurn,
+   isMultiAgentTurnReadyForDeterministicDone,
+   isPreSynthesisGap,
++  isSynthesisKindWithoutActualSynthesis,
++  shouldHoldTurnActiveForOpenRoomRun,
+   shouldShowSynthesizingPhase,
+ } from '@/lib/room-timeline/multi-agent-turn-complete'
+ import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/types'
+@@ -473,7 +476,7 @@ describe('isPreSynthesisGap', () => {
+ })
+ 
+ describe('shouldShowSynthesizingPhase', () => {
+-  it('returns false when only delegation logs exist after agents finish', () => {
++  it('returns true when only delegation logs exist after agents finish on a live run', () => {
+     const turn = makeTurn({
+       status: 'active',
+       isSupervisorTurn: false,
+@@ -483,6 +486,19 @@ describe('shouldShowSynthesizingPhase', () => {
+         makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
+       ],
+     })
++    expect(shouldShowSynthesizingPhase(turn)).toBe(true)
++  })
++
++  it('returns false without live run evidence on a hydrated turn', () => {
++    const turn = makeTurn({
++      status: 'completed',
++      isSupervisorTurn: false,
++      processingStatusLogs: [],
++      agentResults: [
++        makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
++        makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
++      ],
++    })
+     expect(shouldShowSynthesizingPhase(turn)).toBe(false)
+   })
+ 
+@@ -510,3 +526,49 @@ describe('shouldShowSynthesizingPhase', () => {
+     expect(shouldShowSynthesizingPhase(turn)).toBe(true)
+   })
+ })
++
++describe('open room run helpers', () => {
++  const agents = [
++    makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
++    makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
++  ]
++
++  it('hasLiveRunEvidence accepts processing logs and active run ids', () => {
++    expect(hasLiveRunEvidence({
++      userMessageId: 'u1',
++      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
++    })).toBe(true)
++    expect(hasLiveRunEvidence({
++      userMessageId: 'u1',
++      activeRunTriggerMessageIds: new Set(['u1']),
++    })).toBe(true)
++    expect(hasLiveRunEvidence({
++      userMessageId: 'u1',
++      roomProcessingActive: true,
++      isLatestUserTurn: true,
++    })).toBe(true)
++    expect(hasLiveRunEvidence({ userMessageId: 'u1' })).toBe(false)
++  })
++
++  it('shouldHoldTurnActiveForOpenRoomRun stays false for synthesis kind without actual synthesis', () => {
++    expect(shouldHoldTurnActiveForOpenRoomRun(agents, {
++      userMessageId: 'u1',
++      turnCompletionKind: 'synthesis',
++      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
++    })).toBe(false)
++    expect(isSynthesisKindWithoutActualSynthesis(agents, {
++      userMessageId: 'u1',
++      turnCompletionKind: 'synthesis',
++      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
++    })).toBe(true)
++  })
++
++  it('shouldHoldTurnActiveForOpenRoomRun stays false once the room run is terminal', () => {
++    expect(shouldHoldTurnActiveForOpenRoomRun(agents, {
++      userMessageId: 'u1',
++      turnTerminalStatus: 'completed',
++      turnCompletionKind: 'deterministic',
++      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
++    })).toBe(false)
++  })
++})
+diff --git a/frontend/tests/unit/stores/room-ui-store-handoff.test.ts b/frontend/tests/unit/stores/room-ui-store-handoff.test.ts
+index b02f97c97..96019bafc 100644
+--- a/frontend/tests/unit/stores/room-ui-store-handoff.test.ts
++++ b/frontend/tests/unit/stores/room-ui-store-handoff.test.ts
+@@ -3,7 +3,7 @@ import { useRoomUiStore } from "@/stores/room-ui-store"
+ 
+ describe("PendingRoomData handoffMode", () => {
+   beforeEach(() => {
+-    useRoomUiStore.setState({ pendingRoomData: {}, pendingChatDraft: null })
++    useRoomUiStore.setState({ pendingRoomData: {}, pendingChatHandoff: null })
+   })
+ 
+   it("stores and consumes handoffMode: prefill", () => {
+@@ -47,15 +47,25 @@ describe("PendingRoomData handoffMode", () => {
+     expect(dataB!.handoffMode).toBeUndefined()
+   })
+ 
+-  it("keeps an Agent mention until the chat composer clears it", () => {
++  it("keeps a single-agent chat handoff until the composer clears it", () => {
+     const store = useRoomUiStore.getState()
+-    store.setPendingChatDraft("<@agent-1|Weather Agent> ")
++    store.setPendingChatHandoff({
++      draft: "Tell me a story",
++      seedAgents: [{
++        agent_id: "agent-1",
++        agent_card: { name: "Weather Agent" } as never,
++      }],
++    })
+ 
+-    expect(useRoomUiStore.getState().pendingChatDraft).toBe(
+-      "<@agent-1|Weather Agent> ",
+-    )
++    expect(useRoomUiStore.getState().pendingChatHandoff).toEqual({
++      draft: "Tell me a story",
++      seedAgents: [{
++        agent_id: "agent-1",
++        agent_card: { name: "Weather Agent" },
++      }],
++    })
+ 
+-    useRoomUiStore.getState().clearPendingChatDraft()
+-    expect(useRoomUiStore.getState().pendingChatDraft).toBeNull()
++    useRoomUiStore.getState().clearPendingChatHandoff()
++    expect(useRoomUiStore.getState().pendingChatHandoff).toBeNull()
+   })
+ })

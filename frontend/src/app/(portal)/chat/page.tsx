@@ -161,6 +161,8 @@ function ChatPageContent() {
           getToken,
         })
         gm.handleGroupCreated(team)
+        // Use-case scope replaces a single-agent handoff seed.
+        setSeedAgents([])
         setPromptPrefill(template.prefillMessage)
       } catch (error) {
         console.error('Failed to prepare use case:', error)

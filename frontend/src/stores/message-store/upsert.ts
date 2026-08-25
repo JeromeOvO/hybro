@@ -142,11 +142,15 @@ function mergeIncoming(
     }
   }
 
-  const acceptsHitlUpdate = !(
-    incoming.hitlInteractionVersion !== undefined
+  const isStaleHitlVersion = Boolean(
+    incoming.hitlInteractionId !== undefined
+    && existing.hitlInteractionId !== undefined
+    && incoming.hitlInteractionId === existing.hitlInteractionId
+    && incoming.hitlInteractionVersion !== undefined
     && existing.hitlInteractionVersion !== undefined
     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
   )
+  const acceptsHitlUpdate = !isStaleHitlVersion
   const finalizesExistingHitl = Boolean(
     existing.hitlRequestId
     && existing.hitlUserAnswer

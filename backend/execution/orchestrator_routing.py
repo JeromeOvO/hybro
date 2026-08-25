@@ -488,12 +488,40 @@ def _answer_for_kind(kind: HITLAnswerKind, user_input: str) -> Any:
 def _observation_from_webhook_payload(
     payload: dict[str, Any], call: Any
 ) -> NormalizedA2AObservation:
-    """Minimal webhook normalization for the step-7 dark-launch path.
+    """Normalize orchestrator webhook payloads into durable observations.
 
-    Handles the two most common A2A StreamResponse envelopes (``task`` and
-    ``statusUpdate``). The observation identity is derived from the resolved
-    ledger call, so lineage stays durable even when the payload omits task ids.
+    Prefer the shared StreamResponse parser so typed HITL metadata on
+    ``status.message`` survives asynchronous ``status-update`` envelopes.
+    Fall back to the legacy minimal extractor when the payload is not a
+    recognized A2A stream frame.
     """
+    from a2a_adapter.orchestrator_direct_client import _task_to_observation_kwargs
+    from a2a_adapter.webhook_payloads import parse_stream_response_payload
+
+    message_id = getattr(call, "assistant_message_id", None) or call.call_record_id
+    try:
+        task = parse_stream_response_payload(payload, message_id)
+        task_id = task.id or call.a2a_task_id or message_id
+        context_id = task.context_id or call.a2a_context_id
+        kwargs = _task_to_observation_kwargs(
+            task,
+            source_kind="webhook",
+            call_record_id=call.call_record_id,
+            binding_scope=call.endpoint_scope_digest,
+            agent_id=call.agent_id,
+            task_id=task_id,
+            context_id=context_id,
+        )
+        kwargs["observation_id"] = (
+            f"webhook-{_sha256_hex(json.dumps([call.call_record_id, task_id, kwargs['event_kind'], kwargs.get('interaction_spec')]))}"
+        )
+        kwargs["source_identity"] = (
+            f"webhook:{call.call_record_id}:{task_id or context_id or ''}"
+        )
+        return NormalizedA2AObservation(**kwargs)
+    except ValueError:
+        pass
+
     source = (
         payload.get("result") if isinstance(payload.get("result"), dict) else payload
     )
