@@ -13,10 +13,10 @@ from common.dto.hitl import (
     HITLRouteSnapshotUnion,
     HITLRouteSnapshotV2,
 )
+from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 from execution.orchestrator.a2a_runtime.interaction_outcome import (
     emit_hitl_request_events,
 )
-from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 from execution.orchestrator_routing import DualRuntimeRouter
 
 from ._orchestrator_a2a_helpers import ledger_record
@@ -138,7 +138,9 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
 @pytest.mark.asyncio
 async def test_emit_hitl_request_events_use_public_activity_message_id():
     emitted: list[object] = []
-    delivery = SimpleNamespace(emit=AsyncMock(side_effect=lambda event: emitted.append(event)))
+    delivery = SimpleNamespace(
+        emit=AsyncMock(side_effect=lambda event: emitted.append(event))
+    )
     run_store = SimpleNamespace(
         load=AsyncMock(
             return_value=SimpleNamespace(
