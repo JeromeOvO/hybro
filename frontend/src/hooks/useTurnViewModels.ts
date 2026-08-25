@@ -1,6 +1,6 @@
 import React from 'react'
 import { useMessageStore } from '@/stores/message-store'
-import { useRoomUiStore } from '@/stores/room-ui-store'
+import { DEFAULT_ROOM_FLAGS, useRoomUiStore } from '@/stores/room-ui-store'
 import { buildTurnsIncremental } from '@/lib/room-timeline/build-turns'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 import type { RawTimelineEvent } from '@/lib/room-timeline/types'
@@ -22,10 +22,12 @@ function filterRoomMessages(
 export function useTurnViewModels(roomId: string): TurnViewModel[] {
   const version = useMessageStore(s => s.version)
   const roomProcessingActive = useRoomUiStore(
-    s => s.rooms[roomId]?.processing ?? false,
+    s => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).processing,
   )
+  // Use the shared default array so the selector stays referentially stable
+  // when a room has no flags yet (avoids getSnapshot infinite loops).
   const activeRunTriggerMessageIds = useRoomUiStore(
-    s => s.rooms[roomId]?.activeRunTriggerMessageIds ?? [],
+    s => (s.rooms[roomId] ?? DEFAULT_ROOM_FLAGS).activeRunTriggerMessageIds,
   )
   const prev = React.useRef<TurnViewModel[]>([])
 
