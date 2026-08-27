@@ -30,6 +30,7 @@ import {
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
 import { useCanonicalTurns } from '@/stores/turn-store'
 import {
+  canonicalAgentCallParts,
   canonicalArtifactData,
   parseCanonicalCardIdentity,
 } from '@/lib/api/agent-call-detail'
@@ -228,6 +229,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       return {
         ...effectiveBaseDetail,
         content: '',
+        parts: undefined,
         artifacts: [],
         isStreaming: true,
       }
@@ -237,6 +239,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       return {
         ...effectiveBaseDetail,
         content: '',
+        parts: undefined,
         artifacts: [],
         isStreaming: false,
         taskError: error instanceof ApiError && error.status === 404
@@ -245,9 +248,13 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       }
     }
     const response = privateDetailQuery.data
+    const parts = canonicalAgentCallParts(response?.parts)
     return {
       ...effectiveBaseDetail,
-      content: response?.output ?? '',
+      // New backends preserve A2A part boundaries. ``output`` remains only as
+      // a rolling-deploy fallback for an older detail response.
+      content: parts === undefined ? response?.output ?? '' : '',
+      parts,
       artifacts: canonicalArtifactData(response?.artifacts ?? []),
       isStreaming: false,
     }

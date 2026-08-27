@@ -1,6 +1,6 @@
 import { apiClient } from '@/lib/api-client'
 import { getApiUrl } from '@/lib/utils'
-import type { ArtifactData } from '@/stores/message-store/types'
+import type { ArtifactData, ArtifactPart } from '@/stores/message-store/types'
 
 export interface CanonicalArtifactDescriptor {
   artifact_ref: string
@@ -10,12 +10,38 @@ export interface CanonicalArtifactDescriptor {
   size_bytes?: number | null
 }
 
+export type CanonicalAgentCallPart =
+  | { kind: 'text'; text: string }
+  | { kind: 'data'; data: Record<string, unknown> | unknown[] }
+
 export interface CanonicalAgentCallDetailResponse {
   run_id: string
   public_call_id: string
   status: string
+  /** Compatibility projection for frontend instances predating typed parts. */
   output: string
+  /** Absent only while talking to an older backend during a rolling deploy. */
+  parts?: CanonicalAgentCallPart[]
   artifacts: CanonicalArtifactDescriptor[]
+}
+
+export function canonicalAgentCallParts(
+  parts: CanonicalAgentCallPart[] | undefined,
+): ArtifactPart[] | undefined {
+  if (parts === undefined) return undefined
+  const normalized: ArtifactPart[] = []
+  for (const part of parts) {
+    if (part.kind === 'text' && typeof part.text === 'string') {
+      normalized.push({ kind: 'text', text: part.text })
+    } else if (
+      part.kind === 'data'
+      && part.data !== null
+      && typeof part.data === 'object'
+    ) {
+      normalized.push({ kind: 'data', data: part.data })
+    }
+  }
+  return normalized
 }
 
 export function canonicalArtifactData(

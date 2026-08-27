@@ -91,11 +91,15 @@ export function countDurableArtifactFiles(
   ) ?? 0
 }
 
+function dataPartType(data: ArtifactPart['data']): unknown {
+  return data && !Array.isArray(data) ? data.type : undefined
+}
+
 export function hasUnavailableArtifactOutput(
   artifacts: ArtifactData[] | undefined,
 ): boolean {
   return artifacts?.some(artifact => artifact.parts.some(
-    part => part.kind === 'data' && part.data?.type === 'file_unavailable',
+    part => part.kind === 'data' && dataPartType(part.data) === 'file_unavailable',
   )) ?? false
 }
 
@@ -109,7 +113,7 @@ export function hasUsableArtifactOutput(
       return Boolean(
         part.data
         && Object.keys(part.data).length > 0
-        && part.data.type !== 'file_unavailable',
+        && dataPartType(part.data) !== 'file_unavailable',
       )
     }
     return false

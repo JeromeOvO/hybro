@@ -14,7 +14,7 @@ export interface ArtifactPart {
     sizeBytes?: number
     sha256?: string
   }
-  data?: Record<string, unknown>
+  data?: Record<string, unknown> | unknown[]
 }
 
 /** An artifact emitted by an agent, stored alongside the message entity. */

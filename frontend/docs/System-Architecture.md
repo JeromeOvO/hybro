@@ -412,7 +412,14 @@ completed canonical calls: the Final Answer aggregates and deduplicates those
 artifacts, while the selected Agent detail renders only that call's artifacts.
 Both surfaces use one TanStack Query identity per Room/run/opaque call, including
 bounded transient retry and a visible final-body retry state, so opening a card
-reuses the already fetched detail. Descriptors carry the durable room-file ID,
+reuses the already fetched detail. Agent detail treats the authenticated A2A
+`parts` sequence as authoritative: declared `TextPart` values render as Markdown
+without JSON inference, while declared `DataPart` values render as collapsed JSON
+disclosures. The detail pane groups all Text Parts first, Data Parts second, and
+authorized file parts last, preserving source order within each type. This keeps
+type boundaries explicit instead of showing a flattened JSON-plus-text string.
+An absent `parts` field alone enables the
+legacy `output` fallback during a rolling deploy. Descriptors carry the durable room-file ID,
 MIME type, size, and display name and are mapped into the standard authenticated
 `ArtifactList`/`useRoomFile` preview path, including responses with no text.
 Room-file Blob reads use a user/file-keyed promise cache so simultaneous Final

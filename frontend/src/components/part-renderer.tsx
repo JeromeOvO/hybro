@@ -33,7 +33,15 @@ function ResourceExpiredBanner({ icon: Icon }: { icon: React.ComponentType<{ cla
   )
 }
 
-function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
+function TextPartView({
+  text,
+  isStreaming,
+  inferJsonFromText,
+}: {
+  text: string
+  isStreaming?: boolean
+  inferJsonFromText: boolean
+}) {
   const wasStreaming = useRef(false)
   const [jsonOpen, setJsonOpen] = useState(false)
 
@@ -43,12 +51,17 @@ function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boole
 
   // Open the collapsible when streaming finishes and the final content is JSON
   useEffect(() => {
-    if (!isStreaming && wasStreaming.current && tryParseJson(text) !== null) {
+    if (
+      inferJsonFromText
+      && !isStreaming
+      && wasStreaming.current
+      && tryParseJson(text) !== null
+    ) {
       setJsonOpen(true)
     }
-  }, [isStreaming, text])
+  }, [inferJsonFromText, isStreaming, text])
 
-  if (!isStreaming) {
+  if (inferJsonFromText && !isStreaming) {
     const parsed = tryParseJson(text)
     if (parsed !== null) {
       return <CollapsibleJsonBlock data={parsed} open={jsonOpen} onOpenChange={setJsonOpen} />
@@ -60,6 +73,7 @@ function TextPartView({ text, isStreaming }: { text: string; isStreaming?: boole
         className="conversation-markdown-body"
         content={text}
         isStreaming={isStreaming}
+        autoFormatJson={inferJsonFromText}
       />
     </div>
   )
@@ -136,7 +150,10 @@ export function CollapsibleJsonBlock({ data, open, onOpenChange }: {
 }) {
   const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data])
   const lineCount = useMemo(() => jsonString.split('\n').length, [jsonString])
-  const fenced = useMemo(() => '```json\n' + jsonString + '\n```', [jsonString])
+  const fenced = useMemo(
+    () => open ? '```json\n' + jsonString + '\n```' : '',
+    [jsonString, open],
+  )
 
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} className="my-1">
@@ -150,22 +167,25 @@ export function CollapsibleJsonBlock({ data, open, onOpenChange }: {
         <span className="text-muted-foreground/60">· {lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=open]:animate-collapsible-down overflow-hidden">
-        <div className="mt-1">
-          <MarkdownContent
-            content={fenced}
-            autoFormatJson={false}
-            collapseJsonCodeBlocks={false}
-          />
-        </div>
+        {open ? (
+          <div className="mt-1 max-h-[min(60vh,32rem)] overflow-auto rounded-md">
+            <MarkdownContent
+              content={fenced}
+              autoFormatJson={false}
+              collapseJsonCodeBlocks={false}
+            />
+          </div>
+        ) : null}
       </CollapsibleContent>
     </Collapsible>
   )
 }
 
-function DataPartView({ data }: { data: Record<string, unknown> }) {
+function DataPartView({ data }: { data: NonNullable<ArtifactPart['data']> }) {
   const [open, setOpen] = useState(false)
-  if (data.type === 'file_unavailable') {
-    const reason = data.reason === 'size_limit'
+  const dataRecord = !Array.isArray(data) ? data : undefined
+  if (dataRecord?.type === 'file_unavailable') {
+    const reason = dataRecord.reason === 'size_limit'
       ? 'This output exceeded the supported file size.'
       : 'This output could not be processed.'
     return (
@@ -181,10 +201,24 @@ function DataPartView({ data }: { data: Record<string, unknown> }) {
   return <CollapsibleJsonBlock data={data} open={open} onOpenChange={setOpen} />
 }
 
-export function PartRenderer({ part, isStreaming }: { part: ArtifactPart; isStreaming?: boolean }) {
+export function PartRenderer({
+  part,
+  isStreaming,
+  inferJsonFromText = true,
+}: {
+  part: ArtifactPart
+  isStreaming?: boolean
+  inferJsonFromText?: boolean
+}) {
   switch (part.kind) {
     case 'text':
-      return part.text ? <TextPartView text={part.text} isStreaming={isStreaming} /> : null
+      return part.text ? (
+        <TextPartView
+          text={part.text}
+          isStreaming={isStreaming}
+          inferJsonFromText={inferJsonFromText}
+        />
+      ) : null
     case 'file':
       return part.file ? <FilePartView file={part.file} /> : null
     case 'data':

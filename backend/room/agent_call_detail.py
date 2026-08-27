@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,13 +21,39 @@ class CanonicalArtifactDescriptor(BaseModel):
     size_bytes: int | None = Field(default=None, ge=0)
 
 
+class CanonicalTextPart(BaseModel):
+    """Room-authorized projection of an A2A TextPart."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["text"] = "text"
+    text: str
+
+
+class CanonicalDataPart(BaseModel):
+    """Room-authorized projection of an A2A DataPart without private metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["data"] = "data"
+    data: dict[str, Any] | list[Any]
+
+
+CanonicalAgentCallPart = Annotated[
+    CanonicalTextPart | CanonicalDataPart,
+    Field(discriminator="kind"),
+]
+
+
 class CanonicalAgentCallDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
     public_call_id: str
     status: str
+    # Rolling-deploy compatibility for clients predating typed ``parts``.
     output: str
+    parts: list[CanonicalAgentCallPart] = Field(default_factory=list)
     artifacts: list[CanonicalArtifactDescriptor] = Field(default_factory=list)
 
 
@@ -101,18 +127,22 @@ class CanonicalAgentCallDetailService:
             return None
         result = entry.buffered_terminal_result
         output_parts: list[str] = []
+        typed_parts: list[CanonicalAgentCallPart] = []
         for part in result.content:
             kind = getattr(part, "kind", None)
-            if kind == "text" and getattr(part, "text", None):
-                output_parts.append(part.text)
+            if kind == "text":
+                text = getattr(part, "text", None)
+                if isinstance(text, str):
+                    typed_parts.append(CanonicalTextPart(text=text))
+                    if text:
+                        output_parts.append(text)
             elif kind == "data":
-                output_parts.append(
-                    json.dumps(
-                        getattr(part, "data", None),
-                        ensure_ascii=False,
-                        default=str,
+                data = getattr(part, "data", None)
+                if isinstance(data, (dict, list)):
+                    typed_parts.append(CanonicalDataPart(data=data))
+                    output_parts.append(
+                        json.dumps(data, ensure_ascii=False, default=str)
                     )
-                )
         artifacts = [
             await self._artifact_descriptor(
                 room_id=room_id,
@@ -125,6 +155,7 @@ class CanonicalAgentCallDetailService:
             public_call_id=public_call_id,
             status=result.status,
             output="\n".join(output_parts),
+            parts=typed_parts,
             artifacts=artifacts,
         )
 
@@ -132,5 +163,8 @@ class CanonicalAgentCallDetailService:
 __all__ = [
     "CanonicalAgentCallDetail",
     "CanonicalAgentCallDetailService",
+    "CanonicalAgentCallPart",
     "CanonicalArtifactDescriptor",
+    "CanonicalDataPart",
+    "CanonicalTextPart",
 ]

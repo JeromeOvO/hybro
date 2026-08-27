@@ -200,7 +200,12 @@ describe('RoomPageShell agent detail pane', () => {
     }])
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-1', public_call_id: 'inv_weather_0001', status: 'completed',
-      output: '# Private weather output\n\nSunny.', artifacts: [],
+      output: 'FLATTENED OUTPUT MUST NOT RENDER',
+      parts: [
+        { kind: 'data', data: { temperature: 27, unit: 'C' } },
+        { kind: 'text', text: '# Private weather output\n\nSunny.' },
+      ],
+      artifacts: [],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -208,6 +213,12 @@ describe('RoomPageShell agent detail pane', () => {
     act(() => useRoomUiStore.getState().openAgentDetail('room-1', messageId))
 
     expect(await screen.findByRole('heading', { name: 'Private weather output' })).toBeInTheDocument()
+    expect(screen.queryByText('FLATTENED OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
+    const jsonToggle = screen.getByRole('button', { name: /json.*lines/i })
+    expect(jsonToggle).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(jsonToggle)
+    expect(screen.getByTestId('agent-response-detail-pane').querySelector('pre code'))
+      .toHaveTextContent('"temperature": 27')
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/rooms/room-1/agent-calls/run-1/inv_weather_0001/detail'),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -354,7 +365,8 @@ describe('RoomPageShell agent detail pane', () => {
       if (url.includes('/agent-calls/')) {
         return new Response(JSON.stringify({
           run_id: 'run-image', public_call_id: 'inv_image_0001', status: 'completed',
-          output: '[Generated file]',
+          output: 'FLATTENED IMAGE OUTPUT MUST NOT RENDER',
+          parts: [{ kind: 'text', text: 'Generated image response.' }],
           artifacts: [{
             artifact_ref: `/api/v1/files/${fileId}/content`,
             file_id: fileId,
@@ -387,6 +399,8 @@ describe('RoomPageShell agent detail pane', () => {
     await userEvent.click(screen.getByRole('button', { name: /open image generator agent response/i }))
     expect(await screen.findByTestId('agent-response-detail-pane')).toBeInTheDocument()
     expect((await screen.findAllByRole('img', { name: 'shared-image.png' }))).toHaveLength(2)
+    expect(screen.getByText('Generated image response.')).toBeInTheDocument()
+    expect(screen.queryByText('FLATTENED IMAGE OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
 
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
     expect(urls.filter((url) => url.includes('/agent-calls/'))).toHaveLength(1)

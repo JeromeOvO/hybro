@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalArtifactData, parseCanonicalCardIdentity } from './agent-call-detail'
+import {
+  canonicalAgentCallParts,
+  canonicalArtifactData,
+  parseCanonicalCardIdentity,
+} from './agent-call-detail'
 
 describe('canonical Agent call detail identity', () => {
+  it('preserves declared A2A text and data part types and ordering', () => {
+    expect(canonicalAgentCallParts([
+      { kind: 'data', data: { client: 'Acme' } },
+      { kind: 'text', text: 'Submission prepared.' },
+      { kind: 'text', text: '{"declared":"text"}' },
+      { kind: 'data', data: [{ quote: 37200 }] },
+    ])).toEqual([
+      { kind: 'data', data: { client: 'Acme' } },
+      { kind: 'text', text: 'Submission prepared.' },
+      { kind: 'text', text: '{"declared":"text"}' },
+      { kind: 'data', data: [{ quote: 37200 }] },
+    ])
+    expect(canonicalAgentCallParts(undefined)).toBeUndefined()
+  })
+
   it('maps authenticated room-file descriptors to preview-ready artifacts', () => {
     expect(canonicalArtifactData([{
       artifact_ref: '/api/v1/files/af011190aaba4f97b459e7656bba7f7e/content',

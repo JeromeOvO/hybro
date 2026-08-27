@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from api_gateway.routes.room_routes import get_canonical_agent_call_detail
 from common.auth import ClerkUser
-from execution.orchestrator.models import TextPart, ToolResult
+from execution.orchestrator.models import DataPart, TextPart, ToolResult
 from room.agent_call_detail import CanonicalAgentCallDetailService
 
 
@@ -35,13 +35,17 @@ class ArtifactMetadataReader:
         return self.metadata
 
 
-def canonical_run(*, output=True, artifacts=()):
+def canonical_run(*, output=True, artifacts=(), content=None):
     result = (
         ToolResult(
             call_id="private-call-id",
             tool_name="private-tool-name",
             status="completed",
-            content=[TextPart(text="private full output")],
+            content=(
+                content
+                if content is not None
+                else [TextPart(text="private full output")]
+            ),
             artifact_refs=list(artifacts),
         )
         if output
@@ -69,8 +73,48 @@ async def test_private_detail_service_returns_output_without_private_call_identi
     assert detail is not None
     payload = detail.model_dump(mode="json")
     assert payload["output"] == "private full output"
+    assert payload["parts"] == [{"kind": "text", "text": "private full output"}]
     assert "private-call-id" not in str(payload)
     assert "private-tool-name" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_private_detail_preserves_a2a_text_and_data_part_boundaries():
+    detail = await CanonicalAgentCallDetailService(
+        RunStore(
+            canonical_run(
+                content=[
+                    DataPart(
+                        data={"client": {"name": "Acme SaaS Inc."}},
+                        metadata={"private_call_id": "must-not-leak"},
+                    ),
+                    TextPart(text="Submission prepared."),
+                    TextPart(text='{"declared":"text"}'),
+                    DataPart(data=[{"quote": 37_200}]),
+                ]
+            )
+        )
+    ).get(
+        room_id="room-1",
+        run_id="run-1",
+        public_call_id="inv_weather_0001",
+    )
+
+    assert detail is not None
+    payload = detail.model_dump(mode="json")
+    assert payload["parts"] == [
+        {"kind": "data", "data": {"client": {"name": "Acme SaaS Inc."}}},
+        {"kind": "text", "text": "Submission prepared."},
+        {"kind": "text", "text": '{"declared":"text"}'},
+        {"kind": "data", "data": [{"quote": 37_200}]},
+    ]
+    assert "must-not-leak" not in str(payload)
+    assert payload["output"] == (
+        '{"client": {"name": "Acme SaaS Inc."}}\n'
+        "Submission prepared.\n"
+        '{"declared":"text"}\n'
+        '[{"quote": 37200}]'
+    )
 
 
 @pytest.mark.asyncio
@@ -185,6 +229,9 @@ async def test_private_detail_route_authorizes_room_and_handles_missing_output()
         RoomStore("owner"),
     )
     assert detail.output == "private full output"
+    assert [part.model_dump(mode="json") for part in detail.parts] == [
+        {"kind": "text", "text": "private full output"}
+    ]
 
     with pytest.raises(HTTPException) as unauthorized:
         await get_canonical_agent_call_detail(

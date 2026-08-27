@@ -6,6 +6,7 @@ import { X, ChevronDown, Quote } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
+import { PartRenderer } from '@/components/part-renderer'
 import { filterDuplicateTextArtifacts } from '@/lib/artifacts/filter-display-artifacts'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
@@ -50,6 +51,20 @@ function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
       </div>
     </div>
   )
+}
+
+function groupA2AResponseParts(
+  parts: NonNullable<AgentResponseDetail['parts']>,
+): NonNullable<AgentResponseDetail['parts']> {
+  const textParts = [] as NonNullable<AgentResponseDetail['parts']>
+  const dataParts = [] as NonNullable<AgentResponseDetail['parts']>
+  const fileParts = [] as NonNullable<AgentResponseDetail['parts']>
+  for (const part of parts) {
+    if (part.kind === 'text') textParts.push(part)
+    else if (part.kind === 'data') dataParts.push(part)
+    else fileParts.push(part)
+  }
+  return [...textParts, ...dataParts, ...fileParts]
 }
 
 function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
@@ -178,6 +193,13 @@ function AgentResponseDetailHeader({
 }
 
 export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetailPaneProps) {
+  const hasTypedParts = detail.parts !== undefined
+  const groupedParts = detail.parts ? groupA2AResponseParts(detail.parts) : []
+  const hasPartContent = groupedParts.some((part) => (
+    (part.kind === 'text' && Boolean(part.text?.trim()))
+    || (part.kind === 'data' && part.data !== undefined)
+    || (part.kind === 'file' && part.file !== undefined)
+  ))
   const hasContent = detail.content.trim().length > 0
   const displayArtifacts = filterDuplicateTextArtifacts(detail.artifacts, detail.content) ?? []
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -186,7 +208,7 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
     bodyRef,
     detail.messageId,
     detail.isStreaming,
-    detail.content.length + (detail.artifacts?.length ?? 0),
+    detail.content.length + (detail.parts?.length ?? 0) + (detail.artifacts?.length ?? 0),
   )
 
   return (
@@ -199,7 +221,18 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
       <div ref={bodyRef} className="conversation-detail-body">
         <div className="conversation-detail-frame">
           <section className="conversation-detail-response" aria-label="Agent response" data-quote-message-id={detail.messageId} data-quote-agent-name={detail.agentName} data-quote-source-kind="agent">
-            {hasContent ? (
+            {hasTypedParts && hasPartContent ? (
+              <div className="flex min-w-0 flex-col gap-2" data-testid="agent-response-parts">
+                {groupedParts.map((part, index) => (
+                  <PartRenderer
+                    key={`${part.kind}-${index}`}
+                    part={part}
+                    isStreaming={detail.isStreaming}
+                    inferJsonFromText={false}
+                  />
+                ))}
+              </div>
+            ) : !hasTypedParts && hasContent ? (
               <div className={`conversation-content-body ${detail.isStreaming ? 'conversation-streaming-cursor' : ''}`}>
                 <MarkdownContent className="conversation-markdown-body" content={detail.content} isStreaming={detail.isStreaming} />
               </div>

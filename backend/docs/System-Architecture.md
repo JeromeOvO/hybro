@@ -1292,7 +1292,13 @@ and public Agent label without private ledger/registry/task/context IDs. The
 room-authorized canonical Agent-call detail reader accepts only an exact
 `/api/v1/files/{file_id}/content` artifact reference, resolves it through
 `room_files` using the exact Room root, and returns only its room-file ID,
-display name, MIME type, and size alongside private Tool output. External URLs
+display name, MIME type, and size alongside private Tool output. The detail
+projection preserves the accepted A2A content sequence as a discriminated
+`parts` list: `TextPart` remains `{kind: "text", text}` and `DataPart` remains
+`{kind: "data", data}`. Private A2A part metadata is omitted. The legacy
+flattened `output` string remains temporarily for rolling-deploy compatibility,
+but typed clients treat `parts` as authoritative; room-owned files continue
+through the separately authorized artifact descriptor channel. External URLs
 that merely contain a local-looking `/files/…/content` suffix are never remapped.
 This keeps artifact identity out of public lifecycle events while giving the
 Final Answer and Agent detail surfaces enough authenticated metadata to classify

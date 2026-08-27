@@ -1,4 +1,4 @@
-import type { MessageEntity, ArtifactData } from '@/stores/message-store/types'
+import type { MessageEntity, ArtifactData, ArtifactPart } from '@/stores/message-store/types'
 import type { HITLPromptType } from '@/lib/types/sse'
 import { AGENT_PALETTE, agentColorIndex } from '@/lib/mention-color'
 
@@ -120,6 +120,8 @@ export interface AgentResponseDetail {
   taskDescription: string
   theme: AgentTheme
   content: string
+  /** Ordered A2A response parts. Undefined means the legacy flattened contract. */
+  parts?: ArtifactPart[]
   isStreaming: boolean
   artifacts?: ArtifactData[]
   taskStatus?: MessageEntity['taskStatus']
