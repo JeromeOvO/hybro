@@ -896,12 +896,14 @@ async def test_execute_emits_completed_for_completed_room_preflight():
         "processing",
         "completed",
     ]
+    # Terminal fallback direct emit eliminated (Room Stream Snapshot plan
+    # §4.1): without a bound terminal finalizer the completed frame is
+    # delivered by durable projection recovery, not emitted inline.
     assert [
         await_call.args[0].status
         for await_call in deps["event_publisher"].emit.await_args_list
     ] == [
         "processing",
-        "completed",
     ]
 
 
@@ -965,11 +967,13 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
     assert ack.should_start_orchestration is False
     assert ack.error == "Failed to parse user message"
     assert ack.status_code == 500
+    # Terminal fallback direct emit eliminated (§4.1): only the non-terminal
+    # processing status emits inline; the failed frame is delivered by
+    # durable projection recovery.
     assert order == [
         ("record", "processing"),
         ("emit", "processing"),
         ("record", "failed"),
-        ("emit", "failed"),
     ]
     assert deps["run_lifecycle"].record_processing_status.await_args_list == [
         call(
@@ -993,7 +997,9 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
         await_call.args[0]
         for await_call in deps["event_publisher"].emit.await_args_list
     ]
-    assert len(events) == 2
+    # Terminal fallback direct emit eliminated (§4.1): the failed frame is
+    # delivered by durable projection recovery, not emitted inline.
+    assert len(events) == 1
     _assert_processing_status_event(
         events[0],
         room_id="room-1",
@@ -1002,15 +1008,6 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
         related_message_id="msg-1",
         client_request_id="cr-1",
         details=None,
-    )
-    _assert_processing_status_event(
-        events[1],
-        room_id="room-1",
-        message_id="msg-1",
-        status="failed",
-        related_message_id="msg-1",
-        client_request_id="cr-1",
-        details={"message": "Failed to parse user message"},
     )
 
 
@@ -1044,11 +1041,12 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
 
     assert ack.success is True
     assert ack.should_start_orchestration is False
+    # Terminal fallback direct emit eliminated (§4.1): only the non-terminal
+    # processing status emits inline.
     assert order == [
         ("record", "processing"),
         ("emit", "processing"),
         ("record", "canceled"),
-        ("emit", "canceled"),
     ]
     assert deps["run_lifecycle"].record_processing_status.await_args_list == [
         call(
@@ -1072,21 +1070,14 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
         await_call.args[0]
         for await_call in deps["event_publisher"].emit.await_args_list
     ]
-    assert len(events) == 2
+    # Terminal fallback direct emit eliminated (§4.1): the canceled frame is
+    # delivered by durable projection recovery, not emitted inline.
+    assert len(events) == 1
     _assert_processing_status_event(
         events[0],
         room_id="room-1",
         message_id="msg-1",
         status="processing",
-        related_message_id="msg-1",
-        client_request_id="cr-1",
-        details=None,
-    )
-    _assert_processing_status_event(
-        events[1],
-        room_id="room-1",
-        message_id="msg-1",
-        status="canceled",
         related_message_id="msg-1",
         client_request_id="cr-1",
         details=None,

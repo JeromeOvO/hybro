@@ -89,6 +89,7 @@ class AgentMessageFinal(DeliveryEventBase):
     message_id: str
     agent_id: str
     content: dict = Field(default_factory=dict)
+    delivery_id: str | None = None
 
 
 class TaskSubmittedEvent(DeliveryEventBase):

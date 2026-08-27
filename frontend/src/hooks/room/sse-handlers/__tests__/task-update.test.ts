@@ -70,7 +70,7 @@ describe('handleTaskUpdate', () => {
         status_message: privateSentinel,
         content: '',
       }),
-      { shouldDrop: false, shouldBuffer: false },
+      'req-1',
     )
 
     const entity = useMessageStore.getState().entities['agent-message-1']
@@ -89,7 +89,7 @@ describe('handleTaskUpdate', () => {
         status_message: 'Requesting Insurer Agent',
         task_content: privateTaskContent,
       }),
-      { shouldDrop: false, shouldBuffer: false },
+      'req-1',
     )
 
     const entity = useMessageStore.getState().entities['agent-message-1']

@@ -413,13 +413,13 @@ async def test_redis_callback_overflow_tracks_and_finishes_listener_cleanup():
     )
     for _ in range(20):
         await asyncio.sleep(0)
-        if not bus.desired_room_channels and not transport._room_cleanup_tasks:
-            break
 
-    assert connection.is_active is False
-    assert listener.done()
-    assert bus.desired_room_channels == set()
-    assert transport._room_cleanup_tasks == {}
+    # Slow-consumer overflow marks the connection for resync (§7); the
+    # connection and its room listener both stay alive.
+    assert connection.is_active is True
+    assert connection.needs_resync is True
+    assert not listener.done()
+    assert bus.desired_room_channels == {"sse:room:room-1"}
     await transport.close_all_connections()
     await bus.stop()
 

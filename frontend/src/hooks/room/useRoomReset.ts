@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
+import { useTraceStore } from '@/stores/trace-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
 export function useRoomReset(
@@ -28,6 +29,7 @@ export function useRoomReset(
 
     // Initialize normalized store for this room.
     useMessageStore.getState().setRoom(roomId)
+    useTraceStore.getState().setRoom(roomId)
 
     // Clear stale buffers from any prior visit to this room. This is distinct
     // from the cleanup below: the cleanup (which runs with the old roomId in
@@ -41,6 +43,7 @@ export function useRoomReset(
       // this effect registered), so both calls target the correct room.
       useRoomUiStore.getState().resetRoom(roomId)
       useStreamingStore.getState().clearRoom(roomId)
+      useTraceStore.getState().clearRoom()
     }
   }, [roomId, lifecycle, hitlRequestIndex, setSending, setCancelling, setSseConnected, setSseError, resetAgentNameCache])
 }

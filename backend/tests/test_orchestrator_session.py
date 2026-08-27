@@ -169,6 +169,39 @@ async def test_session_emits_tool_lifecycle_inventory():
 
 
 @pytest.mark.asyncio
+async def test_tool_result_message_waits_for_agent_projection_settlement():
+    projection_entered = asyncio.Event()
+    release_projection = asyncio.Event()
+
+    async def listener(event):
+        if (
+            event.event_type == "message_completed"
+            and event.payload.get("message_kind") == "tool_result"
+        ):
+            projection_entered.set()
+            await release_projection.wait()
+
+    lifecycle = LifecycleEmitter(settlement_timeout_seconds=30)
+    lifecycle.subscribe(listener)
+    session, _ = make_session(
+        [
+            tool_events(("call-1", "fake_agent_echo", '{"value":"ok"}')),
+            final_events(),
+        ],
+        lifecycle=lifecycle,
+    )
+
+    prompt_task = asyncio.create_task(session.prompt(user_message()))
+    await projection_entered.wait()
+    await asyncio.sleep(0)
+
+    assert prompt_task.done() is False
+    release_projection.set()
+    result = await prompt_task
+    assert result.outcome == "final_answer"
+
+
+@pytest.mark.asyncio
 async def test_session_events_carry_delivery_correlation_fields():
     """SSE work-log listeners must address room/message without a store hit."""
     observed = []

@@ -57,7 +57,7 @@ describe('handleTaskSubmitted', () => {
       makeTaskSubmitted({
         task_content: privateTaskContent,
       }),
-      { shouldDrop: false, shouldBuffer: false },
+      'req-1',
     )
 
     const entity = useMessageStore.getState().entities['agent-message-1']

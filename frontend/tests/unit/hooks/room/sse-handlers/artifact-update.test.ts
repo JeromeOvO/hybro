@@ -47,7 +47,7 @@ describe('handleArtifactUpdate', () => {
           last_chunk: true,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     expect(useStreamingStore.getState().buffers['msg-1']?.text).toBe(
@@ -120,8 +120,8 @@ describe('handleArtifactUpdate', () => {
           room_id: 'room-1',
           timestamp: '2026-07-13T00:00:01.000Z',
           data,
-        } as Parameters<typeof handleArtifactUpdate>[1],
-        { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+        } as unknown as Parameters<typeof handleArtifactUpdate>[1],
+        'req-1',
       )
 
       const streamingState = useStreamingStore.getState().buffers
@@ -175,7 +175,7 @@ describe('handleArtifactUpdate', () => {
           last_chunk: true,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     expect(useStreamingStore.getState().buffers['msg-1']).toBeUndefined()

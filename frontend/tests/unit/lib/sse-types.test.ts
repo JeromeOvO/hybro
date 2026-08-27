@@ -11,6 +11,7 @@ describe('final room SSE types', () => {
   it('recognizes only final room SSE top-level types', () => {
     expect(isRoomSSEType('connected')).toBe(true)
     expect(isRoomSSEType('heartbeat')).toBe(true)
+    expect(isRoomSSEType('snapshot')).toBe(true)
     expect(isRoomSSEType('agent_response_partial')).toBe(true)
     expect(isRoomSSEType('hitl_request')).toBe(true)
     expect(isRoomSSEType('hitl_response')).toBe(true)
@@ -82,6 +83,61 @@ describe('final room SSE types', () => {
     expect(isConnectedData({ connection_id: 'conn-1' })).toBe(true)
     expect(isConnectedData({})).toBe(false)
     expect(isConnectedData({ connection_id: '' })).toBe(false)
+  })
+
+  it('carries the room_seq handshake on connected and heartbeat data', () => {
+    const connected = {
+      type: 'connected',
+      room_id: 'room-1',
+      timestamp: '2026-07-02T00:00:00.000Z',
+      data: { connection_id: 'conn-1', room_seq: 42 },
+    } satisfies RoomSSEFrameMap['connected']
+    expect(connected.data.room_seq).toBe(42)
+
+    const heartbeat = {
+      type: 'heartbeat',
+      room_id: 'room-1',
+      timestamp: '2026-07-02T00:00:00.000Z',
+      data: { room_seq: 42 },
+    } satisfies RoomSSEFrameMap['heartbeat']
+    expect(heartbeat.data.room_seq).toBe(42)
+  })
+
+  it('pins the snapshot frame shape', () => {
+    const snapshot = {
+      type: 'snapshot',
+      room_id: 'room-1',
+      timestamp: '2026-07-02T00:00:00.000Z',
+      data: {
+        room_seq: 7,
+        messages: [],
+        tasks: [],
+        runs: [],
+        hitl: { requests: [], resolved: [] },
+        streaming: {},
+        trace: {},
+      },
+    } satisfies RoomSSEFrameMap['snapshot']
+    expect(snapshot.data.room_seq).toBe(7)
+  })
+
+  it('allows room_seq / room_event_id / parent_event_id on delta data', () => {
+    const delta = {
+      type: 'task_update',
+      room_id: 'room-1',
+      timestamp: '2026-07-02T00:00:00.000Z',
+      data: {
+        message_id: 'm1',
+        status: 'completed',
+        client_request_id: 'cr-1',
+        room_seq: 8,
+        room_event_id: 'evt-8',
+        parent_event_id: 'evt-3',
+      },
+    } satisfies RoomSSEFrameMap['task_update']
+    expect(delta.data.room_seq).toBe(8)
+    expect(delta.data.room_event_id).toBe('evt-8')
+    expect(delta.data.parent_event_id).toBe('evt-3')
   })
 })
 

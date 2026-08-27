@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { handleAgentResponsePartial } from '@/hooks/room/sse-handlers/handlers/agent-response'
 import { handleArtifactUpdate } from '@/hooks/room/sse-handlers/handlers/artifact-update'
+import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 
@@ -16,6 +17,7 @@ function makeLifecycle(): ProcessingLifecycle {
 
 describe('handleAgentResponsePartial', () => {
   beforeEach(() => {
+    useMessageStore.getState().clearRoom()
     useStreamingStore.setState({ buffers: {} })
   })
 
@@ -35,7 +37,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     handleAgentResponsePartial(
@@ -51,11 +53,18 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     expect(useStreamingStore.getState().buffers['agent-1']?.text).toBe('Hello world')
     expect(useStreamingStore.getState().buffers['req-1']).toBeUndefined()
+    expect(useMessageStore.getState().entities['agent-1']).toMatchObject({
+      id: 'agent-1',
+      roomId: 'room-1',
+      agentId: 'agent-a',
+      clientRequestId: 'req-1',
+      taskStatus: 'working',
+    })
   })
 
   it('keeps parallel agent buffers isolated under the same client_request_id', () => {
@@ -74,7 +83,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-turn',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-turn' },
+      'req-turn',
     )
 
     handleAgentResponsePartial(
@@ -90,7 +99,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-turn',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-turn' },
+      'req-turn',
     )
 
     expect(useStreamingStore.getState().buffers['hermes-1']?.text).toBe('Hermes text')
@@ -121,7 +130,7 @@ describe('handleAgentResponsePartial', () => {
           last_chunk: true,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     handleArtifactUpdate(
@@ -143,7 +152,7 @@ describe('handleAgentResponsePartial', () => {
           last_chunk: true,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     const artifactText = useStreamingStore.getState().buffers['msg-artifact']?.text
@@ -162,7 +171,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     handleAgentResponsePartial(
@@ -178,7 +187,7 @@ describe('handleAgentResponsePartial', () => {
           client_request_id: 'req-1',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'req-1' },
+      'req-1',
     )
 
     const partialText = useStreamingStore.getState().buffers['msg-partial']?.text

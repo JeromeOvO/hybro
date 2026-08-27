@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     log_format: str = "auto"
 
     # Feature Flags (runtime-toggleable behavior gates)
-    feature_run_event_sse: bool = False
+    feature_run_event_sse: bool = True
     feature_run_watchdog: bool = True
     orchestration_outcome_guardrails: bool = True
 

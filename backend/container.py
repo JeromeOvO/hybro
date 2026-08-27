@@ -18,6 +18,7 @@ from api_gateway.dependencies import (
 )
 from api_gateway.viewsets.repository import DALViewSetRepositoryProvider
 from common.config.settings import settings
+from common.dto import AgentMessageFinal, DeliveryEmitStatus
 from common.eventing import (
     BoundedInternalEventBus,
     EventingConfig,
@@ -549,6 +550,8 @@ async def _project_orchestrator_agent_activity(
         client_request_id=run.client_request_id,
         related_message_id=run.request.user_message_id,
         task_content=f"Requesting {label}",
+        task_created_at=now,
+        task_updated_at=now,
     )
     task_id = f"orchestrator-task-{call_id}"
 
@@ -569,6 +572,7 @@ async def _project_orchestrator_agent_activity(
             extend_info={
                 "public_task_label": f"Requesting {label}",
                 "public_dispatch_text": facts["task_text"],
+                "public_agent_name": label,
                 "orchestrator_run_id": run.run_id,
             },
         )
@@ -635,6 +639,7 @@ async def _project_orchestrator_agent_activity(
         extend_info={
             "public_task_label": f"Requesting {label}",
             "public_dispatch_text": facts["task_text"],
+            "public_agent_name": label,
             "orchestrator_run_id": run.run_id,
         },
     )
@@ -836,11 +841,44 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 redis_url=runtime.settings.redis_url,
                 config=_delivery_config,
             )
+            # ── Room event log + snapshot materialization ────────────────
+            # (Room Stream Snapshot plan §5). The snapshot service serves the
+            # per-connect snapshot and the per-connection resync provider;
+            # the store is also exposed on app.state for the replay endpoint.
+            from delivery.room_events import MongoRoomEventStore
+            from delivery.snapshot import SnapshotService
+
+            _room_event_store = MongoRoomEventStore(mongo=mongo_dal)
+            try:
+                await _room_event_store.ensure_indexes()
+            except Exception:
+                logger.warning("room_events index creation failed", exc_info=True)
+            app.state.room_event_store = _room_event_store
+            _room_snapshot_service = SnapshotService(store=_room_event_store)
+            app.state.room_snapshot_service = _room_snapshot_service
+
+            async def _room_seq_reader(room_id: str) -> int | None:
+                return await _room_event_store.latest_seq(room_id)
+
+            async def _snapshot_provider(room_id: str) -> dict[str, Any] | None:
+                try:
+                    return await _room_snapshot_service.snapshot(room_id)
+                except Exception:
+                    logger.warning(
+                        "resync snapshot build failed",
+                        extra={"room_id": room_id},
+                        exc_info=True,
+                    )
+                    return None
+
             _delivery_facade = create_delivery_facade(
                 redis_kv=delivery_redis_kv,
                 redis_pubsub=delivery_redis_pubsub,
                 config=_delivery_config,
                 instance_id=runtime_instance_id,
+                room_events=_room_event_store,
+                snapshot_provider=_snapshot_provider,
+                room_seq_reader=_room_seq_reader,
             )
             await _delivery_facade.start()
             _delivery_deps = create_delivery_deps(_delivery_facade)
@@ -923,6 +961,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_files=file_storage,
             )
             bind_run_lifecycle_service(run_command_handler)
+
+            # ── Terminal settlement reader (defense-in-depth) ────────────
+            # The publisher consults the private run_events fact log before
+            # emitting terminal run_event/processing_status frames (Room
+            # Stream Snapshot plan §4 rule 4). Bound here because the fact
+            # repository only exists after execution composition.
+            from execution.terminal_projection import (
+                RunEventProjectionSettlementReader,
+            )
+
+            _delivery_facade.event_publisher.projection_settlement = (
+                RunEventProjectionSettlementReader(
+                    _execution_repos["run_event_repository"]
+                )
+            )
 
             async def notify_task_update_with_string_state(**kwargs):
                 state = kwargs.get("state")
@@ -1754,8 +1807,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # route, prompt asset, or profile parameter is detected during startup
         # even though nothing routes into it yet. Adapter-level failures
         # degrade the dark launch; programming errors still fail startup.
-        from common.dto import ProcessingStatusEvent
+        from common.dto import ProcessingStatusEvent, RunEventNotification
         from execution.orchestrator.projection import public_terminal_status
+        from execution.orchestrator.public_projection import (
+            PublicProjectionTranslator,
+        )
+
+        public_projection_translator = PublicProjectionTranslator()
 
         async def publish_orchestrator_projection_status(run, intent) -> None:
             # SSE is non-authoritative: it is published only after the durable
@@ -1850,10 +1908,30 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         details={"message": message, "turn_phase": turn_phase},
                         delivery_id=(
                             f"orchestrator:{event.run_id}:"
-                            f"{event.event_type}:{event.sequence}"
+                            f"{event.event_type}:{event.sequence}:"
+                            f"{call_id or 'run'}"
                         ),
                     )
                 )
+
+            # Decision-visibility projection (Room Stream Snapshot plan §6,
+            # Phase 1): public run_event payload types for LLM calls, retries,
+            # orchestrator decisions, and tool calls. Payloads are produced
+            # exclusively by the PublicProjectionTranslator (redaction).
+            if event.room_id and run_event_sse_enabled():
+                public_event = public_projection_translator.translate(event)
+                if public_event is not None:
+                    await _delivery_deps.event_publisher.emit(
+                        RunEventNotification(
+                            room_id=event.room_id,
+                            event_id=public_event.event_id,
+                            run_id=public_event.run_id,
+                            seq=public_event.seq,
+                            run_event_type=public_event.kind,
+                            payload=public_event.payload,
+                            correlation_id=public_event.client_request_id,
+                        )
+                    )
 
             if event.event_type == "run_final_answer_ready" and runtime is not None:
                 # Deliver the final answer immediately instead of waiting for
@@ -1881,6 +1959,41 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 text = getattr(content, "message_text", None)
                 return text if isinstance(text, str) and text.strip() else None
 
+            async def _deliver_orchestrator_final_message(
+                run: Any,
+                final: Any,
+                content: str,
+            ) -> bool:
+                (
+                    status,
+                    room_event_id,
+                ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                    AgentMessageFinal(
+                        room_id=run.room_id,
+                        message_id=final.message_id,
+                        agent_id="system:hybro",
+                        content={
+                            "content": content,
+                            "related_message_id": run.request.user_message_id,
+                            "client_request_id": run.client_request_id,
+                        },
+                        delivery_id=(
+                            f"orchestrator:{run.run_id}:final:{final.message_id}"
+                        ),
+                    )
+                )
+                # Persisted room-event identity is the durable delivery
+                # boundary. A transient fanout miss self-heals through the
+                # heartbeat watermark/snapshot path and must not duplicate the
+                # outbox event.
+                if room_event_id is not None:
+                    return True
+                return status in {
+                    DeliveryEmitStatus.DELIVERED,
+                    DeliveryEmitStatus.ALREADY_DELIVERED,
+                    DeliveryEmitStatus.DEDUPLICATED,
+                }
+
             app.state.orchestrator_runtime = create_orchestrator_runtime(
                 mongo=mongo_dal,
                 settings_obj=runtime.settings,
@@ -1899,6 +2012,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_delivery=(
                     None if _delivery_deps is None else _delivery_deps.event_publisher
                 ),
+                final_message_delivery=_deliver_orchestrator_final_message,
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:
@@ -3357,6 +3471,9 @@ def create_delivery_facade(
     instance_id: str | None = None,
     task_runner: TaskRunner | None = None,
     metrics: MetricsCollector | None = None,
+    room_events: Any | None = None,
+    snapshot_provider: Callable[[str], Awaitable[dict[str, Any] | None]] | None = None,
+    room_seq_reader: Callable[[str], Awaitable[int | None]] | None = None,
 ) -> DeliveryFacade:
     resolved_config = config or DeliveryConfig()
     resolved_now = now or utcnow
@@ -3381,6 +3498,8 @@ def create_delivery_facade(
         instance_id=resolved_instance_id,
         task_runner=resolved_task_runner,
         metrics=metrics,
+        room_seq_reader=room_seq_reader,
+        snapshot_provider=snapshot_provider,
     )
     deduplicator = TerminalStatusDeduplicator(
         redis_kv=redis_kv,
@@ -3394,6 +3513,7 @@ def create_delivery_facade(
         now=resolved_now,
         instance_id=resolved_instance_id,
         metrics=metrics,
+        room_events=room_events,
     )
     event_bus.set_sse_callback(sse_transport.broadcast_frame_to_room)
 

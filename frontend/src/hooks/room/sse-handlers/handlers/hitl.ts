@@ -4,13 +4,12 @@ import { useMessageStore } from '@/stores/message-store'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import { findProcessingStatusUserEntity } from '../../processing-status-log'
-import type { CorrelationResult } from '../correlation'
 import type { SSEHandlerDeps } from '../types'
 
 export async function handleHitlRequest(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['hitl_request'],
-  _correlation: CorrelationResult,
+  _clientReqId: string | null,
 ): Promise<void> {
   const {
     request_id, message_id, source, prompt, prompt_type, choices,
@@ -117,7 +116,7 @@ export async function handleHitlRequest(
 export function handleHitlResponse(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['hitl_response'],
-  correlation: CorrelationResult,
+  _clientReqId: string | null,
 ): void {
   const {
     request_id,

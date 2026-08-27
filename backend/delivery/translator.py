@@ -17,7 +17,14 @@ from common.dto import (
 )
 
 
-def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]:
+def to_sse_frame(
+    event: DeliveryEvent,
+    *,
+    timestamp: datetime,
+    room_seq: int | None = None,
+    room_event_id: str | None = None,
+    parent_event_id: str | None = None,
+) -> dict[str, Any]:
     frame_timestamp = timestamp.isoformat()
     if isinstance(event, ProcessingStatusEvent):
         data: dict[str, Any] = {
@@ -31,7 +38,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "agents", event.agents)
         _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "processing_status", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "processing_status",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, RunEventNotification):
         data = {
@@ -44,7 +59,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         }
         _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "run_event", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "run_event",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, AgentMessagePartial):
         data = {
@@ -53,7 +76,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
             "content_delta": event.content_delta,
         }
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "agent_response_partial", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "agent_response_partial",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, AgentMessageFinal):
         data = {
@@ -62,7 +93,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         }
         data.update(_without_reserved_keys(event.content))
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "agent_response", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "agent_response",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, TaskSubmittedEvent):
         data = {
@@ -79,7 +118,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "task_content", event.task_content)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "task_submitted", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "task_submitted",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, TaskUpdateEvent):
         data = {
@@ -102,7 +149,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_optional(data, "delivery_id", event.delivery_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "task_update", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "task_update",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, ArtifactUpdateEvent):
         data = {
@@ -114,7 +169,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         }
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "artifact_update", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "artifact_update",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, ErrorEvent):
         data = {"error": event.error}
@@ -128,7 +191,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "system_requests_limit", event.system_requests_limit)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "error", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "error",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, CancellationEvent):
         data = {
@@ -136,7 +207,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
             "reason": event.reason,
         }
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "cancellation", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "cancellation",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, HITLRequestEvent):
         data = {
@@ -159,7 +238,15 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "hitl_request", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "hitl_request",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     if isinstance(event, HITLResolvedEvent):
         data = {
@@ -178,9 +265,33 @@ def to_sse_frame(event: DeliveryEvent, *, timestamp: datetime) -> dict[str, Any]
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
-        return _frame(event.room_id, "hitl_response", data, frame_timestamp)
+        return _frame(
+            event.room_id,
+            "hitl_response",
+            data,
+            frame_timestamp,
+            room_seq=room_seq,
+            room_event_id=room_event_id,
+            parent_event_id=parent_event_id,
+        )
 
     raise TypeError(f"Unsupported delivery event: {type(event)!r}")
+
+
+def snapshot_frame(
+    room_id: str,
+    snapshot_data: dict[str, Any],
+    *,
+    timestamp: datetime,
+) -> dict[str, Any]:
+    """Build the ``snapshot`` frame (Room Stream Snapshot plan §4)."""
+
+    return _frame(
+        room_id,
+        "snapshot",
+        snapshot_data,
+        timestamp.isoformat(),
+    )
 
 
 def _frame(
@@ -188,7 +299,17 @@ def _frame(
     event_type: str,
     data: dict[str, Any],
     timestamp: str,
+    *,
+    room_seq: int | None = None,
+    room_event_id: str | None = None,
+    parent_event_id: str | None = None,
 ) -> dict[str, Any]:
+    if room_seq is not None:
+        data["room_seq"] = room_seq
+    if room_event_id is not None:
+        data["room_event_id"] = room_event_id
+    if parent_event_id is not None:
+        data["parent_event_id"] = parent_event_id
     return {
         "type": event_type,
         "timestamp": timestamp,
@@ -211,4 +332,4 @@ def _without_reserved_keys(data: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in data.items() if key != "timestamp"}
 
 
-__all__ = ["to_sse_frame"]
+__all__ = ["snapshot_frame", "to_sse_frame"]

@@ -4,7 +4,12 @@ import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from common.dto import DeliveryEmitStatus, ProcessingStatusEvent
+from common.dto import (
+    DeliveryEmitStatus,
+    DeliveryEvent,
+    ProcessingStatusEvent,
+    RunEventNotification,
+)
 from common.utils.logger import get_logger
 from execution.events import run_event_notification_from_payload
 from execution.state.task_status_mapping import system_task_state_from_runtime_status
@@ -20,6 +25,59 @@ _STEP_ORDER = (
     "completion_metadata",
     "turn_event",
 )
+
+# The SSE emission steps are the frames' emitters: they can only run in the
+# phase-2 pass once every OTHER durable side-effect step is completed or
+# blocked (Room Stream Snapshot plan §4 client rule 4).
+_SSE_EMIT_STEPS = frozenset({"run_event_sse", "processing_sse"})
+
+
+class RunEventProjectionSettlementReader:
+    """Publisher-side settlement reader over the private ``run_events`` log.
+
+    Defense-in-depth for the terminal gating (Room Stream Snapshot plan §4/
+    §5): answers whether the fact behind a terminal frame still has durable
+    side-effect steps in ``{pending, running}``. The primary gate remains the
+    two-phase finalizer above; a missing fact document is treated as settled
+    so the reader can never withhold a frame with no recovery path.
+    """
+
+    def __init__(self, run_event_repository) -> None:
+        self._run_events = run_event_repository
+
+    async def is_terminal_settled(self, event: DeliveryEvent) -> bool:
+        event_id = self._fact_event_id(event)
+        if event_id is None:
+            return True
+        doc = await self._run_events.find_one({"event_id": event_id})
+        if not doc:
+            return True
+        projection = doc.get("terminal_projection")
+        if not isinstance(projection, dict):
+            return True
+        steps = projection.get("steps")
+        if not isinstance(steps, dict):
+            return True
+        for name, value in steps.items():
+            if name in _SSE_EMIT_STEPS:
+                continue
+            state = value.get("state") if isinstance(value, dict) else None
+            if state in {"pending", "running"}:
+                return False
+        return True
+
+    @staticmethod
+    def _fact_event_id(event: DeliveryEvent) -> str | None:
+        if isinstance(event, RunEventNotification):
+            event_id = str(event.event_id or "").strip()
+            return event_id or None
+        delivery_id = getattr(event, "delivery_id", None)
+        if not delivery_id:
+            return None
+        parts = str(delivery_id).split(":")
+        if len(parts) >= 3 and parts[0] == "terminal" and parts[1]:
+            return parts[1]
+        return None
 
 
 class ProjectionBlockedError(RuntimeError):
@@ -101,7 +159,13 @@ class TerminalProjectionFinalizer:
             for name, value in projection_steps.items()
             if value.get("state") == "blocked"
         }
+
+        # Phase 1 — durable side-effect steps. The SSE emission steps are
+        # skipped here; they run in phase 2 only once every other step has
+        # settled (completed or blocked).
         for step in _STEP_ORDER:
+            if step in _SSE_EMIT_STEPS:
+                continue
             if step not in projection_steps:
                 continue
             step_state = (projection_steps.get(step) or {}).get("state")
@@ -136,6 +200,52 @@ class TerminalProjectionFinalizer:
                     exc,
                 ):
                     blocked_steps.add(step)
+
+        # Phase 2 — SSE emission, gated on full durable settlement. A step
+        # that is still pending/running (retry scheduled, or a concurrent
+        # claim) defers the SSE frames to a later finalize pass.
+        durable_settled = all(
+            step in completed_steps or step in blocked_steps
+            for step in projection_steps
+            if step not in _SSE_EMIT_STEPS
+        )
+        if durable_settled:
+            for step in _STEP_ORDER:
+                if step not in _SSE_EMIT_STEPS or step not in projection_steps:
+                    continue
+                step_state = (projection_steps.get(step) or {}).get("state")
+                if step_state in {"completed", "blocked"}:
+                    continue
+                claim = await self._lifecycle.claim_terminal_projection_step(
+                    event_id, step
+                )
+                if claim is None:
+                    all_complete = False
+                    continue
+                token, claimed_fact = claim
+                claimed_projection = (
+                    claimed_fact.get("terminal_projection") or projection
+                )
+                try:
+                    await self._execute(step, claimed_fact, claimed_projection)
+                    completed = await self._lifecycle.complete_terminal_projection_step(
+                        event_id, step, token
+                    )
+                    if completed:
+                        completed_steps.add(step)
+                    all_complete = bool(completed) and all_complete
+                except Exception as exc:
+                    all_complete = False
+                    if await self._release_failed_step(
+                        event_id,
+                        step,
+                        token,
+                        claimed_projection,
+                        exc,
+                    ):
+                        blocked_steps.add(step)
+        else:
+            all_complete = False
         await self._lifecycle.refresh_terminal_projection_schedule(event_id)
         return all_complete
 
@@ -408,4 +518,8 @@ class TerminalProjectionFinalizer:
             raise RuntimeError("terminal delivery returned False")
 
 
-__all__ = ["TerminalProjectionFinalizer"]
+__all__ = [
+    "ProjectionBlockedError",
+    "RunEventProjectionSettlementReader",
+    "TerminalProjectionFinalizer",
+]

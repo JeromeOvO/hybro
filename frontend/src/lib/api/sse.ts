@@ -20,6 +20,8 @@ export interface SSEConnectionOptions {
   reconnectJitterMs?: number
   randomFn?: () => number
   deterministicFirstReconnect?: boolean
+  /** Force a fresh snapshot fold from the authoritative log (?snapshot=1). */
+  snapshot?: boolean
 }
 
 // Connection state constants (mirrors EventSource.readyState values)
@@ -74,7 +76,9 @@ export class SSEConnection {
         }
 
         // Build URL without token in query string (security fix for issue 2.1)
-        const url = `${API_BASE_URL}/room/${this.roomId}/stream`
+        // ?snapshot=1 forces a fresh snapshot fold from the authoritative log
+        // (Room Stream Snapshot plan §4 rule 3 gap recovery).
+        const url = `${API_BASE_URL}/room/${this.roomId}/stream${this.options.snapshot ? '?snapshot=1' : ''}`
 
         // Send JWT via Authorization header instead of URL query parameter
         const headers: Record<string, string> = {

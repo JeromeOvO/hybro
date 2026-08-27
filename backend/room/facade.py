@@ -686,6 +686,12 @@ class RoomFacade:
             current_state = task.status.state
             if is_terminal_state(current_state):
                 continue
+            extend_info = msg.extend_info if isinstance(msg.extend_info, dict) else {}
+            if extend_info.get("orchestrator_run_id"):
+                # The durable orchestrator lifecycle owns this projection. Its
+                # compatibility card has no legacy webhook tracker and must not
+                # be terminalized by the legacy orphan detector.
+                continue
             if not msg.has_task_tracking:
                 if current_state == TaskState.working and is_task_stale(msg):
                     mark_failed(

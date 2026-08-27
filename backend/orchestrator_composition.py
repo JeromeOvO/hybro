@@ -194,6 +194,7 @@ def create_orchestrator_runtime(  # noqa: C901
     projection_listener: ProjectionListener | None = None,
     user_message_text_reader: Callable[[str], Any] | None = None,
     hitl_delivery: Any | None = None,
+    final_message_delivery: Callable[..., Any] | None = None,
 ) -> OrchestratorRuntime:
     """Compose the full orchestrator runtime over the registered Mongo stores.
 
@@ -360,10 +361,12 @@ def create_orchestrator_runtime(  # noqa: C901
     projectors = {
         "append_orchestrator_event": MongoAppendEventProjector(event_store).project,
         "deliver_final_message": MongoFinalMessageProjector(
-            mongo.collection("room_agent_messages")
+            mongo.collection("room_agent_messages"),
+            final_message_delivery,
         ).project,
         "project_terminal_run_status": MongoTerminalRunStatusProjector(
-            mongo.collection("runs")
+            mongo.collection("runs"),
+            mongo.collection("room_agent_messages"),
         ).project,
     }
     projection_worker = ProjectionOutboxWorker(

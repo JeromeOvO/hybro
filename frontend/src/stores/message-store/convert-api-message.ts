@@ -133,7 +133,10 @@ export async function convertApiMessageToIncoming(
       agentId = apiMessage.message_content.message_task.metadata.agent_id as string
     }
 
-    if (agentId) {
+    const publicAgentName = extendInfo?.public_agent_name
+    if (typeof publicAgentName === 'string' && publicAgentName.trim()) {
+      senderName = publicAgentName.trim()
+    } else if (agentId) {
       try {
         senderName = await getAgentName(agentId)
       } catch {

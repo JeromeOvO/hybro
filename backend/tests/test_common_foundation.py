@@ -418,6 +418,7 @@ def test_delivery_event_schemas_match_design_doc():
             "message_id",
             "agent_id",
             "content",
+            "delivery_id",
         },
         CancellationEvent: {
             "room_id",

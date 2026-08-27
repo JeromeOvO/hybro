@@ -175,6 +175,23 @@ class MongoDALImpl:
         self._db = self._client[self._db_name]
         await self._client.admin.command("ping")
 
+    def start_session(self):
+        """Return an async context manager yielding a Motor client session.
+
+        Required by transactional writers (e.g. room event sequencing).
+        """
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def session_context():
+            if self._client is None:
+                raise ConnectionError("MongoDB client is not connected")
+            async with await self._client.start_session() as session:
+                yield session
+
+        return session_context()
+
     async def close(self) -> None:
         if self._client is not None:
             self._client.close()

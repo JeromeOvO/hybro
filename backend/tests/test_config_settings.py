@@ -21,6 +21,12 @@ def _clear_runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+def test_feature_run_event_sse_defaults_on(monkeypatch):
+    monkeypatch.delenv("FEATURE_RUN_EVENT_SSE", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.feature_run_event_sse is True
+
+
 def test_orchestration_outcome_guardrails_defaults_on(monkeypatch):
     monkeypatch.delenv("ORCHESTRATION_OUTCOME_GUARDRAILS", raising=False)
     settings = Settings(_env_file=None)

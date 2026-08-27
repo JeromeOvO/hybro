@@ -282,7 +282,6 @@ Main responsibilities:
 - Convert backend messages into `IncomingMessage`.
 - Filter hydration data.
 - Detect stale tasks.
-- Infer terminal state from active-run context.
 - Resolve display type for renderer consumers.
 
 Key files:
@@ -293,8 +292,63 @@ Key files:
 - `convert-api-message.ts`
 - `hydration-filter.ts`
 - `stale-detection.ts`
-- `infer-turn-terminal-status.ts`
 - `resolve-display-type.ts`
+
+Turn-terminal state now arrives as durable-confirmed frames over the
+snapshot-driven room stream; the former `infer-turn-terminal-status.ts`
+inference module has been removed.
+
+### Snapshot-driven room sync (`src/lib/room-sync/room-reducer.ts`)
+
+The room stream is snapshot-driven: state = latest full snapshot + ordered
+deltas after it. The proposed Pi-aligned lifecycle and rendering cutover is
+specified in backend
+[`docs/Pi-Aligned-Turn-Lifecycle-Plan.md`](../../backend/docs/Pi-Aligned-Turn-Lifecycle-Plan.md).
+`RoomReducer` is the current single state entry:
+
+- `connected` handshake carries `room_seq`; its presence enables the new
+  semantics (legacy fallback otherwise).
+- Deltas before the first snapshot are buffered and replayed in order;
+  a 500 ms bootstrap window (or the first pre-snapshot delta) re-requests a
+  snapshot.
+- After the snapshot watermark, out-of-order deltas enter a bounded reorder
+  window (~500 ms); a gap that outlasts it triggers a `?snapshot=1` reconnect
+  (the only recovery path).
+- Snapshots fold into message / streaming / trace stores through the same fold
+  functions used for live deltas. A processing-state snapshot may arrive before
+  DB message hydration; the reducer creates a correlation-preserving user shell
+  so durable status logs and terminal state are retained, then DB hydration
+  fills the prompt without removing the snapshot overlay.
+
+There are no fixed-delay reconciliation timers, no correlation buffers, and no
+polling safety net.
+
+### Turn Trace (`src/stores/trace-store/`)
+
+Decision-visibility surface (plan §6): public `run_event` payload kinds
+(`llm_call_completed`, `llm_retry_scheduled`, `orchestrator_decision`,
+`tool_call_accepted`, `tool_call_completed`) fold into a per-run tree rendered
+by the Turn Trace panel. Snapshot trace runs and nodes retain
+`client_request_id`, so refresh/reconnect restores the same turn association.
+The panel is the single per-turn activity surface, but it does not flatten all
+facts to generic log rows. Structured events render as an assistant plan, quiet
+model metadata, and per-call tool blocks with bounded public Input/Output;
+free-text `processing_status` updates live in a subordinate Progress disclosure.
+Tool accepted/completed pairs use public `call_id` as identity, so repeated calls
+to the same tool remain separate. The former Work Logs panel is not rendered by
+the conversation timeline.
+
+### Live turn presentation
+
+A turn has four independently sourced surfaces. The optimistic user entity is
+created before `sendMessage`; Agent Cards come from per-invocation
+`task_submitted` / `task_update` entities; the HYBRO answer comes from the
+outbox-owned final `agent_response`; Turn Trace comes from public `run_event`
+nodes plus progress updates. Agent Cards are keyed by message/call identity and
+are rendered even when the optional detail drawer callback is unavailable. A
+single Agent called twice therefore produces two cards, while contributor
+summary copy may still report one unique Agent. Final answer and terminal card
+frames are durable room deltas and restore through snapshot replay.
 
 ### Agent Dispatch Privacy
 
@@ -314,6 +368,9 @@ The room UI store contains ephemeral per-room UI state:
 - pending room handoff data
 - selected agent-response detail state
 
+The SSE reconnect surface also exposes `reconnectWithSnapshot` (gap-recovery
+reconnect with `?snapshot=1`).
+
 ### `src/stores/streaming-store/`
 
 The streaming store contains transient live artifact/text buffers. It is intentionally separate from `message-store`: streaming artifacts are displayed live, then cleared after DB reconcile or task checkpoint persistence.
@@ -322,7 +379,7 @@ Live buffer text is derived via `extractStreamTextFromArtifacts`, which concaten
 
 **Streaming invariants** (enforced after the convergence plan in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md)):
 
-- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that maps `content_delta` to a synthetic artifact and calls the same append.
+- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that first creates a correlation-preserving message shell, then maps `content_delta` to a synthetic artifact and calls the same append; a live buffer is never left without a renderable turn entity.
 - **I2** — Live buffer key is always `message_id`. `client_request_id` is correlation/cleanup metadata, never a buffer key or display merge dimension.
 - **I3** — Live text equals persisted text. `extractStreamTextFromArtifacts` over the live artifact list equals backend `extract_parts_from_artifacts` over the persisted artifact list at terminal.
 - **I4** — Detail pane content for terminal entities comes from `message-store`, never from the live buffer (strict terminal guard in `selectAgentResponseDetail`).

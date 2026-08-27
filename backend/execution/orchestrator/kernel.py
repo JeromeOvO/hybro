@@ -33,6 +33,7 @@ from .models import (
     ToolResult,
     ToolResultMessage,
     ToolSuspension,
+    UsageRecord,
 )
 from .ports import (
     CancellationSignal,
@@ -110,6 +111,38 @@ def _result_text(result: ToolResult) -> str:
         elif isinstance(part, ArtifactRefPart):
             parts.append(f"[artifact reference: {part.artifact_ref}]")
     return "\n".join(parts)[:8000]
+
+
+def _assistant_text(assistant: AssistantMessage) -> str:
+    parts: list[str] = []
+    for part in assistant.content:
+        if isinstance(part, TextPart) and part.text:
+            parts.append(part.text)
+    return "\n".join(parts)[:4000]
+
+
+def _model_turn_outcome(model_outcome) -> str:
+    """Public-safe outcome label for a completed model turn."""
+
+    kind = str(getattr(model_outcome, "kind", "") or "")
+    if kind == "assistant":
+        return "completed"
+    if kind in {"context_overflow", "provider_error", "aborted"}:
+        return kind
+    return "unknown"
+
+
+def _elapsed_ms(now: datetime, started_at: datetime) -> int:
+    return max(0, int((now - started_at).total_seconds() * 1000))
+
+
+def _usage_public_fields(usage) -> dict[str, object] | None:
+    if usage is None:
+        return None
+    return {
+        "input": int(getattr(usage, "input_tokens", 0) or 0),
+        "output": int(getattr(usage, "output_tokens", 0) or 0),
+    }
 
 
 class OrchestratorKernel:
@@ -279,16 +312,40 @@ class OrchestratorKernel:
 
             request = self._model_request(run, compiled.messages, tools)
             assembler = ModelStreamAssembler()
+            turn_started_at = self.clock.now()
+            turn_usage: UsageRecord | None = None
+            turn_finish_reason: str | None = None
+            turn_attempt: int | None = None
             try:
                 async for event in self.model_runtime.stream_turn(
                     request, signal=signal
                 ):
                     assembler.accept(event)
                     run = await self._record_model_event(run, request.turn_id, event)
-                    await self._emit_model_event(lifecycle, run, event)
+                    await self._emit_model_event(lifecycle, run, event, request)
+                    if event.kind == "usage" and event.usage is not None:
+                        turn_usage = event.usage
+                    if event.kind == "finish" and event.finish_reason:
+                        turn_finish_reason = str(event.finish_reason)
+                    if event.attempt is not None:
+                        turn_attempt = event.attempt
                 model_outcome = assembler.build_outcome(
                     message_id=self.id_factory.new_id("assistant"),
                     created_at=self.clock.now(),
+                )
+                await self._emit(
+                    lifecycle,
+                    "model_turn_completed",
+                    run,
+                    {
+                        "model": request.model.model_id,
+                        "provider": request.model.provider,
+                        "attempt": turn_attempt,
+                        "outcome": _model_turn_outcome(model_outcome),
+                        "duration_ms": _elapsed_ms(self.clock.now(), turn_started_at),
+                        "usage": _usage_public_fields(turn_usage),
+                        "finish_reason": turn_finish_reason,
+                    },
                 )
             except BudgetExceeded as exc:
                 return await self._terminate(
@@ -364,6 +421,23 @@ class OrchestratorKernel:
                 run,
                 {"message_id": assistant.message_id},
             )
+            if assistant.tool_calls:
+                await self._emit(
+                    lifecycle,
+                    "orchestrator_decision",
+                    run,
+                    {
+                        "plan_steps": [
+                            {
+                                "agent": self._tool_label(run, call.tool_name)
+                                or call.tool_name,
+                                "summary": _task_text(call.arguments),
+                            }
+                            for call in assistant.tool_calls
+                        ],
+                        "reason": _assistant_text(assistant),
+                    },
+                )
             if not assistant.tool_calls:
                 await self._emit(
                     lifecycle,
@@ -528,6 +602,28 @@ class OrchestratorKernel:
                 label = entry.definition.label.strip()
                 return label or None
         return None
+
+    def _tool_completed_payload(
+        self,
+        run: OrchestratorRunState,
+        call: ToolCall,
+        outcome: ToolResult | ToolSuspension,
+        *,
+        started_at: datetime,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "call_id": call.call_id,
+            "status": outcome.status,
+            "tool_name": call.tool_name,
+            "agent_label": self._tool_label(run, call.tool_name),
+            "duration_ms": _elapsed_ms(self.clock.now(), started_at),
+        }
+        if isinstance(outcome, ToolResult):
+            payload["result_status"] = outcome.status
+            payload["result_error_code"] = outcome.error_code
+            payload["result_error_message"] = outcome.error_message
+            payload["result_text"] = _result_text(outcome)
+        return payload
 
     async def _ensure_tool_batch(
         self, run: OrchestratorRunState, assistant: AssistantMessage
@@ -701,6 +797,7 @@ class OrchestratorKernel:
         outcomes: list[tuple[str, ToolResult | ToolSuspension]] = []
         if sequential:
             for call, invocation, acceptance in executable:
+                started_at = self.clock.now()
                 await self._emit(
                     lifecycle,
                     "tool_execution_started",
@@ -709,6 +806,7 @@ class OrchestratorKernel:
                         "call_id": call.call_id,
                         "tool_name": call.tool_name,
                         "agent_label": self._tool_label(run, call.tool_name),
+                        "arguments": call.arguments,
                     },
                 )
                 outcome = await self._execute_one(invocation, acceptance, signal=signal)
@@ -716,7 +814,9 @@ class OrchestratorKernel:
                     lifecycle,
                     "tool_execution_completed",
                     run,
-                    {"call_id": call.call_id, "status": outcome.status},
+                    self._tool_completed_payload(
+                        run, call, outcome, started_at=started_at
+                    ),
                 )
                 outcomes.append((call.call_id, outcome))
         else:
@@ -728,6 +828,7 @@ class OrchestratorKernel:
                 acceptance: ToolAcceptance,
             ) -> ToolResult | ToolSuspension:
                 async with semaphore:
+                    started_at = self.clock.now()
                     await self._emit(
                         lifecycle,
                         "tool_execution_started",
@@ -736,6 +837,7 @@ class OrchestratorKernel:
                             "call_id": call.call_id,
                             "tool_name": call.tool_name,
                             "agent_label": self._tool_label(run, call.tool_name),
+                            "arguments": call.arguments,
                         },
                     )
                     outcome = await self._execute_one(
@@ -745,7 +847,9 @@ class OrchestratorKernel:
                         lifecycle,
                         "tool_execution_completed",
                         run,
-                        {"call_id": call.call_id, "status": outcome.status},
+                        self._tool_completed_payload(
+                            run, call, outcome, started_at=started_at
+                        ),
                     )
                     return outcome
 
@@ -1061,6 +1165,7 @@ class OrchestratorKernel:
         lifecycle: KernelLifecycle | None,
         run: OrchestratorRunState,
         event,
+        request=None,
     ) -> None:
         event_type = {
             "attempt_started": "model_attempt_started",
@@ -1068,15 +1173,16 @@ class OrchestratorKernel:
             "attempt_failed": "model_attempt_failed",
         }.get(event.kind)
         if event_type is not None:
-            await self._emit(
-                lifecycle,
-                event_type,
-                run,
-                {
-                    "attempt": event.attempt or 0,
-                    "error_class": event.error_class or "",
-                },
-            )
+            payload: dict[str, object] = {
+                "attempt": event.attempt or 0,
+                "error_class": event.error_class or "",
+            }
+            if request is not None:
+                payload["model"] = request.model.model_id
+                payload["provider"] = request.model.provider
+            if event.kind == "retry_scheduled" and event.retry_delay_ms is not None:
+                payload["retry_delay_ms"] = event.retry_delay_ms
+            await self._emit(lifecycle, event_type, run, payload)
 
     async def _complete(
         self, run: OrchestratorRunState, assistant: AssistantMessage

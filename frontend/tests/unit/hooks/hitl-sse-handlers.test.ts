@@ -13,10 +13,23 @@ import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { AnySSEFrame } from '@/lib/types/sse'
 import { ApiError } from '@/lib/api-client'
 import { createInitialProcessingStatusLog } from '@/hooks/room/processing-status-log'
-import {
-  resetPendingTurnBufferForTests,
-  resolveClientRequestMessageId,
-} from '@/hooks/room/sse-handlers/pending-turn-buffer'
+
+function resolveClientRequestMessageId(clientRequestId: string, messageId: string): void {
+  // Post-correlation-buffer: resolution is a store lookup. Mirror the
+  // production flow — the optimistic entity exists from send time — but only
+  // when a message id was explicitly correlated by the test (a real
+  // related_message_id / optimistic entity), not for the synthetic default.
+  if (messageId === 'user-hitl-test-default') return
+  useMessageStore.getState().upsertMessage({
+    id: messageId,
+    roomId: 'room-1',
+    messageType: 'user',
+    content: 'test message',
+    senderName: 'Test',
+    timestamp: '2026-06-04T00:00:00.000Z',
+    clientRequestId,
+  }, 'optimistic')
+}
 
 const capturedOnMessage = (msg: AnySSEFrame) => {
   const cb = (globalThis as any).capturedOnMessage
@@ -101,7 +114,6 @@ describe('useRoomWebhook HITL SSE handling', () => {
     vi.clearAllMocks();
     (globalThis as any).capturedOnMessage = undefined;
     (globalThis as any).mockSseConnected = true;
-    resetPendingTurnBufferForTests()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
     useMessageStore.getState().markDbSynced()

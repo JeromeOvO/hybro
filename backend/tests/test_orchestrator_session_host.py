@@ -144,9 +144,41 @@ async def test_observation_sink_reenters_without_a_session_object(catalog):
     run_store = InMemoryOrchestratorRunStore()
     epoch_store = InMemoryRoomEpochStore()
     await epoch_store.activate("room-1", "create-1", activated_at=NOW)
-    host = _host(run_store=run_store, epoch_store=epoch_store)
+    observed = []
 
-    assert host.observation_sink() is not None
+    async def listener(event):
+        observed.append(event)
+
+    host = _host(
+        run_store=run_store,
+        epoch_store=epoch_store,
+        listener=listener,
+    )
+
+    sink = host.observation_sink()
+    assert sink.lifecycle_factory is not None
+    run = make_run()
+    lifecycle = sink.lifecycle_factory(run)
+    assert lifecycle is not None
+    await lifecycle(
+        "message_completed",
+        run,
+        {
+            "call_id": "call-1",
+            "message_kind": "tool_result",
+            "result_status": "completed",
+        },
+    )
+    assert len(observed) == 1
+    assert observed[0].run_id == run.run_id
+    assert observed[0].room_id == run.room_id
+    assert observed[0].payload["result_status"] == "completed"
+    assert observed[0].sequence == run.state_version
+
+    await lifecycle("turn_started", run, {})
+    await asyncio.sleep(0)
+    assert len(observed) == 1
+
     # Re-entry requires an existing Run; a missing Run is a KeyError.
     with pytest.raises(KeyError):
         await host.observation_sink().deliver(

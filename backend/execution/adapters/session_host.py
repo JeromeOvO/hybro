@@ -12,6 +12,7 @@ surface used by the composition root and tests.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
@@ -27,6 +28,7 @@ from execution.orchestrator.kernel import (
 )
 from execution.orchestrator.lifecycle import (
     LifecycleEmitter,
+    SessionEvent,
     SessionEventListener,
 )
 from execution.orchestrator.models import (
@@ -48,6 +50,9 @@ from execution.orchestrator.session import (
 )
 
 KernelForCatalog = Callable[[FrozenToolCatalogSnapshot], OrchestratorKernel]
+
+
+logger = logging.getLogger(__name__)
 
 
 class RoomSessionHost:
@@ -102,9 +107,7 @@ class RoomSessionHost:
             frozen_tool_catalog=frozen_catalog,
             resource_manifest=resource_manifest,
         )
-        lifecycle = LifecycleEmitter()
-        if self._listener is not None:
-            lifecycle.subscribe(self._listener)
+        lifecycle = self._new_lifecycle_emitter()
         session = RoomAgentSession(
             config=config,
             kernel=self._kernel_factory(frozen_catalog),
@@ -145,19 +148,65 @@ class RoomSessionHost:
         await self._require_session(room_id).abort()
 
     def observation_sink(self) -> RunAddressedToolObservationSink:
-        """Re-entry surface for recovery workers without a session object."""
+        """Re-entry surface for observations with or without a live session."""
 
         def kernel_for_run(run) -> OrchestratorKernel:
             if run.tool_catalog is None:
                 raise SessionConflict("Run has no frozen tool catalog")
             return self._kernel_factory(run.tool_catalog)
 
+        def lifecycle_for_run(initial_run):
+            emitter = self._new_lifecycle_emitter()
+
+            async def emit(event_type, run, payload):
+                if not (
+                    event_type == "message_completed"
+                    and payload.get("message_kind") == "tool_result"
+                ):
+                    return
+                # The observation checkpoint version is durable and monotonic.
+                # call_id is also included in downstream delivery identity, so
+                # parallel results at the same version cannot collide.
+                await emitter.emit(
+                    SessionEvent(
+                        event_type=event_type,
+                        session_id=f"run-addressed:{initial_run.run_id}",
+                        run_id=run.run_id,
+                        causation_id=run.request.user_message_id,
+                        sequence=run.state_version,
+                        timestamp=self._clock.now(),
+                        payload=payload,
+                        room_id=run.room_id,
+                        user_message_id=run.request.user_message_id,
+                        client_request_id=run.client_request_id,
+                    ),
+                    terminal=True,
+                )
+
+            return emit
+
         return RunAddressedToolObservationSink(
             run_store=self._run_store,
             kernel_factory=kernel_for_run,
             signal_factory=EventCancellationSignal,
-            listener=self._listener,
+            lifecycle_factory=lifecycle_for_run,
         )
+
+    def _new_lifecycle_emitter(self) -> LifecycleEmitter:
+        # Agent-card terminal projection performs durable Run/binding reads,
+        # Mongo replacement, and room-event append. Keep the short timeout for
+        # ordinary lifecycle noise, but allow this settled boundary to finish
+        # under transient local/replica-set latency.
+        emitter = LifecycleEmitter(
+            settlement_timeout_seconds=30.0,
+            error_hook=lambda exc: logger.warning(
+                "orchestrator lifecycle listener failed",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            ),
+        )
+        if self._listener is not None:
+            emitter.subscribe(self._listener)
+        return emitter
 
     async def shutdown(self) -> None:
         """Cancel every in-process session task without persisting terminal state.

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/types'
@@ -25,7 +25,7 @@ interface AgentIndexProps {
   turn: TurnViewModel
   sourceResults: AgentResultViewModel[]
   selectedAgentMessageId?: string
-  onOpenDetail: (messageId: string) => void
+  onOpenDetail?: (messageId: string) => void
   isLastTurn?: boolean
 }
 
@@ -36,7 +36,7 @@ function IndexRow({
 }: {
   result: AgentResultViewModel
   selected: boolean
-  onOpenDetail: (messageId: string) => void
+  onOpenDetail?: (messageId: string) => void
 }) {
   const { content, isStreaming, artifacts } = useResultStreamDisplay(result)
   const baseDisplay = mapResultDisplayProps(result, isStreaming, content)
@@ -86,12 +86,7 @@ export function AgentIndex({
   const { finalAnswer } = turn
   const [open, setOpen] = useState(() => defaultAgentIndexOpen(turn, isLastTurn))
 
-  useEffect(() => {
-    if (!isLastTurn) setOpen(false)
-  }, [isLastTurn])
-
   if (sourceResults.length === 0) return null
-  if (finalAnswer.kind === 'single') return null
 
   const summary = getAgentIndexSummary(turn, sourceResults, finalAnswer.kind)
   const forceExpand = sourceResults.some(r => r.messageId === selectedAgentMessageId)
@@ -145,10 +140,6 @@ export function AgentIndex({
   )
 }
 
-export function shouldShowAgentIndex(turn: TurnViewModel, onOpenDetail?: (id: string) => void): boolean {
-  if (!onOpenDetail) return false
-  const sourceResults = getStripSourceResults(turn)
-  if (sourceResults.length <= 1 && turn.finalAnswer.kind === 'single') return false
-  if (turn.finalAnswer.kind === 'single') return false
-  return sourceResults.length > 0
+export function shouldShowAgentIndex(turn: TurnViewModel): boolean {
+  return getStripSourceResults(turn).length > 0
 }

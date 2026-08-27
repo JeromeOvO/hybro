@@ -59,7 +59,7 @@ describe('handleTaskUpdate terminal recovery', () => {
           error: 'Task failed',
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'cr-1' },
+      'cr-1',
     )
 
     expect(scheduleTurnTerminalBackendTruthCheck).toHaveBeenCalledWith(
@@ -133,7 +133,7 @@ describe('handleTaskUpdate terminal recovery', () => {
           status: TASK_STATE.COMPLETED,
         },
       },
-      { shouldDrop: false, shouldBuffer: false, clientReqId: 'cr-1' },
+      'cr-1',
     )
 
     expect(scheduleTurnTerminalBackendTruthCheck).toHaveBeenCalledWith(

@@ -16,6 +16,7 @@ export type SSEFrame<T extends string, D> = {
 export type RoomSSEType =
   | 'connected'
   | 'heartbeat'
+  | 'snapshot'
   | 'processing_status'
   | 'run_event'
   | 'task_submitted'
@@ -32,6 +33,7 @@ export type RoomSSEType =
 export const ROOM_SSE_TYPES = [
   'connected',
   'heartbeat',
+  'snapshot',
   'processing_status',
   'run_event',
   'task_submitted',
@@ -48,8 +50,108 @@ export const ROOM_SSE_TYPES = [
 
 const ROOM_SSE_TYPE_SET = new Set<string>(ROOM_SSE_TYPES)
 
-export type ConnectedData = { connection_id: string }
-export type HeartbeatData = Record<string, never>
+// ── Room-level sequencing (Room Stream Snapshot plan §4) ─────────────────
+// Deltas carry room_seq/room_event_id; parent_event_id links agent/task
+// deltas to the decision event that caused them. Connected/heartbeat carry
+// only room_seq (they are not persisted room_events docs).
+
+export interface RoomEventMeta {
+  room_seq?: number
+  room_event_id?: string
+  parent_event_id?: string
+}
+
+export type ConnectedData = { connection_id: string; room_seq?: number }
+export type HeartbeatData = { room_seq?: number }
+
+export interface RoomSnapshotMessage {
+  message_id: string
+  agent_id: string | null
+  agent_name?: string | null
+  content: string | null
+  parts: unknown
+  related_message_id: string | null
+  client_request_id: string | null
+  status: string | null
+  task_status: string | null
+  task_content: string | null
+  task_error: string | null
+  requires_input: boolean
+  requires_auth: boolean
+  step_number: number | null
+  total_steps: number | null
+  created_at: string | null
+  ts: string | null
+  artifacts: unknown
+  status_logs: Array<{
+    message: string
+    timestamp: string
+    turn_phase?: 'collecting' | 'synthesizing' | 'terminal'
+  }>
+}
+
+export interface RoomSnapshotTask {
+  task_id: string
+  message_id: string | null
+  agent_name: string | null
+  agent_id: string | null
+  status: string | null
+  requires_input: boolean
+  requires_auth: boolean
+  content: string | null
+  status_message: string | null
+  step_number: number | null
+  total_steps: number | null
+  task_content: string | null
+  created_at: string | null
+  error: string | null
+}
+
+export interface RoomSnapshotRun {
+  run_id: string
+  status: string
+  client_request_id: string | null
+  ts: string
+}
+
+export interface RoomSnapshotStream {
+  message_id: string
+  agent_id: string | null
+  text: string
+  artifacts: Array<Record<string, unknown>>
+  is_complete: boolean
+  client_request_id: string | null
+  last_chunk: boolean
+}
+
+export interface RoomSnapshotTraceNode {
+  id: string
+  kind: string
+  client_request_id?: string | null
+  ts?: string
+  [key: string]: unknown
+}
+
+export interface RoomSnapshotTraceRun {
+  run_id: string
+  client_request_id: string | null
+  nodes: RoomSnapshotTraceNode[]
+  usage: unknown
+  duration_ms: number
+}
+
+export type SnapshotData = {
+  room_seq: number
+  messages: RoomSnapshotMessage[]
+  tasks: RoomSnapshotTask[]
+  runs: RoomSnapshotRun[]
+  hitl: {
+    requests: Array<Record<string, unknown>>
+    resolved: Array<Record<string, unknown>>
+  }
+  streaming: Record<string, RoomSnapshotStream>
+  trace: Record<string, RoomSnapshotTraceRun>
+}
 
 export type ProcessingStatus =
   | 'queued'
@@ -62,7 +164,7 @@ export type ProcessingStatus =
   | 'rate_limited'
   | 'error'
 
-export type ProcessingStatusData = {
+export type ProcessingStatusData = RoomEventMeta & {
   message_id: string
   client_request_id: string
   status: ProcessingStatus
@@ -71,7 +173,7 @@ export type ProcessingStatusData = {
   agents?: Array<Record<string, unknown>>
 }
 
-export type RunEventData = {
+export type RunEventData = RoomEventMeta & {
   event_id: string
   run_id: string
   seq: number
@@ -80,7 +182,7 @@ export type RunEventData = {
   correlation_id: string | null
 }
 
-export type TaskSubmittedData = {
+export type TaskSubmittedData = RoomEventMeta & {
   message_id: string
   task_id: string
   agent_name: string
@@ -93,7 +195,7 @@ export type TaskSubmittedData = {
   client_request_id: string
 }
 
-export type TaskUpdateData = {
+export type TaskUpdateData = RoomEventMeta & {
   message_id: string
   status: string
   content?: string | null
@@ -111,7 +213,7 @@ export type TaskUpdateData = {
   client_request_id: string
 }
 
-export type ArtifactUpdateData = {
+export type ArtifactUpdateData = RoomEventMeta & {
   message_id: string
   agent_id: string
   artifact: unknown
@@ -120,7 +222,7 @@ export type ArtifactUpdateData = {
   client_request_id: string
 }
 
-export type AgentResponseData = {
+export type AgentResponseData = RoomEventMeta & {
   message_id: string
   agent_id: string
   related_message_id?: string | null
@@ -129,7 +231,7 @@ export type AgentResponseData = {
   client_request_id: string
 }
 
-export type AgentResponsePartialData = {
+export type AgentResponsePartialData = RoomEventMeta & {
   message_id: string
   agent_id: string
   related_message_id?: string | null
@@ -150,7 +252,7 @@ export type GlobalErrorData = {
   client_request_id?: never
 }
 
-export type TurnErrorData = {
+export type TurnErrorData = RoomEventMeta & {
   error: string
   error_type?: string
   message_id?: string | null
@@ -165,7 +267,7 @@ export type TurnErrorData = {
 
 export type ErrorData = GlobalErrorData | TurnErrorData
 
-export type HITLInputRequestedData = {
+export type HITLInputRequestedData = RoomEventMeta & {
   request_id: string
   message_id: string
   related_message_id?: string | null
@@ -188,7 +290,7 @@ export type HITLInputRequestedData = {
   client_request_id?: string | null
 }
 
-export type HITLStatusUpdateData = {
+export type HITLStatusUpdateData = RoomEventMeta & {
   request_id: string
   message_id: string
   related_message_id?: string | null
@@ -207,11 +309,12 @@ export type HITLStatusUpdateData = {
   client_request_id?: string | null
 }
 
-export type GenericRoomEventData = Record<string, unknown>
+export type GenericRoomEventData = RoomEventMeta & Record<string, unknown>
 
 export type RoomSSEFrameMap = {
   connected: SSEFrame<'connected', ConnectedData>
   heartbeat: SSEFrame<'heartbeat', HeartbeatData>
+  snapshot: SSEFrame<'snapshot', SnapshotData>
   processing_status: SSEFrame<'processing_status', ProcessingStatusData>
   run_event: SSEFrame<'run_event', RunEventData>
   task_submitted: SSEFrame<'task_submitted', TaskSubmittedData>

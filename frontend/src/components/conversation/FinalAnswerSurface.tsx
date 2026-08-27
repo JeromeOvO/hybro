@@ -18,6 +18,7 @@ interface FinalAnswerSurfaceProps {
   surfaceRef?: Ref<HTMLDivElement>
   selectedAgentMessageId?: string
   onOpenDetail?: (messageId: string) => void
+  renderProcessingLog?: boolean
 }
 
 /**
@@ -36,10 +37,12 @@ function CollectingBlock({
   phase,
   processingStatusLogs,
   isRunning,
+  showProcessingLog,
 }: {
   phase?: TurnViewModel['phase']
   processingStatusLogs?: TurnViewModel['processingStatusLogs']
   isRunning: boolean
+  showProcessingLog: boolean
 }) {
   const theme = getAgentTheme('system:hybro', 'HYBRO AI')
   const synthesizing = phase === 'synthesizing'
@@ -60,7 +63,9 @@ function CollectingBlock({
         display={display}
         interactive={false}
       />
-      <ProcessingStatusLog entries={processingStatusLogs ?? []} isRunning={isRunning} />
+      {showProcessingLog ? (
+        <ProcessingStatusLog entries={processingStatusLogs ?? []} isRunning={isRunning} />
+      ) : null}
     </>
   )
 }
@@ -199,10 +204,20 @@ function DeterministicDoneBlock({
   )
 }
 
-function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: boolean }) {
+function HitlPrimary({
+  turn,
+  isRunning,
+  showProcessingLog,
+}: {
+  turn: TurnViewModel
+  isRunning: boolean
+  showProcessingLog: boolean
+}) {
   const hitl = turn.finalAnswer.hitl
   if (!hitl || hitl.prompts.length === 0) {
-    return <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={isRunning} />
+    return showProcessingLog ? (
+      <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={isRunning} />
+    ) : null
   }
 
   return (
@@ -247,16 +262,18 @@ function SynthesisBlock({
   supervisorStatus,
   processingStatusLogs,
   processingStatusRunning,
+  showProcessingLog,
 }: {
   turn: TurnViewModel
   summaryResult: AgentResultViewModel
   supervisorStatus: string | null
   processingStatusLogs?: TurnViewModel['processingStatusLogs']
   processingStatusRunning: boolean
+  showProcessingLog: boolean
 }) {
   const stream = useResultStreamDisplay(summaryResult)
   const logs = processingStatusLogs ?? []
-  const showProcessingLog = logs.length > 0
+  const shouldRenderProcessingLog = showProcessingLog && logs.length > 0
   const turnArtifacts = turn.agentResults.flatMap(r => r.artifacts ?? [])
 
   return (
@@ -266,7 +283,7 @@ function SynthesisBlock({
         isStreaming={stream.isStreaming}
         displayContent={stream.content}
       />
-      {showProcessingLog && (
+      {shouldRenderProcessingLog && (
         <ProcessingStatusLog
           entries={logs}
           isRunning={processingStatusRunning}
@@ -292,12 +309,14 @@ export function FinalAnswerSurface({
   surfaceRef,
   selectedAgentMessageId,
   onOpenDetail,
+  renderProcessingLog = true,
 }: FinalAnswerSurfaceProps) {
   const supervisorStatus = getSupervisorStatusLine(turn)
   const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
   const realAgents = getStripSourceResults(turn)
   const { finalAnswer } = turn
-  const shouldShowProcessingLog = turn.processingStatusLogs.length > 0
+  const shouldShowProcessingLog =
+    renderProcessingLog && turn.processingStatusLogs.length > 0
   const processingStatusRunning = isProcessingStatusRunning(turn)
   let processingLogRenderedInBody = false
 
@@ -305,7 +324,13 @@ export function FinalAnswerSurface({
 
   switch (finalAnswer.kind) {
     case 'hitl':
-      body = <HitlPrimary turn={turn} isRunning={processingStatusRunning} />
+      body = (
+        <HitlPrimary
+          turn={turn}
+          isRunning={processingStatusRunning}
+          showProcessingLog={renderProcessingLog}
+        />
+      )
       break
     case 'llm_synthesis':
       if (summaryResult) {
@@ -317,6 +342,7 @@ export function FinalAnswerSurface({
             supervisorStatus={supervisorStatus}
             processingStatusLogs={turn.processingStatusLogs ?? []}
             processingStatusRunning={processingStatusRunning}
+            showProcessingLog={renderProcessingLog}
           />
         )
       } else {
@@ -326,6 +352,7 @@ export function FinalAnswerSurface({
             phase={turn.phase}
             processingStatusLogs={turn.processingStatusLogs ?? []}
             isRunning={processingStatusRunning}
+            showProcessingLog={renderProcessingLog}
           />
         )
       }
@@ -366,6 +393,7 @@ export function FinalAnswerSurface({
             phase={turn.phase}
             processingStatusLogs={turn.processingStatusLogs}
             isRunning={processingStatusRunning}
+            showProcessingLog={renderProcessingLog}
           />
         )
       }
@@ -379,6 +407,7 @@ export function FinalAnswerSurface({
           phase={turn.phase}
           processingStatusLogs={turn.processingStatusLogs}
           isRunning={processingStatusRunning}
+          showProcessingLog={renderProcessingLog}
         />
       )
       break

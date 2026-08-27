@@ -5,8 +5,7 @@ import { useStreamingStore } from '@/stores/streaming-store'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import type { ProcessingLifecycle } from '../../processing-lifecycle'
 import { sseArtifactDataFromPayload } from '../artifacts'
-import type { CorrelationResult } from '../correlation'
-import { getResolvedMessageId } from '../pending-turn-buffer'
+import { resolveUserMessageId } from '../client-request'
 
 export interface ArtifactUpdateContext {
   roomId: string
@@ -16,7 +15,7 @@ export interface ArtifactUpdateContext {
 export function handleArtifactUpdate(
   ctx: ArtifactUpdateContext,
   sseMessage: RoomSSEFrameMap['artifact_update'],
-  correlation: CorrelationResult,
+  clientReqId: string | null,
 ): void {
   if (sseMessage.data.last_chunk !== true) return
 
@@ -48,10 +47,8 @@ export function handleArtifactUpdate(
   const resolvedAppend = isAppend ?? hasExistingArtifact
 
   streaming.append(message_id, ctx.roomId, artifactData, resolvedAppend, {
-    clientRequestId: correlation.clientReqId,
-    userMessageId: correlation.clientReqId
-      ? getResolvedMessageId(correlation.clientReqId)
-      : undefined,
+    clientRequestId: clientReqId ?? undefined,
+    userMessageId: resolveUserMessageId(ctx.roomId, clientReqId),
   })
   if (last_chunk) streaming.markComplete(message_id)
 

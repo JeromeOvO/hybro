@@ -10,10 +10,6 @@ import { useMessageStore } from '@/stores/message-store'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { createInitialProcessingStatusLog } from './processing-status-log'
-import {
-  clearPendingSseForClientRequest,
-  resolveClientRequestMessageId,
-} from './sse-handlers/pending-turn-buffer'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 
 export type SendUserMessageInput = {
@@ -37,7 +33,6 @@ export function useSendMessage(
   setSending: (v: boolean) => void,
   setCancelling: (v: boolean) => void,
   reconcileWithDb: (roomId: string) => Promise<void>,
-  onPostMessageIdResolved?: (clientRequestId: string, messageId: string) => Promise<void>,
 ) {
   const sendUserMessage = useCallback(async ({
     userInput,
@@ -143,7 +138,6 @@ export function useSendMessage(
         const msgStoreTooLong = useMessageStore.getState()
         msgStoreTooLong.removeMessage(optimisticUserMessageId)
         msgStoreTooLong.removeMessage(lifecycle.placeholderId(roomId))
-        clearPendingSseForClientRequest(clientRequestId)
         rollbackRoomHistory()
         setSending(false)
         lifecycle.setSendGuard(false)
@@ -187,11 +181,10 @@ export function useSendMessage(
       if (!messageId) {
         console.error('SendMessage returned no message_id; treating as failure')
 
-        // Rollback optimistic entities and pending SSE state.
+        // Rollback optimistic entities.
         const msgStoreNoId = useMessageStore.getState()
         msgStoreNoId.removeMessage(optimisticUserMessageId)
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
-        clearPendingSseForClientRequest(clientRequestId)
         rollbackRoomHistory()
 
         banner.error('Message sent but server returned no ID. Please try again.')
@@ -243,15 +236,10 @@ export function useSendMessage(
 
       useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
 
-      // Set correlation before flushing buffered SSE. A fast terminal event
-      // can clear this state during the flush; do not rewrite it afterward.
+      // Set correlation state before any post-send SSE flows in. A fast
+      // terminal event can clear this state; do not rewrite it afterward.
       lifecycle.setMessageId(messageId)
       lifecycle.setPendingRunEventAck(clientRequestId)
-      resolveClientRequestMessageId(clientRequestId, messageId)
-
-      if (onPostMessageIdResolved) {
-        await onPostMessageIdResolved(clientRequestId, messageId)
-      }
 
       // Blob preview URLs are no longer needed now that server URLs are in
       // the store.  Revoke them to free browser blob memory.
@@ -287,7 +275,6 @@ export function useSendMessage(
       const msgStoreErr = useMessageStore.getState()
       msgStoreErr.removeMessage(optimisticUserMessageId)
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
-      clearPendingSseForClientRequest(clientRequestId)
       rollbackRoomHistory()
 
       banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -320,7 +307,7 @@ export function useSendMessage(
       // to prevent a race window where the user could double-send between
       // lifecycle.startProcessing(...) propagating through Zustand and the next render.
     }
-  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb, onPostMessageIdResolved])
+  }, [userId, userName, room, roomId, sending, sseConnected, getToken, setSending, lifecycle, setCancelling, reconcileWithDb])
 
   return { sendUserMessage }
 }

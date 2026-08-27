@@ -19,6 +19,8 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   const [error, setError] = useState<string | null>(null)
   const connectionRef = useRef<SSEConnection | null>(null)
   const resurrectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // ?snapshot=1 forced on the next connect (gap recovery, plan §4 rule 3).
+  const snapshotRef = useRef(false)
   
   const onMessageRef = useRef(onMessage)
   const onConnectionChangeRef = useRef(onConnectionChange)
@@ -71,6 +73,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
         roomId,
         getToken: () => getTokenRef.current?.() ?? Promise.resolve(null),
         onMessage: handleMessage,
+        snapshot: snapshotRef.current,
         onOpen: () => {
           clearResurrectTimer()
           handleConnectionChange(true)
@@ -123,6 +126,14 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     setError(null)
   }, [handleConnectionChange, clearResurrectTimer])
 
+  // Gap-recovery surface (plan §4 rule 3): close the stream and reconnect
+  // to the same endpoint with ?snapshot=1 for a fresh fold.
+  const reconnectWithSnapshot = useCallback(() => {
+    snapshotRef.current = true
+    disconnect()
+    void connectRef.current()
+  }, [disconnect])
+
   useEffect(() => {
     if (enabled && roomId) {
       if (connectionRef.current) {
@@ -150,6 +161,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
     error,
     connect,
     disconnect,
+    reconnectWithSnapshot,
     isConnected: () => connectionRef.current?.isConnected() ?? false
   }
 }

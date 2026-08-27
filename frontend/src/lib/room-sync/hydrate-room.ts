@@ -3,8 +3,6 @@ import {
   convertApiMessageToIncoming,
   detectAndMarkStaleTasks,
   filterHydrationMessages,
-  stampInferredTurnTerminalStatus,
-  collectActiveRunTriggerMessageIds,
 } from '@/stores/message-store'
 import { useMessageStore } from '@/stores/message-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
@@ -123,14 +121,8 @@ export async function hydrateRoomFromDb(options: HydrateRoomOptions): Promise<Hy
     }
 
     if (phase === 'initial') {
-      stampInferredTurnTerminalStatus(roomId, {
-        activeRunTriggerMessageIds: collectActiveRunTriggerMessageIds(options.room),
-      })
       markInitialHydrationComplete(roomId)
     } else {
-      stampInferredTurnTerminalStatus(roomId, {
-        activeRunTriggerMessageIds: collectActiveRunTriggerMessageIds(options.room),
-      })
       useMessageStore.getState().markDbSynced()
       pruneStaleProcessingPlaceholder(roomId)
     }

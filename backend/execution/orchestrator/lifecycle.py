@@ -17,6 +17,8 @@ SessionEventType = Literal[
     "model_attempt_started",
     "model_retry_scheduled",
     "model_attempt_failed",
+    "model_turn_completed",
+    "orchestrator_decision",
     "message_completed",
     "tool_execution_started",
     "tool_execution_completed",
@@ -76,8 +78,12 @@ class LifecycleEmitter:
         if terminal:
             try:
                 async with asyncio.timeout(self._settlement_timeout):
-                    for listener in listeners:
-                        await self._invoke(listener, event)
+                    await asyncio.gather(
+                        *(
+                            self._invoke(listener, event, settled=True)
+                            for listener in listeners
+                        )
+                    )
             except TimeoutError as exc:
                 self._error_hook(exc)
             return
@@ -85,10 +91,15 @@ class LifecycleEmitter:
             asyncio.create_task(self._invoke(listener, event))
 
     async def _invoke(
-        self, listener: SessionEventListener, event: SessionEvent
+        self,
+        listener: SessionEventListener,
+        event: SessionEvent,
+        *,
+        settled: bool = False,
     ) -> None:
         try:
-            async with asyncio.timeout(self._listener_timeout):
+            timeout = self._settlement_timeout if settled else self._listener_timeout
+            async with asyncio.timeout(timeout):
                 result = listener(event)
                 if inspect.isawaitable(result):
                     await result

@@ -1,9 +1,12 @@
 'use client'
 
+import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
+import { useTraceStore } from '@/stores/trace-store'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 import { UserMessageBlock } from './UserMessageBlock'
 import { TurnBody } from './TurnBody'
+import { TurnTracePanel } from './TurnTracePanel'
 import type { Ref } from 'react'
 
 interface TurnRendererProps {
@@ -24,9 +27,23 @@ export function TurnRenderer({
   const userEntity = useMessageStore(s =>
     turn.userMessageId ? s.entities[turn.userMessageId] : undefined,
   )
-  const hasAssistantSurface =
-    turn.agentResults.length > 0 ||
-    turn.processingStatusLogs.length > 0
+  const clientRequestId = userEntity?.clientRequestId
+  const traceNodes = useTraceStore(useShallow((state) => {
+    if (!clientRequestId) return []
+    return Object.values(state.nodes)
+      .filter((node) => node.clientRequestId === clientRequestId)
+      .sort((a, b) => a.receivedAt - b.receivedAt)
+  }))
+  const traceRunIds = traceNodes.map((node) => node.runId)
+  const traceRunStatus = useTraceStore((state) => (
+    traceRunIds.map((runId) => state.runStatuses[runId]).find(Boolean)
+  ))
+  const hasActivity = turn.processingStatusLogs.length > 0 || traceNodes.length > 0
+  const hasAssistantSurface = turn.agentResults.length > 0 || hasActivity
+  const isActivityRunning =
+    turn.status === 'active' &&
+    turn.phase !== 'completed' &&
+    turn.finalAnswer.kind !== 'hitl'
 
   return (
     <div className="conversation-turn">
@@ -48,7 +65,16 @@ export function TurnRenderer({
             onOpenDetail={onOpenAgentDetail}
             primarySurfaceRef={primarySurfaceRef}
             isLastTurn={isLastTurn}
+            renderProcessingLog={false}
           />
+          {hasActivity ? (
+            <TurnTracePanel
+              nodes={traceNodes}
+              statusEntries={turn.processingStatusLogs}
+              isRunning={isActivityRunning}
+              runStatus={traceRunStatus}
+            />
+          ) : null}
         </div>
       )}
     </div>
