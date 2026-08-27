@@ -97,7 +97,7 @@ describe('convertApiMessageToIncoming', () => {
       expect(getAgentName).toHaveBeenCalledWith('agent-42')
     })
 
-    it('falls back to "Agent" when getAgentName throws', async () => {
+    it('uses a neutral unknown label when getAgentName throws', async () => {
       const getAgentName = vi.fn().mockRejectedValue(new Error('not found'))
       const apiMsg = makeApiMessage({
         message_type: 'agent',
@@ -109,10 +109,10 @@ describe('convertApiMessageToIncoming', () => {
         makeOptions({ getAgentName }),
       )
 
-      expect(result.senderName).toBe('Agent')
+      expect(result.senderName).toBe('Unknown agent')
     })
 
-    it('falls back to "Agent" when no agent_id is available', async () => {
+    it('uses a neutral unknown label when no agent_id is available', async () => {
       const apiMsg = makeApiMessage({
         message_type: 'agent',
         agent_id: undefined,
@@ -120,7 +120,7 @@ describe('convertApiMessageToIncoming', () => {
       })
       const result = await convertApiMessageToIncoming(apiMsg, makeOptions())
 
-      expect(result.senderName).toBe('Agent')
+      expect(result.senderName).toBe('Unknown agent')
       expect(result.agentId).toBeUndefined()
     })
 

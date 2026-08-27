@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .models import (
     ArtifactRefPart,
@@ -81,6 +81,14 @@ def _find_final_message(
     return None
 
 
+def _accepted_public_tool_terminals_complete(run: OrchestratorRunState) -> bool:
+    return all(
+        entry.acceptance is None or entry.public_terminal_emitted
+        for batch in run.tool_batches
+        for entry in batch.entries
+    )
+
+
 def evaluate_terminal_decision(
     run: OrchestratorRunState,
     facts: TerminalDecisionFacts,
@@ -117,6 +125,12 @@ def evaluate_terminal_decision(
     ):
         return TerminalDecisionEvaluation(
             decision="waiting_external", reason="ToolBatch entry remains active"
+        )
+
+    if not _accepted_public_tool_terminals_complete(run):
+        return TerminalDecisionEvaluation(
+            decision="waiting_external",
+            reason="an accepted Tool public terminal is not durable",
         )
 
     if not facts.terminal_observations_persisted:
@@ -320,8 +334,19 @@ class TerminalStatusCommitRequest(ContractModel):
     public_run_target: str
     status: Literal["failed", "canceled", "budget_exhausted"]
     terminal_reason: str
+    cancellation_cause: (
+        Literal["user_requested", "room_closed", "shutdown", "policy"] | None
+    ) = None
     correlation_id: str | None = None
     created_at: datetime
+
+    @model_validator(mode="after")
+    def _cancellation_cause_matches_status(self) -> TerminalStatusCommitRequest:
+        if self.status == "canceled" and self.cancellation_cause is None:
+            raise ValueError("canceled terminal status requires cancellation_cause")
+        if self.status != "canceled" and self.cancellation_cause is not None:
+            raise ValueError("cancellation_cause is valid only for canceled status")
+        return self
 
 
 class TerminalStatusCommitResult(ContractModel):
@@ -342,6 +367,8 @@ def commit_terminal_status(
     if request.expected_state_version != run.state_version:
         return TerminalStatusCommitResult(outcome="conflict", run=run)
     if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+        return TerminalStatusCommitResult(outcome="conflict", run=run)
+    if not _accepted_public_tool_terminals_complete(run):
         return TerminalStatusCommitResult(outcome="conflict", run=run)
     expected_sequence = (
         max((item.event_sequence for item in run.projection_outbox), default=0) + 1
@@ -404,6 +431,7 @@ def commit_terminal_status(
         update={
             "status": request.status,
             "terminal_reason": request.terminal_reason,
+            "cancellation_cause": request.cancellation_cause,
             "projection_state": "pending",
             "projection_outbox": [*run.projection_outbox, *intents],
             "processed_command_ids": [

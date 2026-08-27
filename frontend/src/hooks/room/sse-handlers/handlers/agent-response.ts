@@ -116,7 +116,11 @@ export function handleAgentResponsePartial(
   )
 }
 
-export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomSSEFrameMap['agent_response']): Promise<void> {
+export async function handleAgentResponse(
+  ctx: SSEHandlerDeps,
+  sseMessage: RoomSSEFrameMap['agent_response'],
+  canonical = false,
+): Promise<void> {
   if (!sseMessage.data.message_id) return
 
   const store = useMessageStore.getState()
@@ -160,15 +164,17 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         }, 'sse')
       }
       streaming.clear(messageId)
-      const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
-        clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
-        relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
-      })
-      if (!stamped) {
-        maybeScheduleTurnTerminalRecovery(ctx, {
+      if (!canonical) {
+        const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
           clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
           relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
-        }, messageId, existing.agentId)
+        })
+        if (!stamped) {
+          maybeScheduleTurnTerminalRecovery(ctx, {
+            clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+            relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+          }, messageId, existing.agentId)
+        }
       }
       return
     }
@@ -209,14 +215,16 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
   }, 'sse')
   streaming.clear(messageId)
 
-  const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
-    clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
-    relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
-  })
-  if (!stamped) {
-    maybeScheduleTurnTerminalRecovery(ctx, {
+  if (!canonical) {
+    const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
       clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
       relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
-    }, messageId, agentId)
+    })
+    if (!stamped) {
+      maybeScheduleTurnTerminalRecovery(ctx, {
+        clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+        relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+      }, messageId, agentId)
+    }
   }
 }

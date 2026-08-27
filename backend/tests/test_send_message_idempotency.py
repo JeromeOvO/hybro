@@ -283,7 +283,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     assert room_services.run_message_preflight_to_room.await_count == 1
     assert orchestrator_router.process_room_user_message.await_count == 1
     assert len(internal_publisher.internal_events) == 1
-    assert run_lifecycle.record_processing_status.await_count == 1
+    assert run_lifecycle.record_processing_status.await_count == 0
     assert len(delivery_publisher.public_events) == 1
     assert room_services.cancellation_control.create_token.call_count == 1
     assert len(room_files.claims) == 2

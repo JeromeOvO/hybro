@@ -5,6 +5,11 @@ import {
   type ComposerShellAdapter,
 } from '@/components/composer/ComposerShell'
 import { useMessageStore } from '@/stores/message-store'
+import { useTurnStore } from '@/stores/turn-store'
+import { createSSEDispatcher } from '@/hooks/room/sse-handlers/dispatch'
+import type { AnySSEFrame } from '@/lib/types/sse'
+import { createProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 
 vi.mock('@/components/room-chat-input', () => ({
   RoomChatInput: (props: any) => (
@@ -19,6 +24,28 @@ vi.mock('@/components/room-chat-input', () => ({
     </div>
   ),
 }))
+
+function installCompletedCanonicalTurn(): void {
+  const result = useTurnStore.getState().replaceSnapshot('test-room', [{
+    hybro_turn_id: 'canonical-complete', run_id: 'canonical-complete',
+    user_message_id: 'canonical-user', client_request_id: 'canonical-client',
+    state: 'completed', started_at: '2030-01-01T00:00:00.000Z',
+    settled_at: '2030-01-01T00:00:01.000Z', duration_ms: 1000,
+    terminal_code: null, terminal_summary: null,
+    internal_turns: [{
+      internal_turn_id: 'canonical-turn', attempt: 1,
+      message_ids: ['canonical-final'], tool_call_ids: [], status: 'completed',
+    }],
+    activity: [], current_assistant: null,
+    final_answer: {
+      message_id: 'canonical-final', internal_turn_id: 'canonical-turn',
+      text: 'Done', status: 'completed', order: 4,
+    },
+    final_committed: true, hitl_interactions: [], active_interaction_id: null,
+    agent_call_message_ids: [],
+  }])
+  if (!result.ok) throw new Error(result.violation)
+}
 
 const mockAdapter: ComposerShellAdapter = {
   roomId: 'test-room',
@@ -53,6 +80,309 @@ describe('ComposerShell', () => {
     const store = useMessageStore.getState()
     store.clearRoom()
     store.setRoom('test-room')
+    useTurnStore.getState().clear()
+    useRoomUiStore.getState().setProcessing('test-room', false)
+  })
+
+  it('restores canonical HITL through connected → snapshot → composer wiring', async () => {
+    const ts = '2030-01-01T00:00:00.000Z'
+    const hitlRequestIndex = { current: new Map<string, string>() }
+    const requestSnapshot = vi.fn()
+    const dispatcher = createSSEDispatcher({
+      roomId: 'test-room',
+      lifecycle: createProcessingLifecycle(() => {}),
+      getAgentName: vi.fn().mockResolvedValue('Agent'),
+      getAgentSource: vi.fn(),
+      reconcileWithDb: vi.fn(),
+      hitlRequestIndex,
+      setCancelling: vi.fn(),
+      requestSnapshotRef: { current: requestSnapshot },
+    })
+    await dispatcher({
+      type: 'connected', timestamp: ts, room_id: 'test-room',
+      data: { connection_id: 'connection-1', room_seq: 2 },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        turn_lifecycle_schema: 1,
+        turns: [{
+          hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
+          client_request_id: 'client-1', state: 'awaiting_input',
+          started_at: ts, settled_at: null, duration_ms: null,
+          terminal_code: null, terminal_summary: null, internal_turns: [], activity: [],
+          current_assistant: null, final_answer: null, final_committed: false,
+          hitl_interactions: [{
+            interaction_id: 'interaction-1', state: 'awaiting_input',
+            request_ids: ['request-1'], requested_at: ts, resumed_at: null,
+            requests: [{
+              request_id: 'request-1', message_id: 'hitl-message-1',
+              question_index: 0, question_count: 1, prompt: 'Continue?',
+              prompt_type: 'confirmation', choices: [], source: 'supervisor',
+              agent_label: null, status: 'requested', answer_ref: null,
+            }],
+          }],
+          active_interaction_id: 'interaction-1', agent_call_message_ids: [],
+        }],
+        hitl: {
+          requests: [{
+            room_seq: 2, run_id: 'run-1', request_id: 'request-1',
+            message_id: 'hitl-message-1', interaction_id: 'interaction-1',
+            related_user_message_id: 'user-1', client_request_id: 'client-1',
+            question_index: 0, question_count: 1, prompt: 'Continue?',
+            prompt_type: 'confirmation', source: 'supervisor', ts,
+          }],
+          resolved: [],
+        },
+      },
+    } as AnySSEFrame)
+
+    await dispatcher({
+      type: 'processing_status', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 3, room_event_id: 'compat-1', trace_id: 'trace-1', status: 'awaiting_input',
+        message_id: 'user-1', related_message_id: 'user-1',
+        client_request_id: 'client-1', details: null,
+      },
+    } as AnySSEFrame)
+    expect(requestSnapshot).not.toHaveBeenCalled()
+    await dispatcher({
+      type: 'processing_status', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 4, room_event_id: 'compat-2', status: 'awaiting_input',
+        message_id: 'user-1', related_message_id: 'user-1',
+        client_request_id: 'client-1', details: null, agent_id: 'private',
+      },
+    } as AnySSEFrame)
+    // Compatibility processing adapters never participate in canonical
+    // lifecycle authority, regardless of extra legacy fields.
+    expect(requestSnapshot).not.toHaveBeenCalled()
+
+    render(<ComposerShell adapter={mockAdapter} />)
+    expect(screen.getByText('Continue?')).toBeDefined()
+    expect(screen.getByTestId('hitl-response-frame')).toBeDefined()
+    expect(hitlRequestIndex.current.get('request-1')).toBe('hitl-message-1')
+  })
+
+  it('releases the exact canonical processing guard after terminal snapshot recovery', async () => {
+    const ts = '2030-01-01T00:00:00.000Z'
+    const lifecycle = createProcessingLifecycle((processing) => {
+      useRoomUiStore.getState().setProcessing('test-room', processing)
+    })
+    lifecycle.startProcessing('user-1', 'client-1')
+    lifecycle.setProcessing(false)
+    const dispatcher = createSSEDispatcher({
+      roomId: 'test-room',
+      lifecycle,
+      getAgentName: vi.fn().mockResolvedValue('Agent'),
+      getAgentSource: vi.fn(),
+      reconcileWithDb: vi.fn(),
+      hitlRequestIndex: { current: new Map<string, string>() },
+      setCancelling: vi.fn(),
+      requestSnapshotRef: { current: vi.fn() },
+    })
+    await dispatcher({
+      type: 'connected', timestamp: ts, room_id: 'test-room',
+      data: { connection_id: 'connection-1', room_seq: 0 },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
+      },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
+        type: 'run_started', correlation_id: 'client-1',
+        payload: {
+          hybro_turn_id: 'run-1', user_message_id: 'user-1',
+          started_at: ts, mode: 'ultimate',
+        },
+      },
+    } as AnySSEFrame)
+    expect(lifecycle.isSendGuardActive()).toBe(true)
+    lifecycle.markSseDisconnection()
+
+    await dispatcher({
+      type: 'connected', timestamp: ts, room_id: 'test-room',
+      data: { connection_id: 'connection-2', room_seq: 2 },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
+        turns: [{
+          hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
+          client_request_id: 'client-1', state: 'completed', started_at: ts,
+          settled_at: '2030-01-01T00:00:01.000Z', duration_ms: 1000,
+          terminal_code: null, terminal_summary: null,
+          internal_turns: [{
+            internal_turn_id: 'turn-1', attempt: 1, message_ids: ['final-1'],
+            tool_call_ids: [], status: 'completed',
+          }],
+          activity: [], current_assistant: null,
+          final_answer: {
+            message_id: 'final-1', internal_turn_id: 'turn-1', text: 'Done',
+            status: 'completed', order: 4,
+          },
+          final_committed: true, hitl_interactions: [], active_interaction_id: null,
+          agent_call_message_ids: [],
+        }],
+      },
+    } as AnySSEFrame)
+
+    render(<ComposerShell adapter={mockAdapter} />)
+    expect(lifecycle.isSendGuardActive()).toBe(false)
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-processing')).toBe('false')
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-disabled')).toBe('false')
+  })
+
+  it('does not reactivate a settled guard for duplicate canonical run_started', async () => {
+    const ts = '2030-01-01T00:00:00.000Z'
+    const lifecycle = createProcessingLifecycle(() => {})
+    lifecycle.startProcessing('user-1', 'client-1')
+    lifecycle.setProcessing(false)
+    const dispatcher = createSSEDispatcher({
+      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
+      setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
+    })
+    await dispatcher({
+      type: 'connected', timestamp: ts, room_id: 'test-room',
+      data: { connection_id: 'connection-1', room_seq: 0 },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
+      },
+    } as AnySSEFrame)
+    const runStarted = {
+      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
+        type: 'run_started', correlation_id: 'client-1',
+        payload: {
+          hybro_turn_id: 'run-1', user_message_id: 'user-1',
+          started_at: ts, mode: 'ultimate',
+        },
+      },
+    }
+    await dispatcher(runStarted as AnySSEFrame)
+    expect(lifecycle.isSendGuardActive()).toBe(true)
+    await dispatcher({
+      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 2, event_id: 'event-settled', run_id: 'run-1', seq: 2,
+        type: 'run_settled', correlation_id: 'client-1',
+        payload: {
+          status: 'failed', started_at: ts, settled_at: ts, duration_ms: 0,
+          failure_code: 'internal_error', error_summary: 'Failed',
+        },
+      },
+    } as AnySSEFrame)
+    expect(lifecycle.isSendGuardActive()).toBe(false)
+
+    lifecycle.startProcessing('user-1', 'client-1')
+    lifecycle.setProcessing(false)
+    await dispatcher({
+      ...runStarted,
+      data: { ...runStarted.data, room_seq: 3, event_id: 'event-started-duplicate' },
+    } as AnySSEFrame)
+
+    expect(lifecycle.isSendGuardActive()).toBe(false)
+  })
+
+  it('does not stop unrelated legacy work for canonical run_settled', async () => {
+    const ts = '2030-01-01T00:00:00.000Z'
+    const lifecycle = createProcessingLifecycle(() => {})
+    lifecycle.startProcessing('legacy-user', 'legacy-client')
+    const dispatcher = createSSEDispatcher({
+      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
+      setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
+    })
+    await dispatcher({
+      type: 'connected', timestamp: ts, room_id: 'test-room',
+      data: { connection_id: 'connection-1', room_seq: 0 },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
+      },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 1, event_id: 'event-started', run_id: 'run-1', seq: 1,
+        type: 'run_started', correlation_id: 'canonical-client',
+        payload: {
+          hybro_turn_id: 'run-1', user_message_id: 'canonical-user',
+          started_at: ts, mode: 'ultimate',
+        },
+      },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'run_event', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 2, event_id: 'event-settled', run_id: 'run-1', seq: 2,
+        type: 'run_settled', correlation_id: 'canonical-client',
+        payload: {
+          status: 'failed', started_at: ts, settled_at: ts, duration_ms: 0,
+          failure_code: 'internal_error', error_summary: 'Failed',
+        },
+      },
+    } as AnySSEFrame)
+
+    expect(lifecycle.isSendGuardActive()).toBe(true)
+    expect(lifecycle.getMessageId()).toBe('legacy-user')
+    expect(lifecycle.getClientRequestId()).toBe('legacy-client')
+  })
+
+  it('preserves an unrelated active legacy guard in a mixed-room terminal snapshot', async () => {
+    const lifecycle = createProcessingLifecycle((processing) => {
+      useRoomUiStore.getState().setProcessing('test-room', processing)
+    })
+    lifecycle.startProcessing('legacy-user', 'legacy-client')
+    const ts = '2030-01-01T00:00:00.000Z'
+    const dispatcher = createSSEDispatcher({
+      roomId: 'test-room', lifecycle, getAgentName: vi.fn(), getAgentSource: vi.fn(),
+      reconcileWithDb: vi.fn(), hitlRequestIndex: { current: new Map() },
+      setCancelling: vi.fn(), requestSnapshotRef: { current: vi.fn() },
+    })
+    await dispatcher({
+      type: 'connected', timestamp: ts, room_id: 'test-room',
+      data: { connection_id: 'connection-1', room_seq: 2 },
+    } as AnySSEFrame)
+    await dispatcher({
+      type: 'snapshot', timestamp: ts, room_id: 'test-room',
+      data: {
+        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
+        turns: [{
+          hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'canonical-user',
+          client_request_id: 'canonical-client', state: 'failed', started_at: ts,
+          settled_at: '2030-01-01T00:00:01.000Z', duration_ms: 1000,
+          terminal_code: 'internal_error', terminal_summary: 'Failed',
+          internal_turns: [], activity: [], current_assistant: null, final_answer: null,
+          final_committed: false, hitl_interactions: [], active_interaction_id: null,
+          agent_call_message_ids: [],
+        }],
+      },
+    } as AnySSEFrame)
+
+    const legacyProcessing = useRoomUiStore.getState().rooms['test-room']?.processing ?? false
+    render(<ComposerShell adapter={{ ...mockAdapter, isProcessing: legacyProcessing }} />)
+    expect(lifecycle.isSendGuardActive()).toBe(true)
+    expect(screen.getByTestId('room-chat-input').getAttribute('data-disabled')).toBe('true')
   })
 
   it('renders in normal mode', () => {
@@ -61,7 +391,8 @@ describe('ComposerShell', () => {
     expect(screen.getByTestId('room-chat-input').getAttribute('data-target-mode')).toBe('room_default')
   })
 
-  it('keeps stop mode while the room lifecycle is processing between agent tasks', () => {
+  it('keeps active legacy processing authoritative after a canonical Turn completed', () => {
+    installCompletedCanonicalTurn()
     render(<ComposerShell adapter={{ ...mockAdapter, isProcessing: true }} />)
 
     const input = screen.getByTestId('room-chat-input')
@@ -98,7 +429,8 @@ describe('ComposerShell', () => {
     expect(screen.getByTestId('room-chat-input').getAttribute('data-disabled')).toBe('false')
   })
 
-  it('shows HitlResponseBar when there are pending HITLs', () => {
+  it('keeps active legacy HITL authoritative after a canonical Turn completed', () => {
+    installCompletedCanonicalTurn()
     const store = useMessageStore.getState()
     store.upsertMessage({
       id: 'user-1',
@@ -177,6 +509,7 @@ describe('ComposerShell HITL queuing', () => {
     const store = useMessageStore.getState()
     store.clearRoom()
     store.setRoom('test-room')
+    useTurnStore.getState().clear()
   })
 
   it('notes queued interactions beyond the first while in HITL mode', () => {

@@ -805,7 +805,15 @@ def test_unbound_collection_metadata_contains_required_indexes():
     assert set(collections) == {
         "orchestrator_runs",
         "orchestrator_run_events",
+        "orchestrator_recovery_leases",
     }
+    lease_names = {
+        item.name for item in collections["orchestrator_recovery_leases"].indexes
+    }
+    assert {
+        "orchestrator_recovery_lease_run_unique",
+        "orchestrator_recovery_lease_expiry",
+    } <= lease_names
     run_names = {item.name for item in collections["orchestrator_runs"].indexes}
     assert {
         "orchestrator_run_id_unique",

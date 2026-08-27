@@ -13,6 +13,8 @@ import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
+import { useCanonicalComposerAuthority } from '@/stores/turn-store'
+import { Badge } from '@/components/ui/badge'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
@@ -114,8 +116,14 @@ function useComposerState(roomId: string): ComposerState {
 
 export function ComposerShell({ adapter }: ComposerShellProps) {
   const composerState = useComposerState(adapter.roomId)
+  const canonical = useCanonicalComposerAuthority(adapter.roomId)
   const isHitlMode = composerState.mode === 'hitl_responding'
-  const isProcessing = composerState.isProcessing || adapter.isProcessing
+    || (canonical.awaitingInput && composerState.pendingHitls.length > 0)
+  // Mixed rooms retain independent authorities: a completed canonical Turn
+  // must never mask an active legacy processing/HITL/send guard (or vice versa).
+  const legacyProcessing = composerState.isProcessing || adapter.isProcessing
+  const isProcessing = canonical.processing || legacyProcessing
+  const normalComposerBlocked = canonical.normalComposerBlocked || legacyProcessing
 
   // Prefer an actionable open prompt over a transient applying recovery
   // state so follow-up HITL questions are not covered by "Applying…".
@@ -131,11 +139,11 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
     return (
       <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
         {queuedCount > 0 ? (
-          <div className="conversation-hitl-queue-note" data-testid="hitl-queue-note">
+          <Badge variant="secondary" className="mb-2" data-testid="hitl-queue-note">
             {queuedCount === 1
               ? '1 more input request is queued after this one.'
               : `${queuedCount} more input requests are queued after this one.`}
-          </div>
+          </Badge>
         ) : null}
         <HitlResponseBar
           hitls={activeHitls.map(toHitlPromptView)}
@@ -150,7 +158,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   return (
     <RoomChatInput
         onSubmit={adapter.onSendMessage}
-        disableSend={adapter.isSending || isProcessing || isHitlMode}
+        disableSend={adapter.isSending || normalComposerBlocked || isHitlMode}
         sending={adapter.isSending}
         processing={isProcessing}
         cancelling={adapter.isCancelling && isProcessing}

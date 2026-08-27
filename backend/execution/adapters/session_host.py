@@ -147,6 +147,49 @@ class RoomSessionHost:
     async def abort(self, room_id: str) -> None:
         await self._require_session(room_id).abort()
 
+    async def abort_run(self, run) -> None:
+        """Terminalize exactly one user-owned Run through its live signal/state machine.
+
+        A hosted Assistant/Tool execution is signaled and awaited so provider IO
+        stops before terminal children close. Suspended/restarted Runs have no
+        live signal; they re-enter the same Kernel terminalizer with the normal
+        lifecycle listener so HITL/Tool/Turn closure remains publicly durable.
+        """
+
+        session = self._sessions.get(run.room_id)
+        if session is not None and session.owns_run(run.run_id):
+            await session.abort()
+            return
+        if run.tool_catalog is None:
+            raise SessionConflict("Run has no frozen tool catalog")
+        emitter = self._new_lifecycle_emitter()
+
+        async def emit(event_type, current, payload):
+            await emitter.emit(
+                SessionEvent(
+                    event_type=event_type,
+                    session_id=f"cancel:{current.run_id}",
+                    run_id=current.run_id,
+                    causation_id=current.request.user_message_id,
+                    sequence=current.state_version,
+                    timestamp=self._clock.now(),
+                    payload=payload,
+                    room_id=current.room_id,
+                    user_message_id=current.request.user_message_id,
+                    client_request_id=current.client_request_id,
+                    lifecycle_family=current.lifecycle_family,
+                ),
+                terminal=True,
+            )
+
+        await self._kernel_factory(run.tool_catalog).terminalize(
+            run.run_id,
+            status="canceled",
+            reason="cancellation requested",
+            cancellation_cause="user_requested",
+            lifecycle=emit,
+        )
+
     def observation_sink(self) -> RunAddressedToolObservationSink:
         """Re-entry surface for observations with or without a live session."""
 
@@ -159,11 +202,18 @@ class RoomSessionHost:
             emitter = self._new_lifecycle_emitter()
 
             async def emit(event_type, run, payload):
-                if not (
-                    event_type == "message_completed"
-                    and payload.get("message_kind") == "tool_result"
+                if run.lifecycle_family == "legacy" and not (
+                    (
+                        event_type == "message_completed"
+                        and payload.get("message_kind") == "tool_result"
+                    )
+                    or event_type == "tool_execution_completed"
                 ):
                     return
+                # Canonical re-entry forwards every lifecycle boundary and
+                # awaits the durable listener before the Kernel checkpoints a
+                # public Tool terminal as emitted. Legacy retains its narrow
+                # compatibility projection.
                 # The observation checkpoint version is durable and monotonic.
                 # call_id is also included in downstream delivery identity, so
                 # parallel results at the same version cannot collide.
@@ -179,6 +229,7 @@ class RoomSessionHost:
                         room_id=run.room_id,
                         user_message_id=run.request.user_message_id,
                         client_request_id=run.client_request_id,
+                        lifecycle_family=run.lifecycle_family,
                     ),
                     terminal=True,
                 )

@@ -44,6 +44,15 @@ class HITLProjectionReader(Protocol):
     async def get_hitl_request(self, request_id: str) -> dict | None: ...
 
 
+def _public_agent_name(extend_info: object) -> str | None:
+    if not isinstance(extend_info, dict):
+        return None
+    value = extend_info.get("public_agent_name")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:160]
+
+
 def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | None:
     if not isinstance(extend_info, dict):
         return None
@@ -194,7 +203,9 @@ class RoomTimelineProjector:
             extend_info=_public_user_message_extend_info(user_msg.extend_info),
         )
 
-    async def _project_agent_message(self, agent_msg: RoomAgentMessage) -> RoomMessage:
+    async def _project_agent_message(  # noqa: C901
+        self, agent_msg: RoomAgentMessage
+    ) -> RoomMessage:
         stored_task = (
             agent_msg.message_content.message_task
             if agent_msg.message_content is not None
@@ -257,6 +268,9 @@ class RoomTimelineProjector:
                 agent_msg.agent_id or "agent",
             )
             public_extend_info["public_task_label"] = public_task_label
+            public_agent_name = _public_agent_name(agent_msg.extend_info)
+            if public_agent_name is not None:
+                public_extend_info["public_agent_name"] = public_agent_name
             public_dispatch_text = (
                 agent_msg.extend_info.get("public_dispatch_text")
                 if isinstance(agent_msg.extend_info, dict)

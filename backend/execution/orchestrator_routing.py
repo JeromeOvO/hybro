@@ -18,7 +18,6 @@ orchestrator's ``RoomSessionHost`` inputs also lives here, so
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -26,7 +25,6 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
-from common.dto.delivery import HITLResolvedEvent
 from common.dto.execution import HITLRequest
 from common.dto.hitl import (
     A2AInteractionSpec,
@@ -44,6 +42,11 @@ from execution.hitl.exceptions import (
     HITLRoomMismatchError,
 )
 from execution.orchestrator.a2a_runtime.hitl_prompt import prompt_type_for_question
+from execution.orchestrator.a2a_runtime.interaction_outcome import (
+    emit_hitl_resolved_events,
+    public_activity_message_id,
+    public_agent_label,
+)
 from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
 from execution.orchestrator.models import (
     AuthorizationBasis,
@@ -53,6 +56,7 @@ from execution.orchestrator.models import (
     TextPart,
     UserMessage,
 )
+from execution.orchestrator.public_text import sanitize_public_text
 from execution.orchestrator.session import (
     DefaultRunFactory,
     RunFactory,
@@ -74,16 +78,21 @@ _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
 _PROFILE_PINNED_FINALIZATION = "pass_through"
 
 
-def _public_activity_message_id(run_id: str, invocation_id: str) -> str:
-    return f"orchestrator:{run_id}:{invocation_id}"
-
-
 class UnsupportedEnvelopeError(ValueError):
     """The legacy envelope requests something the orchestrator cannot serve yet."""
 
 
 class OrchestratorRoutingError(RuntimeError):
     """The routing seam is misconfigured or a required binding is missing."""
+
+
+class OrchestratorHITLNotOwnedError(OrchestratorRoutingError):
+    """The interaction is not owned by the orchestrator A2A ingress.
+
+    Supervisor ``ask_user`` interactions materialize through the unified
+    Execution HITL service and must fall back to the legacy manager instead
+    of the orchestrator call-ledger ingress.
+    """
 
 
 class WebhookAuthenticationError(RuntimeError):
@@ -808,9 +817,15 @@ class DualRuntimeRouter:
         run = await self._runtime.run_store.load_by_user_message_id(user_message_id)
         if run is None:
             raise KeyError(user_message_id)
-        return await self._runtime.cancellation_coordinator.cancel_run(
+        await self._cancel_owned_hitl_for_run(run, reason=reason)
+        results = await self._runtime.cancellation_coordinator.cancel_run(
             run.run_id, reason=reason, deletion_id=deletion_id
         )
+        # Per-call cancellation is only descendant cleanup. The owning Run must
+        # win its own terminal state machine so an open Assistant, Tool batch,
+        # or suspended HITL round closes before canceled settlement.
+        await self._runtime.session_host.abort_run(run)
+        return results
 
     async def route_hitl_answer(
         self,
@@ -824,7 +839,7 @@ class DualRuntimeRouter:
             raise OrchestratorRoutingError("orchestrator HITL ingress is not bound")
         read = await self._runtime.hitl_port.read_interaction(interaction_id)
         if read is None:
-            raise KeyError(interaction_id)
+            raise OrchestratorHITLNotOwnedError(interaction_id)
         spec, route, _fingerprint = read
         if route.room_id != room_id:
             raise HITLRoomMismatchError("Room mismatch")
@@ -837,20 +852,15 @@ class DualRuntimeRouter:
             answers=mapped,
             authenticated_answerer_id=responder_id,
         )
-        # Continuation delivery records observations into the inbox. With
-        # recovery often disabled locally, sync-process recent observations
-        # so a parked awaiting_user run can leave suspension.
+        # The continuation coordinator durably publishes hitl_response and
+        # run_resumed before dispatch, so an immediate follow-up challenge
+        # cannot overtake the interaction it replaces. Then process the new
+        # observation so the parked Run can leave suspension.
         await self._wake_after_hitl_resume(route.call_record_id)
         if state == "delivery_uncertain":
             raise HITLDeliveryUncertainError(
                 "HITL answer was recorded but continuation delivery is uncertain"
             )
-        await self._emit_hitl_resolved_events(
-            room_id=room_id,
-            spec=spec,
-            route=route,
-            status="responded",
-        )
         return state
 
     async def cancel_hitl_interaction(
@@ -877,18 +887,45 @@ class DualRuntimeRouter:
         )
         if abandoned not in {"accepted", "replayed", "absent"}:
             raise HITLConflictError("HITL interaction could not be canceled")
-        await self._runtime.cancellation_coordinator.cancel_run(
-            route.orchestration_run_id,
-            reason="hitl_canceled",
-        )
-        await self._wake_after_hitl_resume(route.call_record_id)
+        # Close the public interaction before settling the owning Run; a
+        # terminal run_settled event is invalid while HITL remains active.
         await self._emit_hitl_resolved_events(
             room_id=room_id,
             spec=spec,
             route=route,
             status="canceled",
         )
+        await self._runtime.cancellation_coordinator.cancel_run(
+            route.orchestration_run_id,
+            reason="hitl_canceled",
+        )
+        run = await self._runtime.run_store.load(route.orchestration_run_id)
+        if run is not None:
+            await self._runtime.session_host.abort_run(run)
+        await self._wake_after_hitl_resume(route.call_record_id)
         return expected_version
+
+    async def _cancel_owned_hitl_for_run(self, run: Any, *, reason: str) -> None:
+        hitl_port = getattr(self._runtime, "hitl_port", None)
+        if hitl_port is None:
+            return
+        interactions = await hitl_port.get_eligible_interactions(run.room_id)
+        for spec, route, _fingerprint in interactions:
+            if route.orchestration_run_id != run.run_id:
+                continue
+            abandoned = await hitl_port.abandon(
+                spec.interaction_id,
+                call_record_id=route.call_record_id,
+                reason=reason,
+            )
+            if abandoned not in {"accepted", "replayed", "absent"}:
+                raise HITLConflictError("HITL interaction could not be canceled")
+            await self._emit_hitl_resolved_events(
+                room_id=run.room_id,
+                spec=spec,
+                route=route,
+                status="canceled",
+            )
 
     async def _wake_after_hitl_resume(self, call_record_id: str) -> None:
         if self._runtime is None:
@@ -929,35 +966,33 @@ class DualRuntimeRouter:
     ) -> None:
         if self._runtime is None:
             return
+        run = await self._runtime.run_store.load(route.orchestration_run_id)
+        canonical = getattr(run, "lifecycle_family", None) == "canonical"
         delivery = getattr(self._runtime, "hitl_delivery", None)
         if delivery is None:
+            if canonical:
+                raise OrchestratorRoutingError("canonical HITL delivery is not bound")
             return
-        run = await self._runtime.run_store.load(route.orchestration_run_id)
         call = await self._runtime.call_ledger.load_by_record_id(route.call_record_id)
         if call is None:
+            if canonical:
+                raise OrchestratorRoutingError(
+                    "canonical HITL call is unavailable for public closure"
+                )
             return
-        related_message_id = run.request.user_message_id if run is not None else None
-        client_request_id = run.client_request_id if run is not None else None
-        for index, question in enumerate(spec.questions):
-            event = HITLResolvedEvent(
-                room_id=room_id,
-                request_id=question.question_id,
-                message_id=_public_activity_message_id(
-                    route.orchestration_run_id, route.invocation_id
-                ),
-                source="agent",
-                status=status,
-                interaction_id=spec.interaction_id,
-                interaction_status=status,
-                interaction_version=route.interaction_revision,
-                question_count=len(spec.questions),
-                question_index=index,
-                related_message_id=related_message_id,
-                client_request_id=client_request_id,
-            )
-            result = delivery.emit(event)
-            if inspect.isawaitable(result):
-                await result
+        await emit_hitl_resolved_events(
+            record=call,
+            interaction=spec,
+            interaction_id=spec.interaction_id,
+            status=status,
+            hitl_delivery=delivery,
+            run_store=self._runtime.run_store,
+            canonical_control=getattr(
+                self._runtime.continuation,
+                "canonical_hitl_control",
+                None,
+            ),
+        )
 
     async def get_pending_hitl(self, room_id: str) -> list[HITLRequest]:
         if self._runtime is None:
@@ -981,9 +1016,25 @@ class DualRuntimeRouter:
                 continue
 
             user_message_id = run.request.user_message_id
+            secret_values = tuple(
+                getattr(self._runtime, "public_secret_values", ()) or ()
+            )
+            agent_name = public_agent_label(
+                call,
+                run,
+                secret_values=secret_values,
+            )
             for index, question in enumerate(spec.questions):
                 choices = (
-                    list(question.choices) if question.choices is not None else None
+                    [
+                        sanitize_public_text(
+                            choice,
+                            secret_values=secret_values,
+                        )[:500]
+                        for choice in list(question.choices)[:20]
+                    ]
+                    if question.choices is not None
+                    else None
                 )
                 requests.append(
                     HITLRequest(
@@ -991,17 +1042,13 @@ class DualRuntimeRouter:
                         room_id=room_id,
                         user_message_id=user_message_id,
                         source="agent",
-                        prompt=question.prompt,
-                        message_id=_public_activity_message_id(
-                            route.orchestration_run_id, route.invocation_id
-                        ),
-                        display_message_id=_public_activity_message_id(
-                            route.orchestration_run_id, route.invocation_id
-                        ),
-                        source_step_id=route.call_record_id,
-                        agent_id=route.agent_id,
-                        a2a_task_id=route.task_id,
-                        a2a_context_id=route.context_id,
+                        prompt=sanitize_public_text(
+                            question.prompt,
+                            secret_values=secret_values,
+                        )[:4000],
+                        message_id=public_activity_message_id(call, run),
+                        display_message_id=public_activity_message_id(call, run),
+                        agent_name=agent_name,
                         orchestration_run_id=route.orchestration_run_id,
                         client_request_id=run.client_request_id,
                         prompt_type=prompt_type_for_question(question),

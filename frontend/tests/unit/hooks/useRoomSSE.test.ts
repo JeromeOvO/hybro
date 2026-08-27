@@ -126,8 +126,10 @@ describe('useRoomSSE', () => {
     expect(result.current.connected).toBe(false)
   })
 
-  it('should forward messages through onMessage callback', async () => {
-    const onMessage = vi.fn()
+  it('should return the async onMessage result so the production SSE reader preserves order', async () => {
+    let release: (() => void) | undefined
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const onMessage = vi.fn().mockReturnValue(pending)
     renderHook(() =>
       useRoomSSE({ roomId: 'room-1', enabled: true, onMessage })
     )
@@ -136,11 +138,12 @@ describe('useRoomSSE', () => {
     })
 
     const msg = { type: 'heartbeat', room_id: 'room-1', timestamp: new Date().toISOString() }
-    act(() => {
-      ;(capturedOptions.onMessage as (m: unknown) => void)(msg)
-    })
+    const result = (capturedOptions.onMessage as (m: unknown) => Promise<void>)(msg)
 
     expect(onMessage).toHaveBeenCalledWith(msg)
+    expect(result).toBe(pending)
+    release?.()
+    await result
   })
 
   it('should call onConnectionChange when connection state changes', async () => {

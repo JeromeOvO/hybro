@@ -35,10 +35,12 @@ from common.a2a_constants import (
 )
 from common.dto.hitl import A2AInteractionSpec
 from common.types import Message, Task
-from common.utils.a2a_helpers import (
-    extract_parts_from_artifacts,
-    get_text_from_message,
+from common.utils.a2a_artifacts import (
+    canonical_data_part_bytes,
+    data_part_digest,
+    inline_data_artifact_identity,
 )
+from common.utils.a2a_helpers import extract_parts, get_text_from_message
 from common.utils.time import utcnow
 
 from .card_data import sdk_agent_card_data
@@ -47,6 +49,7 @@ from .translators import facade_result_to_model, message_to_completed_task
 from .webhook_payloads import parse_stream_response_payload
 
 logger = logging.getLogger(__name__)
+_MAX_INLINE_DATA_ARTIFACTS = 20
 
 # ---------------------------------------------------------------------------
 # Provider-neutral command mirrors (structural, never imported from the
@@ -223,6 +226,12 @@ def _extract_interaction_spec(task: Any) -> dict[str, Any] | None:
     return spec.model_dump(mode="json")
 
 
+def _artifact_value(artifact: Any, field: str) -> Any:
+    if isinstance(artifact, Mapping):
+        return artifact.get(field)
+    return getattr(artifact, field, None)
+
+
 def _task_to_observation_kwargs(  # noqa: C901
     task: Any,
     *,
@@ -237,55 +246,100 @@ def _task_to_observation_kwargs(  # noqa: C901
 ) -> dict[str, Any]:
     event_kind = _event_kind(task)
     status = _terminal_status(task)
-    content: list[dict[str, Any]] = []
-    artifact_refs: list[str] = []
-
-    text = get_text_from_message(getattr(task.status, "message", None))
-    # A2A puts task output in artifacts. Agents attach structured documents
-    # (JSON data parts) alongside a text summary; both must reach the kernel
-    # or it cannot read the real document and re-dispatches the same Agent
-    # until the budget runs out.
-    extracted = extract_parts_from_artifacts(list(task.artifacts or []))
-    if extracted.text_parts:
-        artifact_text = extracted.text
-        text = f"{text}\n{artifact_text}".strip() if text else artifact_text
-    for data_part in extracted.data_parts:
-        content.append(
-            {
-                "kind": "data",
-                "data": data_part.get("data", {}),
-                "mime_type": data_part.get("mime_type", "application/json"),
-            }
-        )
-    for file_part in extracted.file_parts:
-        file = file_part.get("file") if isinstance(file_part, Mapping) else None
-        uri = file.get("uri") if isinstance(file, Mapping) else None
-        if isinstance(uri, str) and uri:
-            artifact_refs.append(uri)
-    for artifact in list(task.artifacts or []):
-        uri = getattr(artifact, "uri", None)
-        if isinstance(uri, str) and uri and not getattr(artifact, "parts", None):
-            artifact_refs.append(uri)
-    if not text and extracted.file_parts:
-        descriptions = []
-        for file_part in extracted.file_parts:
-            file = file_part.get("file") if isinstance(file_part, Mapping) else None
-            name = (file.get("name") if isinstance(file, Mapping) else None) or "file"
-            mime = (
-                file.get("mime_type") or file.get("mimeType")
-                if isinstance(file, Mapping)
-                else None
-            ) or "binary"
-            descriptions.append(f"{name} ({mime})")
-        text = f"[Generated file: {', '.join(descriptions)}]"
-    if text:
-        content.append({"kind": "text", "text": text})
-
     stable_id = (
         observation_id or f"{source_kind}-{call_record_id}-{task_id}-{event_kind}"
     )
     if cursor:
         stable_id = f"{stable_id}-{cursor}"
+
+    content: list[dict[str, Any]] = []
+    inline_artifacts: list[dict[str, Any]] = []
+    artifact_refs: list[str] = []
+    artifact_text_parts: list[str] = []
+    generated_file_descriptions: list[str] = []
+
+    text = get_text_from_message(getattr(task.status, "message", None))
+    # The observation already durably owns structured A2A output. Give each
+    # DataPart a deterministic private Ref so later Agent calls can select and
+    # rematerialize it without model-authored JSON copying.
+    for artifact_index, artifact in enumerate(list(task.artifacts or [])):
+        parts = _artifact_value(artifact, "parts") or []
+        extracted = extract_parts(list(parts))
+        artifact_text_parts.extend(extracted.text_parts)
+        artifact_id = _artifact_value(artifact, "artifact_id")
+        artifact_name = _artifact_value(artifact, "name")
+        artifact_description = _artifact_value(artifact, "description")
+        for part_index, data_part in enumerate(extracted.data_parts):
+            data = data_part.get("data", {})
+            raw_metadata = data_part.get("metadata")
+            metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else None
+            mime_type = str(
+                data_part.get("mime_type")
+                or (metadata or {}).get("mime_type")
+                or "application/json"
+            )
+            content_index = len(content)
+            content.append(
+                {
+                    "kind": "data",
+                    "data": data,
+                    "mime_type": mime_type,
+                    "metadata": metadata,
+                }
+            )
+            if len(inline_artifacts) >= _MAX_INLINE_DATA_ARTIFACTS:
+                continue
+            canonical = canonical_data_part_bytes(
+                data, mime_type=mime_type, metadata=metadata
+            )
+            digest = data_part_digest(canonical)
+            ref_id = inline_data_artifact_identity(
+                observation_id=stable_id,
+                artifact_id=(str(artifact_id) if artifact_id else None),
+                artifact_index=artifact_index,
+                part_index=part_index,
+                content_digest=digest,
+            )
+            inline_artifacts.append(
+                {
+                    "ref_id": ref_id,
+                    "artifact_id": str(artifact_id) if artifact_id else None,
+                    "artifact_name": str(artifact_name) if artifact_name else None,
+                    "artifact_description": (
+                        str(artifact_description) if artifact_description else None
+                    ),
+                    "artifact_index": artifact_index,
+                    "part_index": part_index,
+                    "content_index": content_index,
+                    "mime_type": mime_type,
+                    "size_bytes": len(canonical),
+                    "content_digest": digest,
+                }
+            )
+            artifact_refs.append(ref_id)
+        for file_part in extracted.file_parts:
+            file = file_part.get("file") if isinstance(file_part, Mapping) else None
+            uri = file.get("uri") if isinstance(file, Mapping) else None
+            if isinstance(uri, str) and uri:
+                artifact_refs.append(uri)
+            name = (file.get("name") if isinstance(file, Mapping) else None) or "file"
+            mime_type = (
+                file.get("mime_type") or file.get("mimeType")
+                if isinstance(file, Mapping)
+                else None
+            ) or "binary"
+            generated_file_descriptions.append(f"{name} ({mime_type})")
+        uri = _artifact_value(artifact, "uri")
+        if isinstance(uri, str) and uri and not parts:
+            artifact_refs.append(uri)
+
+    if artifact_text_parts:
+        artifact_text = "".join(artifact_text_parts)
+        text = f"{text}\n{artifact_text}".strip() if text else artifact_text
+    if not text and generated_file_descriptions:
+        text = f"[Generated file: {', '.join(generated_file_descriptions)}]"
+    if text:
+        content.append({"kind": "text", "text": text})
 
     return {
         "observation_id": stable_id,
@@ -300,7 +354,8 @@ def _task_to_observation_kwargs(  # noqa: C901
         "agent_id": agent_id,
         "status": status,
         "content": content,
-        "artifact_refs": artifact_refs,
+        "inline_artifacts": inline_artifacts,
+        "artifact_refs": list(dict.fromkeys(artifact_refs)),
         "interaction_spec": _extract_interaction_spec(task)
         if event_kind in {"input_required", "auth_required"}
         else None,
@@ -700,14 +755,22 @@ class OrchestratorDirectA2AClient:
             kind = getattr(resource, "kind", None)
             payload = getattr(resource, "payload", None)
             mime_type = getattr(resource, "mime_type", None)
+            resource_metadata = getattr(resource, "metadata", None)
             if kind == "text":
                 parts.append({"kind": "text", "text": str(payload)})
             elif kind == "data":
+                metadata = (
+                    dict(resource_metadata)
+                    if isinstance(resource_metadata, Mapping)
+                    else {}
+                )
+                if mime_type is not None:
+                    metadata.setdefault("mime_type", mime_type)
                 parts.append(
                     {
                         "kind": "data",
                         "data": payload,
-                        "metadata": {"mime_type": mime_type},
+                        "metadata": metadata or None,
                     }
                 )
             elif kind == "file":

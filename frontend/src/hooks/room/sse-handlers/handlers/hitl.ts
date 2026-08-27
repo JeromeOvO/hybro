@@ -15,7 +15,8 @@ export async function handleHitlRequest(
     request_id, message_id, source, prompt, prompt_type, choices,
     agent_name, agent_id, step_number, total_steps, expires_at,
     interaction_id, interaction_status, interaction_version, application_status,
-    question_count, question_index, related_message_id,
+    question_count, question_index, related_message_id, related_user_message_id,
+    agent_label,
   } = sseMessage.data
 
   if (!request_id || !message_id) return
@@ -28,11 +29,11 @@ export async function handleHitlRequest(
     sseMessage.data.client_request_id.length > 0
       ? sseMessage.data.client_request_id
       : undefined
-  const hasEventTurnIdentity = !!eventClientRequestId || !!related_message_id
+  const hasEventTurnIdentity = !!eventClientRequestId || !!related_user_message_id || !!related_message_id
   const processingUser =
     findProcessingStatusUserEntity(roomId, {
       clientRequestId: eventClientRequestId,
-      relatedMessageId: related_message_id,
+      relatedMessageId: related_user_message_id ?? related_message_id,
       latestWithLogs: !hasEventTurnIdentity,
     }) ??
     (!hasEventTurnIdentity
@@ -72,7 +73,7 @@ export async function handleHitlRequest(
     }
   }
 
-  let resolvedAgentName = agent_name
+  let resolvedAgentName = agent_label ?? agent_name
   if (!resolvedAgentName && agent_id) {
     resolvedAgentName = await ctx.getAgentName(agent_id)
   }
@@ -99,7 +100,7 @@ export async function handleHitlRequest(
     groupIndex: question_index,
     stepNumber: step_number,
     totalSteps: total_steps,
-    relatedMessageId: related_message_id,
+    relatedMessageId: related_user_message_id ?? related_message_id,
     clientRequestId: sseMessage.data.client_request_id,
   }), 'sse')
   hitlRequestIndex.current.set(request_id, message_id)

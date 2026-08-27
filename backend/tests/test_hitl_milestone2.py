@@ -413,9 +413,25 @@ async def test_last_group_answer_applies_one_combined_payload():
     lifecycle.mark_interaction_application_state = AsyncMock(return_value=applied)
     lifecycle.get_resume_command_for_interaction_strict = AsyncMock(return_value=None)
     coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-    coordinator.finalize_applied = AsyncMock()
-    coordinator._apply_supervisor = AsyncMock(return_value={})
-    service = SimpleNamespace(persistence=persistence)
+    order: list[str] = []
+
+    async def finalize(*_args, reconcile_terminal=True, **_kwargs):
+        order.append("terminal_reconcile" if reconcile_terminal else "hitl_response")
+        return True
+
+    async def emit_resumed(_interaction):
+        order.append("run_resumed")
+
+    async def apply_supervisor(*_args, **_kwargs):
+        order.append("route_effect")
+        return {}
+
+    coordinator.finalize_applied = AsyncMock(side_effect=finalize)
+    coordinator._apply_supervisor = AsyncMock(side_effect=apply_supervisor)
+    service = SimpleNamespace(
+        persistence=persistence,
+        emit_canonical_resumed_control=emit_resumed,
+    )
 
     result = await coordinator.apply_interaction(
         service,
@@ -428,6 +444,61 @@ async def test_last_group_answer_applies_one_combined_payload():
         "Q: First?\nA: A\n\nQ: Second?\nA: B"
     )
     lifecycle.claim_interaction_application.assert_awaited_once()
+    assert coordinator.finalize_applied.await_count == 2
+    assert coordinator.finalize_applied.await_args_list[0].kwargs == {
+        "reconcile_terminal": False
+    }
+    assert coordinator.finalize_applied.await_args_list[1].kwargs == {}
+    assert order == [
+        "hitl_response",
+        "run_resumed",
+        "route_effect",
+        "terminal_reconcile",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_incomplete_response_projection_blocks_resume_and_route_effect():
+    row = _request_doc(
+        status="answer_recorded",
+        user_input="Shanghai",
+        answer_digest=_sha("Shanghai"),
+    )
+    claimed = _interaction(
+        status="applying",
+        application_revision=1,
+        answer_request_ids=["request-1"],
+        answer_refs=[{"request_id": "request-1", "digest": _sha("Shanghai")}],
+    )
+    lifecycle = MagicMock()
+    lifecycle.record_interaction_answer = AsyncMock(
+        return_value={
+            **claimed,
+            "status": "answers_recorded",
+            "application_claim_id": None,
+            "application_revision": 0,
+        }
+    )
+    lifecycle.claim_interaction_application = AsyncMock(return_value=claimed)
+    lifecycle.mark_interaction_application_state = AsyncMock(return_value=claimed)
+    persistence = MagicMock()
+    persistence.get_hitl_request = AsyncMock(return_value=row)
+    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+    coordinator.finalize_applied = AsyncMock(return_value=False)
+    coordinator._apply_supervisor = AsyncMock(return_value={})
+    service = SimpleNamespace(
+        persistence=persistence,
+        emit_canonical_resumed_control=AsyncMock(),
+    )
+
+    with pytest.raises(HITLRoutingFailedError, match="projection remains incomplete"):
+        await coordinator.apply_interaction(
+            service,
+            {**claimed, "status": "answers_recorded", "application_revision": 0},
+        )
+
+    service.emit_canonical_resumed_control.assert_not_awaited()
+    coordinator._apply_supervisor.assert_not_awaited()
 
 
 @pytest.mark.asyncio

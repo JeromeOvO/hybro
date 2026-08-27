@@ -3,6 +3,17 @@
 // Keep the official A2A states as the base contract, then add the task states
 // emitted by Hybro's backend but not yet represented by the JS SDK.
 import type { TaskState as A2ATaskState } from '@a2a-js/sdk'
+import type {
+  CanonicalRunEventData,
+  RoomSnapshotTurn,
+} from '@/lib/pi-turn/types'
+
+export type {
+  CanonicalHITLRequestData,
+  CanonicalHITLResponseData,
+  CanonicalRunEventData,
+  RoomSnapshotTurn,
+} from '@/lib/pi-turn/types'
 
 export type TaskState = A2ATaskState | 'policy-required' | 'expired'
 
@@ -140,7 +151,7 @@ export interface RoomSnapshotTraceRun {
   duration_ms: number
 }
 
-export type SnapshotData = {
+type SnapshotBase = {
   room_seq: number
   messages: RoomSnapshotMessage[]
   tasks: RoomSnapshotTask[]
@@ -152,6 +163,11 @@ export type SnapshotData = {
   streaming: Record<string, RoomSnapshotStream>
   trace: Record<string, RoomSnapshotTraceRun>
 }
+
+export type SnapshotData = SnapshotBase & (
+  | { turn_lifecycle_schema: 1; turns: RoomSnapshotTurn[] }
+  | { turn_lifecycle_schema?: never; turns?: never }
+)
 
 export type ProcessingStatus =
   | 'queued'
@@ -169,11 +185,12 @@ export type ProcessingStatusData = RoomEventMeta & {
   client_request_id: string
   status: ProcessingStatus
   details: Record<string, unknown> | null
+  related_message_id?: string | null
   agent_id?: string
   agents?: Array<Record<string, unknown>>
 }
 
-export type RunEventData = RoomEventMeta & {
+export type LegacyRunEventData = RoomEventMeta & {
   event_id: string
   run_id: string
   seq: number
@@ -182,7 +199,13 @@ export type RunEventData = RoomEventMeta & {
   correlation_id: string | null
 }
 
+/** Rolling-deploy union. Canonical members are closed and runtime validated;
+ * unknown legacy/private subtypes remain tolerated without entering the Turn fold. */
+export type RunEventData = CanonicalRunEventData | LegacyRunEventData
+
 export type TaskSubmittedData = RoomEventMeta & {
+  run_id?: string | null
+  opaque_public_call_id?: string | null
   message_id: string
   task_id: string
   agent_name: string
@@ -196,6 +219,8 @@ export type TaskSubmittedData = RoomEventMeta & {
 }
 
 export type TaskUpdateData = RoomEventMeta & {
+  run_id?: string | null
+  opaque_public_call_id?: string | null
   message_id: string
   status: string
   content?: string | null
@@ -268,15 +293,18 @@ export type TurnErrorData = RoomEventMeta & {
 export type ErrorData = GlobalErrorData | TurnErrorData
 
 export type HITLInputRequestedData = RoomEventMeta & {
+  run_id?: string | null
   request_id: string
   message_id: string
   related_message_id?: string | null
+  related_user_message_id?: string | null
   source: string
   prompt: string
   prompt_type: string
   choices?: unknown
   agent_id?: string | null
   agent_name?: string | null
+  agent_label?: string | null
   source_step_id?: string | null
   interaction_id?: string | null
   interaction_status?: string | null
@@ -291,11 +319,14 @@ export type HITLInputRequestedData = RoomEventMeta & {
 }
 
 export type HITLStatusUpdateData = RoomEventMeta & {
+  run_id?: string | null
   request_id: string
   message_id: string
   related_message_id?: string | null
+  related_user_message_id?: string | null
   source: string
   status: string
+  answer_ref?: string | null
   error_message?: string
   agent_id?: string | null
   agent_name?: string | null

@@ -87,11 +87,28 @@ async def test_jobs_skip_leader_gate_when_no_leader_bound():
     assert ran == [True]
 
 
-def test_worker_switches_default_off():
+def test_mandatory_worker_cadence_defaults_to_thirty_seconds():
     settings = Settings(_env_file=None)
-    assert settings.orchestrator_recovery_enabled is False
-    assert settings.orchestrator_projection_enabled is False
     assert settings.orchestrator_worker_interval_seconds == 30
+
+
+@pytest.mark.asyncio
+async def test_mandatory_workers_start_when_dependencies_are_bound():
+    recovery = OrchestratorRecoveryJob(interval_seconds=30)
+    recovery.set_recovery_deps(OrchestratorRecoveryDeps(recover_once=AsyncMock()))
+    projection = OrchestratorProjectionJob(interval_seconds=30)
+    projection.set_projection_deps(
+        OrchestratorProjectionDeps(project_once=AsyncMock(return_value=0))
+    )
+
+    await recovery.start()
+    await projection.start()
+    try:
+        assert recovery._running is True
+        assert projection._running is True
+    finally:
+        await projection.stop()
+        await recovery.stop()
 
 
 def test_container_wires_orchestrator_jobs_with_leader_gating():

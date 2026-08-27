@@ -148,6 +148,24 @@ describe('HitlResponseBar', () => {
     expect((email as HTMLInputElement).checked).toBe(true)
   })
 
+  it('registers textarea answers and submits directly', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{
+      ...baseHitl,
+      prompt: 'Add itinerary details',
+      promptType: 'textarea',
+    }], onSubmit)
+
+    const textarea = screen.getByPlaceholderText('Add the details needed to continue…')
+    fireEvent.change(textarea, { target: { value: 'Window seat and vegetarian meal' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'Window seat and vegetarian meal' }],
+      undefined,
+    ))
+  })
+
   it('never asks for authentication secrets in free text', () => {
     renderBar([{ ...baseHitl, prompt: 'Sign in to the carrier', promptType: 'authentication' }])
 

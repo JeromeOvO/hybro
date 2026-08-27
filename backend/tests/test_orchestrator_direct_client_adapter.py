@@ -16,6 +16,7 @@ from a2a_adapter.task_status import (
     build_failed_text_task,
     build_task_status,
 )
+from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
 from common.types import (
     Artifact,
     DataPart,
@@ -37,6 +38,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2AContinuationCommand,
     A2ADispatchCommand,
     A2ADispatchReceipt,
+    MaterializedResourcePart,
     NormalizedA2AObservation,
 )
 from execution.orchestrator.models import ToolResult
@@ -164,6 +166,44 @@ async def test_send_terminal_builds_terminal_receipt_and_observation():
     assert obs.binding_scope == endpoint_scope_digest("https://agent.example/a2a")
 
 
+async def test_send_rematerialized_data_preserves_payload_metadata():
+    task = build_completed_text_task(task_id="task-1", text="done", context_id="ctx-1")
+
+    async def send(card, message, kwargs):
+        return {"kind": "task", "result": _task_dict(task)}
+
+    sdk = FakeSdk(send=send)
+    await _client(sdk).send(
+        _dispatch_command(
+            materialized_resources=[
+                MaterializedResourcePart(
+                    ref_id="art_inline",
+                    kind="data",
+                    content_digest="digest",
+                    payload={"value": 42},
+                    mime_type="application/vnd.hybro.result+json",
+                    metadata={
+                        "mime_type": "application/vnd.hybro.result+json",
+                        "schema": "v1",
+                    },
+                )
+            ]
+        )
+    )
+
+    sent_message = sdk.send_calls[0][1]
+    data_part = next(
+        part.root
+        for part in sent_message.parts
+        if getattr(part.root, "kind", None) == "data"
+    )
+    assert data_part.data == {"value": 42}
+    assert data_part.metadata == {
+        "mime_type": "application/vnd.hybro.result+json",
+        "schema": "v1",
+    }
+
+
 async def test_send_nonterminal_returns_accepted_with_task_identity():
     task = Task(
         id="task-1",
@@ -226,7 +266,12 @@ async def test_send_inline_data_artifact_reaches_observation_with_text():
     artifact = Artifact(
         artifact_id="artifact-1",
         name="cyber_quote",
-        parts=[DataPart(data={"premium": "USD 35,700", "limit": 5000000})],
+        parts=[
+            DataPart(
+                data={"premium": "USD 35,700", "limit": 5000000},
+                metadata={"mime_type": "application/vnd.hybro.quote+json"},
+            )
+        ],
     )
     task = Task(
         id="task-1",
@@ -246,6 +291,17 @@ async def test_send_inline_data_artifact_reaches_observation_with_text():
     assert texts == ["Quote ready, see attached document."]
     data = [part.data for part in observation.content if part.kind == "data"]
     assert data == [{"premium": "USD 35,700", "limit": 5000000}]
+    assert len(observation.inline_artifacts) == 1
+    descriptor = observation.inline_artifacts[0]
+    assert descriptor.ref_id.startswith("art_")
+    assert descriptor.artifact_id == "artifact-1"
+    assert descriptor.artifact_name == "cyber_quote"
+    assert descriptor.content_index == 0
+    assert descriptor.mime_type == "application/vnd.hybro.quote+json"
+    assert observation.content[0].metadata == {
+        "mime_type": "application/vnd.hybro.quote+json"
+    }
+    assert descriptor.ref_id in observation.artifact_refs
 
 
 async def test_start_poll_requests_nonblocking_and_returns_accepted():
@@ -280,6 +336,84 @@ async def test_open_stream_yields_normalized_observations():
     assert isinstance(events[0], NormalizedA2AObservation)
     assert events[0].event_kind == "terminal"
     await stream_obj.close(reason="terminal")
+
+
+async def test_open_stream_parses_standard_discriminated_interaction_frames():
+    async def stream(card, message, kwargs):
+        yield {
+            "result": {
+                "kind": "artifact-update",
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "append": False,
+                "lastChunk": True,
+                "artifact": {
+                    "artifactId": "artifact-1",
+                    "name": "draft",
+                    "parts": [{"kind": "text", "text": "Draft ready."}],
+                },
+            }
+        }
+        yield {
+            "result": {
+                "kind": "status-update",
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "final": True,
+                "status": {
+                    "state": "input-required",
+                    "message": {
+                        "kind": "message",
+                        "messageId": "message-2",
+                        "role": "agent",
+                        "parts": [{"kind": "text", "text": "Which island?"}],
+                        "metadata": {
+                            HYBRO_A2A_INTERACTION_METADATA_KEY: {
+                                "schema_version": 1,
+                                "interaction_id": "interaction-1",
+                                "questions": [
+                                    {
+                                        "question_id": "question-1",
+                                        "interaction_kind": "questionnaire",
+                                        "prompt": "Which island?",
+                                        "answer_kind": "text",
+                                        "required": True,
+                                    }
+                                ],
+                            }
+                        },
+                    },
+                },
+            }
+        }
+
+    client = _client(FakeSdk(stream=stream))
+    command = _dispatch_command()
+    stream_obj = await client.open_stream(command)
+    events = [event async for event in stream_obj]
+    await stream_obj.close(reason="interaction")
+
+    assert [event.event_kind for event in events] == ["working", "input_required"]
+    assert all(event.task_id == "task-1" for event in events)
+    assert all(event.context_id == "ctx-1" for event in events)
+    assert events[0].content[0].text == "Draft ready."
+    assert events[1].content[0].text == "Which island?"
+    assert events[1].interaction_spec == {
+        "schema_version": 1,
+        "interaction_id": "interaction-1",
+        "questions": [
+            {
+                "question_id": "question-1",
+                "interaction_kind": "questionnaire",
+                "prompt": "Which island?",
+                "answer_kind": "text",
+                "required": True,
+                "choices": None,
+            }
+        ],
+    }
+    assert client._addresses[command.call_record_id].task_id == "task-1"
+    assert client._addresses[command.call_record_id].context_id == "ctx-1"
 
 
 async def test_open_stream_assigns_per_frame_identity_and_registers_address():

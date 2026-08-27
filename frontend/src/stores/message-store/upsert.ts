@@ -1,4 +1,5 @@
 import { isTerminalState } from '@/lib/types/sse'
+import { patchedPublicAgentName } from '@/lib/agent-display-name'
 import { resolveDisplayType } from './resolve-display-type'
 import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData, ProcessingStatusLogEntry } from './types'
 
@@ -168,7 +169,9 @@ function mergeIncoming(
     roomId: incoming.roomId,
     messageType: incoming.messageType,
     content: incoming.content,
-    senderName: incoming.senderName,
+    senderName: incoming.messageType === 'agent'
+      ? (patchedPublicAgentName(existing.senderName, incoming.senderName) ?? incoming.senderName)
+      : incoming.senderName,
     timestamp: incoming.timestamp,
     agentId: incoming.agentId !== undefined ? incoming.agentId : existing.agentId,
     agentSource: incoming.agentSource !== undefined ? incoming.agentSource : existing.agentSource,

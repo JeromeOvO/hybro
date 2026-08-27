@@ -15,6 +15,7 @@ from .models import (
     A2AObservationInboxRecord,
     AgentCallLedgerRecord,
     AgentToolBindingRecord,
+    InlineDataArtifact,
     PreparedInvocationSnapshot,
     RoomEpoch,
 )
@@ -403,6 +404,22 @@ class InMemoryObservationInboxStore:
     ) -> A2AObservationInboxRecord | None:
         record = self._records.get(self._by_source.get(source_identity, ""))
         return _clone(record) if record is not None else None
+
+    async def load_inline_artifact(
+        self, ref_id: str
+    ) -> tuple[A2AObservationInboxRecord, InlineDataArtifact] | None:
+        matches = [
+            (record, artifact)
+            for record in self._records.values()
+            for artifact in record.observation.inline_artifacts
+            if artifact.ref_id == ref_id
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ValueError("inline artifact Ref is ambiguous")
+        record, artifact = matches[0]
+        return _clone(record), _clone(artifact)
 
     async def cas(
         self,

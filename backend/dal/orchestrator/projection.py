@@ -173,6 +173,7 @@ async def _repair_terminal_agent_cards(
         "expired": "expired",
     }
     terminal_at = run.updated_at
+    lifecycle_family = getattr(run, "lifecycle_family", "legacy")
     unresolved_state = "canceled" if run.status == "canceled" else "failed"
     for batch in run.tool_batches:
         for entry in batch.entries:
@@ -189,7 +190,7 @@ async def _repair_terminal_agent_cards(
                 ),
                 "task_updated_at": terminal_at,
             }
-            if result is not None:
+            if result is not None and lifecycle_family == "legacy":
                 rendered_parts = [
                     part.text
                     if isinstance(part, TextPart)
@@ -205,10 +206,17 @@ async def _repair_terminal_agent_cards(
                 text = "\n".join(part for part in rendered_parts if part).strip()
                 if text:
                     updates["message_content.message_text"] = text
+            public_call_id = (
+                entry.opaque_public_call_id
+                if lifecycle_family == "canonical"
+                else entry.call_id
+            )
+            if not public_call_id:
+                continue
             await messages.update_one(
                 {
                     "room_id": run.room_id,
-                    "message_id": f"orchestrator:{run.run_id}:{entry.call_id}",
+                    "message_id": f"orchestrator:{run.run_id}:{public_call_id}",
                     "extend_info.orchestrator_run_id": run.run_id,
                 },
                 {"$set": updates},

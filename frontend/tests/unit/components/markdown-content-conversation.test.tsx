@@ -47,6 +47,19 @@ describe('MarkdownContent conversation typography', () => {
     }
   })
 
+  itIfStreamdown('removes sandbox room-file destinations while preserving their label', () => {
+    const { container } = render(
+      <MarkdownContent
+        className="conversation-markdown-body"
+        content="Image: [Open the image here](sandbox:/api/v1/files/hallucinated/content)"
+      />,
+    )
+
+    expect(container).toHaveTextContent('Image: Open the image here')
+    expect(container).not.toHaveTextContent('blocked')
+    expect(container.querySelector('a')).toBeNull()
+  })
+
   itIfStreamdown('strips literal "4 spaces" prefix from supervisor-style nested fields', () => {
     const { container } = render(
       <div className="conversation-content-body">

@@ -382,11 +382,25 @@ class A2AObservationProcessor:
                     }
                 )
 
-        if observation.artifact_refs:
-            artifact_refs = await self.artifacts.materialize_inbound_artifacts(
+        inline_refs = {artifact.ref_id for artifact in observation.inline_artifacts}
+        remote_refs = [
+            ref for ref in observation.artifact_refs if ref not in inline_refs
+        ]
+        if remote_refs:
+            unique_remote_refs = list(dict.fromkeys(remote_refs))
+            durable_remote_refs = await self.artifacts.materialize_inbound_artifacts(
                 call=record,
-                artifact_refs=observation.artifact_refs,
+                artifact_refs=unique_remote_refs,
                 observation_id=observation.observation_id,
+            )
+            durable_by_source = dict(
+                zip(unique_remote_refs, durable_remote_refs, strict=True)
+            )
+            artifact_refs = list(
+                dict.fromkeys(
+                    ref if ref in inline_refs else durable_by_source[ref]
+                    for ref in observation.artifact_refs
+                )
             )
             observation = observation.model_copy(
                 update={"artifact_refs": artifact_refs}

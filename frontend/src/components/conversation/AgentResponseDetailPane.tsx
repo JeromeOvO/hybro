@@ -19,10 +19,10 @@ interface AgentResponseDetailPaneProps {
   onClose: () => void
 }
 
-function useAgentFromCatalog(agentId: string): Agent | undefined {
+function useAgentFromCatalog(agentId?: string): Agent | undefined {
   const qc = useQueryClient()
   const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
-  return agents?.find(a => a.agent_id === agentId)
+  return agentId ? agents?.find(a => a.agent_id === agentId) : undefined
 }
 
 function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
@@ -53,7 +53,9 @@ function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
 }
 
 function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
-  const message = detail.taskError || detail.taskStatusMessage || 'No response content yet.'
+  const message = detail.taskError
+    || detail.taskStatusMessage
+    || (detail.isStreaming ? 'Loading response…' : 'No response content available.')
   return (
     <div className="text-sm" style={{ color: 'var(--conversation-text-muted)' }}>
       {message}
@@ -101,7 +103,7 @@ function AgentResponseDetailHeader({
             />
           ) : null}
           <img
-            src={getAgentAvatarUri(detail.agentId)}
+            src={getAgentAvatarUri(detail.agentId ?? detail.agentName)}
             alt=""
             className="w-full h-full"
             style={{ display: iconUrl ? 'none' : 'block' }}
@@ -111,12 +113,16 @@ function AgentResponseDetailHeader({
 
       <div className="conversation-detail-agent-main">
         <div className="conversation-detail-agent-name">
-          <Link
-            href={`/agents/${encodeURIComponent(detail.agentId)}`}
-            className="hover:underline focus-visible:outline-none truncate"
-          >
-            {detail.agentName}
-          </Link>
+          {detail.agentId ? (
+            <Link
+              href={`/agents/${encodeURIComponent(detail.agentId)}`}
+              className="hover:underline focus-visible:outline-none truncate"
+            >
+              {detail.agentName}
+            </Link>
+          ) : (
+            <span className="truncate">{detail.agentName}</span>
+          )}
           {detail.agentSource != null && (
             <AgentSourceBadge
               source={detail.agentSource}
@@ -173,7 +179,7 @@ function AgentResponseDetailHeader({
 
 export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetailPaneProps) {
   const hasContent = detail.content.trim().length > 0
-  const displayArtifacts = filterDuplicateTextArtifacts(detail.artifacts, detail.content)
+  const displayArtifacts = filterDuplicateTextArtifacts(detail.artifacts, detail.content) ?? []
   const bodyRef = useRef<HTMLDivElement>(null)
 
   useDetailPaneScroll(
@@ -197,9 +203,9 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
               <div className={`conversation-content-body ${detail.isStreaming ? 'conversation-streaming-cursor' : ''}`}>
                 <MarkdownContent className="conversation-markdown-body" content={detail.content} isStreaming={detail.isStreaming} />
               </div>
-            ) : (
+            ) : displayArtifacts.length === 0 ? (
               <EmptyResponse detail={detail} />
-            )}
+            ) : null}
             {displayArtifacts && displayArtifacts.length > 0 && (
               <ArtifactList artifacts={displayArtifacts} />
             )}

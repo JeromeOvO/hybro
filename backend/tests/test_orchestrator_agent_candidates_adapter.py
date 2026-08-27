@@ -125,10 +125,15 @@ async def test_skills_produce_per_skill_and_whole_agent_candidates():
     info = _info(
         "agent-1",
         raw_card={
+            "name": "Weather Agent",
             "skills": [
-                {"id": "skill-1", "name": "Summarize", "description": "summary"},
-                {"id": "skill-2", "name": "Translate", "description": "translate"},
-            ]
+                {
+                    "id": "skill-1",
+                    "name": "Get Current Weather",
+                    "description": "current weather",
+                },
+                {"id": "skill-2", "name": "Get Forecast", "description": "forecast"},
+            ],
         },
     )
     source = AgentServiceCandidateSource(
@@ -144,3 +149,8 @@ async def test_skills_produce_per_skill_and_whole_agent_candidates():
     )
     skill_ids = {candidate.skill_id for candidate in candidates}
     assert skill_ids == {"skill-1", "skill-2", None}
+    current = next(
+        candidate for candidate in candidates if candidate.skill_id == "skill-1"
+    )
+    assert current.agent_display_name == "Weather Agent"
+    assert current.display_name == "Weather Agent - Get Current Weather"

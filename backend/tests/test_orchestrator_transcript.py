@@ -72,6 +72,58 @@ def test_lossless_conversion_preserves_complete_tool_pairs_and_notices():
     assert unresolved_call_ids([assistant(), result()]) == set()
 
 
+def test_orchestration_context_bounds_resolved_plans_and_labels_result_provenance():
+    long_task = "A" * 3_000 + "PRIVATE_MIDDLE" + "Z" * 3_000
+    planned = assistant().model_copy(
+        update={
+            "tool_calls": [
+                ToolCall(
+                    call_id="call-1",
+                    tool_name="echo",
+                    arguments={"task": long_task, "attachment_refs": ["file-1"]},
+                )
+            ]
+        }
+    )
+
+    converted = agent_messages_to_model(
+        [planned, result()], prepare_orchestration_context=True
+    )
+
+    arguments = converted[0].content[1].arguments
+    assert arguments["task"].startswith(
+        "[historical plan, not evidence; middle omitted]"
+    )
+    assert "PRIVATE_MIDDLE" not in arguments["task"]
+    assert len(arguments["task"]) < 2_400
+    assert arguments["attachment_refs"] == ["file-1"]
+    observation = converted[1].content[0].content[0].text
+    assert observation.startswith(
+        "[agent observation: verified completed result; usable as evidence]"
+    )
+    # Context preparation never mutates the durable transcript.
+    assert planned.tool_calls[0].arguments["task"] == long_task
+
+
+def test_orchestration_context_marks_failed_results_as_diagnostic_only():
+    failed = result().model_copy(
+        update={"status": "failed", "is_error": True, "error_message": "timeout"}
+    )
+
+    converted = agent_messages_to_model(
+        [assistant(), failed], prepare_orchestration_context=True
+    )
+
+    assert (
+        converted[1]
+        .content[0]
+        .content[0]
+        .text.startswith(
+            "[agent observation: status=failed; diagnostic only, not evidence]"
+        )
+    )
+
+
 def test_unresolved_calls_are_reported_and_orphan_results_rejected():
     assert unresolved_call_ids([assistant()]) == {"call-1"}
     with pytest.raises(TranscriptCorruptionError, match="orphan"):

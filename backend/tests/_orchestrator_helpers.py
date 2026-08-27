@@ -144,9 +144,10 @@ def user_message(text: str = "hello") -> UserMessage:
 
 def make_run(**profile_kwargs) -> OrchestratorRunState:
     config = session_config(**profile_kwargs)
-    return DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()).create_run(
-        config=config, message=user_message(), client_request_id="request-1"
-    )
+    return DefaultRunFactory(
+        clock=FixedClock(),
+        id_factory=FixedIDs(),
+    ).create_run(config=config, message=user_message(), client_request_id="request-1")
 
 
 async def make_kernel(
@@ -155,6 +156,7 @@ async def make_kernel(
     run: OrchestratorRunState | None = None,
     tool_runtime: RecordingFakeToolRuntime | None = None,
     run_store: InMemoryOrchestratorRunStore | None = None,
+    supervisor_hitl=None,
 ):
     run = run or make_run()
     store = run_store or InMemoryOrchestratorRunStore()
@@ -172,6 +174,7 @@ async def make_kernel(
         projection_driver=InMemoryProjectionDriver(store),
         clock=FixedClock(),
         id_factory=FixedIDs(),
+        supervisor_hitl=supervisor_hitl,
     )
     return kernel, store, runtime, tools
 

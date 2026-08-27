@@ -285,7 +285,9 @@ def _observation_result(
         tool_name=record.tool_name,
         status=observation.status,
         content=observation.content,
-        artifact_refs=observation.artifact_refs,
+        artifact_refs=list(
+            dict.fromkeys([*record.artifact_refs, *observation.artifact_refs])
+        ),
         error_code=observation.error_code,
         error_message=observation.error_message,
     )

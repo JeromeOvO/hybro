@@ -110,6 +110,7 @@ from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
 from models.room import UserAttachment
 from orchestrator_composition import (
     OrchestratorCompositionError,
+    configured_public_secret_values,
     create_orchestrator_runtime,
     validate_orchestrator_runtime,
 )
@@ -292,6 +293,14 @@ def validate_runtime_bindings(
 
     if getattr(app.state, "execution_deps", None) is None:
         errors.append("app.state.execution_deps")
+    if getattr(app.state, "orchestrator_runtime", None) is None:
+        errors.append("app.state.orchestrator_runtime")
+    execution_facade = getattr(app.state, "execution_facade", None)
+    if (
+        execution_facade is None
+        or getattr(execution_facade, "_orchestrator_router", None) is None
+    ):
+        errors.append("app.state.execution_facade.orchestrator_router")
 
     api_gateway_deps = getattr(app.state, "api_gateway_deps", None)
     for missing in missing_required_deps(api_gateway_deps):
@@ -338,18 +347,38 @@ async def _resolve_orchestrator_agent_facts(
         ),
         None,
     )
-    label = (
+    from execution.orchestrator.public_text import enforce_public_label_policy
+
+    raw_label = (
         catalog_entry.definition.label.strip()
         if catalog_entry is not None and catalog_entry.definition.label.strip()
         else "Agent"
     )
+    label = enforce_public_label_policy(
+        raw_label,
+        secret_values=getattr(runtime, "public_secret_values", ()),
+    )
     agent_id: str | None = None
+    binding = None
     if catalog_entry is not None:
         try:
             binding = await runtime.binding_store.load(catalog_entry.binding.binding_id)
         except Exception:
             binding = None
         agent_id = binding.agent_id if binding is not None else None
+    raw_agent_name = (
+        binding.agent_display_name
+        if binding is not None and binding.agent_display_name
+        else (
+            raw_label
+            if getattr(run, "lifecycle_family", "legacy") == "legacy"
+            else "Unknown agent"
+        )
+    )
+    agent_name = enforce_public_label_policy(
+        raw_agent_name,
+        secret_values=getattr(runtime, "public_secret_values", ()),
+    )
     task_text = ""
     for message in run.transcript:
         if not isinstance(message, AssistantMessage):
@@ -362,10 +391,44 @@ async def _resolve_orchestrator_agent_facts(
     result = entry.buffered_terminal_result if entry is not None else None
     return {
         "label": label,
+        "agent_name": agent_name,
         "agent_id": agent_id or "",
         "task_text": task_text or f"Delegate work to {label}.",
         "result": result,
     }
+
+
+def _latest_canonical_parent_id(records: list[dict[str, object]]) -> str | None:
+    """Recover the latest durable semantic parent after process restart."""
+
+    latest = max(records, key=lambda item: int(item.get("room_seq") or 0), default=None)
+    if latest is None:
+        return None
+    return str(latest.get("room_event_id") or "") or None
+
+
+def _canonical_final_message_end_parent_id(
+    records: list[dict[str, object]], message_id: str
+) -> str | None:
+    """Resolve the exact durable final message_end, independent of cache order."""
+
+    parent = next(
+        (
+            record
+            for record in sorted(
+                records,
+                key=lambda item: int(item.get("room_seq") or 0),
+                reverse=True,
+            )
+            if isinstance(record.get("payload_public"), dict)
+            and record["payload_public"].get("type") == "message_end"
+            and isinstance(record["payload_public"].get("payload"), dict)
+            and record["payload_public"]["payload"].get("message_id") == message_id
+            and record["payload_public"]["payload"].get("disposition") == "final"
+        ),
+        None,
+    )
+    return str(parent.get("room_event_id") or "") or None if parent else None
 
 
 async def _emit_working_card(
@@ -380,26 +443,33 @@ async def _emit_working_card(
     now: datetime,
 ) -> None:
     """Emit task_submitted + working task_update for a live agent card."""
+    canonical = run.lifecycle_family == "canonical"
+    public_call_id = message_id.rsplit(":", 1)[-1] if canonical else None
     await delivery.send_task_submitted(
         room_id=run.room_id,
         message_id=message_id,
         task_id=task_id,
         agent_name=label,
-        agent_id=agent_id or None,
+        agent_id=None if canonical else (agent_id or None),
+        run_id=run.run_id if canonical else None,
+        opaque_public_call_id=public_call_id,
         status="working",
         related_message_id=run.request.user_message_id,
         created_at=now.isoformat(),
         step_number=None,
         total_steps=None,
-        task_content=f"Requesting {label}",
+        task_content=None if canonical else f"Requesting {label}",
         client_request_id=run.client_request_id,
     )
     await delivery.send_task_update(
         room_id=run.room_id,
         message_id=message_id,
         status="working",
-        status_message=f"Requesting {label}",
-        agent_id=agent_id or None,
+        run_id=run.run_id if canonical else None,
+        opaque_public_call_id=public_call_id,
+        status_message=None if canonical else f"Requesting {label}",
+        agent_id=None if canonical else (agent_id or None),
+        related_message_id=run.request.user_message_id,
         client_request_id=run.client_request_id,
     )
 
@@ -537,29 +607,47 @@ async def _project_orchestrator_agent_activity(
         run=run, runtime=runtime, call_id=call_id
     )
     label = facts["label"]
+    agent_name = facts["agent_name"]
+    public_call_id = call_id
+    if run.lifecycle_family == "canonical":
+        public_call_id = next(
+            (
+                entry.opaque_public_call_id
+                for batch in run.tool_batches
+                for entry in batch.entries
+                if entry.call_id == call_id and entry.opaque_public_call_id
+            ),
+            "",
+        )
+        if not public_call_id:
+            return
     now = datetime.now(UTC)
-    message_id = f"orchestrator:{run.run_id}:{call_id}"
+    message_id = f"orchestrator:{run.run_id}:{public_call_id}"
     common = dict(
         room_id=run.room_id,
         message_id=message_id,
         message_created_at=now,
         message_type="agent",
         user_id=run.request.requesting_subject_id,
-        agent_id=facts["agent_id"],
+        agent_id=("" if run.lifecycle_family == "canonical" else facts["agent_id"]),
         run_id=run.run_id,
         client_request_id=run.client_request_id,
         related_message_id=run.request.user_message_id,
-        task_content=f"Requesting {label}",
+        task_content=(
+            "" if run.lifecycle_family == "canonical" else f"Requesting {label}"
+        ),
         task_created_at=now,
         task_updated_at=now,
     )
-    task_id = f"orchestrator-task-{call_id}"
+    task_id = f"orchestrator-task-{public_call_id}"
 
     if event.event_type == "tool_execution_started":
         document = RoomAgentMessage(
             **common,
             message_content=MessageContent(
-                message_text=facts["task_text"],
+                message_text=(
+                    "" if run.lifecycle_family == "canonical" else facts["task_text"]
+                ),
                 message_task=Task(
                     id=task_id,
                     kind="task",
@@ -571,21 +659,28 @@ async def _project_orchestrator_agent_activity(
             ),
             extend_info={
                 "public_task_label": f"Requesting {label}",
-                "public_dispatch_text": facts["task_text"],
-                "public_agent_name": label,
+                "public_dispatch_text": (
+                    "" if run.lifecycle_family == "canonical" else facts["task_text"]
+                ),
+                "public_agent_name": agent_name,
                 "orchestrator_run_id": run.run_id,
             },
         )
         await message_store.upsert_room_agent_message(document)
-        if delivery is not None:
+        # Canonical Agent Cards are folded from tool_execution_* room events;
+        # task_submitted/task_update are not emitted for canonical Runs. The
+        # legacy conversation surface keeps its task_* card contract.
+        if delivery is not None and run.lifecycle_family != "canonical":
             await _emit_working_card(
                 delivery=delivery,
                 run=run,
                 message_id=message_id,
                 task_id=task_id,
-                label=label,
+                label=agent_name,
                 agent_id=facts["agent_id"],
-                task_text=facts["task_text"],
+                task_text=(
+                    "" if run.lifecycle_family == "canonical" else facts["task_text"]
+                ),
                 now=now,
             )
         return
@@ -605,7 +700,9 @@ async def _project_orchestrator_agent_activity(
         for part in result.content
         if result is not None and hasattr(part, "text") and part.text
     ]
-    if text_parts:
+    if run.lifecycle_family == "canonical":
+        result_text = ""
+    elif text_parts:
         result_text = "\n".join(text_parts)[:8000]
     else:
         import json as _json
@@ -638,24 +735,32 @@ async def _project_orchestrator_agent_activity(
         ),
         extend_info={
             "public_task_label": f"Requesting {label}",
-            "public_dispatch_text": facts["task_text"],
-            "public_agent_name": label,
+            "public_dispatch_text": (
+                "" if run.lifecycle_family == "canonical" else facts["task_text"]
+            ),
+            "public_agent_name": agent_name,
             "orchestrator_run_id": run.run_id,
         },
     )
     await message_store.upsert_room_agent_message(document)
-    if delivery is not None:
+    # Canonical Agent Cards are folded from tool_execution_* room events;
+    # task_submitted/task_update are not emitted for canonical Runs. The
+    # legacy conversation surface keeps its task_* card contract.
+    if delivery is not None and run.lifecycle_family != "canonical":
         await delivery.send_task_update(
             room_id=run.room_id,
             message_id=message_id,
             status=str(state.value),
             content=result_text,
-            agent_name=label,
+            run_id=None,
+            opaque_public_call_id=None,
+            agent_name=agent_name,
             agent_id=facts["agent_id"] or None,
             related_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
             task_content=f"Requesting {label}",
             parts=sse_parts if sse_parts else None,
+            delivery_id=(f"orchestrator:{run.run_id}:{call_id}:terminal:{state.value}"),
         )
 
 
@@ -845,14 +950,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # (Room Stream Snapshot plan §5). The snapshot service serves the
             # per-connect snapshot and the per-connection resync provider;
             # the store is also exposed on app.state for the replay endpoint.
-            from delivery.room_events import MongoRoomEventStore
             from delivery.snapshot import SnapshotService
 
-            _room_event_store = MongoRoomEventStore(mongo=mongo_dal)
-            try:
-                await _room_event_store.ensure_indexes()
-            except Exception:
-                logger.warning("room_events index creation failed", exc_info=True)
+            _room_event_store = await _create_ready_room_event_store(mongo=mongo_dal)
             app.state.room_event_store = _room_event_store
             _room_snapshot_service = SnapshotService(store=_room_event_store)
             app.state.room_snapshot_service = _room_snapshot_service
@@ -1301,6 +1401,265 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             hitl_application = HITLApplicationCoordinator(
                 lifecycle=hitl_lifecycle_store,
             )
+
+            async def publish_canonical_hitl_control(
+                kind: str,
+                interaction: dict[str, Any],
+                request_ids: list[str],
+            ) -> None:
+                from common.dto import RunEventNotification
+
+                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+                run_id = interaction.get("orchestration_run_id")
+                if orchestrator_runtime is None or not isinstance(run_id, str):
+                    return
+                run = await orchestrator_runtime.run_store.load(run_id)
+                if (
+                    run is None
+                    or run.lifecycle_family != "canonical"
+                    or not run.client_request_id
+                ):
+                    return
+                boundary_at = datetime.now(UTC)
+                payload = (
+                    {
+                        "interaction_id": interaction["interaction_id"],
+                        "request_ids": request_ids,
+                        "requested_at": boundary_at,
+                    }
+                    if kind == "run_waiting_input"
+                    else {
+                        "interaction_id": interaction["interaction_id"],
+                        "resolved_request_ids": request_ids,
+                        "resumed_at": boundary_at,
+                    }
+                )
+                event_id = f"public:{run_id}:{kind}:{interaction['interaction_id']}"
+                records = await _read_canonical_run_events(run.room_id, run_id)
+                parent_event_id = _latest_canonical_parent_id(
+                    records
+                ) or _canonical_parent_ids.get(run_id)
+                (
+                    status,
+                    room_event_id,
+                ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                    RunEventNotification(
+                        room_id=run.room_id,
+                        event_id=event_id,
+                        run_id=run_id,
+                        seq=run.state_version,
+                        run_event_type=kind,
+                        payload=payload,
+                        correlation_id=run.client_request_id,
+                    ),
+                    parent_event_id=parent_event_id,
+                )
+                if room_event_id is None and status not in {
+                    DeliveryEmitStatus.ALREADY_DELIVERED,
+                    DeliveryEmitStatus.DEDUPLICATED,
+                }:
+                    raise RuntimeError(
+                        f"canonical HITL control event {kind} was not persisted"
+                    )
+                if room_event_id is not None:
+                    _canonical_parent_ids[run_id] = room_event_id
+                await _emit_canonical_processing_adapter(
+                    run,
+                    "awaiting_input" if kind == "run_waiting_input" else "processing",
+                )
+
+            async def publish_orchestrator_hitl_control(
+                kind: str,
+                run_id: str,
+                interaction_id: str,
+                request_ids: list[str],
+            ) -> None:
+                await publish_canonical_hitl_control(
+                    kind,
+                    {
+                        "orchestration_run_id": run_id,
+                        "interaction_id": interaction_id,
+                    },
+                    request_ids,
+                )
+
+            async def project_supervisor_run_answer(
+                hitl_result,
+                response,
+            ) -> None:
+                """Aggregate-owned run-answer projection for ask_user.
+
+                Validates the supervisor-run route so ``run_projection_status``
+                converges to applied and the durable APPLIED transition can
+                complete. The canonical ``run_resumed`` control itself is
+                published after ``finalize_applied`` (hitl_response events
+                first) via ``emit_canonical_resumed_control``, whose
+                deterministic identity collapses reconciler replays.
+                """
+                from common.dto.hitl import HITLApplicationRoute
+
+                del response
+                interaction_id = hitl_result.get("interaction_id")
+                if not isinstance(interaction_id, str) or not interaction_id:
+                    return
+                interaction = await hitl_lifecycle_store.get_interaction_strict(
+                    interaction_id
+                )
+                if interaction is None or interaction.get("application_route") != (
+                    HITLApplicationRoute.SUPERVISOR_RUN.value
+                ):
+                    return
+
+            hitl_application.bind_run_answer_projector(project_supervisor_run_answer)
+
+            async def read_orchestrator_lifecycle_family(run_id: str) -> str:
+                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+                if orchestrator_runtime is None:
+                    return "legacy"
+                run = await orchestrator_runtime.run_store.load(run_id)
+                return run.lifecycle_family if run is not None else "legacy"
+
+            async def terminalize_canonical_hitl_run(
+                request: Any,
+                *,
+                terminal_status: str,
+                reason: str,
+            ) -> bool:
+                from execution.orchestrator.lifecycle import SessionEvent
+
+                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+                run_id = request.orchestration_run_id
+                if orchestrator_runtime is None or not run_id:
+                    return False
+                run = await orchestrator_runtime.run_store.load(run_id)
+                if run is None or run.lifecycle_family != "canonical":
+                    return False
+                if run.tool_catalog is None:
+                    raise RuntimeError("canonical HITL owner has no Tool catalog")
+
+                async def emit(event_type, current, payload):
+                    await _orchestrator_session_listener(
+                        SessionEvent(
+                            event_type=event_type,
+                            session_id=f"hitl-terminal:{current.run_id}",
+                            run_id=current.run_id,
+                            causation_id=request.request_id,
+                            sequence=current.state_version,
+                            timestamp=datetime.now(UTC),
+                            payload=payload,
+                            room_id=current.room_id,
+                            user_message_id=current.request.user_message_id,
+                            client_request_id=current.client_request_id,
+                            lifecycle_family=current.lifecycle_family,
+                        )
+                    )
+
+                await orchestrator_runtime.kernel_factory(run.tool_catalog).terminalize(
+                    run_id,
+                    status="canceled" if terminal_status == "canceled" else "failed",
+                    reason=reason,
+                    cancellation_cause=(
+                        "policy" if terminal_status == "canceled" else None
+                    ),
+                    lifecycle=emit,
+                )
+                return True
+
+            async def request_supervisor_input_port(
+                *,
+                run,
+                interaction_id,
+                call_id,
+                question,
+                choices,
+            ):
+                """Kernel-facing port: ask_user → unified Execution HITL."""
+                from common.dto.hitl import (
+                    HITLApplicationRoute,
+                    HITLEvidenceOrigin,
+                    HITLPublicSource,
+                    HITLRouteSnapshot,
+                )
+
+                snapshot = HITLRouteSnapshot(
+                    route=HITLApplicationRoute.SUPERVISOR_RUN,
+                    orchestration_run_id=run.run_id,
+                )
+                requests = await hitl_manager.request_interaction(
+                    room_id=run.room_id,
+                    user_message_id=run.request.user_message_id,
+                    interaction_id=interaction_id,
+                    application_route=HITLApplicationRoute.SUPERVISOR_RUN,
+                    public_source=HITLPublicSource.SUPERVISOR,
+                    evidence_origin=HITLEvidenceOrigin.SUPERVISOR,
+                    route_snapshot=snapshot,
+                    questions=[
+                        {
+                            "prompt": question,
+                            "prompt_type": "single_choice" if choices else "text",
+                            "choices": list(choices),
+                            "source_step_id": call_id,
+                        }
+                    ],
+                    orchestration_run_id=run.run_id,
+                )
+                if not requests:
+                    raise RuntimeError(
+                        "supervisor input interaction was not materialized"
+                    )
+
+            async def resume_supervisor_hitl_port(
+                run_id,
+                *,
+                call_id,
+                answers,
+            ):
+                """HITL-facing port: recorded answer → suspended kernel Run."""
+                from execution.hitl.service import ContinuationLostError
+                from execution.orchestrator.kernel import (
+                    supervisor_answer_observation,
+                )
+
+                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
+                if orchestrator_runtime is None:
+                    raise ContinuationLostError("orchestrator runtime is unavailable")
+                run = await orchestrator_runtime.run_store.load(run_id)
+                if run is None:
+                    raise ContinuationLostError("orchestration run is missing")
+                try:
+                    observation = supervisor_answer_observation(
+                        run_id,
+                        call_id,
+                        answers,
+                        datetime.now(UTC),
+                    )
+                    session = orchestrator_runtime.session_host.get_session(run.room_id)
+                    if session is not None and session.owns_run(run_id):
+                        await orchestrator_runtime.session_host.observe_tool(
+                            run.room_id, observation
+                        )
+                    else:
+                        # Suspended Runs may outlive their process-local
+                        # session (restart/recovery). The run-addressed sink
+                        # re-enters the same kernel observation path with a
+                        # fresh lifecycle emitter.
+                        await orchestrator_runtime.observation_sink.deliver(
+                            run_id, observation
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "supervisor ask_user resume failed",
+                        extra={
+                            "run_id": run_id,
+                            "call_id": call_id,
+                            "room_id": run.room_id,
+                            "resume_error": f"{type(exc).__name__}: {exc}",
+                        },
+                        exc_info=True,
+                    )
+                    raise
+                return True
+
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
@@ -1312,10 +1671,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
                     orchestration_run_store,
                     run_lifecycle,
+                    canonical_terminalizer=terminalize_canonical_hitl_run,
                 ),
                 lifecycle=hitl_lifecycle_store,
                 application=hitl_application,
                 room_files=file_storage,
+                canonical_control_publisher=publish_canonical_hitl_control,
+                lifecycle_family_reader=read_orchestrator_lifecycle_family,
+                supervisor_resume=resume_supervisor_hitl_port,
+                public_secret_values=configured_public_secret_values(runtime.settings),
             )
 
             async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
@@ -1811,9 +2175,121 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         from execution.orchestrator.projection import public_terminal_status
         from execution.orchestrator.public_projection import (
             PublicProjectionTranslator,
+            canonical_settlement_payload,
         )
+        from execution.orchestrator.public_summaries import PublicSummaryRegistry
 
-        public_projection_translator = PublicProjectionTranslator()
+        canonical_public_secrets = configured_public_secret_values(runtime.settings)
+        canonical_summary_registry = PublicSummaryRegistry(
+            secret_values=canonical_public_secrets
+        )
+        canonical_projection_translator = PublicProjectionTranslator(
+            lifecycle_family="canonical",
+            summary_registry=canonical_summary_registry,
+            secret_values=canonical_public_secrets,
+        )
+        legacy_projection_translator = PublicProjectionTranslator(
+            lifecycle_family="legacy"
+        )
+        # Causal inspection links for canonical events. Durability and ordering
+        # do not rely on this process-local cache; deterministic event IDs and
+        # room-event readback remain authoritative after restart.
+        _canonical_parent_ids: dict[str, str] = {}
+
+        async def _emit_canonical_processing_adapter(run, status: str) -> None:
+            from delivery.producer_policy import canonical_processing_status_adapter
+
+            if _delivery_deps is None or not run.client_request_id:
+                return
+            emitted = await _delivery_deps.event_publisher.emit_checked(
+                canonical_processing_status_adapter(
+                    room_id=run.room_id,
+                    user_message_id=run.request.user_message_id,
+                    client_request_id=run.client_request_id,
+                    status=status,
+                )
+            )
+            if emitted not in {
+                DeliveryEmitStatus.DELIVERED,
+                DeliveryEmitStatus.ALREADY_DELIVERED,
+                DeliveryEmitStatus.DEDUPLICATED,
+            }:
+                raise RuntimeError(
+                    "canonical stale-browser processing adapter was not persisted"
+                )
+
+        async def _emit_legacy_orchestrator_terminal(run, status: str) -> None:
+            """Publish the terminal frames the legacy conversation surface owns.
+
+            Legacy Runs settle through ``MongoTerminalRunStatusProjector`` and
+            have no canonical room-event settlement. Without an explicit
+            terminal emission the composer stays in the cancelable processing
+            state forever even though the durable Run is complete.
+            """
+            if _delivery_deps is None:
+                return
+            user_message_id = run.request.user_message_id or run.run_id
+            client_request_id = run.client_request_id
+            run_event_type = {
+                "completed": "run_completed",
+                "canceled": "run_canceled",
+                "failed": "run_failed",
+            }[status]
+            (
+                run_status,
+                run_event_id,
+            ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                RunEventNotification(
+                    room_id=run.room_id,
+                    event_id=f"public:{run.run_id}:terminal:legacy",
+                    delivery_id=f"orchestrator:{run.run_id}:terminal:run_event",
+                    run_id=user_message_id,
+                    seq=run.state_version,
+                    run_event_type=run_event_type,
+                    payload={
+                        "canonical_status": status,
+                        "frontend_message_id": user_message_id,
+                        "lifecycle_message_id": user_message_id,
+                        "client_request_id": client_request_id,
+                        "details": None,
+                        "pending": False,
+                    },
+                    correlation_id=client_request_id,
+                )
+            )
+            if run_event_id is None and run_status not in {
+                DeliveryEmitStatus.ALREADY_DELIVERED,
+                DeliveryEmitStatus.DEDUPLICATED,
+            }:
+                raise RuntimeError(
+                    "legacy terminal run event was not durably persisted"
+                )
+            emitted = await _delivery_deps.event_publisher.emit_checked(
+                ProcessingStatusEvent(
+                    room_id=run.room_id,
+                    message_id=user_message_id,
+                    status=status,
+                    related_message_id=user_message_id,
+                    client_request_id=client_request_id,
+                    delivery_id=(
+                        f"orchestrator:{run.run_id}:terminal:processing_status"
+                    ),
+                )
+            )
+            if emitted not in {
+                DeliveryEmitStatus.DELIVERED,
+                DeliveryEmitStatus.ALREADY_DELIVERED,
+                DeliveryEmitStatus.DEDUPLICATED,
+            }:
+                logger.warning(
+                    "legacy terminal processing_status was not persisted",
+                    extra={
+                        "run_id": run.run_id,
+                        "room_id": run.room_id,
+                        "status": status,
+                        "emitted": emitted.value,
+                    },
+                )
 
         async def publish_orchestrator_projection_status(run, intent) -> None:
             # SSE is non-authoritative: it is published only after the durable
@@ -1826,39 +2302,62 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             status = public_terminal_status(str(run.status or ""))
             if status is None or _delivery_deps is None:
                 return
-            terminal_message = {
-                "completed": "Completed.",
-                "failed": "Failed.",
-                "canceled": "Canceled.",
-                "budget_exhausted": "Stopped: step budget exhausted.",
-            }.get(str(run.status or ""), None)
-            await _delivery_deps.event_publisher.emit(
-                ProcessingStatusEvent(
-                    room_id=run.room_id,
-                    message_id=run.request.user_message_id,
-                    status=status,
-                    client_request_id=run.client_request_id,
-                    delivery_id=f"orchestrator:{run.run_id}:{run.status}",
-                    details=(
-                        {"message": terminal_message, "turn_phase": "terminal"}
-                        if terminal_message
-                        else None
+            if run.lifecycle_family == "legacy":
+                await _emit_legacy_orchestrator_terminal(run, status)
+                return
+            if run.lifecycle_family != "canonical":
+                return
+            payload = canonical_settlement_payload(run)
+            settlement_parent_id = _canonical_parent_ids.get(run.run_id)
+            if settlement_parent_id is None:
+                records = await _read_canonical_run_events(run.room_id, run.run_id)
+                final_message_id = run.proposed_final_message_id
+                parent = next(
+                    (
+                        record
+                        for record in reversed(records)
+                        if record.get("kind") == "agent_response"
+                        and isinstance(record.get("payload_public"), dict)
+                        and record["payload_public"].get("message_id")
+                        == final_message_id
                     ),
+                    records[-1] if records else None,
                 )
+                if parent is not None:
+                    settlement_parent_id = (
+                        str(parent.get("room_event_id") or "") or None
+                    )
+            (
+                settlement_status,
+                settlement_event_id,
+            ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                RunEventNotification(
+                    room_id=run.room_id,
+                    event_id=f"public:{run.run_id}:run_settled",
+                    delivery_id=f"orchestrator:{run.run_id}:run_settled",
+                    run_id=run.run_id,
+                    seq=run.state_version,
+                    run_event_type="run_settled",
+                    payload=payload,
+                    correlation_id=run.client_request_id,
+                ),
+                parent_event_id=settlement_parent_id,
+            )
+            if settlement_event_id is None and settlement_status not in {
+                DeliveryEmitStatus.ALREADY_DELIVERED,
+                DeliveryEmitStatus.DEDUPLICATED,
+            }:
+                raise RuntimeError("canonical run_settled was not durably persisted")
+            await _emit_canonical_processing_adapter(
+                run,
+                "failed" if run.status == "budget_exhausted" else run.status,
             )
 
-        # Non-terminal lifecycle events (agent delegation, responses,
-        # waiting) flow to the room work log over SSE. SSE is
-        # non-authoritative: durable state stays in the Run store.
-        from execution.orchestrator.lifecycle import (
-            orchestrator_lifecycle_log_message,
-        )
+        # Canonical lifecycle events are re-serialized per Run before durable
+        # room-event publication. No compatibility work-log stream is emitted.
 
-        # Lifecycle events are dispatched concurrently (create_task), so a
-        # per-run lock re-serializes the work-log SSE and the agent-card
-        # projection into the kernel's durable event order. Without it the
-        # frontend sees "Waiting…" before "…responded" and drops entries
-        # that arrive after the terminal status.
+        # Lifecycle events are dispatched concurrently, so a per-run lock
+        # re-serializes canonical room-event publication into durable order.
         _orchestrator_session_locks: dict[str, asyncio.Lock] = {}
 
         async def _orchestrator_session_listener(event: Any) -> None:
@@ -1867,36 +2366,28 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 await _orchestrator_session_event(event)
                 return
 
-        async def _orchestrator_session_event(event: Any) -> None:
-            # Project agent activity into room_agent_messages so the legacy
-            # conversation surface (agent cards) reflects the kernel's
-            # dispatches. Best-effort: durable Run state stays authoritative.
+        async def _orchestrator_session_event(event: Any) -> None:  # noqa: C901
+            # Tool lifecycle remains solely in the canonical Run/event fold;
+            # no task-backed RoomAgentMessage status projection is created.
             runtime = getattr(app.state, "orchestrator_runtime", None)
             call_id = (event.payload or {}).get("call_id")
-            if (
-                runtime is not None
-                and isinstance(call_id, str)
-                and call_id
-                and event.room_id
-                and event.event_type in {"tool_execution_started", "message_completed"}
-            ):
-                try:
-                    await _project_orchestrator_agent_activity(
-                        event, runtime, message_store, _delivery_facade
-                    )
-                except Exception:
-                    logger.warning(
-                        "orchestrator agent message projection failed",
-                        extra={
-                            "run_id": event.run_id,
-                            "event_type": event.event_type,
-                        },
-                        exc_info=True,
-                    )
 
             if _delivery_deps is None:
                 return
-            mapped = orchestrator_lifecycle_log_message(event)
+            current_run = (
+                await runtime.run_store.load(event.run_id)
+                if runtime is not None
+                else None
+            )
+            if current_run is None:
+                raise RuntimeError("canonical lifecycle event has no durable Run")
+            if (
+                event.lifecycle_family != "canonical"
+                or current_run.lifecycle_family != event.lifecycle_family
+            ):
+                raise RuntimeError("canonical lifecycle family mismatch")
+            is_canonical = True
+            mapped = None
             if mapped is not None:
                 message, turn_phase = mapped
                 await _delivery_deps.event_publisher.emit(
@@ -1918,20 +2409,77 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # Phase 1): public run_event payload types for LLM calls, retries,
             # orchestrator decisions, and tool calls. Payloads are produced
             # exclusively by the PublicProjectionTranslator (redaction).
-            if event.room_id and run_event_sse_enabled():
-                public_event = public_projection_translator.translate(event)
-                if public_event is not None:
-                    await _delivery_deps.event_publisher.emit(
-                        RunEventNotification(
-                            room_id=event.room_id,
-                            event_id=public_event.event_id,
-                            run_id=public_event.run_id,
-                            seq=public_event.seq,
-                            run_event_type=public_event.kind,
-                            payload=public_event.payload,
-                            correlation_id=public_event.client_request_id,
-                        )
+            if event.room_id and (is_canonical or run_event_sse_enabled()):
+                if is_canonical and current_run.tool_catalog is not None:
+                    canonical_summary_registry.register_catalog(
+                        current_run.tool_catalog
                     )
+                translator = (
+                    canonical_projection_translator
+                    if is_canonical
+                    else legacy_projection_translator
+                )
+                public_event = translator.translate(
+                    event,
+                    catalog=(
+                        current_run.tool_catalog
+                        if is_canonical and current_run is not None
+                        else None
+                    ),
+                )
+                if public_event is not None:
+                    notification = RunEventNotification(
+                        room_id=event.room_id,
+                        event_id=public_event.event_id,
+                        run_id=public_event.run_id,
+                        seq=public_event.seq,
+                        run_event_type=public_event.kind,
+                        payload=public_event.payload,
+                        correlation_id=public_event.client_request_id,
+                    )
+                    if is_canonical:
+                        parent_event_id = _canonical_parent_ids.get(public_event.run_id)
+                        if parent_event_id is None:
+                            records = await _read_canonical_run_events(
+                                public_event.room_id, public_event.run_id
+                            )
+                            parent_event_id = _latest_canonical_parent_id(records)
+                            if parent_event_id is not None:
+                                _canonical_parent_ids[public_event.run_id] = (
+                                    parent_event_id
+                                )
+                        (
+                            status,
+                            room_event_id,
+                        ) = await (
+                            _delivery_deps.event_publisher.emit_checked_identified(
+                                notification,
+                                parent_event_id=(
+                                    None
+                                    if public_event.kind == "run_started"
+                                    else parent_event_id
+                                ),
+                            )
+                        )
+                        if room_event_id is None and status not in {
+                            DeliveryEmitStatus.ALREADY_DELIVERED,
+                            DeliveryEmitStatus.DEDUPLICATED,
+                        }:
+                            raise RuntimeError(
+                                "canonical lifecycle event was not durably persisted"
+                            )
+                        if room_event_id is not None:
+                            _canonical_parent_ids[public_event.run_id] = room_event_id
+                        if (
+                            public_event.kind == "run_started"
+                            and current_run is not None
+                            and status == DeliveryEmitStatus.DELIVERED
+                        ):
+                            await _emit_canonical_processing_adapter(
+                                current_run, "processing"
+                            )
+                    else:
+                        await _delivery_deps.event_publisher.emit(notification)
 
             if event.event_type == "run_final_answer_ready" and runtime is not None:
                 # Deliver the final answer immediately instead of waiting for
@@ -1964,6 +2512,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 final: Any,
                 content: str,
             ) -> bool:
+                final_parent_id = None
+                if run.lifecycle_family == "canonical":
+                    # The final checkpoint is causally owned by its exact
+                    # message_end, never by a process-local latest-event cache
+                    # that may already point at turn_end. Readback also keeps
+                    # this parent stable after restart.
+                    records = await _read_canonical_run_events(run.room_id, run.run_id)
+                    final_parent_id = _canonical_final_message_end_parent_id(
+                        records, final.message_id
+                    )
+                    if final_parent_id is None:
+                        raise RuntimeError(
+                            "canonical final message_end parent is not durable"
+                        )
                 (
                     status,
                     room_event_id,
@@ -1980,8 +2542,31 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         delivery_id=(
                             f"orchestrator:{run.run_id}:final:{final.message_id}"
                         ),
-                    )
+                    ),
+                    parent_event_id=final_parent_id,
                 )
+                if run.lifecycle_family == "canonical":
+                    if room_event_id is None:
+                        records = await _read_canonical_run_events(
+                            run.room_id, run.run_id
+                        )
+                        persisted = next(
+                            (
+                                record
+                                for record in reversed(records)
+                                if record.get("kind") == "agent_response"
+                                and isinstance(record.get("payload_public"), dict)
+                                and record["payload_public"].get("message_id")
+                                == final.message_id
+                            ),
+                            None,
+                        )
+                        if persisted is not None:
+                            room_event_id = (
+                                str(persisted.get("room_event_id") or "") or None
+                            )
+                    if room_event_id is not None:
+                        _canonical_parent_ids[run.run_id] = room_event_id
                 # Persisted room-event identity is the durable delivery
                 # boundary. A transient fanout miss self-heals through the
                 # heartbeat watermark/snapshot path and must not duplicate the
@@ -1993,6 +2578,30 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     DeliveryEmitStatus.ALREADY_DELIVERED,
                     DeliveryEmitStatus.DEDUPLICATED,
                 }
+
+            async def _read_canonical_run_events(
+                room_id: str, run_id: str
+            ) -> list[dict[str, object]]:
+                if _room_event_store is None:
+                    return []
+                records: list[dict[str, object]] = []
+                after = -1
+                while True:
+                    page = await _room_event_store.read_range(
+                        room_id,
+                        after=after,
+                        limit=500,
+                        include_skipped=False,
+                    )
+                    if not page:
+                        break
+                    records.extend(
+                        record for record in page if record.get("run_id") == run_id
+                    )
+                    after = max(int(record.get("room_seq") or 0) for record in page)
+                    if len(page) < 500:
+                        break
+                return records
 
             app.state.orchestrator_runtime = create_orchestrator_runtime(
                 mongo=mongo_dal,
@@ -2013,27 +2622,33 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     None if _delivery_deps is None else _delivery_deps.event_publisher
                 ),
                 final_message_delivery=_deliver_orchestrator_final_message,
+                canonical_event_reader=_read_canonical_run_events,
+                canonical_hitl_control=publish_orchestrator_hitl_control,
+                supervisor_hitl=request_supervisor_input_port,
             )
             missing = validate_orchestrator_runtime(app.state.orchestrator_runtime)
             if missing:
-                logger.warning(
-                    "Orchestrator runtime composition incomplete: %s",
-                    ", ".join(missing),
+                raise OrchestratorCompositionError(
+                    "Orchestrator runtime composition incomplete: " + ", ".join(missing)
                 )
-                app.state.orchestrator_runtime = None
-            else:
-                logger.info(
-                    "Orchestrator runtime composition ready (dark launch, 0%% traffic)"
+            from room.agent_call_detail import CanonicalAgentCallDetailService
+
+            app.state.canonical_agent_call_detail_reader = (
+                CanonicalAgentCallDetailService(
+                    app.state.orchestrator_runtime.run_store,
+                    artifact_metadata_reader=file_storage,
                 )
+            )
+            logger.info("Canonical orchestrator runtime composition ready")
         except OrchestratorCompositionError as exc:
-            logger.warning("Orchestrator runtime composition disabled: %s", exc)
-            app.state.orchestrator_runtime = None
+            raise RuntimeError("Canonical orchestrator runtime is required") from exc
 
         # ── Orchestrator ingress adapter (single execution path) ──
         # The execution facade and API routes reach the orchestrator through
         # this adapter; it is attached here after the composition is ready.
         _orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
         if _orchestrator_runtime is not None:
+            from execution.orchestrator.session import DefaultRunFactory
             from execution.orchestrator_routing import (
                 DualRuntimeRouter,
                 RoomMessageEnvelopeResolver,
@@ -2098,12 +2713,84 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             orchestrator_router = DualRuntimeRouter(
                 runtime=_orchestrator_runtime,
                 envelope_source=envelope_source,
+                run_factory=DefaultRunFactory(),
                 webhook_token_verifier=task_store.verify_webhook_token_for_task,
             )
             execution_facade.bind_orchestrator_router(orchestrator_router)
+
+            class _CanonicalActiveRunReader:
+                _TERMINAL = [
+                    "completed",
+                    "failed",
+                    "canceled",
+                    "budget_exhausted",
+                ]
+
+                @staticmethod
+                def _to_run_info(document: dict[str, Any]):
+                    from common.dto import RunInfo, RunState
+
+                    status = str(document.get("status") or "")
+                    state = {
+                        "queued": RunState.QUEUED,
+                        "awaiting_user": RunState.AWAITING_INPUT,
+                    }.get(status, RunState.PROCESSING)
+                    request = document.get("request") or {}
+                    return RunInfo(
+                        run_id=str(document.get("run_id") or ""),
+                        room_id=str(document.get("room_id") or ""),
+                        state=state,
+                        trigger_message_id=request.get("user_message_id"),
+                        seq=int(document.get("state_version") or 0),
+                        created_at=document.get("created_at"),
+                        updated_at=document.get("updated_at"),
+                    )
+
+                async def _read(self, room_ids: list[str]) -> list[dict[str, Any]]:
+                    if not room_ids:
+                        return []
+                    cursor = _orchestrator_runtime.run_store.collection.aggregate(
+                        [
+                            {
+                                "$match": {
+                                    "room_id": {"$in": room_ids},
+                                    "status": {"$nin": self._TERMINAL},
+                                }
+                            },
+                            {"$sort": {"updated_at": -1}},
+                            {
+                                "$project": {
+                                    "_id": 0,
+                                    "run_id": 1,
+                                    "room_id": 1,
+                                    "status": 1,
+                                    "request.user_message_id": 1,
+                                    "state_version": 1,
+                                    "created_at": 1,
+                                    "updated_at": 1,
+                                }
+                            },
+                        ]
+                    )
+                    return await cursor.to_list(length=None)
+
+                async def get_runs_for_room(self, room_id: str):
+                    documents = await self._read([room_id])
+                    return [self._to_run_info(document) for document in documents]
+
+                async def get_latest_runs_for_rooms(self, room_ids: list[str]):
+                    documents = await self._read(room_ids)
+                    latest = {}
+                    for document in documents:
+                        room_id = str(document.get("room_id") or "")
+                        if room_id and room_id not in latest:
+                            latest[room_id] = self._to_run_info(document)
+                    return latest
+
+            execution_facade.bind_active_run_reader(_CanonicalActiveRunReader())
             logger.info("Orchestrator ingress adapter ready")
 
-        # ── Orchestrator background workers (dark launch, default OFF) ──
+        # ── Mandatory canonical orchestrator background workers ──
         if _orchestrator_runtime is not None:
             orchestrator_recovery_job.set_leader_election(_leader)
             orchestrator_recovery_job.interval_seconds = (
@@ -3301,6 +3988,14 @@ def create_file_storage(
         max_upload_bytes=max_upload_bytes,
         content_url_prefix=content_url_prefix,
     )
+
+
+async def _create_ready_room_event_store(*, mongo: MongoDAL):
+    from delivery.room_events import MongoRoomEventStore
+
+    store = MongoRoomEventStore(mongo=mongo)
+    await store.ensure_indexes()
+    return store
 
 
 def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:

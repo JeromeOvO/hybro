@@ -264,7 +264,7 @@ async def test_cancel_request_records_terminal_state_before_retryable_effect_fai
         await service.cancel_request("request-1", room_id="room-1")
 
     assert persistence.cas_update_hitl_request_strict.await_count == 2
-    persistence.update_hitl_request.assert_not_awaited()
+    assert persistence.update_hitl_request.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -472,6 +472,78 @@ async def test_terminal_retry_converges_after_per_member_crash(
     assert [row["status"] for row in rows] == [member_status, member_status]
     assert all(row["owning_run_terminal_status"] == owning_status for row in rows)
     assert service._emit_hitl_event.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("aggregate_status", "member_status", "event_type"),
+    [
+        ("expired", "expired", "input_expired"),
+        ("canceled", "canceled", "input_canceled"),
+        ("failed", "canceled", "input_canceled"),
+    ],
+)
+async def test_multi_question_terminal_order_closes_all_hitl_before_run(
+    aggregate_status, member_status, event_type
+):
+    rows = _persisted_rows()
+    aggregate = {
+        **_aggregate(),
+        "status": aggregate_status,
+        "member_terminal_status": member_status,
+        "owning_run_terminal_status": (
+            "canceled" if aggregate_status == "canceled" else "failed"
+        ),
+        "terminal_reason": "terminal reason",
+        "version": 4,
+    }
+    order: list[str] = []
+
+    async def get_request(request_id):
+        return deepcopy(next(row for row in rows if row["request_id"] == request_id))
+
+    async def cas_request(request_id, *, expected_status, **updates):
+        row = next(row for row in rows if row["request_id"] == request_id)
+        if row["status"] != expected_status:
+            return False
+        row.update(updates)
+        return True
+
+    async def update_request(request_id, **updates):
+        next(row for row in rows if row["request_id"] == request_id).update(updates)
+        return True
+
+    persistence = MagicMock()
+    persistence.get_hitl_request = AsyncMock(side_effect=get_request)
+    persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
+    persistence.update_hitl_request = AsyncMock(side_effect=update_request)
+    persistence.get_and_clear_continuation_on_message = AsyncMock()
+    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
+    lifecycle = MagicMock()
+    lifecycle.get_interaction_strict = AsyncMock(return_value=aggregate)
+    lifecycle.mark_interaction_terminal_reconciled = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: order.append("ownership_cleared") or True
+    )
+    terminal = MagicMock()
+    terminal.terminalize_owning_run = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: order.append("run_terminalized")
+    )
+    service = HITLService(lifecycle=lifecycle)
+    service._persistence = persistence
+    service._terminal_lifecycle = terminal
+
+    async def emit(*_args, request, **_kwargs):
+        order.append(f"hitl:{request.request_id}:{event_type}")
+
+    service._emit_hitl_event = AsyncMock(side_effect=emit)
+    await service.reconcile_terminal_interaction(aggregate)
+
+    assert order == [
+        "hitl:request-1:" + event_type,
+        "hitl:request-2:" + event_type,
+        "ownership_cleared",
+        "run_terminalized",
+    ]
 
 
 def test_persisted_hitl_models_forbid_authority_looking_extras():

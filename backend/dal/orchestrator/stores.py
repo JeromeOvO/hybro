@@ -23,6 +23,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2AObservationInboxRecord,
     AgentCallLedgerRecord,
     AgentToolBindingRecord,
+    InlineDataArtifact,
     RoomEpoch,
 )
 
@@ -36,6 +37,14 @@ class AsyncMongoCollection(Protocol):
         self,
         query: dict[str, object],
         document: dict[str, object],
+        *,
+        upsert: bool = False,
+    ) -> object: ...
+
+    async def update_one(
+        self,
+        query: dict[str, object],
+        update: dict[str, object],
         *,
         upsert: bool = False,
     ) -> object: ...
@@ -114,6 +123,20 @@ class _MongoCollectionBoundary:
             self._collection.replace_one(query, document, upsert=True)
             if upsert
             else self._collection.replace_one(query, document)
+        )
+        return await _mongo_await(operation)
+
+    async def update_one(
+        self,
+        query: dict[str, object],
+        update: dict[str, object],
+        *,
+        upsert: bool = False,
+    ) -> object:
+        operation = (
+            self._collection.update_one(query, update, upsert=True)
+            if upsert
+            else self._collection.update_one(query, update)
         )
         return await _mongo_await(operation)
 
@@ -541,6 +564,27 @@ class MongoObservationInboxStore:
     ) -> A2AObservationInboxRecord | None:
         value = await self.collection.find_one({"source_identity": source_identity})
         return _from_document(A2AObservationInboxRecord, value) if value else None
+
+    async def load_inline_artifact(
+        self, ref_id: str
+    ) -> tuple[A2AObservationInboxRecord, InlineDataArtifact] | None:
+        values = await _to_list(
+            self.collection.find({"observation.inline_artifacts.ref_id": ref_id}),
+            length=2,
+        )
+        if not values:
+            return None
+        if len(values) != 1:
+            raise ValueError("inline artifact Ref is ambiguous")
+        record = _from_document(A2AObservationInboxRecord, values[0])
+        matches = [
+            artifact
+            for artifact in record.observation.inline_artifacts
+            if artifact.ref_id == ref_id
+        ]
+        if len(matches) != 1:
+            raise ValueError("inline artifact descriptor is ambiguous")
+        return record, matches[0]
 
     async def cas(  # noqa: C901
         self,

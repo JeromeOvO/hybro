@@ -54,7 +54,11 @@ def to_sse_frame(
             "run_id": event.run_id,
             "seq": event.seq,
             "type": event.run_event_type,
-            "payload": event.payload,
+            "payload": (
+                event.payload
+                if isinstance(event.payload, dict)
+                else event.payload.model_dump(mode="json")
+            ),
             "correlation_id": event.correlation_id,
         }
         _add_optional(data, "delivery_id", event.delivery_id)
@@ -110,6 +114,8 @@ def to_sse_frame(
             "agent_name": event.agent_name,
             "status": event.status,
         }
+        _add_optional(data, "run_id", event.run_id)
+        _add_optional(data, "opaque_public_call_id", event.opaque_public_call_id)
         _add_optional(data, "agent_id", event.agent_id)
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "created_at", event.created_at)
@@ -135,6 +141,8 @@ def to_sse_frame(
             "requires_input": event.requires_input,
             "requires_auth": event.requires_auth,
         }
+        _add_optional(data, "run_id", event.run_id)
+        _add_optional(data, "opaque_public_call_id", event.opaque_public_call_id)
         _add_optional(data, "content", event.content)
         _add_optional(data, "error", event.error)
         _add_optional(data, "status_message", event.status_message)
@@ -225,9 +233,11 @@ def to_sse_frame(
             "prompt_type": event.prompt_type,
             "source": event.source,
         }
+        _add_optional(data, "run_id", event.run_id)
         _add_optional(data, "choices", event.choices)
         _add_optional(data, "agent_id", event.agent_id)
         _add_optional(data, "agent_name", event.agent_name)
+        _add_optional(data, "agent_label", event.agent_label)
         _add_optional(data, "source_step_id", event.source_step_id)
         _add_optional(data, "interaction_id", event.interaction_id)
         _add_optional(data, "interaction_status", event.interaction_status)
@@ -236,6 +246,7 @@ def to_sse_frame(
         data["question_count"] = event.question_count
         data["question_index"] = event.question_index
         _add_optional(data, "related_message_id", event.related_message_id)
+        _add_optional(data, "related_user_message_id", event.related_user_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(
@@ -261,8 +272,11 @@ def to_sse_frame(
         _add_optional(data, "application_status", event.application_status)
         data["question_count"] = event.question_count
         data["question_index"] = event.question_index
+        _add_optional(data, "run_id", event.run_id)
         _add_optional(data, "error_message", event.error_message)
+        _add_optional(data, "answer_ref", event.answer_ref)
         _add_optional(data, "related_message_id", event.related_message_id)
+        _add_optional(data, "related_user_message_id", event.related_user_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)
         _add_trace_id(data, event.trace_id)
         return _frame(

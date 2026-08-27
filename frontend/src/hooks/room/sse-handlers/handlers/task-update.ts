@@ -4,6 +4,7 @@ import { isTerminalState, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { normalizeTimestampOrNow } from '@/lib/time'
+import { patchedPublicAgentName } from '@/lib/agent-display-name'
 import { appendEvent } from '@/lib/room-timeline/event-log'
 import { partsToArtifacts } from '../artifacts'
 import { applyRoomCommands } from '../apply-commands'
@@ -49,6 +50,7 @@ export async function handleTaskUpdate(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['task_update'],
   _clientReqId: string | null,
+  canonical = false,
 ): Promise<void> {
   if (!sseMessage.data.message_id) return
 
@@ -76,12 +78,16 @@ export async function handleTaskUpdate(
 
   const store = useMessageStore.getState()
   const existing = store.entities[messageId]
+  const senderName = patchedPublicAgentName(
+    existing?.messageType === 'agent' ? existing.senderName : undefined,
+    resolvedAgentName,
+  ) ?? 'Unknown agent'
 
   const baseMsg = {
     id: messageId,
     roomId: ctx.roomId,
     messageType: 'agent' as const,
-    senderName: resolvedAgentName || 'Agent',
+    senderName,
     agentId: sseMessage.data.agent_id ?? undefined,
     agentSource: ctx.getAgentSource(sseMessage.data.agent_id ?? undefined),
     clientRequestId: sseMessage.data.client_request_id,
@@ -118,51 +124,53 @@ export async function handleTaskUpdate(
     ])
     ctx.lifecycle.dismissPlaceholder()
 
-    if (status === TASK_STATE.COMPLETED) {
-      appendEvent(ctx.roomId, {
-        kind: 'agent_completed',
-        timestamp: sseMessage.timestamp,
-        agentId: sseMessage.data.agent_id ?? undefined,
-        agentName: resolvedAgentName ?? undefined,
-        label: `${resolvedAgentName ?? 'Agent'} completed`,
-      })
-    } else if (
-      status === TASK_STATE.FAILED ||
-      status === TASK_STATE.REJECTED ||
-      status === TASK_STATE.CANCELED
-    ) {
-      appendEvent(ctx.roomId, {
-        kind: 'agent_failed',
-        timestamp: sseMessage.timestamp,
-        agentId: sseMessage.data.agent_id ?? undefined,
-        agentName: resolvedAgentName ?? undefined,
-        label: `${resolvedAgentName ?? 'Agent'} failed`,
-        body: sseMessage.data.error ?? undefined,
-      })
-    }
-
-    if (status === TASK_STATE.CANCELED) {
-      ctx.setCancelling(false)
-      ctx.lifecycle.disarmCancelTimeout()
-    }
-
-    if (!ctx.lifecycle.hasCancelTimedOut()) {
-      if (status === TASK_STATE.FAILED) {
-        banner.error(sseMessage.data.error || 'Task failed')
-      } else if (status === TASK_STATE.REJECTED) {
-        banner.error(sseMessage.data.error || 'Task was rejected')
+    if (!canonical) {
+      if (status === TASK_STATE.COMPLETED) {
+        appendEvent(ctx.roomId, {
+          kind: 'agent_completed',
+          timestamp: sseMessage.timestamp,
+          agentId: sseMessage.data.agent_id ?? undefined,
+          agentName: senderName,
+          label: `${senderName} completed`,
+        })
+      } else if (
+        status === TASK_STATE.FAILED ||
+        status === TASK_STATE.REJECTED ||
+        status === TASK_STATE.CANCELED
+      ) {
+        appendEvent(ctx.roomId, {
+          kind: 'agent_failed',
+          timestamp: sseMessage.timestamp,
+          agentId: sseMessage.data.agent_id ?? undefined,
+          agentName: senderName,
+          label: `${senderName} failed`,
+          body: sseMessage.data.error ?? undefined,
+        })
       }
-    }
 
-    const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
-      clientRequestId: sseMessage.data.client_request_id,
-      relatedMessageId: sseMessage.data.related_message_id,
-    })
-    if (!stamped) {
-      maybeScheduleTurnTerminalRecovery(ctx, {
+      if (status === TASK_STATE.CANCELED) {
+        ctx.setCancelling(false)
+        ctx.lifecycle.disarmCancelTimeout()
+      }
+
+      if (!ctx.lifecycle.hasCancelTimedOut()) {
+        if (status === TASK_STATE.FAILED) {
+          banner.error(sseMessage.data.error || 'Task failed')
+        } else if (status === TASK_STATE.REJECTED) {
+          banner.error(sseMessage.data.error || 'Task was rejected')
+        }
+      }
+
+      const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
         clientRequestId: sseMessage.data.client_request_id,
         relatedMessageId: sseMessage.data.related_message_id,
-      }, status)
+      })
+      if (!stamped) {
+        maybeScheduleTurnTerminalRecovery(ctx, {
+          clientRequestId: sseMessage.data.client_request_id,
+          relatedMessageId: sseMessage.data.related_message_id,
+        }, status)
+      }
     }
   } else {
     store.upsertMessage({

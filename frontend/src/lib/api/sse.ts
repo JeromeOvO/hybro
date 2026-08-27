@@ -13,7 +13,7 @@ export type SSECloseReason = 'manual' | 'permanent-failure'
 export interface SSEConnectionOptions {
   roomId: string
   getToken?: () => Promise<string | null>
-  onMessage?: (message: AnySSEFrame) => void
+  onMessage?: (message: AnySSEFrame) => void | Promise<void>
   onError?: (error: Event) => void
   onOpen?: (event: Event) => void
   onClose?: (reason: SSECloseReason) => void
@@ -168,9 +168,11 @@ export class SSEConnection {
               continue
             }
 
-            this.options.onMessage?.(parsed)
-          } catch (parseError) {
-            console.error('Failed to parse SSE message:', parseError, data)
+            // Preserve wire order across async folds. A later terminal frame
+            // must never overtake an earlier start/update handler.
+            await this.options.onMessage?.(parsed)
+          } catch (frameError) {
+            console.error('Failed to process SSE message:', frameError, data)
           }
         }
       }

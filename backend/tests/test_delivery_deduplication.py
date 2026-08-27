@@ -486,11 +486,11 @@ async def test_default_legacy_terminal_statuses_are_deduped():
     redis = FakeRedisKV(setnx_result=True)
     dedup = TerminalStatusDeduplicator(config=DeliveryConfig(), redis_kv=redis)
 
-    for status in ["rejected", "rate_limited", "error"]:
+    for status in ["rejected", "expired", "rate_limited", "error"]:
         assert await dedup.should_deliver(
             room_id="room-1",
             message_id=status,
             status=status,
         )
 
-    assert len(redis.calls) == 3
+    assert len(redis.calls) == 4

@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 ORCHESTRATOR_RUNS_COLLECTION = "orchestrator_runs"
 ORCHESTRATOR_RUN_EVENTS_COLLECTION = "orchestrator_run_events"
+ORCHESTRATOR_RECOVERY_LEASES_COLLECTION = "orchestrator_recovery_leases"
 
 NON_TERMINAL_RUN_STATUSES = (
     "queued",
@@ -90,6 +91,20 @@ ORCHESTRATOR_EVENT_INDEXES = (
 ORCHESTRATOR_COLLECTIONS = (
     MongoCollectionDefinition(
         name=ORCHESTRATOR_RUNS_COLLECTION, indexes=ORCHESTRATOR_RUN_INDEXES
+    ),
+    MongoCollectionDefinition(
+        name=ORCHESTRATOR_RECOVERY_LEASES_COLLECTION,
+        indexes=(
+            MongoIndexDefinition(
+                name="orchestrator_recovery_lease_run_unique",
+                keys=(("run_id", 1),),
+                unique=True,
+            ),
+            MongoIndexDefinition(
+                name="orchestrator_recovery_lease_expiry",
+                keys=(("lease_expires_at", 1),),
+            ),
+        ),
     ),
     MongoCollectionDefinition(
         name=ORCHESTRATOR_RUN_EVENTS_COLLECTION, indexes=ORCHESTRATOR_EVENT_INDEXES

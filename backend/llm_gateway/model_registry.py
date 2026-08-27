@@ -6,13 +6,27 @@ from common.dto import ModelInfo
 from llm_gateway.config import resolve_generation_provider
 from llm_gateway.errors import LLMModelRoutingError
 
+_OPENAI_REASONING_LEVELS = ("low", "medium", "high")
+_OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _supported_thinking_levels(
+    provider: Literal["openai", "deepseek"], model_id: str
+) -> tuple[str, ...]:
+    """Return explicit provider reasoning controls for known model families."""
+
+    normalized = model_id.strip().lower()
+    if provider == "openai" and normalized.startswith(_OPENAI_REASONING_MODEL_PREFIXES):
+        return _OPENAI_REASONING_LEVELS
+    return ()
+
 
 @dataclass(frozen=True, slots=True)
 class ModelRouteInfo:
     logical_name: str
     provider: Literal["openai", "deepseek"]
     model_id: str
-    api: Literal["chat_completions"]
+    api: Literal["chat_completions", "responses"]
     supports_native_tools: bool
     supports_provider_strict_schema: bool
     supports_local_structured_action: bool
@@ -130,8 +144,13 @@ class ModelRegistryImpl:
         route_enabled: bool = True,
         max_output_tokens: int = 8192,
         max_provider_retries: int = 1,
-        supported_thinking_levels: tuple[str, ...] = (),
+        supported_thinking_levels: tuple[str, ...] | None = None,
     ) -> None:
+        resolved_thinking_levels = (
+            _supported_thinking_levels(provider, model_id)
+            if supported_thinking_levels is None
+            else supported_thinking_levels
+        )
         model_info = ModelInfo(
             model_id=model_id,
             logical_name=logical_name,
@@ -147,7 +166,11 @@ class ModelRegistryImpl:
                 logical_name=logical_name,
                 provider=provider,
                 model_id=model_id,
-                api="chat_completions",
+                api=(
+                    "responses"
+                    if provider == "openai" and resolved_thinking_levels
+                    else "chat_completions"
+                ),
                 supports_native_tools=provider == "openai",
                 supports_provider_strict_schema=provider == "openai",
                 supports_local_structured_action=provider == "deepseek",
@@ -156,7 +179,7 @@ class ModelRegistryImpl:
                 default_temperature=None,
                 timeout_seconds=60,
                 max_provider_retries=max_provider_retries,
-                supported_thinking_levels=supported_thinking_levels,
+                supported_thinking_levels=resolved_thinking_levels,
             )
 
 

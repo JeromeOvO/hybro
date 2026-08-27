@@ -136,6 +136,26 @@ async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable()
     attachment_reader.get_for_room_file.assert_awaited_once_with("room-1", "file-1")
 
 
+async def test_agent_projection_carries_durable_public_agent_name():
+    agent = RoomAgentMessage(
+        room_id="room-1",
+        message_id="agent-1",
+        agent_id="private-agent-id",
+        message_content=MessageContent(message_text="done"),
+        extend_info={
+            "public_agent_name": "Weather Agent",
+            "public_task_label": "Weather Agent - Get Current Weather",
+        },
+    )
+
+    projected = await _projector().project(_page(agent))
+
+    assert projected[0].extend_info["public_agent_name"] == "Weather Agent"
+    assert projected[0].extend_info["public_task_label"] == (
+        "Weather Agent - Get Current Weather"
+    )
+
+
 async def test_missing_room_attachment_drops_existing_untrusted_url_without_fallback():
     attachment = UserAttachment(
         file_id="file-1",

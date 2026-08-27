@@ -27,10 +27,22 @@ def agent_messages_to_model(
     messages: list[object],
     *,
     include_notices: bool = True,
+    prepare_orchestration_context: bool = False,
 ) -> list[ModelMessage]:
+    """Convert the durable transcript into provider messages.
+
+    Durable messages remain lossless. The optional orchestration view only
+    bounds already-resolved historical call plans and labels Tool results by
+    provenance so the model cannot mistake its own prior arguments for facts.
+    """
     result: list[ModelMessage] = []
     calls: set[str] = set()
     results: set[str] = set()
+    resolved_call_ids = {
+        message.call_id
+        for message in messages
+        if isinstance(message, ToolResultMessage)
+    }
     for message in messages:
         if isinstance(message, UserMessage):
             result.append(
@@ -48,11 +60,14 @@ def agent_messages_to_model(
                 if call.call_id in calls:
                     raise TranscriptCorruptionError("duplicate assistant tool call")
                 calls.add(call.call_id)
+                arguments = call.arguments
+                if prepare_orchestration_context and call.call_id in resolved_call_ids:
+                    arguments = _historical_tool_arguments(arguments)
                 parts.append(
                     ModelToolCallPart(
                         call_id=call.call_id,
                         tool_name=call.tool_name,
-                        arguments=call.arguments,
+                        arguments=arguments,
                     )
                 )
             result.append(ModelMessage(role="assistant", content=parts))
@@ -70,6 +85,17 @@ def agent_messages_to_model(
                 text = f"{text}\n{refs}".strip()
             if message.error_message:
                 text = f"{text}\n{message.error_message}".strip()
+            if prepare_orchestration_context:
+                evidence = message.status == "completed" and not message.is_error
+                provenance = (
+                    "[agent observation: verified completed result; usable as evidence]"
+                    if evidence
+                    else (
+                        f"[agent observation: status={message.status}; "
+                        "diagnostic only, not evidence]"
+                    )
+                )
+                text = f"{provenance}\n{text}".strip()
             result.append(
                 ModelMessage(
                     role="tool",
@@ -100,6 +126,47 @@ def agent_messages_to_model(
                 f"unsupported transcript message {type(message).__name__}"
             )
     return result
+
+
+_HISTORICAL_TASK_MAX_CHARS = 2_400
+_HISTORICAL_COLLECTION_MAX_ITEMS = 20
+
+
+def _historical_tool_arguments(arguments: dict[str, object]) -> dict[str, object]:
+    """Build a bounded private context view for an already-resolved call."""
+
+    bounded: dict[str, object] = {}
+    for key, value in arguments.items():
+        if key == "task" and isinstance(value, str):
+            if len(value) <= _HISTORICAL_TASK_MAX_CHARS:
+                bounded[key] = f"[historical plan, not evidence]\n{value}"
+            else:
+                head = value[:1_800].rstrip()
+                tail = value[-400:].lstrip()
+                bounded[key] = (
+                    "[historical plan, not evidence; middle omitted]\n"
+                    f"{head}\n…\n{tail}"
+                )
+            continue
+        if isinstance(value, list):
+            bounded[key] = value[:_HISTORICAL_COLLECTION_MAX_ITEMS]
+            continue
+        if isinstance(value, dict):
+            serialized = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            bounded[key] = (
+                value
+                if len(serialized) <= 1_000
+                else "[historical structured argument omitted]"
+            )
+            continue
+        bounded[key] = value
+    return bounded
 
 
 def unresolved_call_ids(messages: list[object]) -> set[str]:

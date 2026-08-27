@@ -440,6 +440,11 @@ class EventPublisherImpl:
             return str(delivery_id)
         if isinstance(event, TaskSubmittedEvent):
             return event.task_id
+        if isinstance(event, TaskUpdateEvent) and event.run_id:
+            return (
+                event.delivery_id
+                or f"{event.run_id}:{event.opaque_public_call_id}:{event.status}"
+            )
         if isinstance(event, HITLRequestEvent):
             return f"{event.request_id}:{event.question_index}"
         if isinstance(event, HITLResolvedEvent):
@@ -467,7 +472,15 @@ class EventPublisherImpl:
             )
         stable = self._persisted_event_id(event)
         if stable is not None and isinstance(
-            event, (RunEventNotification, TaskSubmittedEvent, HITLRequestEvent)
+            event,
+            (
+                RunEventNotification,
+                TaskSubmittedEvent,
+                TaskUpdateEvent,
+                HITLRequestEvent,
+                HITLResolvedEvent,
+                AgentMessageFinal,
+            ),
         ):
             return f"{event.event_type}:{stable}"
         stream_key = self._stream_key(event)

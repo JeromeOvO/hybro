@@ -1,6 +1,6 @@
 export interface ProcessingLifecycle {
   setProcessing(active: boolean): void
-  startProcessing(messageId?: string | null): void
+  startProcessing(messageId?: string | null, clientRequestId?: string | null): void
   stopProcessing(options?: { clearMessageId?: boolean; clearSendGuard?: boolean }): void
   setPendingRunEventAck(clientRequestId: string | null): void
   getPendingRunEventAck(): string | null
@@ -9,6 +9,7 @@ export interface ProcessingLifecycle {
   isSendGuardActive(): boolean
   setMessageId(id: string | null): void
   getMessageId(): string | null
+  getClientRequestId(): string | null
   dismissPlaceholder(): void
   resetPlaceholder(): void
   isPlaceholderDismissed(): boolean
@@ -32,6 +33,7 @@ export function createProcessingLifecycle(
 ): ProcessingLifecycle {
   let disposed = false
   let currentProcessingMessageId: string | null = null
+  let currentProcessingClientRequestId: string | null = null
   let placeholderDismissed = false
   let processingResolved = false
   let isProcessingGuard = false
@@ -49,11 +51,14 @@ export function createProcessingLifecycle(
       }
     },
 
-    startProcessing(messageId) {
+    startProcessing(messageId, clientRequestId) {
       if (disposed) return
       if (messageId !== undefined) {
         currentProcessingMessageId = messageId
       }
+      currentProcessingClientRequestId = clientRequestId !== undefined
+        ? clientRequestId
+        : pendingRunEventAckClientRequestId
       isProcessingGuard = true
       setZustandProcessing(true)
     },
@@ -68,6 +73,7 @@ export function createProcessingLifecycle(
       }
       if (clearMessageId) {
         currentProcessingMessageId = null
+        currentProcessingClientRequestId = null
       }
       pendingRunEventAckClientRequestId = null
     },
@@ -105,6 +111,11 @@ export function createProcessingLifecycle(
     getMessageId() {
       if (disposed) return null
       return currentProcessingMessageId
+    },
+
+    getClientRequestId() {
+      if (disposed) return null
+      return currentProcessingClientRequestId
     },
 
     dismissPlaceholder() {
@@ -185,6 +196,7 @@ export function createProcessingLifecycle(
       if (disposed) return
       setZustandProcessing(false)
       currentProcessingMessageId = null
+      currentProcessingClientRequestId = null
       placeholderDismissed = false
       processingResolved = false
       isProcessingGuard = false

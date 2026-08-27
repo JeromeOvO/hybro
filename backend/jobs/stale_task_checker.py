@@ -395,12 +395,9 @@ class StaleTaskChecker:
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
 
-        # 8. Repair projections from durable terminal facts before the watchdog
-        # can attempt any competing terminal transition.
-        await self._recover_terminal_projections()
-
-        # 9. Fail runs stuck without a terminal transition (run lifecycle watchdog).
-        await self._fail_stale_runs()
+        # Canonical Run recovery and projection are owned exclusively by the
+        # mandatory orchestrator workers. This legacy checker never creates a
+        # second Run/Task lifecycle for canonical requests.
 
     async def _recover_terminal_projections(self) -> None:
         if self._terminal_projection_deps is None:
@@ -417,8 +414,6 @@ class StaleTaskChecker:
 
     async def _fail_stale_runs(self) -> None:
         """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
-        if not settings.feature_run_watchdog:
-            return
         stale_mins = settings.run_watchdog_stale_minutes
         try:
             stale = await self._store.find_stale_non_terminal_runs(

@@ -177,6 +177,10 @@ class HITLService:
         lifecycle=None,
         application=None,
         room_files=None,
+        canonical_control_publisher=None,
+        lifecycle_family_reader=None,
+        supervisor_resume=None,
+        public_secret_values=(),
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
@@ -187,6 +191,12 @@ class HITLService:
         self._lifecycle: HITLLifecyclePersistencePort | None = lifecycle
         self._application = application
         self._room_files = room_files
+        self._canonical_control_publisher = canonical_control_publisher
+        self._lifecycle_family_reader = lifecycle_family_reader
+        self._supervisor_resume = supervisor_resume
+        self._public_secret_values = tuple(
+            value for value in public_secret_values if isinstance(value, str) and value
+        )
 
     @property
     def persistence(self):
@@ -782,7 +792,32 @@ class HITLService:
                     request_id, claim_id
                 )
                 raise
+        if (
+            await self._is_canonical_run(interaction.get("orchestration_run_id"))
+            and self._canonical_control_publisher
+        ):
+            result = self._canonical_control_publisher(
+                "run_waiting_input",
+                interaction,
+                ordered_ids,
+            )
+            if inspect.isawaitable(result):
+                await result
         return projected_count
+
+    async def emit_canonical_resumed_control(self, interaction: dict[str, Any]) -> None:
+        if (
+            not await self._is_canonical_run(interaction.get("orchestration_run_id"))
+            or not self._canonical_control_publisher
+        ):
+            return
+        result = self._canonical_control_publisher(
+            "run_resumed",
+            interaction,
+            list(interaction.get("request_ids") or []),
+        )
+        if inspect.isawaitable(result):
+            await result
 
     # ------------------------------------------------------------------
     # Handle user response
@@ -1213,14 +1248,31 @@ class HITLService:
         *,
         effect_id: str | None = None,
     ) -> None:
-        """Validate the stable, journaled supervisor continuation effect."""
-        del user_input
-        # Lifecycle-bound callers always pass the stable command identity.
+        """Resume the suspended orchestrator Run with the recorded answer.
+
+        The ask_user declaration persisted ``source_step_id`` as its tool call
+        identity; the answer is delivered as the deterministic ToolObservation
+        for that call, after which the kernel continues the model loop.
+        """
         del effect_id
         if not request.orchestration_run_id:
             raise ContinuationLostError(
                 "Supervisor HITL request is missing orchestration_run_id"
             )
+        call_id = request.source_step_id
+        if not call_id:
+            raise ContinuationLostError(
+                "Supervisor HITL request is missing its tool call identity"
+            )
+        if self._supervisor_resume is None:
+            raise ContinuationLostError(
+                "Supervisor HITL resume port has not been bound"
+            )
+        await self._supervisor_resume(
+            run_id=request.orchestration_run_id,
+            call_id=call_id,
+            answers=user_input,
+        )
 
     # ------------------------------------------------------------------
     # Queries
@@ -1386,20 +1438,6 @@ class HITLService:
                 await self._clear_hitl_continuation_once(
                     member, cleared_continuation_ids
                 )
-                if self._terminal_lifecycle is not None:
-                    terminal_status = member.owning_run_terminal_status or (
-                        "canceled" if member.status == HITLStatus.CANCELED else "failed"
-                    )
-                    terminal_reason = member.owning_run_terminal_reason or (
-                        "Human input request was canceled"
-                        if terminal_status == "canceled"
-                        else "Human input request expired"
-                    )
-                    await self._terminal_lifecycle.terminalize_owning_run(
-                        member,
-                        terminal_status=terminal_status,
-                        reason=terminal_reason,
-                    )
                 await self._emit_hitl_event(
                     room_id=member.room_id,
                     event_type=event_type,
@@ -1567,6 +1605,29 @@ class HITLService:
                     interaction["interaction_id"],
                     version=int(latest_interaction["version"]),
                 )
+            # Every member's public terminal is now durable and aggregate
+            # ownership is cleared. Only now may the owning Tool/Turn/Run expose
+            # its terminal sequence.
+            if self._terminal_lifecycle is not None and proven:
+                member = proven[0][1]
+                terminal_status = member.owning_run_terminal_status or (
+                    "canceled" if member.status == HITLStatus.CANCELED else "failed"
+                )
+                terminal_reason = member.owning_run_terminal_reason or (
+                    "Human input request was canceled"
+                    if terminal_status == "canceled"
+                    else "Human input request expired"
+                )
+                try:
+                    await self._terminal_lifecycle.terminalize_owning_run(
+                        member,
+                        terminal_status=terminal_status,
+                        reason=terminal_reason,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        "HITL terminal side effects remain pending"
+                    ) from exc
         return proven
 
     async def _reconcile_terminal_request(
@@ -1990,6 +2051,26 @@ class HITLService:
                     )
         return None
 
+    async def _is_canonical_run(self, run_id: object) -> bool:
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or self._lifecycle_family_reader is None
+        ):
+            return False
+        try:
+            family = self._lifecycle_family_reader(run_id)
+            if inspect.isawaitable(family):
+                family = await family
+            return family == "canonical"
+        except Exception:
+            logger.warning(
+                "Failed to resolve durable HITL lifecycle family",
+                extra={"run_id": run_id},
+                exc_info=True,
+            )
+            return False
+
     async def _emit_hitl_event(
         self,
         room_id: str,
@@ -2021,32 +2102,75 @@ class HITLService:
         prompt_type = getattr(request.prompt_type, "value", request.prompt_type)
         request_status = getattr(request.status, "value", request.status)
 
+        canonical_run_id = (
+            request.orchestration_run_id
+            if await self._is_canonical_run(request.orchestration_run_id)
+            else None
+        )
         if event_type == HITLEventType.INPUT_REQUESTED:
+            if canonical_run_id:
+                from execution.orchestrator.public_text import sanitize_public_text
+
+                public_prompt = sanitize_public_text(
+                    request.prompt, secret_values=self._public_secret_values
+                )[:4000]
+                public_choices = [
+                    sanitize_public_text(
+                        choice, secret_values=self._public_secret_values
+                    )[:500]
+                    for choice in (request.choices or [])[:20]
+                ]
+                public_agent_label = (
+                    sanitize_public_text(
+                        request.agent_name,
+                        secret_values=self._public_secret_values,
+                    )[:160]
+                    if request.agent_name
+                    else None
+                )
+            else:
+                public_prompt = request.prompt
+                public_choices = request.choices
             await self._emit_delivery_event(
                 HITLRequestEvent(
                     room_id=room_id,
+                    run_id=canonical_run_id,
                     request_id=request.request_id,
                     message_id=data["message_id"],
                     source=source,
-                    prompt=request.prompt,
+                    prompt=public_prompt,
                     prompt_type=prompt_type,
-                    choices=request.choices,
-                    agent_id=request.agent_id,
-                    agent_name=request.agent_name,
-                    source_step_id=request.source_step_id,
+                    choices=public_choices,
+                    agent_id=None if canonical_run_id else request.agent_id,
+                    agent_name=None if canonical_run_id else request.agent_name,
+                    agent_label=public_agent_label if canonical_run_id else None,
+                    source_step_id=(
+                        None if canonical_run_id else request.source_step_id
+                    ),
                     interaction_id=request.interaction_id,
                     interaction_status=(
-                        getattr(
+                        None
+                        if canonical_run_id
+                        else getattr(
                             request.interaction_status,
                             "value",
                             request.interaction_status,
                         )
                     ),
-                    interaction_version=request.interaction_version,
-                    application_status=request.application_status,
+                    interaction_version=(
+                        None if canonical_run_id else request.interaction_version
+                    ),
+                    application_status=(
+                        None if canonical_run_id else request.application_status
+                    ),
                     question_count=request.question_count,
                     question_index=request.question_index,
-                    related_message_id=data["related_message_id"],
+                    related_message_id=(
+                        None if canonical_run_id else data["related_message_id"]
+                    ),
+                    related_user_message_id=(
+                        request.user_message_id if canonical_run_id else None
+                    ),
                     client_request_id=data.get("client_request_id"),
                 )
             )
@@ -2061,22 +2185,34 @@ class HITLService:
         await self._emit_delivery_event(
             HITLResolvedEvent(
                 room_id=room_id,
+                run_id=canonical_run_id,
                 request_id=request.request_id,
                 message_id=data["message_id"],
                 source=source,
                 status=status_map.get(event_type, request_status),
                 interaction_id=request.interaction_id,
                 interaction_status=(
-                    getattr(
+                    None
+                    if canonical_run_id
+                    else getattr(
                         request.interaction_status, "value", request.interaction_status
                     )
                 ),
-                interaction_version=request.interaction_version,
-                application_status=request.application_status,
+                interaction_version=(
+                    None if canonical_run_id else request.interaction_version
+                ),
+                application_status=(
+                    None if canonical_run_id else request.application_status
+                ),
                 question_count=request.question_count,
                 question_index=request.question_index,
-                related_message_id=data["related_message_id"],
-                error_message=error,
+                related_message_id=(
+                    None if canonical_run_id else data["related_message_id"]
+                ),
+                related_user_message_id=(
+                    request.user_message_id if canonical_run_id else None
+                ),
+                error_message=None if canonical_run_id else error,
                 client_request_id=data.get("client_request_id"),
             )
         )

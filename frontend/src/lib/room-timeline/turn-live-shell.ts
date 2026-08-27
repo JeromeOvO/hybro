@@ -1,21 +1,6 @@
 import type { AgentResultViewModel, FinalAnswerKind, TurnViewModel } from './types'
 import { isSupervisorClarifyAgent } from '@/lib/system-agents'
 
-/** Approximate compact strip row height (padding + single line + border). */
-export const STRIP_COMPACT_ROW_HEIGHT_PX = 42
-export const STRIP_ROW_GAP_PX = 8
-/** Max strip list height before scrolling (≈6 compact rows). */
-export const STRIP_LIST_MAX_HEIGHT_CAP_PX = 280
-
-/** Return 0 when all strips fit naturally; return cap px when many agents need inner scroll. */
-export function getActivityStripListMaxHeight(agentCount: number): number {
-  if (agentCount <= 0) return 0
-  const estimated =
-    agentCount * STRIP_COMPACT_ROW_HEIGHT_PX +
-    Math.max(0, agentCount - 1) * STRIP_ROW_GAP_PX
-  return estimated > STRIP_LIST_MAX_HEIGHT_CAP_PX ? STRIP_LIST_MAX_HEIGHT_CAP_PX : 0
-}
-
 export function getStripSourceResults(turn: TurnViewModel): AgentResultViewModel[] {
   return turn.agentResults.filter(r =>
     !r.isSummaryAgent && !r.isEphemeral && !isSupervisorClarifyAgent(r.agentId),
@@ -36,27 +21,27 @@ export function getAgentIndexSummary(
 
   switch (kind) {
     case 'deterministic_done':
-      if (isComplete) return `Agent responses · ${total} agent${total === 1 ? '' : 's'} contributed`
+      if (isComplete) return `Agent responses · ${total} call${total === 1 ? '' : 's'}`
       return [
-        `Agent responses · ${total} agent${total === 1 ? '' : 's'}`,
+        `Agent responses · ${total} call${total === 1 ? '' : 's'}`,
         done > 0 ? `${done} done` : '',
         working > 0 ? `${working} working` : '',
       ].filter(Boolean).join(' · ')
     case 'llm_synthesis':
-      return `Sources · ${total} agent${total === 1 ? '' : 's'} contributed`
+      return `Sources · ${total} agent call${total === 1 ? '' : 's'}`
     case 'canceled':
-      return `Canceled · ${total} agent${total === 1 ? '' : 's'}`
+      return `Canceled · ${total} call${total === 1 ? '' : 's'}`
     case 'failed': {
       const failedCount = sourceResults.filter(r => r.status === 'failed').length
-      return `Failed · ${failedCount || total} of ${total} agent${total === 1 ? '' : 's'}`
+      return `Failed · ${failedCount || total} of ${total} call${total === 1 ? '' : 's'}`
     }
     case 'hitl':
-      return `Completed · ${total} agent${total === 1 ? '' : 's'}`
+      return `Completed · ${total} call${total === 1 ? '' : 's'}`
     case 'pending':
     default:
-      if (isComplete) return `Activity · ${total} agent${total === 1 ? '' : 's'} contributed`
+      if (isComplete) return `Activity · ${total} call${total === 1 ? '' : 's'}`
       return [
-        `Activity · ${total} agent${total === 1 ? '' : 's'}`,
+        `Activity · ${total} call${total === 1 ? '' : 's'}`,
         done > 0 ? `${done} done` : '',
         working > 0 ? `${working} working` : '',
       ].filter(Boolean).join(' · ')

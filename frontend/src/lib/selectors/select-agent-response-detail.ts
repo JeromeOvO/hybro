@@ -97,7 +97,9 @@ export function selectAgentResponseDetail(
 
   return {
     messageId: agent.id,
-    agentId: agent.agentId ?? agent.id,
+    // Only a catalog-backed Agent ID is profile identity. Sender labels and
+    // opaque card/message IDs must never become profile routes.
+    agentId: agent.agentId,
     agentName: agent.senderName,
     display,
     taskDescription,

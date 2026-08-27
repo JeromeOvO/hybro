@@ -19,8 +19,11 @@ SessionEventType = Literal[
     "model_attempt_failed",
     "model_turn_completed",
     "orchestrator_decision",
+    "message_started",
+    "message_updated",
     "message_completed",
     "tool_execution_started",
+    "tool_execution_updated",
     "tool_execution_completed",
     "turn_completed",
     "run_waiting_external",
@@ -46,6 +49,7 @@ class SessionEvent(ContractModel):
     room_id: str | None = None
     user_message_id: str | None = None
     client_request_id: str | None = None
+    lifecycle_family: Literal["legacy", "canonical"] = "legacy"
 
 
 SessionEventListener = Callable[[SessionEvent], Awaitable[None] | None]
@@ -75,17 +79,19 @@ class LifecycleEmitter:
 
     async def emit(self, event: SessionEvent, *, terminal: bool = False) -> None:
         listeners = list(self._listeners)
-        if terminal:
-            try:
-                async with asyncio.timeout(self._settlement_timeout):
-                    await asyncio.gather(
-                        *(
-                            self._invoke(listener, event, settled=True)
-                            for listener in listeners
-                        )
+        durable = terminal or event.lifecycle_family == "canonical"
+        if durable:
+            # Canonical lifecycle publication is part of the state machine: an
+            # acknowledged append must precede the next public state/offset.
+            # Listener failures therefore propagate instead of being converted
+            # into process-local best-effort diagnostics.
+            async with asyncio.timeout(self._settlement_timeout):
+                await asyncio.gather(
+                    *(
+                        self._invoke(listener, event, required=True)
+                        for listener in listeners
                     )
-            except TimeoutError as exc:
-                self._error_hook(exc)
+                )
             return
         for listener in listeners:
             asyncio.create_task(self._invoke(listener, event))
@@ -95,16 +101,18 @@ class LifecycleEmitter:
         listener: SessionEventListener,
         event: SessionEvent,
         *,
-        settled: bool = False,
+        required: bool = False,
     ) -> None:
         try:
-            timeout = self._settlement_timeout if settled else self._listener_timeout
+            timeout = self._settlement_timeout if required else self._listener_timeout
             async with asyncio.timeout(timeout):
                 result = listener(event)
                 if inspect.isawaitable(result):
                     await result
-        except BaseException as exc:  # listener failures never mutate Run state
+        except BaseException as exc:
             self._error_hook(exc)
+            if required:
+                raise
 
 
 __all__ = [

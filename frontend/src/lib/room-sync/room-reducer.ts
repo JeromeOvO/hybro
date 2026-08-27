@@ -14,10 +14,18 @@
 
 import type { AnySSEFrame, RoomSSEFrameMap, RoomSSEType, SnapshotData } from '@/lib/types/sse'
 import { isRoomSSEType } from '@/lib/types/sse'
+import {
+  hasCanonicalSnapshotCapability,
+  isCanonicalHITLRequestData,
+  validateCanonicalSnapshotTurns,
+} from '@/lib/pi-turn/contract'
 import { useMessageStore } from '@/stores/message-store'
+import { useTurnStore } from '@/stores/turn-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { useTraceStore } from '@/stores/trace-store'
 import type { ArtifactData, MessageEntity } from '@/stores/message-store/types'
+import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
+import { specificPublicAgentName } from '@/lib/agent-display-name'
 
 export const REORDER_WINDOW_MS = 500
 export const BOOTSTRAP_SNAPSHOT_MS = 500
@@ -30,6 +38,10 @@ export interface RoomReducerDeps {
   onDelta: (frame: AnySSEFrame) => Promise<void>
   /** Force a fresh snapshot: close the stream, reconnect with ?snapshot=1. */
   requestSnapshot: () => void
+  /** Real dispatcher-owned HITL request → message index restored by snapshots. */
+  hitlRequestIndex?: Map<string, string>
+  /** Legacy guard reconciled only when an exact canonical root settles. */
+  processingLifecycle?: ProcessingLifecycle
 }
 
 type DeltaType = Exclude<RoomSSEType, 'connected' | 'heartbeat' | 'snapshot'>
@@ -60,6 +72,11 @@ export class RoomReducer {
   private capabilityEnabled = false
   private snapshotApplied = false
   private lastRoomSeq: number | null = null
+  /** Highest watermark actually folded into stores. Unlike connection-local
+   * ordering state, this survives reconnects so an older bootstrap snapshot
+   * cannot replace newer visible state. */
+  private appliedRoomSeq: number | null = null
+  private highestObservedRoomSeq: number | null = null
   private preSnapshotBuffer: DeltaFrame[] = []
   private reorderBuffer = new Map<number, DeltaFrame>()
   private reorderTimer: ReturnType<typeof setTimeout> | null = null
@@ -96,6 +113,7 @@ export class RoomReducer {
     // New session: reset per-connection ordering state.
     this.snapshotApplied = false
     this.lastRoomSeq = null
+    this.highestObservedRoomSeq = null
     this.preSnapshotBuffer = []
     this.reorderBuffer.clear()
     this.bootstrapRequested = false
@@ -107,19 +125,61 @@ export class RoomReducer {
       // new snapshot-driven semantics.
       this.capabilityEnabled = true
       this.lastRoomSeq = roomSeq
+      this.highestObservedRoomSeq = roomSeq
       this.scheduleBootstrapCheck()
     } else {
+      // A pre-snapshot backend retains the incumbent unsequenced fold. Exact
+      // canonical authority is established only by a sequenced handshake and
+      // a validated canonical snapshot/root.
       this.capabilityEnabled = false
     }
   }
 
   private async onSnapshot(frame: RoomSSEFrameMap['snapshot']): Promise<void> {
-    if (!this.capabilityEnabled) return
+    if (!this.capabilityEnabled) {
+      applySnapshotToStores(
+        this.deps.roomId,
+        frame.data,
+        this.deps.hitlRequestIndex,
+      )
+      return
+    }
     const watermark = frame.data.room_seq
-    applySnapshotToStores(this.deps.roomId, frame.data)
+    if (
+      this.appliedRoomSeq !== null
+      && watermark < this.appliedRoomSeq
+    ) {
+      // A replacement snapshot is authoritative only when it covers at least
+      // the watermark already folded into the stores.
+      this.deps.requestSnapshot()
+      return
+    }
+    if (!applySnapshotToStores(
+      this.deps.roomId,
+      frame.data,
+      this.deps.hitlRequestIndex,
+    )) {
+      this.deps.requestSnapshot()
+      return
+    }
+    if (hasCanonicalSnapshotCapability(frame.data) && this.deps.processingLifecycle) {
+      reconcileCanonicalSnapshotProcessingGuard(
+        this.deps.roomId,
+        this.deps.processingLifecycle,
+      )
+    }
 
     this.snapshotApplied = true
     this.lastRoomSeq = watermark
+    this.appliedRoomSeq = Math.max(this.appliedRoomSeq ?? watermark, watermark)
+    this.highestObservedRoomSeq = Math.max(
+      this.highestObservedRoomSeq ?? watermark,
+      watermark,
+    )
+    for (const seq of this.reorderBuffer.keys()) {
+      if (seq <= watermark) this.reorderBuffer.delete(seq)
+    }
+    this.clearReorderTimerIfEmpty()
     if (this.bootstrapTimer) {
       clearTimeout(this.bootstrapTimer)
       this.bootstrapTimer = null
@@ -138,27 +198,18 @@ export class RoomReducer {
     // Drain the reorder window: buffered higher-seq deltas replay in order
     // after the replacement snapshot applies (plan rule 3).
     await this.drainReorderBuffer()
+    this.reconcileObservedWatermark()
   }
 
   private onHeartbeat(frame: RoomSSEFrameMap['heartbeat']): void {
     if (!this.capabilityEnabled || !this.snapshotApplied) return
     const roomSeq = frame.data.room_seq
     if (typeof roomSeq !== 'number') return
-    if (this.lastRoomSeq !== null && roomSeq > this.lastRoomSeq + 1) {
-      // A delta was missed while idle (plan §7): give the missing seq a
-      // short settle window, then force a snapshot.
-      if (!this.heartbeatGapTimer) {
-        this.heartbeatGapTimer = setTimeout(() => {
-          this.heartbeatGapTimer = null
-          if (
-            this.lastRoomSeq !== null &&
-            roomSeq > this.lastRoomSeq + 1
-          ) {
-            this.deps.requestSnapshot()
-          }
-        }, HEARTBEAT_GAP_SETTLE_MS)
-      }
-    }
+    this.highestObservedRoomSeq = Math.max(
+      this.highestObservedRoomSeq ?? roomSeq,
+      roomSeq,
+    )
+    this.reconcileObservedWatermark()
   }
 
   private async onDelta(frame: DeltaFrame): Promise<void> {
@@ -168,9 +219,8 @@ export class RoomReducer {
     }
     const seq = frameRoomSeq(frame)
     if (seq === undefined) {
-      // Frames emitted by a pre-Phase-2 publisher instance carry no seq;
-      // they bypass sequencing and fold directly.
-      await this.deps.onDelta(frame)
+      // Unsequenced deltas are never folded into canonical state.
+      this.requestBootstrapSnapshotOnce()
       return
     }
     if (!this.snapshotApplied) {
@@ -190,10 +240,12 @@ export class RoomReducer {
     if (this.lastRoomSeq !== null && seq === this.lastRoomSeq + 1) {
       await this.deps.onDelta(frame)
       this.lastRoomSeq = seq
-      if (this.heartbeatGapTimer) {
-        clearTimeout(this.heartbeatGapTimer)
-        this.heartbeatGapTimer = null
-      }
+      this.appliedRoomSeq = Math.max(this.appliedRoomSeq ?? seq, seq)
+      this.highestObservedRoomSeq = Math.max(
+        this.highestObservedRoomSeq ?? seq,
+        seq,
+      )
+      this.reconcileObservedWatermark()
       await this.drainReorderBuffer()
       return
     }
@@ -210,12 +262,45 @@ export class RoomReducer {
   }
 
   private async drainReorderBuffer(): Promise<void> {
-    if (this.reorderBuffer.size === 0) return
+    if (this.reorderBuffer.size === 0) {
+      this.clearReorderTimerIfEmpty()
+      return
+    }
     const expected = (this.lastRoomSeq ?? 0) + 1
     const next = this.reorderBuffer.get(expected)
     if (next === undefined) return
     this.reorderBuffer.delete(expected)
+    this.clearReorderTimerIfEmpty()
     await this.onDelta(next)
+  }
+
+  private clearReorderTimerIfEmpty(): void {
+    if (this.reorderBuffer.size > 0 || !this.reorderTimer) return
+    clearTimeout(this.reorderTimer)
+    this.reorderTimer = null
+  }
+
+  private reconcileObservedWatermark(): void {
+    const observed = this.highestObservedRoomSeq
+    const applied = this.lastRoomSeq
+    if (observed === null || applied === null || observed <= applied) {
+      if (this.heartbeatGapTimer) {
+        clearTimeout(this.heartbeatGapTimer)
+        this.heartbeatGapTimer = null
+      }
+      return
+    }
+    if (this.heartbeatGapTimer) return
+    this.heartbeatGapTimer = setTimeout(() => {
+      this.heartbeatGapTimer = null
+      if (
+        this.highestObservedRoomSeq !== null
+        && this.lastRoomSeq !== null
+        && this.highestObservedRoomSeq > this.lastRoomSeq
+      ) {
+        this.deps.requestSnapshot()
+      }
+    }, HEARTBEAT_GAP_SETTLE_MS)
   }
 
   private scheduleBootstrapCheck(): void {
@@ -247,6 +332,24 @@ export class RoomReducer {
 
 // ── Snapshot application (fold snapshot sections into stores) ───────────────
 
+function reconcileCanonicalSnapshotProcessingGuard(
+  roomId: string,
+  lifecycle: ProcessingLifecycle,
+): void {
+  if (!lifecycle.isSendGuardActive()) return
+  const userMessageId = lifecycle.getMessageId()
+  const clientRequestId = lifecycle.getClientRequestId()
+  if (!userMessageId || !clientRequestId) return
+  const room = useTurnStore.getState().rooms[roomId]
+  const guardedTurn = room && Object.values(room.turns).find((turn) => (
+    turn.userMessageId === userMessageId
+    && turn.clientRequestId === clientRequestId
+  ))
+  if (guardedTurn && ['completed', 'failed', 'canceled'].includes(guardedTurn.state)) {
+    lifecycle.stopProcessing()
+  }
+}
+
 function mapSnapshotStatusToTerminal(
   status: string | null,
 ): 'completed' | 'failed' | 'canceled' | undefined {
@@ -258,12 +361,16 @@ function mapSnapshotStatusToTerminal(
   return undefined
 }
 
-function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
+function applySnapshotMessages(
+  roomId: string,
+  snapshot: SnapshotData,
+  canonicalUserMessageIds: ReadonlySet<string>,
+): void {
   const store = useMessageStore.getState()
   if (store.roomId && store.roomId !== roomId) return
 
   for (const message of snapshot.messages) {
-    if (message.content !== null || message.agent_id) {
+    if (message.content !== null || message.agent_id || message.task_status !== null) {
       // Agent-side record: upsert the committed message content.
       store.upsertMessage(
         {
@@ -271,7 +378,7 @@ function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
           roomId,
           messageType: 'agent',
           content: message.content ?? '',
-          senderName: message.agent_name ?? message.agent_id ?? 'Agent',
+          senderName: specificPublicAgentName(message.agent_name) ?? 'Unknown agent',
           agentId: message.agent_id ?? undefined,
           clientRequestId: message.client_request_id ?? undefined,
           relatedMessageId: message.related_message_id ?? undefined,
@@ -289,7 +396,8 @@ function applySnapshotMessages(roomId: string, snapshot: SnapshotData): void {
         'sse',
       )
     }
-    if (message.status || message.status_logs.length > 0) {
+    if (!canonicalUserMessageIds.has(message.message_id)
+      && (message.status || message.status_logs.length > 0)) {
       // Turn-level processing state belongs to the USER entity. Snapshot may
       // arrive before DB hydration; create a correlation-preserving shell so
       // the durable logs/status are never discarded because of arrival order.
@@ -422,8 +530,77 @@ function applySnapshotHitl(
     const messageId =
       typeof request.message_id === 'string' ? request.message_id : undefined
     if (!requestId || !messageId) continue
+    let entity = store.entities[messageId]
+    // Snapshot folds add the record timestamp as display metadata. The live
+    // canonical validator intentionally accepts only wire fields, so normalize
+    // this snapshot-only key before applying the same strict contract.
+    const { ts: snapshotTs, ...canonicalRequest } = request
+    const canonical = isCanonicalHITLRequestData(canonicalRequest)
+      ? canonicalRequest
+      : null
+    const requestClientId = typeof request.client_request_id === 'string'
+      ? request.client_request_id
+      : undefined
+    const requestUserMessageId = typeof request.related_user_message_id === 'string'
+      ? request.related_user_message_id
+      : typeof request.related_message_id === 'string'
+        ? request.related_message_id
+        : undefined
+    const roomTurns = useTurnStore.getState().rooms[roomId]?.turns
+    const owner = canonical
+      ? roomTurns?.[canonical.run_id]
+      : requestClientId && requestUserMessageId
+        ? Object.values(roomTurns ?? {}).find((turn) => (
+            turn.clientRequestId === requestClientId
+            && turn.userMessageId === requestUserMessageId
+          ))
+        : undefined
+    const ownerMatches = Boolean(owner
+      && owner.clientRequestId === requestClientId
+      && owner.userMessageId === requestUserMessageId)
+    const claimsCanonicalRoot = canonical !== null
+      || /^orchestrator:run-[^:]+:/.test(messageId)
+    const existingEntityMatches = !entity || (
+      entity.clientRequestId === requestClientId
+      && entity.relatedMessageId === requestUserMessageId
+    )
+    if (
+      hasCanonicalSnapshotCapability(snapshot)
+      && claimsCanonicalRoot
+      && (!ownerMatches || !existingEntityMatches)
+    ) {
+      continue
+    }
     hitlRequestIndex.set(requestId, messageId)
-    const entity = store.entities[messageId]
+    if (!entity && owner && ownerMatches) {
+      // Rolling-deploy compatibility: canonical snapshots written before the
+      // A2A HITL producer upgrade contain an exact Turn root but legacy field
+      // names. Restore only the composer projection; lifecycle authority stays
+      // with the canonical Turn and is never inferred from request recency.
+      const waitingAgentLabels = owner.activity.flatMap((item) => (
+        item.kind === 'tool'
+        && item.executionKind === 'agent'
+        && item.status === 'suspended'
+        && item.targetName
+          ? [item.targetName]
+          : []
+      ))
+      const compatibleAgentLabel = waitingAgentLabels.length === 1
+        ? waitingAgentLabels[0]
+        : undefined
+      store.upsertMessage({
+        id: messageId,
+        roomId,
+        messageType: 'agent',
+        content: '',
+        senderName: canonical?.agent_label ?? compatibleAgentLabel ?? 'Agent',
+        timestamp: typeof snapshotTs === 'string' ? snapshotTs : new Date().toISOString(),
+        clientRequestId: requestClientId,
+        relatedMessageId: requestUserMessageId,
+        isEphemeral: false,
+      }, 'sse')
+      entity = useMessageStore.getState().entities[messageId]
+    }
     if (!entity) continue
     store.upsertMessage(
       {
@@ -436,19 +613,24 @@ function applySnapshotHitl(
         hitlRequestId: requestId,
         hitlPrompt: typeof request.prompt === 'string' ? request.prompt : undefined,
         hitlPromptType: typeof request.prompt_type === 'string' ? (request.prompt_type as never) : undefined,
+        hitlChoices: Array.isArray(request.choices)
+          ? request.choices.filter((choice): choice is string => typeof choice === 'string')
+          : undefined,
         hitlSource: typeof request.source === 'string' ? (request.source as never) : undefined,
         hitlInteractionId: typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
         hitlInteractionStatus: typeof request.interaction_status === 'string' ? request.interaction_status : undefined,
         hitlInteractionVersion: typeof request.interaction_version === 'number' ? request.interaction_version : undefined,
         hitlApplicationStatus: typeof request.application_status === 'string' ? request.application_status : undefined,
-        hitlResolved: request.status === 'responded' || request.status === 'resolved',
+        hitlResolved: ['responded', 'resolved', 'expired', 'canceled', 'error'].includes(
+          String(request.status ?? ''),
+        ),
       },
       'sse',
     )
   }
 }
 
-function applySnapshotTrace(roomId: string, snapshot: SnapshotData): void {
+function applyLegacySnapshotTrace(roomId: string, snapshot: SnapshotData): void {
   useTraceStore.getState().hydrateFromSnapshot(roomId, snapshot)
 }
 
@@ -457,11 +639,31 @@ export function applySnapshotToStores(
   roomId: string,
   snapshot: SnapshotData,
   hitlRequestIndex?: Map<string, string>,
-): void {
-  applySnapshotMessages(roomId, snapshot)
+): boolean {
+  const advertisesCanonical = (snapshot as { turn_lifecycle_schema?: unknown }).turn_lifecycle_schema === 1
+    || Object.prototype.hasOwnProperty.call(snapshot, 'turns')
+  if (advertisesCanonical && !hasCanonicalSnapshotCapability(snapshot)) return false
+  if (!hasCanonicalSnapshotCapability(snapshot)) {
+    applySnapshotMessages(roomId, snapshot, new Set())
+    applySnapshotStreaming(roomId, snapshot)
+    applyLegacySnapshotTrace(roomId, snapshot)
+    if (hitlRequestIndex) applySnapshotHitl(roomId, snapshot, hitlRequestIndex)
+    return true
+  }
+  const turns = validateCanonicalSnapshotTurns(snapshot)
+  if (!turns) return false
+  const replacement = useTurnStore.getState().replaceSnapshot(roomId, turns)
+  if (!replacement.ok) return false
+
+  const canonicalUserMessageIds = new Set(
+    (snapshot.turns ?? []).map((turn) => turn.user_message_id),
+  )
+  applySnapshotMessages(roomId, snapshot, canonicalUserMessageIds)
   applySnapshotStreaming(roomId, snapshot)
-  applySnapshotTrace(roomId, snapshot)
   if (hitlRequestIndex) {
+    // Canonical awaiting_input restores from durable correlated requests; no
+    // recency inference is used by the composer selector.
     applySnapshotHitl(roomId, snapshot, hitlRequestIndex)
   }
+  return true
 }

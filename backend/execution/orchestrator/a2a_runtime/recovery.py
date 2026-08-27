@@ -23,6 +23,7 @@ from .errors import (
 from .hitl import A2AContinuationCoordinator
 from .ingress import A2AObservationProcessor
 from .interaction_outcome import (
+    CanonicalHITLControlPublisher,
     emit_hitl_request_events,
     park_call_for_interaction,
 )
@@ -36,6 +37,7 @@ from .models import (
     A2AObservationInboxRecord,
     A2ARuntimePolicy,
     AgentCallLedgerRecord,
+    MaterializedResourcePart,
     NormalizedA2AObservation,
 )
 from .ports import (
@@ -68,6 +70,8 @@ class A2ACallRecoveryService:
         hitl: HITLApplicationPort | None = None,
         hitl_delivery: Any | None = None,
         run_store: Any | None = None,
+        canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
+        public_secret_values: tuple[str, ...] = (),
     ) -> None:
         self.ledger = ledger
         self.checkpoints = checkpoints
@@ -80,6 +84,8 @@ class A2ACallRecoveryService:
         self.hitl = hitl
         self.hitl_delivery = hitl_delivery
         self.run_store = run_store
+        self.canonical_hitl_control = canonical_hitl_control
+        self.public_secret_values = public_secret_values
 
     async def recover_due(self, *, due_at: datetime) -> int:
         records = await self.ledger.list_due(
@@ -262,7 +268,10 @@ class A2ACallRecoveryService:
             return False
         if inspected is not None and inspected.terminal_observation is not None:
             observation = inspected.terminal_observation
-            await self.observations.record(observation)
+            _record_outcome, persisted_observation = await self.observations.record(
+                observation
+            )
+            observation = persisted_observation.observation
             record = await self._renew(record, now=datetime.now(UTC))
             if record is None:
                 return False
@@ -287,7 +296,10 @@ class A2ACallRecoveryService:
                 observation = observation.model_copy(
                     update={"call_record_id": record.call_record_id}
                 )
-            await self.observations.record(observation)
+            _record_outcome, persisted_observation = await self.observations.record(
+                observation
+            )
+            observation = persisted_observation.observation
             record = await self._renew(record, now=datetime.now(UTC))
             if record is None:
                 return False
@@ -311,7 +323,11 @@ class A2ACallRecoveryService:
                     tool_name=record.tool_name,
                     status="completed",
                     content=content,
-                    artifact_refs=list(observation.artifact_refs or []),
+                    artifact_refs=list(
+                        dict.fromkeys(
+                            [*record.artifact_refs, *(observation.artifact_refs or [])]
+                        )
+                    ),
                     error_code=None,
                     error_message=None,
                 )
@@ -319,6 +335,7 @@ class A2ACallRecoveryService:
                     record,
                     to_state="completed",
                     updated_at=datetime.now(UTC),
+                    artifact_refs=result.artifact_refs,
                     terminal_result=result,
                     terminal_result_digest=sha256(
                         result.model_dump_json().encode()
@@ -369,6 +386,8 @@ class A2ACallRecoveryService:
                         interaction_id=persisted.pending_interaction_id,
                         hitl_delivery=self.hitl_delivery,
                         run_store=self.run_store,
+                        canonical_control=self.canonical_hitl_control,
+                        public_secret_values=self.public_secret_values,
                     )
             return persisted.state in {
                 "input_required",
@@ -784,7 +803,11 @@ def _call_recovery_progressed(
     )
 
 
-def dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
+def dispatch_command(
+    record: AgentCallLedgerRecord,
+    *,
+    materialized_resources: list[MaterializedResourcePart] | None = None,
+) -> A2ADispatchCommand:
     return A2ADispatchCommand(
         command_id=record.dispatch_snapshot.command_id,
         call_record_id=record.call_record_id,
@@ -797,7 +820,7 @@ def dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
         transport_kind=record.transport_kind,
         direct_mode=record.dispatch_snapshot.direct_mode,
         task=record.dispatch_snapshot.task,
-        materialized_resources=[],
+        materialized_resources=list(materialized_resources or []),
         room_id=record.room_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,

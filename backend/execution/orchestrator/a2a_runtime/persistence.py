@@ -63,6 +63,10 @@ OBSERVATION_INDEXES = (
         "observation_recovery_due",
         (("state", 1), ("next_attempt_at", 1), ("claim_expires_at", 1)),
     ),
+    MongoIndexDefinition(
+        "observation_inline_artifact_ref",
+        (("observation.inline_artifacts.ref_id", 1),),
+    ),
     MongoIndexDefinition("observation_binding_cleanup", (("binding_scope", 1),)),
     MongoIndexDefinition(
         "observation_epoch_cleanup", (("room_id", 1), ("room_epoch", 1))

@@ -14,7 +14,12 @@ from execution.orchestrator.lifecycle import (
 )
 
 
-def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
+def _event(
+    event_type: str,
+    payload: dict | None = None,
+    *,
+    lifecycle_family: str = "legacy",
+) -> SessionEvent:
     return SessionEvent(
         event_type=event_type,  # type: ignore[arg-type]
         session_id="session-1",
@@ -23,6 +28,7 @@ def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
         sequence=1,
         timestamp=datetime.now(UTC),
         payload=payload or {},
+        lifecycle_family=lifecycle_family,  # type: ignore[arg-type]
     )
 
 
@@ -55,6 +61,27 @@ async def test_terminal_settlement_runs_listeners_concurrently_with_full_timeout
     release_slow.set()
     await emit_task
     assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_canonical_nonterminal_waits_for_durable_listener_acknowledgement():
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def listener(_event):
+        started.set()
+        await release.wait()
+
+    emitter = LifecycleEmitter(settlement_timeout_seconds=1)
+    emitter.subscribe(listener)
+    task = asyncio.create_task(
+        emitter.emit(_event("message_updated", lifecycle_family="canonical"))
+    )
+    await started.wait()
+    await asyncio.sleep(0)
+    assert task.done() is False
+    release.set()
+    await task
 
 
 def test_run_started_maps_to_planning_entry():

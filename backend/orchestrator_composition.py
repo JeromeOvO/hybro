@@ -14,10 +14,13 @@ import failures) are intentionally *not* swallowed here.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from a2a_adapter.client_facade import (
     cancel_remote_task as sdk_cancel_remote_task,
@@ -36,7 +39,6 @@ from dal.orchestrator.hitl import MongoHITLApplicationStore
 from dal.orchestrator.projection import (
     MongoAppendEventProjector,
     MongoFinalMessageProjector,
-    MongoTerminalRunStatusProjector,
 )
 from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
@@ -94,6 +96,7 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
 from execution.orchestrator.kernel import OrchestratorKernel
+from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.model_runtime import GatewayModelRuntime
 from execution.orchestrator.models import (
     FrozenToolCatalogSnapshot,
@@ -105,6 +108,7 @@ from execution.orchestrator.projection import (
     ProjectionOutboxWorker,
     SettlingProjectionDriver,
 )
+from execution.orchestrator.session import DefaultRunFactory, EventCancellationSignal
 
 logger = get_logger(__name__)
 
@@ -140,6 +144,7 @@ class OrchestratorRuntime:
     kernel_factory: Callable[[FrozenToolCatalogSnapshot], OrchestratorKernel]
     projection_worker: Any
     recovery_cycle: Any
+    public_secret_values: tuple[str, ...]
 
 
 _RUNTIME_BINDINGS = (
@@ -168,6 +173,7 @@ _RUNTIME_BINDINGS = (
     "kernel_factory",
     "projection_worker",
     "recovery_cycle",
+    "public_secret_values",
 )
 
 
@@ -176,6 +182,84 @@ def validate_orchestrator_runtime(runtime: Any) -> list[str]:
     if runtime is None:
         return ["runtime"]
     return [name for name in _RUNTIME_BINDINGS if getattr(runtime, name, None) is None]
+
+
+def configured_public_secret_values(settings_obj: Any) -> tuple[str, ...]:
+    """Collect configured credential values without logging or serializing them."""
+
+    values: set[str] = set()
+    for name in getattr(type(settings_obj), "model_fields", {}):
+        lowered = name.lower()
+        value = getattr(settings_obj, name, None)
+        getter = getattr(value, "get_secret_value", None)
+        if callable(getter):
+            value = getter()
+        if not isinstance(value, str):
+            continue
+        if (
+            any(
+                marker in lowered
+                for marker in ("api_key", "secret", "token", "password", "credential")
+            )
+            and len(value) >= 4
+        ):
+            values.add(value)
+        # Credentials embedded in configured DSNs are just as sensitive as
+        # explicitly named secrets. urlsplit handles mongodb(+srv), redis(s),
+        # AMQP, SQL, and HTTP-family schemes without maintaining a scheme list.
+        if "://" in value:
+            try:
+                parsed = urlsplit(value)
+            except ValueError:
+                continue
+            for credential in (parsed.username, parsed.password):
+                if credential is not None:
+                    decoded = unquote(credential)
+                    if len(decoded) >= 4:
+                        values.add(decoded)
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+async def _run_with_recovery_lease(
+    *,
+    run_store: Any,
+    run_id: str,
+    owner_id: str,
+    work: Any,
+    lease_duration: timedelta,
+    renew_interval_seconds: float,
+) -> Any:
+    """Run Kernel work while periodically renewing its token-fenced lease."""
+
+    task = asyncio.create_task(work)
+    try:
+        while not task.done():
+            done, _pending = await asyncio.wait({task}, timeout=renew_interval_seconds)
+            if done:
+                break
+            renewed = None
+            for _renew_attempt in range(4):
+                current = await run_store.load(run_id)
+                if current is None or current.recovery_claim.owner_id != owner_id:
+                    raise RecoverableAdapterError("generic recovery lease was replaced")
+                renewed = await run_store.renew_recovery(
+                    run_id,
+                    expected_state_version=current.state_version,
+                    owner_id=owner_id,
+                    lease_expires_at=datetime.now(UTC) + lease_duration,
+                )
+                if renewed.outcome in {"accepted", "replayed"}:
+                    break
+                await asyncio.sleep(0)
+            if renewed is None or renewed.outcome not in {"accepted", "replayed"}:
+                raise RecoverableAdapterError(
+                    "generic recovery lease renewal conflicted"
+                )
+        return await task
+    except BaseException:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 def create_orchestrator_runtime(  # noqa: C901
@@ -195,13 +279,18 @@ def create_orchestrator_runtime(  # noqa: C901
     user_message_text_reader: Callable[[str], Any] | None = None,
     hitl_delivery: Any | None = None,
     final_message_delivery: Callable[..., Any] | None = None,
+    canonical_event_reader: Callable[[str, str], Any] | None = None,
+    canonical_hitl_control: Callable[[str, str, str, list[str]], Any] | None = None,
+    supervisor_hitl: Any | None = None,
 ) -> OrchestratorRuntime:
     """Compose the full orchestrator runtime over the registered Mongo stores.
 
     No Mongo or LLM calls are made during construction; this is wiring only.
     """
+    public_secret_values = configured_public_secret_values(settings_obj)
     run_store = MongoOrchestratorRunStore(
-        mongo.collection("orchestrator_runs").raw_collection
+        mongo.collection("orchestrator_runs").raw_collection,
+        mongo.collection("orchestrator_recovery_leases").raw_collection,
     )
     # The event store is bound for the projection worker (step 6), which
     # appends durable Run events through the outbox projector.
@@ -279,6 +368,7 @@ def create_orchestrator_runtime(  # noqa: C901
     resources = RoomFilesResourceMaterializer(
         room_files=room_files,
         artifact_writer=artifact_writer,
+        inline_artifact_reader=observation_inbox,
         context_text_reader=user_message_text_reader,
     )
 
@@ -327,6 +417,8 @@ def create_orchestrator_runtime(  # noqa: C901
         hitl=hitl_port,
         hitl_delivery=hitl_delivery,
         run_store=run_store,
+        canonical_hitl_control=canonical_hitl_control,
+        public_secret_values=public_secret_values,
     )
 
     model_runtime = GatewayModelRuntime(llm_gateway)
@@ -347,16 +439,33 @@ def create_orchestrator_runtime(  # noqa: C901
             context_compiler=ContextCompiler(),
             budget_policy=BudgetPolicy(),
             projection_driver=SettlingProjectionDriver(run_store),
+            public_secret_values=public_secret_values,
+            canonical_event_reader=canonical_event_reader,
+            artifact_metadata_reader=resources.describe_artifact,
+            supervisor_hitl=supervisor_hitl,
         )
 
+    run_factory = DefaultRunFactory()
     session_host = RoomSessionHost(
         kernel_factory=kernel_for_catalog,
         run_store=run_store,
         epoch_store=epoch_store,
         listener=session_listener,
+        run_factory=run_factory,
     )
 
     observation_sink = session_host.observation_sink()
+
+    async def project_terminal_run_status(intent, run):
+        # Canonical Run state remains in the orchestrator aggregate. This
+        # outbox intent publishes run_settled but never mirrors status into the
+        # removed compatibility `runs`/task-card projection.
+        if projection_listener is not None:
+            # run_settled is part of this durable dependent intent. A failure
+            # leaves the intent claimed/pending for lease-based retry; an append
+            # followed by a crash is read back by its deterministic delivery ID.
+            await projection_listener(run, intent)
+        return "accepted"
 
     projectors = {
         "append_orchestrator_event": MongoAppendEventProjector(event_store).project,
@@ -364,15 +473,11 @@ def create_orchestrator_runtime(  # noqa: C901
             mongo.collection("room_agent_messages"),
             final_message_delivery,
         ).project,
-        "project_terminal_run_status": MongoTerminalRunStatusProjector(
-            mongo.collection("runs"),
-            mongo.collection("room_agent_messages"),
-        ).project,
+        "project_terminal_run_status": project_terminal_run_status,
     }
     projection_worker = ProjectionOutboxWorker(
         run_store=run_store,
         projectors=projectors,
-        after_project=projection_listener,
     )
 
     cancellation_coordinator = A2ACancellationCoordinator(
@@ -403,24 +508,21 @@ def create_orchestrator_runtime(  # noqa: C901
     )
 
     async def recover_dispatch(record: Any) -> None:
-        # Re-delivery for checkpointed accepted/ready_to_dispatch calls. The
-        # shared dispatch_command helper builds materialized_resources=[];
-        # a resource-bearing Run re-dispatch would silently drop attachments
-        # and context refs. Until the step-7 resource re-materialization path
-        # lands, refuse that case loudly instead of dispatching empty
-        # resources.
-        if getattr(record, "resource_manifest", None) is not None and getattr(
-            record.resource_manifest, "refs", []
-        ):
-            logger.warning(
-                "orchestrator recovery: resource-bearing re-dispatch is "
-                "unsupported until step 7; call %s stays due",
-                record.call_record_id,
-            )
+        binding = await binding_store.load(record.binding_id)
+        if binding is None or binding.binding_digest != record.binding_digest:
             raise RecoverableAdapterError(
-                "resource-bearing re-dispatch is not implemented"
+                "resource-bearing re-dispatch binding is unavailable"
             )
-        await dispatch.dispatch(dispatch_command(record))
+        materialized = await resources.materialize(
+            record.resource_manifest,
+            room_id=record.room_id,
+            room_epoch=record.room_epoch,
+            allowed_input_modes=binding.input_modes,
+            deadline_at=record.dispatch_snapshot.deadline_at,
+        )
+        await dispatch.dispatch(
+            dispatch_command(record, materialized_resources=materialized)
+        )
 
     call_recovery = A2ACallRecoveryService(
         ledger=call_ledger,
@@ -432,20 +534,118 @@ def create_orchestrator_runtime(  # noqa: C901
         hitl=hitl_port,
         hitl_delivery=hitl_delivery,
         run_store=run_store,
+        canonical_hitl_control=canonical_hitl_control,
+        public_secret_values=public_secret_values,
     )
     artifact_recovery = A2AArtifactRecoveryService(inbox_recovery)
 
     async def _recovery_noop() -> None:
-        # Generic Run re-entry and the orchestrator watchdog are bound in later
-        # steps. HITL continuation recovery is wired below.
+        # HITL continuation and the watchdog remain separate recovery phases.
         return None
 
-    if getattr(settings_obj, "orchestrator_recovery_enabled", False):
-        logger.warning(
-            "orchestrator recovery enabled while generic_runs/watchdog phases "
-            "are still no-ops; generic Run re-entry will not run until step 7 "
-            "binds them"
-        )
+    recovery_instance = f"orchestrator-generic-runs:{uuid.uuid4().hex}"
+    recovery_lease = timedelta(seconds=60)
+    recovery_renew_interval = 20.0
+
+    async def recover_generic_runs() -> None:  # noqa: C901
+        now = datetime.now(UTC)
+        due = await run_store.list_due_runs(due_at=now, limit=100)
+        for candidate in due:
+            claim_now = datetime.now(UTC)
+            recovery_owner = f"{recovery_instance}:{uuid.uuid4().hex}"
+            claimed = await run_store.claim_recovery(
+                candidate.run_id,
+                expected_state_version=candidate.state_version,
+                owner_id=recovery_owner,
+                lease_expires_at=claim_now + recovery_lease,
+            )
+            if claimed.run is None or claimed.outcome not in {"accepted", "replayed"}:
+                continue
+            run = claimed.run
+
+            async def emit(event_type, current, payload, _owner_id=recovery_owner):
+                latest = await run_store.load(current.run_id)
+                if latest is None or latest.recovery_claim.owner_id != _owner_id:
+                    raise RecoverableAdapterError("generic recovery lease was lost")
+                if session_listener is None:
+                    return
+                result = session_listener(
+                    SessionEvent(
+                        event_type=event_type,
+                        session_id=f"recovery:{current.run_id}",
+                        run_id=current.run_id,
+                        causation_id=current.request.user_message_id,
+                        sequence=current.state_version,
+                        timestamp=datetime.now(UTC),
+                        payload=payload,
+                        room_id=current.room_id,
+                        user_message_id=current.request.user_message_id,
+                        client_request_id=current.client_request_id,
+                        lifecycle_family=current.lifecycle_family,
+                    )
+                )
+                if hasattr(result, "__await__"):
+                    await result
+
+            try:
+                # This deterministic root is safe both before and after its
+                # original append; the publisher reads back the same room row.
+                await emit(
+                    "run_started",
+                    run,
+                    {
+                        "status": run.status,
+                        "mode": run.profile.profile_id,
+                        "started_at": run.created_at,
+                    },
+                )
+                if run.tool_catalog is None:
+                    raise RecoverableAdapterError("recoverable Run has no tool catalog")
+                await _run_with_recovery_lease(
+                    run_store=run_store,
+                    run_id=run.run_id,
+                    owner_id=recovery_owner,
+                    work=kernel_for_catalog(run.tool_catalog).run(
+                        run.run_id,
+                        signal=EventCancellationSignal(),
+                        lifecycle=emit,
+                    ),
+                    lease_duration=recovery_lease,
+                    renew_interval_seconds=recovery_renew_interval,
+                )
+                current = await run_store.load(run.run_id)
+                if (
+                    current is not None
+                    and current.recovery_claim.owner_id == recovery_owner
+                ):
+                    await run_store.release_recovery(
+                        run.run_id,
+                        expected_state_version=current.state_version,
+                        owner_id=recovery_owner,
+                        next_attempt_at=(
+                            None
+                            if current.status
+                            in {"completed", "failed", "canceled", "budget_exhausted"}
+                            else datetime.now(UTC) + timedelta(seconds=2)
+                        ),
+                    )
+            except Exception:
+                logger.warning(
+                    "generic orchestrator Run recovery failed run_id=%s",
+                    run.run_id,
+                    exc_info=True,
+                )
+                current = await run_store.load(run.run_id)
+                if (
+                    current is not None
+                    and current.recovery_claim.owner_id == recovery_owner
+                ):
+                    await run_store.release_recovery(
+                        run.run_id,
+                        expected_state_version=current.state_version,
+                        owner_id=recovery_owner,
+                        next_attempt_at=datetime.now(UTC) + timedelta(seconds=5),
+                    )
 
     def _due_phase(recover: Callable[..., Any]) -> Callable[[], Any]:
         async def run() -> None:
@@ -469,6 +669,8 @@ def create_orchestrator_runtime(  # noqa: C901
         observations=observation_ingress,
         hitl_delivery=hitl_delivery,
         run_store=run_store,
+        canonical_hitl_control=canonical_hitl_control,
+        public_secret_values=public_secret_values,
     )
     continuation_recovery = A2AContinuationRecoveryService(
         coordinator=continuation_coordinator,
@@ -485,7 +687,7 @@ def create_orchestrator_runtime(  # noqa: C901
         observations=_due_phase(inbox_recovery.recover_due),
         calls=_due_phase(call_recovery.recover_due),
         artifacts=_due_phase(artifact_recovery.recover_due),
-        generic_runs=_recovery_noop,
+        generic_runs=recover_generic_runs,
         projection=projection_worker.run_once,
         watchdog=_recovery_noop,
     )
@@ -518,6 +720,7 @@ def create_orchestrator_runtime(  # noqa: C901
         kernel_factory=kernel_for_catalog,
         projection_worker=projection_worker,
         recovery_cycle=recovery_cycle,
+        public_secret_values=public_secret_values,
     )
 
 

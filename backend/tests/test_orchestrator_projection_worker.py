@@ -337,7 +337,9 @@ async def test_worker_blocks_poison_intent_after_bounded_attempts():
         max_attempts=2,
         backoff_base_seconds=1,
     )
-    assert await worker.run_once(due_at=NOW) == 2
+    # Final-message projection can complete, but the dependent settlement
+    # intent remains pending while the terminal event append is unresolved.
+    assert await worker.run_once(due_at=NOW) == 1
     stored = await store.load(run.run_id)
     event_intent = next(
         item

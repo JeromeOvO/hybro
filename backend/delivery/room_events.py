@@ -26,6 +26,7 @@ from common.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _GRACE_DEFAULT = 5
+_FALLBACK_INSERT_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,8 +82,14 @@ class MongoRoomEventStore:
         self._skip_grace = skip_grace
 
     async def ensure_indexes(self) -> None:
+        # Keep the legacy non-unique index migration-safe, but establish a
+        # distinct unique index before accepting writes. Existing ambiguous
+        # rows make startup fail instead of allowing a tombstone and delayed
+        # original to coexist at one room sequence.
         await self._events.create_index(
-            [("room_id", 1), ("room_seq", 1)], name="room_id_seq"
+            [("room_id", 1), ("room_seq", 1)],
+            name="room_id_seq_unique",
+            unique=True,
         )
         await self._events.create_index([("room_id", 1), ("ts", 1)], name="room_id_ts")
 
@@ -153,28 +160,72 @@ class MongoRoomEventStore:
     ) -> RoomEventAppend:
         """Counter-then-insert allocation for non-transactional deployments.
 
-        A crash between the counter advance and the insert burns a sequence.
-        ``_heal_skipped`` below backfills the hole with a ``skipped`` tombstone
-        once the counter has advanced ``skip_grace`` allocations past it, so
-        the snapshot fold can advance (plan §11 risk 10 fallback).
+        Deterministic retries are read before allocation. A concurrent retry
+        can still lose after allocating; that exact burned slot is immediately
+        filled with a skipped tombstone so a quiescent room never retains a
+        permanent tail hole.
         """
 
         from pymongo.errors import DuplicateKeyError
 
-        counter = await self._seq.raw_collection.find_one_and_update(
-            {"_id": room_id},
-            {"$inc": {"seq": 1}},
-            upsert=True,
-            return_document=True,
+        existing = await self._events.find_one(
+            {"_id": str(doc["_id"]), "room_id": room_id}
         )
-        room_seq = int(counter["seq"])
-        doc["room_seq"] = room_seq
+        if existing is not None:
+            return RoomEventAppend(
+                room_seq=int(existing.get("room_seq") or 0),
+                room_event_id=str(doc["_id"]),
+            )
+
+        for _attempt in range(_FALLBACK_INSERT_ATTEMPTS):
+            counter = await self._seq.raw_collection.find_one_and_update(
+                {"_id": room_id},
+                {"$inc": {"seq": 1}},
+                upsert=True,
+                return_document=True,
+            )
+            room_seq = int(counter["seq"])
+            doc["room_seq"] = room_seq
+            try:
+                await self._events.raw_collection.insert_one(doc)
+            except DuplicateKeyError:
+                existing = await self._events.find_one(
+                    {"_id": str(doc["_id"]), "room_id": room_id}
+                )
+                if existing is not None:
+                    await self._fill_skipped(room_id, room_seq)
+                    return RoomEventAppend(
+                        room_seq=int(existing.get("room_seq") or 0),
+                        room_event_id=str(doc["_id"]),
+                    )
+                # A delayed writer can find its allocated sequence occupied by
+                # a healer tombstone. Its logical id is still absent, so reuse
+                # the same idempotency key at a fresh allocation rather than
+                # reporting a false persisted=false/seq=0 result.
+                continue
+            await self._heal_skipped(room_id, room_seq)
+            return RoomEventAppend(room_seq=room_seq, room_event_id=str(doc["_id"]))
+        raise DuplicateKeyError(
+            "room event fallback allocation repeatedly collided before persistence"
+        )
+
+    async def _fill_skipped(self, room_id: str, room_seq: int) -> None:
+        tombstone = {
+            "_id": f"skip:{room_id}:{room_seq}",
+            "room_id": room_id,
+            "room_seq": room_seq,
+            "kind": "skipped",
+            "event_id": None,
+            "parent_event_id": None,
+            "run_id": None,
+            "ts": None,
+            "payload_public": {},
+            "persist_state": "settled",
+        }
         try:
-            await self._events.raw_collection.insert_one(doc)
+            await self._events.raw_collection.insert_one(tombstone)
         except DuplicateKeyError:
-            return await self._read_back(room_id, str(doc["_id"]))
-        await self._heal_skipped(room_id, room_seq)
-        return RoomEventAppend(room_seq=room_seq, room_event_id=str(doc["_id"]))
+            pass
 
     async def _read_back(self, room_id: str, _id: str) -> RoomEventAppend:
         existing = await self._events.find_one({"_id": _id, "room_id": room_id})
@@ -190,29 +241,29 @@ class MongoRoomEventStore:
     async def _heal_skipped(self, room_id: str, allocated_seq: int) -> None:
         if self._skip_grace <= 0:
             return
+        heal_through = allocated_seq - self._skip_grace
+        if heal_through <= 0:
+            return
+        counter = await self._seq.find_one({"_id": room_id})
+        healed_through = int((counter or {}).get("healed_through") or 0)
+        if heal_through <= healed_through:
+            return
+        scan_from = healed_through + 1
         try:
-            candidates = await self._events.find(
-                {"room_id": room_id},
-                projection={"room_seq": 1},
-                sort=[("room_seq", -1)],
-                limit=1,
-            )
+            existing_seqs = {
+                int(doc.get("room_seq") or 0)
+                for doc in await self._events.find(
+                    {
+                        "room_id": room_id,
+                        "room_seq": {"$gte": scan_from, "$lte": heal_through},
+                    },
+                    projection={"room_seq": 1},
+                    limit=heal_through - healed_through,
+                )
+            }
         except Exception:
             return
-        highest = int(candidates[0].get("room_seq") or 0) if candidates else 0
-        # Only holes older than skip_grace allocations are confirmed burns.
-        oldest_healable = allocated_seq - self._skip_grace
-        if oldest_healable <= highest:
-            return
-        existing_seqs = {
-            int(doc.get("room_seq") or 0)
-            for doc in await self._events.find(
-                {"room_id": room_id},
-                projection={"room_seq": 1},
-                limit=max(0, allocated_seq - highest),
-            )
-        }
-        for missing in range(highest + 1, oldest_healable + 1):
+        for missing in range(scan_from, heal_through + 1):
             if missing in existing_seqs:
                 continue
             tombstone = {
@@ -231,6 +282,15 @@ class MongoRoomEventStore:
                 await self._events.raw_collection.insert_one(tombstone)
             except DuplicateKeyError:
                 continue
+        # ``$max`` makes concurrent fallback healers monotonic and persists the
+        # contiguous scan cursor, bounding each allocation to newly confirmed
+        # sequence positions rather than rescanning the full room prefix.
+        await self._seq.raw_collection.find_one_and_update(
+            {"_id": room_id},
+            {"$max": {"healed_through": heal_through}},
+            upsert=True,
+            return_document=True,
+        )
 
     async def latest_seq(self, room_id: str) -> int:
         counter = await self._seq.find_one({"_id": room_id})

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
+from common.dto import RunEventNotification
+from delivery.room_events import InMemoryRoomEventStore
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.public_projection import (
     PUBLIC_RUN_EVENT_KINDS,
     PublicProjectionTranslator,
 )
+from tests.test_delivery_event_publisher import FakeTransport, make_publisher
 
 
 def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
@@ -26,13 +31,21 @@ def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
     )
 
 
-def test_public_kinds_are_the_decision_visibility_vocabulary():
+def test_public_kinds_are_the_pi_turn_lifecycle_vocabulary():
     assert PUBLIC_RUN_EVENT_KINDS == {
-        "llm_call_completed",
-        "llm_retry_scheduled",
-        "orchestrator_decision",
-        "tool_call_accepted",
-        "tool_call_completed",
+        "run_started",
+        "turn_start",
+        "message_start",
+        "message_update",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_update",
+        "tool_execution_end",
+        "turn_end",
+        "retry_scheduled",
+        "run_waiting_input",
+        "run_resumed",
+        "run_settled",
     }
 
 
@@ -140,6 +153,63 @@ def test_orchestrator_decision_requires_plan_steps():
     )
 
 
+def test_canonical_tool_label_enforces_configured_secret_policy():
+    event = _event(
+        "tool_execution_started",
+        {
+            "internal_turn_id": "turn-1",
+            "call_id": "private-call",
+            "public_call_id": "inv_weather_0001",
+            "tool_name": "weather_lookup",
+            "agent_label": "Weather token=hunter2",
+            "arguments": {},
+        },
+    ).model_copy(update={"lifecycle_family": "canonical"})
+    public = PublicProjectionTranslator(
+        lifecycle_family="canonical",
+        secret_values=("hunter2",),
+    ).translate(event)
+    assert public is not None
+    assert public.payload["tool_name"] == "Weather token[REDACTED]"
+    assert "hunter2" not in str(public.payload)
+
+
+@pytest.mark.asyncio
+async def test_canonical_label_secret_never_reaches_persisted_room_event():
+    sentinel = "PRIVATE_LABEL_SENTINEL"
+    event = _event(
+        "tool_execution_started",
+        {
+            "internal_turn_id": "turn-1",
+            "call_id": "private-call",
+            "public_call_id": "inv_weather_0001",
+            "tool_name": "weather_lookup",
+            "agent_label": f"Weather {sentinel}",
+            "arguments": {},
+        },
+    ).model_copy(update={"lifecycle_family": "canonical"})
+    projected = PublicProjectionTranslator(
+        lifecycle_family="canonical", secret_values=(sentinel,)
+    ).translate(event)
+    assert projected is not None
+    store = InMemoryRoomEventStore()
+    publisher = make_publisher(transport=FakeTransport(), room_events=store)
+    await publisher.emit_checked_identified(
+        RunEventNotification(
+            room_id=projected.room_id,
+            event_id=projected.event_id,
+            run_id=projected.run_id,
+            seq=projected.seq,
+            run_event_type=projected.kind,
+            payload=projected.payload,
+            correlation_id=projected.client_request_id,
+        )
+    )
+    persisted = await store.read_range("room-1")
+    assert sentinel not in str(persisted)
+    assert "[REDACTED]" in str(persisted)
+
+
 def test_tool_call_accepted_redacts_arguments():
     public = PublicProjectionTranslator().translate(
         _event(
@@ -161,15 +231,11 @@ def test_tool_call_accepted_redacts_arguments():
     assert public.payload["call_id"].startswith("inv_")
     assert public.payload["call_id"] != "call-1"
     assert public.payload["tool_name"] == "Weather Agent"
-    assert public.payload["arg_summary"]["city"] == "Shanghai"
-    assert public.payload["arg_summary"]["days"] == 3
-    # Full argument values are truncated to short summaries and nested
-    # structures collapse to metadata — but scalars under the limit pass
-    # through unchanged, so assert the redaction limit instead.
-    assert "secret_api_key" in public.payload["arg_summary"]
+    assert public.payload["arg_summary"] == {}
+    assert "never-leak-me" not in str(public.payload)
 
 
-def test_tool_call_accepted_truncates_long_argument_values():
+def test_tool_call_accepted_denies_unknown_argument_projection():
     public = PublicProjectionTranslator().translate(
         _event(
             "tool_execution_started",
@@ -180,8 +246,7 @@ def test_tool_call_accepted_truncates_long_argument_values():
         )
     )
     assert public is not None
-    summary = public.payload["arg_summary"]["city"]
-    assert len(summary) <= 124  # 120 chars + ellipsis
+    assert public.payload["arg_summary"] == {}
 
 
 def test_tool_call_completed_carries_result_summary_and_exit_code():
@@ -204,7 +269,7 @@ def test_tool_call_completed_carries_result_summary_and_exit_code():
     assert public.payload | {"call_id": "<opaque>"} == {
         "call_id": "<opaque>",
         "tool_name": "weather_lookup",
-        "result_summary": "Sunny, 24C",
+        "result_summary": "",
         "exit_code": 0,
         "duration_ms": 120,
     }
@@ -223,7 +288,8 @@ def test_tool_call_completed_maps_failure_error_code():
         )
     )
     assert public is not None
-    assert public.payload["exit_code"] is None  # non-numeric codes stay None
+    # A non-numeric provider error still has a truthful failed public outcome.
+    assert public.payload["exit_code"] == 1
     public = PublicProjectionTranslator().translate(
         _event(
             "tool_execution_completed",
@@ -244,3 +310,136 @@ def test_translator_missing_room_id_degrades_to_empty_string():
     public = PublicProjectionTranslator().translate(event)
     assert public is not None
     assert public.room_id == ""
+
+
+def _agent_catalog():
+    from execution.orchestrator.models import (
+        FrozenToolCatalogEntry,
+        FrozenToolCatalogSnapshot,
+        ToolBindingRef,
+        ToolDefinition,
+    )
+
+    return FrozenToolCatalogSnapshot(
+        catalog_id="catalog-1",
+        entries=[
+            FrozenToolCatalogEntry(
+                definition=ToolDefinition(
+                    name="agent_weather",
+                    label="Weather Agent - Forecast",
+                    description="Weather",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"task": {"type": "string"}},
+                    },
+                    execution_mode="parallel",
+                    side_effect_level="read",
+                ),
+                binding=ToolBindingRef(binding_id="binding-1", binding_digest="digest"),
+                agent_display_name="Weather Agent",
+            )
+        ],
+        created_at=datetime.now(UTC),
+    )
+
+
+def _canonical_tool_event(event_type: str, payload: dict):
+    return _event(event_type, payload).model_copy(
+        update={"lifecycle_family": "canonical"}
+    )
+
+
+def test_canonical_run_started_identity_ignores_recovery_payload_ids():
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    durable_started_at = datetime(2030, 1, 1, tzinfo=UTC)
+    initial = _event("run_started", {"mode": "ultimate"}).model_copy(
+        update={"lifecycle_family": "canonical"}
+    )
+    recovery = _event(
+        "run_started",
+        {
+            "mode": "ultimate",
+            "public_event_id": "public:run-1:run_started",
+            "started_at": durable_started_at,
+        },
+    ).model_copy(update={"lifecycle_family": "canonical", "sequence": 99})
+
+    initial_public = translator.translate(initial)
+    recovery_public = translator.translate(recovery)
+
+    assert initial_public is not None
+    assert recovery_public is not None
+    assert initial_public.event_id == recovery_public.event_id
+    assert recovery_public.payload["started_at"] == durable_started_at
+
+
+def test_canonical_agent_execution_exposes_base_name_and_kind():
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    public = translator.translate(
+        _canonical_tool_event(
+            "tool_execution_started",
+            {
+                "internal_turn_id": "turn-1",
+                "call_id": "private-call",
+                "public_call_id": "inv_weather_0001",
+                "tool_name": "agent_weather",
+                "agent_label": "Weather Agent - Forecast",
+                "arguments": {"task": "Check San Jose weather"},
+            },
+        ),
+        catalog=_agent_catalog(),
+    )
+    assert public is not None
+    assert public.kind == "tool_execution_start"
+    assert public.payload["execution_kind"] == "agent"
+    assert public.payload["target"] == {"name": "Weather Agent", "source": None}
+    assert public.payload["tool_name"] == "Weather Agent - Forecast"
+    assert public.payload["request_summary"] == "Check San Jose weather"
+
+
+def test_canonical_agent_execution_end_marks_private_detail_available():
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    public = translator.translate(
+        _canonical_tool_event(
+            "tool_execution_completed",
+            {
+                "internal_turn_id": "turn-1",
+                "call_id": "private-call",
+                "public_call_id": "inv_weather_0001",
+                "tool_name": "agent_weather",
+                "agent_label": "Weather Agent - Forecast",
+                "result_status": "completed",
+                "result_text": "Clear, 22C",
+                "duration_ms": 120,
+            },
+        ),
+        catalog=_agent_catalog(),
+    )
+    assert public is not None
+    assert public.payload["execution_kind"] == "agent"
+    assert public.payload["target"] == {"name": "Weather Agent", "source": None}
+    assert public.payload["detail_available"] is True
+    assert public.payload["result"] == ""
+    assert "Clear, 22C" not in str(public.payload)
+
+
+def test_canonical_unknown_tool_is_plain_tool_execution_without_target():
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    public = translator.translate(
+        _canonical_tool_event(
+            "tool_execution_started",
+            {
+                "internal_turn_id": "turn-1",
+                "call_id": "private-call",
+                "public_call_id": "inv_tool_0000001",
+                "tool_name": "request_user_input",
+                "arguments": {"question": "Which city?"},
+            },
+        ),
+        catalog=_agent_catalog(),
+    )
+    assert public is not None
+    assert public.payload["execution_kind"] == "tool"
+    assert "target" not in public.payload
+    assert public.payload["request_summary"] == ""
+    assert public.payload["tool_name"] == "request_user_input"

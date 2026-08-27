@@ -140,6 +140,7 @@ class AgentServiceCandidateSource:
                     AgentToolCandidate(
                         agent_id=info.agent_id,
                         skill_id=skill_id,
+                        agent_display_name=display_name.strip()[:120] or None,
                         display_name=(
                             f"{display_name} - {skill.get('name') or skill_id}"
                         ).strip()[:120],
@@ -167,6 +168,7 @@ class AgentServiceCandidateSource:
                     AgentToolCandidate(
                         agent_id=info.agent_id,
                         skill_id=None,
+                        agent_display_name=display_name.strip()[:120] or None,
                         display_name=display_name.strip()[:120] or "Agent",
                         description=description.strip()[:500],
                         card_digest=card_digest,

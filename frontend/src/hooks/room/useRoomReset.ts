@@ -5,6 +5,8 @@ import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { useTraceStore } from '@/stores/trace-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+import { useTurnStore } from '@/stores/turn-store'
+import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 
 export function useRoomReset(
   roomId: string,
@@ -44,6 +46,8 @@ export function useRoomReset(
       useRoomUiStore.getState().resetRoom(roomId)
       useStreamingStore.getState().clearRoom(roomId)
       useTraceStore.getState().clearRoom()
+      useTurnStore.getState().clearRoom(roomId)
+      useTurnPresentationStore.getState().clear()
     }
   }, [roomId, lifecycle, hitlRequestIndex, setSending, setCancelling, setSseConnected, setSseError, resetAgentNameCache])
 }

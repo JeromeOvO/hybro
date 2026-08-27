@@ -76,9 +76,16 @@ class A2AHITLContinuationAdapter:
 class HITLTerminalLifecycleAdapter:
     """Converge orchestration and public run state after HITL termination."""
 
-    def __init__(self, orchestration_run_store, run_lifecycle) -> None:
+    def __init__(
+        self,
+        orchestration_run_store,
+        run_lifecycle,
+        *,
+        canonical_terminalizer=None,
+    ) -> None:
         self._orchestration_run_store = orchestration_run_store
         self._run_lifecycle = run_lifecycle
+        self._canonical_terminalizer = canonical_terminalizer
 
     async def terminalize_owning_run(  # noqa: C901
         self,
@@ -90,6 +97,14 @@ class HITLTerminalLifecycleAdapter:
         orchestration_state = None
         run_id = request.orchestration_run_id
         terminal_event_required = False
+        if run_id and self._canonical_terminalizer is not None:
+            handled = await self._canonical_terminalizer(
+                request,
+                terminal_status=terminal_status,
+                reason=reason,
+            )
+            if handled:
+                return
         if run_id:
             for _attempt in range(3):
                 current = await self._orchestration_run_store.get_run(run_id)

@@ -125,7 +125,10 @@ async def emit_run_event_payload(
     await event_publisher.emit(
         run_event_notification_from_payload(
             room_id=room_id,
-            payload=payload,
+            payload=build_run_event_payload(
+                payload,
+                client_request_id=client_request_id,
+            ),
             correlation_id=client_request_id,
         )
     )

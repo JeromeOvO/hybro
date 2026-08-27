@@ -5,6 +5,8 @@ import asyncio
 import pytest
 
 from execution.orchestrator.budget import BudgetExceeded, BudgetPolicy
+from execution.orchestrator.compaction import DeterministicFakeCompactor
+from execution.orchestrator.context import CompiledContext
 from execution.orchestrator.fake_tools import RecordingFakeToolRuntime
 from execution.orchestrator.in_memory import (
     InMemoryOrchestratorRunStore,
@@ -13,7 +15,9 @@ from execution.orchestrator.in_memory import (
 from execution.orchestrator.kernel import KernelConflict
 from execution.orchestrator.models import (
     AssistantMessage,
+    ModelMessage,
     ModelStreamEvent,
+    ModelTextPart,
     SessionNotice,
     TextPart,
     ToolBatchEntry,
@@ -26,6 +30,7 @@ from execution.orchestrator.models import (
     ToolSuspension,
     UsageRecord,
 )
+from execution.orchestrator.public_projection import canonical_settlement_payload
 from tests._orchestrator_helpers import (
     NOW,
     EventCancellationSignal,
@@ -79,6 +84,227 @@ async def test_finalizing_run_resumes_terminal_commit_without_new_model_turn():
         for item in result.run.transcript
         if isinstance(item, AssistantMessage)
     ] == [assistant.message_id]
+
+
+@pytest.mark.asyncio
+async def test_process_restart_adopts_checkpointed_final_terminal_before_settlement():
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="assistant-restart-final",
+        content=[TextPart(text="durable final")],
+        tool_calls=[],
+        finish_reason="stop",
+        usage=None,
+        created_at=NOW,
+    )
+    run = run.model_copy(
+        update={
+            "transcript": [*run.transcript, assistant],
+            "active_internal_turn_id": "turn-restart",
+            "active_assistant_message_id": assistant.message_id,
+            "active_attempt": 1,
+            "active_public_text": "durable final",
+            "greatest_public_text_offset": len("durable final"),
+            "proposed_final_message_id": assistant.message_id,
+        }
+    )
+    kernel, _, runtime, _ = await make_kernel([], run=run)
+    lifecycle_events: list[str] = []
+
+    async def lifecycle(event_type, _run, _payload):
+        lifecycle_events.append(event_type)
+
+    result = await kernel.run(
+        run.run_id,
+        signal=NeverCancelled(),
+        lifecycle=lifecycle,
+    )
+
+    assert result.outcome == "final_answer"
+    assert runtime.requests == []
+    assert lifecycle_events[:4] == [
+        "turn_started",
+        "message_started",
+        "message_completed",
+        "turn_completed",
+    ]
+    assert result.run.active_internal_turn_id is None
+    assert result.run.active_assistant_message_id is None
+
+
+@pytest.mark.asyncio
+async def test_recovery_adopts_durable_final_after_active_assistant_id_was_cleared():
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="assistant-durable-final",
+        content=[TextPart(text="durable final")],
+        tool_calls=[],
+        finish_reason="stop",
+        usage=None,
+        created_at=NOW,
+    )
+    run = run.model_copy(
+        update={
+            "transcript": [*run.transcript, assistant],
+            "active_internal_turn_id": "turn-durable",
+            "active_assistant_message_id": None,
+            "active_attempt": 1,
+            "proposed_final_message_id": assistant.message_id,
+        }
+    )
+    kernel, _, runtime, _ = await make_kernel([], run=run)
+
+    async def read_events(_room_id, _run_id):
+        return [
+            {
+                "room_seq": 1,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "message_start",
+                    "payload": {
+                        "internal_turn_id": "turn-durable",
+                        "message_id": assistant.message_id,
+                    },
+                },
+            },
+            {
+                "room_seq": 2,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "message_end",
+                    "payload": {
+                        "internal_turn_id": "turn-durable",
+                        "message_id": assistant.message_id,
+                        "disposition": "final",
+                        "stop_reason": "stop",
+                        "text": "durable final",
+                    },
+                },
+            },
+        ]
+
+    kernel.canonical_event_reader = read_events
+    events: list[str] = []
+
+    async def lifecycle(event_type, _run, _payload):
+        events.append(event_type)
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+
+    assert result.outcome == "final_answer"
+    assert runtime.requests == []
+    assert events == ["turn_started", "turn_completed"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_repairs_stale_offset_from_durable_chunks_before_aborting():
+    run = make_run()
+    run = run.model_copy(
+        update={
+            "active_internal_turn_id": "turn-stale-offset",
+            "active_assistant_message_id": "assistant-stale-offset",
+            "active_attempt": 1,
+            "active_public_text": "stale",
+            "greatest_public_text_offset": 5,
+        }
+    )
+    kernel, _, runtime, _ = await make_kernel([final_events("recovered")], run=run)
+
+    async def read_events(_room_id, _run_id):
+        return [
+            {
+                "room_seq": 1,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "message_start",
+                    "payload": {
+                        "internal_turn_id": "turn-stale-offset",
+                        "message_id": "assistant-stale-offset",
+                    },
+                },
+            },
+            {
+                "room_seq": 2,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "message_update",
+                    "payload": {
+                        "internal_turn_id": "turn-stale-offset",
+                        "message_id": "assistant-stale-offset",
+                        "assistant_message_event": {
+                            "delta": "durable text",
+                            "start_offset": 0,
+                            "end_offset": 12,
+                        },
+                    },
+                },
+            },
+        ]
+
+    kernel.canonical_event_reader = read_events
+    observed: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        observed.append((event_type, payload))
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+
+    aborted = next(
+        payload
+        for event_type, payload in observed
+        if event_type == "message_completed" and payload.get("disposition") == "aborted"
+    )
+    assert aborted["text"] == "durable text"
+    assert result.outcome == "final_answer"
+    assert len(runtime.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_publishes_checkpointed_accepted_tool_terminal_before_settlement():
+    kernel, store, _, _ = await make_kernel(
+        [tool_events(("call-crash", "fake_agent_echo", '{"value":"ok"}'))]
+    )
+    run_id = next(iter(store.runs))
+    crashed = False
+
+    async def crash_after_private_terminal(event_type, _run, _payload):
+        nonlocal crashed
+        if event_type == "tool_execution_completed" and not crashed:
+            crashed = True
+            raise OSError("crash before public terminal checkpoint")
+
+    with pytest.raises(OSError, match="public terminal checkpoint"):
+        await kernel.run(
+            run_id,
+            signal=NeverCancelled(),
+            lifecycle=crash_after_private_terminal,
+        )
+    checkpoint = await store.load(run_id)
+    assert checkpoint is not None
+    entry = checkpoint.tool_batches[0].entries[0]
+    assert entry.state == "terminal"
+    assert entry.acceptance is not None
+    assert entry.public_terminal_emitted is False
+
+    from tests._orchestrator_helpers import ScriptedModelRuntime
+
+    runtime = ScriptedModelRuntime([final_events("recovered")])
+    kernel.model_runtime = runtime
+    published: list[str] = []
+
+    async def lifecycle(event_type, _run, _payload):
+        published.append(event_type)
+
+    result = await kernel.run(
+        run_id,
+        signal=NeverCancelled(),
+        lifecycle=lifecycle,
+    )
+    assert result.outcome == "final_answer"
+    assert runtime.requests
+    assert published[0] == "tool_execution_completed"
+    recovered_entry = result.run.tool_batches[0].entries[0]
+    assert recovered_entry.public_terminal_emitted is True
 
 
 @pytest.mark.asyncio
@@ -157,8 +383,12 @@ async def test_reconstructed_tool_batch_can_suspend_and_accept_observation():
     )
     run = run.model_copy(update={"transcript": [*run.transcript, assistant]})
     kernel, _, runtime, _ = await make_kernel([final_events()], run=run)
+    lifecycle_events: list[tuple[str, dict[str, object]]] = []
 
-    waiting = await kernel.run(run.run_id, signal=NeverCancelled())
+    async def lifecycle(event_type, _run, payload):
+        lifecycle_events.append((event_type, payload))
+
+    waiting = await kernel.run(run.run_id, signal=NeverCancelled(), lifecycle=lifecycle)
     assert waiting.outcome == "waiting_external"
     assert waiting.run.status == "waiting_external"
 
@@ -177,10 +407,68 @@ async def test_reconstructed_tool_batch_can_suspend_and_accept_observation():
             observed_at=NOW,
         ),
         signal=NeverCancelled(),
+        lifecycle=lifecycle,
     )
 
     assert result.outcome == "final_answer"
     assert len(runtime.requests) == 1
+    tool_events_seen = [
+        event_type
+        for event_type, payload in lifecycle_events
+        if payload.get("call_id") == "call-torn-pause"
+    ]
+    assert tool_events_seen.count("tool_execution_updated") == 1
+    assert tool_events_seen.count("tool_execution_completed") == 1
+    assert tool_events_seen.index("tool_execution_updated") < tool_events_seen.index(
+        "tool_execution_completed"
+    )
+    event_names = [event_type for event_type, _ in lifecycle_events]
+    resumed_end = event_names.index("tool_execution_completed")
+    prior_turn_end = event_names.index("turn_completed", resumed_end)
+    successor_turn_start = event_names.index("turn_started", prior_turn_end)
+    assert resumed_end < prior_turn_end < successor_turn_start
+
+
+@pytest.mark.asyncio
+async def test_kernel_sanitizes_configured_secret_before_final_checkpoint():
+    kernel, store, _, _ = await make_kernel([final_events("echo top-secret")])
+    kernel.public_secret_values = ("top-secret",)
+    result = await kernel.run(next(iter(store.runs)), signal=NeverCancelled())
+    final = next(
+        item
+        for item in result.run.transcript
+        if isinstance(item, AssistantMessage) and not item.tool_calls
+    )
+    assert final.content[0].text == "echo [REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_short_safe_answer_timer_update_precedes_message_end_when_provider_stalls():
+    class StallingRuntime:
+        async def stream_turn(self, request, *, signal):
+            del request, signal
+            yield ModelStreamEvent(kind="attempt_started", attempt=1)
+            yield ModelStreamEvent(kind="text_delta", attempt=1, delta="short answer")
+            await asyncio.sleep(0.09)
+            yield ModelStreamEvent(kind="finish", attempt=1, finish_reason="stop")
+
+    run = make_run()
+    store = InMemoryOrchestratorRunStore()
+    kernel, _, _, _ = await make_kernel([], run=run, run_store=store)
+    kernel.model_runtime = StallingRuntime()
+    observed: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        observed.append((event_type, payload))
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+
+    assert result.outcome == "final_answer"
+    names = [name for name, _ in observed]
+    update_at = names.index("message_updated")
+    end_at = names.index("message_completed")
+    assert update_at < end_at
+    assert observed[update_at][1]["delta"] == "short answer"
 
 
 @pytest.mark.asyncio
@@ -219,11 +507,105 @@ async def test_kernel_correlates_unknown_and_schema_invalid_calls_without_execut
     assert [item.call_id for item in messages] == ["unknown", "invalid", "ok"]
     assert [item.error_code for item in messages] == [
         "invalid_tool_call",
-        "invalid_tool_call",
-        None,
+        "skipped_due_to_prior_rejection",
+        "skipped_due_to_prior_rejection",
     ]
-    assert tools.execute_log == ["ok"]
-    assert runtime.requests[1].messages[-3].role == "tool"
+    assert tools.execute_log == []
+    assert len(runtime.requests) == 2
+    assert runtime.requests[1].messages[-1].role == "tool"
+    assert result.outcome == "final_answer"
+
+
+@pytest.mark.asyncio
+async def test_schema_invalid_agent_call_gets_actionable_correction_turn():
+    kernel, store, runtime, tools = await make_kernel(
+        [
+            tool_events(
+                (
+                    "bad-resource",
+                    "fake_agent_echo",
+                    '{"value":"submission","attachment_refs":["pdf-1"]}',
+                )
+            ),
+            final_events("retried without unsupported attachment"),
+        ]
+    )
+    lifecycle_events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        lifecycle_events.append((event_type, payload))
+
+    result = await kernel.run(
+        next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
+    )
+
+    assert result.outcome == "final_answer"
+    assert tools.accept_log == tools.execute_log == []
+    assert len(runtime.requests) == 2
+    rejected = next(
+        item for item in result.run.transcript if isinstance(item, ToolResultMessage)
+    )
+    assert rejected.error_code == "invalid_tool_call"
+    assert "unsupported properties: attachment_refs" in rejected.error_message
+    assert runtime.requests[1].messages[-1].role == "tool"
+    assert [
+        payload["status"]
+        for event_type, payload in lifecycle_events
+        if event_type == "turn_completed"
+    ] == ["error", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_provider_prefetch_is_canceled_and_stream_closed_on_processing_failure():
+    class BlockingPrefetchStream:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.prefetch_started = asyncio.Event()
+            self.prefetch_canceled = False
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.calls += 1
+            if self.calls == 1:
+                return ModelStreamEvent(kind="attempt_started", attempt=1)
+            self.prefetch_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.prefetch_canceled = True
+                raise
+            raise AssertionError("blocking provider pull unexpectedly completed")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    class TrackingRuntime:
+        def __init__(self, stream: BlockingPrefetchStream) -> None:
+            self.stream = stream
+
+        def stream_turn(self, request, *, signal):
+            del request, signal
+            return self.stream
+
+    stream = BlockingPrefetchStream()
+    kernel, store, _, _ = await make_kernel([])
+    kernel.model_runtime = TrackingRuntime(stream)
+
+    async def fail_while_prefetch_is_running(run, turn_id, event):
+        del run, turn_id, event
+        await stream.prefetch_started.wait()
+        raise RuntimeError("durable event processing failed")
+
+    kernel._record_model_event = fail_while_prefetch_is_running
+
+    with pytest.raises(RuntimeError, match="durable event processing failed"):
+        await kernel.run(next(iter(store.runs)), signal=NeverCancelled())
+
+    assert stream.prefetch_canceled is True
+    assert stream.closed is True
 
 
 @pytest.mark.asyncio
@@ -247,7 +629,7 @@ async def test_malformed_tool_call_adds_stable_notice_and_never_invokes_tools():
 
 
 @pytest.mark.asyncio
-async def test_suspended_mixed_batch_flushes_once_in_source_order_after_observation():
+async def test_invalid_first_declaration_fail_fast_skips_later_siblings():
     kernel, store, runtime, tools = await make_kernel(
         [
             tool_events(
@@ -259,38 +641,38 @@ async def test_suspended_mixed_batch_flushes_once_in_source_order_after_observat
         ]
     )
     run_id = next(iter(store.runs))
-    waiting = await kernel.run(run_id, signal=NeverCancelled())
-    assert waiting.outcome == "waiting_external"
-    assert not any(
-        isinstance(item, ToolResultMessage) for item in waiting.run.transcript
-    )
-    assert tools.execute_log == ["done", "wait"]
-
-    observation = ToolObservation(
-        observation_id="observation-1",
-        invocation_id="wait",
-        outcome=ToolResult(
-            call_id="wait",
-            tool_name="fake_agent_pause",
-            status="completed",
-            content=[TextPart(text="external done")],
-            artifact_refs=[],
-        ),
-        observed_at=NOW,
-    )
-    result = await kernel.observe_tool(run_id, observation, signal=NeverCancelled())
+    result = await kernel.run(run_id, signal=NeverCancelled())
+    assert result.outcome == "final_answer"
     results = [
         item for item in result.run.transcript if isinstance(item, ToolResultMessage)
     ]
     assert [item.call_id for item in results] == ["bad", "done", "wait"]
-    assert result.run.tool_batches[0].results_flushed is True
-    assert runtime.requests[-1].messages[-1].role == "tool"
+    assert [item.error_code for item in results] == [
+        "invalid_tool_call",
+        "skipped_due_to_prior_rejection",
+        "skipped_due_to_prior_rejection",
+    ]
+    assert tools.execute_log == []
+    assert len(runtime.requests) == 2
 
-    replay = await kernel.observe_tool(run_id, observation, signal=NeverCancelled())
+
+@pytest.mark.asyncio
+async def test_replaying_completed_run_after_corrected_declaration_is_idempotent():
+    kernel, store, runtime, _ = await make_kernel(
+        [
+            tool_events(("bad", "fake_agent_echo", "{}")),
+            final_events("corrected"),
+        ]
+    )
+    run_id = next(iter(store.runs))
+    result = await kernel.run(run_id, signal=NeverCancelled())
+    assert result.outcome == "final_answer"
+    replay = await kernel.run(run_id, signal=NeverCancelled())
     replay_results = [
         item for item in replay.run.transcript if isinstance(item, ToolResultMessage)
     ]
-    assert len(replay_results) == 3
+    assert len(replay_results) == 1
+    assert len(runtime.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -415,7 +797,7 @@ async def test_stale_tool_entry_writer_cannot_overwrite_terminal_result():
 
 
 @pytest.mark.asyncio
-async def test_acceptance_failed_sibling_is_retained_until_suspension_finishes():
+async def test_acceptance_failure_skips_later_unstarted_siblings():
     tools = RecordingFakeToolRuntime(fail_accept_for={"fake_agent_fail"})
     kernel, store, _, _ = await make_kernel(
         [
@@ -428,34 +810,21 @@ async def test_acceptance_failed_sibling_is_retained_until_suspension_finishes()
         tool_runtime=tools,
     )
     run_id = next(iter(store.runs))
-    waiting = await kernel.run(run_id, signal=NeverCancelled())
-    assert waiting.outcome == "awaiting_user"
-    assert [entry.state for entry in waiting.run.tool_batches[0].entries] == [
+    result = await kernel.run(run_id, signal=NeverCancelled())
+    assert result.outcome == "failed"
+    assert [entry.state for entry in result.run.tool_batches[0].entries] == [
         "terminal",
-        "input_required",
+        "terminal",
     ]
-
-    result = await kernel.observe_tool(
-        run_id,
-        ToolObservation(
-            observation_id="input-1",
-            invocation_id="wait",
-            outcome=ToolResult(
-                call_id="wait",
-                tool_name="fake_agent_pause",
-                status="completed",
-                content=[TextPart(text="provided")],
-                artifact_refs=[],
-            ),
-            observed_at=NOW,
-        ),
-        signal=NeverCancelled(),
-    )
+    assert tools.execute_log == []
     messages = [
         item for item in result.run.transcript if isinstance(item, ToolResultMessage)
     ]
     assert [item.call_id for item in messages] == ["accept-fail", "wait"]
-    assert messages[0].error_code == "acceptance_failed"
+    assert [item.error_code for item in messages] == [
+        "acceptance_failed",
+        "skipped_due_to_prior_rejection",
+    ]
 
 
 @pytest.mark.asyncio
@@ -611,9 +980,12 @@ async def test_deadline_during_tool_reservation_aborts_batch_without_side_effect
     assert result.run.terminal_reason == "deadline"
     assert tools.accept_log == tools.execute_log == []
     assert all(
-        entry.buffered_terminal_result is None
+        entry.state == "terminal"
+        and entry.buffered_terminal_result is not None
+        and entry.buffered_terminal_result.error_code == "skipped_due_to_run_terminal"
         for entry in result.run.tool_batches[0].entries
     )
+    assert result.run.tool_batches[0].results_flushed is True
 
 
 @pytest.mark.asyncio
@@ -663,6 +1035,92 @@ async def test_usage_budget_exhaustion_prevents_tool_side_effects():
     assert result.outcome == "budget_exhausted"
     assert result.run.budget.output_tokens == 2
     assert tools.accept_log == tools.execute_log == []
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_closes_canonical_turn_before_compaction_retry():
+    class ShrinkingContextCompiler:
+        def compile(self, _run, *, tools, summary=None):
+            del tools
+            message = ModelMessage(
+                role="user", content=[ModelTextPart(text="compiled context")]
+            )
+            return CompiledContext(
+                kind="ready",
+                messages=[message],
+                estimated_input_tokens=100 if summary is None else 50,
+                reserved_output_tokens=10,
+                retained_transcript_indexes=(0,),
+                compacted=summary is not None,
+            )
+
+    overflow = [
+        ModelStreamEvent(kind="attempt_started", attempt=1),
+        ModelStreamEvent(
+            kind="attempt_failed",
+            attempt=1,
+            error_class="context_overflow",
+            retryable=False,
+        ),
+        ModelStreamEvent(
+            kind="error",
+            attempt=1,
+            error_class="context_overflow",
+            retryable=False,
+        ),
+    ]
+    kernel, store, _, _ = await make_kernel([overflow, final_events("done")])
+    kernel.context_compiler = ShrinkingContextCompiler()
+    kernel.context_compactor = DeterministicFakeCompactor()
+    lifecycle: list[tuple[str, dict[str, object]]] = []
+
+    async def capture(event_type, _run, payload):
+        lifecycle.append((event_type, payload))
+
+    run_id = next(iter(store.runs))
+    result = await kernel.run(
+        run_id,
+        signal=NeverCancelled(),
+        lifecycle=capture,
+    )
+
+    boundaries = [
+        (event_type, payload)
+        for event_type, payload in lifecycle
+        if event_type
+        in {
+            "turn_started",
+            "message_started",
+            "message_completed",
+            "turn_completed",
+            "model_retry_scheduled",
+        }
+    ]
+    assert [event_type for event_type, _ in boundaries] == [
+        "turn_started",
+        "message_started",
+        "message_completed",
+        "turn_completed",
+        "model_retry_scheduled",
+        "turn_started",
+        "message_started",
+        "message_completed",
+        "turn_completed",
+    ]
+    first_turn_id = str(boundaries[0][1]["internal_turn_id"])
+    retry_payload = boundaries[4][1]
+    second_turn_id = str(boundaries[5][1]["internal_turn_id"])
+    assert boundaries[2][1]["disposition"] == "error"
+    assert boundaries[3][1]["status"] == "error"
+    assert retry_payload == {
+        "internal_turn_id": first_turn_id,
+        "attempt": 2,
+        "error_class": "context_overflow",
+        "retry_delay_ms": 0,
+    }
+    assert second_turn_id != first_turn_id
+    assert result.outcome == "final_answer"
+    assert result.run.active_internal_turn_id is None
 
 
 @pytest.mark.asyncio
@@ -857,3 +1315,164 @@ async def test_observed_terminal_tool_artifacts_merge_with_observation_checkpoin
     )
     assert waiting.outcome == "waiting_external"
     assert completed.run.artifact_refs == ["artifact-observed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cause", ["user_requested", "room_closed", "shutdown", "policy"]
+)
+async def test_canceled_terminal_persists_typed_cancellation_cause(cause):
+    kernel, store, _, _ = await make_kernel([])
+    run_id = next(iter(store.runs))
+
+    result = await kernel.terminalize(
+        run_id,
+        status="canceled",
+        reason=f"canceled:{cause}",
+        cancellation_cause=cause,
+    )
+
+    assert result.outcome == "aborted"
+    saved = await store.load(run_id)
+    assert saved is not None
+    assert saved.status == "canceled"
+    assert saved.cancellation_cause == cause
+    assert canonical_settlement_payload(saved)["cancellation_code"] == cause
+
+
+def test_request_user_input_schema_accepts_up_to_twelve_choices():
+    from execution.orchestrator.kernel import REQUEST_USER_INPUT_TOOL_DEFINITION
+
+    choices_schema = REQUEST_USER_INPUT_TOOL_DEFINITION.input_schema["properties"][
+        "choices"
+    ]
+    assert choices_schema["maxItems"] == 12
+    assert choices_schema["items"]["maxLength"] == 500
+
+
+class RecordingSupervisorHITL:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(self, **kwargs) -> None:
+        self.calls.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_canonical_ask_user_suspends_and_resumes_with_durable_answer():
+    from execution.orchestrator.kernel import (
+        REQUEST_USER_INPUT_TOOL_NAME,
+        supervisor_answer_observation,
+    )
+
+    hitl_port = RecordingSupervisorHITL()
+    kernel, store, runtime, _ = await make_kernel(
+        [
+            tool_events(
+                ("ask-1", REQUEST_USER_INPUT_TOOL_NAME, '{"question": "Which city?"}')
+            ),
+            final_events("You chose Shanghai."),
+        ],
+        supervisor_hitl=hitl_port,
+    )
+    run_id = next(iter(store.runs))
+
+    lifecycle_events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        lifecycle_events.append((event_type, payload))
+
+    result = await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+    assert result.outcome == "awaiting_user"
+    assert result.run.status == "awaiting_user"
+    # Public protocol contract: the suspension update must extend a
+    # tool_execution_started event for the same public call id.
+    ask_events = [
+        (event_type, payload)
+        for event_type, payload in lifecycle_events
+        if payload.get("call_id") == "ask-1"
+    ]
+    assert [event_type for event_type, _ in ask_events][:2] == [
+        "tool_execution_started",
+        "tool_execution_updated",
+    ]
+    start_payload = ask_events[0][1]
+    assert start_payload["public_event_id"].endswith(":start")
+    assert (
+        start_payload["public_call_id"]
+        == start_payload["public_event_id"].split(":start")[0].rsplit(":", 1)[1]
+    )
+    assert len(hitl_port.calls) == 1
+    request = hitl_port.calls[0]
+    assert request["run"].run_id == run_id
+    assert request["question"] == "Which city?"
+    from hashlib import sha256
+
+    expected_interaction_id = sha256(f"{run_id}:ask:ask-1".encode()).hexdigest()
+    assert request["interaction_id"] == expected_interaction_id
+    entry = result.run.tool_batches[0].entries[0]
+    assert entry.state == "input_required"
+    assert entry.tool_name == REQUEST_USER_INPUT_TOOL_NAME
+    assert entry.invocation is not None
+    # The structured ask tool is only exposed on canonical Runs with the port.
+    assert any(
+        tool.name == REQUEST_USER_INPUT_TOOL_NAME for tool in runtime.requests[0].tools
+    )
+
+    observation = supervisor_answer_observation(run_id, "ask-1", "Shanghai", NOW)
+    events_before_resume = len(lifecycle_events)
+    resumed = await kernel.observe_tool(
+        run_id, observation, signal=NeverCancelled(), lifecycle=lifecycle
+    )
+    assert resumed.outcome == "final_answer"
+    assert resumed.run.status == "completed"
+    # The resumed ask_user publishes running update + terminal end, and the
+    # user answer never enters the public end event.
+    resumed_events = [
+        (event_type, payload)
+        for event_type, payload in lifecycle_events[events_before_resume:]
+        if payload.get("call_id") == "ask-1"
+        and event_type in {"tool_execution_updated", "tool_execution_completed"}
+    ]
+    assert [event_type for event_type, _ in resumed_events] == [
+        "tool_execution_updated",
+        "tool_execution_completed",
+    ]
+    assert resumed_events[1][1]["result_text"] == ""
+    assert "Shanghai" not in [str(payload) for _, payload in lifecycle_events]
+    flushed = [
+        item for item in resumed.run.transcript if isinstance(item, ToolResultMessage)
+    ]
+    assert len(flushed) == 1
+    assert flushed[0].tool_name == REQUEST_USER_INPUT_TOOL_NAME
+    assert flushed[0].content[0].text == "Shanghai"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        '{"question": 42}',
+        '{"question": "   "}',
+        '{"question": "Which city?", "choices": ["Shanghai", "   "]}',
+    ],
+)
+@pytest.mark.asyncio
+async def test_ask_user_invalid_declaration_self_corrects_without_hitl(arguments):
+    from execution.orchestrator.kernel import REQUEST_USER_INPUT_TOOL_NAME
+
+    hitl_port = RecordingSupervisorHITL()
+    kernel, store, _, _ = await make_kernel(
+        [
+            tool_events(("ask-1", REQUEST_USER_INPUT_TOOL_NAME, arguments)),
+            final_events("fallback"),
+        ],
+        supervisor_hitl=hitl_port,
+    )
+    run_id = next(iter(store.runs))
+
+    result = await kernel.run(run_id, signal=NeverCancelled())
+    # Invalid ask_user declarations fail closed at the HITL boundary but remain
+    # a model-correctable orchestration error.
+    assert result.outcome == "final_answer"
+    assert result.run.status == "completed"
+    assert hitl_port.calls == []

@@ -52,8 +52,10 @@ makes the frontend fold that model into one authoritative Hybro Turn.
    step”, “Evaluating results”, and “Preparing final answer” are not persisted
    or rendered as Turn Trace entries.
 6. **Agent Cards remain independent projections.** One card represents one
-   orchestration call and retains identity `run_id + call_id`. Cards do not
-   become Trace nodes and repeated calls to one Agent are not merged.
+   orchestration call. Canonical public identity is
+   `run_id + opaque_public_call_id`; the private provider/A2A `call_id` remains
+   only in backend-owned bindings. Cards do not become Trace nodes and repeated
+   calls to one Agent are not merged.
 7. **Final Answer is a real streamed Assistant message.** It is not synthesized
    from terminal statuses or discovered only by later DB hydration.
 8. **One frontend fold owns Turn state.** Snapshot hydration, live deltas, and
@@ -115,7 +117,9 @@ subset through the existing room stream. This distinction is normative:
 | Pi `tool_execution_start/update/end` | same subtype names | Preserve semantics; rename fields to repository-standard snake_case. |
 | ToolResult `message_start/end` | `tool_execution_end` checkpoint + private transcript message | Do not duplicate result text in the normal public fold. |
 | `turn_start/end` | same subtype names | Preserve internal boundaries under one Hybro Turn. |
-| `agent_start/end/settled` | `run_started` / `run_settled` | Renamed because “Agent” already means an A2A specialist in Hybro. |
+| Pi `agent_start` | `run_started` | Renamed because “Agent” already means an A2A specialist in Hybro. |
+| Pi `agent_end` | no settlement projection | It may precede retry, compaction, or queued continuation and is not terminal. |
+| Pi `agent_settled` | `run_settled` | The only Pi Agent-level terminal semantic projected as Hybro settlement. |
 | Pi full `args`/`result` | bounded public summaries | Redacted by design. |
 | Pi provider/model/usage | private diagnostics | Not part of normal Turn Trace. |
 | Pi `thinking_*` | no public equivalent | Explicitly prohibited. |
@@ -209,8 +213,11 @@ Rules:
 - Users can reopen it; a late duplicate or replayed terminal frame must not
   collapse it again after manual reopening.
 - Failed and canceled Turns collapse to `Failed after …` or `Stopped after …`.
-- `awaiting_input` is not settled. The Trace remains available and the final
-  slot is replaced by the HITL surface.
+- `awaiting_input` is not settled. The Trace stays available and records the
+  HITL event (e.g. the ask_user marker with its `Waiting for input` state).
+  The body/final slot stays empty: question content renders exclusively in
+  the composer interaction UI (shadcn Questionnaire), never in the answer
+  area.
 - Historical completed Turns initialize collapsed without a mount-time flash.
 
 ### 4.3 Expanded historical Trace
@@ -331,8 +338,35 @@ Trace and final-answer fold.
 
 Payloads are validated as a discriminated public union before they reach
 `RunEventNotification`; a bare unconstrained `dict` is not sufficient for this
-contract. Validators enforce bounded text, required correlation, opaque public
-call IDs, valid indices, and the exclusion of private/reasoning fields.
+contract. Every subtype and nested variant has an explicit DTO with required,
+optional, and forbidden fields. Validators enforce bounded text, required
+correlation, opaque public call IDs, valid indices, terminal-status-dependent
+fields, and the exclusion of private/reasoning fields. Contract fixtures cover
+every union member and reject unknown fields at the public translator boundary.
+
+Phase 0 also creates a checked inventory of **every** top-level `room_events`
+producer and classifies each field as intentional user content, allowlisted
+public projection, private/detail-only, or prohibited. Canonical runs may emit
+content only through typed sanitized DTOs:
+
+- `message_*`, `agent_response`, and any nested final-message parts use the
+  stateful public-text sanitizer;
+- `tool_execution_*` and `task_*` use registered safe-summary builders;
+- `hitl_request` sanitizes prompts/choices and omits private source/routing IDs;
+- `hitl_response`, cancellation, and error/control events use allowlisted status
+  and reason enums, never raw exception/reason dictionaries;
+- artifact payloads remain private/detail-only unless a registered artifact-type
+  projector produces a bounded safe summary;
+- content-bearing `processing_status`, `AgentMessageFinal`, raw
+  `ArtifactUpdateEvent`, and other legacy DTOs are prohibited for a canonical
+  run. A minimal compatibility event is allowed only after its exact DTO has
+  passed the same field inventory and contains no free-form content. The
+  stale-browser `processing_status` adapter is the sole initial exception shape
+  and is defined in §15.
+
+Accepted User Messages are intentional room content governed by room auth; this
+inventory prevents duplicating their full prompt into lifecycle, error,
+processing, or artifact payloads.
 
 ### 5.3 `run_started` and durable root binding
 
@@ -418,17 +452,14 @@ The public shape follows Pi's delta model:
 }
 ```
 
-Public `assistant_message_event.type` initially permits:
-
-```text
-text_start
-text_delta
-text_end
-```
-
-Thinking/reasoning events are explicitly excluded. Tool-call argument deltas are
-also excluded because arguments are not public until they have been completely
-assembled, validated, authorized, and redacted.
+Public `assistant_message_event.type` initially permits only `text_delta`.
+`message_start` and `message_end` already provide the public start and
+checkpoint/end boundaries, so separate nested `text_start`/`text_end` variants
+would be redundant. A `text_delta` requires exactly `content_index`,
+`delta_index`, `start_offset`, `end_offset`, and `delta`; all reasoning,
+thinking, tool-argument, and provider-native fields are forbidden. Tool-call
+arguments are not public until they have been completely assembled, validated,
+authorized, and redacted.
 
 Each published chunk has a deterministic event identity derived from:
 
@@ -438,10 +469,16 @@ run_id + internal_turn_id + message_id + content_index
 ```
 
 `start_offset` and `end_offset` are Unicode code-point offsets in the assembled
-public text and are included in the event. `delta_index` remains a monotonic
-convenience cursor, not the sole identity. The event publisher persists the
-logical event before fanout, so delivery retries reuse the same
-`room_seq`/`room_event_id` and do not duplicate text.
+**sanitized public text** and are included in the event. Before chunk identity or
+offsets are assigned, a stateful public-text sanitizer removes configured secret
+values and credential/token patterns, including matches split across provider
+chunks. It holds the bounded detector look-behind needed to avoid publishing a
+prefix of a secret; semantic-boundary flushes finalize that buffer. The same
+sanitizer and replacement rules produce `message_end.text` and the durable final
+message, so checkpoints cannot diverge from streamed public text. `delta_index`
+remains a monotonic convenience cursor, not the sole identity. The event
+publisher persists the logical event before fanout, so delivery retries reuse
+the same `room_seq`/`room_event_id` and do not duplicate text.
 
 To avoid one Mongo document per provider token, the public projection coalesces
 provider text deltas. It flushes when any of these conditions occurs:
@@ -452,13 +489,47 @@ provider text deltas. It flushes when any of these conditions occurs:
 - the message, attempt, run, or connection terminates.
 
 The preallocated message identity and active attempt record are checkpointed in
-`OrchestratorRunState` before the provider request. Published chunks are already
-durable in `room_events`; the run state stores the greatest published end
-offset. A crashed provider stream is **not resumed** with reconstructed timing
-boundaries. Recovery emits one `message_end(aborted)` for the interrupted
-message using its durable checkpoint, then starts a new attempt with a new
-internal turn/message identity. This makes restart behavior explicit and avoids
-pretending an unresumable provider stream can reproduce identical chunks.
+`OrchestratorRunState` before the provider request. Chunk append and Run-state
+CAS are separate writes, so `room_events`—not the Run-state offset—is the
+recovery authority. After a chunk append succeeds, the publisher may advance an
+advisory greatest-published-offset checkpoint; it must never advance that
+checkpoint before append acknowledgement.
+
+On recovery, the backend first reads back the one deterministic
+`message_end` idempotency key derived from
+`run_id + internal_turn_id + message_id + message_end`, then fresh-folds the
+authoritative contiguous `room_events` prefix for the active message. If direct
+readback finds the terminal above a sequence gap, recovery heals/tombstones the
+lower confirmed hole under §5.1 and advances the contiguous fold through that
+terminal before deciding what is missing. It never emits a competing terminal
+merely because an already-persisted one is temporarily above the snapshot
+watermark. The fold validates offsets and derives exact public text, greatest
+end offset, and the existing terminal. A stale lower Run-state offset is
+repaired from that fold and can never cause `message_end` to replace longer text
+with a shorter checkpoint. If Run state claims an offset absent from both the
+durable prefix and deterministic event-key readback, recovery treats the
+unacknowledged claim as unpublished and records a repair diagnostic.
+
+An existing valid `message_end` is adopted as authoritative and never followed
+by a second, contradictory terminal. Recovery resumes from the next missing
+semantic boundary: commentary verifies the already durable private Assistant
+and source-ordered declared Tool batch before idempotently resuming per-entry
+validation/authorization/acceptance; final emits or
+adopts `turn_end(completed)` before durable final projection; and error/aborted
+continues at `turn_end` plus retry/settlement. Missing commentary prerequisites
+are a protocol failure and are never reconstructed from public text.
+
+Only when neither deterministic readback nor the healed contiguous fold contains
+a terminal does recovery emit one deterministic `message_end(aborted)` with the
+fresh-folded public text. If the private Assistant checkpoint contains a
+declared Tool batch, recovery then persists exactly one source-ordered private
+`process_restart_before_public_terminal` error ToolResult for every declaration;
+none receives a public Tool row because per-entry acceptance begins only after a
+public commentary terminal. It then emits `turn_end(aborted)` and deterministic
+`retry_scheduled(error_class="process_restart")` before starting the new attempt.
+That retry fact is the public causal successor used by settlement validation. The provider stream itself is never resumed with reconstructed
+timing boundaries. Crash tests cover both sides of terminal append and its
+Run-state CAS for every disposition.
 
 Exact thresholds are configuration constants with focused tests, not public
 protocol values.
@@ -476,7 +547,7 @@ Tool-using Assistant message:
   "payload": {
     "internal_turn_id": "model-turn-id",
     "message_id": "assistant-message-id",
-    "stop_reason": "toolUse",
+    "stop_reason": "tool_use",
     "disposition": "commentary",
     "text": "I’ll ask Weather Agent for the current conditions in Shanghai."
   }
@@ -507,8 +578,22 @@ error
 aborted
 ```
 
-`text` is a public, user-visible Assistant text checkpoint. It lets a snapshot
-or replay reconstruct the message without depending on every partial chunk.
+Every `message_end` requires the common identity fields, normalized snake-case
+`stop_reason`, `disposition`, and bounded `text` checkpoint (which may be
+empty). The valid combinations are closed:
+
+| Disposition | Allowed `stop_reason` | Conditional fields |
+|---|---|---|
+| `commentary` | `tool_use` | `error_summary` forbidden |
+| `final` | `stop` | `error_summary` forbidden |
+| `error` | `length`, `content_filter`, `error`, `deferred` | sanitized `error_summary` required |
+| `aborted` | `aborted` | `error_summary` forbidden |
+
+Provider-native spellings such as `toolUse` normalize at the private-to-public
+translator. A no-tool response stopped for length/content filtering is not a
+successful final. `text` contains only public, user-visible Assistant text and
+lets a snapshot or replay reconstruct the message without depending on every
+partial chunk. Raw exception text is never a valid `error_summary`.
 
 If a tool-using Assistant message contains no text, no commentary Marker is
 fabricated. The Trace proceeds directly to the tool event.
@@ -539,9 +624,17 @@ Requirements:
   or A2A call ID.
 - `tool_name` is the user-facing Agent/tool label, never an internal registry
   symbol when a public label exists.
-- `input` contains only validated, bounded public summaries.
-- Nested private objects, auth references, routing metadata, and secrets are
+- `input` is produced by a deny-by-default, tool-specific public-summary
+  builder with an allowlist of fields and transformations. A tool without a
+  registered safe builder emits an empty/generic input summary rather than
+  traversing arbitrary arguments.
+- Length bounds and schema validation are necessary but are not treated as
+  privacy controls. Secret-bearing scalar values, URLs, user data, nested
+  private objects, auth references, routing metadata, and credentials are
   omitted.
+- `partial_result` and terminal `result` use the same tool-specific allowlisted
+  projection policy and safe fallback; the canonical path must not reuse a
+  generic recursive scalar-copy translator.
 
 ### 5.9 `tool_execution_update`
 
@@ -592,10 +685,24 @@ Rules:
 }
 ```
 
-Allowed outcomes are `completed`, `failed`, and `canceled`. The public result is
-bounded and redacted. Full Agent output remains available through the
-corresponding Agent Card/detail surface. Suspension is non-terminal and is
-represented by `tool_execution_update(status="suspended")`, never by a fake end.
+Allowed wire outcomes are `completed`, `failed`, and `canceled`, with closed
+field relationships:
+
+| Outcome | `is_error` | `failure_reason` | `result` |
+|---|---:|---|---|
+| `completed` | `false` | forbidden | required bounded safe summary, possibly empty |
+| `failed` | `true` | optional allowlisted enum | required bounded safe summary, possibly empty |
+| `canceled` | `false` | forbidden | required empty string |
+
+Durable Hybro/A2A terminal states `rejected` and `expired` normalize to
+`outcome="failed"` with `failure_reason="rejected"|"expired"`. Raw exception
+text is never a valid reason or result. This guarantees every accepted ledger
+call has one valid public end and cannot remain open at settlement. The result
+is projected through the tool-specific safe-summary policy. Full private Agent
+output is available only through an authenticated detail fetch backed by private
+storage; it is not copied into Agent Card room events or snapshots. Suspension
+is non-terminal and is represented by
+`tool_execution_update(status="suspended")`, never by a fake end.
 
 ### 5.11 `turn_end`
 
@@ -611,8 +718,48 @@ represented by `tool_execution_update(status="suspended")`, never by a fake end.
 }
 ```
 
-Allowed statuses are `completed`, `error`, and `aborted`. This is a
-fold/checkpoint boundary and is hidden in the normal UI.
+Allowed statuses are `completed`, `error`, and `aborted`. The DTO is closed:
+
+- `internal_turn_id`, `status`, and `tool_call_ids` are always required.
+  `tool_call_ids` is the source-ordered inventory of public IDs durably accepted
+  into the call ledger—exactly the calls that emitted `tool_execution_start`—or
+  `[]`. It is not the raw declared model batch.
+- The private Assistant checkpoint separately preserves the complete
+  source-ordered declared batch and each entry's validation/authorization/
+  acceptance/processing state. Processing is fail-fast in source order. The
+  first invalid or pre-acceptance-rejected entry receives a deterministic
+  private error ToolResult but no public call ID/Tool row; every later unstarted
+  declaration receives a deterministic private
+  `skipped_due_to_prior_rejection` error ToolResult and is never accepted or
+  executed. A call accepted into the ledger but later rejected/expired remains
+  in `tool_call_ids` and receives both its private error ToolResult and the
+  normalized failed public `tool_execution_end` from §5.10.
+- Every declared ToolCall has exactly one source-ordered private ToolResult before
+  `turn_end`, including invalid and skipped entries. Every accepted call also has
+  exactly one durable public `tool_execution_end`. If an accepted sibling is
+  suspended on HITL when another entry fails or cancellation wins, all unresolved
+  HITL requests terminalize and clear ownership before that Tool end. Only after
+  the complete private result sequence and all accepted public ends are durable
+  may the turn close `error`/`aborted` and retry/settle.
+- `completed` requires `message_id` matching the terminal Assistant message. A
+  commentary turn may close completed only after every declared call has its
+  private ToolResult and every accepted call has its durable public end; a final
+  turn closes completed immediately after its final `message_end` and before
+  final projection.
+- `error`/`aborted` require matching `message_id` when `message_start` occurred.
+  If `turn_start` occurred but failure/cancellation won before any Assistant
+  started, `message_id` is omitted and `tool_call_ids` is `[]`.
+- Recovery/adoption replays the fail-fast state machine idempotently from the
+  durable declared batch, reuses existing ledger/public-ID bindings and private
+  result checkpoints, and never guesses or re-executes an accepted side effect.
+  Persisted per-entry state decides whether later declarations remain processable
+  or are deterministically skipped; the public terminal inventory is always
+  derived from durable accepted bindings.
+
+This is a fold/checkpoint boundary and is hidden in the normal UI. It is a
+Hybro-safe projection rather than a byte-for-byte Pi `turn_end`, because Pi's
+native event always carries a message while Hybro must close a durably started
+turn that can fail before Assistant construction.
 
 ### 5.12 Retry and HITL lifecycle
 
@@ -637,24 +784,69 @@ before `retry_scheduled` and the next `turn_start`. Retry belongs to the closed
 old internal turn active in the snapshot. Retry text is rendered only from this
 event; the server does not manufacture a generic progress history.
 
-HITL uses the existing durable `hitl_request`/`hitl_response` content events and
-adds control boundaries:
+HITL uses the existing durable per-question `hitl_request`/`hitl_response`
+content events and adds interaction-level control boundaries:
 
 ```text
-run_waiting_input { interaction_id, requested_at }
-run_resumed       { interaction_id, resumed_at }
+run_waiting_input {
+  interaction_id, request_ids[], requested_at
+}
+run_resumed {
+  interaction_id, resolved_request_ids[], resumed_at
+}
 ```
 
-Before `run_waiting_input`, each affected running Tool receives an indexed
-`tool_execution_update(status="suspended")`. `run_waiting_input` then sets the
-Hybro Turn to `awaiting_input` and keeps Trace available. On resume,
-`run_resumed` restores `active` on the same `hybro_turn_id`; each continuing call
-receives a higher-index `tool_execution_update(status="running")`. It never
-creates a new User Turn.
+Each canonical `hitl_request` and `hitl_response` carries explicit Turn-root
+correlation: `run_id`, `client_request_id`, and `related_user_message_id`, in
+addition to `interaction_id`, `request_id`, and reused public `message_id`.
+Requests also carry `question_index`, `question_count`, bounded sanitized
+`prompt`, allowlisted `prompt_type`, bounded sanitized `choices`, allowlisted
+`source`, and an optional public `agent_label`. Private `agent_id`, step/routing
+IDs, and raw metadata are forbidden. A response sets one status: `responded`,
+`expired`, `canceled`, or `error`; it does not invent a separate response message
+or expose answer content. The fold rejects any request/response whose three root
+fields do not exactly match the bound canonical Turn. When the durable aggregate has a safe
+opaque answer reference, the response may carry `answer_ref`; otherwise status
+is sufficient for the normal HITL surface. Legacy `resolved` normalizes to
+`responded` at the canonical translator.
 
-Before failed/canceled `run_settled`, every open Tool receives an authoritative
-`tool_execution_end(outcome="failed"|"canceled")`. Settlement does not invent
-Tool terminal state on the frontend.
+The causal order is normative for a resumable interaction:
+
+```text
+tool_execution_update(suspended)*
+→ persisted hitl_request* for every required request
+→ run_waiting_input referencing the complete ordered request_ids[]
+→ persisted hitl_response(responded)* for every required request
+→ durable answer application succeeds
+→ run_resumed referencing the complete resolved_request_ids[]
+→ tool_execution_update(running)*
+```
+
+The Turn fold owns an ordered `hitl_interactions` history plus
+`active_interaction_id`. This supports questionnaires and multiple HITL rounds
+under one Hybro Turn. `run_waiting_input` is invalid unless every referenced
+request has already folded for the same run/correlation and question indices are
+complete. `run_resumed` is invalid unless every required request has a responded
+resolution and durable application succeeded. It clears
+`active_interaction_id`, restores `active`, and permits continuing calls to
+receive a higher-index running update. For expiry, cancellation, or error, the producer first emits a terminal
+`hitl_response` for **every** unresolved request in the required set. On folding
+the last required terminal response, the interaction state becomes `error`,
+`canceled`, or `expired` (precedence: error, then canceled, then expired) and
+`active_interaction_id` is cleared. No `run_resumed` is emitted; only after that
+clear may the owning run continue its failed/canceled terminal sequence.
+Snapshot and replay preserve all root correlation, request IDs, reused message
+IDs, sanitized question display fields, per-request statuses, optional opaque
+answer references, and round order, so the dedicated HITL surface does not
+depend on a REST/message-store overlay to infer ownership or lifecycle.
+
+Before failed/canceled `run_settled`, the backend emits, in order, an
+authoritative `message_end(error|aborted)` for any open Assistant, terminal HITL
+responses for every unresolved request and clears interaction ownership,
+terminal `tool_execution_end` for every open Tool, and
+`turn_end(error|aborted)` for every active internal turn. HITL ownership always
+closes before terminal Tool/call authority is exposed. Only then may it persist
+`run_settled`. Settlement never invents child terminal state on the frontend.
 
 ### 5.13 `run_settled`
 
@@ -678,6 +870,33 @@ completed
 failed
 canceled
 ```
+
+Terminal fields form a closed conditional DTO:
+
+| Status | Required fields | Forbidden fields |
+|---|---|---|
+| `completed` | `final_message_id` matching the committed final | `failure_code`, `error_summary`, `cancellation_code` |
+| `failed` | allowlisted `failure_code` and bounded sanitized `error_summary` | `final_message_id`, `cancellation_code` |
+| `canceled` | allowlisted `cancellation_code` | `final_message_id`, `failure_code`, `error_summary` |
+
+Initial `failure_code` values are `budget_exhausted`, `provider_error`,
+`assembly_error`, `tool_failure`, `hitl_error`, `rejected`, and
+`internal_error`; unknown/private failures normalize to `internal_error` with a
+generic sanitized summary. Initial cancellation codes are `user_requested`,
+`room_closed`, `shutdown`, and `policy`; unknown values normalize to `policy`.
+Raw `terminal_reason`, cancellation prose, and exception text are prohibited.
+This makes failures before any Assistant message visible without fabricating an
+Assistant event.
+
+Every settlement status requires no open Assistant or Tool, no active HITL
+interaction, and no active internal turn. Completed requires at least one
+internal turn and the **final** turn completed; earlier turns may be
+error/aborted only when each has a causally ordered `retry_scheduled` (including
+`process_restart`) that ultimately leads to the final completed turn.
+Failed/canceled may contain zero internal turns when settlement won before any
+`turn_start`; otherwise the final started turn must have closed as
+error/aborted, including the no-Assistant `turn_end` form from §5.11. DTO,
+producer, snapshot, and frontend fold validation enforce these conditions.
 
 This replaces `processing_status` as the authoritative user-Turn terminal
 signal. `duration_ms` is server-authored and authoritative. It covers the
@@ -705,11 +924,26 @@ The existing `agent_response` remains the durable room-message checkpoint:
 Its transport and correlation fields are not Pi content; they are Hybro's
 reliable room projection envelope. The UI does not display them.
 
-The final answer is considered committed when this durable checkpoint is folded.
-The causal terminal order is:
+The final answer is considered committed only when the folded `agent_response`
+matches one canonical Turn by all of these fields:
+
+```text
+data.client_request_id == turn.client_request_id
+data.related_message_id == turn.user_message_id
+data.message_id == turn.final_answer.message_id
+```
+
+The matching `final_answer` must already come from `message_end(final)` for that
+run. Its checkpoint content is replaced by the durable response content; content
+equality is not a correlation mechanism. An identity-matching direct-Agent
+response may commit because the direct path first creates that stable
+Assistant/final projection. Unrelated or card-only specialist `agent_response`
+events remain detail entities and cannot commit a Turn final. The causal
+terminal order is:
 
 ```text
 message_end(final)
+→ turn_end(completed)
 → Mongo final message checkpoint
 → persisted agent_response room event
 → all required terminal projection steps settled
@@ -730,26 +964,111 @@ run_settled(completed) folded
 
 `message_end(disposition="final")` may finish visible streaming first, but it
 is not by itself the durable settlement boundary. Failed/canceled Turns have no
-final-commit requirement and collapse on their authoritative `run_settled` after
-all open Assistant/Tool states have been terminalized.
+final-commit requirement and collapse on their authoritative `run_settled` only
+after all Assistant/Tool/HITL states and the active internal turn have been
+terminalized.
 
 ### 5.15 Agent Card events
 
-Existing `task_submitted` and `task_update` events remain the Agent Card
-projection contract. They are not Turn Trace entries.
+Agent Cards are first-class folds of the canonical execution stream. New Runs
+never emit `task_submitted`/`task_update`; those frames are historical
+read-only compatibility events for Rooms created before the cutover.
 
-One call remains one card, but its public/durable message ID uses the same
-opaque derived invocation identity as Trace:
+One orchestration call remains one card, but its public/durable message ID uses
+the same opaque derived invocation identity as Trace:
 
 ```text
 orchestrator:{run_id}:{opaque_public_call_id}
 ```
 
-The UI card key is this durable public message ID. The private provider/A2A
-`call_id` is stored only in backend-owned call-ledger/binding fields and never
-enters `room_events`, snapshots, DOM attributes, or frontend state. Public Trace
-and Agent Card correlation use `opaque_public_call_id`; the backend maintains
-the private mapping.
+`tool_execution_*` payloads carry the closed execution identity the card folds:
+
+```json
+{
+  "type": "tool_execution_start",
+  "payload": {
+    "internal_turn_id": "turn-1",
+    "tool_call_id": "inv_weather_0001",
+    "tool_name": "Weather Agent - Get Current Weather",
+    "input": { "task": "Current weather" },
+    "execution_kind": "agent",
+    "target": { "name": "Weather Agent", "source": null },
+    "request_summary": "Check the weather in San Jose"
+  }
+}
+```
+
+```json
+{
+  "type": "tool_execution_end",
+  "payload": {
+    "tool_call_id": "inv_weather_0001",
+    "execution_kind": "agent",
+    "target": { "name": "Weather Agent", "source": null },
+    "outcome": "completed",
+    "result": "Clear, 22C",
+    "detail_available": true,
+    "duration_ms": 1530
+  }
+}
+```
+
+Rules:
+
+- `execution_kind == "agent"` requires a `target`; `"tool"` must not carry one.
+- `target.name` is the exact base Agent Card name. Registry ids, provider/A2A
+  call ids, and endpoint scopes stay private; cards correlate through the
+  opaque public call id only.
+- `request_summary` is the safe model-authored `task` question (≤ 1000 chars,
+  secret-sanitized). Raw ToolResult text/data never enters public events.
+- `detail_available` is true only for completed Agent Executions. The full
+  question/output is fetched through the authenticated detail API
+  (§5.10) and never enters SSE or snapshots.
+- Trace renders Agent Executions as orchestrator log lines (called / waiting
+  / completed) without request/result details; the card owns those.
+- Snapshot activity carries the same `execution_kind`/`target_name`/
+  `request_summary`/`detail_available` fields, so live, refresh, and history
+  fold one model.
+
+### 5.16 Structured supervisor `ask_user`
+
+The kernel exposes a synthetic structured action
+`request_user_input(question, choices?)` to canonical Runs whose Supervisor
+model supports structured actions:
+
+1. The model declares the action as a normal tool call.
+2. The kernel validates it against the closed schema (fail closed like any
+   malformed Agent declaration) and creates one ordered interaction through
+   the unified Execution HITL service with
+   `application_route == SUPERVISOR_RUN` and `orchestration_run_id == run_id`.
+3. The tool entry is suspended (`input_required`) and the Run transitions to
+   `awaiting_user`; the durable HITL lifecycle publishes `hitl_request` and
+   the canonical control `run_waiting_input`.
+4. The recorded answer resumes the Run as the deterministic ToolObservation
+   for the synthetic call (`run_resumed`, then the normal Tool-resumed/terminal
+   flow). Replays collapse into the already-processed observation path.
+5. The Supervisor answer is a durable ToolResult in the model transcript, so
+   the continuing model turn sees the user answer exactly like any Tool
+   output.
+
+The ask_user declaration persists `source_step_id == call_id`; the HITL
+application effect resolves it into the suspended call identity. Missing or
+stale identities fail closed with `ContinuationLostError` and retry through
+the journaled supervisor effect command.
+
+Delivery notes:
+
+- Answer routing is dual: the facade tries the orchestrator A2A ingress
+  first; interactions it does not own (`OrchestratorHITLNotOwnedError`)
+  fall back to the unified HITL manager, which is the authoritative path
+  for supervisor-run interactions.
+- The aggregate-owned run-answer projector publishes the canonical
+  `run_resumed` control and marks the interaction's run projection applied,
+  which unblocks the durable `APPLIED` transition (the HITL reconciler
+  converges replays and restarts).
+- Resuming a suspended Run that outlived its process-local session re-enters
+  through the run-addressed observation sink (`session_host.observation_sink`),
+  not through a live session lookup.
 
 ## 6. `processing_status` retirement
 
@@ -779,8 +1098,8 @@ The one composer-release predicate is:
 
 ```text
 completed: finalCommitted && runSettled(completed)
-failed:    runSettled(failed) && no open Assistant/Tool item
-canceled:  runSettled(canceled) && no open Assistant/Tool item
+failed:    runSettled(failed) && no open Assistant/Tool/HITL/internal-turn state
+canceled:  runSettled(canceled) && no open Assistant/Tool/HITL/internal-turn state
 awaiting_input: release the send guard only into the dedicated HITL response UI,
                 not the normal composer
 ```
@@ -824,10 +1143,23 @@ Change it to:
 3. feed provider events to the assembler and public coalescer in parallel;
 4. record private reasoning/usage as today, but never project reasoning publicly;
 5. flush public text chunks as `message_update`;
-6. build and validate the final `AssistantMessage` with the preallocated ID;
-7. emit `message_end` with the authoritative public text and disposition;
-8. execute accepted tools with `tool_execution_*` projection;
-9. emit `turn_end` after all results for that internal turn are recorded.
+6. build and validate the `AssistantMessage` with the preallocated ID;
+7. durably persist the private Assistant transcript checkpoint and, for
+   commentary, the complete source-ordered **declared** Tool-call batch before
+   public `message_end`; each entry records later validation/authorization/
+   acceptance state, and this checkpoint is the only recovery authority for
+   continuing Tool preparation;
+8. emit `message_end` with the authoritative public text and disposition;
+9. in source order, idempotently validate, authorize, accept into the durable
+   ledger, allocate/reuse the public ID, and execute each accepted call with
+   `tool_execution_*` projection. On the first pre-acceptance failure, persist
+   its private error ToolResult, mark all later unstarted declarations skipped
+   with private error ToolResults, terminalize any accepted siblings (including
+   HITL ownership before Tool ends), then close the turn error and enter
+   retry/failed settlement; non-accepted entries never get a public Tool row;
+10. emit `turn_end` after all results for commentary, or immediately after the
+    no-tool final/error/aborted message, before any final projection or
+    settlement.
 
 The public stream is a projection of the same ordered Kernel events, not an
 independent observer that guesses lifecycle afterward.
@@ -961,6 +1293,8 @@ interface RoomSnapshotTurn {
   started_at: string
   settled_at: string | null
   duration_ms: number | null
+  terminal_code: string | null
+  terminal_summary: string | null
   internal_turns: Array<{
     internal_turn_id: string
     attempt: number
@@ -972,6 +1306,27 @@ interface RoomSnapshotTurn {
   current_assistant: RoomSnapshotAssistant | null
   final_answer: RoomSnapshotAssistant | null
   final_committed: boolean
+  hitl_interactions: Array<{
+    interaction_id: string
+    state: 'awaiting_input' | 'resumed' | 'expired' | 'canceled' | 'error'
+    request_ids: string[]
+    requests: Array<{
+      request_id: string
+      message_id: string
+      question_index: number
+      question_count: number
+      prompt: string
+      prompt_type: string
+      choices: string[]
+      source: string
+      agent_label: string | null
+      status: 'requested' | 'responded' | 'expired' | 'canceled' | 'error'
+      answer_ref: string | null
+    }>
+    requested_at: string
+    resumed_at: string | null
+  }>
+  active_interaction_id: string | null
   agent_call_message_ids: string[]
 }
 ```
@@ -989,8 +1344,13 @@ semantics:
 - commentary messages enter `activity`;
 - final messages enter `final_answer`;
 - tool start/update/end fold by opaque `tool_call_id`;
-- `agent_response` commits the final room message;
-- `run_settled` sets terminal status and duration;
+- `hitl_request`/`hitl_response` fold per-question identity/status into ordered
+  interaction history, while waiting/resume boundaries set or clear
+  `active_interaction_id`;
+- only an `agent_response` matching the Turn root and provisional final message
+  commits the final room message;
+- `run_settled` sets terminal status, duration, and sanitized failure/cancellation
+  code/summary fields;
 - `task_*` updates Agent Card projections by message ID.
 
 A snapshot arriving mid-stream must restore exactly the same visible text and
@@ -1012,6 +1372,29 @@ type TurnLifecycleState =
   | 'failed'
   | 'canceled'
 
+interface HITLQuestionProjection {
+  requestId: string
+  messageId: string
+  questionIndex: number
+  questionCount: number
+  prompt: string
+  promptType: string
+  choices: string[]
+  source: string
+  agentLabel?: string
+  status: 'requested' | 'responded' | 'expired' | 'canceled' | 'error'
+  answerRef?: string
+}
+
+interface HITLInteractionProjection {
+  interactionId: string
+  state: 'awaiting_input' | 'resumed' | 'expired' | 'canceled' | 'error'
+  requestIds: string[]
+  requests: HITLQuestionProjection[]
+  requestedAt: string
+  resumedAt?: string
+}
+
 interface TurnProjection {
   id: string // hybroTurnId
   runId: string
@@ -1022,11 +1405,15 @@ interface TurnProjection {
   startedAt: string
   settledAt?: string
   durationMs?: number
+  terminalCode?: string
+  terminalSummary?: string
   internalTurns: InternalTurnProjection[]
   activity: TurnActivityItem[]
   currentAssistant?: AssistantProjection
   finalAnswer?: AssistantProjection
   finalCommitted: boolean
+  hitlInteractions: HITLInteractionProjection[]
+  activeInteractionId?: string
   agentCallMessageIds: string[]
 }
 ```
@@ -1086,14 +1473,16 @@ Snapshot items preserve the same order.
 | `message_end(aborted)` | terminalize/clear candidate and await recovery or cancellation settlement |
 | `tool_execution_start` | append running Tool activity owned by the internal turn |
 | `tool_execution_update(running/suspended)` | replace accumulated progress/state only when `update_index` advances |
-| `tool_execution_end(completed/failed/canceled)` | terminalize Tool activity in place |
-| `turn_end` | close the matching internal turn |
+| `tool_execution_end(completed/failed/canceled)` | terminalize Tool activity in place; rejected/expired have already normalized to failed |
+| `turn_end` | close the matching internal turn; enforce message presence iff an Assistant started and publicly verify that `tool_call_ids` exactly equal started Tool rows with durable public ends; private ToolResult closure is backend-only |
 | `retry_scheduled` | append Retry activity and await next internal turn |
-| `run_waiting_input` | set `awaiting_input`; preserve same Hybro Turn |
-| `run_resumed` | return the same Hybro Turn to `active` |
-| `agent_response` | commit Final Answer entity/content |
+| `hitl_request` | append/update one ordered question row for the matching Turn/interaction; do not infer by recency |
+| `run_waiting_input` | require the complete referenced request set, set `activeInteractionId` and `awaiting_input`, preserve the same Turn |
+| `hitl_response` | require exact Turn-root correlation; update the matching request row and optional opaque answer reference; when all required rows are terminal with any non-responded status, derive terminal interaction state and clear `activeInteractionId` |
+| `run_resumed` | require all required rows responded and application committed, mark the interaction resumed, clear `activeInteractionId`, return the same Turn to `active` |
+| matching final `agent_response` | commit Final Answer only when client request, related User Message, and provisional final message ID all match |
 | `run_settled(completed)` | require final commit; set terminal state/time/duration |
-| `run_settled(failed/canceled)` | require no open Assistant/Tool activity, then set terminal state/time/duration without final requirement |
+| `run_settled(failed/canceled)` | require no open Assistant/Tool, active HITL interaction, or active internal turn; allow zero turns only when no `turn_start` folded, otherwise require the last turn error/aborted; set typed terminal code/summary without a final requirement |
 | `task_submitted/update` | update Agent Card projection only |
 | Snapshot | replace server Turn data at watermark while preserving local UI state |
 
@@ -1116,10 +1505,10 @@ legacy room with no canonical root binding   → legacy renderer only
 ```
 
 A Turn never merges legacy `processing_status`/trace nodes with canonical
-activity. A `run_settled` frame that contradicts open Assistant/Tool state is a
-protocol violation: the live reducer requests one fresh snapshot and does not
-fabricate terminal child states. Backend contract tests prevent production of
-that ordering.
+activity. A `run_settled` frame that contradicts open Assistant/Tool state, an
+active HITL interaction, or an active internal turn is a protocol violation: the
+live reducer requests one fresh snapshot and does not fabricate terminal child
+states. Backend contract tests prevent production of that ordering.
 
 ### 9.3 Streaming candidate behavior
 
@@ -1272,17 +1661,31 @@ reconnecting client.
   - no-commentary tool call;
   - repeated calls to the same Agent;
   - retry;
-  - failure/cancel;
-  - HITL suspend/resume;
-  - final streaming;
-  - reconnect during commentary, tool output, and final text.
+  - failure/cancel, including rejected and expired calls;
+  - multi-question and multi-round HITL, including responded, expired, canceled,
+    error, and resumed interactions with reused request message IDs;
+  - final streaming plus unrelated and identity-matching direct-Agent
+    `agent_response` cases;
+  - reconnect during commentary, tool output, and final text;
+  - deployment while legacy runs are streaming, executing tools, canceled, or
+    waiting on HITL;
+  - stale-browser compatibility with nonempty IDs, allowlisted status, and
+    exactly `details: null`.
+- Add DTO fixtures for every allowed union member and conditional terminal
+  shape, plus negative fixtures for unknown/forbidden fields.
+- Inventory every top-level room-event producer/field, including HITL,
+  artifacts, errors, cancellation, final-message parts, and compatibility DTOs;
+  assign an explicit canonical policy or prohibit it.
 - Record the current dependencies on `processing_status` before removing it.
 
 Acceptance:
 
-- schemas reject reasoning fields, raw call IDs, private arguments, and missing
-  correlation;
+- schemas reject reasoning fields, raw call IDs, private arguments, missing
+  correlation, invalid terminal fields, unknown nested variants, and every
+  unclassified canonical room-event producer/field;
 - fixture room sequences are contiguous and replayable;
+- a checked run-state migration/producer matrix selects exactly one lifecycle
+  family per run;
 - no production behavior changes yet.
 
 ### Phase 1 — Backend Pi-aligned message stream
@@ -1307,9 +1710,12 @@ backend/container.py
 
 Work:
 
-- persist the active internal-turn/message/attempt/public-offset checkpoint;
+- bump and dual-read/migrate the Run-state schema, then persist the active
+  internal-turn/message/attempt/public-offset checkpoint for canonical runs;
 - preallocate Assistant IDs;
-- add discriminated validated public payload DTOs;
+- add discriminated validated public payload DTOs, stateful Assistant secret
+  sanitization, and tool/Agent-card public summary builders with deny-by-default
+  fallback;
 - emit/coalesce `message_*` events;
 - classify commentary/final at `message_end`;
 - emit Pi-aligned tool lifecycle;
@@ -1321,10 +1727,18 @@ Acceptance:
 
 - replay shows real Assistant text deltas and tool lifecycle in order;
 - final text is visible before the final DB hydration path;
-- crash tests at message start, published chunk, final DB write, room-event
-  append, and fanout recover without lost/duplicated committed text;
+- crash tests at message start, immediately before/after chunk room-event
+  append, immediately before/after Run-state offset CAS, final DB write,
+  terminal room-event append, terminal Run-state CAS, and fanout recover without
+  lost, duplicated, truncated, or contradictory committed text; existing
+  `message_end` events are adopted rather than re-terminalized;
 - one durable final `agent_response` and one `run_settled` exist;
-- raw reasoning/private IDs never appear in `room_events`.
+- unrelated specialist responses cannot commit the final, while an
+  identity-matching direct-Agent final does;
+- rejected/expired calls terminalize as failed with safe reasons;
+- canonical `room_events` contain no raw reasoning, private IDs, model-echoed
+  configured credentials, secret-bearing tool/card/HITL/artifact/error content,
+  or unaudited compatibility payloads.
 
 ### Phase 2 — Canonical frontend Turn fold
 
@@ -1347,6 +1761,9 @@ Work:
 - build one Turn projection;
 - fold live/replay/snapshot through the same reducer;
 - implement current-Assistant classification and final promotion;
+- fold durable HITL message references and waiting/resume boundaries into the
+  same Turn projection;
+- commit finals only by exact root/message identity;
 - use `room_seq` as activity order;
 - move terminal/send-guard authority to `run_settled`.
 
@@ -1426,15 +1843,75 @@ zero fixed-delay reconciliation or safety polling
 
 - Public redaction for all message/tool event payloads.
 - Stable published-delta IDs across delivery retry.
-- Process restart terminalizes the interrupted persisted message once and starts
-  a new attempt/message identity without duplicating committed text.
-- Delta coalescing flush on time, size, tool start, message end, error, and
+- Process restart fresh-folds the durable chunk prefix, repairs stale lower
+  Run-state offsets, ignores unacknowledged higher offsets, terminalizes the
+  interrupted message once without truncation, and starts a new attempt/message
+  identity. Tests crash on both sides of room-event append and offset CAS.
+- Delta coalescing and stateful secret sanitization flush on time, size, tool
+  start, message end, error, and
   cancellation.
 - Persist-before-broadcast for every new public subtype.
+- Pi `agent_end` alone never settles a run; retry/compaction/queued continuation
+  may follow, and only the projected `agent_settled` boundary settles.
 - Snapshot reconstruction during partial Assistant text.
 - Snapshot reconstruction during tool update.
 - Final message and `run_settled` idempotency.
+- Failure/cancellation before `turn_start` settles with zero internal turns;
+  after `turn_start` but before `message_start`, it emits
+  `turn_end(error|aborted)` without `message_id`; failures after Assistant start
+  require the matching ID. All paths emit typed sanitized settlement
+  code/summary and reject raw terminal reasons/exceptions.
+- `turn_end.tool_call_ids` exactly matches source-ordered durable accepted
+  public-ID bindings, not the larger private declared batch. Invalid/
+  authorization-rejected pre-acceptance entries create no Tool row and close the
+  turn error; each such entry gets a private error ToolResult, all later
+  declarations are durably skipped with private error ToolResults, and
+  accepted-then-rejected/expired entries remain in the inventory and receive a
+  failed Tool end. No retry/settlement occurs until every declared call has one
+  source-ordered private result and every accepted call has a public end.
+- Retry-to-success and crash-recovery-to-success allow earlier causally retried
+  error/aborted turns while requiring the final turn completed.
+- Recovery uses deterministic terminal-event-key readback plus a healed
+  contiguous fold, adopts each already-persisted commentary/final/error/aborted
+  `message_end` after a terminal-append/gap crash, and resumes only missing later
+  boundaries; final always closes `turn_end(completed)` before projection.
+- Commentary `message_end` cannot publish before the private Assistant and
+  complete source-ordered declared Tool batch are durable. Recovery idempotently
+  resumes per-entry acceptance, reuses accepted ledger bindings, never repeats
+  side effects, and refuses an uncheckpointed batch. A crash after the declared
+  batch checkpoint but before `message_end` writes one deterministic private
+  restart-abort result per declaration before `turn_end`; no public Tool row is
+  created. Mixed-batch crash tests cover that boundary, failure before the first
+  acceptance, and failure between accepted calls, including accepted siblings
+  suspended on HITL.
+- Restart-aborted attempts emit deterministic
+  `retry_scheduled(error_class="process_restart")` before a successor turn.
 - Multiple calls to the same Agent retain separate opaque call identities.
+- Rejected and expired durable calls each emit one failed Tool end with a safe
+  `failure_reason` and do not block settlement.
+- Multi-question and multiple-round HITL live/snapshot folds require exact
+  run/client/User-Message root correlation and preserve sanitized
+  prompts/types/choices/source labels, ordered request IDs, reused message IDs,
+  per-request response status, active interaction, and optional opaque answer
+  refs without REST-overlay inference; mismatched roots are rejected; expiry,
+  cancellation, application failure, and resume are covered. The last terminal
+  response for a non-resumable required set derives interaction state and clears
+  the active interaction before settlement.
+- Failure/cancellation at Assistant streaming, Tool execution, and HITL emits
+  child terminal events plus `turn_end` before `run_settled`; HITL expiry,
+  cancellation, and error terminalize every unresolved request and clear
+  interaction ownership before Tool end. The fold rejects settlement with any
+  active internal turn or interaction.
+- An unrelated specialist `agent_response` cannot commit a Turn final, while an
+  identity-matching direct-Agent response can.
+- Canonical-only tests prove unconditional schema-v6 admission, mandatory
+  projection/recovery workers, fail-fast startup, and canonical restarts at
+  each stream/tool/HITL boundary.
+- Unknown tools, secret-bearing scalar/nested ToolResults and Agent Card data,
+  credentials echoed by Assistant text, secrets split across stream chunks,
+  malicious HITL prompts/choices, artifacts, cancellation/error reasons,
+  compatibility events, and nested final-message parts produce only sanitized
+  canonical projections or are prohibited.
 - Terminal outbox replay never duplicates Final Answer or Agent Cards.
 - Full `pytest`, Ruff check, and Ruff format check.
 
@@ -1447,10 +1924,19 @@ zero fixed-delay reconciliation or safety polling
 - Final candidate remains in Final Answer at `message_end(final)`.
 - Trace collapses only after final commit plus `run_settled`.
 - HITL does not collapse as completed.
-- Failed/canceled headers show correct duration.
+- Failed/canceled headers show correct duration and typed terminal summary/code,
+  including zero-turn failure and failure after `turn_start` but before
+  `message_start`.
 - User manual collapse/reopen is respected.
-- Tool start/update/end updates one row per call.
+- Tool start/update/end updates one row per call, including normalized
+  rejected/expired failures.
 - Same Agent called twice produces two Tool rows and two Agent Cards.
+- Multi-question, multi-round HITL request/wait/response/resume requires exact
+  Turn-root correlation and reconstructs prompt/type/choices/source and status
+  identically in live and snapshot folds; expired/canceled/error required sets
+  clear the active interaction and do not resume or collapse as completed.
+- An unrelated specialist response before the coordinator final does not commit
+  or replace it; an identity-matching direct-Agent response does commit.
 - Snapshot-before-DB and DB-before-snapshot converge identically.
 - Gap recovery mid-final preserves text and scroll state.
 - Final Answer renders streaming Markdown safely across partial syntax.
@@ -1479,9 +1965,9 @@ Additional deterministic flows:
 - disconnect/reconnect during final text;
 - repeated same-Agent calls;
 - Agent failure followed by successful alternative;
-- cancellation;
-- HITL pause/resume;
-- Fast/direct mode.
+- cancellation/failure during Assistant, Tool, and HITL boundaries;
+- multi-question and multi-round HITL pause/resume/expiry/cancel/error;
+- Fast/direct mode with positive final commitment.
 
 ## 13. Performance and retention
 
@@ -1492,8 +1978,9 @@ Additional deterministic flows:
 - Frontend subscribes per Turn and per current message; historical Turns do not
   rerender for active deltas.
 - Collapsed Trace content is not mounted until opened.
-- Long activity histories use CSS `content-visibility` first; virtualization is
-  added only if measured traces justify it.
+- Long activity histories use the conversation as the single scroll owner;
+  nested fixed-height Trace/Card scrollers and `content-visibility` painting
+  gaps are prohibited.
 - No room-event retention or compaction is implemented in this cutover. A
   separate future design must satisfy the continuity constraints in §5.1 before
   deleting any delta.
@@ -1506,34 +1993,45 @@ Public projection tests must prove that room events never contain:
 - model thinking/reasoning deltas;
 - provider API request/response bodies;
 - credentials, auth references, relay tokens, or webhook secrets;
-- private A2A/provider call IDs;
+- private A2A/provider call IDs in newly generated canonical events;
 - unbounded tool arguments or Agent results;
 - internal exception tracebacks.
+
+Every canonical room-event content surface uses a public projection boundary.
+Tool input/progress/output and Agent Card content use registered per-tool or
+per-Agent allowlisted summary builders with a deny-by-default empty/generic
+fallback. Assistant deltas/checkpoints and final messages use the same stateful
+secret sanitizer over sanitized public text before offsets are assigned. Tests
+include secret-bearing scalar keys and values, credentials embedded in URLs,
+secrets split across streaming chunks, model-echoed credentials, card results,
+nested objects, and unknown tools; length bounds or a provider
+“user-visible-text” label alone are never accepted as evidence of redaction.
+Historical immutable events are handled by the rollout limitation in §15.
 
 Assistant commentary is displayed only when it is explicitly user-visible text
 from the validated Assistant message. Empty commentary stays empty.
 
-## 15. Rollout and compatibility
+## 15. Canonical-only operation
 
-This is an in-place contract evolution:
+The lifecycle is a single mandatory contract, not a rollout option:
 
-1. Backend may dual-emit old and new public lifecycle facts briefly, but the new
-   frontend consumes only one family.
-2. Deploy backend support before switching the frontend fold.
-3. Snapshot advertises support through presence of canonical `turns`; no V2
-   naming or new endpoint is introduced.
-4. The frontend may fall back to the existing renderer only for rooms generated
-   before canonical Turn events existed. It must not merge old and new activity
-   for the same Turn.
-5. Once all active rooms and execution modes emit canonical events, remove dual
-   emission and the fallback.
-
-Historical limitations:
-
-- Old rooms without durable activity events cannot recover Pi-like commentary.
-- Existing final messages and Agent Cards still hydrate from Mongo.
-- The UI must not fabricate missing historical Trace lines to make old rooms
-  look complete.
+1. Every accepted orchestration request requires a nonempty
+   `client_request_id` and creates a schema-v6 `canonical` Run.
+2. Canonical admission, projection, and recovery have no runtime feature
+   switches. Missing runtime composition, router binding, room-event
+   persistence, or worker dependencies fails startup/readiness.
+3. Every snapshot, including an empty room, contains
+   `turn_lifecycle_schema: 1` and `turns: []` (or the folded Turns).
+4. `tool_execution_start/update/end` is the sole Agent-call lifecycle source.
+   Trace and Agent Cards are separate views of the same folded activity row and
+   expose the same call identity and normalized status.
+5. `task_*`, compatibility work logs, partial Agent frames, and legacy Trace
+   snapshots cannot create or update Agent Cards, Trace, final content, or
+   composer lifecycle authority.
+6. A message-derived optimistic shell may render only the User bubble before
+   `run_started`; it owns no execution state.
+7. Privacy acceptance applies to every newly generated event. Historical data
+   migration and old-room presentation are outside this contract.
 
 ## 16. Risks and mitigations
 
@@ -1553,12 +2051,10 @@ Historical limitations:
    coalesced deltas; snapshot restores `current_assistant` without guessing.
 7. **Duplicate terminal signals.** One fold transition is absorbing by durable
    event identity; duplicates do not alter user-controlled expansion state.
-8. **Agent Card/Tool row duplication.** They intentionally represent different
-   surfaces and correlate through backend mapping, but neither is derived from
-   the other on the frontend.
-9. **Removing `processing_status` too early.** Phase 4 cannot begin until the
-   responsibility table in §6.2 has passing replacement tests for every mode.
-10. **Raw Assistant text may contain private model reasoning.** Only provider
+8. **Agent Card/Tool row divergence.** Both surfaces must select the same
+   `TurnProjection.activity` row by `(run_id, tool_call_id)`; neither maintains
+   an independent status transition.
+9. **Raw Assistant text may contain private model reasoning.** Only provider
     text content blocks designated as user-visible are projected; reasoning
     block kinds are rejected at the public translator boundary.
 

@@ -24,7 +24,9 @@ from .errors import (
     RecoverableTransportError,
 )
 from .interaction_outcome import (
+    CanonicalHITLControlPublisher,
     emit_hitl_request_events,
+    emit_hitl_resolved_events,
     park_call_for_interaction,
 )
 from .ledger import (
@@ -274,6 +276,8 @@ class A2AContinuationCoordinator:
         worker_id: str = "a2a-continuation",
         hitl_delivery: Any | None = None,
         run_store: Any | None = None,
+        canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
+        public_secret_values: tuple[str, ...] = (),
     ) -> None:
         self.ledger = ledger
         self.bindings = bindings
@@ -288,6 +292,8 @@ class A2AContinuationCoordinator:
         self.worker_id = worker_id
         self.hitl_delivery = hitl_delivery
         self.run_store = run_store
+        self.canonical_hitl_control = canonical_hitl_control
+        self.public_secret_values = public_secret_values
 
     async def resume(
         self,
@@ -687,11 +693,52 @@ class A2AContinuationCoordinator:
         )
         return persisted if persisted.answer_applied == marker else None
 
+    async def _ensure_resumed_projection(
+        self,
+        call: AgentCallLedgerRecord,
+        answer_record: DurableHITLAnswerRecord,
+    ) -> None:
+        stored = await self.hitl.read_interaction(answer_record.interaction_id)
+        if stored is None:
+            raise RecoverableCheckpointError(
+                "answered HITL interaction is unavailable for public projection"
+            )
+        interaction, route, _fingerprint = stored
+        if (
+            route.call_record_id != call.call_record_id
+            or route.interaction_revision != answer_record.interaction_revision
+        ):
+            raise RecoverableCheckpointError(
+                "answered HITL route changed before public projection"
+            )
+        await emit_hitl_resolved_events(
+            record=call,
+            interaction=interaction,
+            interaction_id=answer_record.interaction_id,
+            status="responded",
+            hitl_delivery=self.hitl_delivery,
+            run_store=self.run_store,
+            canonical_control=self.canonical_hitl_control,
+            answer_ref=(
+                "answer_"
+                + sha256(
+                    (
+                        f"{answer_record.interaction_id}:"
+                        f"{answer_record.interaction_revision}"
+                    ).encode()
+                ).hexdigest()
+            ),
+        )
+
     async def _create_or_replay_command(
         self,
         call: AgentCallLedgerRecord,
         answer_record: DurableHITLAnswerRecord,
     ) -> str:
+        # The public response and run_resumed boundary must be durable before
+        # continuation dispatch can synchronously produce a follow-up challenge.
+        # Deterministic delivery identities make this replay-safe.
+        await self._ensure_resumed_projection(call, answer_record)
         if call.continuation_command is not None:
             return await self.recover_call(call_record_id=call.call_record_id)
         binding = await self.bindings.load(call.binding_id)
@@ -989,6 +1036,8 @@ class A2AContinuationCoordinator:
             interaction_id=persisted.pending_interaction_id,
             hitl_delivery=self.hitl_delivery,
             run_store=self.run_store,
+            canonical_control=self.canonical_hitl_control,
+            public_secret_values=self.public_secret_values,
         )
 
     async def _mark_parked_terminal_outcome(

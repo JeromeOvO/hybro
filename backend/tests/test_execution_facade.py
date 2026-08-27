@@ -2,7 +2,7 @@ import asyncio
 import inspect
 from types import SimpleNamespace
 from typing import get_type_hints
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -568,6 +568,43 @@ async def test_schedule_orchestration_carries_live_mode_and_scope():
 
 
 @pytest.mark.asyncio
+async def test_bound_canonical_active_run_reader_rejects_before_message_persistence():
+    facade, deps = _make_facade()
+    canonical_reader = SimpleNamespace(
+        get_runs_for_room=AsyncMock(return_value=[{"run_id": "run-1"}])
+    )
+    facade.bind_active_run_reader(canonical_reader)
+
+    ack = await facade.execute(
+        ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
+    )
+
+    assert ack.success is False
+    assert ack.status_code == 409
+    deps["room_center"].persist_message_to_room.assert_not_awaited()
+    canonical_reader.get_runs_for_room.assert_awaited_once_with("room-1")
+
+
+@pytest.mark.asyncio
+async def test_bound_canonical_active_run_reader_owns_public_room_queries():
+    facade, deps = _make_facade()
+    canonical_run = SimpleNamespace(trigger_message_id="canonical-user")
+    canonical_reader = SimpleNamespace(
+        get_runs_for_room=AsyncMock(return_value=[canonical_run]),
+        get_latest_runs_for_rooms=AsyncMock(return_value={"room-1": canonical_run}),
+    )
+    facade.bind_active_run_reader(canonical_reader)
+
+    assert await facade.get_runs_for_room("room-1") == [canonical_run]
+    assert await facade.get_latest_runs_for_rooms(["room-1"]) == {
+        "room-1": canonical_run
+    }
+    canonical_reader.get_runs_for_room.assert_awaited_once_with("room-1")
+    canonical_reader.get_latest_runs_for_rooms.assert_awaited_once_with(["room-1"])
+    deps["run_reader"].get_runs_for_room.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_emits_processing_for_ready_room_preflight():
     facade, deps = _make_facade()
     deps[
@@ -595,15 +632,8 @@ async def test_execute_emits_processing_for_ready_room_preflight():
     )
 
     assert ack.should_start_orchestration is True
-    assert order == [("record", "processing"), ("emit", "processing")]
-    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
-        "room-1",
-        "processing",
-        "root-msg-1",
-        client_request_id="cr-1",
-        details=None,
-        error_message=None,
-    )
+    assert order == [("emit", "processing")]
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_awaited_once()
     event = deps["event_publisher"].emit.await_args.args[0]
     _assert_processing_status_event(
@@ -670,7 +700,7 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
 
     assert ack.success is True
     assert ack.should_start_orchestration is True
-    assert order == ["record:processing", "emit:processing", "room_preflight"]
+    assert order == ["emit:processing", "room_preflight"]
     room_center.persist_message_to_room.assert_awaited_once()
     room_center.run_message_preflight_to_room.assert_awaited_once_with(
         preflight_context
@@ -857,14 +887,7 @@ async def test_execute_does_not_emit_completed_for_success_without_preflight_out
 
     assert ack.success is True
     assert ack.should_start_orchestration is False
-    deps["run_lifecycle"].record_processing_status.assert_awaited_once_with(
-        "room-1",
-        "processing",
-        "msg-1",
-        client_request_id="cr-1",
-        details=None,
-        error_message=None,
-    )
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     event = deps["event_publisher"].emit.await_args.args[0]
     assert event.status == "processing"
 
@@ -889,21 +912,13 @@ async def test_execute_emits_completed_for_completed_room_preflight():
 
     assert ack.success is True
     assert ack.should_start_orchestration is False
-    assert [
-        await_call.args[1]
-        for await_call in deps["run_lifecycle"].record_processing_status.await_args_list
-    ] == [
-        "processing",
-        "completed",
-    ]
-    # Terminal fallback direct emit eliminated (Room Stream Snapshot plan
-    # §4.1): without a bound terminal finalizer the completed frame is
-    # delivered by durable projection recovery, not emitted inline.
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     assert [
         await_call.args[0].status
         for await_call in deps["event_publisher"].emit.await_args_list
     ] == [
         "processing",
+        "completed",
     ]
 
 
@@ -967,39 +982,16 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
     assert ack.should_start_orchestration is False
     assert ack.error == "Failed to parse user message"
     assert ack.status_code == 500
-    # Terminal fallback direct emit eliminated (§4.1): only the non-terminal
-    # processing status emits inline; the failed frame is delivered by
-    # durable projection recovery.
     assert order == [
-        ("record", "processing"),
         ("emit", "processing"),
-        ("record", "failed"),
+        ("emit", "failed"),
     ]
-    assert deps["run_lifecycle"].record_processing_status.await_args_list == [
-        call(
-            "room-1",
-            "processing",
-            "msg-1",
-            client_request_id="cr-1",
-            details=None,
-            error_message=None,
-        ),
-        call(
-            "room-1",
-            "failed",
-            "msg-1",
-            client_request_id="cr-1",
-            details={"message": "Failed to parse user message"},
-            error_message="Failed to parse user message",
-        ),
-    ]
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     events = [
         await_call.args[0]
         for await_call in deps["event_publisher"].emit.await_args_list
     ]
-    # Terminal fallback direct emit eliminated (§4.1): the failed frame is
-    # delivered by durable projection recovery, not emitted inline.
-    assert len(events) == 1
+    assert len(events) == 2
     _assert_processing_status_event(
         events[0],
         room_id="room-1",
@@ -1041,38 +1033,16 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
 
     assert ack.success is True
     assert ack.should_start_orchestration is False
-    # Terminal fallback direct emit eliminated (§4.1): only the non-terminal
-    # processing status emits inline.
     assert order == [
-        ("record", "processing"),
         ("emit", "processing"),
-        ("record", "canceled"),
+        ("emit", "canceled"),
     ]
-    assert deps["run_lifecycle"].record_processing_status.await_args_list == [
-        call(
-            "room-1",
-            "processing",
-            "msg-1",
-            client_request_id="cr-1",
-            details=None,
-            error_message=None,
-        ),
-        call(
-            "room-1",
-            "canceled",
-            "msg-1",
-            client_request_id="cr-1",
-            details=None,
-            error_message=None,
-        ),
-    ]
+    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     events = [
         await_call.args[0]
         for await_call in deps["event_publisher"].emit.await_args_list
     ]
-    # Terminal fallback direct emit eliminated (§4.1): the canceled frame is
-    # delivered by durable projection recovery, not emitted inline.
-    assert len(events) == 1
+    assert len(events) == 2
     _assert_processing_status_event(
         events[0],
         room_id="room-1",
@@ -1340,6 +1310,37 @@ async def test_cancel_does_not_rewrite_budget_exhausted_orchestration():
         terminal_reason=None,
         causation_id=("orchestration-terminal-repair:msg-1:budget_exhausted"),
     )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_cancel_closes_hitl_before_root_terminalization():
+    router = SimpleNamespace(
+        route_cancellation_by_user_message=AsyncMock(return_value={})
+    )
+    facade, deps = _make_facade(orchestrator_router=router)
+    order: list[str] = []
+    deps["hitl_message_cancellation"].cancel_requests_for_message.side_effect = (
+        lambda _message_id: order.append("hitl")
+    )
+    router.route_cancellation_by_user_message.side_effect = lambda *_args, **_kwargs: (
+        order.append("run") or {}
+    )
+
+    ack = await facade.cancel(
+        "room-1",
+        "msg-1",
+        requested_by_user_id="user-1",
+    )
+
+    assert isinstance(ack, CancellationAck)
+    assert ack.status == "canceled"
+    deps[
+        "hitl_message_cancellation"
+    ].cancel_requests_for_message.assert_awaited_once_with("msg-1")
+    router.route_cancellation_by_user_message.assert_awaited_once_with(
+        "msg-1", reason="user:user-1"
+    )
+    assert order == ["hitl", "run"]
 
 
 @pytest.mark.asyncio
@@ -1693,3 +1694,36 @@ def test_room_response_to_execution_ack_skips_orchestration_without_dispatch_roo
     assert ack.success is True
     assert ack.message_id == "msg-1"
     assert ack.should_start_orchestration is False
+
+
+@pytest.mark.asyncio
+async def test_supervisor_hitl_answer_falls_back_to_unified_manager():
+    from execution.orchestrator_routing import OrchestratorHITLNotOwnedError
+
+    router = SimpleNamespace(
+        route_hitl_answer=AsyncMock(
+            side_effect=OrchestratorHITLNotOwnedError("interaction-1")
+        )
+    )
+    facade, deps = _make_facade(orchestrator_router=router)
+    deps["hitl_manager"].handle_batch_response.return_value = {
+        "request_id": "request-1",
+        "status": "applied",
+    }
+
+    response = await facade.resolve_hitl_batch(
+        "room-1",
+        "interaction-1",
+        [{"request_id": "request-1", "user_input": "Shanghai"}],
+        "user-1",
+    )
+
+    router.route_hitl_answer.assert_awaited_once()
+    deps["hitl_manager"].handle_batch_response.assert_awaited_once_with(
+        room_id="room-1",
+        interaction_id="interaction-1",
+        answers=[{"request_id": "request-1", "user_input": "Shanghai"}],
+        user_id="user-1",
+        client_request_id=None,
+    )
+    assert response.status == "applied"

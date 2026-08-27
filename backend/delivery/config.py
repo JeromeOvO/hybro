@@ -4,7 +4,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 DEFAULT_TERMINAL_PROCESSING_STATUSES = frozenset(
-    {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
+    {
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "expired",
+        "rate_limited",
+        "error",
+    }
 )
 
 

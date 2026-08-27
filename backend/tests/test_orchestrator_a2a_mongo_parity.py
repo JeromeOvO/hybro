@@ -32,7 +32,7 @@ from execution.orchestrator.a2a_runtime.models import (
     DurableHITLAnswerRecord,
     NormalizedA2AObservation,
 )
-from execution.orchestrator.models import ProjectionIntent
+from execution.orchestrator.models import ProjectionIntent, RecoveryClaim
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW, make_run
@@ -440,6 +440,85 @@ async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
     assert replayed.run.processed_command_ids == ["create:run-1"]
 
 
+async def test_mongo_recovery_lease_takeover_fences_stale_owner():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    created = await store.create(make_run(), command_id="create:lease-takeover")
+    assert created.run is not None
+
+    owner_a = "instance-a:token-a"
+    claimed_a = await store.claim_recovery(
+        created.run.run_id,
+        expected_state_version=created.run.state_version,
+        owner_id=owner_a,
+        lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    assert claimed_a.outcome == "accepted"
+    assert claimed_a.run is not None
+
+    owner_b = "instance-b:token-b"
+    claimed_b = await store.claim_recovery(
+        created.run.run_id,
+        expected_state_version=claimed_a.run.state_version,
+        owner_id=owner_b,
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    assert claimed_b.outcome == "accepted"
+    assert claimed_b.run is not None
+    assert claimed_b.run.recovery_claim.owner_id == owner_b
+    assert len(leases.values) == 1
+    assert leases.values[0]["owner_id"] == owner_b
+
+    stale_renewal = await store.renew_recovery(
+        created.run.run_id,
+        expected_state_version=claimed_b.run.state_version,
+        owner_id=owner_a,
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=2),
+    )
+    stale_release = await store.release_recovery(
+        created.run.run_id,
+        expected_state_version=claimed_b.run.state_version,
+        owner_id=owner_a,
+        next_attempt_at=None,
+    )
+
+    assert stale_renewal.outcome == "conflict"
+    assert stale_release.outcome == "conflict"
+    latest = await store.load(created.run.run_id)
+    assert latest is not None
+    assert latest.recovery_claim.owner_id == owner_b
+    assert leases.values[0]["owner_id"] == owner_b
+
+
+async def test_mongo_recovery_lease_release_is_token_fenced():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    created = await store.create(make_run(), command_id="create:lease-release")
+    assert created.run is not None
+    owner = "instance:token"
+    claimed = await store.claim_recovery(
+        created.run.run_id,
+        expected_state_version=created.run.state_version,
+        owner_id=owner,
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    assert claimed.run is not None
+
+    released = await store.release_recovery(
+        created.run.run_id,
+        expected_state_version=claimed.run.state_version,
+        owner_id=owner,
+        next_attempt_at=datetime.now(UTC) + timedelta(seconds=5),
+    )
+
+    assert released.outcome == "accepted"
+    assert released.run is not None
+    assert released.run.recovery_claim.owner_id is None
+    assert leases.values[0]["owner_id"] is None
+
+
 async def test_mongo_run_replay_and_ack_loss_use_bson_datetime_precision():
     collection = MongoPrecisionCollection()
     store = MongoOrchestratorRunStore(collection)
@@ -593,7 +672,10 @@ async def test_mongo_run_cas_does_not_duplicate_preapplied_command_id():
 async def test_mongo_due_run_listing_ignores_mongo_id():
     collection = FakeCollection()
     store = MongoOrchestratorRunStore(collection)
-    created = await store.create(make_run(), command_id="create:run-1")
+    due_run = make_run().model_copy(
+        update={"recovery_claim": RecoveryClaim(next_attempt_at=NOW)}
+    )
+    created = await store.create(due_run, command_id="create:run-1")
     collection.values[0]["_id"] = "mongo-generated-id"
 
     due = await store.list_due_runs(due_at=NOW, limit=10)

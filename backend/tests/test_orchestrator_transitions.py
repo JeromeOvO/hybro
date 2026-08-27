@@ -120,7 +120,8 @@ def test_terminal_evaluation_derives_user_wait_from_generic_tool_batch():
 
 def test_terminal_evaluation_has_no_embedded_a2a_authority():
     run = make_run()
-    assert run.schema_version == 5
+    assert run.schema_version == 6
+    assert run.lifecycle_family == "canonical"
     assert "calls" not in type(run).model_fields
     assert "pending_interaction_ids" not in type(run).model_fields
     payload = run.model_dump(mode="json")

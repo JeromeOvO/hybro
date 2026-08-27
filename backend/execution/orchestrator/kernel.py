@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Literal
 
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from .budget import BudgetExceeded, BudgetPolicy
 from .context import ContextCompiler, UnresolvedToolBatchError
@@ -19,15 +22,19 @@ from .models import (
     ArtifactRefPart,
     AssistantMessage,
     DataPart,
+    ModelStreamEvent,
     OrchestratorRunState,
     PreparedResourceRef,
+    ResolvedTool,
     RunResourceManifestSnapshot,
     SessionNotice,
     TextPart,
     ToolAcceptance,
     ToolBatchEntry,
+    ToolBindingRef,
     ToolCall,
     ToolCallBatch,
+    ToolDefinition,
     ToolInvocation,
     ToolObservation,
     ToolResult,
@@ -45,6 +52,11 @@ from .ports import (
     ToolCatalog,
     ToolRuntime,
 )
+from .public_text import (
+    DEFAULT_COALESCE_INTERVAL_MS,
+    PublicTextCoalescer,
+    PublicTextSanitizer,
+)
 from .settlement import (
     TerminalCommitRequest,
     TerminalDecisionFacts,
@@ -60,6 +72,8 @@ KernelLifecycle = Callable[
     [str, OrchestratorRunState, dict[str, object]], Awaitable[None]
 ]
 
+_kernel_logger = logging.getLogger(__name__)
+
 KernelOutcome = Literal[
     "final_answer",
     "waiting_external",
@@ -72,6 +86,76 @@ KernelOutcome = Literal[
 
 class KernelConflict(RuntimeError):
     pass
+
+
+REQUEST_USER_INPUT_TOOL_NAME = "request_user_input"
+REQUEST_USER_INPUT_TOOL_DEFINITION = ToolDefinition(
+    name=REQUEST_USER_INPUT_TOOL_NAME,
+    label="Ask the user",
+    description=(
+        "Ask the user a clarifying question when required information is "
+        "missing, the request is ambiguous, or confirmation is needed before "
+        "proceeding. Execution pauses until the user answers; include short "
+        "options when the answer space is small."
+    ),
+    input_schema={
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["question"],
+        "properties": {
+            "question": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4_000,
+                "pattern": r"[\s\S]*\S[\s\S]*",
+            },
+            "choices": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "pattern": r"[\s\S]*\S[\s\S]*",
+                },
+                "uniqueItems": True,
+                "maxItems": 12,
+            },
+        },
+    },
+    execution_mode="sequential",
+    side_effect_level="read",
+)
+
+
+SupervisorHITLPort = Callable[..., Awaitable[None]]
+
+
+def supervisor_answer_observation(
+    run_id: str,
+    call_id: str,
+    answers: str,
+    observed_at: datetime,
+) -> ToolObservation:
+    """Build the deterministic ToolObservation that resumes an ask_user call.
+
+    The observation identity is a pure function of the durable answer so HITL
+    application replays collapse into the already-processed observation path.
+    """
+    observation_id = sha256(
+        f"{run_id}:ask-answer:{call_id}:{answers}".encode()
+    ).hexdigest()
+    return ToolObservation(
+        observation_id=observation_id,
+        invocation_id=call_id,
+        outcome=ToolResult(
+            call_id=call_id,
+            tool_name=REQUEST_USER_INPUT_TOOL_NAME,
+            status="completed",
+            content=[TextPart(text=answers)],
+            artifact_refs=[],
+        ),
+        observed_at=observed_at,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +172,11 @@ class SystemClock:
 class UUIDFactory:
     def new_id(self, prefix: str) -> str:
         return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def _opaque_public_call_id(run_id: str, private_call_id: str) -> str:
+    digest = sha256(f"{run_id}:{private_call_id}".encode()).hexdigest()[:24]
+    return f"inv_{digest}"
 
 
 def _task_text(arguments: object) -> str:
@@ -118,7 +207,7 @@ def _assistant_text(assistant: AssistantMessage) -> str:
     for part in assistant.content:
         if isinstance(part, TextPart) and part.text:
             parts.append(part.text)
-    return "\n".join(parts)[:4000]
+    return "\n".join(parts)[:32_000]
 
 
 def _model_turn_outcome(model_outcome) -> str:
@@ -159,6 +248,12 @@ class OrchestratorKernel:
         clock: SystemClock | None = None,
         id_factory: IDFactory | None = None,
         context_compactor: ContextCompactor | None = None,
+        public_secret_values: Iterable[str] = (),
+        canonical_event_reader: Callable[[str, str], Awaitable[list[dict[str, object]]]]
+        | None = None,
+        artifact_metadata_reader: Callable[..., Awaitable[PreparedResourceRef | None]]
+        | None = None,
+        supervisor_hitl: SupervisorHITLPort | None = None,
     ) -> None:
         self.run_store = run_store
         self.model_runtime = model_runtime
@@ -170,6 +265,15 @@ class OrchestratorKernel:
         self.clock = clock or SystemClock()
         self.id_factory = id_factory or UUIDFactory()
         self.context_compactor = context_compactor
+        self.public_secret_values = tuple(
+            value for value in public_secret_values if isinstance(value, str) and value
+        )
+        self.canonical_event_reader = canonical_event_reader
+        self.artifact_metadata_reader = artifact_metadata_reader
+        self.supervisor_hitl = supervisor_hitl
+        self._lifecycle_context: ContextVar[KernelLifecycle | None] = ContextVar(
+            f"kernel-lifecycle-{id(self)}", default=None
+        )
 
     async def run(
         self,
@@ -178,11 +282,51 @@ class OrchestratorKernel:
         signal: CancellationSignal,
         lifecycle: KernelLifecycle | None = None,
     ) -> KernelRunResult:
+        self._lifecycle_context.set(lifecycle)
         invalid_observations = 0
+        recover_initial_state = True
         while True:
             run = await self._load(run_id)
             if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
                 return KernelRunResult(_outcome_for_status(run.status), run)
+            if run.lifecycle_family == "canonical":
+                for batch_index, batch in enumerate(list(run.tool_batches)):
+                    run = await self._publish_checkpointed_tool_terminals(
+                        run,
+                        batch_index,
+                        lifecycle=lifecycle,
+                        internal_turn_id=(
+                            run.active_internal_turn_id or batch.assistant_message_id
+                        ),
+                    )
+            if (
+                recover_initial_state
+                and run.lifecycle_family == "canonical"
+                and run.active_internal_turn_id
+            ):
+                recover_initial_state = False
+                recovered = await self._recover_active_canonical_attempt(run, lifecycle)
+                if isinstance(recovered, KernelRunResult):
+                    return recovered
+                run, closed_turn_id = recovered
+                if closed_turn_id is not None:
+                    await self._emit(
+                        lifecycle,
+                        "model_retry_scheduled",
+                        run,
+                        {
+                            "public_event_id": (
+                                f"public:{run.run_id}:{closed_turn_id}:"
+                                "retry:process_restart"
+                            ),
+                            "internal_turn_id": closed_turn_id,
+                            "attempt": 2,
+                            "error_class": "process_restart",
+                            "retry_delay_ms": 0,
+                        },
+                    )
+                continue
+            recover_initial_state = False
             if run.status == "finalizing":
                 assistant = _finalization_candidate(run)
                 if assistant is None:
@@ -234,7 +378,6 @@ class OrchestratorKernel:
                     )
                 continue
 
-            await self._emit(lifecycle, "turn_started", run, {})
             grace = run.budget.model_turns_used >= run.profile.max_model_turns
             if grace and not run.budget.wrap_up_requested:
                 budget = self.budget_policy.request_wrap_up(run.budget)
@@ -269,6 +412,15 @@ class OrchestratorKernel:
                 if run.budget.wrap_up_requested
                 else self.tool_catalog.list_tools(run)
             )
+            # The structured ask_user action pauses the Run into the unified
+            # Execution HITL service. It is only exposed to canonical Runs so
+            # the strict run_waiting_input/run_resumed lifecycle owns it.
+            if (
+                not run.budget.wrap_up_requested
+                and run.lifecycle_family == "canonical"
+                and self.supervisor_hitl is not None
+            ):
+                tools = [*tools, REQUEST_USER_INPUT_TOOL_DEFINITION]
             try:
                 compiled = self.context_compiler.compile(
                     run, tools=tools, summary=run.compaction_summary
@@ -311,16 +463,94 @@ class OrchestratorKernel:
                 )
 
             request = self._model_request(run, compiled.messages, tools)
+            assistant_message_id = self.id_factory.new_id("assistant")
+            if run.lifecycle_family == "canonical":
+                run = await self._checkpoint(
+                    run,
+                    updates={
+                        "active_internal_turn_id": request.turn_id,
+                        "active_assistant_message_id": assistant_message_id,
+                        "active_attempt": 1,
+                        "greatest_public_text_offset": 0,
+                        "active_public_text": "",
+                    },
+                    command_id=f"public-turn-start:{request.turn_id}",
+                )
+            await self._emit(
+                lifecycle,
+                "turn_started",
+                run,
+                {"internal_turn_id": request.turn_id, "attempt": 1},
+            )
+            await self._emit(
+                lifecycle,
+                "message_started",
+                run,
+                {
+                    "internal_turn_id": request.turn_id,
+                    "message_id": assistant_message_id,
+                },
+            )
             assembler = ModelStreamAssembler()
+            public_sanitizer = PublicTextSanitizer(
+                secret_values=self.public_secret_values
+            )
+            public_coalescer = PublicTextCoalescer(
+                run_id=run.run_id,
+                internal_turn_id=request.turn_id,
+                message_id=assistant_message_id,
+            )
             turn_started_at = self.clock.now()
             turn_usage: UsageRecord | None = None
             turn_finish_reason: str | None = None
             turn_attempt: int | None = None
+            stream = None
+            next_event: asyncio.Task[ModelStreamEvent] | None = None
             try:
-                async for event in self.model_runtime.stream_turn(
+                stream = self.model_runtime.stream_turn(
                     request, signal=signal
-                ):
+                ).__aiter__()
+                next_event = asyncio.create_task(anext(stream))
+                while True:
+                    done, _ = await asyncio.wait(
+                        {next_event},
+                        timeout=DEFAULT_COALESCE_INTERVAL_MS / 1000,
+                    )
+                    if not done:
+                        # The provider may stall after a short safe fragment.
+                        # Flush the coalescer timer without cancelling/reordering
+                        # the outstanding provider ``anext`` operation.
+                        run = await self._publish_public_text(
+                            lifecycle,
+                            run,
+                            public_coalescer,
+                            "",
+                            timer_flush=True,
+                        )
+                        continue
+                    try:
+                        event = next_event.result()
+                    except StopAsyncIteration:
+                        break
+                    next_event = asyncio.create_task(anext(stream))
                     assembler.accept(event)
+                    if event.kind == "text_delta" and event.delta:
+                        decidable = public_sanitizer.feed(event.delta)
+                        run = await self._publish_public_text(
+                            lifecycle,
+                            run,
+                            public_coalescer,
+                            decidable,
+                        )
+                    elif event.kind in {"tool_call_start", "finish", "error"}:
+                        decidable = public_sanitizer.flush()
+                        run = await self._publish_public_text(
+                            lifecycle,
+                            run,
+                            public_coalescer,
+                            decidable,
+                            semantic_boundary=True,
+                        )
                     run = await self._record_model_event(run, request.turn_id, event)
                     await self._emit_model_event(lifecycle, run, event, request)
                     if event.kind == "usage" and event.usage is not None:
@@ -329,10 +559,38 @@ class OrchestratorKernel:
                         turn_finish_reason = str(event.finish_reason)
                     if event.attempt is not None:
                         turn_attempt = event.attempt
+                final_fragment = public_sanitizer.flush()
+                run = await self._publish_public_text(
+                    lifecycle,
+                    run,
+                    public_coalescer,
+                    final_fragment,
+                    semantic_boundary=True,
+                )
+                public_text = public_sanitizer.public_text
                 model_outcome = assembler.build_outcome(
-                    message_id=self.id_factory.new_id("assistant"),
+                    message_id=assistant_message_id,
                     created_at=self.clock.now(),
                 )
+                if model_outcome.assistant is not None:
+                    non_text_parts = [
+                        part
+                        for part in model_outcome.assistant.content
+                        if not isinstance(part, TextPart)
+                    ]
+                    model_outcome = model_outcome.__class__(
+                        kind=model_outcome.kind,
+                        assistant=model_outcome.assistant.model_copy(
+                            update={
+                                "content": (
+                                    [TextPart(text=public_text)] if public_text else []
+                                )
+                                + non_text_parts
+                            }
+                        ),
+                        error_class=model_outcome.error_class,
+                        provider_request_id=model_outcome.provider_request_id,
+                    )
                 await self._emit(
                     lifecycle,
                     "model_turn_completed",
@@ -352,6 +610,11 @@ class OrchestratorKernel:
                     run, status="budget_exhausted", reason=exc.reason
                 )
             except ModelStreamAssemblyError as exc:
+                run, closed_turn_id = await self._close_active_attempt(
+                    run,
+                    disposition="error",
+                    error_summary="The model response could not be assembled.",
+                )
                 notice = self._assembly_notice(run, exc)
                 run = await self._append_notice(run, notice)
                 invalid_observations += 1
@@ -359,7 +622,37 @@ class OrchestratorKernel:
                     return await self._terminate(
                         run, status="failed", reason="invalid model output loop"
                     )
+                await self._emit(
+                    lifecycle,
+                    "model_retry_scheduled",
+                    run,
+                    {
+                        "internal_turn_id": closed_turn_id or request.turn_id,
+                        "attempt": 2,
+                        "error_class": "assembly_error",
+                        "retry_delay_ms": 0,
+                    },
+                )
                 continue
+            except ValueError:
+                return await self._terminate(
+                    run, status="failed", reason="public_text_oversized"
+                )
+            finally:
+                if next_event is not None:
+                    if not next_event.done():
+                        next_event.cancel()
+                    try:
+                        await next_event
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                if stream is not None:
+                    close_stream = getattr(stream, "aclose", None)
+                    if close_stream is not None:
+                        try:
+                            await close_stream()
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
             if model_outcome.kind == "aborted":
                 return await self._terminate(
@@ -373,6 +666,11 @@ class OrchestratorKernel:
                     return await self._terminate(
                         run, status="budget_exhausted", reason="context overflow"
                     )
+                run, closed_turn_id = await self._close_active_attempt(
+                    run,
+                    disposition="error",
+                    error_summary="The model context limit was exceeded.",
+                )
                 compacted = await self._compact(
                     run,
                     list(compiled.messages),
@@ -381,8 +679,25 @@ class OrchestratorKernel:
                 )
                 if isinstance(compacted, KernelRunResult):
                     return compacted
+                run = compacted
+                await self._emit(
+                    lifecycle,
+                    "model_retry_scheduled",
+                    run,
+                    {
+                        "internal_turn_id": closed_turn_id or request.turn_id,
+                        "attempt": 2,
+                        "error_class": "context_overflow",
+                        "retry_delay_ms": 0,
+                    },
+                )
                 continue
             if model_outcome.kind == "provider_error":
+                run, closed_turn_id = await self._close_active_attempt(
+                    run,
+                    disposition="error",
+                    error_summary="The model provider did not complete the response.",
+                )
                 notice = SessionNotice(
                     notice_id=self._stable_id(
                         run,
@@ -399,6 +714,17 @@ class OrchestratorKernel:
                     return await self._terminate(
                         run, status="failed", reason="provider error loop"
                     )
+                await self._emit(
+                    lifecycle,
+                    "model_retry_scheduled",
+                    run,
+                    {
+                        "internal_turn_id": closed_turn_id or request.turn_id,
+                        "attempt": 2,
+                        "error_class": "provider_error",
+                        "retry_delay_ms": 0,
+                    },
+                )
                 continue
             assistant = model_outcome.assistant
             if assistant is None:
@@ -415,12 +741,38 @@ class OrchestratorKernel:
                 command_id=f"assistant-turn:{request.turn_id}",
             )
             run = await self._append_assistant(run, assistant)
+            # Commentary is public only after the complete source-ordered
+            # declared Tool batch is durable, so restart recovery never has to
+            # guess declarations from public text.
+            if assistant.tool_calls:
+                run = await self._ensure_tool_batch(run, assistant)
+            assistant_public_text = _assistant_text(assistant)
             await self._emit(
                 lifecycle,
                 "message_completed",
                 run,
-                {"message_id": assistant.message_id},
+                {
+                    "public_event_id": (
+                        f"public:{run.run_id}:{request.turn_id}:"
+                        f"{assistant.message_id}:message_end"
+                    ),
+                    "internal_turn_id": request.turn_id,
+                    "message_id": assistant.message_id,
+                    "stop_reason": ("tool_use" if assistant.tool_calls else "stop"),
+                    "disposition": ("commentary" if assistant.tool_calls else "final"),
+                    "text": assistant_public_text,
+                },
             )
+            if run.lifecycle_family == "canonical":
+                run = await self._checkpoint(
+                    run,
+                    updates={
+                        "active_assistant_message_id": None,
+                        "active_public_text": "",
+                        "greatest_public_text_offset": 0,
+                    },
+                    command_id=f"public-message-end:{assistant.message_id}",
+                )
             if assistant.tool_calls:
                 await self._emit(
                     lifecycle,
@@ -443,8 +795,23 @@ class OrchestratorKernel:
                     lifecycle,
                     "turn_completed",
                     run,
-                    {"message_id": assistant.message_id},
+                    {
+                        "internal_turn_id": request.turn_id,
+                        "message_id": assistant.message_id,
+                        "tool_call_ids": [],
+                        "status": "completed",
+                    },
                 )
+                if run.lifecycle_family == "canonical":
+                    run = await self._checkpoint(
+                        run,
+                        updates={
+                            "active_internal_turn_id": None,
+                            "active_assistant_message_id": None,
+                            "active_attempt": None,
+                        },
+                        command_id=f"public-turn-end:{request.turn_id}",
+                    )
                 return await self._complete(run, assistant)
             if run.budget.wrap_up_requested:
                 run = await self._reject_grace_tools(run, assistant)
@@ -460,14 +827,60 @@ class OrchestratorKernel:
                         current, status="canceled", reason="tool execution canceled"
                     )
                 raise
+            if result == "retry":
+                continue
             if result is not None:
                 return result
+            completed_run = await self._load(run.run_id)
+            accepted_public_ids = [
+                entry.opaque_public_call_id
+                for batch in completed_run.tool_batches
+                if batch.assistant_message_id == assistant.message_id
+                for entry in batch.entries
+                if entry.opaque_public_call_id is not None
+            ]
             await self._emit(
                 lifecycle,
                 "turn_completed",
-                await self._load(run.run_id),
-                {"message_id": assistant.message_id},
+                completed_run,
+                {
+                    "internal_turn_id": request.turn_id,
+                    "message_id": assistant.message_id,
+                    "tool_call_ids": accepted_public_ids,
+                    "status": "completed",
+                },
             )
+            if completed_run.lifecycle_family == "canonical":
+                await self._checkpoint(
+                    completed_run,
+                    updates={
+                        "active_internal_turn_id": None,
+                        "active_assistant_message_id": None,
+                        "active_attempt": None,
+                    },
+                    command_id=f"public-turn-end:{request.turn_id}",
+                )
+
+    async def terminalize(
+        self,
+        run_id: str,
+        *,
+        status: Literal["failed", "canceled", "budget_exhausted"],
+        reason: str,
+        cancellation_cause: (
+            Literal["user_requested", "room_closed", "shutdown", "policy"] | None
+        ) = None,
+        lifecycle: KernelLifecycle | None = None,
+    ) -> KernelRunResult:
+        """Public family-specific terminalization entrypoint for HITL/recovery."""
+
+        self._lifecycle_context.set(lifecycle)
+        return await self._terminate(
+            await self._load(run_id),
+            status=status,
+            reason=reason,
+            cancellation_cause=cancellation_cause,
+        )
 
     async def observe_tool(
         self,
@@ -477,6 +890,7 @@ class OrchestratorKernel:
         signal: CancellationSignal,
         lifecycle: KernelLifecycle | None = None,
     ) -> KernelRunResult:
+        self._lifecycle_context.set(lifecycle)
         run = await self._load(run_id)
         batch_index, entry_index = _find_invocation(run, observation.invocation_id)
         if batch_index is None or entry_index is None:
@@ -500,6 +914,7 @@ class OrchestratorKernel:
             raise KernelConflict("terminal Run cannot accept a new tool observation")
         if run.status not in {"waiting_external", "awaiting_user"}:
             raise KernelConflict("tool observations require a suspended Run")
+        was_awaiting_user = run.status == "awaiting_user"
         if entry.state not in {"waiting_external", "input_required", "auth_required"}:
             raise KernelConflict("tool observation target is not suspended")
         if observation.observation_id in entry.processed_observation_ids:
@@ -558,6 +973,49 @@ class OrchestratorKernel:
                 else "waiting_external",
                 run,
             )
+        internal_turn_id = run.active_internal_turn_id or entry.assistant_message_id
+        if was_awaiting_user:
+            resumed_entry = run.tool_batches[batch_index].entries[entry_index]
+            update_index = resumed_entry.public_update_index + 1
+            await self._emit(
+                lifecycle,
+                "tool_execution_updated",
+                run,
+                {
+                    "public_event_id": (
+                        f"public:{run.run_id}:{resumed_entry.opaque_public_call_id}:"
+                        f"update:{update_index}"
+                    ),
+                    "call_id": resumed_entry.call_id,
+                    "public_call_id": resumed_entry.opaque_public_call_id
+                    or _opaque_public_call_id(run.run_id, resumed_entry.call_id),
+                    "internal_turn_id": internal_turn_id,
+                    "tool_name": resumed_entry.tool_name,
+                    "agent_label": self._tool_label(run, resumed_entry.tool_name),
+                    "update_index": update_index,
+                    "status": "running",
+                    "partial_result": "",
+                },
+            )
+            run = await self._update_entry(
+                run,
+                batch_index,
+                entry_index,
+                state="terminal",
+                invocation=resumed_entry.invocation,
+                acceptance=resumed_entry.acceptance,
+                opaque_public_call_id=resumed_entry.opaque_public_call_id,
+                result=resumed_entry.buffered_terminal_result,
+                public_update_index=update_index,
+                command=(f"public-tool-resumed:{resumed_entry.call_id}:{update_index}"),
+            )
+        run = await self._publish_checkpointed_tool_terminals(
+            run,
+            batch_index,
+            lifecycle=lifecycle,
+            internal_turn_id=internal_turn_id,
+        )
+        batch = run.tool_batches[batch_index]
         for item in batch.entries:
             await self._emit(
                 lifecycle,
@@ -580,7 +1038,128 @@ class OrchestratorKernel:
                     else None,
                 },
             )
+        accepted_public_ids = [
+            item.opaque_public_call_id
+            for item in batch.entries
+            if item.opaque_public_call_id is not None
+        ]
+        await self._emit(
+            lifecycle,
+            "turn_completed",
+            run,
+            {
+                "public_event_id": (
+                    f"public:{run.run_id}:{internal_turn_id}:turn_end:completed"
+                ),
+                "internal_turn_id": internal_turn_id,
+                "message_id": batch.assistant_message_id,
+                "tool_call_ids": accepted_public_ids,
+                "status": "completed",
+            },
+        )
+        if run.lifecycle_family == "canonical":
+            run = await self._checkpoint(
+                run,
+                updates={
+                    "active_internal_turn_id": None,
+                    "active_assistant_message_id": None,
+                    "active_attempt": None,
+                    "active_public_text": "",
+                    "greatest_public_text_offset": 0,
+                },
+                command_id=f"public-turn-end:{internal_turn_id}",
+            )
         return await self.run(run_id, signal=signal, lifecycle=lifecycle)
+
+    async def _suspend_for_supervisor_input(
+        self,
+        run: OrchestratorRunState,
+        batch_index: int,
+        entry_index: int,
+        call: ToolCall,
+        assistant: AssistantMessage,
+    ) -> OrchestratorRunState | None:
+        """Create the unified HITL interaction and suspend the ask_user call.
+
+        Returns None after durably rejecting an invalid declaration (the batch
+        continues with the preacceptance-failed path). On success the entry is
+        ``input_required`` and the batch tail publishes the suspension update
+        and the ``awaiting_user`` Run status.
+        """
+        errors = list(
+            Draft202012Validator(
+                REQUEST_USER_INPUT_TOOL_DEFINITION.input_schema
+            ).iter_errors(call.arguments)
+        )
+        if errors:
+            run = await self._update_entry(
+                run,
+                batch_index,
+                entry_index,
+                state="terminal",
+                result=_tool_error(
+                    call,
+                    "invalid_tool_call",
+                    "request_user_input arguments failed schema validation",
+                ),
+                command=f"invalid-ask:{call.call_id}",
+            )
+            return None
+        question = str(call.arguments.get("question") or "").strip()
+        choices = [
+            str(choice).strip()
+            for choice in (call.arguments.get("choices") or [])
+            if str(choice).strip()
+        ]
+        interaction_id = self._stable_id(run, "ask", call.call_id)
+        assert self.supervisor_hitl is not None
+        try:
+            await self.supervisor_hitl(
+                run=run,
+                interaction_id=interaction_id,
+                call_id=call.call_id,
+                question=question,
+                choices=choices,
+            )
+        except Exception as exc:
+            _kernel_logger.error(
+                "ask_user supervisor input creation failed",
+                extra={
+                    "run_id": run.run_id,
+                    "call_id": call.call_id,
+                    "interaction_id": interaction_id,
+                    "ask_error": f"{type(exc).__name__}: {exc}",
+                },
+                exc_info=True,
+            )
+            raise
+        invocation = ToolInvocation(
+            invocation_id=call.call_id,
+            run_id=run.run_id,
+            expected_run_version=run.state_version,
+            assistant_message_id=assistant.message_id,
+            source_index=entry_index,
+            causation_id=assistant.message_id,
+            idempotency_key=self._stable_id(run, "ask-invocation", call.call_id),
+            tool=ResolvedTool(
+                definition=REQUEST_USER_INPUT_TOOL_DEFINITION,
+                binding=ToolBindingRef(
+                    binding_id=f"ask:{run.run_id}:{call.call_id}",
+                    binding_digest="structured-ask-user",
+                ),
+            ),
+            arguments=call.arguments,
+            deadline_at=run.budget.deadline_at,
+        )
+        return await self._update_entry(
+            run,
+            batch_index,
+            entry_index,
+            state="input_required",
+            invocation=invocation,
+            opaque_public_call_id=_opaque_public_call_id(run.run_id, call.call_id),
+            command=f"ask-user:{call.call_id}",
+        )
 
     @staticmethod
     def _tool_binding_id(run: OrchestratorRunState, tool_name: str) -> str | None:
@@ -613,6 +1192,8 @@ class OrchestratorKernel:
     ) -> dict[str, object]:
         payload: dict[str, object] = {
             "call_id": call.call_id,
+            "public_call_id": _opaque_public_call_id(run.run_id, call.call_id),
+            "internal_turn_id": run.active_internal_turn_id or call.call_id,
             "status": outcome.status,
             "tool_name": call.tool_name,
             "agent_label": self._tool_label(run, call.tool_name),
@@ -624,6 +1205,116 @@ class OrchestratorKernel:
             payload["result_error_message"] = outcome.error_message
             payload["result_text"] = _result_text(outcome)
         return payload
+
+    async def _publish_checkpointed_tool_terminals(
+        self,
+        run: OrchestratorRunState,
+        batch_index: int,
+        *,
+        lifecycle: KernelLifecycle | None,
+        internal_turn_id: str,
+    ) -> OrchestratorRunState:
+        for entry_index in range(len(run.tool_batches[batch_index].entries)):
+            entry = run.tool_batches[batch_index].entries[entry_index]
+            result = entry.buffered_terminal_result
+            if (
+                entry.state != "terminal"
+                or result is None
+                or entry.public_terminal_emitted
+            ):
+                continue
+            # ask_user entries never pass through tool_runtime.accept, but they
+            # carry an opaque public call id from suspension, so their
+            # terminal (the user answer as ToolResult) is publishable too.
+            if entry.acceptance is None and entry.opaque_public_call_id is None:
+                continue
+            await self._emit(
+                lifecycle,
+                "tool_execution_completed",
+                run,
+                {
+                    "public_event_id": (
+                        f"public:{run.run_id}:{entry.opaque_public_call_id}:end"
+                    ),
+                    "call_id": entry.call_id,
+                    "public_call_id": entry.opaque_public_call_id
+                    or _opaque_public_call_id(run.run_id, entry.call_id),
+                    "internal_turn_id": internal_turn_id,
+                    "status": result.status,
+                    "result_status": result.status,
+                    "tool_name": entry.tool_name,
+                    "agent_label": self._tool_label(run, entry.tool_name),
+                    "duration_ms": 0,
+                    # The ask_user answer is the user's private input: the
+                    # public end event carries no result text.
+                    "result_text": (
+                        ""
+                        if entry.tool_name == REQUEST_USER_INPUT_TOOL_NAME
+                        else _result_text(result)
+                    ),
+                },
+            )
+            run = await self._update_entry(
+                run,
+                batch_index,
+                entry_index,
+                state="terminal",
+                result=result,
+                public_terminal_emitted=True,
+                command=f"public-tool-end:{entry.call_id}",
+            )
+        return run
+
+    async def _publish_checkpointed_suspensions(
+        self,
+        run: OrchestratorRunState,
+        batch_index: int,
+        *,
+        lifecycle: KernelLifecycle | None,
+        internal_turn_id: str,
+    ) -> OrchestratorRunState:
+        for entry_index in range(len(run.tool_batches[batch_index].entries)):
+            entry = run.tool_batches[batch_index].entries[entry_index]
+            if entry.state not in {
+                "waiting_external",
+                "input_required",
+                "auth_required",
+            }:
+                continue
+            update_index = entry.public_update_index + 1
+            await self._emit(
+                lifecycle,
+                "tool_execution_updated",
+                run,
+                {
+                    "public_event_id": (
+                        f"public:{run.run_id}:{entry.opaque_public_call_id}:"
+                        f"update:{update_index}"
+                    ),
+                    "call_id": entry.call_id,
+                    "public_call_id": entry.opaque_public_call_id
+                    or _opaque_public_call_id(run.run_id, entry.call_id),
+                    "internal_turn_id": internal_turn_id,
+                    "tool_name": entry.tool_name,
+                    "agent_label": self._tool_label(run, entry.tool_name),
+                    "update_index": update_index,
+                    "status": "suspended",
+                    "partial_result": "",
+                },
+            )
+            run = await self._update_entry(
+                run,
+                batch_index,
+                entry_index,
+                state=entry.state,
+                invocation=entry.invocation,
+                acceptance=entry.acceptance,
+                opaque_public_call_id=entry.opaque_public_call_id,
+                result=entry.buffered_terminal_result,
+                public_update_index=update_index,
+                command=f"public-tool-suspended:{entry.call_id}:{update_index}",
+            )
+        return run
 
     async def _ensure_tool_batch(
         self, run: OrchestratorRunState, assistant: AssistantMessage
@@ -654,7 +1345,7 @@ class OrchestratorKernel:
         signal: CancellationSignal,
         *,
         lifecycle: KernelLifecycle | None = None,
-    ) -> KernelRunResult | None:
+    ) -> KernelRunResult | Literal["retry"] | None:
         batch_index = next(
             (
                 index
@@ -673,6 +1364,9 @@ class OrchestratorKernel:
                 and not item.results_flushed
             )
         executable: list[tuple[ToolCall, ToolInvocation, ToolAcceptance]] = []
+        preacceptance_failed = False
+        recoverable_declaration_failed = False
+        fatal_preacceptance_failed = False
         for call in assistant.tool_calls:
             run = await self._load(run.run_id)
             batch = run.tool_batches[batch_index]
@@ -682,6 +1376,34 @@ class OrchestratorKernel:
                 if entry.call_id == call.call_id
             )
             entry = batch.entries[entry_index]
+            if (
+                entry.state == "terminal"
+                and entry.acceptance is None
+                and entry.buffered_terminal_result is not None
+            ):
+                error_code = entry.buffered_terminal_result.error_code
+                if error_code == "invalid_tool_call":
+                    recoverable_declaration_failed = True
+                    preacceptance_failed = True
+                elif error_code == "acceptance_failed":
+                    fatal_preacceptance_failed = True
+                    preacceptance_failed = True
+                elif error_code == "skipped_due_to_prior_rejection":
+                    preacceptance_failed = True
+            if preacceptance_failed and entry.state == "pending":
+                run = await self._update_entry(
+                    run,
+                    batch_index,
+                    entry_index,
+                    state="terminal",
+                    result=_tool_error(
+                        call,
+                        "skipped_due_to_prior_rejection",
+                        "Skipped after an earlier declaration was rejected.",
+                    ),
+                    command=f"skip-tool:{call.call_id}",
+                )
+                continue
             if entry.state in {
                 "terminal",
                 "waiting_external",
@@ -689,9 +1411,80 @@ class OrchestratorKernel:
                 "auth_required",
             }:
                 continue
+            if (
+                entry.state == "pending"
+                and call.tool_name == REQUEST_USER_INPUT_TOOL_NAME
+            ):
+                if self.supervisor_hitl is None:
+                    raise KernelConflict("supervisor HITL port is not bound")
+                # Validate before publishing: only valid declarations get a
+                # public tool entry, so rejected ask_user calls leave no open
+                # tool row behind (the fold must never see a phantom
+                # "running" ask that never suspends).
+                declaration_errors = list(
+                    Draft202012Validator(
+                        REQUEST_USER_INPUT_TOOL_DEFINITION.input_schema
+                    ).iter_errors(call.arguments)
+                )
+                if not declaration_errors:
+                    # The ask_user call never enters the tool-runtime dispatch
+                    # loop, so publish its tool_execution_started here to
+                    # satisfy the public protocol contract
+                    # (tool_execution_update must extend an existing tool
+                    # entry). The deterministic public_event_id collapses
+                    # replays onto the original room event at append time.
+                    public_call_id = _opaque_public_call_id(run.run_id, call.call_id)
+                    await self._emit(
+                        lifecycle,
+                        "tool_execution_started",
+                        run,
+                        {
+                            "public_event_id": (
+                                f"public:{run.run_id}:{public_call_id}:start"
+                            ),
+                            "call_id": call.call_id,
+                            "public_call_id": public_call_id,
+                            "internal_turn_id": (
+                                run.active_internal_turn_id or assistant.message_id
+                            ),
+                            "tool_name": call.tool_name,
+                            "agent_label": self._tool_label(run, call.tool_name),
+                            "arguments": call.arguments,
+                        },
+                    )
+                suspended = await self._suspend_for_supervisor_input(
+                    run,
+                    batch_index,
+                    entry_index,
+                    call,
+                    assistant,
+                )
+                if suspended is None:
+                    preacceptance_failed = True
+                    recoverable_declaration_failed = True
+                    continue
+                run = suspended
+                continue
             if entry.state in {"accepted", "executing"}:
                 if entry.invocation is None or entry.acceptance is None:
                     raise KernelConflict("accepted tool entry is incomplete")
+                if (
+                    run.lifecycle_family == "canonical"
+                    and entry.opaque_public_call_id is None
+                ):
+                    run = await self._update_entry(
+                        run,
+                        batch_index,
+                        entry_index,
+                        state=entry.state,
+                        invocation=entry.invocation,
+                        acceptance=entry.acceptance,
+                        opaque_public_call_id=_opaque_public_call_id(
+                            run.run_id, entry.call_id
+                        ),
+                        command=f"repair-public-call-id:{entry.call_id}",
+                    )
+                    entry = run.tool_batches[batch_index].entries[entry_index]
                 executable.append((call, entry.invocation, entry.acceptance))
                 continue
             if entry.state != "pending":
@@ -700,22 +1493,42 @@ class OrchestratorKernel:
                 )
             try:
                 resolved = self.tool_catalog.resolve(run, call.tool_name)
-                errors = list(
-                    Draft202012Validator(resolved.definition.input_schema).iter_errors(
-                        call.arguments
-                    )
-                )
-                if errors:
-                    raise ValueError("tool arguments failed schema validation")
-            except Exception as exc:
+            except KeyError:
                 run = await self._update_entry(
                     run,
                     batch_index,
                     entry_index,
                     state="terminal",
-                    result=_tool_error(call, "invalid_tool_call", str(exc)),
+                    result=_tool_error(
+                        call,
+                        "invalid_tool_call",
+                        "Unknown tool. Choose a tool from the current catalog and retry.",
+                    ),
                     command=f"invalid-tool:{call.call_id}",
                 )
+                preacceptance_failed = True
+                recoverable_declaration_failed = True
+                continue
+            errors = list(
+                Draft202012Validator(resolved.definition.input_schema).iter_errors(
+                    call.arguments
+                )
+            )
+            if errors:
+                run = await self._update_entry(
+                    run,
+                    batch_index,
+                    entry_index,
+                    state="terminal",
+                    result=_tool_error(
+                        call,
+                        "invalid_tool_call",
+                        _tool_schema_validation_message(errors[0]),
+                    ),
+                    command=f"invalid-tool:{call.call_id}",
+                )
+                preacceptance_failed = True
+                recoverable_declaration_failed = True
                 continue
             try:
                 self.budget_policy.before_tool_call(
@@ -778,6 +1591,8 @@ class OrchestratorKernel:
                     result=_tool_error(call, "acceptance_failed", str(exc)),
                     command=f"acceptance-failed:{call.call_id}",
                 )
+                preacceptance_failed = True
+                fatal_preacceptance_failed = True
                 continue
             run = await self._update_entry(
                 run,
@@ -786,6 +1601,7 @@ class OrchestratorKernel:
                 state="accepted",
                 invocation=invocation,
                 acceptance=acceptance,
+                opaque_public_call_id=_opaque_public_call_id(run.run_id, call.call_id),
                 command=f"accepted-tool:{call.call_id}",
             )
             executable.append((call, invocation, acceptance))
@@ -797,27 +1613,23 @@ class OrchestratorKernel:
         outcomes: list[tuple[str, ToolResult | ToolSuspension]] = []
         if sequential:
             for call, invocation, acceptance in executable:
-                started_at = self.clock.now()
                 await self._emit(
                     lifecycle,
                     "tool_execution_started",
                     run,
                     {
                         "call_id": call.call_id,
+                        "public_call_id": _opaque_public_call_id(
+                            run.run_id, call.call_id
+                        ),
+                        "internal_turn_id": run.active_internal_turn_id
+                        or assistant.message_id,
                         "tool_name": call.tool_name,
                         "agent_label": self._tool_label(run, call.tool_name),
                         "arguments": call.arguments,
                     },
                 )
                 outcome = await self._execute_one(invocation, acceptance, signal=signal)
-                await self._emit(
-                    lifecycle,
-                    "tool_execution_completed",
-                    run,
-                    self._tool_completed_payload(
-                        run, call, outcome, started_at=started_at
-                    ),
-                )
                 outcomes.append((call.call_id, outcome))
         else:
             semaphore = asyncio.Semaphore(run.profile.max_parallel_calls)
@@ -828,13 +1640,17 @@ class OrchestratorKernel:
                 acceptance: ToolAcceptance,
             ) -> ToolResult | ToolSuspension:
                 async with semaphore:
-                    started_at = self.clock.now()
                     await self._emit(
                         lifecycle,
                         "tool_execution_started",
                         run,
                         {
                             "call_id": call.call_id,
+                            "public_call_id": _opaque_public_call_id(
+                                run.run_id, call.call_id
+                            ),
+                            "internal_turn_id": run.active_internal_turn_id
+                            or assistant.message_id,
                             "tool_name": call.tool_name,
                             "agent_label": self._tool_label(run, call.tool_name),
                             "arguments": call.arguments,
@@ -842,14 +1658,6 @@ class OrchestratorKernel:
                     )
                     outcome = await self._execute_one(
                         invocation, acceptance, signal=signal
-                    )
-                    await self._emit(
-                        lifecycle,
-                        "tool_execution_completed",
-                        run,
-                        self._tool_completed_payload(
-                            run, call, outcome, started_at=started_at
-                        ),
                     )
                     return outcome
 
@@ -899,6 +1707,13 @@ class OrchestratorKernel:
                 },
                 command_id=f"complete-tool-batch:{assistant.message_id}",
             )
+            run = await self._publish_checkpointed_tool_terminals(
+                run,
+                batch_index,
+                lifecycle=lifecycle,
+                internal_turn_id=run.active_internal_turn_id or assistant.message_id,
+            )
+            batch = run.tool_batches[batch_index]
             for entry in batch.entries:
                 await self._emit(
                     lifecycle,
@@ -914,6 +1729,44 @@ class OrchestratorKernel:
                         else None,
                     },
                 )
+            if fatal_preacceptance_failed or recoverable_declaration_failed:
+                public_ids = [
+                    entry.opaque_public_call_id
+                    for entry in batch.entries
+                    if entry.opaque_public_call_id is not None
+                ]
+                await self._emit(
+                    lifecycle,
+                    "turn_completed",
+                    run,
+                    {
+                        "internal_turn_id": run.active_internal_turn_id
+                        or assistant.message_id,
+                        "message_id": assistant.message_id,
+                        "tool_call_ids": public_ids,
+                        "status": "error",
+                    },
+                )
+                if run.lifecycle_family == "canonical":
+                    run = await self._checkpoint(
+                        run,
+                        updates={
+                            "active_internal_turn_id": None,
+                            "active_assistant_message_id": None,
+                            "active_attempt": None,
+                        },
+                        command_id=f"public-turn-error:{assistant.message_id}",
+                    )
+                if fatal_preacceptance_failed:
+                    return await self._terminate(
+                        run, status="failed", reason="tool_failure"
+                    )
+                # A model-authored declaration can be incompatible with the
+                # frozen Agent Card schema even though the Agent itself is
+                # healthy. Its durable ToolResult becomes a bounded diagnostic
+                # observation on the next model turn. Local rejection does not
+                # consume Agent-call budget or manufacture a public Tool row.
+                return "retry"
             return None
         status = _wait_status(batch)
         run = await self._checkpoint(
@@ -925,12 +1778,25 @@ class OrchestratorKernel:
             },
             command_id=f"suspend-tool-batch:{assistant.message_id}",
         )
-        await self._emit(
-            lifecycle,
-            "turn_completed",
+        run = await self._publish_checkpointed_tool_terminals(
             run,
-            {"message_id": assistant.message_id, "status": status},
+            batch_index,
+            lifecycle=lifecycle,
+            internal_turn_id=run.active_internal_turn_id or assistant.message_id,
         )
+        run = await self._publish_checkpointed_suspensions(
+            run,
+            batch_index,
+            lifecycle=lifecycle,
+            internal_turn_id=run.active_internal_turn_id or assistant.message_id,
+        )
+        if run.lifecycle_family == "legacy":
+            await self._emit(
+                lifecycle,
+                "turn_completed",
+                run,
+                {"message_id": assistant.message_id, "status": status},
+            )
         return KernelRunResult(
             "awaiting_user" if status == "awaiting_user" else "waiting_external",
             run,
@@ -1160,6 +2026,53 @@ class OrchestratorKernel:
         if lifecycle is not None:
             await lifecycle(event_type, run, payload)
 
+    async def _publish_public_text(
+        self,
+        lifecycle: KernelLifecycle | None,
+        run: OrchestratorRunState,
+        coalescer: PublicTextCoalescer,
+        text: str,
+        *,
+        semantic_boundary: bool = False,
+        timer_flush: bool = False,
+    ) -> OrchestratorRunState:
+        now = self.clock.now()
+        deltas = coalescer.add(text, now=now)
+        if timer_flush:
+            deltas.extend(coalescer.timed_flush(now=now))
+        if semantic_boundary:
+            deltas.extend(coalescer.semantic_flush(now=now))
+        for delta in deltas:
+            await self._emit(
+                lifecycle,
+                "message_updated",
+                run,
+                {
+                    "public_event_id": delta.event_id,
+                    "internal_turn_id": coalescer.internal_turn_id,
+                    "message_id": coalescer.message_id,
+                    "content_index": delta.content_index,
+                    "delta_index": delta.delta_index,
+                    "start_offset": delta.start_offset,
+                    "end_offset": delta.end_offset,
+                    "delta": delta.delta,
+                },
+            )
+            # Public append acknowledgement precedes this advisory checkpoint.
+            if run.lifecycle_family == "canonical":
+                active_text = f"{run.active_public_text}{delta.delta}"
+                run = await self._checkpoint(
+                    run,
+                    updates={
+                        "greatest_public_text_offset": delta.end_offset,
+                        "active_public_text": active_text,
+                    },
+                    command_id=(
+                        f"public-text-offset:{coalescer.message_id}:{delta.end_offset}"
+                    ),
+                )
+        return run
+
     async def _emit_model_event(
         self,
         lifecycle: KernelLifecycle | None,
@@ -1173,16 +2086,264 @@ class OrchestratorKernel:
             "attempt_failed": "model_attempt_failed",
         }.get(event.kind)
         if event_type is not None:
+            # Gateway-internal transport attempts do not own independent public
+            # Assistant identities. Canonical retry facts are emitted only by
+            # the Kernel after closing the public attempt below.
+            if (
+                run.lifecycle_family == "canonical"
+                and event_type == "model_retry_scheduled"
+            ):
+                return
             payload: dict[str, object] = {
                 "attempt": event.attempt or 0,
                 "error_class": event.error_class or "",
             }
             if request is not None:
+                payload["internal_turn_id"] = request.turn_id
                 payload["model"] = request.model.model_id
                 payload["provider"] = request.model.provider
             if event.kind == "retry_scheduled" and event.retry_delay_ms is not None:
                 payload["retry_delay_ms"] = event.retry_delay_ms
             await self._emit(lifecycle, event_type, run, payload)
+
+    async def _recover_active_canonical_attempt(
+        self,
+        run: OrchestratorRunState,
+        lifecycle: KernelLifecycle | None,
+    ) -> tuple[OrchestratorRunState, str | None] | KernelRunResult:
+        """Resume from durable room events, never advisory Run text state."""
+
+        internal_turn_id = run.active_internal_turn_id
+        assert internal_turn_id is not None
+        records = (
+            await self.canonical_event_reader(run.room_id, run.run_id)
+            if self.canonical_event_reader is not None
+            else []
+        )
+        text = ""
+        terminal: dict[str, object] | None = None
+        turn_started = False
+        message_started = False
+        turn_ended = False
+        message_id = run.active_assistant_message_id
+        for record in sorted(records, key=lambda item: int(item.get("room_seq") or 0)):
+            data = record.get("payload_public")
+            if not isinstance(data, dict) or data.get("run_id") != run.run_id:
+                continue
+            payload = data.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("internal_turn_id") != internal_turn_id:
+                continue
+            kind = data.get("type")
+            if kind == "turn_start":
+                turn_started = True
+            elif kind == "message_start":
+                candidate = payload.get("message_id")
+                if isinstance(candidate, str):
+                    message_id = candidate
+                    message_started = True
+            elif kind == "message_update" and payload.get("message_id") == message_id:
+                nested = payload.get("assistant_message_event")
+                if not isinstance(nested, dict):
+                    continue
+                delta = nested.get("delta")
+                start = nested.get("start_offset")
+                end = nested.get("end_offset")
+                if (
+                    isinstance(delta, str)
+                    and start == len(text)
+                    and end == len(text) + len(delta)
+                ):
+                    text += delta
+            elif kind == "message_end" and payload.get("message_id") == message_id:
+                terminal_text = str(payload.get("text") or "")
+                if text and terminal_text != text:
+                    raise KernelConflict(
+                        "durable message_end contradicts assembled public deltas"
+                    )
+                terminal = payload
+                text = terminal_text
+            elif kind == "turn_end":
+                turn_ended = True
+
+        # The active-state CAS intentionally precedes public starts. Recovery
+        # must adopt/restore those missing semantic parents before it emits any
+        # message_end/turn_end child. Deterministic public identities make both
+        # boundaries exactly-once across repeated recovery.
+        if not turn_started:
+            await self._emit(
+                lifecycle,
+                "turn_started",
+                run,
+                {
+                    "internal_turn_id": internal_turn_id,
+                    "attempt": run.active_attempt or 1,
+                },
+            )
+        if message_id is not None and not message_started:
+            await self._emit(
+                lifecycle,
+                "message_started",
+                run,
+                {
+                    "internal_turn_id": internal_turn_id,
+                    "message_id": message_id,
+                    "role": "assistant",
+                },
+            )
+
+        checkpointed_assistant = next(
+            (
+                item
+                for item in reversed(run.transcript)
+                if isinstance(item, AssistantMessage)
+                and (message_id is None or item.message_id == message_id)
+            ),
+            None,
+        )
+        if (
+            terminal is None
+            and self.canonical_event_reader is None
+            and checkpointed_assistant is not None
+        ):
+            terminal = {
+                "message_id": checkpointed_assistant.message_id,
+                "disposition": (
+                    "commentary" if checkpointed_assistant.tool_calls else "final"
+                ),
+                "stop_reason": (
+                    "tool_use" if checkpointed_assistant.tool_calls else "stop"
+                ),
+                "text": _assistant_text(checkpointed_assistant),
+            }
+            await self._emit(
+                lifecycle,
+                "message_completed",
+                run,
+                {
+                    "public_event_id": (
+                        f"public:{run.run_id}:{internal_turn_id}:"
+                        f"{checkpointed_assistant.message_id}:message_end"
+                    ),
+                    "internal_turn_id": internal_turn_id,
+                    **terminal,
+                },
+            )
+
+        if terminal is None:
+            inferred_message_id = message_id or (
+                checkpointed_assistant.message_id if checkpointed_assistant else None
+            )
+            updates: dict[str, object] = {
+                "active_public_text": text,
+                "greatest_public_text_offset": len(text),
+            }
+            if inferred_message_id is not None:
+                updates["active_assistant_message_id"] = inferred_message_id
+            if updates != {
+                "active_public_text": run.active_public_text,
+                "greatest_public_text_offset": run.greatest_public_text_offset,
+            }:
+                run = await self._checkpoint(
+                    run,
+                    updates=updates,
+                    command_id=f"public-repair-offset:{internal_turn_id}:{len(text)}",
+                )
+            return await self._close_active_attempt(run, disposition="aborted")
+
+        disposition = str(terminal.get("disposition") or "")
+        terminal_message_id = str(terminal.get("message_id") or message_id or "")
+        if run.active_assistant_message_id is not None or run.active_public_text:
+            run = await self._checkpoint(
+                run,
+                updates={
+                    "active_assistant_message_id": None,
+                    "active_public_text": "",
+                    "greatest_public_text_offset": 0,
+                },
+                command_id=f"public-adopt-message-end:{terminal_message_id}",
+            )
+
+        if disposition == "commentary":
+            if not turn_ended:
+                completed_batch = next(
+                    (
+                        batch
+                        for batch in run.tool_batches
+                        if batch.assistant_message_id == terminal_message_id
+                        and batch.results_flushed
+                        and all(entry.state == "terminal" for entry in batch.entries)
+                        and all(
+                            entry.acceptance is None or entry.public_terminal_emitted
+                            for entry in batch.entries
+                        )
+                    ),
+                    None,
+                )
+                if completed_batch is None:
+                    return run, None
+                accepted_public_ids = [
+                    entry.opaque_public_call_id
+                    for entry in completed_batch.entries
+                    if entry.acceptance is not None
+                    and entry.opaque_public_call_id is not None
+                ]
+                await self._emit(
+                    lifecycle,
+                    "turn_completed",
+                    run,
+                    {
+                        "public_event_id": (
+                            f"public:{run.run_id}:{internal_turn_id}:turn_end:completed"
+                        ),
+                        "internal_turn_id": internal_turn_id,
+                        "message_id": terminal_message_id,
+                        "tool_call_ids": accepted_public_ids,
+                        "status": "completed",
+                    },
+                )
+            run = await self._checkpoint(
+                run,
+                updates={
+                    "active_internal_turn_id": None,
+                    "active_assistant_message_id": None,
+                    "active_attempt": None,
+                    "active_public_text": "",
+                    "greatest_public_text_offset": 0,
+                },
+                command_id=f"public-adopt-turn-end:{internal_turn_id}",
+            )
+            return run, None
+
+        status = "completed" if disposition == "final" else disposition
+        if not turn_ended:
+            await self._emit(
+                lifecycle,
+                "turn_completed",
+                run,
+                {
+                    "public_event_id": (
+                        f"public:{run.run_id}:{internal_turn_id}:turn_end:{status}"
+                    ),
+                    "internal_turn_id": internal_turn_id,
+                    "message_id": terminal_message_id,
+                    "tool_call_ids": [],
+                    "status": status,
+                },
+            )
+        run = await self._checkpoint(
+            run,
+            updates={"active_internal_turn_id": None, "active_attempt": None},
+            command_id=f"public-adopt-turn-end:{internal_turn_id}:{status}",
+        )
+        if disposition == "final":
+            if checkpointed_assistant is None:
+                return await self._terminate(
+                    run, status="failed", reason="finalization candidate missing"
+                )
+            return await self._complete(run, checkpointed_assistant)
+        return run, internal_turn_id
 
     async def _complete(
         self, run: OrchestratorRunState, assistant: AssistantMessage
@@ -1221,13 +2382,185 @@ class OrchestratorKernel:
         settled = await self.projection_driver.settle(run.run_id)
         return KernelRunResult("final_answer", settled)
 
+    async def _close_active_attempt(
+        self,
+        run: OrchestratorRunState,
+        *,
+        disposition: Literal["error", "aborted"],
+        error_summary: str | None = None,
+    ) -> tuple[OrchestratorRunState, str | None]:
+        if run.lifecycle_family != "canonical" or not run.active_internal_turn_id:
+            return run, None
+        lifecycle = self._lifecycle_context.get()
+        internal_turn_id = run.active_internal_turn_id
+        message_id = run.active_assistant_message_id or next(
+            (
+                batch.assistant_message_id
+                for batch in reversed(run.tool_batches)
+                if not batch.results_flushed
+            ),
+            None,
+        )
+
+        if run.active_assistant_message_id and message_id:
+            payload: dict[str, object] = {
+                "public_event_id": (
+                    f"public:{run.run_id}:{internal_turn_id}:{message_id}:message_end"
+                ),
+                "internal_turn_id": internal_turn_id,
+                "message_id": message_id,
+                "stop_reason": "error" if disposition == "error" else "aborted",
+                "disposition": disposition,
+                "text": run.active_public_text,
+            }
+            if disposition == "error":
+                payload["error_summary"] = (
+                    error_summary or "The response could not be completed."
+                )
+            await self._emit(lifecycle, "message_completed", run, payload)
+
+        # Accepted Tools are public children and must terminalize before their
+        # owning internal Turn and root settlement. A recovery may observe the
+        # private terminal checkpoint before its public end; publish those
+        # checkpointed terminals first, then close entries that are still open.
+        for batch_index in range(len(run.tool_batches)):
+            run = await self._publish_checkpointed_tool_terminals(
+                run,
+                batch_index,
+                lifecycle=lifecycle,
+                internal_turn_id=internal_turn_id,
+            )
+        for batch_index, batch in enumerate(list(run.tool_batches)):
+            for entry_index, entry in enumerate(list(batch.entries)):
+                if entry.state == "terminal":
+                    continue
+                accepted = entry.acceptance is not None
+                result = ToolResult(
+                    call_id=entry.call_id,
+                    tool_name=entry.tool_name,
+                    status="canceled" if disposition == "aborted" else "failed",
+                    content=[],
+                    artifact_refs=[],
+                    error_code=(
+                        "run_canceled"
+                        if disposition == "aborted"
+                        else (
+                            "run_failed" if accepted else "skipped_due_to_run_terminal"
+                        )
+                    ),
+                    error_message=None,
+                )
+                run = await self._update_entry(
+                    run,
+                    batch_index,
+                    entry_index,
+                    state="terminal",
+                    result=result,
+                    command=f"public-close-tool:{entry.call_id}:{disposition}",
+                )
+                if not accepted:
+                    continue
+                await self._emit(
+                    lifecycle,
+                    "tool_execution_completed",
+                    run,
+                    {
+                        "public_event_id": (
+                            f"public:{run.run_id}:{entry.opaque_public_call_id}:end"
+                        ),
+                        "call_id": entry.call_id,
+                        "public_call_id": entry.opaque_public_call_id
+                        or _opaque_public_call_id(run.run_id, entry.call_id),
+                        "internal_turn_id": internal_turn_id,
+                        "status": result.status,
+                        "result_status": result.status,
+                        "tool_name": entry.tool_name,
+                        "agent_label": self._tool_label(run, entry.tool_name),
+                        "duration_ms": 0,
+                        "result_text": "",
+                    },
+                )
+                run = await self._update_entry(
+                    run,
+                    batch_index,
+                    entry_index,
+                    state="terminal",
+                    result=result,
+                    public_terminal_emitted=True,
+                    command=f"public-close-tool-emitted:{entry.call_id}",
+                )
+
+        for batch_index, batch in enumerate(list(run.tool_batches)):
+            if batch.results_flushed or not all(
+                entry.state == "terminal" for entry in batch.entries
+            ):
+                continue
+            transcript, flushed = _flush_batch(run.transcript, batch, self.clock.now())
+            batches = list(run.tool_batches)
+            batches[batch_index] = flushed
+            run = await self._checkpoint(
+                run,
+                updates={"tool_batches": batches, "transcript": transcript},
+                command_id=f"public-flush-closed-batch:{batch.assistant_message_id}",
+            )
+
+        accepted_ids = [
+            entry.opaque_public_call_id
+            for batch in run.tool_batches
+            if batch.assistant_message_id == message_id
+            for entry in batch.entries
+            if entry.opaque_public_call_id is not None
+        ]
+        await self._emit(
+            lifecycle,
+            "turn_completed",
+            run,
+            {
+                "public_event_id": (
+                    f"public:{run.run_id}:{internal_turn_id}:turn_end:{disposition}"
+                ),
+                "internal_turn_id": internal_turn_id,
+                "message_id": message_id,
+                "tool_call_ids": accepted_ids,
+                "status": disposition,
+            },
+        )
+        run = await self._checkpoint(
+            run,
+            updates={
+                "active_internal_turn_id": None,
+                "active_assistant_message_id": None,
+                "active_attempt": None,
+                "active_public_text": "",
+                "greatest_public_text_offset": 0,
+            },
+            command_id=f"public-close-attempt:{internal_turn_id}:{disposition}",
+        )
+        return run, internal_turn_id
+
     async def _terminate(
         self,
         run: OrchestratorRunState,
         *,
         status: Literal["failed", "canceled", "budget_exhausted"],
         reason: str,
+        cancellation_cause: (
+            Literal["user_requested", "room_closed", "shutdown", "policy"] | None
+        ) = None,
     ) -> KernelRunResult:
+        current = await self._load(run.run_id)
+        if current.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+            return KernelRunResult(_outcome_for_status(current.status), current)
+        run = current
+        run, _ = await self._close_active_attempt(
+            run,
+            disposition="aborted" if status == "canceled" else "error",
+            error_summary=(
+                "The response exceeded its safe public output limit."
+                if reason == "public_text_oversized"
+                else "The request could not be completed."
+            ),
+        )
         sequence = (
             max((item.event_sequence for item in run.projection_outbox), default=0) + 1
         )
@@ -1241,6 +2574,9 @@ class OrchestratorKernel:
             public_run_target=run.run_id,
             status=status,
             terminal_reason=reason,
+            cancellation_cause=(
+                cancellation_cause or "user_requested" if status == "canceled" else None
+            ),
             created_at=self.clock.now(),
         )
         committed = commit_terminal_status(run, request=request)
@@ -1266,7 +2602,10 @@ class OrchestratorKernel:
         command: str,
         invocation: ToolInvocation | None = None,
         acceptance: ToolAcceptance | None = None,
+        opaque_public_call_id: str | None = None,
         result: ToolResult | None = None,
+        public_update_index: int | None = None,
+        public_terminal_emitted: bool | None = None,
     ) -> OrchestratorRunState:
         batches = list(run.tool_batches)
         batch = batches[batch_index]
@@ -1280,6 +2619,12 @@ class OrchestratorKernel:
             update["invocation"] = invocation
         if acceptance is not None:
             update["acceptance"] = acceptance
+        if opaque_public_call_id is not None:
+            update["opaque_public_call_id"] = opaque_public_call_id
+        if public_update_index is not None:
+            update["public_update_index"] = public_update_index
+        if public_terminal_emitted is not None:
+            update["public_terminal_emitted"] = public_terminal_emitted
         desired_entry = original_entry.model_copy(update=update)
         entries[entry_index] = desired_entry
         batches[batch_index] = batch.model_copy(update={"entries": entries})
@@ -1321,38 +2666,64 @@ class OrchestratorKernel:
     async def _refresh_resource_manifest(
         self, run: OrchestratorRunState
     ) -> OrchestratorRunState:
-        """Fold mid-run agent artifacts into the live resource manifest.
+        """Fold produced Agent artifacts into the live resource manifest.
 
-        Artifacts produced by agent calls accumulate on ``run.artifact_refs``;
-        without registering them into the manifest the next turn's tool schema
-        cannot offer them as ``artifact_refs``. Idempotent: already-registered
-        refs are left untouched and no checkpoint is written when unchanged.
+        Inline DataParts are already durable in the accepted A2A observation.
+        The metadata reader promotes their refs into real MIME/digest-bearing
+        resources so the next model turn can select them from strict Tool
+        schemas and the A2A runtime can rematerialize the original DataPart.
         """
         if run.resource_manifest is None:
             return run
-        existing = {ref.ref_id for ref in run.resource_manifest.refs}
-        new_refs = [
-            PreparedResourceRef(
-                ref_id=ref_id,
-                kind="artifact",
-                source_message_id=run.request.user_message_id,
-                mime_type=None,
-                size_bytes=0,
-                content_digest="",
+        current = run
+        for _attempt in range(3):
+            existing = {ref.ref_id for ref in current.resource_manifest.refs}
+            pending = [
+                ref_id
+                for ref_id in current.artifact_refs
+                if ref_id and ref_id not in existing
+            ]
+            if not pending:
+                return current
+            new_refs: list[PreparedResourceRef] = []
+            for ref_id in pending:
+                described = (
+                    await self.artifact_metadata_reader(
+                        ref_id,
+                        room_id=current.room_id,
+                        room_epoch=current.request.room_epoch,
+                    )
+                    if self.artifact_metadata_reader is not None
+                    else None
+                )
+                if described is None:
+                    if ref_id.startswith("art_"):
+                        raise KernelConflict(
+                            f"inline artifact metadata is unavailable: {ref_id}"
+                        )
+                    described = PreparedResourceRef(
+                        ref_id=ref_id,
+                        kind="artifact",
+                        source_message_id=current.request.user_message_id,
+                        mime_type=None,
+                        size_bytes=0,
+                        content_digest="",
+                    )
+                new_refs.append(described)
+            manifest = _resource_manifest_from_refs(
+                [*current.resource_manifest.refs, *new_refs]
             )
-            for ref_id in run.artifact_refs
-            if ref_id and ref_id not in existing
-        ]
-        if not new_refs:
-            return run
-        manifest = _resource_manifest_from_refs(
-            [*run.resource_manifest.refs, *new_refs]
-        )
-        return await self._checkpoint(
-            run,
-            updates={"resource_manifest": manifest},
-            command_id=f"resource-manifest:{run.run_id}",
-        )
+            try:
+                return await self._checkpoint(
+                    current,
+                    updates={"resource_manifest": manifest},
+                    command_id=(
+                        f"resource-manifest:{current.run_id}:{manifest.content_digest}"
+                    ),
+                )
+            except KernelConflict:
+                current = await self._load(current.run_id)
+        raise KernelConflict("resource manifest refresh did not converge")
 
     async def _checkpoint(
         self,
@@ -1516,6 +2887,45 @@ def _find_entry(
             if entry.call_id == call_id:
                 return batch_index, entry_index
     return None, None
+
+
+def _tool_schema_validation_message(error: ValidationError) -> str:
+    """Return an actionable diagnostic without echoing argument values."""
+
+    path = "$"
+    if error.absolute_path:
+        path += "".join(f"[{item}]" for item in error.absolute_path)
+    detail = "arguments do not match the declared schema"
+    if error.validator == "additionalProperties":
+        instance = error.instance
+        properties = error.schema.get("properties")
+        allowed = set(properties) if isinstance(properties, dict) else set()
+        unexpected = (
+            sorted(str(key) for key in instance if key not in allowed)
+            if isinstance(instance, dict)
+            else []
+        )
+        if unexpected:
+            detail = f"unsupported properties: {', '.join(unexpected[:5])}"
+    elif error.validator == "required":
+        required = error.validator_value
+        instance = error.instance
+        missing = (
+            sorted(str(key) for key in required if key not in instance)
+            if isinstance(required, list) and isinstance(instance, dict)
+            else []
+        )
+        if missing:
+            detail = f"missing required properties: {', '.join(missing[:5])}"
+    elif error.validator == "type":
+        detail = f"value at {path} has the wrong type"
+    elif error.validator == "enum":
+        detail = f"value at {path} is not an allowed resource reference"
+
+    return (
+        f"Tool arguments failed schema validation: {detail}. "
+        "Consult the current Tool schema and retry with compatible arguments."
+    )
 
 
 def _tool_error(call: ToolCall, code: str, message: str) -> ToolResult:

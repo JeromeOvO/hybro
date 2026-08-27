@@ -15,6 +15,7 @@ from ..models import (
     AgentToolInput,
     TextPart,
     ToolAcceptance,
+    ToolDefinition,
     ToolInvocation,
     ToolResult,
     ToolSuspension,
@@ -31,6 +32,7 @@ from .errors import (
 )
 from .ingress import ObservationIngressError
 from .interaction_outcome import (
+    CanonicalHITLControlPublisher,
     emit_hitl_request_events,
     park_call_for_interaction,
 )
@@ -85,6 +87,8 @@ class A2AAgentToolRuntime:
         hitl: HITLApplicationPort | None = None,
         hitl_delivery: Any | None = None,
         run_store: Any | None = None,
+        canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
+        public_secret_values: tuple[str, ...] = (),
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-runtime",
     ) -> None:
@@ -100,6 +104,8 @@ class A2AAgentToolRuntime:
         self.hitl = hitl
         self.hitl_delivery = hitl_delivery
         self.run_store = run_store
+        self.canonical_hitl_control = canonical_hitl_control
+        self.public_secret_values = public_secret_values
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
 
@@ -119,7 +125,9 @@ class A2AAgentToolRuntime:
             binding.binding_id != invocation.tool.binding.binding_id
             or binding.binding_digest != invocation.tool.binding.binding_digest
             or binding.tool_name != invocation.tool.definition.name
-            or binding.definition != invocation.tool.definition
+            or not _definition_matches_frozen_binding(
+                invocation.tool.definition, binding.definition
+            )
             or binding.requesting_subject_digest
             != _digest(prepared.requesting_subject_id)
         ):
@@ -181,6 +189,8 @@ class A2AAgentToolRuntime:
             assistant_message_id=invocation.assistant_message_id,
             source_index=invocation.source_index,
             tool_name=invocation.tool.definition.name,
+            execution_mode=binding.definition.execution_mode,
+            side_effect_level=binding.definition.side_effect_level,
             binding_id=binding.binding_id,
             binding_digest=binding.binding_digest,
             agent_id=binding.agent_id,
@@ -584,7 +594,10 @@ class A2AAgentToolRuntime:
 
         Invalid spec: fail closed as a terminal failed tool result.
         """
-        await self.observations.record(observation)
+        _record_outcome, persisted_observation = await self.observations.record(
+            observation
+        )
+        observation = persisted_observation.observation
         renewed = await self._renew_and_verify_epoch(record)
         if renewed is None:
             return _suspension(invocation)
@@ -636,6 +649,8 @@ class A2AAgentToolRuntime:
             interaction_id=persisted.pending_interaction_id,
             hitl_delivery=self.hitl_delivery,
             run_store=self.run_store,
+            canonical_control=self.canonical_hitl_control,
+            public_secret_values=self.public_secret_values,
         )
 
     async def _finalize_interaction_terminal(
@@ -782,6 +797,21 @@ def _select_direct_mode(binding) -> str | None:
     raise A2AAcceptanceDenied("direct Agent has no supported delivery capability")
 
 
+def _definition_matches_frozen_binding(
+    invocation: ToolDefinition, frozen: ToolDefinition
+) -> bool:
+    """Permit only the live resource-ref schema to differ from the binding.
+
+    Agent identity and execution semantics remain frozen. The Kernel validates
+    arguments against the current Run schema, while acceptance independently
+    freezes and authorizes the selected resource manifest.
+    """
+
+    return invocation == frozen.model_copy(
+        update={"input_schema": invocation.input_schema}
+    )
+
+
 def _acceptance_material(invocation: ToolInvocation, prepared) -> tuple[object, ...]:
     return (
         _stable("call", invocation.run_id, invocation.invocation_id),
@@ -807,6 +837,8 @@ def _invocation_matches_record(
         and record.binding_id == invocation.tool.binding.binding_id
         and record.binding_digest == invocation.tool.binding.binding_digest
         and record.tool_name == invocation.tool.definition.name
+        and record.execution_mode == invocation.tool.definition.execution_mode
+        and record.side_effect_level == invocation.tool.definition.side_effect_level
         and record.arguments_digest == _digest_json(invocation.arguments)
     )
 

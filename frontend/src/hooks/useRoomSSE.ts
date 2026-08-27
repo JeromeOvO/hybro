@@ -7,7 +7,7 @@ interface UseRoomSSEOptions {
   roomId: string
   enabled?: boolean
   getToken?: () => Promise<string | null>
-  onMessage?: (message: AnySSEFrame) => void
+  onMessage?: (message: AnySSEFrame) => void | Promise<void>
   onConnectionChange?: (connected: boolean) => void
 }
 
@@ -39,7 +39,7 @@ export function useRoomSSE({ roomId, enabled = true, getToken, onMessage, onConn
   }, [getToken])
 
   const handleMessage = useCallback((message: AnySSEFrame) => {
-    onMessageRef.current?.(message)
+    return onMessageRef.current?.(message)
   }, [])
 
   const handleConnectionChange = useCallback((isConnected: boolean) => {

@@ -15,6 +15,12 @@ import { handleTaskUpdate } from './handlers/task-update'
 import { handleArtifactUpdate } from './handlers/artifact-update'
 import { handleHitlRequest, handleHitlResponse } from './handlers/hitl'
 import { RoomReducer } from '@/lib/room-sync/room-reducer'
+import {
+  isCanonicalHITLRequestData,
+  isCanonicalHITLResponseData,
+  validateCanonicalRunEventData,
+} from '@/lib/pi-turn/contract'
+import { isCanonicalRoot, useTurnStore } from '@/stores/turn-store'
 
 export const HANDLED_ROOM_SSE_TYPES = {
   connected: true,
@@ -48,7 +54,104 @@ type DeltaMessage = Exclude<
  * window replay (Room Stream Snapshot plan P4). Ordering and buffering are
  * reducer-owned; here only the client_request_id extraction happens.
  */
+function requestProtocolRecovery(deps: SSEHandlerDeps, reason: string): void {
+  console.warn('[SSE] canonical Turn protocol violation:', reason)
+  deps.requestSnapshotRef?.current?.()
+}
+
+function lifecycleMatchesRoot(
+  deps: SSEHandlerDeps,
+  userMessageId: string,
+  clientRequestId: string,
+): boolean {
+  return deps.lifecycle.getMessageId() === userMessageId
+    && deps.lifecycle.getClientRequestId() === clientRequestId
+}
+
+function foldCanonicalDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): 'continue' | 'stop' {
+  const store = useTurnStore.getState()
+  let result: ReturnType<typeof store.applyEvent> | undefined
+
+  if (roomMessage.type === 'run_event') {
+    const validation = validateCanonicalRunEventData(roomMessage.data)
+    if (!validation.canonical) return 'continue'
+    if (!validation.valid) {
+      requestProtocolRecovery(deps, validation.reason)
+      return 'stop'
+    }
+    const existingTurn = store.rooms[deps.roomId]?.turns[validation.data.run_id]
+    result = store.applyEvent(deps.roomId, { kind: 'run_event', data: validation.data })
+    if (
+      result.ok
+      && validation.data.type === 'run_started'
+      && !existingTurn
+      && lifecycleMatchesRoot(
+        deps,
+        validation.data.payload.user_message_id,
+        validation.data.correlation_id,
+      )
+    ) {
+      deps.lifecycle.startProcessing(
+        validation.data.payload.user_message_id,
+        validation.data.correlation_id,
+      )
+    }
+    if (
+      result.ok
+      && validation.data.type === 'run_settled'
+      && existingTurn
+      && !['completed', 'failed', 'canceled'].includes(existingTurn.state)
+      && lifecycleMatchesRoot(
+        deps,
+        existingTurn.userMessageId,
+        existingTurn.clientRequestId,
+      )
+    ) {
+      deps.lifecycle.stopProcessing()
+    }
+  } else if (roomMessage.type === 'hitl_request' && roomMessage.data.run_id) {
+    if (!isCanonicalHITLRequestData(roomMessage.data)) {
+      requestProtocolRecovery(deps, 'Malformed canonical hitl_request')
+      return 'stop'
+    }
+    result = store.applyEvent(deps.roomId, { kind: 'hitl_request', data: roomMessage.data })
+  } else if (roomMessage.type === 'hitl_response' && roomMessage.data.run_id) {
+    if (!isCanonicalHITLResponseData(roomMessage.data)) {
+      requestProtocolRecovery(deps, 'Malformed canonical hitl_response')
+      return 'stop'
+    }
+    result = store.applyEvent(deps.roomId, { kind: 'hitl_response', data: roomMessage.data })
+  } else if (roomMessage.type === 'agent_response') {
+    result = store.applyEvent(deps.roomId, { kind: 'agent_response', data: roomMessage.data })
+  } else if (roomMessage.type === 'task_submitted' || roomMessage.type === 'task_update') {
+    // Canonical Runs never emit task_* cards. Legacy-shaped frames may still
+    // hydrate MessageStore, but the product renderer never consumes them as
+    // Trace/Card lifecycle authority.
+    if (roomMessage.data.run_id) {
+      requestProtocolRecovery(deps, 'Deprecated canonical task card frame')
+      return 'stop'
+    }
+    if (isCanonicalRoot(
+      deps.roomId,
+      roomMessage.data.client_request_id,
+      roomMessage.data.related_message_id,
+    )) {
+      return 'stop'
+    }
+  } else if (roomMessage.type === 'processing_status'
+    && isCanonicalRoot(deps.roomId, roomMessage.data.client_request_id, roomMessage.data.message_id)) {
+    return 'stop'
+  }
+
+  if (result && !result.ok) {
+    requestProtocolRecovery(deps, result.violation ?? 'Unknown canonical fold violation')
+    return 'stop'
+  }
+  return 'continue'
+}
+
 async function foldDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): Promise<void> {
+  if (foldCanonicalDelta(deps, roomMessage) === 'stop') return
   const clientReqId = clientRequestIdOf(roomMessage)
 
   if (TURN_CORRELATED_EVENT_TYPES.has(roomMessage.type) && !clientReqId) {
@@ -61,7 +164,15 @@ async function foldDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): Promi
 
   switch (roomMessage.type) {
     case 'agent_response':
-      await handleAgentResponse(deps, roomMessage)
+      await handleAgentResponse(
+        deps,
+        roomMessage,
+        isCanonicalRoot(
+          deps.roomId,
+          roomMessage.data.client_request_id,
+          roomMessage.data.related_message_id,
+        ),
+      )
       break
     case 'agent_response_partial':
       handleAgentResponsePartial(deps, roomMessage, clientReqId)
@@ -73,10 +184,20 @@ async function foldDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): Promi
       handleError(deps, roomMessage)
       break
     case 'task_submitted':
-      await handleTaskSubmitted(deps, roomMessage, clientReqId)
+      await handleTaskSubmitted(
+        deps,
+        roomMessage,
+        clientReqId,
+        false,
+      )
       break
     case 'task_update':
-      await handleTaskUpdate(deps, roomMessage, clientReqId)
+      await handleTaskUpdate(
+        deps,
+        roomMessage,
+        clientReqId,
+        false,
+      )
       break
     case 'artifact_update':
       handleArtifactUpdate({ roomId: deps.roomId, lifecycle: deps.lifecycle }, roomMessage, clientReqId)
@@ -109,6 +230,8 @@ export function createSSEDispatcher(deps: SSEHandlerDeps) {
     onDelta: (frame: AnySSEFrame) => {
       return foldDelta(deps, frame as DeltaMessage)
     },
+    hitlRequestIndex: deps.hitlRequestIndex.current,
+    processingLifecycle: deps.lifecycle,
     requestSnapshot: () => {
       const request = deps.requestSnapshotRef?.current
       if (request) {

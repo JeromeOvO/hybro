@@ -1,10 +1,18 @@
+from __future__ import annotations
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from common.dto.base import FrozenDTO
+from common.dto.pi_lifecycle import (
+    CANONICAL_RUN_EVENT_KINDS,
+    CanonicalRunEventPayload,
+    RunStartedPayload,
+    validate_canonical_payload,
+)
 
 
 class DeliveryEmitStatus(StrEnum):
@@ -67,14 +75,48 @@ class ProcessingStatusEvent(DeliveryEventBase):
 
 
 class RunEventNotification(DeliveryEventBase):
+    """Run event with strict canonical payload validation.
+
+    Legacy-pinned runs retain their historical dictionary payloads during the
+    expand/contract window. Canonical kinds can only cross this boundary as the
+    matching closed DTO and require complete Turn-root correlation.
+    """
+
     event_type: Literal["run_event"] = "run_event"
-    event_id: str
+    event_id: str = Field(min_length=1)
     delivery_id: str | None = None
-    run_id: str
-    seq: int
-    run_event_type: str
-    payload: dict = Field(default_factory=dict)
+    run_id: str = Field(min_length=1)
+    seq: int = Field(ge=0)
+    run_event_type: str = Field(min_length=1)
+    payload: CanonicalRunEventPayload | dict[str, Any] = Field(default_factory=dict)
     correlation_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_canonical_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        kind = value.get("run_event_type")
+        if kind in CANONICAL_RUN_EVENT_KINDS:
+            copied = dict(value)
+            copied["payload"] = validate_canonical_payload(
+                str(kind), copied.get("payload") or {}
+            )
+            return copied
+        return value
+
+    @model_validator(mode="after")
+    def _validate_canonical_root(self) -> RunEventNotification:
+        if self.run_event_type not in CANONICAL_RUN_EVENT_KINDS:
+            return self
+        if not self.correlation_id:
+            raise ValueError("canonical run events require correlation_id")
+        if isinstance(self.payload, dict):
+            raise ValueError("canonical run events require a typed payload")
+        if isinstance(self.payload, RunStartedPayload):
+            if self.payload.hybro_turn_id != self.run_id:
+                raise ValueError("hybro_turn_id must equal run_id")
+        return self
 
 
 class AgentMessagePartial(DeliveryEventBase):
@@ -94,6 +136,8 @@ class AgentMessageFinal(DeliveryEventBase):
 
 class TaskSubmittedEvent(DeliveryEventBase):
     event_type: Literal["task_submitted"] = "task_submitted"
+    run_id: str | None = None
+    opaque_public_call_id: str | None = None
     message_id: str
     task_id: str
     agent_name: str
@@ -106,9 +150,35 @@ class TaskSubmittedEvent(DeliveryEventBase):
     task_content: str | None = None
     client_request_id: str | None = None
 
+    @model_validator(mode="after")
+    def _canonical_card_is_closed(self) -> TaskSubmittedEvent:
+        if self.run_id is None:
+            return self
+        public_id = self.opaque_public_call_id or ""
+        if (
+            not public_id.startswith("inv_")
+            or self.message_id != f"orchestrator:{self.run_id}:{public_id}"
+        ):
+            raise ValueError("canonical task card identity is invalid")
+        if not self.client_request_id or not self.related_message_id:
+            raise ValueError("canonical task cards require exact Turn roots")
+        if any(
+            value is not None
+            for value in (
+                self.agent_id,
+                self.task_content,
+                self.step_number,
+                self.total_steps,
+            )
+        ):
+            raise ValueError("canonical task cards forbid private/legacy content")
+        return self
+
 
 class TaskUpdateEvent(DeliveryEventBase):
     event_type: Literal["task_update"] = "task_update"
+    run_id: str | None = None
+    opaque_public_call_id: str | None = None
     message_id: str
     status: str
     delivery_id: str | None = None
@@ -126,6 +196,34 @@ class TaskUpdateEvent(DeliveryEventBase):
     task_content: str | None = None
     parts: list[dict] | None = None
     client_request_id: str | None = None
+
+    @model_validator(mode="after")
+    def _canonical_card_is_closed(self) -> TaskUpdateEvent:
+        if self.run_id is None:
+            return self
+        public_id = self.opaque_public_call_id or ""
+        if (
+            not public_id.startswith("inv_")
+            or self.message_id != f"orchestrator:{self.run_id}:{public_id}"
+        ):
+            raise ValueError("canonical task card identity is invalid")
+        if not self.client_request_id or not self.related_message_id:
+            raise ValueError("canonical task cards require exact Turn roots")
+        if any(
+            value is not None
+            for value in (
+                self.content,
+                self.error,
+                self.parts,
+                self.agent_id,
+                self.task_content,
+                self.status_message,
+                self.step_number,
+                self.total_steps,
+            )
+        ):
+            raise ValueError("canonical task cards forbid raw/private content")
+        return self
 
 
 class ArtifactUpdateEvent(DeliveryEventBase):
@@ -160,14 +258,16 @@ class CancellationEvent(DeliveryEventBase):
 
 class HITLRequestEvent(DeliveryEventBase):
     event_type: Literal["hitl_request"] = "hitl_request"
+    run_id: str | None = None
     request_id: str
     message_id: str
     source: str
-    prompt: str
+    prompt: str = Field(max_length=4_000)
     prompt_type: str
     choices: list[str] | None = None
     agent_id: str | None = None
     agent_name: str | None = None
+    agent_label: str | None = None
     source_step_id: str | None = None
     interaction_id: str | None = None
     interaction_status: str | None = None
@@ -176,11 +276,54 @@ class HITLRequestEvent(DeliveryEventBase):
     question_count: int = 1
     question_index: int = 0
     related_message_id: str | None = None
+    related_user_message_id: str | None = None
     client_request_id: str | None = None
+
+    @model_validator(mode="after")
+    def _canonical_root_is_closed(self) -> HITLRequestEvent:
+        if self.run_id is None:
+            return self
+        if not self.client_request_id or not self.related_user_message_id:
+            raise ValueError("canonical HITL requests require exact Turn roots")
+        if any(
+            value is not None
+            for value in (
+                self.agent_id,
+                self.agent_name,
+                self.source_step_id,
+                self.interaction_status,
+                self.interaction_version,
+                self.application_status,
+                self.related_message_id,
+            )
+        ):
+            raise ValueError("canonical HITL requests forbid legacy/private metadata")
+        if self.agent_label is not None and len(self.agent_label) > 160:
+            raise ValueError("canonical HITL agent_label is too long")
+        if self.choices is not None and (
+            len(self.choices) > 20 or any(len(choice) > 500 for choice in self.choices)
+        ):
+            raise ValueError("canonical HITL choices exceed public bounds")
+        if self.source not in {"agent", "supervisor", "system"}:
+            raise ValueError("canonical HITL source is not allowlisted")
+        if self.prompt_type not in {
+            "text",
+            "textarea",
+            "choice",
+            "single_choice",
+            "multi_choice",
+            "confirmation",
+            "approval",
+            "authentication",
+            "date",
+        }:
+            raise ValueError("canonical HITL prompt type is not allowlisted")
+        return self
 
 
 class HITLResolvedEvent(DeliveryEventBase):
     event_type: Literal["hitl_resolved"] = "hitl_resolved"
+    run_id: str | None = None
     request_id: str
     message_id: str
     source: str
@@ -192,8 +335,33 @@ class HITLResolvedEvent(DeliveryEventBase):
     question_count: int = 1
     question_index: int = 0
     error_message: str | None = None
+    answer_ref: str | None = None
     related_message_id: str | None = None
+    related_user_message_id: str | None = None
     client_request_id: str | None = None
+
+    @model_validator(mode="after")
+    def _canonical_root_is_closed(self) -> HITLResolvedEvent:
+        if self.run_id is None:
+            return self
+        if not self.client_request_id or not self.related_user_message_id:
+            raise ValueError("canonical HITL responses require exact Turn roots")
+        if self.status not in {"responded", "expired", "canceled", "error"}:
+            raise ValueError("canonical HITL response status is not allowlisted")
+        if self.source not in {"agent", "supervisor", "system"}:
+            raise ValueError("canonical HITL response source is not allowlisted")
+        if any(
+            value is not None
+            for value in (
+                self.error_message,
+                self.interaction_status,
+                self.interaction_version,
+                self.application_status,
+                self.related_message_id,
+            )
+        ):
+            raise ValueError("canonical HITL responses forbid legacy/private metadata")
+        return self
 
 
 DeliveryEvent = Annotated[

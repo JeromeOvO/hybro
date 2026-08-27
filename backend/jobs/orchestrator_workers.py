@@ -4,9 +4,9 @@ Leader-elected orchestrator background workers.
 The recovery cycle drains A2A recovery work (cancellation, inbox, call
 delivery, artifacts, projection), the projection worker drains the durable
 projection outbox, and the canary job reads the durable stores and logs a
-warning when a §8.2 threshold is exceeded. All three are dark-launch jobs:
-they are constructed eagerly but only started when their settings switch is
-enabled (default OFF until steps 6/8).
+warning when a §8.2 threshold is exceeded. Recovery and projection are
+mandatory canonical lifecycle workers; the canary remains independently
+configurable observability.
 """
 
 from __future__ import annotations
@@ -75,9 +75,7 @@ class OrchestratorRecoveryJob:
         if self._running:
             logger.warning("Orchestrator recovery job already running")
             return
-        if not settings.orchestrator_recovery_enabled:
-            logger.info("Orchestrator recovery job skipped — flag is disabled")
-            return
+        self._require_deps()
         self._running = True
         self._task = traced_create_task(self._run_loop(), name="orchestrator-recovery")
         logger.info(
@@ -145,9 +143,7 @@ class OrchestratorProjectionJob:
         if self._running:
             logger.warning("Orchestrator projection job already running")
             return
-        if not settings.orchestrator_projection_enabled:
-            logger.info("Orchestrator projection job skipped — flag is disabled")
-            return
+        self._require_deps()
         self._running = True
         self._task = traced_create_task(
             self._run_loop(), name="orchestrator-projection"

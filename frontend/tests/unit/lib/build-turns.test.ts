@@ -255,6 +255,33 @@ describe('buildTurns – core construction', () => {
     expect(turns[0].agentResults).toHaveLength(2)
   })
 
+  it('keeps one live card per durable orchestrator invocation from the same Agent', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      clientRequestId: 'request-1',
+      timestamp: '2026-01-01T00:00:00.000Z',
+    })
+    const calls = Array.from({ length: 5 }, (_, index) => makeAgentEntity({
+      id: `orchestrator:run-1:call-${index + 1}`,
+      agentId: 'broker-agent',
+      senderName: 'Broker Agent',
+      clientRequestId: 'request-1',
+      relatedMessageId: 'u1',
+      content: '',
+      taskStatus: 'working',
+      timestamp: `2026-01-01T00:00:0${index + 1}.000Z`,
+    }))
+    const entities = entitiesToMap([user, ...calls])
+
+    const turns = buildTurns(entities, ['u1', ...calls.map(call => call.id)], [])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.agentResults).toHaveLength(5)
+    expect(turns[0]?.agentResults.map(result => result.messageId)).toEqual(
+      calls.map(call => call.id),
+    )
+  })
+
   describe('buildTurns – summary selection', () => {
     it('11. supervisor result selected as summary', () => {
       const user = makeUserEntity({ id: 'u1' })

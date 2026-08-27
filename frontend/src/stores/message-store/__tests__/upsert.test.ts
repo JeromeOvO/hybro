@@ -430,6 +430,44 @@ describe('applyUpsert', () => {
       expect(result!.entities['msg-1'].taskContent).toBe('Doing work')
     })
 
+    it('does not downgrade a specific Agent name with an unlabeled patch', () => {
+      const entities = {
+        'msg-1': makeEntity({
+          senderName: 'Weather Agent',
+          taskStatus: 'working',
+          displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities,
+        ['msg-1'],
+        makeIncoming({ senderName: 'Agent', taskStatus: 'completed', content: 'Done' }),
+        'sse',
+      )
+      expect(result?.entities['msg-1'].senderName).toBe('Weather Agent')
+    })
+
+    it('does not replace an exact Agent name with a later skill-qualified update', () => {
+      const entities = {
+        'msg-1': makeEntity({
+          senderName: 'Weather Agent',
+          taskStatus: 'working',
+          displayType: 'agent-bubble',
+        }),
+      }
+      const result = applyUpsert(
+        entities,
+        ['msg-1'],
+        makeIncoming({
+          senderName: 'Weather Agent - Get Current Weather',
+          taskStatus: 'completed',
+          content: 'Done',
+        }),
+        'sse',
+      )
+      expect(result?.entities['msg-1'].senderName).toBe('Weather Agent')
+    })
+
     it('allows explicitly setting nullable fields to null', () => {
       const entities = {
         'msg-1': makeEntity({

@@ -114,7 +114,7 @@ export interface ContentView {
 
 export interface AgentResponseDetail {
   messageId: string
-  agentId: string
+  agentId?: string
   agentName: string
   display: AgentDisplayProps
   taskDescription: string

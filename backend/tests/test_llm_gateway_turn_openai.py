@@ -11,10 +11,13 @@ from execution.orchestrator.streaming import (
     ModelStreamAssembler,
     TruncatedToolCallError,
 )
+from llm_gateway.error_classification import classify_gateway_error
 from llm_gateway.providers.openai_provider import OpenAIProvider
 from llm_gateway.turn_types import (
     GatewayTextPart,
+    GatewayToolCallPart,
     GatewayToolDefinition,
+    GatewayToolResultPart,
     GatewayTurnMessage,
     GatewayTurnRequest,
 )
@@ -154,6 +157,214 @@ async def test_openai_turn_streams_reasoning_text_delayed_parallel_tools_and_usa
     )
     assert events[-2].usage.input_tokens == 4
     assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_streams_tools_and_replays_prior_tool_evidence():
+    req = request().model_copy(
+        update={
+            "api": "responses",
+            "thinking_level": "high",
+            "messages": [
+                GatewayTurnMessage(
+                    role="user", parts=[GatewayTextPart(text="first request")]
+                ),
+                GatewayTurnMessage(
+                    role="assistant",
+                    parts=[
+                        GatewayTextPart(text="delegating"),
+                        GatewayToolCallPart(
+                            call_id="prior-call",
+                            tool_name="echo",
+                            arguments={"value": "prior"},
+                        ),
+                    ],
+                ),
+                GatewayTurnMessage(
+                    role="tool",
+                    parts=[
+                        GatewayToolResultPart(
+                            call_id="prior-call",
+                            tool_name="echo",
+                            content='{"value":"done"}',
+                        )
+                    ],
+                ),
+                GatewayTurnMessage(
+                    role="user", parts=[GatewayTextPart(text="continue")]
+                ),
+            ],
+        }
+    )
+    response_id = "resp-1"
+    response = SimpleNamespace(
+        id=response_id,
+        status="completed",
+        incomplete_details=None,
+        output=[SimpleNamespace(type="function_call")],
+        usage=SimpleNamespace(
+            input_tokens=12,
+            output_tokens=7,
+            input_tokens_details=SimpleNamespace(cached_tokens=3),
+        ),
+    )
+    stream = Stream(
+        [
+            SimpleNamespace(
+                type="response.created",
+                response=SimpleNamespace(id=response_id),
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=0,
+                item=SimpleNamespace(type="reasoning"),
+            ),
+            SimpleNamespace(
+                type="response.output_item.added",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="function_call",
+                    call_id="call-1",
+                    name="echo",
+                ),
+            ),
+            SimpleNamespace(
+                type="response.function_call_arguments.delta",
+                output_index=1,
+                delta='{"value":"new"}',
+            ),
+            SimpleNamespace(
+                type="response.output_item.done",
+                output_index=1,
+                item=SimpleNamespace(
+                    type="function_call",
+                    call_id="call-1",
+                    name="echo",
+                    arguments='{"value":"new"}',
+                ),
+            ),
+            SimpleNamespace(type="response.completed", response=response),
+        ]
+    )
+    create = AsyncMock(return_value=stream)
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    events = [
+        event async for event in OpenAIProvider(client=client).stream_turn_once(req)
+    ]
+
+    assert [event.kind for event in events] == [
+        "tool_call_start",
+        "tool_call_arguments_delta",
+        "tool_call_end",
+        "usage",
+        "finish",
+    ]
+    assert events[0].tool_index == 1
+    assert events[0].call_id == "call-1"
+    assert events[-2].usage.input_tokens == 12
+    assert events[-2].usage.cache_read_tokens == 3
+    assert events[-1].finish_reason == "tool_calls"
+    assert stream.closed is True
+
+    sent = create.await_args.kwargs
+    assert sent["instructions"] == "system"
+    assert sent["reasoning"] == {"effort": "high"}
+    assert sent["store"] is False
+    assert sent["max_output_tokens"] == 100
+    assert sent["tools"][0]["type"] == "function"
+    assert sent["tools"][0]["name"] == "echo"
+    assert "function" not in sent["tools"][0]
+    assert sent["input"] == [
+        {"role": "user", "content": "first request"},
+        {"role": "assistant", "content": "delegating"},
+        {
+            "type": "function_call",
+            "call_id": "prior-call",
+            "name": "echo",
+            "arguments": '{"value":"prior"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "prior-call",
+            "output": '{"value":"done"}',
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_maps_text_and_incomplete_length():
+    req = request().model_copy(
+        update={"api": "responses", "tools": [], "thinking_level": "low"}
+    )
+    response = SimpleNamespace(
+        id="resp-2",
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        output=[],
+        usage=None,
+    )
+    stream = Stream(
+        [
+            SimpleNamespace(
+                type="response.created", response=SimpleNamespace(id="resp-2")
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="partial"),
+            SimpleNamespace(type="response.incomplete", response=response),
+        ]
+    )
+    create = AsyncMock(return_value=stream)
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+
+    events = [
+        event async for event in OpenAIProvider(client=client).stream_turn_once(req)
+    ]
+
+    assert [event.kind for event in events] == ["text_delta", "finish"]
+    assert events[0].delta == "partial"
+    assert events[-1].finish_reason == "length"
+    sent = create.await_args.kwargs
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "error_class", "retryable"),
+    [
+        ("server_error", "provider_5xx", True),
+        ("rate_limit_exceeded", "rate_limit", True),
+        ("invalid_request_error", "invalid_request", False),
+    ],
+)
+async def test_openai_responses_preserves_stream_failure_classification(
+    code, error_class, retryable
+):
+    stream = Stream(
+        [
+            SimpleNamespace(
+                type="response.failed",
+                response=SimpleNamespace(
+                    id="resp-failed",
+                    error={"code": code, "message": "provider failed"},
+                ),
+            )
+        ]
+    )
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=AsyncMock(return_value=stream))
+    )
+
+    with pytest.raises(RuntimeError) as error:
+        async for _ in OpenAIProvider(client=client).stream_turn_once(
+            request().model_copy(update={"api": "responses"})
+        ):
+            pass
+
+    classified = classify_gateway_error(error.value)
+    assert classified.error_class == error_class
+    assert classified.retryable is retryable
 
 
 @pytest.mark.asyncio

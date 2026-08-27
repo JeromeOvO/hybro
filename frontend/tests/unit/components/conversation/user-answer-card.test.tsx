@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { UserAnswerCard } from '@/components/conversation/UserAnswerCard'
 
 describe('UserAnswerCard', () => {
-  it('renders the HITL answer in the lightweight conversation style', () => {
+  it('renders the HITL answer with the shared shadcn Card surface', () => {
     render(
       <UserAnswerCard
         agentName="HITL Mock Agent"
@@ -13,7 +13,7 @@ describe('UserAnswerCard', () => {
     )
 
     const card = screen.getByTestId('hitl-answer-card')
-    expect(card.className).toContain('conversation-hitl-answer')
+    expect(card).toHaveAttribute('data-slot', 'card')
     expect(screen.getByText('Response to HITL Mock Agent')).toBeTruthy()
     expect(screen.getByText('Human approval required.')).toBeTruthy()
     expect(screen.getByText('approved')).toBeTruthy()

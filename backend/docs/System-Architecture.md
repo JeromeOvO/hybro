@@ -1180,38 +1180,132 @@ listener task.
 
 #### Snapshot-driven room stream
 
-The room stream is snapshot-driven. The implemented delivery foundation is
-retained by the proposed
+The room stream is snapshot-driven. The delivery foundation and canonical
+Turn lifecycle implement
 [`Pi-Aligned-Turn-Lifecycle-Plan.md`](Pi-Aligned-Turn-Lifecycle-Plan.md): an
 append-only `room_events` collection is the source of truth for the realtime
 UI. Every emitted frame is persisted to `room_events` BEFORE broadcast
 (persist-before-broadcast), with a per-room monotonic `room_seq` allocated
 atomically with the insert (a Mongo counter document advanced in the same
 transaction; non-replica-set environments fall back to counter-then-insert
-plus idempotent `skipped` tombstones). Deltas carry `room_seq`,
+plus idempotent `skipped` tombstones). Deterministic fallback retries read back
+before allocating; a concurrent losing retry immediately tombstones its exact
+burned slot, including a quiescent tail. Fallback healing persists a per-room
+contiguous scan cursor and the `(room_id, room_seq)` index is uniquely enforced,
+so each append scans only newly confirmed positions and a delayed original
+cannot coexist with its tombstone. Deltas carry `room_seq`,
 `room_event_id`, and optional `parent_event_id` inside `data`; the `connected`
-handshake and heartbeats carry the room's latest `room_seq`. Terminal
-`run_event`/`processing_status` frames are gated: the two-phase
+handshake and heartbeats carry the room's latest `room_seq`. Every newly
+accepted orchestration request requires a nonempty `client_request_id` and is
+persisted unconditionally as a schema-v6 `canonical` Run. Canonical admission,
+projection, and recovery have no runtime feature switches; recovery and outbox
+projection workers are mandatory and `ORCHESTRATOR_WORKER_INTERVAL_SECONDS`
+controls only their polling cadence. Runtime composition or worker dependency
+failure aborts startup rather than serving traffic without lifecycle durability.
+Canonical Runs use the closed `run_started`, internal-turn,
+Assistant-message, Tool, retry, input, and `run_settled` `run_event` family.
+The DTO boundary rejects unknown nested fields and contradictory terminal
+shapes. Canonical Assistant IDs and internal-turn
+IDs are checkpointed before provider I/O. Recovery restores/adopts any missing
+`turn_start` and `message_start` parents before terminal children, and live Runs
+schedule generic recovery only at their durable deadline/watchdog boundary so a
+normal recovery tick cannot preempt a healthy provider stream. Recovery lease
+heartbeats persist in `orchestrator_recovery_leases` outside the execution
+aggregate version, so renewal cannot conflict with a slow Kernel CAS. The
+unique lease row atomically fences claim, renewal, and release by the
+per-attempt owner token; an expired row may transfer ownership while stale
+tokens cannot mutate it. Graceful shutdown moves every interrupted nonterminal
+Run's recovery due time to now.
+Canonical lifecycle listeners are awaited through persisted room-event acknowledgement;
+no compatibility work-log or task-card stream owns lifecycle state, and public
+offsets advance only after
+that acknowledgement and terminal projection cannot overtake open children.
+User cancellation first clears HITL ownership, signals a hosted provider/Tool
+session, and then runs the same child-closure/settlement state machine; it never
+stops at call-ledger cancellation. Canceled Runs persist one typed cause
+(`user_requested`, `room_closed`, `shutdown`, or `policy`) and settlement maps
+that stored cause rather than inferring it. Public text uses bounded
+stateful look-behind, provider-loop time/size/semantic coalescing, UTF-8-bounded
+chunks, Unicode code-point offsets, and the same sanitized checkpoint for
+`message_end`/final durability. A terminal checkpoint must equal any already
+assembled durable deltas; mismatch is a protocol violation rather than a text
+replacement. Tool arguments/results use a deny-by-default summary registry;
+production registers only frozen-catalog tools, keys each builder by frozen
+catalog identity, input-schema digest, and Tool name, exposes `task` plus
+explicitly schema-marked scalar inputs, and accepts normalized string
+progress/results. A later catalog therefore cannot inherit a broader prior
+allowlist for the same Tool name.
+Accepted Tool
+calls persist an opaque public call ID; provider/A2A call IDs remain private.
+Terminal `run_event`/legacy `processing_status` frames are gated: the two-phase
 `TerminalProjectionFinalizer` runs every durable side-effect step before the
 SSE emission steps, and `EventPublisherImpl` backs that up with a
 `ProjectionSettlementReader` over the private `run_events` log. Every connect
 yields a `snapshot` frame right after `connected`, folded from the event log
 by `SnapshotService` (incrementally materialized; `?snapshot=1` forces a fresh
-fold). The fold preserves processing-log phase metadata and trace
-`client_request_id` on both run and node records, so a refreshed frontend can
-reattach persisted activity to the originating user turn without heuristic
-matching. Settled terminal frames also force a boundary snapshot fanout. A
+fold). Builds are serialized per room and replace checkpoints monotonically;
+a canonical DTO or semantic fold violation stops before that event's watermark
+and is surfaced instead of publishing a partially accepted snapshot. Snapshot
+reads page until the complete contiguous prefix rather than stopping at a
+storage page limit. A pure legacy snapshot omits canonical
+capability; a room with canonical roots advertises `turn_lifecycle_schema: 1`
+and folds canonical `turns` with exact run/client/User
+root binding, offset-checked Assistant text, opaque Tool identity, child closure,
+and exact provisional-final/`agent_response` commitment. Legacy messages,
+processing logs, and diagnostic trace remain readable in their separate
+sections and never become canonical Turn activity. During the bounded stale-tab
+window canonical roots additionally emit only the exact content-free
+`processing_status` adapter (allowlisted status, exact nonempty User/client
+roots, `details: null`, and no Agent/free-text fields); canonical clients ignore
+it. Settled terminal frames also
+force a boundary snapshot fanout. A
 fallback read path `GET /sse/room/{room_id}/events?after=<seq>&limit=N`
 replays persisted events; auth matches the stream route.
 
-Orchestrator UI projection follows the same boundary. Each A2A invocation owns
-one compatibility Agent Card keyed by `orchestrator:{run_id}:{call_id}`; repeated
-calls to the same Agent therefore remain separate cards. Lifecycle projection
-writes `room_agent_messages` and emits durable `task_submitted` / `task_update`
-room events for low latency, while terminal Run outbox replay repairs card state
+Orchestrator UI projection follows the same boundary. Each canonical A2A
+invocation owns one Agent Card keyed by
+`orchestrator:{run_id}:{opaque_public_call_id}`; repeated calls to the same Agent
+therefore remain separate cards without exposing private call IDs. The private
+binding durably denormalizes the sanitized root Agent Card name separately from
+the skill-specific Tool label, so Agent Cards show (for example) `Weather Agent`
+while Trace may show `Weather Agent - Get Current Weather`. Timeline history
+carries that public root name; old bindings fall back to their frozen public
+Tool label. Legacy-pinned cards preserve their historical identity. Lifecycle
+projection writes `room_agent_messages` and emits closed durable `task_submitted` /
+`task_update` room events containing only the run/public-call identity, public
+Agent name, and status; missing-name updates are patches and cannot downgrade a
+specific persisted name. Private agent IDs, raw content/errors/parts/artifacts are
+forbidden. Canonical HITL prompts, choices, and labels use the configured secret
+inventory. The invocation-owned A2A HITL producer resolves the accepted Tool's
+opaque public call ID and frozen root Agent label from the canonical Run before
+it emits any request; canonical frames contain `run_id`, the exact
+client/User root, and no private Agent, ledger, or provider call identity. After
+the complete ordered questionnaire is persisted it emits `run_waiting_input`.
+On answer, deterministic `hitl_response` frames and `run_resumed` are persisted
+before continuation dispatch, so an immediate follow-up challenge cannot
+overtake the interaction it replaces. The answer reference hashes only the
+interaction identity/revision, never answer content. A failed request/response
+append stops before its control boundary; replay accepts an already-delivered
+member and completes the missing boundary idempotently. Authenticated pending
+reads return the same sanitized prompt, bounded choices, opaque Tool message ID,
+and public Agent label without private ledger/registry/task/context IDs. The
+room-authorized canonical Agent-call detail reader accepts only an exact
+`/api/v1/files/{file_id}/content` artifact reference, resolves it through
+`room_files` using the exact Room root, and returns only its room-file ID,
+display name, MIME type, and size alongside private Tool output. External URLs
+that merely contain a local-looking `/files/…/content` suffix are never remapped.
+This keeps artifact identity out of public lifecycle events while giving the
+Final Answer and Agent detail surfaces enough authenticated metadata to classify
+and preview generated images/files; missing or foreign-room metadata remains an
+unresolved descriptor and is never inferred from Agent prose. Full message
+cancellation and direct interaction cancellation both publish canceled
+responses before descendant cleanup and abort the owning Run. Recovery replays
+the same boundaries idempotently. Terminal Run outbox replay repairs card state
 from durable tool results. The `deliver_final_message` outbox step is complete
 only after both the final `system:hybro` message is in Mongo and an idempotent
-`agent_response` has entered `room_events`; a browser no longer needs DB refresh
+`agent_response` has entered `room_events`. That event always parents to the
+exact final `message_end` by durable readback (not the cached latest `turn_end`),
+and `run_settled` parents to the durable final response after restart; a browser no longer needs DB refresh
 to discover the final answer.
 
 When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
@@ -1353,10 +1447,12 @@ in-memory/offline queues for single-process/degraded operation.
   `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
   strictly validated. JSON-RPC webhook request IDs provide the durable
   idempotency key when the update metadata does not provide one.
-- Parse webhook and direct-stream response payloads. Direct A2A
-  `message/stream` SSE frames use top-level `kind` values
-  (`task`, `status-update`, `artifact-update`, `message`); legacy wrapped
-  envelopes (`statusUpdate` / `artifactUpdate`) remain accepted.
+- Parse webhook and direct-stream response payloads in both legacy keyed-envelope
+  form (`statusUpdate` / `artifactUpdate`) and current JSON-RPC SSE form with
+  top-level `kind` values (`task`, `status-update`, `artifact-update`, `message`).
+  This preserves remote task/context identity and typed interaction metadata
+  before durable observation ingress, so `input-required` can materialize as
+  HITL instead of degrading to an identity-less suspended call.
 - Probe inspection and dry-send flows without leaking SDK clients into owner
   services.
 - Materialize inline or remote file artifacts into room-owned storage.
@@ -1980,6 +2076,13 @@ facade/port wiring:
 - Emit HITL request/response frames with `related_message_id` for resume
   correlation when available.
 
+Public active-Run reads use the canonical `orchestrator_runs` aggregate after
+composition binding. `awaiting_user` maps to public `awaiting_input`, other
+nonterminal states map to `processing`, and the Run request's User message is
+the public trigger. The same reader owns send-time exclusion, room settings,
+`inquiryActiveRuns`, and active room-history status; legacy run rows are not a
+second lifecycle authority.
+
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
 routes do not need to know runtime implementation internals.
 
@@ -2282,3 +2385,21 @@ prevents clients from hiding unresolved interactions during degraded hydration.
 Prompt schemas include text, textarea, single/multi choice, confirmation/approval,
 authentication guidance, date, and file capability signaling; clients must not use
 free text to collect credentials.
+
+### Canonical lifecycle recovery and private card details
+
+Canonical recovery claims use instance-and-attempt-unique owner tokens. Kernel work
+renews the token-fenced lease periodically; lifecycle publication and release both
+re-read the durable claim, so a replaced worker cannot continue or clear another
+worker's lease. On restart, the latest semantic parent is recovered from durable
+`room_events`, including HITL control boundaries. Accepted Tool terminals gate both
+successful and unsuccessful Run settlement until their public end is durable. HITL
+terminal reconciliation persists every member response and clears aggregate ownership
+before invoking the lifecycle-family-specific Run terminalizer.
+
+Canonical Agent cards carry only `run_id + opaque_public_call_id`. Authenticated room
+owners may fetch full private Tool output at
+`GET /api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail`; the service
+reads the private orchestrator Run and never returns provider call IDs or Agent profile
+IDs. Canonical public labels pass the configured-secret producer policy before they are
+persisted.

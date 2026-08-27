@@ -221,7 +221,9 @@ def test_room_epoch_fences_old_recovery_after_delete():
 
 def test_due_run_inventory_excludes_live_leases_and_terminal_runs():
     store = InMemoryOrchestratorContractHarness()
-    due = _run("due", "room-due")
+    due = _run("due", "room-due").model_copy(
+        update={"recovery_claim": RecoveryClaim(next_attempt_at=NOW)}
+    )
     live = _run("live", "room-live").model_copy(
         update={
             "recovery_claim": RecoveryClaim(

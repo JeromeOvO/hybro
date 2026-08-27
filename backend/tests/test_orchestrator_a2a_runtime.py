@@ -35,6 +35,7 @@ from execution.orchestrator.a2a_runtime.models import (
     NormalizedA2AObservation,
 )
 from execution.orchestrator.a2a_runtime.runtime import (
+    A2AAcceptanceConflict,
     A2AAcceptanceDenied,
     A2AAgentToolRuntime,
 )
@@ -173,6 +174,64 @@ async def test_accept_is_durable_idempotent_and_has_no_transport_effect():
     assert authorization.calls == 1
     assert dispatch.commands == []
     assert (await ledger.load("run-1", "call-1")) is not None
+
+
+async def test_accept_allows_only_live_resource_schema_to_differ_from_binding():
+    runtime, ledger, authorization, dispatch, _ = await setup()
+    original = invocation()
+    live_definition = original.tool.definition.model_copy(
+        update={
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["task"],
+                "properties": {
+                    "task": {"type": "string"},
+                    "artifact_refs": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["art_live"]},
+                    },
+                },
+            }
+        }
+    )
+    live_invocation = original.model_copy(
+        update={
+            "tool": original.tool.model_copy(update={"definition": live_definition})
+        }
+    )
+
+    accepted = await runtime.accept(live_invocation)
+
+    assert accepted.invocation_id == live_invocation.invocation_id
+    assert authorization.calls == 1
+    assert dispatch.commands == []
+    assert (await ledger.load("run-1", "call-1")) is not None
+
+
+async def test_accept_rejects_execution_semantic_drift_on_fresh_and_replay():
+    changed = invocation()
+    changed = changed.model_copy(
+        update={
+            "tool": changed.tool.model_copy(
+                update={
+                    "definition": changed.tool.definition.model_copy(
+                        update={"execution_mode": "sequential"}
+                    )
+                }
+            )
+        }
+    )
+    fresh_runtime, fresh_ledger, _, _, _ = await setup()
+    with pytest.raises(A2AAcceptanceConflict, match="does not correlate"):
+        await fresh_runtime.accept(changed)
+    assert await fresh_ledger.load("run-1", "call-1") is None
+
+    replay_runtime, replay_ledger, _, _, _ = await setup()
+    await replay_runtime.accept(invocation())
+    with pytest.raises(A2AAcceptanceConflict, match="does not match ledger"):
+        await replay_runtime.accept(changed)
+    assert (await replay_ledger.load("run-1", "call-1")).execution_mode == ("parallel")
 
 
 async def test_accept_denial_happens_before_any_ledger_record():

@@ -130,18 +130,18 @@ class InMemoryOrchestratorRunStore:
             or run.recovery_claim.owner_id != owner_id
         ):
             return InMemoryRunStoreResult("conflict", run)
-        return await self._replace(
-            run.model_copy(
-                update={
-                    "recovery_claim": run.recovery_claim.model_copy(
-                        update={"lease_expires_at": lease_expires_at}
-                    ),
-                    "state_version": run.state_version + 1,
-                }
-            ),
-            run.state_version,
-            f"renew:{owner_id}:{run.state_version}",
+        # Lease heartbeats are fencing metadata, not execution mutations. Keep
+        # the aggregate CAS version stable so a slow Kernel checkpoint built
+        # from this version can still commit while the worker renews its lease.
+        renewed = run.model_copy(
+            update={
+                "recovery_claim": run.recovery_claim.model_copy(
+                    update={"lease_expires_at": lease_expires_at}
+                )
+            }
         )
+        self.runs[run_id] = renewed
+        return InMemoryRunStoreResult("accepted", renewed)
 
     async def release_recovery(
         self,

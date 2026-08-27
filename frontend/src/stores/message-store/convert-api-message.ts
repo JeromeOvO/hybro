@@ -8,6 +8,7 @@ import type { AttachmentData } from '@/lib/types/attachments'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import { parseSummaryOrigin } from '@/lib/room-timeline/derive-final-answer'
 import { deduplicateArtifactsByPart } from '@/lib/artifacts/artifact-identity'
+import { specificPublicAgentName } from '@/lib/agent-display-name'
 import type { ArtifactData, ArtifactPart, IncomingMessage } from './types'
 
 function parseTurnCompletionKind(raw: unknown): 'synthesis' | 'deterministic' | undefined {
@@ -133,17 +134,17 @@ export async function convertApiMessageToIncoming(
       agentId = apiMessage.message_content.message_task.metadata.agent_id as string
     }
 
-    const publicAgentName = extendInfo?.public_agent_name
-    if (typeof publicAgentName === 'string' && publicAgentName.trim()) {
-      senderName = publicAgentName.trim()
+    const publicAgentName = specificPublicAgentName(extendInfo?.public_agent_name)
+    if (publicAgentName) {
+      senderName = publicAgentName
     } else if (agentId) {
       try {
-        senderName = await getAgentName(agentId)
+        senderName = specificPublicAgentName(await getAgentName(agentId)) ?? 'Unknown agent'
       } catch {
-        senderName = 'Agent'
+        senderName = 'Unknown agent'
       }
     } else {
-      senderName = 'Agent'
+      senderName = 'Unknown agent'
     }
   } else {
     senderName = 'Unknown'
