@@ -528,6 +528,14 @@ class InMemoryObservationInboxStore:
             and (record.claim_expires_at is None or record.claim_expires_at <= due_at)
         ][:limit]
 
+    async def list_due_for_call(
+        self, call_record_id: str, *, due_at: datetime, limit: int
+    ) -> list[A2AObservationInboxRecord]:
+        due = await self.list_due(due_at=due_at, limit=len(self._records))
+        return [record for record in due if record.call_record_id == call_record_id][
+            :limit
+        ]
+
     async def delete_by_binding_scope(self, binding_scope: str) -> int:
         ids = [
             record.observation_id
@@ -707,6 +715,15 @@ class RunCheckpointReader:
             for batch in run.tool_batches
             for entry in batch.entries
         )
+
+    async def is_run_terminal(self, run_id: str) -> bool:
+        run = await self.run_store.load(run_id)
+        return run is not None and run.status in {
+            "completed",
+            "failed",
+            "canceled",
+            "budget_exhausted",
+        }
 
     async def is_outcome_checkpointed(
         self, run_id: str, invocation_id: str, outcome_digest: str

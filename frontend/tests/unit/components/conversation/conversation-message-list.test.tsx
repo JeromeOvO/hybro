@@ -34,6 +34,30 @@ describe('ConversationMessageList optimistic Turn', () => {
     expect(screen.getByRole('status', { name: 'Weather Agent — Completed' })).toBeInTheDocument()
   })
 
+  it('keeps orphaned HITL prompts out of the conversation body', () => {
+    useMessageStore.getState().upsertMessage({
+      id: 'hitl-message-1',
+      roomId: 'room-1',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Cyber Broker Agent',
+      timestamp: '2030-01-01T00:00:01.000Z',
+      taskStatus: 'input-required',
+      hitlRequestId: 'cloud-providers',
+      hitlInteractionId: 'interaction-1',
+      hitlPrompt: 'Which cloud providers do you use?',
+      hitlPromptType: 'text',
+      hitlGroupIndex: 0,
+      hitlGroupTotal: 1,
+      hitlResolved: false,
+    }, 'sse')
+
+    render(<ConversationMessageList roomId="room-1" />)
+
+    expect(screen.queryByText('Unattributed responses')).not.toBeInTheDocument()
+    expect(screen.queryByText('Which cloud providers do you use?')).not.toBeInTheDocument()
+  })
+
   it('shows the live Turn Trace before canonical run_started arrives', () => {
     useMessageStore.getState().upsertMessage({
       id: 'cr:client-1',

@@ -2,7 +2,10 @@ import type { MutableRefObject } from 'react'
 import type { HitlPendingRequest } from '@/lib/api/hitl'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
 import { useMessageStore } from '@/stores/message-store'
-import { buildPendingHitlIncomingMessage } from '@/lib/hitl/hitl-message-projection'
+import {
+  buildPendingHitlIncomingMessage,
+  hitlRequestKey,
+} from '@/lib/hitl/hitl-message-projection'
 import type { HydrateRoomAgentResolver } from './types'
 
 export async function overlayPendingHitlRequests(
@@ -12,7 +15,7 @@ export async function overlayPendingHitlRequests(
     hitlRequestIndex: MutableRefObject<Map<string, string>>
   },
 ): Promise<Set<string>> {
-  const pendingMessageIds = new Set<string>()
+  const pendingRequestIds = new Set<string>()
   const store = useMessageStore.getState()
 
   const resolved: Array<{ req: HitlPendingRequest; name: string }> = []
@@ -25,8 +28,8 @@ export async function overlayPendingHitlRequests(
   }
 
   for (const { req, name } of resolved) {
-    pendingMessageIds.add(req.message_id)
-    store.upsertMessage(buildPendingHitlIncomingMessage({
+    const requestKey = hitlRequestKey(req.interaction_id, req.request_id)
+    const incoming = buildPendingHitlIncomingMessage({
       roomId,
       messageId: req.message_id,
       requestId: req.request_id,
@@ -51,11 +54,69 @@ export async function overlayPendingHitlRequests(
       totalSteps: undefined,
       relatedMessageId: req.related_message_id,
       clientRequestId: req.client_request_id,
-    }), 'sse')
-    deps.hitlRequestIndex.current.set(req.request_id, req.message_id)
+    })
+    const indexedId = deps.hitlRequestIndex.current.get(requestKey)
+    const existingExact = store.entities[incoming.id]
+      ?? (indexedId ? store.entities[indexedId] : undefined)
+    const sameIdentity = Boolean(
+      existingExact
+      && existingExact.hitlRequestId === req.request_id
+      && (existingExact.hitlInteractionId ?? existingExact.hitlGroupId)
+        === req.interaction_id
+    )
+    const incomingIsNewer = Boolean(
+      req.interaction_version !== undefined
+      && req.interaction_version !== null
+      && existingExact?.hitlInteractionVersion !== undefined
+      && req.interaction_version > existingExact.hitlInteractionVersion
+    )
+    const existingIsAnsweredOrApplying = Boolean(
+      sameIdentity
+      && !incomingIsNewer
+      && (
+        existingExact?.hitlResolved === true
+        || existingExact?.hitlUserAnswer
+        || ['answers_recorded', 'applying', 'applied', 'responded'].includes(
+          existingExact?.hitlInteractionStatus ?? '',
+        )
+        || ['applying', 'applied'].includes(
+          existingExact?.hitlApplicationStatus ?? '',
+        )
+      )
+    )
+    if (existingIsAnsweredOrApplying) {
+      // REST pending is recovery overlay, not authority to regress canonical
+      // response/application evidence. Keep applying rows indexed until the
+      // server removes them; fully resolved rows are no longer actionable.
+      if (existingExact && existingExact.hitlResolved !== true) {
+        pendingRequestIds.add(requestKey)
+        deps.hitlRequestIndex.current.set(requestKey, existingExact.id)
+      }
+      continue
+    }
+    pendingRequestIds.add(requestKey)
+    const legacyProjection = store.entities[req.message_id]
+    if (
+      legacyProjection
+      && legacyProjection.id !== incoming.id
+      && legacyProjection.hitlRequestId === req.request_id
+      && legacyProjection.hitlResolved !== true
+    ) {
+      store.upsertMessage({
+        id: legacyProjection.id,
+        roomId,
+        messageType: 'agent',
+        content: legacyProjection.content,
+        senderName: legacyProjection.senderName,
+        timestamp: legacyProjection.timestamp,
+        hitlResolved: true,
+      }, 'sse')
+    }
+    store.upsertMessage(incoming, 'sse')
+    deps.hitlRequestIndex.current.set(requestKey, incoming.id)
   }
 
-  return pendingMessageIds
+  return pendingRequestIds
 }
 
 /**
@@ -65,7 +126,7 @@ export async function overlayPendingHitlRequests(
 export function markResolvedHitlFromHydrationBatch(
   targetRoomId: string,
   hydratedIds: ReadonlySet<string>,
-  pendingMessageIds: ReadonlySet<string>,
+  pendingRequestIds: ReadonlySet<string>,
 ): void {
   const store = useMessageStore.getState()
   if (store.roomId !== targetRoomId) return
@@ -75,7 +136,10 @@ export function markResolvedHitlFromHydrationBatch(
       entity.roomId === targetRoomId &&
       entity.taskStatus === 'input-required' &&
       hydratedIds.has(entity.id) &&
-      !pendingMessageIds.has(entity.id)
+      (!entity.hitlRequestId || !pendingRequestIds.has(hitlRequestKey(
+        entity.hitlInteractionId,
+        entity.hitlRequestId,
+      )))
     ) {
       store.upsertMessage({
         id: entity.id,
@@ -100,14 +164,17 @@ export function markResolvedHitlFromHydrationBatch(
  */
 export function clearStaleHitlNotInPending(
   targetRoomId: string,
-  pendingMessageIds: ReadonlySet<string>,
+  pendingRequestIds: ReadonlySet<string>,
 ): void {
   const store = useMessageStore.getState()
   if (store.roomId !== targetRoomId) return
 
   for (const entity of Object.values(store.entities)) {
     if (entity.roomId !== targetRoomId || !entity.hitlRequestId) continue
-    if (pendingMessageIds.has(entity.id)) continue
+    if (pendingRequestIds.has(hitlRequestKey(
+      entity.hitlInteractionId,
+      entity.hitlRequestId,
+    ))) continue
     if (entity.hitlResolved === true) continue
 
     const wasApplying =
@@ -149,20 +216,26 @@ export async function overlayHitlForRoom(
   const store = useMessageStore.getState()
   if (store.roomId !== roomId) return new Set()
 
-  let pendingMessageIds = new Set<string>()
+  let pendingRequestIds = new Set<string>()
   if (hitlRes.requests?.length) {
-    pendingMessageIds = await overlayPendingHitlRequests(roomId, hitlRes.requests, {
+    pendingRequestIds = await overlayPendingHitlRequests(roomId, hitlRes.requests, {
       getAgentName,
       getAgentSource,
       hitlRequestIndex,
     })
   }
 
-  if (hydratedIdsForResolve) {
-    markResolvedHitlFromHydrationBatch(roomId, hydratedIdsForResolve, pendingMessageIds)
-  } else {
-    clearStaleHitlNotInPending(roomId, pendingMessageIds)
+  for (const requestId of hitlRequestIndex.current.keys()) {
+    if (!pendingRequestIds.has(requestId)) {
+      hitlRequestIndex.current.delete(requestId)
+    }
   }
 
-  return pendingMessageIds
+  if (hydratedIdsForResolve) {
+    markResolvedHitlFromHydrationBatch(roomId, hydratedIdsForResolve, pendingRequestIds)
+  } else {
+    clearStaleHitlNotInPending(roomId, pendingRequestIds)
+  }
+
+  return pendingRequestIds
 }

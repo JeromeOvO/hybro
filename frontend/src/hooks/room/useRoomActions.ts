@@ -14,6 +14,8 @@ import {
   findProcessingStatusUserEntity,
 } from './processing-status-log'
 import { hydrateRoomFromDb } from '@/lib/room-sync/hydrate-room'
+import { hitlRequestKey } from '@/lib/hitl/hitl-message-projection'
+import { acquireHitlSubmissionFence } from './hitl-submission-fence'
 
 export function useRoomActions(
   roomId: string,
@@ -29,6 +31,7 @@ export function useRoomActions(
   setSseEnabled: (v: boolean) => void,
   getAgentName?: (agentId: string) => Promise<string>,
   getAgentSource?: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
+  requestCanonicalSnapshot?: () => void,
 ) {
   // Update room name and membership. Execution mode is request-scoped.
   const updateRoomSettings = useCallback(async (
@@ -155,16 +158,19 @@ export function useRoomActions(
   ) => {
     const answerById = new Map(answers.map(answer => [answer.requestId, answer.answer]))
     const store = useMessageStore.getState()
-    const entities = Object.values(store.entities).filter(entity =>
+    const interactionEntities = Object.values(store.entities).filter(entity =>
       entity.roomId === roomId
       && entity.hitlRequestId
-      && answerById.has(entity.hitlRequestId)
       && (entity.hitlInteractionId ?? entity.hitlGroupId ?? entity.hitlRequestId) === interactionId
     )
+    const entities = interactionEntities.filter(entity => (
+      entity.hitlRequestId && answerById.has(entity.hitlRequestId)
+    ))
 
-    const { respondToHitlBatch: submitBatch } = await import('@/lib/api/hitl')
+    const releaseSubmissionFence = acquireHitlSubmissionFence(roomId, interactionId)
     let response
     try {
+      const { respondToHitlBatch: submitBatch } = await import('@/lib/api/hitl')
       response = await submitBatch(
         roomId,
         interactionId,
@@ -174,9 +180,34 @@ export function useRoomActions(
       )
     } catch (error) {
       if (error instanceof ApiError && (error.status === 409 || error.status === 410)) {
+        // Identical durable retries return success from the backend. A typed
+        // conflict is therefore never inferred as success from local state:
+        // refresh DB + REST pending authority, request a forced canonical
+        // snapshot reconnect as best effort, then surface the original conflict.
         await reconcileWithDb(roomId)
+        try {
+          requestCanonicalSnapshot?.()
+        } catch (snapshotError) {
+          console.error('Failed to request canonical HITL snapshot:', snapshotError)
+        }
+        if (!getAgentName || !getAgentSource) {
+          throw new Error('Authoritative HITL refresh is unavailable.', { cause: error })
+        }
+        const refreshed = await hydrateRoomFromDb({
+          roomId,
+          phase: 'hitl_overlay',
+          getToken,
+          hitlRequestIndex,
+          getAgentName,
+          getAgentSource,
+        })
+        if (refreshed.hitlFetchFailed) {
+          throw new Error('Authoritative HITL pending refresh failed.', { cause: error })
+        }
       }
       throw error
+    } finally {
+      releaseSubmissionFence()
     }
 
     const applied = response.status === 'applied' || response.status === 'responded'
@@ -195,7 +226,10 @@ export function useRoomActions(
         hitlInteractionStatus: applied ? 'applied' : 'applying',
         hitlApplicationStatus: applied ? 'applied' : 'applying',
       }, 'optimistic')
-      if (applied) hitlRequestIndex.current.delete(requestId)
+      if (applied) {
+        hitlRequestIndex.current.delete(hitlRequestKey(interactionId, requestId))
+        hitlRequestIndex.current.delete(requestId)
+      }
     }
 
     if (applied) {
@@ -218,16 +252,34 @@ export function useRoomActions(
       )
       lifecycle.startProcessing(processingUserEntity?.id)
     }
-  }, [getToken, hitlRequestIndex, lifecycle, reconcileWithDb, roomId])
+  }, [
+    getAgentName,
+    getAgentSource,
+    getToken,
+    hitlRequestIndex,
+    lifecycle,
+    reconcileWithDb,
+    requestCanonicalSnapshot,
+    roomId,
+  ])
 
-  const cancelHitlRequest = useCallback(async (requestId: string) => {
+  const cancelHitlRequest = useCallback(async (
+    requestId: string,
+    requestedInteractionId?: string,
+  ) => {
     const store = useMessageStore.getState()
-    const target = Object.values(store.entities).find(entity =>
-      entity.roomId === roomId && entity.hitlRequestId === requestId
-    )
-    const interactionId = target
+    const target = Object.values(store.entities).find(entity => {
+      if (entity.roomId !== roomId || entity.hitlRequestId !== requestId) return false
+      const entityInteractionId = entity.hitlInteractionId
+        ?? entity.hitlGroupId
+        ?? entity.hitlRequestId
+      return requestedInteractionId === undefined
+        ? !entity.hitlResolved
+        : entityInteractionId === requestedInteractionId
+    })
+    const interactionId = requestedInteractionId ?? (target
       ? (target.hitlInteractionId ?? target.hitlGroupId ?? target.hitlRequestId)
-      : undefined
+      : undefined)
     if (!interactionId || !target?.hitlInteractionVersion) {
       throw new Error('The interaction changed before it could be canceled.')
     }
@@ -264,7 +316,13 @@ export function useRoomActions(
         taskStatus: 'canceled',
         taskError: 'Input request canceled',
       }, 'optimistic')
-      if (entity.hitlRequestId) hitlRequestIndex.current.delete(entity.hitlRequestId)
+      if (entity.hitlRequestId) {
+        hitlRequestIndex.current.delete(hitlRequestKey(
+          entity.hitlInteractionId ?? entity.hitlGroupId,
+          entity.hitlRequestId,
+        ))
+        hitlRequestIndex.current.delete(entity.hitlRequestId)
+      }
     }
   }, [getToken, hitlRequestIndex, reconcileWithDb, roomId])
 

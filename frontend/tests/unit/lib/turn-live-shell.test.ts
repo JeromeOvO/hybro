@@ -93,7 +93,7 @@ describe('getAgentIndexSummary', () => {
     expect(summary).toBe('Sources · 2 agent calls')
   })
 
-  it('returns "Completed" prefix for hitl turn', () => {
+  it('reports that a HITL turn is waiting for input', () => {
     const agents = [
       makeAgentResult({ messageId: 'a1', status: 'completed' }),
     ]
@@ -103,7 +103,7 @@ describe('getAgentIndexSummary', () => {
       agentResults: agents,
     })
     const summary = getAgentIndexSummary(turn, agents)
-    expect(summary).toBe('Completed · 1 call')
+    expect(summary).toBe('Waiting for input · 1 call')
   })
 
   it('returns "Activity" prefix for pending multi-agent turn', () => {

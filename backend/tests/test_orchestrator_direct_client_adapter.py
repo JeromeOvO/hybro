@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import pytest
 
+from a2a_adapter.client_facade import A2AClientFacadeError
 from a2a_adapter.orchestrator_direct_client import (
     DirectCallAddress,
     OrchestratorDirectA2AClient,
@@ -16,7 +18,24 @@ from a2a_adapter.task_status import (
     build_failed_text_task,
     build_task_status,
 )
-from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
+from common.a2a_constants import (
+    HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+    HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
+    HYBRO_A2A_INTERACTION_METADATA_KEY,
+    HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
+    HYBRO_A2A_PART_PROVENANCE_METADATA_KEY,
+    HYBRO_A2A_SELECTED_SKILL_METADATA_KEY,
+)
+from common.dto.hitl import (
+    HITLAuthorizationResultAnswer,
+    HITLConfirmationAnswer,
+    HITLMultiChoiceAnswer,
+    HITLPolicyDecision,
+    HITLPolicyDecisionAnswer,
+    HITLQuestionAnswer,
+    HITLSingleChoiceAnswer,
+    HITLTextAnswer,
+)
 from common.types import (
     Artifact,
     DataPart,
@@ -30,7 +49,9 @@ from common.types import (
     TextPart,
 )
 from execution.orchestrator.a2a_runtime.errors import (
+    AgentCardContractError,
     RecoverableAdapterError,
+    RecoverableTransportError,
     StaleRoomEpochError,
 )
 from execution.orchestrator.a2a_runtime.models import (
@@ -38,6 +59,7 @@ from execution.orchestrator.a2a_runtime.models import (
     A2AContinuationCommand,
     A2ADispatchCommand,
     A2ADispatchReceipt,
+    A2AModelReplyCommand,
     MaterializedResourcePart,
     NormalizedA2AObservation,
 )
@@ -47,7 +69,12 @@ NOW = datetime.now(UTC)
 
 
 def _card() -> dict:
-    return {"name": "Agent", "url": "https://agent.example/a2a", "version": "1.0.0"}
+    return {
+        "name": "Agent",
+        "url": "https://agent.example/a2a",
+        "version": "1.0.0",
+        "capabilities": {},
+    }
 
 
 def _task_dict(task: Task) -> dict:
@@ -95,6 +122,23 @@ def _continuation_command() -> A2AContinuationCommand:
     )
 
 
+def _model_reply_command() -> A2AModelReplyCommand:
+    return A2AModelReplyCommand(
+        command_id="model-reply-1",
+        transport_kind="direct",
+        call_record_id="call-1",
+        binding_id="binding-1",
+        binding_digest="binding-digest",
+        requesting_subject_digest=sha256(b"user-1").hexdigest(),
+        task_id="task-1",
+        context_id="context-1",
+        room_id="room-1",
+        room_epoch=1,
+        message_text="continue",
+        created_at=NOW,
+    )
+
+
 def _cancellation_command() -> A2ACancellationCommand:
     return A2ACancellationCommand(
         command_id="cancel-1",
@@ -106,14 +150,18 @@ def _cancellation_command() -> A2ACancellationCommand:
 
 
 class FakeSdk:
-    def __init__(self, *, send=None, fetch=None, cancel=None, stream=None):
+    def __init__(
+        self, *, send=None, fetch=None, cancel=None, stream=None, fetch_card=None
+    ):
         self.send = send
         self.fetch = fetch
         self.cancel = cancel
         self.stream = stream
+        self.fetch_card = fetch_card
         self.send_calls = []
         self.fetch_calls = []
         self.cancel_calls = []
+        self.card_calls = []
 
     async def send_message(self, card, message, **kwargs):
         self.send_calls.append((card, message, kwargs))
@@ -128,6 +176,9 @@ class FakeSdk:
         return await self.cancel(card, task_id, kwargs)
 
     async def fetch_agent_card(self, url, **kwargs):
+        self.card_calls.append((url, kwargs))
+        if self.fetch_card is not None:
+            return await self.fetch_card(url, kwargs)
         return _card()
 
     def stream_message(self, card, message, **kwargs):
@@ -143,8 +194,110 @@ def _client(sdk: FakeSdk, **kwargs) -> OrchestratorDirectA2AClient:
         fetch_agent_card=sdk.fetch_agent_card,
         receipt_factory=A2ADispatchReceipt,
         observation_factory=NormalizedA2AObservation,
+        recoverable_transport_error_factory=RecoverableTransportError,
+        agent_card_contract_error_factory=AgentCardContractError,
         **kwargs,
     )
+
+
+@pytest.mark.parametrize("status_code", [408, 425, 429, 500, 503])
+async def test_card_fetch_retryable_status_is_sanitized_transport_error(status_code):
+    async def fetch_card(url, kwargs):
+        raise A2AClientFacadeError(
+            f"provider failure at {url}", status_code=status_code
+        )
+
+    sdk = FakeSdk(fetch_card=fetch_card)
+    with pytest.raises(RecoverableTransportError) as caught:
+        await _client(sdk).send(_dispatch_command())
+
+    assert str(caught.value) == "Agent Card is temporarily unavailable."
+    assert "agent.example" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert sdk.send_calls == []
+
+
+async def test_card_fetch_no_status_network_signature_is_retryable():
+    async def fetch_card(url, kwargs):
+        raise A2AClientFacadeError(f"All connection attempts failed for {url}")
+
+    with pytest.raises(RecoverableTransportError, match="temporarily unavailable"):
+        await _client(FakeSdk(fetch_card=fetch_card)).send(_dispatch_command())
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 404])
+async def test_card_fetch_contract_status_is_nonretryable_and_sanitized(status_code):
+    async def fetch_card(url, kwargs):
+        raise A2AClientFacadeError(
+            f"provider failure at {url}", status_code=status_code
+        )
+
+    with pytest.raises(AgentCardContractError) as caught:
+        await _client(FakeSdk(fetch_card=fetch_card)).send(_dispatch_command())
+
+    assert str(caught.value) == "Agent Card could not be resolved."
+    assert "agent.example" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+async def test_invalid_card_is_nonretryable_contract_error():
+    async def fetch_card(url, kwargs):
+        return {
+            "name": "missing required card fields",
+            "secret": "provider-secret-value",
+        }
+
+    with pytest.raises(AgentCardContractError, match="Agent Card is invalid") as caught:
+        await _client(FakeSdk(fetch_card=fetch_card)).send(_dispatch_command())
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "provider-secret-value" not in repr(caught.value)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "send",
+        "start_poll",
+        "open_stream",
+        "inspect",
+        "continue_task",
+        "send_model_reply",
+        "inspect_continuation",
+        "cancel",
+        "inspect_cancellation",
+    ],
+)
+async def test_all_direct_paths_share_retryable_card_resolution(operation):
+    async def fetch_card(url, kwargs):
+        raise A2AClientFacadeError("temporary provider outage", status_code=503)
+
+    sdk = FakeSdk(fetch_card=fetch_card)
+    client = _client(sdk)
+    dispatch_command = _dispatch_command()
+    client._remember(dispatch_command, task_id="task-1", context_id="context-1")
+    command_by_operation = {
+        "send": dispatch_command,
+        "start_poll": dispatch_command,
+        "open_stream": dispatch_command,
+        "inspect": dispatch_command,
+        "continue_task": _continuation_command(),
+        "send_model_reply": _model_reply_command(),
+        "inspect_continuation": _continuation_command(),
+        "cancel": _cancellation_command(),
+        "inspect_cancellation": _cancellation_command(),
+    }
+
+    with pytest.raises(RecoverableTransportError):
+        await getattr(client, operation)(command_by_operation[operation])
+
+    assert len(sdk.card_calls) == 1
+    assert sdk.send_calls == []
+    assert sdk.fetch_calls == []
+    assert sdk.cancel_calls == []
 
 
 async def test_send_terminal_builds_terminal_receipt_and_observation():
@@ -202,6 +355,91 @@ async def test_send_rematerialized_data_preserves_payload_metadata():
         "mime_type": "application/vnd.hybro.result+json",
         "schema": "v1",
     }
+
+
+async def test_send_tags_instruction_context_and_selected_skill_for_sdk_round_trip():
+    task = build_completed_text_task(task_id="task-1", text="done", context_id="ctx-1")
+
+    async def send(card, message, kwargs):
+        return {"kind": "task", "result": _task_dict(task)}
+
+    sdk = FakeSdk(send=send)
+    await _client(sdk).send(
+        _dispatch_command(
+            skill_id="skill-review",
+            materialized_resources=[
+                MaterializedResourcePart(
+                    ref_id="ctx:message:user-1",
+                    kind="text",
+                    content_digest="context-digest",
+                    payload="durable user evidence",
+                    mime_type="text/plain",
+                    metadata={
+                        "owner": "context-memory",
+                        HYBRO_A2A_PART_PROVENANCE_METADATA_KEY: {
+                            "schema_version": 99,
+                            "role": "forged",
+                        },
+                    },
+                ),
+                MaterializedResourcePart(
+                    ref_id="file-1",
+                    kind="file",
+                    content_digest="file-digest",
+                    payload={
+                        "name": "input.pdf",
+                        "mime_type": "application/pdf",
+                        "bytes": base64.b64encode(b"pdf").decode(),
+                    },
+                    mime_type="application/pdf",
+                    metadata={"authorized": True},
+                ),
+            ],
+        )
+    )
+
+    sent_message = sdk.send_calls[0][1]
+    assert sent_message.metadata == {
+        "agent_id": "agent-1",
+        HYBRO_A2A_SELECTED_SKILL_METADATA_KEY: {
+            "schema_version": 1,
+            "skill_id": "skill-review",
+        },
+    }
+    instruction, context, file_part = [part.root for part in sent_message.parts]
+    assert instruction.metadata == {
+        HYBRO_A2A_PART_PROVENANCE_METADATA_KEY: {
+            "schema_version": 1,
+            "role": HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
+        }
+    }
+    assert context.metadata == {
+        "owner": "context-memory",
+        HYBRO_A2A_PART_PROVENANCE_METADATA_KEY: {
+            "schema_version": 1,
+            "role": HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+        },
+    }
+    assert file_part.metadata == {"authorized": True}
+
+    private_metadata = json.dumps(
+        {
+            "message": sent_message.metadata,
+            "parts": [
+                getattr(part.root, "metadata", None) for part in sent_message.parts
+            ],
+        },
+        sort_keys=True,
+    )
+    for forbidden in (
+        "https://agent.example/a2a",
+        "room-1",
+        "binding-1",
+        "call-1",
+        "inv-1",
+        "presentation_id",
+    ):
+        assert forbidden not in private_metadata
 
 
 async def test_send_nonterminal_returns_accepted_with_task_identity():
@@ -627,12 +865,72 @@ async def test_cancel_acknowledged_returns_accepted():
     assert receipt.task_id == "task-1"
 
 
+async def test_continuation_message_preserves_all_typed_answers_and_digest():
+    answers = [
+        HITLQuestionAnswer(question_id="text", answer=HITLTextAnswer(text="Ada")),
+        HITLQuestionAnswer(
+            question_id="single", answer=HITLSingleChoiceAnswer(choice="one")
+        ),
+        HITLQuestionAnswer(
+            question_id="multi", answer=HITLMultiChoiceAnswer(choices=["a", "b"])
+        ),
+        HITLQuestionAnswer(
+            question_id="confirm", answer=HITLConfirmationAnswer(confirmed=True)
+        ),
+        HITLQuestionAnswer(
+            question_id="auth",
+            answer=HITLAuthorizationResultAnswer(
+                authorization_reference="authref:proof-1"
+            ),
+        ),
+        HITLQuestionAnswer(
+            question_id="policy",
+            answer=HITLPolicyDecisionAnswer(
+                decision=HITLPolicyDecision.APPROVE, reason="approved"
+            ),
+        ),
+    ]
+    command = _continuation_command().model_copy(
+        update={"answer_digest": "durable-digest", "answers": answers}
+    )
+    client = _client(FakeSdk())
+    message = client._build_continuation_message(
+        command,
+        address=DirectCallAddress(
+            call_record_id="call-1",
+            task_id="task-1",
+            context_id="context-1",
+            endpoint_scope="https://agent.example/a2a",
+            agent_id="agent-1",
+        ),
+    )
+
+    envelope = message["metadata"][HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY]
+    assert envelope == {
+        "schema_version": 1,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "answer_digest": "durable-digest",
+        "answers": [answer.model_dump(mode="json") for answer in answers],
+    }
+    assert message["parts"] == [
+        {
+            "kind": "text",
+            "text": (
+                "text: Ada\nsingle: one\nmulti: a, b\nconfirm: True\n"
+                "auth: authref:proof-1\npolicy: approve"
+            ),
+        }
+    ]
+
+
 async def test_continue_task_uses_command_task_and_context():
     task = build_completed_text_task(
         task_id="task-1", text="continued", context_id="ctx-1"
     )
 
     async def send(card, message, kwargs):
+        assert message.message_id == "continuation-1"
         assert message.task_id == "task-1"
         assert message.context_id == "context-1"
         return {"kind": "task", "result": _task_dict(task)}
@@ -677,6 +975,58 @@ async def test_continue_task_input_required_builds_interaction_receipt():
     assert observation is not None
     assert observation.event_kind == "input_required"
     assert observation.content[0].text == "How many days will you stay?"
+
+
+async def test_continue_task_distinguishes_repeated_typed_interaction_rounds():
+    send_count = 0
+
+    async def send(card, message, kwargs):
+        nonlocal send_count
+        send_count += 1
+        interaction_id = f"interaction-{send_count}"
+        status = build_task_status(TaskState.input_required)
+        status.message = Message(
+            role=MessageRole.AGENT,
+            parts=[TextPart(text=f"Question for round {send_count}?")],
+            message_id=f"msg-{send_count}",
+            metadata={
+                HYBRO_A2A_INTERACTION_METADATA_KEY: {
+                    "schema_version": 1,
+                    "interaction_id": interaction_id,
+                    "questions": [
+                        {
+                            "question_id": f"question-{send_count}",
+                            "interaction_kind": "questionnaire",
+                            "prompt": f"Question for round {send_count}?",
+                            "answer_kind": "text",
+                            "required": True,
+                        }
+                    ],
+                }
+            },
+        )
+        task = Task(
+            id="task-1",
+            context_id="ctx-1",
+            status=status,
+            artifacts=None,
+        )
+        return {"kind": "task", "result": _task_dict(task)}
+
+    client = _client(FakeSdk(send=send))
+    client._remember(_dispatch_command(), task_id="task-1", context_id="ctx-1")
+
+    first = await client.continue_task(_continuation_command())
+    second = await client.continue_task(_continuation_command())
+    first_observation = first.interaction_observation
+    second_observation = second.interaction_observation
+
+    assert first_observation is not None
+    assert second_observation is not None
+    assert first_observation.observation_id != second_observation.observation_id
+    assert first_observation.source_identity != second_observation.source_identity
+    assert first_observation.interaction_spec["interaction_id"] == "interaction-1"
+    assert second_observation.interaction_spec["interaction_id"] == "interaction-2"
 
 
 async def test_extract_interaction_spec_requires_status_message_metadata():

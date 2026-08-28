@@ -82,6 +82,8 @@ export interface MessageEntity {
 
   // ── HITL (Human-in-the-Loop) ─────────────────────────────
   hitlRequestId?: string
+  /** Wire Agent message/card identity when this is a request-scoped HITL projection. */
+  hitlMessageId?: string
   hitlSource?: 'agent' | 'supervisor'
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType
@@ -164,6 +166,8 @@ export interface IncomingMessage {
   totalSteps?: number
   relatedMessageId?: string
   hitlRequestId?: string
+  /** Wire Agent message/card identity retained separately from the store entity ID. */
+  hitlMessageId?: string
   hitlSource?: 'agent' | 'supervisor'
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType

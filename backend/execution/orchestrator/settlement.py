@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from .events import canonicalize_orchestrator_event
 from .models import (
     ArtifactRefPart,
     AssistantMessage,
@@ -252,19 +253,21 @@ def commit_terminal_decision(
         "final_message_id": facts.final_message_id,
         "terminal_reason": request.terminal_reason,
     }
-    event = OrchestratorEvent(
-        event_id=request.event_id,
-        event_type="run_completed",
-        session_id=run.session_id,
-        run_id=run.run_id,
-        room_id=run.room_id,
-        room_epoch=run.request.room_epoch,
-        sequence=request.event_sequence,
-        state_version=next_version,
-        causation_id=request.command_id,
-        correlation_id=request.correlation_id,
-        payload=event_payload,
-        created_at=request.created_at,
+    event = canonicalize_orchestrator_event(
+        OrchestratorEvent(
+            event_id=request.event_id,
+            event_type="run_completed",
+            session_id=run.session_id,
+            run_id=run.run_id,
+            room_id=run.room_id,
+            room_epoch=run.request.room_epoch,
+            sequence=request.event_sequence,
+            state_version=next_version,
+            causation_id=request.command_id,
+            correlation_id=request.correlation_id,
+            payload=event_payload,
+            created_at=request.created_at,
+        )
     )
     common = {
         "event_id": event.event_id,
@@ -388,19 +391,21 @@ def commit_terminal_status(
         return TerminalStatusCommitResult(outcome="conflict", run=run)
 
     next_version = run.state_version + 1
-    event = OrchestratorEvent(
-        event_id=request.event_id,
-        event_type=f"run_{request.status}",  # type: ignore[arg-type]
-        session_id=run.session_id,
-        run_id=run.run_id,
-        room_id=run.room_id,
-        room_epoch=run.request.room_epoch,
-        sequence=request.event_sequence,
-        state_version=next_version,
-        causation_id=request.command_id,
-        correlation_id=request.correlation_id,
-        payload={"terminal_reason": request.terminal_reason},
-        created_at=request.created_at,
+    event = canonicalize_orchestrator_event(
+        OrchestratorEvent(
+            event_id=request.event_id,
+            event_type=f"run_{request.status}",  # type: ignore[arg-type]
+            session_id=run.session_id,
+            run_id=run.run_id,
+            room_id=run.room_id,
+            room_epoch=run.request.room_epoch,
+            sequence=request.event_sequence,
+            state_version=next_version,
+            causation_id=request.command_id,
+            correlation_id=request.correlation_id,
+            payload={"terminal_reason": request.terminal_reason},
+            created_at=request.created_at,
+        )
     )
     common = {
         "event_id": event.event_id,

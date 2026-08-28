@@ -79,6 +79,12 @@ def _patched_agent_name(current: Any, incoming: Any) -> str | None:
     return _specific_agent_name(incoming) or _specific_agent_name(current)
 
 
+def _hitl_request_key(data: dict[str, Any]) -> str:
+    request_id = str(data.get("request_id") or "")
+    interaction_id = str(data.get("interaction_id") or request_id)
+    return f"{interaction_id}:{request_id}"
+
+
 class RoomEventFold:
     """Pure fold: room event records → snapshot state (mirrors client folds)."""
 
@@ -507,6 +513,7 @@ class RoomEventFold:
             "tool_execution_end",
             "turn_end",
             "retry_scheduled",
+            "model_decision",
             "run_waiting_input",
             "run_resumed",
             "run_settled",
@@ -766,6 +773,30 @@ class RoomEventFold:
                 tool["is_error"] = payload.get("is_error")
                 tool["duration_ms"] = payload.get("duration_ms")
                 tool["detail_available"] = payload.get("detail_available") is True
+        elif sub_type == "model_decision":
+            if internal is None:
+                return False
+            decision_id = str(data.get("event_id") or "")
+            if not decision_id:
+                return False
+            if any(
+                item.get("kind") == "decision" and item.get("id") == decision_id
+                for item in turn["activity"]
+            ):
+                return False
+            turn["activity"].append(
+                {
+                    "kind": "decision",
+                    "id": decision_id,
+                    "internal_turn_id": internal_turn_id,
+                    "decision": payload.get("decision"),
+                    "agent_label": payload.get("agent_label"),
+                    "question_summary": payload.get("question_summary"),
+                    "source_summary": payload.get("source_summary"),
+                    "reason": payload.get("reason"),
+                    "order": room_seq,
+                }
+            )
         elif sub_type == "turn_end":
             expected_calls = [
                 item.get("tool_call_id")
@@ -1042,14 +1073,19 @@ class RoomEventFold:
         request_id = str(data.get("request_id") or "")
         if not request_id:
             return data.get("run_id") is None
-        self.hitl_requests[request_id] = dict(data)
-        self.hitl_requests[request_id]["ts"] = str(record.get("ts") or "")
+        request_key = _hitl_request_key(data)
         run_id = str(data.get("run_id") or "")
         turn = self.turns.get(run_id)
         if turn is None or (
             data.get("client_request_id") != turn.get("client_request_id")
             or data.get("related_user_message_id") != turn.get("user_message_id")
         ):
+            if not run_id:
+                self.hitl_requests[request_key] = dict(data)
+                self.hitl_requests[request_key]["room_seq"] = int(
+                    record.get("room_seq") or 0
+                )
+                self.hitl_requests[request_key]["ts"] = str(record.get("ts") or "")
             return not run_id
         interaction_id = str(data.get("interaction_id") or "")
         if not interaction_id:
@@ -1062,6 +1098,12 @@ class RoomEventFold:
             ),
             None,
         )
+        if interaction is not None and interaction.get("state") != "awaiting_input":
+            # A late or CAS-losing observation can incorrectly re-emit a new
+            # questionnaire under an already resumed interaction identity.
+            # Without a matching new interaction/control boundary it is not
+            # canonical state, so retain the settled inventory and ignore it.
+            return True
         if interaction is None:
             interaction = {
                 "interaction_id": interaction_id,
@@ -1074,6 +1116,9 @@ class RoomEventFold:
             turn["hitl_interactions"].append(interaction)
         if request_id in interaction["request_ids"]:
             return False
+        self.hitl_requests[request_key] = dict(data)
+        self.hitl_requests[request_key]["room_seq"] = int(record.get("room_seq") or 0)
+        self.hitl_requests[request_key]["ts"] = str(record.get("ts") or "")
         interaction["request_ids"].append(request_id)
         interaction["requests"].append(
             {
@@ -1091,6 +1136,14 @@ class RoomEventFold:
             }
         )
         return True
+
+    def _stored_hitl_request(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        request_key = _hitl_request_key(data)
+        existing = self.hitl_requests.get(request_key)
+        if existing is not None:
+            return existing
+        request_id = str(data.get("request_id") or "")
+        return self.hitl_requests.get(f"{request_id}:{request_id}")
 
     def _hitl_response(self, data: dict[str, Any], record: dict[str, Any]) -> bool:
         if data.get("run_id") is not None:
@@ -1115,8 +1168,8 @@ class RoomEventFold:
         entry = dict(data)
         entry["ts"] = str(record.get("ts") or "")
         self.hitl_resolved.append(entry)
-        if request_id and request_id in self.hitl_requests:
-            existing = self.hitl_requests[request_id]
+        existing = self._stored_hitl_request(data)
+        if request_id and existing is not None:
             existing["status"] = data.get("status")
             existing["interaction_id"] = data.get("interaction_id")
             existing["interaction_status"] = data.get("interaction_status")

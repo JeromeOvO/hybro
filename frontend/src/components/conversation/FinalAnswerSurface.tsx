@@ -8,7 +8,6 @@ import { MarkdownContent } from '@/components/markdown-content'
 import { AgentResultContent } from './AgentResultContent'
 import { ProcessingStatusLog } from './ProcessingStatusLog'
 import { SynthesisContent, SynthesisContentFromStream } from './SynthesisContent'
-import { UserAnswerCard } from './UserAnswerCard'
 
 interface FinalAnswerSurfaceProps {
   turn: TurnViewModel
@@ -72,58 +71,6 @@ function DeterministicDoneBlock({
   return <TerminalContent intro={intro} turnId={turnId} />
 }
 
-function HitlPrimary({
-  turn,
-  isRunning,
-  showProcessingLog,
-}: {
-  turn: TurnViewModel
-  isRunning: boolean
-  showProcessingLog: boolean
-}) {
-  const hitl = turn.finalAnswer.hitl
-  if (!hitl || hitl.prompts.length === 0) {
-    return showProcessingLog ? (
-      <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={isRunning} />
-    ) : null
-  }
-
-  return (
-    <div className="flex flex-col" style={{ gap: 'var(--conversation-gap-block)' }}>
-      {hitl.prompts.map((prompt) => (
-        <div
-          key={prompt.messageId}
-          className="rounded-xl border px-4 py-3"
-          style={{
-            borderColor: 'hsl(var(--agent-color-4) / 0.18)',
-            backgroundColor: 'hsl(var(--agent-color-4) / 0.08)',
-          }}
-        >
-          <div className="mb-2 text-xs font-medium" style={{ color: 'var(--conversation-text-muted)' }}>
-            {prompt.agentName} · Needs Input
-          </div>
-          <div
-            className="conversation-user-message-text whitespace-pre-wrap"
-            style={{ color: 'var(--conversation-text-primary)' }}
-          >
-            {prompt.prompt}
-          </div>
-        </div>
-      ))}
-      {turn.agentResults
-        .filter((result) => result.hitlResolved)
-        .map((result) => (
-          <UserAnswerCard
-            key={result.messageId}
-            agentName={result.agentName}
-            question={result.hitlResolved!.prompt}
-            answer={result.hitlResolved!.answer}
-          />
-        ))}
-    </div>
-  )
-}
-
 function SynthesisBlock({
   turn,
   summaryResult,
@@ -181,11 +128,14 @@ export function FinalAnswerSurface({
 
   switch (finalAnswer.kind) {
     case 'hitl':
+      // The composer questionnaire is the sole HITL interaction surface.
+      // Keep lifecycle feedback here only when this component owns the log.
+      processingLogRenderedInBody = true
       body = (
-        <HitlPrimary
-          turn={turn}
+        <ProcessingBlock
+          entries={turn.processingStatusLogs}
           isRunning={processingStatusRunning}
-          showProcessingLog={renderProcessingLog}
+          show={renderProcessingLog}
         />
       )
       break

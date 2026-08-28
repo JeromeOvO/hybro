@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pymongo.errors import DuplicateKeyError
 
-from execution.orchestrator.events import evaluate_event_append
+from execution.orchestrator.events import (
+    canonicalize_orchestrator_event,
+    evaluate_event_append,
+)
 from execution.orchestrator.models import OrchestratorEvent
 from execution.orchestrator.ports import StoreOutcome
 
@@ -31,6 +34,7 @@ class MongoOrchestratorEventStore:
         self.collection = _bounded(collection)
 
     async def append(self, event: OrchestratorEvent) -> StoreOutcome:
+        event = canonicalize_orchestrator_event(event)
         existing = await self.read(event.run_id)
         evaluation = evaluate_event_append(existing, event)
         if evaluation.outcome != "accepted":
@@ -43,7 +47,10 @@ class MongoOrchestratorEventStore:
             current = await self.collection.find_one({"event_id": event.event_id})
             if current is None:
                 return "conflict"
-            if _from_document(OrchestratorEvent, current) == event:
+            current_event = canonicalize_orchestrator_event(
+                _from_document(OrchestratorEvent, current)
+            )
+            if current_event == event:
                 return "replayed"
             return "conflict"
         return "accepted"

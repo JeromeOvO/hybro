@@ -80,6 +80,9 @@ class Checkpoints:
 
 
 class Outcomes:
+    async def is_run_terminal(self, *args):
+        return False
+
     async def has_processed_observation(self, *args):
         return True
 

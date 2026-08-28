@@ -43,6 +43,7 @@ def test_public_kinds_are_the_pi_turn_lifecycle_vocabulary():
         "tool_execution_end",
         "turn_end",
         "retry_scheduled",
+        "model_decision",
         "run_waiting_input",
         "run_resumed",
         "run_settled",
@@ -397,6 +398,41 @@ def test_canonical_agent_execution_exposes_base_name_and_kind():
     assert public.payload["request_summary"] == "Check San Jose weather"
 
 
+def test_canonical_agent_execution_omits_private_a2a_transport_metadata():
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    public = translator.translate(
+        _canonical_tool_event(
+            "tool_execution_started",
+            {
+                "internal_turn_id": "turn-1",
+                "call_id": "private-call",
+                "public_call_id": "inv_weather_0001",
+                "tool_name": "agent_weather",
+                "agent_label": "Weather Agent - Forecast",
+                "arguments": {"task": "Check weather"},
+                "message_metadata": {
+                    "hybro.ai/a2a/selected-skill": {
+                        "schema_version": 1,
+                        "skill_id": "PRIVATE_SKILL_SENTINEL",
+                    }
+                },
+                "part_metadata": {
+                    "hybro.ai/a2a/part-provenance": {
+                        "schema_version": 1,
+                        "role": "orchestrator_instruction",
+                    }
+                },
+            },
+        ),
+        catalog=_agent_catalog(),
+    )
+
+    assert public is not None
+    assert "PRIVATE_SKILL_SENTINEL" not in str(public.payload)
+    assert "hybro.ai/a2a/selected-skill" not in str(public.payload)
+    assert "hybro.ai/a2a/part-provenance" not in str(public.payload)
+
+
 def test_canonical_agent_execution_end_marks_private_detail_available():
     translator = PublicProjectionTranslator(lifecycle_family="canonical")
     public = translator.translate(
@@ -443,3 +479,44 @@ def test_canonical_unknown_tool_is_plain_tool_execution_without_target():
     assert "target" not in public.payload
     assert public.payload["request_summary"] == ""
     assert public.payload["tool_name"] == "request_user_input"
+
+
+def test_model_decision_projects_answered_from_context_and_no_progress():
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+
+    answered = translator.translate(
+        _event(
+            "model_decision",
+            {
+                "internal_turn_id": "turn-1",
+                "decision": "answered_from_context",
+                "agent_label": "Cyber Broker Agent",
+                "question_summary": "Which cloud provider?",
+                "source_summary": "from earlier messages and attachments",
+            },
+        )
+    )
+    assert answered is not None
+    assert answered.kind == "model_decision"
+    assert answered.payload["decision"] == "answered_from_context"
+    assert answered.payload["agent_label"] == "Cyber Broker Agent"
+    assert answered.payload["question_summary"] == "Which cloud provider?"
+    assert answered.payload["source_summary"] == "from earlier messages and attachments"
+    # The semantic event id must not embed raw public text.
+    assert "Which cloud" not in answered.event_id
+
+    no_progress = translator.translate(
+        _event(
+            "model_decision",
+            {
+                "internal_turn_id": "turn-1",
+                "decision": "no_progress",
+                "agent_label": "Cyber Broker Agent",
+                "question_summary": "Which cloud provider?",
+                "reason": "auto_reply_limit_reached",
+            },
+        )
+    )
+    assert no_progress is not None
+    assert no_progress.payload["decision"] == "no_progress"
+    assert no_progress.payload["reason"] == "auto_reply_limit_reached"

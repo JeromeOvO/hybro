@@ -163,6 +163,9 @@ class FaultRecorder:
             raise RecoverableAdapterError("injected inbox outage")
         return await self.delegate.record(observation)
 
+    async def mark_ledger_applied(self, observation_id):
+        await self.delegate.mark_ledger_applied(observation_id)
+
     async def mark_executor_outcome(self, observation_id, *, outcome_digest):
         if self.mark_error is not None:
             error = self.mark_error

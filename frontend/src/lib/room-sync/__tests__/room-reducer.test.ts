@@ -11,6 +11,10 @@ import { useStreamingStore } from '@/stores/streaming-store'
 import { useTraceStore } from '@/stores/trace-store'
 import { useTurnStore } from '@/stores/turn-store'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
+import {
+  hitlQuestionEntityId,
+  hitlRequestKey,
+} from '@/lib/hitl/hitl-message-projection'
 
 function frame(type: string, data: Record<string, unknown>, roomSeq?: number): AnySSEFrame {
   return {
@@ -329,10 +333,14 @@ describe('applySnapshotToStores', () => {
         current_assistant: null, final_answer: null, final_committed: false,
         hitl_interactions: [{
           interaction_id: 'interaction-1', state: 'awaiting_input' as const,
-          request_ids: ['request-1'], requested_at: '2030-01-01T00:00:01.000Z', resumed_at: null,
+          request_ids: ['request-1', 'request-2'], requested_at: '2030-01-01T00:00:01.000Z', resumed_at: null,
           requests: [{
             request_id: 'request-1', message_id: 'hitl-message-1', question_index: 0,
-            question_count: 1, prompt: 'Continue?', prompt_type: 'confirmation', choices: [],
+            question_count: 2, prompt: 'Continue?', prompt_type: 'confirmation', choices: [],
+            source: 'supervisor', agent_label: null, status: 'requested' as const, answer_ref: null,
+          }, {
+            request_id: 'request-2', message_id: 'hitl-message-1', question_index: 1,
+            question_count: 2, prompt: 'Add details', prompt_type: 'text', choices: [],
             source: 'supervisor', agent_label: null, status: 'requested' as const, answer_ref: null,
           }],
         }],
@@ -342,21 +350,62 @@ describe('applySnapshotToStores', () => {
         requests: [{
           room_seq: 3, run_id: 'run-1', request_id: 'request-1', message_id: 'hitl-message-1',
           interaction_id: 'interaction-1', related_user_message_id: 'user-1',
-          client_request_id: 'client-1', question_index: 0, question_count: 1,
+          client_request_id: 'client-1', question_index: 0, question_count: 2,
           prompt: 'Continue?', prompt_type: 'confirmation', source: 'supervisor',
+          ts: '2030-01-01T00:00:01.000Z',
+        }, {
+          room_seq: 3, run_id: 'run-1', request_id: 'request-2', message_id: 'hitl-message-1',
+          interaction_id: 'interaction-1', related_user_message_id: 'user-1',
+          client_request_id: 'client-1', question_index: 1, question_count: 2,
+          prompt: 'Add details', prompt_type: 'text', source: 'supervisor',
           ts: '2030-01-01T00:00:01.000Z',
         }],
         resolved: [],
       },
     }
 
-    expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(true)
-    expect(useMessageStore.getState().entities['hitl-message-1']).toMatchObject({
-      hitlRequestId: 'request-1',
-      hitlPrompt: 'Continue?',
-      clientRequestId: 'client-1',
-      relatedMessageId: 'user-1',
+    const index = new Map<string, string>()
+    expect(applySnapshotToStores('room-1', snapshot, index)).toBe(true)
+    const firstKey = hitlRequestKey('interaction-1', 'request-1')
+    const secondKey = hitlRequestKey('interaction-1', 'request-2')
+    const firstId = hitlQuestionEntityId(
+      'hitl-message-1', 'interaction-1', 'request-1', 2,
+    )
+    const secondId = hitlQuestionEntityId(
+      'hitl-message-1', 'interaction-1', 'request-2', 2,
+    )
+    const entities = useMessageStore.getState().entities
+    expect(entities['hitl-message-1'].hitlRequestId).toBeUndefined()
+    expect(entities[firstId]).toMatchObject({
+      hitlRequestId: 'request-1', hitlMessageId: 'hitl-message-1',
+      hitlPrompt: 'Continue?', clientRequestId: 'client-1', relatedMessageId: 'user-1',
     })
+    expect(entities[secondId]).toMatchObject({
+      hitlRequestId: 'request-2', hitlMessageId: 'hitl-message-1',
+      hitlPrompt: 'Add details', clientRequestId: 'client-1', relatedMessageId: 'user-1',
+    })
+    expect(index).toEqual(new Map([
+      [firstKey, firstId],
+      [secondKey, secondId],
+    ]))
+
+    const incompleteInventory = {
+      ...snapshot,
+      room_seq: 4,
+      turns: [{
+        ...snapshot.turns[0],
+        hitl_interactions: [{
+          ...snapshot.turns[0].hitl_interactions[0],
+          requests: [snapshot.turns[0].hitl_interactions[0].requests[0]],
+        }],
+      }],
+      hitl: { ...snapshot.hitl, requests: [snapshot.hitl.requests[0]] },
+    }
+    expect(applySnapshotToStores('room-1', incompleteInventory, index)).toBe(false)
+    expect(index).toEqual(new Map([
+      [firstKey, firstId],
+      [secondKey, secondId],
+    ]))
   })
 
   it('restores a rolling-deploy legacy HITL request against an exact canonical Turn root', () => {
@@ -397,7 +446,10 @@ describe('applySnapshotToStores', () => {
     }
 
     expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(true)
-    expect(useMessageStore.getState().entities['orchestrator:run-1:call_private']).toMatchObject({
+    const requestId = hitlQuestionEntityId(
+      'orchestrator:run-1:call_private', 'interaction-1', 'request-1', 1,
+    )
+    expect(useMessageStore.getState().entities[requestId]).toMatchObject({
       senderName: 'Travel Planner Agent',
       hitlRequestId: 'request-1',
       hitlPrompt: 'Which island?',
@@ -405,6 +457,62 @@ describe('applySnapshotToStores', () => {
       relatedMessageId: 'user-1',
     })
     expect(useTurnStore.getState().rooms['room-1'].turns['run-1'].state).toBe('active')
+  })
+
+  it('accepts legacy snapshot HITL rows missing new correlation fields', () => {
+    const snapshot = {
+      ...emptySnapshot(3),
+      turn_lifecycle_schema: 1 as const,
+      turns: [{
+        hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
+        client_request_id: 'client-1', state: 'active' as const,
+        started_at: '2030-01-01T00:00:00.000Z', settled_at: null, duration_ms: null,
+        terminal_code: null, terminal_summary: null, internal_turns: [], activity: [],
+        current_assistant: null, final_answer: null, final_committed: false,
+        hitl_interactions: [], active_interaction_id: null, agent_call_message_ids: [],
+      }],
+      hitl: {
+        requests: [{
+          request_id: 'legacy-request',
+          message_id: 'orchestrator:run-1:legacy_private',
+          interaction_id: 'legacy-interaction', question_index: 0, question_count: 1,
+          prompt: 'Legacy prompt?', prompt_type: 'text', source: 'agent',
+          ts: '2030-01-01T00:00:01.000Z',
+        }],
+        resolved: [],
+      },
+    }
+
+    expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(true)
+    expect(useTurnStore.getState().rooms['room-1'].turns['run-1']).toBeDefined()
+  })
+
+  it('rejects canonical snapshot HITL rows missing correlation fields', () => {
+    const snapshot = {
+      ...emptySnapshot(3),
+      turn_lifecycle_schema: 1 as const,
+      turns: [{
+        hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
+        client_request_id: 'client-1', state: 'active' as const,
+        started_at: '2030-01-01T00:00:00.000Z', settled_at: null, duration_ms: null,
+        terminal_code: null, terminal_summary: null, internal_turns: [], activity: [],
+        current_assistant: null, final_answer: null, final_committed: false,
+        hitl_interactions: [], active_interaction_id: null, agent_call_message_ids: [],
+      }],
+      hitl: {
+        requests: [{
+          room_seq: 3, run_id: 'run-1', request_id: 'canonical-request',
+          message_id: 'orchestrator:run-1:inv_request_0001',
+          interaction_id: 'canonical-interaction', question_index: 0, question_count: 1,
+          prompt: 'Canonical prompt?', prompt_type: 'text', source: 'agent',
+          ts: '2030-01-01T00:00:01.000Z',
+        }],
+        resolved: [],
+      },
+    }
+
+    expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(false)
+    expect(useTurnStore.getState().rooms['room-1']).toBeUndefined()
   })
 
   it('keeps canceled rolling-deploy HITL requests out of the composer projection', () => {
@@ -433,7 +541,10 @@ describe('applySnapshotToStores', () => {
     }
 
     expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(true)
-    expect(useMessageStore.getState().entities['orchestrator:run-1:call_private']).toMatchObject({
+    const requestId = hitlQuestionEntityId(
+      'orchestrator:run-1:call_private', 'interaction-1', 'request-1', 1,
+    )
+    expect(useMessageStore.getState().entities[requestId]).toMatchObject({
       hitlRequestId: 'request-1', hitlResolved: true,
     })
   })
@@ -471,9 +582,40 @@ describe('applySnapshotToStores', () => {
     }
     const index = new Map<string, string>()
 
-    expect(applySnapshotToStores('room-1', snapshot, index)).toBe(true)
+    expect(applySnapshotToStores('room-1', snapshot, index)).toBe(false)
     expect(useMessageStore.getState().entities['orchestrator:run-1:inv_request_0001']?.hitlRequestId).toBeUndefined()
+    expect(useTurnStore.getState().rooms['room-1']).toBeUndefined()
     expect(index.size).toBe(0)
+  })
+
+  it('rejects a canonical top-level HITL prompt absent from the Turn inventory', () => {
+    const snapshot = {
+      ...emptySnapshot(4),
+      turn_lifecycle_schema: 1 as const,
+      turns: [{
+        hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
+        client_request_id: 'client-1', state: 'active' as const,
+        started_at: '2030-01-01T00:00:00.000Z', settled_at: null, duration_ms: null,
+        terminal_code: null, terminal_summary: null, internal_turns: [], activity: [],
+        current_assistant: null, final_answer: null, final_committed: false,
+        hitl_interactions: [], active_interaction_id: null, agent_call_message_ids: [],
+      }],
+      hitl: {
+        requests: [{
+          room_seq: 4, run_id: 'run-1', request_id: 'phantom-request',
+          message_id: 'orchestrator:run-1:inv_agent', interaction_id: 'phantom-interaction',
+          related_user_message_id: 'user-1', client_request_id: 'client-1',
+          question_index: 0, question_count: 1, prompt: 'Phantom?',
+          prompt_type: 'text', source: 'agent', status: 'requested',
+          ts: '2030-01-01T00:00:01.000Z',
+        }],
+        resolved: [],
+      },
+    }
+
+    expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(false)
+    expect(useTurnStore.getState().rooms['room-1']).toBeUndefined()
+    expect(useMessageStore.getState().entities['orchestrator:run-1:inv_agent']).toBeUndefined()
   })
 
   it('rejects malformed canonical snapshot capability without mutating the Turn projection', () => {

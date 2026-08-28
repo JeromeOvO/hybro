@@ -107,10 +107,41 @@ async def test_memory_and_mongo_reject_identity_and_ordering_conflicts():
         assert await store.append(first) == "accepted"
         assert await store.append(first) == "replayed"
         assert await store.append(event("event-1", 1, state_version=2)) == "conflict"
+        assert (
+            await store.append(first.model_copy(update={"payload": {"other": True}}))
+            == "conflict"
+        )
         assert await store.append(event("event-2", 1)) == "conflict"
         assert await store.append(event("event-2", 3)) == "conflict"
         assert await store.append(event("event-2", 1, state_version=0)) == "conflict"
         assert [item.event_id for item in await store.read("run-1")] == ["event-1"]
+
+
+async def test_memory_and_mongo_share_bson_millisecond_event_identity():
+    stores = [
+        InMemoryOrchestratorEventStore(),
+        MongoOrchestratorEventStore(FakeCollection()),
+    ]
+    for store in stores:
+        microsecond_event = event("event-1", 1).model_copy(
+            update={"created_at": NOW.replace(microsecond=616_500)}
+        )
+        assert await store.append(microsecond_event) == "accepted"
+        stored = (await store.read("run-1"))[0]
+        assert stored.created_at == NOW.replace(microsecond=616_000)
+
+        # A legacy pending payload can retain Python microseconds after Mongo
+        # has already inserted the same event at BSON millisecond precision.
+        same_millisecond = microsecond_event.model_copy(
+            update={"created_at": NOW.replace(microsecond=616_999)}
+        )
+        assert await store.append(same_millisecond) == "replayed"
+
+        next_millisecond = microsecond_event.model_copy(
+            update={"created_at": NOW.replace(microsecond=617_000)}
+        )
+        assert await store.append(next_millisecond) == "conflict"
+        assert len(await store.read("run-1")) == 1
 
 
 async def test_mongo_duplicate_key_race_replays_the_exact_winner():
@@ -137,6 +168,20 @@ def _duplicate_key_once_then_write(collection: FakeCollection):
         return await original(document)
 
     return insert_one
+
+
+async def test_mongo_duplicate_key_race_replays_winner_after_bson_truncation():
+    winner = event("event-1", 1).model_copy(
+        update={"created_at": NOW.replace(microsecond=616_000)}
+    )
+    candidate = winner.model_copy(
+        update={"created_at": NOW.replace(microsecond=616_500)}
+    )
+    store = MongoOrchestratorEventStore(
+        StaleReadDuplicateCollection(winner.model_dump(mode="json"))
+    )
+
+    assert await store.append(candidate) == "replayed"
 
 
 async def test_mongo_duplicate_key_race_classifies_divergent_winner_as_conflict():

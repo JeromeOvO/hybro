@@ -189,6 +189,16 @@ function validatePayload(type: CanonicalRunEventType, value: unknown): boolean {
         && integer(value.attempt, 2)
         && integer(value.delay_ms)
         && oneOf(value.error_class, ['provider_timeout', 'provider_error', 'content_filter', 'assembly_error', 'tool_failure', 'process_restart'])
+    case 'model_decision':
+      return exactKeys(value, ['internal_turn_id', 'decision'], ['agent_label', 'question_summary', 'source_summary', 'reason'])
+        && id(value.internal_turn_id)
+        && oneOf(value.decision, ['interaction_received', 'answered_from_context', 'forwarded_to_user', 'no_progress', 'degraded_to_user'])
+        && (value.agent_label === undefined || value.agent_label === null || (typeof value.agent_label === 'string' && value.agent_label.length <= 160))
+        && (value.question_summary === undefined || value.question_summary === null || text(value.question_summary, 1_000))
+        && (value.source_summary === undefined || value.source_summary === null || text(value.source_summary, 1_000))
+        && (value.reason === undefined || value.reason === null || text(value.reason, 1_000))
+        && (!['answered_from_context', 'forwarded_to_user'].includes(value.decision) || !!value.agent_label)
+        && (!['no_progress', 'degraded_to_user'].includes(value.decision) || !!value.reason)
     case 'run_waiting_input':
       return exactKeys(value, ['interaction_id', 'request_ids', 'requested_at'])
         && id(value.interaction_id)
@@ -431,6 +441,19 @@ function snapshotActivity(value: unknown): value is RoomSnapshotActivityItem {
       && integer(value.delay_ms)
       && typeof value.error_class === 'string'
       && value.error_class.length > 0
+      && integer(value.order)
+  }
+  if (value.kind === 'decision') {
+    return exactKeys(value, ['kind', 'id', 'internal_turn_id', 'decision', 'order'], ['agent_label', 'question_summary', 'source_summary', 'reason'])
+      && id(value.id)
+      && id(value.internal_turn_id)
+      && oneOf(value.decision, ['interaction_received', 'answered_from_context', 'forwarded_to_user', 'no_progress', 'degraded_to_user'])
+      && (value.agent_label === undefined || value.agent_label === null || text(value.agent_label, 160))
+      && (value.question_summary === undefined || value.question_summary === null || text(value.question_summary, 1_000))
+      && (value.source_summary === undefined || value.source_summary === null || text(value.source_summary, 1_000))
+      && (value.reason === undefined || value.reason === null || text(value.reason, 1_000))
+      && (!['answered_from_context', 'forwarded_to_user'].includes(value.decision) || !!value.agent_label)
+      && (!['no_progress', 'degraded_to_user'].includes(value.decision) || !!value.reason)
       && integer(value.order)
   }
   return false

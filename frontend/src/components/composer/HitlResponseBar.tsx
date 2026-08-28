@@ -69,7 +69,7 @@ interface HitlResponseBarProps {
     answers: HitlBatchAnswer[],
     clientRequestId?: string,
   ) => Promise<void>
-  onCancel?: (requestId: string) => Promise<void>
+  onCancel?: (requestId: string, interactionId?: string) => Promise<void>
   onRefresh?: () => Promise<void>
 }
 
@@ -196,13 +196,13 @@ function RecoveryState({
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           {state === 'delivery_uncertain' && onRefresh ? (
-            <Button variant="outline" disabled={working} onClick={() => run(onRefresh)}>
+            <Button type="button" variant="outline" disabled={working} onClick={() => run(onRefresh)}>
               <RefreshCw data-icon="inline-start" aria-hidden="true" />
               Check status
             </Button>
           ) : null}
           {(state === 'agent_timeout' || state === 'routing_failed') && onCancel ? (
-            <Button variant="outline" disabled={working} onClick={() => run(onCancel)}>
+            <Button type="button" variant="outline" disabled={working} onClick={() => run(onCancel)}>
               Cancel request
             </Button>
           ) : null}
@@ -518,7 +518,9 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
           state={state as Exclude<HitlLifecycleState, 'open'>}
           message={submissionError ?? current.errorMessage}
           onRefresh={onRefresh}
-          onCancel={onCancel ? () => onCancel(current.hitlId) : undefined}
+          onCancel={onCancel
+            ? () => onCancel(current.hitlId, current.interactionId)
+            : undefined}
         />
       </section>
     )
@@ -601,7 +603,12 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
           <CardFooter className="flex flex-col-reverse gap-2 border-t py-3 sm:flex-row sm:justify-between">
             <div>
               {onCancel ? (
-                <Button variant="ghost" disabled={submitting} onClick={() => onCancel(current.hitlId)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={submitting}
+                  onClick={() => onCancel(current.hitlId, current.interactionId)}
+                >
                   Cancel request
                 </Button>
               ) : null}

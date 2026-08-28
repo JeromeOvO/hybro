@@ -361,6 +361,43 @@ def test_fold_projects_hitl_requests_and_responses():
     assert len(state["hitl"]["resolved"]) == 1
 
 
+def test_fold_scopes_reused_question_ids_by_interaction():
+    fold = RoomEventFold()
+    for interaction_id, message_id in (("i1", "m1"), ("i2", "m2")):
+        assert fold.apply(
+            _record(
+                "hitl_request",
+                {
+                    "request_id": "cloud_providers",
+                    "message_id": message_id,
+                    "prompt": "Which providers?",
+                    "prompt_type": "text",
+                    "source": "agent",
+                    "interaction_id": interaction_id,
+                },
+            )
+        )
+    assert fold.apply(
+        _record(
+            "hitl_response",
+            {
+                "request_id": "cloud_providers",
+                "message_id": "m1",
+                "source": "agent",
+                "status": "responded",
+                "interaction_id": "i1",
+            },
+        )
+    )
+
+    requests = {
+        request["interaction_id"]: request
+        for request in fold.state(room_seq=3)["hitl"]["requests"]
+    }
+    assert requests["i1"]["status"] == "responded"
+    assert "status" not in requests["i2"]
+
+
 async def _seeded_service() -> SnapshotService:
     store = InMemoryRoomEventStore()
     await store.append(

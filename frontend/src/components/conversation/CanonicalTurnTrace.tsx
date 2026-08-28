@@ -6,6 +6,7 @@ import {
   ChevronRight,
   LoaderCircle,
   RotateCw,
+  GitBranch,
 } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
@@ -25,6 +26,46 @@ function RetryMarker() {
     <Marker data-kind="retry" className="canonical-trace-marker conversation-trace-action-neutral">
       <MarkerIcon><RotateCw /></MarkerIcon>
       <MarkerContent>Retried the model call</MarkerContent>
+    </Marker>
+  )
+}
+
+function DecisionMarker({
+  item,
+}: {
+  item: Extract<TurnActivityItem, { kind: 'decision' }>
+}) {
+  const copy = {
+    interaction_received: {
+      label: 'Agent requested input',
+      detail: item.questionSummary,
+    },
+    answered_from_context: {
+      label: `Answered ${item.agentLabel ?? 'the agent'} from available information`,
+      detail: item.questionSummary ?? item.sourceSummary,
+    },
+    forwarded_to_user: {
+      label: `Forwarding ${item.agentLabel ?? 'the agent'}'s questions`,
+      detail: item.questionSummary ?? item.sourceSummary,
+    },
+    no_progress: {
+      label: 'Stopped: the agent made no progress',
+      detail: item.reason,
+    },
+    degraded_to_user: {
+      label: 'Handed the question to you',
+      detail: item.reason ?? item.questionSummary,
+    },
+  }[item.decision]
+  return (
+    <Marker data-kind="decision" className="canonical-trace-marker conversation-trace-action-neutral">
+      <MarkerIcon><GitBranch /></MarkerIcon>
+      <MarkerContent className="flex-1">
+        <span className="conversation-trace-action-label">{copy.label}</span>
+        {copy.detail ? (
+          <span className="conversation-trace-action-status">{copy.detail}</span>
+        ) : null}
+      </MarkerContent>
     </Marker>
   )
 }
@@ -172,6 +213,7 @@ export function CanonicalTurnTrace({ turn }: { turn: TurnProjection }) {
             ) : null}
             {ordered.map((item) => {
               if (item.kind === 'retry') return <RetryMarker key={item.id} />
+              if (item.kind === 'decision') return <DecisionMarker key={item.id} item={item} />
               return <ToolMarker key={item.id} item={item} />
             })}
           </div>

@@ -81,6 +81,10 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     // Trace, Agent Cards, final content, or lifecycle status.
     for (const pending of legacyTurns) {
       if (!pending.userMessageId) {
+        // HITL prompts belong exclusively to the composer questionnaire. A
+        // message-derived orphan can otherwise duplicate the same request as
+        // an "Unattributed responses" card above the canonical Turn.
+        if (pending.finalAnswer.kind === 'hitl') continue
         ordered.push({ kind: 'legacy', id: `legacy:${pending.id}`, turn: pending })
         continue
       }

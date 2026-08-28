@@ -77,6 +77,28 @@ describe('buildTurns – core construction', () => {
     expect(turns[0].status).toBe('active')
   })
 
+  it('does not render request-scoped HITL projections as duplicate Agent cards', () => {
+    const user = makeUserEntity({ id: 'u1', clientRequestId: 'client-1' })
+    const agent = makeAgentEntity({
+      id: 'orchestrator:run-1:inv_agent', relatedMessageId: 'u1',
+      clientRequestId: 'client-1', taskStatus: 'input-required',
+    })
+    const question = makeAgentEntity({
+      id: 'hitl-question:orchestrator%3Arun-1%3Ainv_agent:question-1',
+      relatedMessageId: 'u1', clientRequestId: 'client-1',
+      hitlRequestId: 'question-1', hitlMessageId: agent.id,
+      hitlPrompt: 'Question?', taskStatus: 'input-required',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, agent, question]),
+      [user.id, agent.id, question.id],
+      [],
+    )
+
+    expect(turns[0].agentResults.map(result => result.messageId)).toEqual([agent.id])
+  })
+
   it('3. user + agent produces one turn with one agent result', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({

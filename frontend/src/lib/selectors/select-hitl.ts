@@ -19,6 +19,7 @@ function deriveLifecycleState(entity: MessageEntity, question: string): HitlLife
   ) return 'applying'
   if (
     interaction === 'failed' ||
+    interaction === 'error' ||
     !question.trim() ||
     GENERIC_PROMPT.test(question.trim())
   ) return 'routing_failed'
@@ -57,8 +58,9 @@ export function selectPendingHitls(
         question,
         promptType: e.hitlPromptType ?? 'text',
         choices: e.hitlChoices ?? undefined,
-        messageId: e.id,
+        messageId: e.hitlMessageId ?? e.id,
         interactionId: e.hitlInteractionId ?? e.hitlGroupId ?? e.hitlRequestId!,
+        interactionVersion: e.hitlInteractionVersion,
         interactionStatus: e.hitlInteractionStatus,
         applicationStatus: e.hitlApplicationStatus,
         lifecycleState: deriveLifecycleState(e, question),

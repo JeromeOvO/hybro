@@ -330,9 +330,11 @@ Snapshots without both capability fields remain pure legacy snapshots and
 continue to hydrate the incumbent message, streaming, and diagnostic trace
 stores. Mixed snapshots still hydrate legacy logs/trace/HITL for historical
 legacy roots; suppression is exact-root only, and canonical `awaiting_input`
-restores an actionable correlated HITL entity plus the dispatcher-owned
+restores every actionable request-scoped HITL entity plus the dispatcher-owned
 `hitlRequestIndex` through the production `RoomReducer` snapshot path, without
-recency inference. During rolling-deploy recovery, an older legacy-shaped HITL
+recency inference. Multiple requests may retain the same canonical Agent Card
+message identity but never share their client-side projection identity. During
+rolling-deploy recovery, an older legacy-shaped HITL
 request may recreate only its composer message projection when its
 `client_request_id` and related User message exactly match one canonical Turn;
 it never infers or mutates canonical Turn lifecycle state. This keeps rooms
@@ -385,7 +387,15 @@ Trace and Agent Cards are separate UI projections of the same canonical
 neither MessageStore task entities nor TraceStore nodes own execution state.
 Repeated calls remain separate and activity summaries count calls, not unique
 Agent names. Both surfaces expose the same `data-call-id` and normalized
-`data-status`, including cancellation. Cards prefer the durable sanitized root
+`data-status`, including cancellation.
+
+Canonical `model_decision` events fold into `TurnProjection.activity` entries of
+`kind:"decision"` (validated in `contract.ts`, folded in `fold.ts`, rendered by
+`CanonicalTurnTrace`). Decisions make the model-first HITL loop visible in the
+Trace: `interaction_received`, `answered_from_context`, `no_progress`, and
+`degraded_to_user`. Only backend-computed summaries and sanitized Agent labels
+are projected; raw model reasoning is never surfaced.
+ Cards prefer the durable sanitized root
 Agent name, and generic,
 blank, opaque, or internal update labels cannot downgrade it during live,
 snapshot, or database hydration. For old records only, the exact opaque-call
@@ -547,9 +557,11 @@ requests therefore render the external agent name (for example,
 Raw agent task states such as `input-required`, `auth-required`, and
 `policy-required` are not actionable UI state by themselves: until the message
 has a durable `hitlRequestId`, the timeline and agent header continue to show
-Working while backend recovery runs silently. Durable HITL replaces the primary
-surface with Needs Input (composer owns the answer form); work-log running
-state stays active through HITL wait. After answers apply, the HYBRO AI Working
+Working while backend recovery runs silently. Durable HITL content appears only
+in the composer questionnaire; the conversation body does not repeat its prompt
+or render an orphaned “Unattributed responses” Turn. The Turn Trace may still
+show the Waiting for input lifecycle state, and its running state stays active
+through the HITL wait. After answers apply, the HYBRO AI Working
 avatar spinner returns while the turn stays `active` (including synthesizing and
 any early `deterministic_done` surface) and stops when the turn leaves active /
 reaches `phase: completed`. Spinner state follows turn lifecycle, not finalAnswer
@@ -868,9 +880,26 @@ without a manual "Check status" click; that button remains only for
 `delivery_uncertain`. When both an applying recovery and a new open prompt exist,
 the composer prefers the open prompt. The client submits the complete answer
 inventory to `POST /rooms/{room_id}/hitl/respond-batch`, preserving
-`client_request_id` for run correlation. A 409 is reconciled and surfaced rather
-than assumed successful; 410, delivery uncertainty, routing failure, timeout, and
-applying states remain explicit. The frontend has no single-request response
+`client_request_id` for run correlation. When several questions share one A2A
+Agent `message_id`, each question receives a deterministic interaction-and-request-scoped
+MessageStore identity while retaining the wire message identity separately. This is
+also mandatory for singleton interactions: sequential one-question rounds from one
+Agent call never overwrite the prior round's entity. A rolling-deploy raw-message
+projection for the same request is resolved when the scoped entity arrives, avoiding
+a duplicate composer item without mutating the canonical Agent Card.
+SSE, snapshot, and `/hitl/pending` overlays use the same composite projection and
+request index, so sibling questions—and later interactions that reuse a stable
+question ID—cannot overwrite one another; request projections
+are composer-only and never create duplicate Agent Cards. Exact interaction/request
+state merges are monotonic: a REST recovery row with an equal, missing, or older
+version cannot clear a saved answer or regress responded/applying/applied state to
+open, while a genuinely new interaction identity can open normally. Concurrent
+submits are fenced per room and interaction. A 409/410 triggers DB reconciliation,
+a successful authoritative `/pending` overlay, and a best-effort forced canonical
+snapshot reconnect, but is never inferred as success from local state; identical
+durable retries already return success from the backend, so typed conflicts remain
+visible. A failed pending read is an explicit refresh error. Delivery uncertainty,
+routing failure, timeout, and applying states remain explicit. The frontend has no single-request response
 pipeline; even singleton interactions use the batch endpoint. File-upload
 instructions arrive in the ordinary terminal HYBRO summary message, so they do
 not replace the composer. Historical `file` and `unknown` prompt records remain
@@ -884,13 +913,20 @@ hydration may mark hydrated open HITL absent from pending as resolved via
 composer auto-refresh) only clears local *applying* projections that are no
 longer pending — open `input-required` prompts are left alone so a brief empty
 pending window cannot dismiss a still-open UI. Resolved answers remain
-non-actionable timeline summaries sourced from durable message projection.
+non-actionable timeline summaries sourced from durable message projection. The
+composer keeps answered siblings as context only inside their active questionnaire;
+its queue badge counts distinct other actionable/open interactions and excludes
+answered, applying, delivery-uncertain, and routing-failed rows.
 
 ### Canonical HITL and private Agent details
 
 Canonical snapshot HITL requests normalize snapshot-only timestamp metadata before the
-strict live-wire validator is applied. This lets snapshot-first hydration recreate the
-pending message entity and composer response controls. The Composer exclusively owns
+strict live-wire validator is applied. Before any Turn or message store replacement,
+the complete top-level request set is checked against the exact Turn interaction
+inventory, User/client root, request fields, and any existing projection root; a
+contradiction rejects the whole snapshot and requests recovery without advancing the
+watermark. This lets snapshot-first hydration recreate the pending message entity and
+composer response controls atomically. The Composer exclusively owns
 question text and answer controls through the shadcn `Questionnaire` primitive composed
 inside the shared `Card`, `Input`, and `Button` surfaces. While the Turn awaits input,
 the canonical Final slot stays empty and the Conversation Body retains only the

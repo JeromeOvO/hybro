@@ -213,6 +213,31 @@ class RetryScheduledPayload(PiPublicDTO):
     ]
 
 
+class ModelDecisionPayload(PiPublicDTO):
+    internal_turn_id: PublicId
+    decision: Literal[
+        "interaction_received",
+        "answered_from_context",
+        "forwarded_to_user",
+        "no_progress",
+        "degraded_to_user",
+    ]
+    agent_label: PublicLabel | None = None
+    question_summary: PublicSummary | None = None
+    source_summary: PublicSummary | None = None
+    reason: PublicSummary | None = None
+
+    @model_validator(mode="after")
+    def _decision_context_fields(self) -> ModelDecisionPayload:
+        if self.decision in {"answered_from_context", "forwarded_to_user"} and (
+            self.agent_label is None
+        ):
+            raise ValueError(f"{self.decision} requires agent_label")
+        if self.decision in {"no_progress", "degraded_to_user"} and not self.reason:
+            raise ValueError("terminal decision requires reason")
+        return self
+
+
 class RunWaitingInputPayload(PiPublicDTO):
     interaction_id: PublicId
     request_ids: list[PublicId] = Field(min_length=1)
@@ -301,6 +326,7 @@ CanonicalRunEventPayload = (
     | ToolExecutionEndPayload
     | TurnEndPayload
     | RetryScheduledPayload
+    | ModelDecisionPayload
     | RunWaitingInputPayload
     | RunResumedPayload
     | RunSettledPayload
@@ -317,6 +343,7 @@ CANONICAL_RUN_EVENT_PAYLOADS: dict[str, type[PiPublicDTO]] = {
     "tool_execution_end": ToolExecutionEndPayload,
     "turn_end": TurnEndPayload,
     "retry_scheduled": RetryScheduledPayload,
+    "model_decision": ModelDecisionPayload,
     "run_waiting_input": RunWaitingInputPayload,
     "run_resumed": RunResumedPayload,
     "run_settled": RunSettledPayload,
@@ -341,6 +368,7 @@ __all__ = [
     "MessageEndPayload",
     "MessageStartPayload",
     "MessageUpdatePayload",
+    "ModelDecisionPayload",
     "PiPublicDTO",
     "RetryScheduledPayload",
     "RunResumedPayload",

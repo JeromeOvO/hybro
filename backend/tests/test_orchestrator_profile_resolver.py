@@ -55,8 +55,8 @@ def test_parameter_table_defaults_are_pinned():
     fields = Settings.model_fields
     assert fields["orchestrator_fast_model_route"].default == "supervisor_model"
     assert fields["orchestrator_fast_prompt_id"].default == "orchestrator_fast"
-    assert fields["orchestrator_fast_prompt_version"].default == "1"
-    assert fields["orchestrator_fast_max_model_turns"].default == 6
+    assert fields["orchestrator_fast_prompt_version"].default == "5"
+    assert fields["orchestrator_fast_max_model_turns"].default == 12
     assert fields["orchestrator_fast_max_agent_calls"].default == 10
     assert fields["orchestrator_fast_max_parallel_calls"].default == 3
     assert fields["orchestrator_fast_initial_routing"].default == (
@@ -66,8 +66,8 @@ def test_parameter_table_defaults_are_pinned():
 
     assert fields["orchestrator_ultimate_model_route"].default == "supervisor_model"
     assert fields["orchestrator_ultimate_prompt_id"].default == "orchestrator_ultimate"
-    assert fields["orchestrator_ultimate_prompt_version"].default == "1"
-    assert fields["orchestrator_ultimate_max_model_turns"].default == 12
+    assert fields["orchestrator_ultimate_prompt_version"].default == "5"
+    assert fields["orchestrator_ultimate_max_model_turns"].default == 24
     assert fields["orchestrator_ultimate_max_agent_calls"].default == 20
     assert fields["orchestrator_ultimate_max_parallel_calls"].default == 4
     assert fields["orchestrator_ultimate_initial_routing"].default == (
@@ -119,20 +119,20 @@ def test_fast_and_ultimate_profiles_resolve_from_defaults():
     assert fast.model.route == "supervisor_model"
     assert fast.model.model_id == "gpt-5-mini"
     assert fast.prompt.prompt_id == "orchestrator_fast"
-    assert fast.prompt.version == "1"
+    assert fast.prompt.version == "5"
     assert fast.prompt.rendered_system_prompt == FAST_ORCHESTRATOR_SYSTEM_PROMPT
     assert fast.initial_routing == "explicit_agent_first"
     assert fast.finalization == "pass_through"
-    assert fast.max_model_turns == 6
+    assert fast.max_model_turns == 12
     assert fast.max_agent_calls == 10
     assert fast.max_parallel_calls == 3
 
     assert ultimate.profile_id == "ultimate"
     assert ultimate.prompt.prompt_id == "orchestrator_ultimate"
-    assert ultimate.prompt.version == "1"
+    assert ultimate.prompt.version == "5"
     assert ultimate.initial_routing == "explicit_agent_first"
     assert ultimate.finalization == "pass_through"
-    assert ultimate.max_model_turns == 12
+    assert ultimate.max_model_turns == 24
     assert ultimate.max_agent_calls == 20
     assert ultimate.max_parallel_calls == 4
 
@@ -147,6 +147,21 @@ def test_default_prompts_share_truth_and_resource_contracts():
         assert "minimal verified scalar facts" in prompt
         assert "Never reproduce or reconstruct a bulk or structured Artifact" in prompt
         assert "Keep conflicting evidence unresolved" in prompt
+        assert "A2A AND HYBRO RUNTIME REFERENCE" in prompt
+        assert "interaction_id" in prompt
+        assert "answer_kind" in prompt
+        assert "request_user_input" in prompt
+        assert "mutually exclusive answers" in prompt
+        assert "free text belong in question instead" in prompt
+        assert "highest revision as the authoritative current state" in prompt
+        assert (
+            "do not carry forward blockers, missing fields, or status values" in prompt
+        )
+        assert "same batch only when they are mutually independent" in prompt
+        assert "must wait for and consume the latest successful result" in prompt
+        assert "A numeric target being met is not evidence of acceptance" in prompt
+        assert "obtain authoritative successful evidence" in prompt
+        assert "If revision identity or ordering is ambiguous, do not guess" in prompt
         assert "evidence from the responsible authority" in prompt
         assert "proposed, reviewed, accepted, authorized, and executed" in prompt
         assert "verbatim copy" not in prompt

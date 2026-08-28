@@ -6,6 +6,11 @@ from enum import Enum
 from typing import Any
 
 HYBRO_A2A_INTERACTION_METADATA_KEY = "hybro.ai/a2a/interaction"
+HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY = "hybro.ai/a2a/interaction-answer"
+HYBRO_A2A_PART_PROVENANCE_METADATA_KEY = "hybro.ai/a2a/part-provenance"
+HYBRO_A2A_SELECTED_SKILL_METADATA_KEY = "hybro.ai/a2a/selected-skill"
+HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE = "orchestrator_instruction"
+HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE = "durable_user_context"
 
 
 class TaskStateCategory(Enum):
@@ -132,7 +137,12 @@ def get_retry_after_seconds(state: Any) -> int | None:
 __all__ = [
     "CommonTaskState",
     "FAILURE_STATES",
+    "HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE",
+    "HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY",
     "HYBRO_A2A_INTERACTION_METADATA_KEY",
+    "HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE",
+    "HYBRO_A2A_PART_PROVENANCE_METADATA_KEY",
+    "HYBRO_A2A_SELECTED_SKILL_METADATA_KEY",
     "INTERACTIVE_STATES",
     "NON_TERMINAL_STATES",
     "PENDING_STATES",

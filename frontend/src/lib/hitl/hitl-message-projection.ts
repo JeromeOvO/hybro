@@ -32,6 +32,38 @@ export type PendingHitlProjectionInput = {
 }
 
 const OPAQUE_INTERNAL_ID = /^(?:[a-f0-9]{32}|[a-f0-9-]{36})$/i
+const HITL_QUESTION_ENTITY_PREFIX = 'hitl-question:'
+
+/**
+ * One Agent call can request multiple answers and multiple sequential rounds
+ * while every wire event shares the call's message_id. Every question therefore
+ * needs an immutable interaction-and-request-scoped store identity; the wire
+ * message identity remains separate for Agent-card correlation.
+ */
+export function hitlRequestKey(
+  interactionId: string | null | undefined,
+  requestId: string,
+): string {
+  return `${encodeURIComponent(interactionId || requestId)}:${encodeURIComponent(requestId)}`
+}
+
+export function hitlQuestionEntityId(
+  messageId: string,
+  interactionId: string | null | undefined,
+  requestId: string,
+  _questionCount: number | null | undefined,
+): string {
+  return (
+    `${HITL_QUESTION_ENTITY_PREFIX}${encodeURIComponent(messageId)}:`
+    + hitlRequestKey(interactionId, requestId)
+  )
+}
+
+export function isSyntheticHitlQuestionEntity(
+  entity: Pick<IncomingMessage, 'id' | 'hitlMessageId'>,
+): boolean {
+  return Boolean(entity.hitlMessageId && entity.id !== entity.hitlMessageId)
+}
 
 function publicAgentName(value: string | null | undefined): string {
   const name = value?.trim()
@@ -64,7 +96,12 @@ export function buildPendingHitlIncomingMessage(
 ): IncomingMessage {
   const normalizedApplicationStatus = input.applicationStatus ?? 'open'
   return {
-    id: input.messageId,
+    id: hitlQuestionEntityId(
+      input.messageId,
+      input.interactionId ?? input.groupId,
+      input.requestId,
+      input.groupTotal,
+    ),
     roomId: input.roomId,
     messageType: 'agent',
     content: input.prompt || '',
@@ -75,6 +112,7 @@ export function buildPendingHitlIncomingMessage(
     taskStatus: 'input-required' as TaskState,
     taskError: input.applicationError ?? null,
     hitlRequestId: input.requestId,
+    hitlMessageId: input.messageId,
     hitlSource: input.source === 'supervisor' ? 'supervisor' : 'agent',
     hitlPrompt: input.prompt || '',
     hitlPromptType: normalizePromptType(input.promptType),

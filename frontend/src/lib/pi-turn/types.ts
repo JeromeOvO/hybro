@@ -9,6 +9,7 @@ export const CANONICAL_RUN_EVENT_TYPES = [
   'tool_execution_end',
   'turn_end',
   'retry_scheduled',
+  'model_decision',
   'run_waiting_input',
   'run_resumed',
   'run_settled',
@@ -126,6 +127,15 @@ export interface RetryScheduledPayload {
     | 'process_restart'
 }
 
+export type ModelDecisionPayload = {
+  internal_turn_id: string
+  decision: 'interaction_received' | 'answered_from_context' | 'forwarded_to_user' | 'no_progress' | 'degraded_to_user'
+  agent_label?: string | null
+  question_summary?: string | null
+  source_summary?: string | null
+  reason?: string | null
+}
+
 export interface RunWaitingInputPayload {
   interaction_id: string
   request_ids: string[]
@@ -184,6 +194,7 @@ export interface CanonicalPayloadMap {
   tool_execution_end: ToolExecutionEndPayload
   turn_end: TurnEndPayload
   retry_scheduled: RetryScheduledPayload
+  model_decision: ModelDecisionPayload
   run_waiting_input: RunWaitingInputPayload
   run_resumed: RunResumedPayload
   run_settled: RunSettledPayload
@@ -260,6 +271,17 @@ export type TurnActivityItem =
       attempt: number
       delayMs: number
       errorClass: string
+      order: number
+    }
+  | {
+      kind: 'decision'
+      id: string
+      internalTurnId: string
+      decision: 'interaction_received' | 'answered_from_context' | 'forwarded_to_user' | 'no_progress' | 'degraded_to_user'
+      agentLabel?: string
+      questionSummary?: string
+      sourceSummary?: string
+      reason?: string
       order: number
     }
 
@@ -355,6 +377,17 @@ export type RoomSnapshotActivityItem =
       attempt: number
       delay_ms: number
       error_class: string
+      order: number
+    }
+  | {
+      kind: 'decision'
+      id: string
+      internal_turn_id: string
+      decision: 'interaction_received' | 'answered_from_context' | 'forwarded_to_user' | 'no_progress' | 'degraded_to_user'
+      agent_label?: string | null
+      question_summary?: string | null
+      source_summary?: string | null
+      reason?: string | null
       order: number
     }
 

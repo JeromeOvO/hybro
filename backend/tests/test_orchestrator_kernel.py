@@ -594,8 +594,8 @@ async def test_provider_prefetch_is_canceled_and_stream_closed_on_processing_fai
     kernel, store, _, _ = await make_kernel([])
     kernel.model_runtime = TrackingRuntime(stream)
 
-    async def fail_while_prefetch_is_running(run, turn_id, event):
-        del run, turn_id, event
+    async def fail_while_prefetch_is_running(run, turn_id, event, *, message_id=None):
+        del run, turn_id, event, message_id
         await stream.prefetch_started.wait()
         raise RuntimeError("durable event processing failed")
 
@@ -1476,3 +1476,133 @@ async def test_ask_user_invalid_declaration_self_corrects_without_hitl(arguments
     assert result.outcome == "final_answer"
     assert result.run.status == "completed"
     assert hitl_port.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_keeps_multi_batch_turn_open_when_entry_still_parked():
+    """Restart replay must not emit a premature turn_end for a multi-batch turn.
+
+    One batch is fully terminal (a prior join resolved it) while a second batch
+    still carries a presented interaction awaiting a decision. Recovery must
+    keep the internal turn active instead of closing it from the single
+    completed batch.
+    """
+    run = make_run()
+    assistant = AssistantMessage(
+        message_id="assistant-1",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-1",
+                tool_name="fake_agent_echo",
+                arguments={"value": "ok"},
+            ),
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    run = run.model_copy(
+        update={
+            "transcript": [*run.transcript, assistant],
+            "active_internal_turn_id": "turn-open",
+            "active_assistant_message_id": "assistant-1",
+            "active_attempt": 1,
+            "tool_batches": [
+                ToolCallBatch(
+                    assistant_message_id="assistant-1",
+                    internal_turn_id="turn-open",
+                    results_flushed=True,
+                    entries=[
+                        ToolBatchEntry(
+                            call_id="call-1",
+                            assistant_message_id="assistant-1",
+                            source_index=0,
+                            tool_name="fake_agent_echo",
+                            state="terminal",
+                            result_flushed=True,
+                            opaque_public_call_id="inv_call-1",
+                            buffered_terminal_result=ToolResult(
+                                call_id="call-1",
+                                tool_name="fake_agent_echo",
+                                status="completed",
+                                content=[],
+                                artifact_refs=[],
+                            ),
+                        ),
+                    ],
+                ),
+                ToolCallBatch(
+                    assistant_message_id="assistant-1",
+                    internal_turn_id="turn-open",
+                    entries=[
+                        ToolBatchEntry(
+                            call_id="call-2",
+                            assistant_message_id="assistant-1",
+                            source_index=1,
+                            tool_name="fake_agent_pause",
+                            state="input_required",  # type: ignore[arg-type]
+                            presented=True,
+                            suspended_call_record_id="parent-2",
+                            interaction_id="interaction-2",
+                            interaction_fingerprint="fp-2",
+                            opaque_public_call_id="inv_call-2",
+                        ),
+                    ],
+                ),
+            ],
+        }
+    )
+    kernel, store, _, _ = await make_kernel([], run=run)
+    stored = await store.load(next(iter(store.runs)))
+    assert stored is not None
+
+    async def read_events(_room_id, _run_id):
+        return [
+            {
+                "room_seq": 1,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "turn_start",
+                    "payload": {"internal_turn_id": "turn-open", "attempt": 1},
+                },
+            },
+            {
+                "room_seq": 2,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "message_start",
+                    "payload": {
+                        "internal_turn_id": "turn-open",
+                        "message_id": "assistant-1",
+                    },
+                },
+            },
+            {
+                "room_seq": 3,
+                "payload_public": {
+                    "run_id": run.run_id,
+                    "type": "message_end",
+                    "payload": {
+                        "internal_turn_id": "turn-open",
+                        "message_id": "assistant-1",
+                        "disposition": "commentary",
+                        "stop_reason": "tool_use",
+                        "text": "",
+                    },
+                },
+            },
+        ]
+
+    kernel.canonical_event_reader = read_events
+    events: list[str] = []
+
+    async def lifecycle(event_type, _run, _payload):
+        events.append(event_type)
+
+    recovered, closed_turn_id = await kernel._recover_active_canonical_attempt(
+        stored, lifecycle
+    )
+    assert closed_turn_id is None
+    assert "turn_completed" not in events
+    assert recovered.active_internal_turn_id == "turn-open"

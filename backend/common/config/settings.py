@@ -71,9 +71,9 @@ class Settings(BaseSettings):
     # those reserved dimensions are consumed by the kernel.
     orchestrator_fast_model_route: str = "supervisor_model"
     orchestrator_fast_prompt_id: str = "orchestrator_fast"
-    orchestrator_fast_prompt_version: str = "1"
+    orchestrator_fast_prompt_version: str = "5"
     orchestrator_fast_thinking_level: str | None = None
-    orchestrator_fast_max_model_turns: int = 6
+    orchestrator_fast_max_model_turns: int = 12
     orchestrator_fast_grace_model_turns: int = 1
     orchestrator_fast_max_agent_calls: int = 10
     orchestrator_fast_max_parallel_calls: int = 3
@@ -86,9 +86,9 @@ class Settings(BaseSettings):
 
     orchestrator_ultimate_model_route: str = "supervisor_model"
     orchestrator_ultimate_prompt_id: str = "orchestrator_ultimate"
-    orchestrator_ultimate_prompt_version: str = "1"
+    orchestrator_ultimate_prompt_version: str = "5"
     orchestrator_ultimate_thinking_level: str | None = None
-    orchestrator_ultimate_max_model_turns: int = 12
+    orchestrator_ultimate_max_model_turns: int = 24
     orchestrator_ultimate_grace_model_turns: int = 2
     orchestrator_ultimate_max_agent_calls: int = 20
     orchestrator_ultimate_max_parallel_calls: int = 4

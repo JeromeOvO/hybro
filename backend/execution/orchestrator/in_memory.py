@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
-from .events import evaluate_event_append
+from .events import canonicalize_orchestrator_event, evaluate_event_append
 from .models import (
     OrchestratorEvent,
     OrchestratorRunState,
     ProjectionIntent,
     RecoveryClaim,
 )
+from .persistence import RECOVERY_ELIGIBLE_RUN_STATUSES
 from .settlement import transition_projection_intent, transition_projection_settlement
 
 
@@ -98,15 +100,33 @@ class InMemoryOrchestratorRunStore:
         expected_state_version: int,
         owner_id: str,
         lease_expires_at: datetime,
+        claimed_at: datetime,
     ) -> InMemoryRunStoreResult:
         run = self.runs.get(run_id)
-        if run is None or run.state_version != expected_state_version:
+        if (
+            run is None
+            or run.state_version != expected_state_version
+            or lease_expires_at <= claimed_at
+            or run.recovery_claim.quarantined_at is not None
+            or (
+                run.recovery_claim.next_attempt_at is not None
+                and run.recovery_claim.next_attempt_at > claimed_at
+            )
+            or (
+                run.recovery_claim.lease_expires_at is not None
+                and run.recovery_claim.lease_expires_at > claimed_at
+            )
+        ):
             return InMemoryRunStoreResult("conflict", run)
         return await self._replace(
             run.model_copy(
                 update={
-                    "recovery_claim": RecoveryClaim(
-                        owner_id=owner_id, lease_expires_at=lease_expires_at
+                    "recovery_claim": run.recovery_claim.model_copy(
+                        update={
+                            "owner_id": owner_id,
+                            "lease_expires_at": lease_expires_at,
+                            "next_attempt_at": None,
+                        }
                     ),
                     "state_version": run.state_version + 1,
                 }
@@ -150,6 +170,9 @@ class InMemoryOrchestratorRunStore:
         expected_state_version: int,
         owner_id: str,
         next_attempt_at: datetime | None,
+        failure_count: int = 0,
+        quarantined_at: datetime | None = None,
+        quarantine_reason: Literal["terminal_invariant_conflict"] | None = None,
     ) -> InMemoryRunStoreResult:
         run = self.runs.get(run_id)
         if (
@@ -161,7 +184,12 @@ class InMemoryOrchestratorRunStore:
         return await self._replace(
             run.model_copy(
                 update={
-                    "recovery_claim": RecoveryClaim(next_attempt_at=next_attempt_at),
+                    "recovery_claim": RecoveryClaim(
+                        next_attempt_at=next_attempt_at,
+                        failure_count=failure_count,
+                        quarantined_at=quarantined_at,
+                        quarantine_reason=quarantine_reason,
+                    ),
                     "state_version": run.state_version + 1,
                 }
             ),
@@ -172,11 +200,11 @@ class InMemoryOrchestratorRunStore:
     async def list_due_runs(
         self, *, due_at: datetime, limit: int
     ) -> list[OrchestratorRunState]:
-        return [
+        due = [
             run
             for run in self.runs.values()
-            if run.status
-            in {"queued", "running", "waiting_external", "awaiting_user", "finalizing"}
+            if run.status in RECOVERY_ELIGIBLE_RUN_STATUSES
+            and run.recovery_claim.quarantined_at is None
             and (
                 run.recovery_claim.next_attempt_at is None
                 or run.recovery_claim.next_attempt_at <= due_at
@@ -185,7 +213,14 @@ class InMemoryOrchestratorRunStore:
                 run.recovery_claim.lease_expires_at is None
                 or run.recovery_claim.lease_expires_at <= due_at
             )
-        ][:limit]
+        ]
+        due.sort(
+            key=lambda run: (
+                run.recovery_claim.next_attempt_at or run.updated_at,
+                run.run_id,
+            )
+        )
+        return due[: max(limit, 0)]
 
     async def claim_projection_intent(
         self,
@@ -352,6 +387,7 @@ class InMemoryOrchestratorEventStore:
         self.events: dict[str, list[OrchestratorEvent]] = {}
 
     async def append(self, event: OrchestratorEvent) -> str:
+        event = canonicalize_orchestrator_event(event)
         existing = self.events.setdefault(event.run_id, [])
         evaluation = evaluate_event_append(existing, event)
         if evaluation.outcome == "accepted":

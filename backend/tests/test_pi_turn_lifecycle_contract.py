@@ -83,6 +83,12 @@ PAYLOADS = {
         "delay_ms": 1,
         "error_class": "provider_timeout",
     },
+    "model_decision": {
+        "internal_turn_id": "turn-1",
+        "decision": "interaction_received",
+        "agent_label": "Weather Agent",
+        "question_summary": "Which city?",
+    },
     "run_waiting_input": {
         "interaction_id": "interaction-1",
         "request_ids": ["request-1"],

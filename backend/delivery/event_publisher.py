@@ -470,6 +470,18 @@ class EventPublisherImpl:
                 or f"terminal:{event.room_id}:{self._dedup_message_id(event)}:"
                 f"{self._dedup_status(event)}"
             )
+        if isinstance(event, HITLRequestEvent):
+            interaction = event.interaction_id or event.message_id
+            return (
+                f"hitl_request:{event.room_id}:{interaction}:"
+                f"{event.request_id}:{event.question_index}"
+            )
+        if isinstance(event, HITLResolvedEvent):
+            interaction = event.interaction_id or event.message_id
+            return (
+                f"hitl_response:{event.room_id}:{interaction}:"
+                f"{event.request_id}:{event.status}"
+            )
         stable = self._persisted_event_id(event)
         if stable is not None and isinstance(
             event,
@@ -477,8 +489,6 @@ class EventPublisherImpl:
                 RunEventNotification,
                 TaskSubmittedEvent,
                 TaskUpdateEvent,
-                HITLRequestEvent,
-                HITLResolvedEvent,
                 AgentMessageFinal,
             ),
         ):

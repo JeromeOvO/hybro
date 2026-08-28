@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildPendingHitlIncomingMessage } from '@/lib/hitl/hitl-message-projection'
+import {
+  buildPendingHitlIncomingMessage,
+  hitlQuestionEntityId,
+  hitlRequestKey,
+} from '@/lib/hitl/hitl-message-projection'
 
 describe('buildPendingHitlIncomingMessage', () => {
   it('maps durable HITL payload fields to one agent message projection', () => {
@@ -26,7 +30,7 @@ describe('buildPendingHitlIncomingMessage', () => {
     })
 
     expect(incoming).toMatchObject({
-      id: 'agent-msg-1',
+      id: 'hitl-question:agent-msg-1:group-1:hitl-1',
       roomId: 'room-1',
       messageType: 'agent',
       content: 'Need revenue',
@@ -35,6 +39,7 @@ describe('buildPendingHitlIncomingMessage', () => {
       agentSource: 'cloud',
       taskStatus: 'input-required',
       hitlRequestId: 'hitl-1',
+      hitlMessageId: 'agent-msg-1',
       hitlSource: 'agent',
       hitlPrompt: 'Need revenue',
       hitlPromptType: 'text',
@@ -49,6 +54,18 @@ describe('buildPendingHitlIncomingMessage', () => {
       relatedMessageId: 'user-msg-1',
       clientRequestId: 'cr-1',
     })
+  })
+
+  it('uses an encoded deterministic entity id for every interaction question', () => {
+    expect(hitlQuestionEntityId('agent/msg', 'interaction:1', 'question:1', 2)).toBe(
+      'hitl-question:agent%2Fmsg:interaction%3A1:question%3A1',
+    )
+    expect(hitlQuestionEntityId(
+      'agent-msg-1', 'interaction-1', 'question-1', 1,
+    )).toBe('hitl-question:agent-msg-1:interaction-1:question-1')
+    expect(hitlRequestKey('interaction:1', 'question:1')).toBe(
+      'interaction%3A1:question%3A1',
+    )
   })
 
   it('does not expose opaque internal agent ids as display names', () => {

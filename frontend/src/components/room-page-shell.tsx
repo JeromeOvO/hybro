@@ -101,7 +101,7 @@ export interface TimelineAdapter {
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
-  onCancelHitl: (requestId: string) => Promise<void>
+  onCancelHitl: (requestId: string, interactionId?: string) => Promise<void>
   onRefreshHitl: () => Promise<void>
   onChatModeChange: (mode: ChatMode) => void
   isSending: boolean

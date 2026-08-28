@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, render, screen, cleanup } from '@testing-library/react'
+import { act, fireEvent, render, screen, cleanup } from '@testing-library/react'
 import {
   ComposerShell,
   type ComposerShellAdapter,
@@ -10,6 +10,10 @@ import { createSSEDispatcher } from '@/hooks/room/sse-handlers/dispatch'
 import type { AnySSEFrame } from '@/lib/types/sse'
 import { createProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 import { useRoomUiStore } from '@/stores/room-ui-store'
+import {
+  hitlQuestionEntityId,
+  hitlRequestKey,
+} from '@/lib/hitl/hitl-message-projection'
 
 vi.mock('@/components/room-chat-input', () => ({
   RoomChatInput: (props: any) => (
@@ -162,7 +166,11 @@ describe('ComposerShell', () => {
     render(<ComposerShell adapter={mockAdapter} />)
     expect(screen.getByText('Continue?')).toBeDefined()
     expect(screen.getByTestId('hitl-response-frame')).toBeDefined()
-    expect(hitlRequestIndex.current.get('request-1')).toBe('hitl-message-1')
+    expect(hitlRequestIndex.current.get(
+      hitlRequestKey('interaction-1', 'request-1'),
+    )).toBe(hitlQuestionEntityId(
+      'hitl-message-1', 'interaction-1', 'request-1', 1,
+    ))
   })
 
   it('releases the exact canonical processing guard after terminal snapshot recovery', async () => {
@@ -463,6 +471,55 @@ describe('ComposerShell', () => {
     expect(screen.queryByTestId('room-chat-input')).toBeNull()
   })
 
+  it('resets questionnaire state for a newer revision with reused aliases', () => {
+    const store = useMessageStore.getState()
+    store.upsertMessage({
+      id: 'hitl-versioned',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Agent A',
+      timestamp: new Date().toISOString(),
+      taskStatus: 'input-required' as any,
+      hitlRequestId: 'same-request',
+      hitlPrompt: 'First round?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+      hitlInteractionId: 'same-interaction',
+      hitlInteractionVersion: 1,
+      hitlInteractionStatus: 'open',
+    }, 'db')
+
+    render(<ComposerShell adapter={mockAdapter} />)
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), {
+      target: { value: 'stale draft' },
+    })
+    expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value)
+      .toBe('stale draft')
+
+    act(() => {
+      store.upsertMessage({
+        id: 'hitl-versioned',
+        roomId: 'test-room',
+        messageType: 'agent',
+        content: '',
+        senderName: 'Agent A',
+        timestamp: new Date().toISOString(),
+        hitlRequestId: 'same-request',
+        hitlPrompt: 'Second round?',
+        hitlPromptType: 'text',
+        hitlResolved: false,
+        hitlInteractionId: 'same-interaction',
+        hitlInteractionVersion: 2,
+        hitlInteractionStatus: 'open',
+      }, 'sse')
+    })
+
+    expect(screen.getByText('Second round?')).toBeDefined()
+    expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value)
+      .toBe('')
+  })
+
   it('re-renders when the same request changes lifecycle status only', () => {
     const store = useMessageStore.getState()
     store.upsertMessage({
@@ -510,6 +567,55 @@ describe('ComposerShell HITL queuing', () => {
     store.clearRoom()
     store.setRoom('test-room')
     useTurnStore.getState().clear()
+  })
+
+  it('does not count answered applying siblings as queued interactions', () => {
+    const store = useMessageStore.getState()
+    for (const [id, requestId, prompt, index] of [
+      ['answered-1', 'security_training', 'Training?', 0],
+      ['answered-2', 'cloud_providers', 'Cloud providers?', 1],
+    ] as const) {
+      store.upsertMessage({
+        id,
+        roomId: 'test-room',
+        messageType: 'agent',
+        content: '',
+        senderName: 'Broker',
+        timestamp: new Date().toISOString(),
+        taskStatus: 'input-required' as any,
+        hitlRequestId: requestId,
+        hitlPrompt: prompt,
+        hitlPromptType: 'text',
+        hitlResolved: false,
+        hitlUserAnswer: index === 0 ? 'Yes' : 'AWS',
+        hitlInteractionId: 'interaction-old',
+        hitlInteractionStatus: 'applying',
+        hitlApplicationStatus: 'applying',
+        hitlGroupId: 'interaction-old',
+        hitlGroupTotal: 2,
+        hitlGroupIndex: index,
+      }, 'optimistic')
+    }
+    store.upsertMessage({
+      id: 'new-open',
+      roomId: 'test-room',
+      messageType: 'agent',
+      content: '',
+      senderName: 'Broker',
+      timestamp: new Date().toISOString(),
+      taskStatus: 'input-required' as any,
+      hitlRequestId: 'new-question',
+      hitlPrompt: 'New question?',
+      hitlPromptType: 'text',
+      hitlResolved: false,
+      hitlInteractionId: 'interaction-new',
+      hitlInteractionStatus: 'open',
+    }, 'sse')
+
+    render(<ComposerShell adapter={mockAdapter} />)
+
+    expect(screen.getByText('New question?')).toBeDefined()
+    expect(screen.queryByTestId('hitl-queue-note')).toBeNull()
   })
 
   it('notes queued interactions beyond the first while in HITL mode', () => {

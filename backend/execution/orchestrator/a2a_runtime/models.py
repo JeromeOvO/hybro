@@ -233,6 +233,9 @@ class AgentCallLedgerRecord(A2ADurableModel):
     pending_interaction_id: str | None = None
     interaction_revision: int | None = Field(default=None, ge=1)
     interaction_fingerprint: str | None = None
+    # Bounded model-driven reply accounting, persisted on the parent call.
+    model_reply_rounds: dict[str, int] = Field(default_factory=dict)
+    model_reply_joins: list[A2AJoinBinding] = Field(default_factory=list)
     answer_applied: HITLAnswerAppliedMarker | None = None
     consumed_auth_references: list[VerifiedAuthReferenceBinding] = Field(
         default_factory=list
@@ -242,6 +245,10 @@ class AgentCallLedgerRecord(A2ADurableModel):
         Literal["pending", "dispatching", "delivery_uncertain", "accepted"] | None
     ) = None
     continuation_attempts: int = Field(default=0, ge=0)
+    # Authorization refresh is distinct from remote delivery attempts. Keeping
+    # its own durable counter prevents denied/transient refresh outcomes from
+    # becoming an unbounded one-second recovery loop after an answer is saved.
+    authorization_refresh_attempts: int = Field(default=0, ge=0)
     artifact_refs: list[str] = Field(default_factory=list)
     latest_observation_cursor: str | None = None
     recent_observation_ids: list[str] = Field(default_factory=list, max_length=128)
@@ -598,6 +605,43 @@ class A2AContinuationCommand(A2ADurableModel):
     context_id: str
     room_id: str
     room_epoch: int = Field(ge=1)
+    created_at: datetime
+
+
+class A2AModelReplyCommand(A2ADurableModel):
+    """Model-driven reply to an already-parked agent interaction.
+
+    Reuses the same remote task/context so the Agent keeps its session state.
+    Distinct from ``A2AContinuationCommand``: a model reply is free text, not a
+    typed answer inventory.
+    """
+
+    command_id: str
+    transport_kind: Literal["direct", "relay"]
+    call_record_id: str
+    binding_id: str
+    binding_digest: str
+    requesting_subject_digest: str
+    task_id: str
+    context_id: str
+    room_id: str
+    room_epoch: int = Field(ge=1)
+    message_text: str
+    interaction_fingerprint: str | None = None
+    source: Literal["model_reply"] = "model_reply"
+    created_at: datetime
+
+
+class A2AJoinBinding(A2ADurableModel):
+    """Durable correlation between a model-reply invocation and its parent call.
+
+    Persisted on the parent call ledger record; lets the runtime translate a
+    parent-keyed observation into the join invocation's kernel ToolObservation.
+    """
+
+    join_invocation_id: str
+    command_id: str
+    interaction_fingerprint: str | None = None
     created_at: datetime
 
 

@@ -36,7 +36,7 @@ export function getAgentIndexSummary(
       return `Failed · ${failedCount || total} of ${total} call${total === 1 ? '' : 's'}`
     }
     case 'hitl':
-      return `Completed · ${total} call${total === 1 ? '' : 's'}`
+      return `Waiting for input · ${total} call${total === 1 ? '' : 's'}`
     case 'pending':
     default:
       if (isComplete) return `Activity · ${total} call${total === 1 ? '' : 's'}`

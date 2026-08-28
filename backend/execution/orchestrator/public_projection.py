@@ -226,6 +226,7 @@ class PublicProjectionTranslator:
             "tool_execution_completed": "tool_execution_end",
             "turn_completed": "turn_end",
             "model_retry_scheduled": "retry_scheduled",
+            "model_decision": "model_decision",
         }.get(event.event_type)
         if kind is None:
             return None
@@ -402,6 +403,30 @@ class PublicProjectionTranslator:
                 "delay_ms": _as_int(raw.get("retry_delay_ms")) or 0,
                 "error_class": error_class,
             }
+        if kind == "model_decision":
+            payload = {
+                "internal_turn_id": internal_turn_id,
+                "decision": raw.get("decision"),
+            }
+            agent_label = raw.get("agent_label")
+            if agent_label is not None:
+                payload["agent_label"] = self._public_label(agent_label)
+            question_summary = raw.get("question_summary")
+            if question_summary is not None:
+                payload["question_summary"] = sanitize_public_text(
+                    question_summary, secret_values=self._secret_values
+                )[:1_000]
+            source_summary = raw.get("source_summary")
+            if source_summary is not None:
+                payload["source_summary"] = sanitize_public_text(
+                    source_summary, secret_values=self._secret_values
+                )[:1_000]
+            reason = raw.get("reason")
+            if reason is not None:
+                payload["reason"] = sanitize_public_text(
+                    reason, secret_values=self._secret_values
+                )[:1_000]
+            return payload
         return None
 
     @staticmethod
@@ -552,6 +577,14 @@ def _canonical_semantic_id(  # noqa: C901
         return f"{turn_id}:turn_end:{raw.get('status') or 'completed'}"
     if kind == "retry_scheduled":
         return f"{turn_id}:retry:{_as_int(raw.get('attempt')) or 2}"
+    if kind == "model_decision":
+        content = (
+            f"{raw.get('decision')}:"
+            f"{raw.get('agent_label') or ''}:"
+            f"{raw.get('question_summary') or ''}"
+        )
+        digest = hashlib.sha256(sanitize_public_text(content).encode()).hexdigest()[:16]
+        return f"{turn_id}:decision:{digest}"
     raise ValueError(f"unsupported canonical kind {kind}")
 
 

@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from hashlib import sha256
 
 import pytest
 
+from a2a_adapter.client_facade import A2AClientFacadeError
+from a2a_adapter.orchestrator_direct_client import (
+    OrchestratorDirectA2AClient,
+    endpoint_scope_digest,
+)
+from a2a_adapter.task_status import build_completed_text_task
 from common.dto.hitl import A2AInteractionSpec
+from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
+    AgentCardContractError,
     AmbiguousRemoteEffectError,
     RecoverableAuthorizationError,
     RecoverableCheckpointError,
     RecoverableEpochError,
     RecoverableResourceError,
+    RecoverableTransportError,
 )
 from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 from execution.orchestrator.a2a_runtime.in_memory import (
@@ -30,9 +40,15 @@ from execution.orchestrator.a2a_runtime.ledger import (
 )
 from execution.orchestrator.a2a_runtime.models import (
     A2ADispatchReceipt,
+    A2AJoinBinding,
     A2AOwnershipAlias,
     MaterializedResourcePart,
     NormalizedA2AObservation,
+)
+from execution.orchestrator.a2a_runtime.preparation import RunBackedDispatchRecovery
+from execution.orchestrator.a2a_runtime.recovery import (
+    A2ACallRecoveryService,
+    A2ARecoveryCycle,
 )
 from execution.orchestrator.a2a_runtime.runtime import (
     A2AAcceptanceConflict,
@@ -44,7 +60,7 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
 )
 from execution.orchestrator.models import TextPart, ToolResult, ToolSuspension
 
-from ._orchestrator_a2a_helpers import invocation, prepared
+from ._orchestrator_a2a_helpers import invocation, ledger_record, prepared
 from ._orchestrator_helpers import NOW, NeverCancelled
 
 
@@ -85,12 +101,83 @@ class Resources:
         return kwargs["artifact_refs"]
 
 
+class InteractionCasLoserLedger(InMemoryAgentCallLedgerStore):
+    def __init__(self):
+        super().__init__()
+        self.lost_interaction_cas = False
+
+    async def cas(self, record, *, expected_state_version):
+        if record.state == "continuation_pending" and not self.lost_interaction_cas:
+            self.lost_interaction_cas = True
+            return "conflict"
+        return await super().cas(record, expected_state_version=expected_state_version)
+
+
+class FlakyCardSdk:
+    def __init__(self, *, failures: list[A2AClientFacadeError]):
+        self.failures = list(failures)
+        self.card_fetches = 0
+        self.sent_message_ids: list[str] = []
+
+    async def fetch_agent_card(self, url, **kwargs):
+        self.card_fetches += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        return {
+            "name": "Agent",
+            "url": url,
+            "version": "1.0.0",
+            "capabilities": {},
+        }
+
+    async def send_message(self, card, message, **kwargs):
+        self.sent_message_ids.append(message.message_id)
+        task = build_completed_text_task(
+            task_id="task-1", text="done", context_id="context-1"
+        )
+        return {
+            "kind": "task",
+            "result": task.model_dump(mode="json", by_alias=True),
+        }
+
+    async def fetch_remote_task(self, card, task_id, **kwargs):
+        return None
+
+    async def cancel_remote_task(self, card, task_id, **kwargs):
+        return False
+
+    def stream_message(self, card, message, **kwargs):
+        async def empty_stream():
+            if False:  # pragma: no cover - structural async generator
+                yield None
+
+        return empty_stream()
+
+
+class RecordingDirectDispatch(DirectA2ADispatchAdapter):
+    def __init__(self, client):
+        super().__init__(client)
+        self.commands = []
+
+    async def dispatch(self, command):
+        self.commands.append(command)
+        return await super().dispatch(command)
+
+
 class Dispatch:
-    def __init__(self, receipt=None, error=False):
+    def __init__(
+        self,
+        receipt=None,
+        error=False,
+        model_reply_error=None,
+        model_reply_receipt=None,
+    ):
         self.receipt = receipt or A2ADispatchReceipt(
             outcome="accepted", task_id="task-1", context_id="context-1"
         )
         self.error = error
+        self.model_reply_error = model_reply_error
+        self.model_reply_receipt = model_reply_receipt
         self.commands = []
 
     async def dispatch(self, command):
@@ -104,6 +191,12 @@ class Dispatch:
 
     async def continue_task(self, command):
         return self.receipt
+
+    async def dispatch_model_reply(self, command):
+        self.commands.append(command)
+        if self.model_reply_error is not None:
+            raise self.model_reply_error
+        return self.model_reply_receipt or self.receipt
 
     async def inspect_continuation(self, command):
         return self.receipt
@@ -124,19 +217,21 @@ async def setup(
     auth="authorized",
     dispatch=None,
     direct_capabilities=None,
+    binding_endpoint_scope_digest=None,
     ledger=None,
     hitl=None,
 ):
     ledger = ledger or InMemoryAgentCallLedgerStore()
     snapshots = InMemoryPreparedInvocationSnapshotReader()
     snapshot = prepared()
+    binding_updates = {}
     if direct_capabilities is not None:
+        binding_updates["direct_capabilities"] = direct_capabilities
+    if binding_endpoint_scope_digest is not None:
+        binding_updates["endpoint_scope_digest"] = binding_endpoint_scope_digest
+    if binding_updates:
         snapshot = snapshot.model_copy(
-            update={
-                "binding": snapshot.binding.model_copy(
-                    update={"direct_capabilities": direct_capabilities}
-                )
-            }
+            update={"binding": snapshot.binding.model_copy(update=binding_updates)}
         )
     snapshots.put(snapshot)
     epochs = InMemoryRoomEpochStore()
@@ -163,6 +258,330 @@ async def setup(
         hitl=hitl,
     )
     return runtime, ledger, authorization, transport, ingress
+
+
+async def make_call_due(ledger: InMemoryAgentCallLedgerStore) -> None:
+    record = await ledger.load("run-1", "call-1")
+    assert record is not None
+    due = record.model_copy(
+        update={
+            "next_attempt_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+            "state_version": record.state_version + 1,
+        }
+    )
+    assert await ledger.cas(due, expected_state_version=record.state_version) in {
+        "accepted",
+        "replayed",
+    }
+
+
+def flaky_card_dispatch(
+    failures: list[A2AClientFacadeError],
+) -> tuple[RecordingDirectDispatch, FlakyCardSdk]:
+    sdk = FlakyCardSdk(failures=failures)
+    client = OrchestratorDirectA2AClient(
+        send_message=sdk.send_message,
+        stream_message=sdk.stream_message,
+        cancel_remote_task=sdk.cancel_remote_task,
+        fetch_remote_task=sdk.fetch_remote_task,
+        fetch_agent_card=sdk.fetch_agent_card,
+        receipt_factory=A2ADispatchReceipt,
+        observation_factory=NormalizedA2AObservation,
+        recoverable_transport_error_factory=RecoverableTransportError,
+        agent_card_contract_error_factory=AgentCardContractError,
+    )
+    return RecordingDirectDispatch(client), sdk
+
+
+async def test_transient_card_fetch_retries_same_frozen_dispatch_without_false_failure():
+    dispatch, sdk = flaky_card_dispatch(
+        [A2AClientFacadeError("host gateway unavailable", status_code=503)]
+    )
+    runtime, ledger, _, _, _ = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+
+    first = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    after_first = await ledger.load("run-1", "call-1")
+
+    assert isinstance(first, ToolSuspension)
+    assert after_first is not None
+    assert after_first.state == "ready_to_dispatch"
+    assert after_first.terminal_result is None
+    assert after_first.transport_attempts == 1
+    assert sdk.sent_message_ids == []
+
+    await make_call_due(ledger)
+    completed = await runtime.execute(
+        tool_invocation, accepted, signal=NeverCancelled()
+    )
+    terminal = await ledger.load("run-1", "call-1")
+
+    assert isinstance(completed, ToolResult)
+    assert completed.status == "completed"
+    assert terminal is not None
+    assert terminal.state == "completed"
+    assert terminal.terminal_result == completed
+    assert terminal.terminal_result_digest is not None
+    assert len(dispatch.commands) == 2
+    assert dispatch.commands[0].command_id == dispatch.commands[1].command_id
+    assert dispatch.commands[0].message_id == dispatch.commands[1].message_id
+    assert sdk.sent_message_ids == [dispatch.commands[0].message_id]
+    assert sdk.card_fetches == 2
+
+
+async def test_repeated_card_fetch_503_exhausts_transport_bound_without_hot_loop():
+    dispatch, sdk = flaky_card_dispatch(
+        [
+            A2AClientFacadeError("unavailable", status_code=503),
+            A2AClientFacadeError("unavailable", status_code=503),
+            A2AClientFacadeError("unavailable", status_code=503),
+            A2AClientFacadeError("must not be reached", status_code=503),
+        ]
+    )
+    runtime, ledger, _, _, _ = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+
+    first = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    await make_call_due(ledger)
+    second = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    await make_call_due(ledger)
+    exhausted = await runtime.execute(
+        tool_invocation, accepted, signal=NeverCancelled()
+    )
+    replay = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    terminal = await ledger.load("run-1", "call-1")
+
+    assert isinstance(first, ToolSuspension)
+    assert isinstance(second, ToolSuspension)
+    assert isinstance(exhausted, ToolResult)
+    assert exhausted.status == "failed"
+    assert exhausted.error_code == "agent_card_transport_unavailable"
+    assert replay == exhausted
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.terminal_result == exhausted
+    assert terminal.transport_attempts == terminal.runtime_policy.max_transport_attempts
+    assert sdk.card_fetches == terminal.runtime_policy.max_transport_attempts
+    assert sdk.sent_message_ids == []
+    assert len(dispatch.commands) == terminal.runtime_policy.max_transport_attempts
+
+
+async def test_card_fetch_404_is_terminal_nonretryable_and_ledger_agrees():
+    dispatch, sdk = flaky_card_dispatch(
+        [A2AClientFacadeError("not found", status_code=404)]
+    )
+    runtime, ledger, _, _, _ = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+
+    result = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    terminal = await ledger.load("run-1", "call-1")
+
+    assert isinstance(result, ToolResult)
+    assert result.status == "failed"
+    assert result.error_code == "agent_card_contract_error"
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.terminal_result == result
+    assert terminal.transport_attempts == 1
+    assert sdk.card_fetches == 1
+    assert sdk.sent_message_ids == []
+
+
+async def _run_production_recovery_cycle(
+    runtime: A2AAgentToolRuntime,
+    ledger: InMemoryAgentCallLedgerStore,
+    tool_invocation,
+    *,
+    due_at: datetime,
+) -> None:
+    class InvocationReader:
+        async def read_invocation(self, *, run_id, invocation_id):
+            if (
+                run_id == tool_invocation.run_id
+                and invocation_id == tool_invocation.invocation_id
+            ):
+                return tool_invocation
+            return None
+
+    recover_dispatch = RunBackedDispatchRecovery(
+        prepared_reader=InvocationReader(),
+        runtime=runtime,
+    )
+    call_recovery = A2ACallRecoveryService(
+        ledger=ledger,
+        checkpoints=runtime.checkpoint_reader,
+        room_epochs=runtime.room_epochs,
+        dispatch=runtime.dispatch,
+        observations=runtime.observations,
+        recover_dispatch=recover_dispatch,
+    )
+
+    async def noop():
+        return None
+
+    async def recover_calls():
+        await call_recovery.recover_due(due_at=due_at)
+
+    cycle = A2ARecoveryCycle(
+        cancellation=noop,
+        continuation=noop,
+        observations=noop,
+        calls=recover_calls,
+        artifacts=noop,
+        generic_runs=noop,
+        projection=noop,
+        watchdog=noop,
+    )
+    await cycle.run_once()
+
+
+async def test_production_recovery_cycle_retries_card_fetch_and_never_resends_after_success():
+    dispatch, sdk = flaky_card_dispatch(
+        [
+            A2AClientFacadeError("foreground unavailable", status_code=503),
+            A2AClientFacadeError("recovery unavailable", status_code=503),
+        ]
+    )
+    runtime, ledger, _, _, _ = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+    first = await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+    assert isinstance(first, ToolSuspension)
+
+    await make_call_due(ledger)
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    after_second = await ledger.load("run-1", "call-1")
+    assert after_second is not None
+    assert after_second.state == "ready_to_dispatch"
+    assert after_second.transport_attempts == 2
+    assert after_second.terminal_result is None
+    assert sdk.sent_message_ids == []
+
+    await make_call_due(ledger)
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    terminal = await ledger.load("run-1", "call-1")
+    assert terminal is not None
+    assert terminal.state == "completed"
+    assert terminal.transport_attempts == 3
+    assert terminal.terminal_result is not None
+    assert terminal.terminal_result.status == "completed"
+    assert sdk.card_fetches == 3
+    assert sdk.sent_message_ids == [dispatch.commands[0].message_id]
+    assert len({command.command_id for command in dispatch.commands}) == 1
+    assert len({command.message_id for command in dispatch.commands}) == 1
+
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    assert sdk.card_fetches == 3
+    assert len(sdk.sent_message_ids) == 1
+    assert (await ledger.load("run-1", "call-1")).terminal_result == (
+        terminal.terminal_result
+    )
+
+
+async def test_production_recovery_cycle_bounds_repeated_card_503():
+    dispatch, sdk = flaky_card_dispatch(
+        [A2AClientFacadeError("unavailable", status_code=503)] * 4
+    )
+    runtime, ledger, _, _, _ = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+    await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+
+    await make_call_due(ledger)
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    await make_call_due(ledger)
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    terminal = await ledger.load("run-1", "call-1")
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.transport_attempts == terminal.runtime_policy.max_transport_attempts
+    assert terminal.terminal_result is not None
+    assert terminal.terminal_result.error_code == "agent_card_transport_unavailable"
+    assert sdk.card_fetches == terminal.runtime_policy.max_transport_attempts
+    assert sdk.sent_message_ids == []
+
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    assert sdk.card_fetches == terminal.runtime_policy.max_transport_attempts
+
+
+async def test_production_recovery_cycle_terminalizes_card_404_once():
+    dispatch, sdk = flaky_card_dispatch(
+        [
+            A2AClientFacadeError("foreground unavailable", status_code=503),
+            A2AClientFacadeError("not found", status_code=404),
+        ]
+    )
+    runtime, ledger, _, _, _ = await setup(
+        dispatch=dispatch,
+        binding_endpoint_scope_digest=endpoint_scope_digest(
+            "https://agent.example/a2a"
+        ),
+    )
+    tool_invocation = invocation()
+    accepted = await runtime.accept(tool_invocation)
+    await runtime.execute(tool_invocation, accepted, signal=NeverCancelled())
+
+    await make_call_due(ledger)
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    terminal = await ledger.load("run-1", "call-1")
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.transport_attempts == 2
+    assert terminal.terminal_result is not None
+    assert terminal.terminal_result.error_code == "agent_card_contract_error"
+    assert sdk.card_fetches == 2
+    assert sdk.sent_message_ids == []
+
+    await _run_production_recovery_cycle(
+        runtime, ledger, tool_invocation, due_at=datetime.now(UTC)
+    )
+    assert sdk.card_fetches == 2
+    assert (await ledger.load("run-1", "call-1")).terminal_result == (
+        terminal.terminal_result
+    )
 
 
 async def test_accept_is_durable_idempotent_and_has_no_transport_effect():
@@ -317,7 +736,7 @@ async def test_execute_input_required_returns_request_as_tool_result():
 
 
 async def test_execute_typed_input_required_suspends_and_activates_hitl():
-    runtime, ledger, _, dispatch, _ = await setup()
+    runtime, ledger, _, dispatch, ingress = await setup()
     accepted = await runtime.accept(invocation())
     record = await ledger.load("run-1", "call-1")
     interaction = {
@@ -373,6 +792,61 @@ async def test_execute_typed_input_required_suspends_and_activates_hitl():
     assert fingerprint == persisted.interaction_fingerprint
     assert route.call_record_id == persisted.call_record_id
     assert A2AInteractionSpec.model_validate(interaction) == spec
+    inbox = await ingress.inbox.load(observation.observation_id)
+    assert inbox.state == "ledger_applied"
+    assert inbox.delivery_route == "executor"
+    assert inbox.delivery_state == "checkpointed"
+
+
+async def test_execute_does_not_checkpoint_losing_typed_interaction():
+    ledger = InteractionCasLoserLedger()
+    runtime, ledger, _, dispatch, ingress = await setup(ledger=ledger)
+    accepted = await runtime.accept(invocation())
+    record = await ledger.load("run-1", "call-1")
+    interaction = {
+        "schema_version": 1,
+        "interaction_id": "interaction-loser",
+        "questions": [
+            {
+                "question_id": "question-loser",
+                "interaction_kind": "questionnaire",
+                "prompt": "Losing question?",
+                "answer_kind": "text",
+                "required": True,
+            }
+        ],
+    }
+    observation = NormalizedA2AObservation(
+        observation_id="obs-typed-loser",
+        call_record_id=record.call_record_id,
+        source_kind="direct",
+        source_identity="direct:endpoint:task-1:input_required:loser",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        agent_id="agent-1",
+        content=[TextPart(text="Losing question?")],
+        interaction_spec=interaction,
+    )
+    dispatch.receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_observation=observation,
+    )
+
+    outcome = await runtime.execute(invocation(), accepted, signal=NeverCancelled())
+
+    assert isinstance(outcome, ToolSuspension)
+    persisted = await ledger.load("run-1", "call-1")
+    assert persisted.state == "dispatching"
+    assert persisted.pending_interaction_id is None
+    assert await runtime.hitl.read_interaction("interaction-loser") is None
+    inbox = await ingress.inbox.load(observation.observation_id)
+    assert inbox.state == "pending"
+    assert inbox.delivery_route == "unresolved"
 
 
 async def test_execute_invalid_interaction_spec_fails_closed():
@@ -831,6 +1305,21 @@ async def test_runtime_competing_terminal_cas_winner_requires_hitl_finalization(
     assert len(dispatch.commands) == 1
 
 
+async def test_runtime_parked_abandonment_propagates_recoverable_store_failure():
+    class FailingHITL(InMemoryHITLApplicationPort):
+        async def abandon(self, *args, **kwargs):
+            raise RecoverableCheckpointError("HITL store unavailable")
+
+    runtime, _, _, _, _ = await setup(hitl=FailingHITL())
+
+    with pytest.raises(RecoverableCheckpointError, match="HITL store unavailable"):
+        await runtime.abandon_parked_interaction(
+            call_record_id="call-record-1",
+            interaction_id="interaction-1",
+            terminal_state="failed",
+        )
+
+
 async def test_runtime_terminal_finalizer_programming_defect_surfaces():
     class ProgrammingDefectHITL(InMemoryHITLApplicationPort):
         async def abandon(self, *args, **kwargs):
@@ -877,3 +1366,324 @@ async def test_inline_terminal_evidence_is_inboxed_before_result():
     assert inbox is not None
     assert inbox.delivery_route == "executor"
     assert (await ledger.load("run-1", "call-1")).state == "completed"
+
+
+async def test_dispatch_model_reply_bounds_fingerprint_none_and_dedupes_replay():
+    runtime, ledger, _, dispatch, _ = await setup()
+    parked = ledger_record(state="input_required").model_copy(
+        update={
+            "a2a_task_id": "task-1",
+            "a2a_context_id": "context-1",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": None,
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    inv1 = invocation(call_id="join-1")
+    inv2 = invocation(call_id="join-2")
+    inv3 = invocation(call_id="join-3")
+
+    first = await runtime.dispatch_model_reply(
+        inv1,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(first, ToolSuspension)
+    assert dispatch.commands
+    persisted = await ledger.load_by_record_id(parked.call_record_id)
+    assert persisted.model_reply_rounds == {"": 1}
+    assert len(persisted.model_reply_joins) == 1
+
+    second = await runtime.dispatch_model_reply(
+        inv2,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(second, ToolSuspension)
+    persisted = await ledger.load_by_record_id(parked.call_record_id)
+    assert persisted.model_reply_rounds == {"": 2}
+
+    third = await runtime.dispatch_model_reply(
+        inv3,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(third, ToolResult)
+    assert third.error_code == "auto_reply_limit_reached"
+
+    # Replaying a prior invocation re-dispatches idempotently without
+    # re-checking the bound or double-counting the join.
+    before = await ledger.load_by_record_id(parked.call_record_id)
+    commands_before = len(dispatch.commands)
+    replay = await runtime.dispatch_model_reply(
+        inv2,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(replay, ToolSuspension)
+    assert len(dispatch.commands) == commands_before + 1
+    after = await ledger.load_by_record_id(parked.call_record_id)
+    assert after.model_reply_rounds == before.model_reply_rounds
+    assert len(after.model_reply_joins) == len(before.model_reply_joins)
+
+
+async def test_model_reply_transport_suspension_carries_metadata_and_redispatch():
+    observation = NormalizedA2AObservation(
+        observation_id="observation-join",
+        source_kind="direct",
+        source_identity="direct:event-join",
+        binding_scope="endpoint",
+        event_kind="terminal",
+        status="completed",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+    )
+    dispatch = Dispatch(
+        model_reply_error=RecoverableTransportError("temporarily unavailable"),
+        model_reply_receipt=A2ADispatchReceipt(
+            outcome="terminal", terminal_observation=observation
+        ),
+    )
+    runtime, ledger, _, dispatch, _ = await setup(dispatch=dispatch)
+    parked = ledger_record(state="input_required").model_copy(
+        update={
+            "a2a_task_id": "task-1",
+            "a2a_context_id": "context-1",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    inv = invocation(call_id="join-1")
+
+    # Recoverable transport failure → suspension keeps the parent call identity
+    # and parked-interaction metadata so the kernel can re-dispatch.
+    suspension = await runtime.dispatch_model_reply(
+        inv,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(suspension, ToolSuspension)
+    assert suspension.status == "waiting_external"
+    assert suspension.delivery_state == "transport_uncertain"
+    assert suspension.call_record_id == parked.call_record_id
+    assert suspension.interaction_id == "interaction-1"
+    assert suspension.interaction_fingerprint == "fp-1"
+
+    # Re-dispatching the SAME invocation is idempotent: the join binding is
+    # reused (no double counter/binding) and the durable command id is stable.
+    dispatch.model_reply_error = None
+    before = await ledger.load_by_record_id(parked.call_record_id)
+    result = await runtime.dispatch_model_reply(
+        inv,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.status == "completed"
+    persisted = await ledger.load_by_record_id(parked.call_record_id)
+    assert persisted.model_reply_rounds == before.model_reply_rounds
+    assert len(persisted.model_reply_joins) == len(before.model_reply_joins)
+    command_ids = {command.command_id for command in dispatch.commands}
+    assert len(command_ids) == 1
+
+
+async def test_model_reply_card_contract_failure_terminalizes_parent_and_replay_is_safe():
+    dispatch = Dispatch(
+        model_reply_error=AgentCardContractError("Agent Card could not be resolved.")
+    )
+    owner = RuntimeFinalizerFaultHITL("absent")
+    runtime, ledger, _, dispatch, _ = await setup(dispatch=dispatch, hitl=owner)
+    parked = ledger_record(state="input_required").model_copy(
+        update={
+            "a2a_task_id": "task-1",
+            "a2a_context_id": "context-1",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    join = invocation(call_id="join-1")
+
+    result = await runtime.dispatch_model_reply(
+        join,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    terminal = await ledger.load_by_record_id(parked.call_record_id)
+
+    assert isinstance(result, ToolResult)
+    assert result.call_id == join.invocation_id
+    assert result.status == "failed"
+    assert result.error_code == "agent_card_contract_error"
+    assert terminal is not None
+    assert terminal.state == "failed"
+    assert terminal.terminal_result is not None
+    assert terminal.terminal_result.call_id == parked.invocation_id
+    assert terminal.terminal_result.error_code == result.error_code
+    assert terminal.pending_interaction_id == "interaction-1"
+    assert owner.abandon_calls == 1
+    assert len(dispatch.commands) == 1
+
+    replay = await runtime.dispatch_model_reply(
+        join,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert replay == result
+    assert len(dispatch.commands) == 1
+    assert (await ledger.load_by_record_id(parked.call_record_id)).terminal_result == (
+        terminal.terminal_result
+    )
+
+
+async def test_model_reply_card_contract_failure_retries_interaction_finalizer_only():
+    dispatch = Dispatch(
+        model_reply_error=AgentCardContractError("Agent Card could not be resolved.")
+    )
+    owner = RuntimeFinalizerFaultHITL("outage")
+    runtime, ledger, _, dispatch, _ = await setup(dispatch=dispatch, hitl=owner)
+    parked = ledger_record(state="input_required").model_copy(
+        update={
+            "a2a_task_id": "task-1",
+            "a2a_context_id": "context-1",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    join = invocation(call_id="join-1")
+
+    first = await runtime.dispatch_model_reply(
+        join,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(first, ToolSuspension)
+    assert (await ledger.load_by_record_id(parked.call_record_id)).state == "failed"
+    assert len(dispatch.commands) == 1
+
+    replay = await runtime.dispatch_model_reply(
+        join,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(replay, ToolResult)
+    assert replay.error_code == "agent_card_contract_error"
+    assert owner.abandon_calls == 2
+    assert len(dispatch.commands) == 1
+
+
+async def test_model_reply_accepted_receipt_suspends_without_retry_discriminator():
+    """A bare accepted acknowledgement is not a transport failure.
+
+    The Agent accepted the reply and is still working; the response observation
+    will arrive asynchronously. ``dispatch_model_reply`` must return a
+    ``waiting_external`` suspension with ``delivery_state="accepted"`` so the
+    kernel does NOT re-send the delivered message.
+    """
+    dispatch = Dispatch(
+        model_reply_receipt=A2ADispatchReceipt(
+            outcome="accepted", task_id="task-1", context_id="context-1"
+        )
+    )
+    runtime, ledger, _, dispatch, _ = await setup(dispatch=dispatch)
+    parked = ledger_record(state="input_required").model_copy(
+        update={
+            "a2a_task_id": "task-1",
+            "a2a_context_id": "context-1",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    inv = invocation(call_id="join-1")
+
+    suspension = await runtime.dispatch_model_reply(
+        inv,
+        parent_call_record_id=parked.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+
+    assert isinstance(suspension, ToolSuspension)
+    assert suspension.status == "waiting_external"
+    assert suspension.delivery_state == "accepted"
+    assert suspension.call_record_id == parked.call_record_id
+    assert suspension.interaction_id == "interaction-1"
+    assert suspension.interaction_fingerprint == "fp-1"
+    # The Agent is still working: the parent call stays parked (not resuming),
+    # the join binding is durable, and exactly one remote message was sent.
+    persisted = await ledger.load_by_record_id(parked.call_record_id)
+    assert persisted.state == "input_required"
+    assert persisted.model_reply_rounds == {"fp-1": 1}
+    assert len(persisted.model_reply_joins) == 1
+    assert len(dispatch.commands) == 1
+
+
+async def test_model_reply_redispatch_returns_persisted_outcome_without_resend():
+    runtime, ledger, _, dispatch, _ = await setup()
+    result_content = ToolResult(
+        call_id="call-1",
+        tool_name="agent_abc",
+        status="completed",
+        content=[TextPart(text="done")],
+        artifact_refs=[],
+        error_code=None,
+        error_message=None,
+    )
+    terminal = ledger_record(state="input_required").model_copy(
+        update={
+            "state": "completed",
+            "a2a_task_id": "task-1",
+            "a2a_context_id": "context-1",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": None,
+            "terminal_at": NOW,
+            "terminal_result": result_content,
+            "terminal_result_digest": sha256(
+                result_content.model_dump_json().encode()
+            ).hexdigest(),
+            "model_reply_joins": [
+                A2AJoinBinding(
+                    join_invocation_id="join-1",
+                    command_id="model-reply-abc",
+                    interaction_fingerprint=None,
+                    created_at=NOW,
+                )
+            ],
+        }
+    )
+    assert await ledger.insert(terminal) == "accepted"
+    inv = invocation(call_id="join-1")
+
+    commands_before = len(dispatch.commands)
+    result = await runtime.dispatch_model_reply(
+        inv,
+        parent_call_record_id=terminal.call_record_id,
+        interaction_fingerprint=None,
+        signal=NeverCancelled(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert result.content == [TextPart(text="done")]
+    # The parent already resolved: no remote message was sent.
+    assert len(dispatch.commands) == commands_before

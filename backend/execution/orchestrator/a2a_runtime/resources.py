@@ -252,16 +252,42 @@ def freeze_call_manifest(
     binding: AgentToolBindingRecord,
     source_room_id: str,
     source_room_epoch: int,
+    root_context_source_message_id: str | None = None,
 ) -> FrozenCallResourceManifest:
+    """Freeze the exact authorized resources for one Agent call.
+
+    The root user message is durable evidence, whereas ``task`` is a
+    model-authored instruction. If the model omitted ``context_refs``, the
+    preparation boundary implicitly selects only compatible context refs owned
+    by that exact root message. This narrow default prevents instruction text
+    from being mistaken for user evidence without auto-forwarding arbitrary
+    artifacts or attachments. Any non-empty explicit context selection remains
+    exact.
+    """
     parsed = AgentToolInput.model_validate(arguments)
+    inventory_refs = list(run_manifest.refs if run_manifest else [])
+    context_refs = list(parsed.context_refs)
+    if not context_refs and root_context_source_message_id is not None:
+        context_refs = [
+            ref.ref_id
+            for ref in inventory_refs
+            if ref.kind == "context"
+            and ref.source_message_id == root_context_source_message_id
+            and ref.ref_id in binding.compatible_resource_refs
+            and resource_is_compatible(
+                kind=ref.kind,
+                mime_type=ref.mime_type,
+                input_modes=binding.input_modes,
+            )
+        ]
     selected = (
-        [("context", ref) for ref in parsed.context_refs]
+        [("context", ref) for ref in context_refs]
         + [("artifact", ref) for ref in parsed.artifact_refs]
         + [("attachment", ref) for ref in parsed.attachment_refs]
     )
     if run_manifest is None and selected:
         raise ResourceSelectionError("Run has no prepared resources")
-    inventory = {ref.ref_id: ref for ref in (run_manifest.refs if run_manifest else [])}
+    inventory = {ref.ref_id: ref for ref in inventory_refs}
     frozen: list[FrozenCallResourceRef] = []
     for requested_kind, ref_id in selected:
         prepared = inventory.get(ref_id)

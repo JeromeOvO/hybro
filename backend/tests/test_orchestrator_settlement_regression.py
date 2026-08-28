@@ -9,8 +9,10 @@ from execution.orchestrator import (
     ProjectionIntent,
     TerminalCommitRequest,
     TerminalDecisionFacts,
+    TerminalStatusCommitRequest,
     TextPart,
     commit_terminal_decision,
+    commit_terminal_status,
     evaluate_projection_settlement,
     transition_projection_intent,
     transition_projection_settlement,
@@ -102,6 +104,38 @@ def test_terminal_cas_persists_complete_outbox_and_replays_exactly_once():
         request=request(expected_state_version=1),
     )
     assert replay.outcome == "replayed"
+
+
+def test_terminal_events_are_minted_at_bson_millisecond_precision():
+    created_at = NOW.replace(microsecond=616_500)
+    completed = commit_terminal_decision(
+        finalizing(), facts=facts(), request=request(created_at=created_at)
+    )
+    failed = commit_terminal_status(
+        make_run(),
+        request=TerminalStatusCommitRequest(
+            expected_state_version=0,
+            command_id="fail-command",
+            event_id="fail-event",
+            event_sequence=1,
+            event_intent_id="fail-event-intent",
+            public_run_intent_id="fail-run-intent",
+            public_run_target="run-1",
+            status="failed",
+            terminal_reason="test failure",
+            created_at=created_at,
+        ),
+    )
+
+    for result in (completed, failed):
+        assert result.event is not None
+        assert result.event.created_at == NOW.replace(microsecond=616_000)
+        event_intent = next(
+            item
+            for item in result.run.projection_outbox
+            if item.kind == "append_orchestrator_event"
+        )
+        assert event_intent.payload["created_at"].endswith(".616000Z")
 
 
 def test_terminal_cas_rejects_stale_version_and_non_next_sequence():

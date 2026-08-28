@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 from datetime import timedelta
 
+from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from execution.orchestrator import (
     AssistantMessage,
     RecoveryClaim,
@@ -11,6 +13,8 @@ from execution.orchestrator import (
     commit_terminal_decision,
 )
 from execution.orchestrator.contract_harness import InMemoryOrchestratorContractHarness
+from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
+from execution.orchestrator.ports import OrchestratorRunStore
 
 from ._orchestrator_helpers import NOW, make_run
 
@@ -32,6 +36,48 @@ def _run(run_id: str, room_id: str):
             ),
         }
     )
+
+
+def test_recovery_store_signatures_have_exact_claim_and_release_inventory():
+    implementations = (
+        OrchestratorRunStore,
+        InMemoryOrchestratorRunStore,
+        MongoOrchestratorRunStore,
+        InMemoryOrchestratorContractHarness,
+    )
+    expected_claim = {
+        "self",
+        "run_id",
+        "expected_state_version",
+        "owner_id",
+        "lease_expires_at",
+        "claimed_at",
+    }
+    expected_release = {
+        "self",
+        "run_id",
+        "expected_state_version",
+        "owner_id",
+        "next_attempt_at",
+        "failure_count",
+        "quarantined_at",
+        "quarantine_reason",
+    }
+    assert set(RecoveryClaim.model_fields) == {
+        "owner_id",
+        "lease_expires_at",
+        "next_attempt_at",
+        "failure_count",
+        "quarantined_at",
+        "quarantine_reason",
+    }
+    for implementation in implementations:
+        assert set(inspect.signature(implementation.claim_recovery).parameters) == (
+            expected_claim
+        )
+        assert set(inspect.signature(implementation.release_recovery).parameters) == (
+            expected_release
+        )
 
 
 def test_recovery_claim_is_owner_version_and_epoch_fenced():
@@ -144,7 +190,6 @@ def test_recovery_claim_renew_release_and_due_schedule_are_fully_fenced():
             expected_state_version=2,
             owner_id="other",
             next_attempt_at=NOW + timedelta(minutes=5),
-            released_at=NOW + timedelta(seconds=2),
         )
         == "conflict"
     )
@@ -154,7 +199,6 @@ def test_recovery_claim_renew_release_and_due_schedule_are_fully_fenced():
             expected_state_version=2,
             owner_id="worker",
             next_attempt_at=NOW + timedelta(minutes=5),
-            released_at=NOW + timedelta(seconds=2),
         )
         == "accepted"
     )
@@ -163,6 +207,41 @@ def test_recovery_claim_renew_release_and_due_schedule_are_fully_fenced():
         item.run_id
         for item in store.list_due_runs(due_at=NOW + timedelta(minutes=5), limit=10)
     ] == [run.run_id]
+
+
+def test_contract_harness_release_persists_invariant_quarantine_fields():
+    store = InMemoryOrchestratorContractHarness()
+    run = _run("run-quarantine", "room-quarantine").model_copy(
+        update={"recovery_claim": RecoveryClaim(next_attempt_at=NOW)}
+    )
+    assert store.create(run) == "accepted"
+    assert (
+        store.claim_recovery(
+            run.run_id,
+            expected_state_version=0,
+            owner_id="worker",
+            lease_expires_at=NOW + timedelta(minutes=1),
+            claimed_at=NOW,
+        )
+        == "accepted"
+    )
+    assert (
+        store.release_recovery(
+            run.run_id,
+            expected_state_version=1,
+            owner_id="worker",
+            next_attempt_at=None,
+            failure_count=3,
+            quarantined_at=NOW + timedelta(seconds=1),
+            quarantine_reason="terminal_invariant_conflict",
+        )
+        == "accepted"
+    )
+    claim = store.runs[run.run_id].recovery_claim
+    assert claim.failure_count == 3
+    assert claim.quarantined_at == NOW + timedelta(seconds=1)
+    assert claim.quarantine_reason == "terminal_invariant_conflict"
+    assert store.list_due_runs(due_at=NOW + timedelta(days=1), limit=10) == []
 
 
 def test_deletion_waits_for_live_projection_claim_and_fences_stale_owner():
@@ -231,10 +310,16 @@ def test_due_run_inventory_excludes_live_leases_and_terminal_runs():
             )
         }
     )
+    dormant = _run("dormant", "room-dormant").model_copy(
+        update={
+            "status": "awaiting_user",
+            "recovery_claim": RecoveryClaim(next_attempt_at=NOW + timedelta(minutes=1)),
+        }
+    )
     terminal = _run("terminal", "room-terminal").model_copy(
         update={"status": "completed"}
     )
-    for run in (due, live, terminal):
+    for run in (due, live, dormant, terminal):
         assert store.create(run) == "accepted"
     assert [run.run_id for run in store.list_due_runs(due_at=NOW, limit=10)] == ["due"]
 

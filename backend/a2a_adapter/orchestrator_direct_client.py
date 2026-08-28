@@ -22,15 +22,23 @@ classes, and this module stays provider-neutral.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
+from a2a.types import AgentCard
+
 from common.a2a_constants import (
+    HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+    HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
     HYBRO_A2A_INTERACTION_METADATA_KEY,
+    HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
+    HYBRO_A2A_PART_PROVENANCE_METADATA_KEY,
+    HYBRO_A2A_SELECTED_SKILL_METADATA_KEY,
     normalize_task_state_value,
 )
 from common.dto.hitl import A2AInteractionSpec
@@ -44,6 +52,7 @@ from common.utils.a2a_helpers import extract_parts, get_text_from_message
 from common.utils.time import utcnow
 
 from .card_data import sdk_agent_card_data
+from .client_facade import A2AClientFacadeError
 from .message_factory import from_sdk_task, to_sdk_message
 from .translators import facade_result_to_model, message_to_completed_task
 from .webhook_payloads import parse_stream_response_payload
@@ -90,6 +99,22 @@ class _ContinuationCommand(Protocol):
     context_id: str
     room_id: str
     room_epoch: int
+    created_at: Any
+
+
+class _ModelReplyCommand(Protocol):
+    command_id: str
+    transport_kind: str
+    call_record_id: str
+    binding_id: str
+    binding_digest: str
+    requesting_subject_digest: str
+    task_id: str
+    context_id: str
+    room_id: str
+    room_epoch: int
+    message_text: str
+    interaction_fingerprint: str | None
     created_at: Any
 
 
@@ -155,6 +180,10 @@ class FetchAgentCardFn(Protocol):
     async def __call__(
         self, agent_url: str, *, timeout: float = 30.0
     ) -> dict[str, Any]: ...
+
+
+class ExceptionFactory(Protocol):
+    def __call__(self, message: str) -> BaseException: ...
 
 
 # ``CallResolver`` is the production seam for recovery/restart. A composition
@@ -246,8 +275,28 @@ def _task_to_observation_kwargs(  # noqa: C901
 ) -> dict[str, Any]:
     event_kind = _event_kind(task)
     status = _terminal_status(task)
+    interaction_spec = (
+        _extract_interaction_spec(task)
+        if event_kind in {"input_required", "auth_required"}
+        else None
+    )
+    interaction_digest = (
+        sha256(
+            json.dumps(
+                interaction_spec,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        if interaction_spec is not None
+        else None
+    )
+    identity_kind = (
+        f"{event_kind}-{interaction_digest}" if interaction_digest else event_kind
+    )
     stable_id = (
-        observation_id or f"{source_kind}-{call_record_id}-{task_id}-{event_kind}"
+        observation_id or f"{source_kind}-{call_record_id}-{task_id}-{identity_kind}"
     )
     if cursor:
         stable_id = f"{stable_id}-{cursor}"
@@ -345,7 +394,7 @@ def _task_to_observation_kwargs(  # noqa: C901
         "observation_id": stable_id,
         "call_record_id": call_record_id,
         "source_kind": source_kind,
-        "source_identity": f"{source_kind}:{binding_scope}:{task_id}:{event_kind}:{cursor or ''}",
+        "source_identity": f"{source_kind}:{binding_scope}:{task_id}:{identity_kind}:{cursor or ''}",
         "binding_scope": binding_scope,
         "event_kind": event_kind,
         "observed_at": utcnow(),
@@ -356,13 +405,81 @@ def _task_to_observation_kwargs(  # noqa: C901
         "content": content,
         "inline_artifacts": inline_artifacts,
         "artifact_refs": list(dict.fromkeys(artifact_refs)),
-        "interaction_spec": _extract_interaction_spec(task)
-        if event_kind in {"input_required", "auth_required"}
-        else None,
+        "interaction_spec": interaction_spec,
         "error_code": None,
         "error_message": None,
         "cursor": cursor,
     }
+
+
+_RETRYABLE_AGENT_CARD_STATUS_CODES = frozenset({408, 425, 429})
+_NETWORK_EXCEPTION_NAMES = frozenset(
+    {
+        "ClientConnectorError",
+        "ConnectError",
+        "ConnectTimeout",
+        "ConnectionResetError",
+        "NetworkError",
+        "PoolTimeout",
+        "ProxyError",
+        "ReadError",
+        "ReadTimeout",
+        "RemoteProtocolError",
+        "ServerDisconnectedError",
+        "WriteError",
+        "WriteTimeout",
+        "gaierror",
+    }
+)
+_NETWORK_ERROR_MARKERS = (
+    "all connection attempts failed",
+    "connection refused",
+    "connection reset",
+    "connection timed out",
+    "network is unreachable",
+    "name or service not known",
+    "server disconnected",
+    "temporary failure in name resolution",
+    "timed out",
+)
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _exception_status_code(exc: BaseException) -> int | None:
+    for current in _exception_chain(exc):
+        value = getattr(current, "status_code", None)
+        if type(value) is int:
+            return value
+        response = getattr(current, "response", None)
+        value = getattr(response, "status_code", None)
+        if type(value) is int:
+            return value
+    return None
+
+
+def _is_retryable_agent_card_fetch_error(exc: BaseException) -> bool:
+    status_code = _exception_status_code(exc)
+    if status_code is not None:
+        return status_code in _RETRYABLE_AGENT_CARD_STATUS_CODES or status_code >= 500
+    for current in _exception_chain(exc):
+        if isinstance(current, (ConnectionError, TimeoutError)):
+            return True
+        if current.__class__.__name__ in _NETWORK_EXCEPTION_NAMES:
+            return True
+        message = str(current).lower()
+        if any(marker in message for marker in _NETWORK_ERROR_MARKERS):
+            return True
+    return False
 
 
 _RECOVERABLE_MATERIALIZATION_ERROR_NAMES = frozenset(
@@ -670,6 +787,8 @@ class OrchestratorDirectA2AClient:
         fetch_agent_card: FetchAgentCardFn,
         receipt_factory: ReceiptFactory,
         observation_factory: ObservationFactory,
+        recoverable_transport_error_factory: ExceptionFactory,
+        agent_card_contract_error_factory: ExceptionFactory,
         epoch_owner: Any | None = None,
         call_resolver: CallResolver | None = None,
         timeout: float = 600.0,
@@ -684,6 +803,8 @@ class OrchestratorDirectA2AClient:
         self._fetch_agent_card = fetch_agent_card
         self._receipt = receipt_factory
         self._observation = observation_factory
+        self._recoverable_transport_error = recoverable_transport_error_factory
+        self._agent_card_contract_error = agent_card_contract_error_factory
         self._epoch_owner = epoch_owner
         self._call_resolver = call_resolver
         self._timeout = timeout
@@ -745,19 +866,75 @@ class OrchestratorDirectA2AClient:
         )
 
     async def _card(self, endpoint_scope: str) -> dict[str, Any]:
-        return sdk_agent_card_data(await self._fetch_agent_card(endpoint_scope))
+        fetch_error: Literal["transport", "contract"] | None = None
+        try:
+            raw_card = await self._fetch_agent_card(endpoint_scope)
+        except A2AClientFacadeError as exc:
+            fetch_error = (
+                "transport" if _is_retryable_agent_card_fetch_error(exc) else "contract"
+            )
+        except Exception as exc:
+            fetch_error = (
+                "transport" if _is_retryable_agent_card_fetch_error(exc) else "contract"
+            )
+        if fetch_error == "transport":
+            raise self._recoverable_transport_error(
+                "Agent Card is temporarily unavailable."
+            ) from None
+        if fetch_error == "contract":
+            raise self._agent_card_contract_error(
+                "Agent Card could not be resolved."
+            ) from None
+
+        invalid_card = False
+        try:
+            normalized = sdk_agent_card_data(raw_card)
+            AgentCard(**normalized)
+        except Exception:
+            invalid_card = True
+        if invalid_card:
+            raise self._agent_card_contract_error("Agent Card is invalid.") from None
+        return normalized
 
     # -- message construction ----------------------------------------------
 
     def _build_user_message(self, command: _DispatchCommand) -> dict[str, Any]:
-        parts: list[dict[str, Any]] = [{"kind": "text", "text": command.task}]
+        parts: list[dict[str, Any]] = [
+            {
+                "kind": "text",
+                "text": command.task,
+                "metadata": {
+                    HYBRO_A2A_PART_PROVENANCE_METADATA_KEY: {
+                        "schema_version": 1,
+                        "role": HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
+                    }
+                },
+            }
+        ]
         for resource in command.materialized_resources:
             kind = getattr(resource, "kind", None)
             payload = getattr(resource, "payload", None)
             mime_type = getattr(resource, "mime_type", None)
             resource_metadata = getattr(resource, "metadata", None)
             if kind == "text":
-                parts.append({"kind": "text", "text": str(payload)})
+                metadata = (
+                    dict(resource_metadata)
+                    if isinstance(resource_metadata, Mapping)
+                    else {}
+                )
+                # Platform-reserved transport metadata is authoritative even
+                # if an owner-supplied resource used the same key.
+                metadata[HYBRO_A2A_PART_PROVENANCE_METADATA_KEY] = {
+                    "schema_version": 1,
+                    "role": HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
+                }
+                parts.append(
+                    {
+                        "kind": "text",
+                        "text": str(payload),
+                        "metadata": metadata,
+                    }
+                )
             elif kind == "data":
                 metadata = (
                     dict(resource_metadata)
@@ -775,6 +952,11 @@ class OrchestratorDirectA2AClient:
                 )
             elif kind == "file":
                 if isinstance(payload, Mapping):
+                    metadata = (
+                        dict(resource_metadata)
+                        if isinstance(resource_metadata, Mapping)
+                        else {}
+                    )
                     parts.append(
                         {
                             "kind": "file",
@@ -784,25 +966,67 @@ class OrchestratorDirectA2AClient:
                                 "bytes": payload.get("bytes"),
                                 "uri": payload.get("uri"),
                             },
+                            "metadata": metadata or None,
                         }
                     )
+        message_metadata: dict[str, Any] = {"agent_id": command.agent_id}
+        if command.skill_id is not None:
+            message_metadata[HYBRO_A2A_SELECTED_SKILL_METADATA_KEY] = {
+                "schema_version": 1,
+                "skill_id": command.skill_id,
+            }
         return {
             "role": "user",
             "message_id": command.message_id,
             "parts": parts,
-            "metadata": {"agent_id": command.agent_id},
+            "metadata": message_metadata,
         }
 
     def _build_continuation_message(
         self, command: _ContinuationCommand, *, address: DirectCallAddress
     ) -> dict[str, Any]:
         text = _continuation_text(command.answers)
+        typed_answers = [
+            answer.model_dump(mode="json")
+            if hasattr(answer, "model_dump")
+            else dict(answer)
+            if isinstance(answer, Mapping)
+            else answer
+            for answer in command.answers
+        ]
         return {
             "role": "user",
-            "message_id": str(uuid4()),
+            # The durable continuation command is the remote idempotency key.
+            # Recovery must never turn one human answer into a new A2A message.
+            "message_id": command.command_id,
             "task_id": address.task_id,
             "context_id": address.context_id,
             "parts": [{"kind": "text", "text": text}],
+            "metadata": {
+                "agent_id": address.agent_id,
+                HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY: {
+                    "schema_version": 1,
+                    "interaction_id": command.interaction_id,
+                    "interaction_revision": command.interaction_revision,
+                    # This is the durable platform digest. Never recompute it
+                    # at the SDK boundary, where ordering/coercion could drift.
+                    "answer_digest": command.answer_digest,
+                    "answers": typed_answers,
+                },
+            },
+        }
+
+    def _build_model_reply_message(
+        self, command: _ModelReplyCommand, *, address: DirectCallAddress
+    ) -> dict[str, Any]:
+        return {
+            "role": "user",
+            # Durable command id as the remote idempotency key, mirroring
+            # typed-answer continuation delivery.
+            "message_id": command.command_id,
+            "task_id": address.task_id,
+            "context_id": address.context_id,
+            "parts": [{"kind": "text", "text": command.message_text}],
             "metadata": {"agent_id": address.agent_id},
         }
 
@@ -1096,6 +1320,63 @@ class OrchestratorDirectA2AClient:
                 raise
             logger.error(
                 "failed to materialize task artifacts for continue_task: %s", exc
+            )
+            kwargs = _failed_materialization_observation_kwargs(
+                source_kind="direct",
+                call_record_id=command.call_record_id,
+                binding_scope=endpoint_scope_digest(address.endpoint_scope),
+                agent_id=address.agent_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                error_message=f"Failed to materialize agent file artifact: {exc}",
+            )
+            obs = self._observation(**kwargs)
+            return self._receipt(
+                outcome="terminal",
+                task_id=task.id,
+                context_id=task.context_id,
+                terminal_observation=obs,
+            )
+        self._remember(command, task_id=task.id, context_id=task.context_id)
+        return self._receipt_from_task(
+            task,
+            source_kind="direct",
+            call_record_id=command.call_record_id,
+            binding_scope=endpoint_scope_digest(address.endpoint_scope),
+            agent_id=address.agent_id,
+            task_id=task.id,
+            context_id=task.context_id,
+        )
+
+    async def send_model_reply(self, command: _ModelReplyCommand) -> Any:
+        address = await self._resolve_call(command)
+        if not address.task_id or not address.endpoint_scope:
+            return self._receipt(outcome="delivery_uncertain")
+        card = await self._card(address.endpoint_scope)
+        response = await self._send_message(
+            card,
+            to_sdk_message(self._build_model_reply_message(command, address=address)),
+            accepted_output_modes=self._accepted_output_modes,
+            blocking=True,
+            timeout=self._timeout,
+        )
+        task = _response_to_task(response, command_message_id=command.command_id)
+        if task is None:
+            return self._receipt(outcome="delivery_uncertain")
+        try:
+            await _materialize_task_artifacts_epoch_fenced(
+                task,
+                epoch_owner=self._epoch_owner,
+                room_id=getattr(command, "room_id", None),
+                room_epoch=getattr(command, "room_epoch", None),
+                call_record_id=getattr(command, "call_record_id", None),
+                message_id=getattr(command, "command_id", None),
+            )
+        except Exception as exc:
+            if _is_recoverable_materialization_error(exc):
+                raise
+            logger.error(
+                "failed to materialize task artifacts for model_reply: %s", exc
             )
             kwargs = _failed_materialization_observation_kwargs(
                 source_kind="direct",

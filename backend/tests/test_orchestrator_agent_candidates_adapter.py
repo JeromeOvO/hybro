@@ -1,7 +1,24 @@
 from __future__ import annotations
 
+import pytest
+
 from common.dto.agent import AgentInfo
 from execution.adapters.agent_candidates import AgentServiceCandidateSource
+from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
+from execution.orchestrator.a2a_runtime.catalog_assembler import (
+    AgentToolCatalogAssembler,
+    deterministic_tool_name,
+)
+from execution.orchestrator.a2a_runtime.in_memory import (
+    InMemoryAgentToolBindingStore,
+    InMemoryRoomEpochStore,
+)
+from execution.orchestrator.models import (
+    CandidateScopeSnapshot,
+    RunResourceManifestSnapshot,
+)
+
+from ._orchestrator_helpers import NOW, make_run
 
 
 class FakeRegistry:
@@ -121,7 +138,7 @@ async def test_hub_agent_uses_relay_transport_and_hub_scope():
     assert candidates[0].transport_kind == "direct"
 
 
-async def test_skills_produce_per_skill_and_whole_agent_candidates():
+async def test_skills_produce_only_per_skill_candidates():
     info = _info(
         "agent-1",
         raw_card={
@@ -147,10 +164,162 @@ async def test_skills_produce_per_skill_and_whole_agent_candidates():
         requesting_subject_id="user-1",
         candidate_agent_ids=["agent-1"],
     )
-    skill_ids = {candidate.skill_id for candidate in candidates}
-    assert skill_ids == {"skill-1", "skill-2", None}
-    current = next(
-        candidate for candidate in candidates if candidate.skill_id == "skill-1"
-    )
+    assert [candidate.skill_id for candidate in candidates] == ["skill-1", "skill-2"]
+    current = candidates[0]
     assert current.agent_display_name == "Weather Agent"
     assert current.display_name == "Weather Agent - Get Current Weather"
+
+
+async def test_malformed_and_duplicate_skills_keep_only_usable_unique_tools():
+    info = _info(
+        "agent-1",
+        raw_card={
+            "skills": [
+                None,
+                {},
+                {"id": {"nested": "value"}, "name": "object-id-fallback"},
+                {"id": ["value"], "name": "list-id-fallback"},
+                {"id": True, "name": "bool-id-fallback"},
+                {"id": 42, "name": "numeric-id-fallback"},
+                {"id": "   ", "name": "blank-id-fallback"},
+                {"id": "submission-intake", "name": "Prepare Submission"},
+                {"id": "submission-intake", "name": "Duplicate"},
+                {"id": "invalid-name", "name": {"nested": "value"}},
+                {"id": "list-name", "name": ["value"]},
+                {"id": "bool-name", "name": False},
+                {"id": "numeric-name", "name": 7},
+                {"id": "blank-name", "name": "   "},
+                42,
+            ]
+        },
+    )
+    source = AgentServiceCandidateSource(agents=FakeRegistry([info]))
+
+    candidates = await source.list_candidates(
+        run_id="run-1",
+        room_id="room-1",
+        room_epoch=1,
+        requesting_subject_id="user-1",
+        candidate_agent_ids=["agent-1"],
+    )
+
+    assert [candidate.skill_id for candidate in candidates] == [
+        "object-id-fallback",
+        "list-id-fallback",
+        "bool-id-fallback",
+        "numeric-id-fallback",
+        "blank-id-fallback",
+        "submission-intake",
+        "invalid-name",
+        "list-name",
+        "bool-name",
+        "numeric-name",
+        "blank-name",
+    ]
+    assert [candidate.display_name for candidate in candidates] == [
+        "Agent agent-1 - object-id-fallback",
+        "Agent agent-1 - list-id-fallback",
+        "Agent agent-1 - bool-id-fallback",
+        "Agent agent-1 - numeric-id-fallback",
+        "Agent agent-1 - blank-id-fallback",
+        "Agent agent-1 - Prepare Submission",
+        "Agent agent-1 - invalid-name",
+        "Agent agent-1 - list-name",
+        "Agent agent-1 - bool-name",
+        "Agent agent-1 - numeric-name",
+        "Agent agent-1 - blank-name",
+    ]
+
+
+@pytest.mark.parametrize(
+    "skills",
+    [
+        None,
+        [],
+        "legacy-skills",
+        [
+            None,
+            {},
+            {"id": "", "name": "   "},
+            {"id": {"nested": "value"}, "name": ["value"]},
+            {"id": ["value"], "name": {"nested": "value"}},
+            {"id": True, "name": False},
+            {"id": 42, "name": 7},
+            42,
+        ],
+    ],
+)
+async def test_skill_less_and_legacy_cards_keep_whole_agent_fallback(skills):
+    raw_card = {} if skills is None else {"skills": skills}
+    info = _info("agent-1", raw_card=raw_card)
+    source = AgentServiceCandidateSource(agents=FakeRegistry([info]))
+
+    candidates = await source.list_candidates(
+        run_id="run-1",
+        room_id="room-1",
+        room_epoch=1,
+        requesting_subject_id="user-1",
+        candidate_agent_ids=["agent-1"],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].skill_id is None
+    assert candidates[0].display_name == "Agent agent-1"
+
+
+async def test_multiskill_card_freezes_only_skill_bindings_and_model_tools():
+    info = _info(
+        "broker-agent",
+        raw_card={
+            "name": "Broker Agent",
+            "skills": [
+                {"id": "submission-intake", "name": "Prepare Submission"},
+                {"id": "quote-negotiation", "name": "Negotiate Quote"},
+                {"id": "quote-review", "name": "Review Quote"},
+            ],
+        },
+    )
+    source = AgentServiceCandidateSource(agents=FakeRegistry([info]))
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "create-1", activated_at=NOW)
+    bindings = InMemoryAgentToolBindingStore()
+    assembler = AgentToolCatalogAssembler(
+        candidate_source=source,
+        binding_store=bindings,
+        room_epoch_store=epochs,
+    )
+
+    prepared = await assembler.prepare(
+        run_id="run-1",
+        room_id="room-1",
+        room_epoch=1,
+        requesting_subject_id="user-1",
+        candidate_scope=CandidateScopeSnapshot(
+            snapshot_id="scope-1",
+            revision=1,
+            source="test",
+            room_id="room-1",
+            agent_ids=["broker-agent"],
+        ),
+        resource_manifest=RunResourceManifestSnapshot(
+            manifest_id="resources", refs=[], content_digest="empty"
+        ),
+        authorization_basis_digest="auth-basis",
+        created_at=NOW,
+    )
+
+    expected_skill_ids = ["quote-negotiation", "quote-review", "submission-intake"]
+    assert [binding.skill_id for binding in prepared.bindings] == expected_skill_ids
+    assert len(prepared.snapshot.entries) == 3
+    assert len(prepared.bindings) == 3
+    assert await bindings.load(prepared.bindings[0].binding_id) == prepared.bindings[0]
+
+    run = make_run().model_copy(update={"tool_catalog": prepared.snapshot})
+    model_tools = FrozenToolCatalog(prepared.snapshot).list_tools(run)
+    assert [tool.name for tool in model_tools] == [
+        deterministic_tool_name("broker-agent", skill_id)
+        for skill_id in expected_skill_ids
+    ]
+    assert deterministic_tool_name("broker-agent") not in {
+        tool.name for tool in model_tools
+    }

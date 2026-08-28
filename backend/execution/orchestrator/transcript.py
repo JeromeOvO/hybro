@@ -14,6 +14,7 @@ from .models import (
     ModelToolResultPart,
     SessionNotice,
     TextPart,
+    ToolInteractionMessage,
     ToolResultMessage,
     UserMessage,
 )
@@ -41,7 +42,7 @@ def agent_messages_to_model(
     resolved_call_ids = {
         message.call_id
         for message in messages
-        if isinstance(message, ToolResultMessage)
+        if isinstance(message, (ToolResultMessage, ToolInteractionMessage))
     }
     for message in messages:
         if isinstance(message, UserMessage):
@@ -105,6 +106,22 @@ def agent_messages_to_model(
                             tool_name=message.tool_name,
                             content=[ModelTextPart(text=text)],
                             is_error=message.is_error,
+                        )
+                    ],
+                )
+            )
+        elif isinstance(message, ToolInteractionMessage):
+            if message.call_id not in calls:
+                raise TranscriptCorruptionError("orphan tool interaction")
+            result.append(
+                ModelMessage(
+                    role="tool",
+                    content=[
+                        ModelToolResultPart(
+                            call_id=message.call_id,
+                            tool_name=message.tool_name,
+                            content=[ModelTextPart(text=_interaction_text(message))],
+                            is_error=False,
                         )
                     ],
                 )
@@ -175,9 +192,44 @@ def unresolved_call_ids(messages: list[object]) -> set[str]:
     for message in messages:
         if isinstance(message, AssistantMessage):
             calls.update(call.call_id for call in message.tool_calls)
-        elif isinstance(message, ToolResultMessage):
+        elif isinstance(message, (ToolResultMessage, ToolInteractionMessage)):
             results.add(message.call_id)
     return calls - results
+
+
+def _interaction_text(message: ToolInteractionMessage) -> str:
+    """Render an executable, provider-neutral private interaction observation.
+
+    The model must receive the exact platform presentation target and typed
+    question inventory. Public projections never use this transcript text.
+    """
+
+    payload = {
+        "presentation_id": message.presentation_id,
+        "interaction_id": message.interaction_id,
+        "interaction_fingerprint": message.interaction_fingerprint,
+        "questions": [
+            {
+                "question_id": question.question_id,
+                "interaction_kind": question.interaction_kind,
+                "answer_kind": question.answer_kind,
+                "required": question.required,
+                "prompt": question.prompt,
+                "choices": question.choices,
+            }
+            for question in message.questions
+        ],
+        "artifact_refs": list(message.artifact_refs),
+    }
+    return (
+        "[agent input request; answer it from existing evidence, or ask the user]\n"
+        + json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _content_text(parts: list[object]) -> str:

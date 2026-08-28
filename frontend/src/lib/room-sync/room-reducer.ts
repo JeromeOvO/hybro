@@ -12,7 +12,13 @@
 //
 // Legacy behavior (no room_seq in `connected`) is preserved unchanged.
 
-import type { AnySSEFrame, RoomSSEFrameMap, RoomSSEType, SnapshotData } from '@/lib/types/sse'
+import type {
+  AnySSEFrame,
+  RoomSnapshotTurn,
+  RoomSSEFrameMap,
+  RoomSSEType,
+  SnapshotData,
+} from '@/lib/types/sse'
 import { isRoomSSEType } from '@/lib/types/sse'
 import {
   hasCanonicalSnapshotCapability,
@@ -26,6 +32,11 @@ import { useTraceStore } from '@/stores/trace-store'
 import type { ArtifactData, MessageEntity } from '@/stores/message-store/types'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 import { specificPublicAgentName } from '@/lib/agent-display-name'
+import {
+  buildPendingHitlIncomingMessage,
+  hitlQuestionEntityId,
+  hitlRequestKey,
+} from '@/lib/hitl/hitl-message-projection'
 
 export const REORDER_WINDOW_MS = 500
 export const BOOTSTRAP_SNAPSHOT_MS = 500
@@ -518,6 +529,166 @@ function applySnapshotStreaming(roomId: string, snapshot: SnapshotData): void {
   }
 }
 
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function validateCanonicalSnapshotHitl(
+  roomId: string,
+  snapshot: SnapshotData,
+  turns: RoomSnapshotTurn[],
+): boolean {
+  const store = useMessageStore.getState()
+  const turnsByRunId = new Map(turns.map((turn) => [turn.run_id, turn]))
+  const canonicalRequests = new Map<string, NonNullable<ReturnType<typeof canonicalRequestData>>>()
+  const seenRequestKeys = new Set<string>()
+
+  for (const turn of turns) {
+    for (const interaction of turn.hitl_interactions) {
+      const projectedIds = interaction.requests.map((request) => request.request_id)
+      if (!stringArraysEqual(interaction.request_ids, projectedIds)) return false
+      if (interaction.requests.some((request, index) => (
+        request.question_index !== index
+        || request.question_count !== interaction.request_ids.length
+      ))) return false
+    }
+  }
+
+  for (const request of snapshot.hitl.requests) {
+    const requestId = typeof request.request_id === 'string' ? request.request_id : undefined
+    const messageId = typeof request.message_id === 'string' ? request.message_id : undefined
+    if (!requestId || !messageId) return false
+    const requestKey = hitlRequestKey(
+      typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
+      requestId,
+    )
+    if (seenRequestKeys.has(requestKey)) return false
+    seenRequestKeys.add(requestKey)
+    const requestClientId = typeof request.client_request_id === 'string'
+      ? request.client_request_id
+      : undefined
+    const requestUserMessageId = typeof request.related_user_message_id === 'string'
+      ? request.related_user_message_id
+      : typeof request.related_message_id === 'string'
+        ? request.related_message_id
+        : undefined
+    const questionCount = typeof request.question_count === 'number'
+      ? request.question_count
+      : undefined
+    const projectionId = hitlQuestionEntityId(
+      messageId,
+      typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
+      requestId,
+      questionCount,
+    )
+    const canonical = canonicalRequestData(request)
+    const declaresCanonical = Object.prototype.hasOwnProperty.call(request, 'run_id')
+    if (declaresCanonical && canonical === null) return false
+    // Rolling-deploy rows without run_id predate the canonical request
+    // contract, even when their message_id happens to use an orchestrator
+    // prefix. Accept them through legacy overlay before strict correlation;
+    // rows declaring run_id remain exact and fail closed.
+    if (!declaresCanonical) continue
+    const claimsCanonicalRoot = canonical !== null
+    if (!claimsCanonicalRoot) return false
+    const existingEntitiesMatch = [store.entities[messageId], store.entities[projectionId]]
+      .filter((entity): entity is MessageEntity => entity !== undefined)
+      .every((entity) => (
+        entity.roomId === roomId
+        && entity.clientRequestId === requestClientId
+        && entity.relatedMessageId === requestUserMessageId
+      ))
+    if (!existingEntitiesMatch) return false
+    const owner = canonical
+      ? turnsByRunId.get(canonical.run_id)
+      : turns.find((turn) => (
+          turn.client_request_id === requestClientId
+          && turn.user_message_id === requestUserMessageId
+        ))
+    if (
+      !owner
+      || owner.client_request_id !== requestClientId
+      || owner.user_message_id !== requestUserMessageId
+    ) return false
+    if (!canonical) continue
+
+    const interaction = owner.hitl_interactions.find((item) => (
+      item.interaction_id === canonical.interaction_id
+    ))
+    const question = interaction?.requests.find((item) => (
+      item.request_id === canonical.request_id
+    ))
+    if (
+      !interaction
+      || !question
+      || !interaction.request_ids.includes(canonical.request_id)
+      || question.message_id !== canonical.message_id
+      || question.question_index !== canonical.question_index
+      || question.question_count !== canonical.question_count
+      || question.prompt !== canonical.prompt
+      || question.prompt_type !== canonical.prompt_type
+      || question.source !== canonical.source
+      || (question.agent_label ?? null) !== (canonical.agent_label ?? null)
+      || !stringArraysEqual(question.choices, canonical.choices ?? [])
+    ) return false
+    canonicalRequests.set(
+      hitlRequestKey(canonical.interaction_id, canonical.request_id),
+      canonical,
+    )
+  }
+
+  for (const turn of turns) {
+    if (turn.state !== 'awaiting_input' || !turn.active_interaction_id) continue
+    const interaction = turn.hitl_interactions.find((item) => (
+      item.interaction_id === turn.active_interaction_id
+    ))
+    if (!interaction || interaction.state !== 'awaiting_input') return false
+    for (const requestId of interaction.request_ids) {
+      const question = interaction.requests.find((item) => item.request_id === requestId)
+      if (!question || question.status !== 'requested') return false
+      const request = canonicalRequests.get(hitlRequestKey(
+        interaction.interaction_id,
+        requestId,
+      ))
+      if (!request || request.run_id !== turn.run_id) return false
+    }
+  }
+  return true
+}
+
+const CANONICAL_HITL_REQUEST_KEYS = [
+  'run_id',
+  'request_id',
+  'message_id',
+  'interaction_id',
+  'related_user_message_id',
+  'client_request_id',
+  'question_index',
+  'question_count',
+  'prompt',
+  'prompt_type',
+  'source',
+  'room_seq',
+  'choices',
+  'agent_label',
+  'room_event_id',
+  'parent_event_id',
+  'delivery_id',
+  'trace_id',
+] as const
+
+function canonicalRequestData(
+  request: SnapshotData['hitl']['requests'][number],
+) {
+  const wireRequest: Record<string, unknown> = {}
+  for (const key of CANONICAL_HITL_REQUEST_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(request, key)) {
+      wireRequest[key] = request[key]
+    }
+  }
+  return isCanonicalHITLRequestData(wireRequest) ? wireRequest : null
+}
+
 function applySnapshotHitl(
   roomId: string,
   snapshot: SnapshotData,
@@ -530,14 +701,22 @@ function applySnapshotHitl(
     const messageId =
       typeof request.message_id === 'string' ? request.message_id : undefined
     if (!requestId || !messageId) continue
-    let entity = store.entities[messageId]
+    const questionCount = typeof request.question_count === 'number'
+      ? request.question_count
+      : undefined
+    const projectionId = hitlQuestionEntityId(
+      messageId,
+      typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
+      requestId,
+      questionCount,
+    )
+    let sourceEntity = store.entities[messageId]
+    const projectionEntity = store.entities[projectionId]
     // Snapshot folds add the record timestamp as display metadata. The live
     // canonical validator intentionally accepts only wire fields, so normalize
     // this snapshot-only key before applying the same strict contract.
-    const { ts: snapshotTs, ...canonicalRequest } = request
-    const canonical = isCanonicalHITLRequestData(canonicalRequest)
-      ? canonicalRequest
-      : null
+    const snapshotTs = request.ts
+    const canonical = canonicalRequestData(request)
     const requestClientId = typeof request.client_request_id === 'string'
       ? request.client_request_id
       : undefined
@@ -558,25 +737,27 @@ function applySnapshotHitl(
     const ownerMatches = Boolean(owner
       && owner.clientRequestId === requestClientId
       && owner.userMessageId === requestUserMessageId)
+    const declaresCanonical = Object.prototype.hasOwnProperty.call(request, 'run_id')
     const claimsCanonicalRoot = canonical !== null
-      || /^orchestrator:run-[^:]+:/.test(messageId)
-    const existingEntityMatches = !entity || (
-      entity.clientRequestId === requestClientId
-      && entity.relatedMessageId === requestUserMessageId
-    )
+    const existingEntitiesMatch = [sourceEntity, projectionEntity]
+      .filter((entity): entity is MessageEntity => entity !== undefined)
+      .every((entity) => (
+        entity.clientRequestId === requestClientId
+        && entity.relatedMessageId === requestUserMessageId
+      ))
     if (
       hasCanonicalSnapshotCapability(snapshot)
+      && declaresCanonical
       && claimsCanonicalRoot
-      && (!ownerMatches || !existingEntityMatches)
+      && (!ownerMatches || !existingEntitiesMatch)
     ) {
       continue
     }
-    hitlRequestIndex.set(requestId, messageId)
-    if (!entity && owner && ownerMatches) {
+    if (!sourceEntity && owner && ownerMatches) {
       // Rolling-deploy compatibility: canonical snapshots written before the
       // A2A HITL producer upgrade contain an exact Turn root but legacy field
-      // names. Restore only the composer projection; lifecycle authority stays
-      // with the canonical Turn and is never inferred from request recency.
+      // names. Restore the Agent card identity independently from any
+      // request-scoped questionnaire projections.
       const waitingAgentLabels = owner.activity.flatMap((item) => (
         item.kind === 'tool'
         && item.executionKind === 'agent'
@@ -599,34 +780,49 @@ function applySnapshotHitl(
         relatedMessageId: requestUserMessageId,
         isEphemeral: false,
       }, 'sse')
-      entity = useMessageStore.getState().entities[messageId]
+      sourceEntity = useMessageStore.getState().entities[messageId]
     }
-    if (!entity) continue
-    store.upsertMessage(
-      {
-        id: messageId,
-        roomId,
-        messageType: 'agent',
-        content: entity.content ?? '',
-        senderName: entity.senderName ?? 'Agent',
-        timestamp: entity.timestamp ?? new Date().toISOString(),
-        hitlRequestId: requestId,
-        hitlPrompt: typeof request.prompt === 'string' ? request.prompt : undefined,
-        hitlPromptType: typeof request.prompt_type === 'string' ? (request.prompt_type as never) : undefined,
-        hitlChoices: Array.isArray(request.choices)
-          ? request.choices.filter((choice): choice is string => typeof choice === 'string')
-          : undefined,
-        hitlSource: typeof request.source === 'string' ? (request.source as never) : undefined,
-        hitlInteractionId: typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
-        hitlInteractionStatus: typeof request.interaction_status === 'string' ? request.interaction_status : undefined,
-        hitlInteractionVersion: typeof request.interaction_version === 'number' ? request.interaction_version : undefined,
-        hitlApplicationStatus: typeof request.application_status === 'string' ? request.application_status : undefined,
-        hitlResolved: ['responded', 'resolved', 'expired', 'canceled', 'error'].includes(
-          String(request.status ?? ''),
-        ),
-      },
-      'sse',
+    if (!sourceEntity) continue
+    const terminal = ['responded', 'resolved', 'expired', 'canceled', 'error']
+      .includes(String(request.status ?? ''))
+    const incoming = buildPendingHitlIncomingMessage({
+      roomId,
+      messageId,
+      requestId,
+      source: typeof request.source === 'string' ? request.source : undefined,
+      prompt: typeof request.prompt === 'string' ? request.prompt : undefined,
+      promptType: typeof request.prompt_type === 'string' ? request.prompt_type : undefined,
+      choices: Array.isArray(request.choices)
+        ? request.choices.filter((choice): choice is string => typeof choice === 'string')
+        : undefined,
+      timestamp: typeof snapshotTs === 'string' ? snapshotTs : sourceEntity.timestamp,
+      agentId: sourceEntity.agentId,
+      agentName: canonical?.agent_label ?? sourceEntity.senderName,
+      agentSource: sourceEntity.agentSource,
+      expiresAt: typeof request.expires_at === 'string' ? request.expires_at : undefined,
+      interactionId: typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
+      interactionStatus: typeof request.interaction_status === 'string' ? request.interaction_status : undefined,
+      interactionVersion: typeof request.interaction_version === 'number' ? request.interaction_version : undefined,
+      applicationStatus: typeof request.application_status === 'string' ? request.application_status : undefined,
+      groupId: typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
+      groupTotal: questionCount,
+      groupIndex: typeof request.question_index === 'number' ? request.question_index : undefined,
+      stepNumber: undefined,
+      totalSteps: undefined,
+      relatedMessageId: requestUserMessageId,
+      clientRequestId: requestClientId,
+    })
+    store.upsertMessage({ ...incoming, hitlResolved: terminal }, 'sse')
+    const requestKey = hitlRequestKey(
+      typeof request.interaction_id === 'string' ? request.interaction_id : undefined,
+      requestId,
     )
+    if (terminal) {
+      hitlRequestIndex.delete(requestKey)
+      hitlRequestIndex.delete(requestId)
+    } else {
+      hitlRequestIndex.set(requestKey, incoming.id)
+    }
   }
 }
 
@@ -651,7 +847,7 @@ export function applySnapshotToStores(
     return true
   }
   const turns = validateCanonicalSnapshotTurns(snapshot)
-  if (!turns) return false
+  if (!turns || !validateCanonicalSnapshotHitl(roomId, snapshot, turns)) return false
   const replacement = useTurnStore.getState().replaceSnapshot(roomId, turns)
   if (!replacement.ok) return false
 

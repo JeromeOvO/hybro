@@ -126,6 +126,10 @@ export function buildTurns(
       continue
     }
 
+    // Multi-question HITL rows are composer-only projections. The wire Agent
+    // message/card remains the sole timeline identity for the underlying call.
+    if (entity.hitlMessageId && entity.id !== entity.hitlMessageId) continue
+
     // Agent message — find its turn
     const targetTurn = routeAgentToTurn(
       entity,

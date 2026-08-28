@@ -27,6 +27,38 @@ def _run_event(seq: int, kind: str, payload: dict) -> dict:
     }
 
 
+def _hitl_event(
+    seq: int,
+    kind: str,
+    *,
+    request_id: str,
+    interaction_id: str,
+    question_index: int = 0,
+    question_count: int = 1,
+) -> dict:
+    payload = {
+        "request_id": request_id,
+        "message_id": "orchestrator:run-1:inv_agent",
+        "source": "agent",
+        "interaction_id": interaction_id,
+        "question_index": question_index,
+        "question_count": question_count,
+        "run_id": "run-1",
+        "related_user_message_id": "user-1",
+        "client_request_id": "client-1",
+    }
+    if kind == "hitl_request":
+        payload.update({"prompt": f"Question {request_id}", "prompt_type": "text"})
+    else:
+        payload.update({"status": "responded", "answer_ref": f"answer-{request_id}"})
+    return {
+        "room_seq": seq,
+        "kind": kind,
+        "ts": NOW.isoformat(),
+        "payload_public": payload,
+    }
+
+
 def test_canonical_turn_fold_requires_exact_final_commit_and_child_closure():
     fold = RoomEventFold()
     events = [
@@ -153,6 +185,195 @@ def test_canonical_turn_fold_requires_exact_final_commit_and_child_closure():
     assert turn["state"] == "completed"
     assert turn["final_answer"]["text"] == "durable done"
     assert turn["final_committed"] is True
+
+
+def test_canonical_fold_projects_model_decision_activity():
+    fold = RoomEventFold()
+    events = [
+        _run_event(
+            1,
+            "run_started",
+            {
+                "hybro_turn_id": "run-1",
+                "user_message_id": "user-1",
+                "started_at": NOW.isoformat(),
+                "mode": "fast",
+            },
+        ),
+        _run_event(2, "turn_start", {"internal_turn_id": "turn-1", "attempt": 1}),
+        _run_event(
+            3,
+            "message_start",
+            {
+                "internal_turn_id": "turn-1",
+                "message_id": "assistant-1",
+                "role": "assistant",
+            },
+        ),
+        _run_event(
+            4,
+            "tool_execution_start",
+            {
+                "internal_turn_id": "turn-1",
+                "tool_call_id": "inv_agent_0001",
+                "tool_name": "Cyber Broker Agent",
+                "input": {},
+                "execution_kind": "agent",
+                "target": {"name": "Cyber Broker Agent", "source": None},
+            },
+        ),
+        _run_event(
+            5,
+            "model_decision",
+            {
+                "internal_turn_id": "turn-1",
+                "decision": "interaction_received",
+                "agent_label": "Cyber Broker Agent",
+                "question_summary": "Which cloud provider?",
+            },
+        ),
+    ]
+    for event in events:
+        fold.apply(event)
+    turn = fold.state(room_seq=5)["turns"][0]
+    decisions = [item for item in turn["activity"] if item["kind"] == "decision"]
+    assert len(decisions) == 1
+    assert decisions[0]["decision"] == "interaction_received"
+    assert decisions[0]["agent_label"] == "Cyber Broker Agent"
+
+
+def test_canonical_fold_projects_answered_from_context_and_no_progress():
+    fold = RoomEventFold()
+    base = [
+        _run_event(
+            1,
+            "run_started",
+            {
+                "hybro_turn_id": "run-1",
+                "user_message_id": "user-1",
+                "started_at": NOW.isoformat(),
+                "mode": "fast",
+            },
+        ),
+        _run_event(2, "turn_start", {"internal_turn_id": "turn-1", "attempt": 1}),
+        _run_event(
+            3,
+            "message_start",
+            {
+                "internal_turn_id": "turn-1",
+                "message_id": "assistant-1",
+                "role": "assistant",
+            },
+        ),
+        _run_event(
+            4,
+            "model_decision",
+            {
+                "internal_turn_id": "turn-1",
+                "decision": "answered_from_context",
+                "agent_label": "Cyber Broker Agent",
+                "question_summary": "Which cloud provider?",
+                "source_summary": "from earlier messages and attachments",
+            },
+        ),
+        _run_event(
+            5,
+            "model_decision",
+            {
+                "internal_turn_id": "turn-1",
+                "decision": "no_progress",
+                "agent_label": "Cyber Broker Agent",
+                "question_summary": "Which cloud provider?",
+                "reason": "auto_reply_limit_reached",
+            },
+        ),
+    ]
+    for event in base:
+        fold.apply(event)
+    turn = fold.state(room_seq=5)["turns"][0]
+    decisions = [item for item in turn["activity"] if item["kind"] == "decision"]
+    assert [d["decision"] for d in decisions] == [
+        "answered_from_context",
+        "no_progress",
+    ]
+    assert decisions[0]["agent_label"] == "Cyber Broker Agent"
+    assert decisions[0]["source_summary"] == "from earlier messages and attachments"
+    assert decisions[1]["reason"] == "auto_reply_limit_reached"
+
+
+def test_snapshot_ignores_new_questions_reusing_a_resumed_interaction_id():
+    fold = RoomEventFold()
+    events = [
+        _run_event(
+            1,
+            "run_started",
+            {
+                "hybro_turn_id": "run-1",
+                "user_message_id": "user-1",
+                "started_at": NOW.isoformat(),
+                "mode": "fast",
+            },
+        ),
+        _hitl_event(
+            2,
+            "hitl_request",
+            request_id="details",
+            interaction_id="interaction-1",
+        ),
+        _run_event(
+            3,
+            "run_waiting_input",
+            {
+                "interaction_id": "interaction-1",
+                "request_ids": ["details"],
+                "requested_at": NOW.isoformat(),
+            },
+        ),
+        _hitl_event(
+            4,
+            "hitl_response",
+            request_id="details",
+            interaction_id="interaction-1",
+        ),
+        _run_event(
+            5,
+            "run_resumed",
+            {
+                "interaction_id": "interaction-1",
+                "resolved_request_ids": ["details"],
+                "resumed_at": NOW.isoformat(),
+            },
+        ),
+        # A CAS-losing observation must not merge a second questionnaire into
+        # the already resumed canonical interaction.
+        _hitl_event(
+            6,
+            "hitl_request",
+            request_id="security_training",
+            interaction_id="interaction-1",
+            question_index=0,
+            question_count=2,
+        ),
+        _hitl_event(
+            7,
+            "hitl_request",
+            request_id="cloud_providers",
+            interaction_id="interaction-1",
+            question_index=1,
+            question_count=2,
+        ),
+    ]
+
+    assert all(fold.apply(event) for event in events)
+    state = fold.state(room_seq=7)
+    assert [request["request_id"] for request in state["hitl"]["requests"]] == [
+        "details"
+    ]
+    assert state["hitl"]["requests"][0]["room_seq"] == 2
+    interaction = state["turns"][0]["hitl_interactions"][0]
+    assert interaction["state"] == "resumed"
+    assert interaction["request_ids"] == ["details"]
+    assert [request["request_id"] for request in interaction["requests"]] == ["details"]
 
 
 def test_canonical_message_end_must_equal_already_assembled_deltas():

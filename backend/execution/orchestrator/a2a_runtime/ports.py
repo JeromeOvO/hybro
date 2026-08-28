@@ -17,6 +17,7 @@ from .models import (
     A2AContinuationCommand,
     A2ADispatchCommand,
     A2ADispatchReceipt,
+    A2AModelReplyCommand,
     A2AObservationConflictRecord,
     A2AObservationInboxRecord,
     AgentCallLedgerRecord,
@@ -180,6 +181,10 @@ class ObservationInboxStore(Protocol):
         self, *, due_at: datetime, limit: int
     ) -> list[A2AObservationInboxRecord]: ...
 
+    async def list_due_for_call(
+        self, call_record_id: str, *, due_at: datetime, limit: int
+    ) -> list[A2AObservationInboxRecord]: ...
+
     async def delete_by_binding_scope(self, binding_scope: str) -> int: ...
 
     async def delete_by_epoch(self, room_id: str, room_epoch: int) -> int: ...
@@ -189,6 +194,8 @@ class NormalizedObservationRecorder(Protocol):
     async def record(
         self, observation: NormalizedA2AObservation
     ) -> tuple[StoreOutcome, A2AObservationInboxRecord]: ...
+
+    async def mark_ledger_applied(self, observation_id: str) -> None: ...
 
     async def mark_executor_outcome(
         self,
@@ -215,6 +222,10 @@ class A2ADispatchPort(Protocol):
 
     async def continue_task(
         self, command: A2AContinuationCommand
+    ) -> A2ADispatchReceipt: ...
+
+    async def dispatch_model_reply(
+        self, command: A2AModelReplyCommand
     ) -> A2ADispatchReceipt: ...
 
     async def inspect_continuation(
@@ -303,6 +314,12 @@ class HITLApplicationPort(Protocol):
     async def get_eligible_interactions(
         self, room_id: str
     ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]: ...
+
+    async def get_published_interactions(
+        self, room_id: str
+    ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]: ...
+
+    async def publish(self, interaction_id: str, *, call_record_id: str) -> str: ...
 
     async def read_answers(
         self, interaction_id: str, interaction_revision: int

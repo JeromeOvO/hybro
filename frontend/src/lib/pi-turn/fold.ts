@@ -10,6 +10,7 @@ import type {
   MessageEndPayload,
   MessageStartPayload,
   MessageUpdatePayload,
+  ModelDecisionPayload,
   RetryScheduledPayload,
   RoomSnapshotTurn,
   RunResumedPayload,
@@ -167,6 +168,27 @@ function foldRunEvent(
       attempt: payload.attempt,
       delayMs: payload.delay_ms,
       errorClass: payload.error_class,
+      order,
+    })
+    return changed(turns, turn)
+  }
+
+  if (data.type === 'model_decision') {
+    const payload = data.payload as ModelDecisionPayload
+    const internal = turn.internalTurns.find((item) => item.internalTurnId === payload.internal_turn_id)
+    if (!internal || internal.status !== 'active') {
+      return failed(turns, 'model_decision does not belong to an active internal Turn')
+    }
+    if (turn.activity.some((item) => item.kind === 'decision' && item.id === data.event_id)) return unchanged(turns)
+    turn.activity.push({
+      kind: 'decision',
+      id: data.event_id,
+      internalTurnId: payload.internal_turn_id,
+      decision: payload.decision,
+      agentLabel: payload.agent_label ?? undefined,
+      questionSummary: payload.question_summary ?? undefined,
+      sourceSummary: payload.source_summary ?? undefined,
+      reason: payload.reason ?? undefined,
       order,
     })
     return changed(turns, turn)
@@ -626,6 +648,17 @@ export function snapshotTurnToProjection(roomId: string, value: RoomSnapshotTurn
         attempt: item.attempt,
         delayMs: item.delay_ms,
         errorClass: item.error_class,
+        order: item.order,
+      }
+      if (item.kind === 'decision') return {
+        kind: 'decision' as const,
+        id: item.id,
+        internalTurnId: item.internal_turn_id,
+        decision: item.decision,
+        agentLabel: item.agent_label ?? undefined,
+        questionSummary: item.question_summary ?? undefined,
+        sourceSummary: item.source_summary ?? undefined,
+        reason: item.reason ?? undefined,
         order: item.order,
       }
       return {

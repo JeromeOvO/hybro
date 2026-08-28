@@ -738,6 +738,30 @@ class MongoObservationInboxStore:
         values = await _to_list(self.collection.find(query), length=limit)
         return [_from_document(A2AObservationInboxRecord, value) for value in values]
 
+    async def list_due_for_call(
+        self, call_record_id: str, *, due_at: datetime, limit: int
+    ) -> list[A2AObservationInboxRecord]:
+        query = {
+            "call_record_id": call_record_id,
+            "state": {"$nin": ["completed", "quarantined"]},
+            "$and": [
+                {
+                    "$or": [
+                        {"next_attempt_at": None},
+                        {"next_attempt_at": {"$lte": due_at}},
+                    ]
+                },
+                {
+                    "$or": [
+                        {"claim_expires_at": None},
+                        {"claim_expires_at": {"$lte": due_at}},
+                    ]
+                },
+            ],
+        }
+        values = await _to_list(self.collection.find(query), length=limit)
+        return [_from_document(A2AObservationInboxRecord, value) for value in values]
+
     async def delete_by_binding_scope(self, binding_scope: str) -> int:
         result = await self.collection.delete_many({"binding_scope": binding_scope})
         return int(getattr(result, "deleted_count", 0))

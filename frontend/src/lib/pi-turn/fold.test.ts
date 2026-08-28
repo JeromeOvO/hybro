@@ -476,3 +476,119 @@ beforeEach(() => {
   useTurnStore.getState().clear()
   useTurnPresentationStore.getState().clear()
 })
+
+describe('canonical model_decision activity', () => {
+  function decisionTurn(): TurnProjectionMap {
+    let turns: TurnProjectionMap = {}
+    turns = apply(turns, runEvent(1, 'run_started', {
+      hybro_turn_id: 'run-1', user_message_id: 'user-1', started_at: TS, mode: 'fast',
+    }))
+    turns = apply(turns, runEvent(2, 'turn_start', { internal_turn_id: 'turn-1', attempt: 1 }))
+    turns = apply(turns, runEvent(3, 'message_start', {
+      internal_turn_id: 'turn-1', message_id: 'assistant-1', role: 'assistant',
+    }))
+    return turns
+  }
+
+  it('folds all five decision kinds into the active turn', () => {
+    let turns = decisionTurn()
+    turns = apply(turns, runEvent(4, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'interaction_received',
+      agent_label: 'Agent A', question_summary: 'Which?',
+    }))
+    turns = apply(turns, runEvent(5, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'answered_from_context',
+      agent_label: 'Agent A', question_summary: 'Which?',
+      source_summary: 'from earlier messages and attachments',
+    }))
+    turns = apply(turns, runEvent(6, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'forwarded_to_user',
+      agent_label: 'Agent A', question_summary: 'Which?',
+    }))
+    turns = apply(turns, runEvent(7, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'no_progress',
+      agent_label: 'Agent A', question_summary: 'Which?',
+      reason: 'auto_reply_limit_reached',
+    }))
+    turns = apply(turns, runEvent(8, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'degraded_to_user',
+      agent_label: 'Agent A', question_summary: 'Which?',
+      reason: 'decision_turn_inconclusive',
+    }))
+    const decisions = turns['run-1'].activity.filter((item) => item.kind === 'decision')
+    expect(decisions.map((d) => d.decision)).toEqual([
+      'interaction_received', 'answered_from_context', 'forwarded_to_user',
+      'no_progress', 'degraded_to_user',
+    ])
+    expect(decisions[1]).toMatchObject({
+      kind: 'decision', decision: 'answered_from_context', agentLabel: 'Agent A',
+      sourceSummary: 'from earlier messages and attachments',
+    })
+    expect(decisions[2]).toMatchObject({ decision: 'forwarded_to_user', agentLabel: 'Agent A' })
+    expect(decisions[3].reason).toBe('auto_reply_limit_reached')
+  })
+
+  it('deduplicates a decision by event id', () => {
+    let turns = decisionTurn()
+    const event = runEvent(4, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'interaction_received',
+      agent_label: 'Agent A', question_summary: 'Which?',
+    })
+    turns = apply(turns, event)
+    turns = apply(turns, event)
+    expect(turns['run-1'].activity.filter((item) => item.kind === 'decision')).toHaveLength(1)
+  })
+
+  it('rejects a decision that does not belong to an active turn', () => {
+    const turns = decisionTurn()
+    const result = foldCanonicalEvent(turns, 'room-1', {
+      kind: 'run_event',
+      data: runEvent(4, 'model_decision', {
+        internal_turn_id: 'missing-turn', decision: 'interaction_received', agent_label: 'Agent A',
+      }),
+    })
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('canonical model_decision contract validation', () => {
+  it('accepts valid decision payloads and enforces context fields', () => {
+    const base = {
+      type: 'model_decision',
+      payload: { internal_turn_id: 'turn-1', decision: 'interaction_received' },
+    } as const
+    expect(validateCanonicalRunEventData(runEvent(1, 'model_decision', base.payload))).toMatchObject({
+      canonical: true, valid: true,
+    })
+
+    const answered = runEvent(1, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'answered_from_context',
+      agent_label: 'Agent A', question_summary: 'Which?',
+    })
+    expect(validateCanonicalRunEventData(answered)).toMatchObject({ canonical: true, valid: true })
+
+    // answered_from_context requires agent_label
+    const missingLabel = runEvent(1, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'answered_from_context', question_summary: 'Which?',
+    })
+    expect(validateCanonicalRunEventData(missingLabel)).toMatchObject({ canonical: true, valid: false })
+
+    // no_progress / degraded_to_user require a reason
+    const missingReason = runEvent(1, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'no_progress', agent_label: 'Agent A',
+    })
+    expect(validateCanonicalRunEventData(missingReason)).toMatchObject({ canonical: true, valid: false })
+
+    const noProgress = runEvent(1, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'no_progress', reason: 'auto_reply_limit_reached',
+    })
+    expect(validateCanonicalRunEventData(noProgress)).toMatchObject({ canonical: true, valid: true })
+  })
+
+  it('rejects unknown decision values', () => {
+    const event = runEvent(1, 'model_decision', {
+      internal_turn_id: 'turn-1', decision: 'not_a_real_decision',
+    })
+    expect(validateCanonicalRunEventData(event)).toMatchObject({ canonical: true, valid: false })
+  })
+})

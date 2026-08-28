@@ -13,7 +13,12 @@ from pydantic import ValidationError
 from common.dto.hitl import A2AInteractionSpec
 
 from ..kernel import KernelConflict
-from ..models import TextPart, ToolObservation, ToolSuspension
+from ..models import (
+    TextPart,
+    ToolInteractionQuestion,
+    ToolObservation,
+    ToolSuspension,
+)
 from ..ports import InvocationCheckpointReader, InvocationOutcomeCheckpointReader
 from .errors import RecoverableAdapterError, RecoverableCheckpointError
 from .ledger import (
@@ -109,7 +114,11 @@ class A2AObservationIngress(NormalizedObservationRecorder):
             raise ObservationIngressError(
                 "normalized observation exceeds configured limit"
             )
-        payload_digest = sha256(payload.encode()).hexdigest()
+        # Observation time is receipt metadata, not provider event identity.
+        # Re-inspecting an unchanged remote Task must replay the accepted row
+        # instead of creating a conflict solely because normalization ran later.
+        identity_payload = observation.model_dump_json(exclude={"observed_at"})
+        payload_digest = sha256(identity_payload.encode()).hexdigest()
         call = await self._resolve_lineage(observation)
         if call is None:
             # Unresolved evidence is rejected before persistence so it cannot become
@@ -199,6 +208,41 @@ class A2AObservationIngress(NormalizedObservationRecorder):
         }:
             return None
         return call
+
+    async def mark_ledger_applied(self, observation_id: str) -> None:
+        """Checkpoint a direct interactive observation already applied to its call."""
+        record = await self.inbox.load(observation_id)
+        if record is None:
+            raise KeyError(observation_id)
+        if record.state in {"completed", "quarantined"} or (
+            record.delivery_route == "executor"
+            and record.delivery_state == "checkpointed"
+            and record.outcome_digest is None
+        ):
+            return
+        updated = record.model_copy(
+            update={
+                "state": "ledger_applied",
+                "delivery_route": "executor",
+                "delivery_state": "checkpointed",
+                "state_version": record.state_version + 1,
+            }
+        )
+        outcome = await self.inbox.cas(
+            updated, expected_state_version=record.state_version
+        )
+        if outcome in {"accepted", "replayed"}:
+            return
+        winner = await self.inbox.load(observation_id)
+        if winner is not None and (
+            winner.state in {"claimed", "completed", "quarantined"}
+            or (
+                winner.delivery_route == "executor"
+                and winner.delivery_state == "checkpointed"
+            )
+        ):
+            return
+        raise ObservationIngressError("interaction ledger checkpoint failed")
 
     async def mark_executor_outcome(
         self,
@@ -297,7 +341,24 @@ class A2AObservationProcessor:
             or claimed.call_record_id != record.call_record_id
         ):
             return await self._release_inbox(claimed, state="quarantined")
+        if claimed.observation.event_kind != "terminal":
+            terminal_outcome = await self._complete_if_run_terminal(
+                claimed,
+                record,
+                outcome_digest=_digest_json(
+                    claimed.observation.model_dump(mode="json")
+                ),
+            )
+            if terminal_outcome is not None:
+                return terminal_outcome
         if claimed.delivery_route == "executor" and claimed.outcome_digest is not None:
+            terminal_outcome = await self._complete_if_run_terminal(
+                claimed,
+                record,
+                outcome_digest=claimed.outcome_digest,
+            )
+            if terminal_outcome is not None:
+                return terminal_outcome
             checkpointed = await self.outcome_reader.is_outcome_checkpointed(
                 record.run_id,
                 record.invocation_id,
@@ -330,7 +391,11 @@ class A2AObservationProcessor:
                             _to_tool_observation(record, claimed.observation),
                         )
                     except KernelConflict:
-                        pass
+                        return await self.defer_poison(
+                            claimed.observation_id,
+                            error=_kernel_conflict_marker(),
+                            now=datetime.now(UTC),
+                        )
                     checkpointed = await self.outcome_reader.is_outcome_checkpointed(
                         record.run_id,
                         record.invocation_id,
@@ -415,6 +480,27 @@ class A2AObservationProcessor:
             and record.pending_interaction_id == interaction.interaction_id
             and record.interaction_fingerprint == fingerprint
         )
+        observation_already_applied = (
+            observation.observation_id in record.recent_observation_ids
+        )
+        ledger_application_checkpointed = (
+            claimed.delivery_route == "executor"
+            and claimed.delivery_state == "checkpointed"
+            and claimed.outcome_digest is None
+        )
+        if (
+            interaction is not None
+            and (observation_already_applied or ledger_application_checkpointed)
+            and not interaction_already_attached
+            and record.state not in TERMINAL_AGENT_CALL_STATES
+        ):
+            # Direct execution can apply an observation to the call ledger
+            # before its durable inbox row is drained. If the call has since
+            # resumed or advanced to another interaction, that old row is audit
+            # evidence—not a new transition to re-attach. The durable executor
+            # checkpoint keeps this safe even after the bounded recent-ID window
+            # has evicted the original observation.
+            return await self._release_inbox(claimed, state="completed")
         try:
             changed = (
                 record
@@ -431,7 +517,17 @@ class A2AObservationProcessor:
             if claimed is None:
                 return "conflict"
             await self._close_terminal_interaction_or_retry(claimed, record)
-            return await self._release_inbox(claimed, state="completed")
+            # The conflicting row is a completed executor-side loser, while the
+            # persisted terminal winner remains authoritative. Classify the row
+            # consistently with the durable conflict audit instead of leaving
+            # it looking unresolved or awaiting delivery.
+            return await self._release_inbox(
+                claimed,
+                state="completed",
+                route="executor",
+                delivery_state="completed",
+                outcome_digest=conflict.persisted_digest,
+            )
         if changed != record:
             try:
                 winner = await self._cas_or_load_call_winner(
@@ -583,16 +679,37 @@ class A2AObservationProcessor:
             record = activated_record
 
         tool_observation = _to_tool_observation(record, observation)
-        suspension_checkpointed = (
-            await self.checkpoint_reader.is_suspension_checkpointed(
-                record.run_id, record.invocation_id, "waiting_external"
-            )
+        terminal_outcome = await self._complete_if_run_terminal(
+            claimed,
+            record,
+            outcome_digest=_digest_json(tool_observation.model_dump(mode="json")),
+        )
+        if terminal_outcome is not None:
+            return terminal_outcome
+        suspension_checkpointed = any(
+            [
+                await self.checkpoint_reader.is_suspension_checkpointed(
+                    record.run_id, record.invocation_id, status
+                )
+                for status in (
+                    "waiting_external",
+                    "input_required",
+                    "auth_required",
+                )
+            ]
         )
         claimed = await self._renew_and_verify_epoch(claimed, record)
         if claimed is None:
             return "conflict"
         if suspension_checkpointed:
-            await self.sink.deliver(record.run_id, tool_observation)
+            try:
+                await self.sink.deliver(record.run_id, tool_observation)
+            except KernelConflict:
+                return await self.defer_poison(
+                    claimed.observation_id,
+                    error=_kernel_conflict_marker(),
+                    now=datetime.now(UTC),
+                )
             claimed = await self._renew_and_verify_epoch(claimed, record)
             if claimed is None:
                 return "conflict"
@@ -620,6 +737,42 @@ class A2AObservationProcessor:
             state="outcome_pending",
             route="executor",
             outcome_digest=record.terminal_result_digest,
+        )
+
+    async def _complete_if_run_terminal(
+        self,
+        claimed: A2AObservationInboxRecord,
+        record: AgentCallLedgerRecord,
+        *,
+        outcome_digest: str | None,
+    ) -> str | None:
+        try:
+            run_terminal = await self.outcome_reader.is_run_terminal(record.run_id)
+        except RecoverableAdapterError:
+            await self._release_inbox(claimed, state="pending")
+            raise
+        if not run_terminal:
+            return None
+        if record.pending_interaction_id is not None:
+            await self._close_interaction_or_retry(
+                claimed,
+                interaction_id=record.pending_interaction_id,
+                call_record_id=record.call_record_id,
+                terminal_state=(
+                    record.state
+                    if record.state in TERMINAL_AGENT_CALL_STATES
+                    else "run_terminal"
+                ),
+            )
+        # A terminal Run is absorbing. The inbox row remains durable audit
+        # evidence, but executor authority proves that no kernel transition or
+        # public lifecycle event may be emitted for this late observation.
+        return await self._release_inbox(
+            claimed,
+            state="completed",
+            route="executor",
+            delivery_state="completed",
+            outcome_digest=outcome_digest,
         )
 
     async def defer_poison(
@@ -861,13 +1014,65 @@ def _to_tool_observation(
             if observation.event_kind in {"input_required", "auth_required"}
             else "waiting_external"
         )
-        outcome = ToolSuspension(invocation_id=record.invocation_id, status=status)
+        interaction_id: str | None = None
+        interaction_fingerprint: str | None = None
+        questions: list[ToolInteractionQuestion] = []
+        if status in {"input_required", "auth_required"}:
+            if observation.interaction_spec is None:
+                raise ObservationIngressError(
+                    "typed interaction observation lost its interaction spec"
+                )
+            try:
+                interaction = A2AInteractionSpec.model_validate(
+                    observation.interaction_spec
+                )
+            except (TypeError, ValueError, ValidationError) as exc:
+                raise ObservationIngressError(
+                    "typed interaction observation has an invalid interaction spec"
+                ) from exc
+            fingerprint = _digest_json(interaction.model_dump(mode="json"))
+            if (
+                record.state != status
+                or record.pending_interaction_id != interaction.interaction_id
+                or record.interaction_revision is None
+                or record.interaction_fingerprint != fingerprint
+            ):
+                raise ObservationIngressError(
+                    "typed interaction observation does not match the persisted call"
+                )
+            interaction_id = interaction.interaction_id
+            interaction_fingerprint = fingerprint
+            questions = [
+                ToolInteractionQuestion(
+                    question_id=question.question_id,
+                    interaction_kind=question.interaction_kind.value,
+                    prompt=question.prompt,
+                    answer_kind=question.answer_kind.value,
+                    required=question.required,
+                    choices=(list(question.choices) if question.choices else None),
+                )
+                for question in interaction.questions
+            ]
+        outcome = ToolSuspension(
+            invocation_id=record.invocation_id,
+            status=status,
+            observation_cursor=observation.cursor,
+            call_record_id=record.call_record_id,
+            interaction_id=interaction_id,
+            interaction_fingerprint=interaction_fingerprint,
+            questions=questions,
+        )
     return ToolObservation(
         observation_id=observation.observation_id,
         invocation_id=record.invocation_id,
         outcome=outcome,
         observed_at=observation.observed_at,
     )
+
+
+def _kernel_conflict_marker() -> str:
+    fingerprint = sha256(b"observation-sink:KernelConflict").hexdigest()[:16]
+    return f"KernelConflict:{fingerprint}"
 
 
 def _digest_json(value: object) -> str:

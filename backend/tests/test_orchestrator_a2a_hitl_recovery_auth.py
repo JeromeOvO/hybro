@@ -42,8 +42,15 @@ from ._orchestrator_helpers import NOW
 
 
 class Authorization:
+    def __init__(self, *outcomes: str):
+        self.outcomes = list(outcomes) or ["authorized"]
+        self.calls = 0
+
     async def authorize(self, **kwargs):
-        return "authorized"
+        del kwargs
+        index = min(self.calls, len(self.outcomes) - 1)
+        self.calls += 1
+        return self.outcomes[index]
 
 
 class Dispatch:
@@ -280,6 +287,9 @@ class AckLossObservationRecorder:
             raise RecoverableCheckpointError("observation acknowledgement lost")
         return result
 
+    async def mark_ledger_applied(self, observation_id):
+        await self.delegate.mark_ledger_applied(observation_id)
+
     async def mark_executor_outcome(self, observation_id, *, outcome_digest):
         await self.delegate.mark_executor_outcome(
             observation_id, outcome_digest=outcome_digest
@@ -442,7 +452,14 @@ def auth_answers(reference):
     ]
 
 
-async def setup_waiting(*, auth_required=False, ledger=None, hitl=None, dispatch=None):
+async def setup_waiting(
+    *,
+    auth_required=False,
+    ledger=None,
+    hitl=None,
+    dispatch=None,
+    authorization=None,
+):
     ledger = ledger or InMemoryAgentCallLedgerStore()
     hitl = hitl or InMemoryHITLApplicationPort()
     call = ledger_record()
@@ -465,7 +482,7 @@ async def setup_waiting(*, auth_required=False, ledger=None, hitl=None, dispatch
     )
     call = transition_call(call, to_state="continuation_pending", updated_at=NOW)
     spec = auth_spec() if auth_required else questionnaire_spec()
-    fingerprint = "auth-fingerprint" if auth_required else "question-fingerprint"
+    fingerprint = _digest_json(spec.model_dump(mode="json"))
     call = transition_call(
         call,
         to_state="auth_required" if auth_required else "input_required",
@@ -496,12 +513,163 @@ async def setup_waiting(*, auth_required=False, ledger=None, hitl=None, dispatch
         bindings=bindings,
         hitl=hitl,
         room_epochs=epochs,
-        authorization=Authorization(),
+        authorization=authorization or Authorization(),
         auth_references=auth_refs,
         dispatch=dispatch,
         observations=observations,
     )
     return coordinator, ledger, hitl, auth_refs, dispatch, call, route
+
+
+async def test_in_memory_hitl_answer_requires_exact_revision_and_excludes_cancel():
+    _coordinator, _ledger, hitl, _refs, _dispatch, call, route = await setup_waiting()
+    assert await hitl.publish("interaction-1", call_record_id=call.call_record_id) == (
+        "accepted"
+    )
+
+    with pytest.raises(ValueError, match="fingerprint or revision"):
+        await hitl.answer(
+            interaction_id="interaction-1",
+            interaction_revision=2,
+            route_fingerprint=route.fingerprint,
+            answers=questionnaire_answers(),
+            authenticated_answerer_id="user-1",
+            verified_auth_reference_digests=[],
+            verified_auth_references=[],
+        )
+    assert [
+        interaction.interaction_id
+        for interaction, _route, _fingerprint in await hitl.get_published_interactions(
+            call.room_id
+        )
+    ] == ["interaction-1"]
+
+    await hitl.answer(
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+        verified_auth_reference_digests=[],
+        verified_auth_references=[],
+    )
+    assert (
+        await hitl.abandon(
+            "interaction-1",
+            call_record_id=call.call_record_id,
+            reason="user_canceled",
+        )
+        == "conflict"
+    )
+
+    (
+        _coordinator,
+        _ledger,
+        canceled,
+        _refs,
+        _dispatch,
+        call,
+        route,
+    ) = await setup_waiting()
+    assert (
+        await canceled.abandon(
+            "interaction-1",
+            call_record_id=call.call_record_id,
+            reason="user_canceled",
+        )
+        == "accepted"
+    )
+    with pytest.raises(KeyError):
+        await canceled.answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            route_fingerprint=route.fingerprint,
+            answers=questionnaire_answers(),
+            authenticated_answerer_id="user-1",
+            verified_auth_reference_digests=[],
+            verified_auth_references=[],
+        )
+    assert await canceled.read_answer_record("interaction-1", 1) is None
+
+
+async def test_continuation_authorization_denial_terminalizes_without_hot_loop():
+    authorization = Authorization("denied")
+    coordinator, ledger, _hitl, _refs, dispatch, call, route = await setup_waiting(
+        authorization=authorization
+    )
+
+    state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert state == persisted.state == "failed"
+    assert persisted.error_code == "continuation_authorization_denied"
+    assert persisted.next_attempt_at is None
+    assert persisted.authorization_refresh_attempts == 1
+    assert authorization.calls == 1
+    assert dispatch.commands == []
+    recovery = A2AContinuationRecoveryService(coordinator, ledger)
+    assert await recovery.recover_due(due_at=datetime.now(UTC), limit=10) == 0
+    assert authorization.calls == 1
+
+
+async def test_transient_authorization_refresh_uses_bounded_backoff_then_fails():
+    authorization = Authorization(
+        "transient_failure", "transient_failure", "transient_failure"
+    )
+    coordinator, ledger, _hitl, _refs, dispatch, call, route = await setup_waiting(
+        authorization=authorization
+    )
+    kwargs = {
+        "call_record_id": call.call_record_id,
+        "interaction_id": "interaction-1",
+        "interaction_revision": 1,
+        "route_fingerprint": route.fingerprint,
+        "answers": questionnaire_answers(),
+        "authenticated_answerer_id": "user-1",
+    }
+
+    assert await coordinator.resume(**kwargs) == "delivery_uncertain"
+    first = await ledger.load_by_record_id(call.call_record_id)
+    assert first.state == "input_required"
+    assert first.authorization_refresh_attempts == 1
+    assert first.next_attempt_at > datetime.now(UTC)
+    assert await coordinator.reconcile_answer(call_record_id=call.call_record_id) == (
+        "input_required"
+    )
+    assert authorization.calls == 1
+
+    for expected_attempt in (2, 3):
+        current = await ledger.load_by_record_id(call.call_record_id)
+        due = current.model_copy(
+            update={
+                "next_attempt_at": datetime.now(UTC) - timedelta(seconds=1),
+                "state_version": current.state_version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        assert (
+            await ledger.cas(due, expected_state_version=current.state_version)
+            == "accepted"
+        )
+        state = await coordinator.reconcile_answer(call_record_id=call.call_record_id)
+        persisted = await ledger.load_by_record_id(call.call_record_id)
+        assert persisted.authorization_refresh_attempts == expected_attempt
+        if expected_attempt < 3:
+            assert state == "delivery_uncertain"
+            assert persisted.next_attempt_at > datetime.now(UTC)
+        else:
+            assert state == persisted.state == "failed"
+            assert persisted.error_code == "continuation_authorization_unavailable"
+            assert persisted.next_attempt_at is None
+    assert authorization.calls == 3
+    assert dispatch.commands == []
 
 
 @pytest.mark.parametrize("branch", ["working", "terminal_marker"])
@@ -1277,11 +1445,33 @@ async def test_continuation_interaction_receipt_parks_typed_second_round():
     stored = hitl.read_interaction_for_test("interaction-2")
     assert stored is not None
     assert stored[2] == persisted.interaction_fingerprint
+    assert await hitl.get_published_interactions(call.room_id) == []
     assert hitl.read_interaction_for_test("interaction-1") is None
     assert len(dispatch.commands) == 1
+    first_command = dispatch.commands[0]
+
+    # The second answer uses the interaction produced by the real first
+    # continuation receipt; no ledger fields are manually cleared or replaced.
+    dispatch.interaction_receipt = None
+    second_route = stored[1]
+    second_state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-2",
+        interaction_revision=1,
+        route_fingerprint=second_route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+    final = await ledger.load_by_record_id(call.call_record_id)
+    assert second_state == final.state == "working"
+    assert final.continuation_command is not None
+    assert final.continuation_command.command_id != first_command.command_id
+    assert len(dispatch.commands) == 2
+    assert {command.task_id for command in dispatch.commands} == {"task-1"}
+    assert {command.context_id for command in dispatch.commands} == {"context-1"}
 
 
-async def test_inspect_same_answered_interaction_retries_continuation_send():
+async def test_inspect_same_answered_interaction_never_repeats_continuation_send():
     spec = questionnaire_spec()
     dispatch = AmbiguousThenRetryDispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
@@ -1322,16 +1512,16 @@ async def test_inspect_same_answered_interaction_retries_continuation_send():
     await make_due(ledger, call.call_record_id)
     recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
 
-    assert recovered == "working"
+    assert recovered == "delivery_uncertain"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "working"
+    assert persisted.state == "delivery_uncertain"
     assert persisted.pending_interaction_id == "interaction-1"
     assert len(dispatch.inspections) == 1
-    assert len(dispatch.commands) == 2
+    assert len(dispatch.commands) == 1
 
 
-async def test_inspect_missing_interaction_spec_retries_continuation_send():
-    """Cleared status.message (no typed spec) must resend, not untyped-complete."""
+async def test_inspect_missing_interaction_spec_never_repeats_continuation_send():
+    """Cleared status.message stays uncertain without repeating remote effects."""
     dispatch = AmbiguousThenRetryDispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
         dispatch=dispatch
@@ -1371,12 +1561,12 @@ async def test_inspect_missing_interaction_spec_retries_continuation_send():
     await make_due(ledger, call.call_record_id)
     recovered = await coordinator.recover_call(call_record_id=call.call_record_id)
 
-    assert recovered == "working"
+    assert recovered == "delivery_uncertain"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "working"
+    assert persisted.state == "delivery_uncertain"
     assert persisted.terminal_result is None
     assert len(dispatch.inspections) == 1
-    assert len(dispatch.commands) == 2
+    assert len(dispatch.commands) == 1
 
 
 async def test_continuation_missing_spec_does_not_untyped_complete():
@@ -1424,8 +1614,8 @@ async def test_continuation_missing_spec_does_not_untyped_complete():
     assert persisted.continuation_command is not None
 
 
-async def test_continuation_same_answered_challenge_stays_uncertain():
-    """Continue send that still returns the answered challenge must not re-park."""
+async def test_continuation_same_answered_challenge_fails_as_no_progress():
+    """A synchronous repeated challenge proves Agent no-progress, not uncertainty."""
     spec = questionnaire_spec()
     dispatch = Dispatch()
     coordinator, ledger, _, _, dispatch, call, route = await setup_waiting(
@@ -1462,11 +1652,13 @@ async def test_continuation_same_answered_challenge_stays_uncertain():
         authenticated_answerer_id="user-1",
     )
 
-    assert state == "delivery_uncertain"
+    assert state == "failed"
     persisted = await ledger.load_by_record_id(call.call_record_id)
-    assert persisted.state == "delivery_uncertain"
+    assert persisted.state == "failed"
     assert persisted.pending_interaction_id == "interaction-1"
-    assert persisted.terminal_result is None
+    assert persisted.terminal_result is not None
+    assert persisted.terminal_result.error_code == "agent_interaction_no_progress"
+    assert persisted.continuation_state == "accepted"
     assert len(dispatch.commands) == 1
 
 
@@ -1610,7 +1802,9 @@ async def test_authref_is_bound_expiring_and_replay_safe_before_answer_persisten
     assert binding.interaction_id == "auth-interaction"
     assert binding.interaction_revision == 1
     assert binding.route_fingerprint == route.fingerprint
-    assert binding.interaction_fingerprint == "auth-fingerprint"
+    assert binding.interaction_fingerprint == _digest_json(
+        auth_spec().model_dump(mode="json")
+    )
     assert binding.question_id == "auth-q"
     assert binding.answer_digest == answer_record.answer_digest
     exact_identity = auth_reference_identity(call, route, "authref:valid")

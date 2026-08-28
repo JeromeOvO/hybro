@@ -38,7 +38,12 @@ and jobs until the production cutover. Contracts pinned before wiring:
   Mongo `OrchestratorEventStore` implementation behind the pure
   `evaluate_event_append` ordering/idempotency evaluation; the Mongo store
   relies on the `(event_id)` and `(run_id, sequence)` unique indexes to
-  classify concurrent insert losers as replay or conflict.
+  classify concurrent insert losers as replay or conflict. Event persistence
+  identity canonicalizes only `created_at` to UTC BSON millisecond precision;
+  all other identity, sequence, and state-version fields remain exact. Terminal
+  event intents are minted in that form, while both stores and the Mongo
+  duplicate-winner boundary normalize legacy microsecond payloads before replay
+  comparison.
 - The artifact write-lease owner `orchestrator-v3-a2a-artifact` and the
   `orchestrator-v3-a2a` origin-key namespace are durable operational/data
   identity and must survive the version-neutral naming cleanup unchanged.
@@ -85,9 +90,27 @@ the remaining recovery scan.
 
 Direct transport capability selection (`stream`, `sync`, or `poll`) is frozen
 in the accepted dispatch snapshot. The provider-neutral direct client port
-contains SDK types behind its implementation boundary. Stream events enter the
-same durable ingress before they affect lifecycle state; deadline, cancellation,
-and process-death paths close the stream and reconcile through inspection.
+contains SDK types behind its implementation boundary. Every direct operation
+resolves and validates the Agent Card before its remote message/cancel effect.
+Card fetch status `408`/`425`/`429`/`5xx` and recognized no-status network
+failures become a sanitized `RecoverableTransportError`; initial dispatch,
+continuation, and cancellation return to their retry-safe pre-effect state and
+reuse the frozen command/message ID under `max_transport_attempts`. Background
+`ready_to_dispatch` recovery reloads the exact durable invocation and re-enters
+`A2AAgentToolRuntime.execute`; it never calls the transport directly, so claim,
+attempt, receipt, observation, backoff, and terminal-result CAS accounting are
+identical to foreground execution. Inspection retries inspection, and transient
+model replies remain suspended for their existing bounded kernel recovery. A
+`401`/`403`/`404` or invalid Card becomes the non-retryable
+`AgentCardContractError` and terminalizes the durable call and `ToolResult`
+together. For model-reply continuation, that permanent failure terminalizes the
+parent call and abandons its exact interaction before the join failure is
+returned. Sanitized Card exceptions sever the raw provider exception chain, so
+endpoint or credential text is not reachable through `__cause__`/`__context__`.
+Thus public tool failure cannot disagree with a nonterminal ledger row. Stream
+events enter the same durable ingress before they affect
+lifecycle state; deadline, cancellation, and process-death paths close the stream
+and reconcile through inspection.
 Inbound remote artifacts may be enabled only with the guarded adapter, which
 uses the existing SSRF-pinned fetch primitive and an epoch-fenced
 `RoomFilesEpochFencedArtifactOwner`. After a long fetch, that owner holds the
@@ -531,9 +554,17 @@ terminal settlement.
 `ContextCompiler`, non-destructive explicitly budgeted compaction, and
 `BudgetPolicy` bound each turn. The `execution.orchestrator.a2a_runtime`
 adapter layer: async authorized Agent Card
-projection produces a frozen synchronous catalog and private bindings; a separate
-call ledger enforces accept-before-dispatch, scoped task/context ownership,
-Room-epoch fences, cancellation, and leased recovery. In-flight direct dispatch and
+projection produces a frozen synchronous catalog and private bindings. Agent Cards
+with one or more usable unique skill entries expose only one tool per explicit skill;
+they do not also expose an ambiguous whole-Agent alias. A usable identity is an exact,
+nonblank string `id`, or otherwise an exact, nonblank string `name`; arbitrary JSON
+values are never coerced into tool identities. Skill-less legacy cards and cards whose
+skill inventory has no usable entries retain one whole-Agent fallback. Malformed or
+exact-duplicate entries do not alter valid skill ordering or accidentally remove that
+legacy fallback. This makes the frozen catalog, private binding inventory,
+and model-visible tool list share the same deterministic cardinality and preserves
+selected-skill routing. A separate call ledger enforces accept-before-dispatch,
+scoped task/context ownership, Room-epoch fences, cancellation, and leased recovery. In-flight direct dispatch and
 HITL continuation execution maintain an active claim lease via a background fenced
 heartbeat loop (`_run_fenced_dispatch` / `_run_fenced_continuation`), with cancellation
 and suspension if lease ownership or room epoch is invalidated. Terminal observations
@@ -663,6 +694,34 @@ HYBRO's ability to draft plausible prose is not by itself a reason to avoid
 delegation. Explicit Agent requests and approval of a previously offered Agent
 action also prefer delegation. The planner can delegate to one suitable Agent,
 delegate independent work in parallel, or delegate dependent work sequentially.
+The default Supervisor prompt treats the highest comparable revision/version as
+the authoritative current state when multiple successful observations or
+Artifacts clearly revise the same logical result. Superseded missing fields,
+blockers, and statuses remain historical context rather than current evidence;
+ambiguous revision identity or ordering remains an explicit conflict instead of
+being guessed. Before `request_user_input`, the Supervisor removes fields already
+populated by that authoritative revision from its unresolved set. Tool choices
+must be actual mutually exclusive answers—not instructions, examples, or answer
+formats—and free-form or multi-field replies omit choices so the composer accepts
+text. Calls in one batch must be mutually independent. Review, negotiation,
+approval, acceptance, revision, finalization, and execution consume the latest
+successful result from the responsible owner; meeting a numeric target is not
+acceptance, and an unresolved prerequisite requires authoritative successful
+evidence before finalization. This shared Fast/Ultimate contract is prompt
+version `5`; model/tool/time budgets are unchanged.
+
+Initial direct A2A messages distinguish model-authored instructions from durable
+user evidence with versioned `hybro.ai/a2a/part-provenance` TextPart metadata and
+carry the privately selected skill in versioned `hybro.ai/a2a/selected-skill`
+Message metadata. Platform-reserved metadata overrides owner collisions while
+other authorized resource metadata is preserved. If a model omits
+`context_refs`, prepared-invocation freezing implicitly includes only compatible
+context refs owned by the exact root user message. Non-empty explicit context
+selection remains exact, and artifacts or attachments are never implicitly
+added. The resulting frozen manifest and digest make this narrow default
+replayable and auditable while avoiding broad implicit forwarding. These
+transport fields never enter public room projection.
+
 A request to read, explain, or summarize a readable attachment is answered
 through `platform_answer` first. That response offers exactly one concrete Agent
 action when one suitable next step materially advances the likely goal, and
@@ -914,6 +973,41 @@ auth-reference verifier is bound (text / choice HITL is unaffected). Local
 Compose sets `ORCHESTRATOR_RECOVERY_ENABLED=true` so continuation recovery runs
 alongside inbox/call recovery. User cancellation of an orchestrator HITL
 interaction abandons the interaction and cancels the owning orchestration run.
+
+**Model-first HITL decision (canonical Runs).** A parked typed interaction is
+not immediately user-facing. The runtime parks the call durably (without
+emitting `hitl_request`/`run_waiting_input`) and returns a `ToolSuspension`
+carrying a private typed interaction inventory. The kernel writes a distinct
+`tool_interaction` transcript message (deterministic
+`interaction:<call_id>:<fingerprint>`), assigns a private platform-owned
+`presentation_id`, marks the batch entry `presented`, emits a redacted
+`model_decision` (`interaction_received`) public event, and continues the *same*
+internal turn so the model can decide: answer the Agent from existing evidence
+(continuation join) or forward the exact questions with
+`surface_agent_questions`. A singleton presentation makes that forwarding tool
+argument-free; multiple presentations expose only an enum of the current private
+presentation IDs. A distinct continuation challenge traverses durable inbox recovery
+back to the kernel with the CAS-winning call record, exact interaction/fingerprint,
+and complete typed question inventory intact; the observation sink never reconstructs
+an identity-less suspension. Presentation IDs, Agent interaction aliases, fingerprints
+and question IDs never enter public lifecycle/SSE/snapshot/REST payloads. Local tool
+declaration rejection also stays within the same internal turn while any parent
+Tool row is suspended; only a complete terminal Tool inventory can close the turn.
+Model-driven replies
+use `A2AModelReplyCommand` on the same task/context (durable `command_id` as the
+remote message id), bounded per interaction fingerprint and by a run-level
+consecutive-join counter. `model_decision` folds into `kind:"decision"`
+activity so the Turn Trace shows the decision.
+
+Human answers are durable typed evidence. A user continuation retains the legacy
+text part and also carries `hybro.ai/a2a/interaction-answer` metadata with schema
+version, exact interaction/revision, the already-persisted answer digest, and the
+full typed `{question_id, answer}` inventory. Compatible Agents consume this
+envelope before any model planner; older Agents may continue to use the text
+fallback. A published interaction remains recovery-eligible after answer capture,
+but its answered current revision is immediately non-actionable and is excluded
+from REST/snapshot pending projections. Exact answer replays are idempotent;
+changed identity or inventory is a safe conflict.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
 HITL status messages pass through a bounded public-text sanitizer across both initial
@@ -1214,12 +1308,25 @@ heartbeats persist in `orchestrator_recovery_leases` outside the execution
 aggregate version, so renewal cannot conflict with a slow Kernel CAS. The
 unique lease row atomically fences claim, renewal, and release by the
 per-attempt owner token; an expired row may transfer ownership while stale
-tokens cannot mutate it. Graceful shutdown moves every interrupted nonterminal
-Run's recovery due time to now.
+tokens cannot mutate it. Once created, that row is authoritative for due time,
+lease expiry, and quarantine: due inventory unions never-leased aggregates with
+dedicated due rows and applies its limit only after authoritative filtering.
+BSON timestamps are restored to aware UTC before every comparison. The same
+dedicated row persists consecutive recovery failure count and
+terminal-invariant quarantine state. Three consecutive
+`KernelConflict` failures quarantine an irreparable legacy history, exclude it
+from future scans, and produce one sanitized terminal warning without changing
+the Run winner or weakening canonical fold/settlement invariants. Graceful
+shutdown moves every interrupted nonterminal Run's recovery due time to now.
 Canonical lifecycle listeners are awaited through persisted room-event acknowledgement;
 no compatibility work-log or task-card stream owns lifecycle state, and public
 offsets advance only after
 that acknowledgement and terminal projection cannot overtake open children.
+Non-success termination first validates an immutable closure plan for every
+affected historical/active Turn (message owner, ordered public Tool inventory,
+and existing canonical events). Only after the complete plan succeeds may exact
+parked HITL ownership be abandoned, Tool/Turn ends be published, or aggregate
+state change; abandonment/store failure remains retryable and fail-closed.
 User cancellation first clears HITL ownership, signals a hosted provider/Tool
 session, and then runs the same child-closure/settlement state machine; it never
 stops at call-ledger cancellation. Canceled Runs persist one typed cause
@@ -1311,8 +1418,12 @@ from durable tool results. The `deliver_final_message` outbox step is complete
 only after both the final `system:hybro` message is in Mongo and an idempotent
 `agent_response` has entered `room_events`. That event always parents to the
 exact final `message_end` by durable readback (not the cached latest `turn_end`),
-and `run_settled` parents to the durable final response after restart; a browser no longer needs DB refresh
-to discover the final answer.
+and `run_settled` parents to the durable final response after restart. If an
+`orchestrator_run_events` insert wins but the outbox completion CAS is lost, the
+retry compares the event at BSON millisecond precision, completes the legacy
+pending intent without duplicating the event, and unblocks the dependent
+`run_settled` projection; a browser no longer needs DB refresh to discover the
+final answer.
 
 When Redis is enabled, room admission waits until the DAL Pub/Sub subscribe
 operation has completed, while the subscription task owns the bounded readiness
@@ -2373,13 +2484,69 @@ legacy active Debate orchestration is failed during recovery rather than resumed
 
 HITL uses three durable projections: `hitl_requests` for backward-compatible
 question APIs, `hitl_interactions` for questionnaire/deadline/application ownership,
-and `hitl_resume_commands` for fenced remote A2A continuation delivery. The stale
+and `hitl_resume_commands` for fenced remote A2A continuation delivery. Durable
+room-event idempotency for HITL requests/responses is scoped by Room and interaction
+in addition to question identity, because standards-compliant Agents may reuse stable
+question IDs such as `cloud_providers` across rooms. Snapshot HITL request state
+uses the same interaction-plus-request identity inside a Room, preventing later
+interactions that reuse a question ID from overwriting earlier interaction history.
+If a concurrent initial-direct, continuation, or general-recovery observation loses
+its ledger CAS, its questionnaire is never checkpointed or published under the
+winner's older interaction identity.
+Snapshot recovery also ignores an orphan questionnaire emitted under an already
+resumed interaction, retaining the last canonical inventory until a distinct
+interaction/control boundary arrives. Direct and inspection observation identities
+include the typed interaction spec digest, so changed `input-required` rounds on one
+A2A task/context remain separate durable observations instead of colliding by event
+kind. Re-normalizing an unchanged observation excludes local `observed_at` from its
+payload identity and therefore replays rather than creating a conflict. An inbox row
+whose observation was already applied directly to the call receives a durable
+`ledger_applied` executor checkpoint and is drained as stale once the call has resumed
+or moved to another interaction. That checkpoint preserves the classification even
+after the bounded recent-ID window has evicted the original ID; timestamp ordering is
+never used as proof of application. It cannot re-attach an old questionnaire to the
+newer call state. The read-only Run checkpoint authority also classifies completed,
+failed, canceled, and budget-exhausted Runs as absorbing. A late inbox observation for
+such a Run is retained as completed executor-owned audit evidence, while the exact
+call-owned interaction is terminally abandoned; the processor never invokes the
+Kernel or emits another public lifecycle event. A nonterminal Run that rejects a
+stale observation on ownership or ordering grounds retains the row with sanitized
+`KernelConflict` class/fingerprint evidence, bounded exponential backoff, and
+quarantine at the existing transport-attempt limit. A concurrent mismatch can still
+apply on a later valid retry, while permanent poison cannot hold a claim lease or
+abort every recovery cycle. Terminal ledger conflicts are audited before this Run
+classification and therefore remain fail-closed.
+
+Exact-call wake queries use the denormalized `call_record_id` under a
+compound due-work index rather than scanning nested observation payloads. Every
+folded canonical HITL request also
+retains its originating `room_seq`;
+without that sequence metadata the browser must reject the snapshot and would enter
+repeated snapshot recovery rather than advancing its watermark. The stale
 task checker's existing leader lease also gates HITL lifecycle reconciliation.
 Remote delivery uncertainty is intentionally durable and is never blindly retried.
+One durable continuation command also supplies the outbound A2A `message_id`, so a
+local retry cannot silently create a second remote command identity. Inspection that
+still sees the answered challenge remains uncertain and never authorizes an automatic
+resend. A synchronous continuation response, by contrast, proves receipt: if it
+returns the exact answered interaction and fingerprint, the call fails explicitly
+with `agent_interaction_no_progress` instead of resending, reopening the answered
+question, or expiring as transport uncertainty. Continuation expiry timestamps use
+the actual reconciliation decision time rather than the original answer time.
+When a continuation receipt initially routes terminal artifacts through the observation
+inbox, the synchronous post-answer wake queries due inbox work by exact call identity
+rather than scanning a global batch, then re-reads the exact answered call; a matching
+durable terminal plus answer marker is accepted as delivery proof instead of returning
+a stale 503. An `awaiting_user` Run remains dormant until an answer, cancel, terminal
+observation, or its durable profile deadline. At the deadline generic recovery closes
+the questionnaire and accepted Tool descendants once and settles the Run; ordinary
+polls before that timestamp do not wake it or emit periodic `processing` events.
 
 The questionnaire endpoint `POST /rooms/{room_id}/hitl/respond-batch` requires an
-exact, duplicate-free answer inventory for the durable interaction. Request answers
-are CAS-recorded without invoking execution; only after the aggregate proves that
+exact, duplicate-free answer inventory for the durable interaction. A missing or
+stale question inventory is a safe `409 Conflict` requiring client reconciliation,
+not an internal `500` with routing details. Request answers are CAS-recorded without
+invoking execution; only after the aggregate proves that
 all required answers and digests exist does the application coordinator claim one
 fenced application. Retrying a partially recorded batch repairs the same aggregate,
 and retrying an applied batch only replays idempotent projections. Individual
@@ -2398,7 +2565,12 @@ Canonical recovery claims use instance-and-attempt-unique owner tokens. Kernel w
 renews the token-fenced lease periodically; lifecycle publication and release both
 re-read the durable claim, so a replaced worker cannot continue or clear another
 worker's lease. On restart, the latest semantic parent is recovered from durable
-`room_events`, including HITL control boundaries. Accepted Tool terminals gate both
+`room_events`, including HITL control boundaries. Terminal recovery sweeps every
+incomplete durable Tool batch even when the active-Turn pointer is missing. It abandons
+each exact parked interaction once, attributes every public Tool end to the batch's
+owning internal Turn, flushes all ToolResult batches, closes each affected Turn with
+its latest durable Assistant message and full public Tool inventory, and then proves
+the descendant invariant again before terminal CAS. Accepted Tool terminals gate both
 successful and unsuccessful Run settlement until their public end is durable. HITL
 terminal reconciliation persists every member response and clears aggregate ownership
 before invoking the lifecycle-family-specific Run terminalizer.

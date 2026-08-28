@@ -193,10 +193,35 @@ class ToolAcceptance(ContractModel):
 ToolSuspensionStatus = Literal["waiting_external", "input_required", "auth_required"]
 
 
+class ToolInteractionQuestion(ContractModel):
+    """Typed question inventory carried in the private model transcript."""
+
+    question_id: str
+    interaction_kind: str = "questionnaire"
+    prompt: str
+    answer_kind: str
+    required: bool = True
+    choices: list[str] | None = None
+
+
 class ToolSuspension(ContractModel):
     invocation_id: str
     status: ToolSuspensionStatus
     observation_cursor: str | None = None
+    # Model-reply continuation discriminator. ``accepted`` means the Agent
+    # acknowledged the reply and is still working (the response observation
+    # arrives later via the parent call's inbox/poll path and must NOT be
+    # re-sent). ``transport_uncertain`` means delivery may not have reached the
+    # Agent and the idempotent command is safe to re-dispatch. ``None`` for
+    # non-model-reply suspensions.
+    delivery_state: Literal["accepted", "transport_uncertain"] | None = None
+    # Interaction parking metadata carried by input_required/auth_required
+    # suspensions so the kernel can present a tool_interaction message and
+    # route model-driven replies without reading the runtime ledger.
+    call_record_id: str | None = None
+    interaction_id: str | None = None
+    interaction_fingerprint: str | None = None
+    questions: list[ToolInteractionQuestion] = Field(default_factory=list)
 
 
 ToolExecutionOutcome = ToolResult | ToolSuspension
@@ -238,6 +263,26 @@ class ToolBatchEntry(ContractModel):
     public_update_index: int = Field(default=0, ge=0)
     public_terminal_emitted: bool = False
     processed_observation_ids: list[str] = Field(default_factory=list)
+    # Model-first HITL: an input_required/auth_required entry whose interaction
+    # has been surfaced to the model (tool_interaction transcript message) is
+    # ``presented`` and must no longer be re-suspended/re-dispatched.
+    presented: bool = False
+    # Per-entry flush marker so a mixed batch can write terminal results
+    # immediately without a second ToolResultMessage at final flush.
+    result_flushed: bool = False
+    # Runtime call identity of a parked interaction (join routing / closeout).
+    suspended_call_record_id: str | None = None
+    # Parent call a ``surface_agent_questions`` entry forwards to the user.
+    # Closed by ``observe_tool`` when that parent resolves, because the user's
+    # answer flows through the parent continuation, not the surface entry.
+    surface_for_call_record_id: str | None = None
+    # Private interaction metadata for model-first presentation. The
+    # presentation id is platform-owned and only appears in model context/tool
+    # schemas; public lifecycle projections continue to use opaque call ids.
+    presentation_id: str | None = None
+    interaction_id: str | None = None
+    interaction_fingerprint: str | None = None
+    interaction_questions: list[ToolInteractionQuestion] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _entry_state_is_consistent(self) -> ToolBatchEntry:
@@ -258,6 +303,10 @@ class ToolCallBatch(ContractModel):
     assistant_message_id: str
     entries: list[ToolBatchEntry]
     results_flushed: bool = False
+    # Canonical turn ownership. Batches created within the same active internal
+    # turn share this id so cross-batch turn_end can gather the ordered tool id
+    # union and defer closing until every entry is terminal.
+    internal_turn_id: str | None = None
 
     @model_validator(mode="after")
     def _call_ids_are_unique(self) -> ToolCallBatch:
@@ -308,6 +357,27 @@ class ToolResultMessage(ContractModel):
     created_at: datetime
 
 
+class ToolInteractionMessage(ContractModel):
+    """Model-visible agent input request presented before the call resolves.
+
+    Distinct from ``ToolResultMessage``: the call's real ToolResultMessage is
+    still written exactly once when the call terminalizes, while this message
+    lets the model continue reasoning without marking the batch flushed.
+    """
+
+    kind: Literal["tool_interaction"] = "tool_interaction"
+    message_id: str
+    call_id: str
+    tool_name: str
+    presentation_id: str | None = None
+    interaction_id: str
+    interaction_fingerprint: str
+    questions: list[ToolInteractionQuestion] = Field(default_factory=list)
+    artifact_refs: list[str] = Field(default_factory=list)
+    agent_label: str | None = None
+    created_at: datetime
+
+
 class SessionNotice(ContractModel):
     kind: Literal["session_notice"] = "session_notice"
     notice_id: str
@@ -318,7 +388,11 @@ class SessionNotice(ContractModel):
 
 
 AgentMessage = Annotated[
-    UserMessage | AssistantMessage | ToolResultMessage | SessionNotice,
+    UserMessage
+    | AssistantMessage
+    | ToolResultMessage
+    | ToolInteractionMessage
+    | SessionNotice,
     Field(discriminator="kind"),
 ]
 
@@ -508,6 +582,18 @@ class RecoveryClaim(ContractModel):
     owner_id: str | None = None
     lease_expires_at: datetime | None = None
     next_attempt_at: datetime | None = None
+    # Consecutive KernelConflict count; non-invariant adapter failures reset it.
+    failure_count: int = Field(default=0, ge=0)
+    quarantined_at: datetime | None = None
+    quarantine_reason: Literal["terminal_invariant_conflict"] | None = None
+
+    @model_validator(mode="after")
+    def _quarantine_fields_are_paired(self) -> RecoveryClaim:
+        if (self.quarantined_at is None) != (self.quarantine_reason is None):
+            raise ValueError("recovery quarantine timestamp and reason must be paired")
+        if self.quarantined_at is not None and self.owner_id is not None:
+            raise ValueError("quarantined recovery cannot retain an owner")
+        return self
 
 
 ProjectionIntentStatus = Literal["pending", "claimed", "completed", "blocked"]
@@ -645,6 +731,7 @@ class OrchestratorRunState(ContractModel):
     active_internal_turn_id: str | None = None
     active_assistant_message_id: str | None = None
     active_attempt: int | None = Field(default=None, ge=1)
+    consecutive_model_joins: int = Field(default=0, ge=0)
     greatest_public_text_offset: int = Field(default=0, ge=0)
     active_public_text: str = Field(default="", max_length=32_000)
     proposed_final_message_id: str | None

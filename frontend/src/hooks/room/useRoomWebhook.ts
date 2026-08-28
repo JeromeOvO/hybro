@@ -110,6 +110,10 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // Snapshot recovery surface (plan §4 rule 3): bound by useRoomSSEConnection
   // to a reconnect-with-?snapshot=1 callback.
   const requestSnapshotRef = useRef<(() => void) | null>(null)
+  const requestCanonicalSnapshot = useCallback(
+    () => requestSnapshotRef.current?.(),
+    [],
+  )
 
   // Room reset effect
   useRoomReset(roomId, lifecycle, hitlRequestIndex, resetAgentNameCache, setSending, setCancelling, setSseConnected, setSseError)
@@ -196,6 +200,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     reconcileWithDb, setCancelling, setUpdatingRoom,
     sseEnabled, setSseEnabled,
     getAgentName, getAgentSource,
+    requestCanonicalSnapshot,
   )
 
   return {

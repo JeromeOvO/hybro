@@ -41,5 +41,9 @@ class RecoverableTransportError(RecoverableAdapterError):
     """Transport failed before a remote side effect was known to be possible."""
 
 
+class AgentCardContractError(RuntimeError):
+    """Agent Card resolution failed for a non-retryable contract/config reason."""
+
+
 class AmbiguousRemoteEffectError(RecoverableAdapterError):
     """Transport may have produced a remote effect before acknowledgement failed."""

@@ -38,7 +38,7 @@ export interface ComposerShellAdapter {
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
-  onCancelHitl: (requestId: string) => Promise<void>
+  onCancelHitl: (requestId: string, interactionId?: string) => Promise<void>
   onRefreshHitl: () => Promise<void>
   onChatModeChange?: (mode: ChatMode) => void
   isSending: boolean
@@ -81,6 +81,7 @@ function samePendingHitl(left: PendingHitl, right: PendingHitl | undefined): boo
     && left.promptType === right.promptType
     && left.messageId === right.messageId
     && left.interactionId === right.interactionId
+    && left.interactionVersion === right.interactionVersion
     && left.interactionStatus === right.interactionStatus
     && left.applicationStatus === right.applicationStatus
     && left.lifecycleState === right.lifecycleState
@@ -127,15 +128,34 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
 
   // Prefer an actionable open prompt over a transient applying recovery
   // state so follow-up HITL questions are not covered by "Applying…".
-  const preferredHitl = composerState.pendingHitls.find(hitl => hitl.lifecycleState === 'open')
-    ?? composerState.pendingHitls[0]
+  const actionableOpenHitls = composerState.pendingHitls.filter(
+    hitl => hitl.lifecycleState === 'open' && !hitl.isAnswered,
+  )
+  const preferredHitl = actionableOpenHitls[0] ?? composerState.pendingHitls[0]
   const activeInteractionId = preferredHitl?.interactionId
+  // Answered siblings remain questionnaire context for the active interaction,
+  // but must never be counted as queued work.
   const activeHitls = activeInteractionId
     ? composerState.pendingHitls.filter(hitl => hitl.interactionId === activeInteractionId)
     : []
 
   if (isHitlMode && activeHitls.length > 0) {
-    const queuedCount = composerState.pendingHitls.length - activeHitls.length
+    const activeInteractionKey = JSON.stringify([
+      activeInteractionId,
+      Math.max(...activeHitls.map(hitl => hitl.interactionVersion ?? 0)),
+      activeHitls.map(hitl => [
+        hitl.hitlId,
+        hitl.question,
+        hitl.promptType,
+        hitl.choices ?? [],
+      ]),
+    ])
+    const queuedInteractionIds = new Set(
+      actionableOpenHitls
+        .map(hitl => hitl.interactionId)
+        .filter(interactionId => interactionId !== activeInteractionId),
+    )
+    const queuedCount = queuedInteractionIds.size
     return (
       <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
         {queuedCount > 0 ? (
@@ -146,6 +166,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
           </Badge>
         ) : null}
         <HitlResponseBar
+          key={activeInteractionKey}
           hitls={activeHitls.map(toHitlPromptView)}
           onSubmit={adapter.onRespondToHitlBatch}
           onCancel={adapter.onCancelHitl}

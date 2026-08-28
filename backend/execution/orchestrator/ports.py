@@ -64,6 +64,30 @@ class ToolRuntime(Protocol):
         signal: CancellationSignal,
     ) -> ToolExecutionOutcome: ...
 
+    async def dispatch_model_reply(
+        self,
+        invocation: ToolInvocation,
+        *,
+        parent_call_record_id: str,
+        interaction_fingerprint: str | None,
+        signal: CancellationSignal,
+    ) -> ToolExecutionOutcome: ...
+
+    async def publish_parked_interaction(
+        self,
+        *,
+        call_record_id: str,
+        interaction_id: str,
+    ) -> None: ...
+
+    async def abandon_parked_interaction(
+        self,
+        *,
+        call_record_id: str,
+        interaction_id: str,
+        terminal_state: str,
+    ) -> None: ...
+
 
 class Clock(Protocol):
     def now(self) -> datetime: ...
@@ -112,6 +136,7 @@ class OrchestratorRunStore(Protocol):
         expected_state_version: int,
         owner_id: str,
         lease_expires_at: datetime,
+        claimed_at: datetime,
     ) -> RunStoreResult: ...
 
     async def renew_recovery(
@@ -130,6 +155,9 @@ class OrchestratorRunStore(Protocol):
         expected_state_version: int,
         owner_id: str,
         next_attempt_at: datetime | None,
+        failure_count: int = 0,
+        quarantined_at: datetime | None = None,
+        quarantine_reason: Literal["terminal_invariant_conflict"] | None = None,
     ) -> RunStoreResult: ...
 
     async def list_due_runs(
@@ -208,6 +236,8 @@ class InvocationCheckpointReader(Protocol):
 
 
 class InvocationOutcomeCheckpointReader(Protocol):
+    async def is_run_terminal(self, run_id: str) -> bool: ...
+
     async def is_outcome_checkpointed(
         self,
         run_id: str,

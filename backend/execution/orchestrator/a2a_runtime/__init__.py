@@ -18,6 +18,7 @@ from .dispatch import (
     DirectA2AStream,
 )
 from .errors import (
+    AgentCardContractError,
     AmbiguousRemoteEffectError,
     RecoverableAdapterError,
     RecoverableAuthorizationError,
@@ -112,6 +113,7 @@ __all__ = [
     "InMemoryPreparedInvocationSnapshotReader",
     "InMemoryRoomEpochStore",
     "PreparedAgentCatalog",
+    "AgentCardContractError",
     "AmbiguousRemoteEffectError",
     "RecoverableAdapterError",
     "RecoverableAuthorizationError",

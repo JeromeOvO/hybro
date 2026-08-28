@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
 
 from a2a_adapter.client_facade import (
@@ -64,7 +64,9 @@ from execution.orchestrator.a2a_runtime.catalog_assembler import (
 )
 from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
+    AgentCardContractError,
     RecoverableAdapterError,
+    RecoverableTransportError,
 )
 from execution.orchestrator.a2a_runtime.hitl import A2AContinuationCoordinator
 from execution.orchestrator.a2a_runtime.in_memory import RunCheckpointReader
@@ -78,6 +80,7 @@ from execution.orchestrator.a2a_runtime.models import (
     NormalizedA2AObservation,
 )
 from execution.orchestrator.a2a_runtime.preparation import (
+    RunBackedDispatchRecovery,
     RunPreparedInvocationSnapshotReader,
 )
 from execution.orchestrator.a2a_runtime.recovery import (
@@ -87,7 +90,6 @@ from execution.orchestrator.a2a_runtime.recovery import (
     A2AContinuationRecoveryService,
     A2AInboxRecoveryService,
     A2ARecoveryCycle,
-    dispatch_command,
 )
 from execution.orchestrator.a2a_runtime.runtime import A2AAgentToolRuntime
 from execution.orchestrator.a2a_runtime.terminal_interactions import (
@@ -95,12 +97,13 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
 )
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.kernel import OrchestratorKernel
+from execution.orchestrator.kernel import KernelConflict, OrchestratorKernel
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.model_runtime import GatewayModelRuntime
 from execution.orchestrator.models import (
     FrozenToolCatalogSnapshot,
     OrchestratorProfile,
+    RecoveryClaim,
 )
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
 from execution.orchestrator.projection import (
@@ -115,6 +118,45 @@ logger = get_logger(__name__)
 
 class OrchestratorCompositionError(RuntimeError):
     """Adapter-level composition failure; safe to degrade the dark launch."""
+
+
+_GENERIC_RECOVERY_MAX_INVARIANT_FAILURES = 3
+_GENERIC_RECOVERY_BASE_BACKOFF_SECONDS = 5
+_GENERIC_RECOVERY_MAX_BACKOFF_SECONDS = 300
+
+
+@dataclass(frozen=True, slots=True)
+class GenericRecoveryFailureDecision:
+    failure_count: int
+    next_attempt_at: datetime | None
+    quarantined_at: datetime | None
+    quarantine_reason: Literal["terminal_invariant_conflict"] | None
+
+
+def _generic_recovery_failure_decision(
+    claim: RecoveryClaim, exc: Exception, *, now: datetime
+) -> GenericRecoveryFailureDecision:
+    """Bound persistent recovery conflicts without mutating the Run winner."""
+
+    invariant_conflict = isinstance(exc, KernelConflict)
+    failure_count = claim.failure_count + 1 if invariant_conflict else 0
+    if invariant_conflict and failure_count >= _GENERIC_RECOVERY_MAX_INVARIANT_FAILURES:
+        return GenericRecoveryFailureDecision(
+            failure_count=failure_count,
+            next_attempt_at=None,
+            quarantined_at=now,
+            quarantine_reason="terminal_invariant_conflict",
+        )
+    delay = min(
+        _GENERIC_RECOVERY_BASE_BACKOFF_SECONDS * (2 ** (max(failure_count, 1) - 1)),
+        _GENERIC_RECOVERY_MAX_BACKOFF_SECONDS,
+    )
+    return GenericRecoveryFailureDecision(
+        failure_count=failure_count,
+        next_attempt_at=now + timedelta(seconds=delay),
+        quarantined_at=None,
+        quarantine_reason=None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +435,8 @@ def create_orchestrator_runtime(  # noqa: C901
         fetch_agent_card=sdk_fetch_agent_card,
         receipt_factory=A2ADispatchReceipt,
         observation_factory=NormalizedA2AObservation,
+        recoverable_transport_error_factory=RecoverableTransportError,
+        agent_card_contract_error_factory=AgentCardContractError,
         epoch_owner=artifact_writer.epoch_owner,
         call_resolver=resolve_call_address,
     )
@@ -507,22 +551,10 @@ def create_orchestrator_runtime(  # noqa: C901
         inbox=observation_inbox,
     )
 
-    async def recover_dispatch(record: Any) -> None:
-        binding = await binding_store.load(record.binding_id)
-        if binding is None or binding.binding_digest != record.binding_digest:
-            raise RecoverableAdapterError(
-                "resource-bearing re-dispatch binding is unavailable"
-            )
-        materialized = await resources.materialize(
-            record.resource_manifest,
-            room_id=record.room_id,
-            room_epoch=record.room_epoch,
-            allowed_input_modes=binding.input_modes,
-            deadline_at=record.dispatch_snapshot.deadline_at,
-        )
-        await dispatch.dispatch(
-            dispatch_command(record, materialized_resources=materialized)
-        )
+    recover_dispatch = RunBackedDispatchRecovery(
+        prepared_reader=prepared_reader,
+        runtime=tool_runtime,
+    )
 
     call_recovery = A2ACallRecoveryService(
         ledger=call_ledger,
@@ -558,6 +590,7 @@ def create_orchestrator_runtime(  # noqa: C901
                 expected_state_version=candidate.state_version,
                 owner_id=recovery_owner,
                 lease_expires_at=claim_now + recovery_lease,
+                claimed_at=claim_now,
             )
             if claimed.run is None or claimed.outcome not in {"accepted", "replayed"}:
                 continue
@@ -629,23 +662,52 @@ def create_orchestrator_runtime(  # noqa: C901
                             else datetime.now(UTC) + timedelta(seconds=2)
                         ),
                     )
-            except Exception:
-                logger.warning(
-                    "generic orchestrator Run recovery failed run_id=%s",
-                    run.run_id,
-                    exc_info=True,
-                )
+            except Exception as exc:
                 current = await run_store.load(run.run_id)
                 if (
                     current is not None
                     and current.recovery_claim.owner_id == recovery_owner
                 ):
-                    await run_store.release_recovery(
+                    failure_at = datetime.now(UTC)
+                    decision = _generic_recovery_failure_decision(
+                        current.recovery_claim, exc, now=failure_at
+                    )
+                    released = await run_store.release_recovery(
                         run.run_id,
                         expected_state_version=current.state_version,
                         owner_id=recovery_owner,
-                        next_attempt_at=datetime.now(UTC) + timedelta(seconds=5),
+                        next_attempt_at=decision.next_attempt_at,
+                        failure_count=decision.failure_count,
+                        quarantined_at=decision.quarantined_at,
+                        quarantine_reason=decision.quarantine_reason,
                     )
+                    if (
+                        released.outcome in {"accepted", "replayed"}
+                        and decision.quarantined_at is not None
+                    ):
+                        # The dedicated lease makes this warning exactly-once:
+                        # quarantined rows are excluded from every future scan.
+                        logger.warning(
+                            "generic orchestrator Run recovery quarantined "
+                            "run_id=%s reason=%s attempts=%s",
+                            run.run_id,
+                            decision.quarantine_reason,
+                            decision.failure_count,
+                        )
+                    elif isinstance(exc, KernelConflict):
+                        logger.debug(
+                            "generic orchestrator Run recovery invariant retry "
+                            "run_id=%s attempt=%s",
+                            run.run_id,
+                            decision.failure_count,
+                        )
+                    else:
+                        logger.warning(
+                            "generic orchestrator Run recovery failed "
+                            "run_id=%s error_type=%s retry_scheduled=true",
+                            run.run_id,
+                            type(exc).__name__,
+                        )
 
     def _due_phase(recover: Callable[..., Any]) -> Callable[[], Any]:
         async def run() -> None:

@@ -77,6 +77,7 @@ export interface PendingHitl {
   choices?: string[]
   messageId: string
   interactionId: string
+  interactionVersion?: number
   interactionStatus?: string
   applicationStatus?: string
   lifecycleState: HitlLifecycleState

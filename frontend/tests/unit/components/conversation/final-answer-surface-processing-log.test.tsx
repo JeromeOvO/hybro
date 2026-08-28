@@ -189,7 +189,7 @@ describe('FinalAnswerSurface processing logs', () => {
     expect(screen.queryByText('Agents working on your request…')).not.toBeInTheDocument()
   })
 
-  it('keeps work-log running during HITL without replacing Needs Input with Working', () => {
+  it('keeps only the work log running while HITL content stays in the composer', () => {
     const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
@@ -230,7 +230,8 @@ describe('FinalAnswerSurface processing logs', () => {
       />,
     )
 
-    expect(screen.getByText('Where are you going?')).toBeInTheDocument()
+    expect(screen.queryByText('Where are you going?')).not.toBeInTheDocument()
+    expect(screen.getByText('Delegating to Travel Planner Agent')).toBeInTheDocument()
     expect(screen.queryByLabelText('HYBRO AI — Working')).not.toBeInTheDocument()
     expect(container.querySelector('.conversation-processing-log')).toHaveClass(
       'conversation-processing-log-running',

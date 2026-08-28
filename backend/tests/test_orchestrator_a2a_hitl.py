@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -14,12 +15,17 @@ from common.dto.hitl import (
     HITLRouteSnapshotUnion,
     HITLRouteSnapshotV2,
 )
-from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
+from execution.hitl.exceptions import HITLConflictError
+from execution.orchestrator.a2a_runtime.hitl import (
+    A2AContinuationCoordinator,
+    InMemoryHITLApplicationPort,
+)
 from execution.orchestrator.a2a_runtime.interaction_outcome import (
     emit_hitl_request_events,
     emit_hitl_resolved_events,
 )
-from execution.orchestrator_routing import DualRuntimeRouter
+from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
+from execution.orchestrator_routing import DualRuntimeRouter, _map_legacy_answers
 
 from ._orchestrator_a2a_helpers import ledger_record
 
@@ -40,6 +46,170 @@ def interaction():
             ],
         }
     )
+
+
+def test_legacy_batch_requires_every_typed_question_with_safe_conflict():
+    spec = A2AInteractionSpec.model_validate(
+        {
+            "schema_version": 1,
+            "interaction_id": "interaction-2",
+            "questions": [
+                {
+                    "question_id": "security_training",
+                    "interaction_kind": "questionnaire",
+                    "prompt": "Is training in place?",
+                    "answer_kind": "text",
+                },
+                {
+                    "question_id": "cloud_providers",
+                    "interaction_kind": "questionnaire",
+                    "prompt": "Which cloud providers?",
+                    "answer_kind": "text",
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(HITLConflictError, match="changed before submission"):
+        _map_legacy_answers(
+            spec,
+            [{"request_id": "cloud_providers", "user_input": "AWS, Azure"}],
+        )
+
+    mapped = _map_legacy_answers(
+        spec,
+        [
+            {"request_id": "security_training", "user_input": "Yes"},
+            {"request_id": "cloud_providers", "user_input": "AWS, Azure"},
+        ],
+    )
+    assert [answer.question_id for answer in mapped] == [
+        "security_training",
+        "cloud_providers",
+    ]
+
+
+async def test_terminal_continuation_proof_clears_initial_delivery_uncertainty():
+    spec = A2AInteractionSpec.model_validate(
+        {
+            "schema_version": 1,
+            "interaction_id": "interaction-1",
+            "questions": [
+                {
+                    "question_id": "q1",
+                    "interaction_kind": "questionnaire",
+                    "prompt": "Answer",
+                    "answer_kind": "text",
+                }
+            ],
+        }
+    )
+    route = HITLRouteSnapshotV2(
+        orchestration_run_id="run-1",
+        call_record_id="record-1",
+        invocation_id="call-1",
+        room_id="room-1",
+        room_epoch=1,
+        binding_id="binding-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_revision=1,
+        interaction_fingerprint="fingerprint",
+    )
+    waiting_call = SimpleNamespace(
+        state="delivery_uncertain",
+        recent_observation_ids=["old-input-required"],
+        answer_applied=SimpleNamespace(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+        ),
+    )
+    completed_call = SimpleNamespace(
+        state="completed",
+        recent_observation_ids=["terminal-with-artifacts"],
+        answer_applied=waiting_call.answer_applied,
+    )
+    terminal_inbox = SimpleNamespace(
+        observation_id="terminal-with-artifacts",
+        observation=SimpleNamespace(
+            call_record_id="record-1",
+            event_kind="terminal",
+            observed_at="2026-08-27T00:00:00Z",
+        ),
+    )
+    runtime = SimpleNamespace(
+        hitl_port=SimpleNamespace(
+            read_interaction=AsyncMock(return_value=(spec, route, "fingerprint"))
+        ),
+        continuation=SimpleNamespace(
+            resume=AsyncMock(return_value="delivery_uncertain")
+        ),
+        call_ledger=SimpleNamespace(
+            load_by_record_id=AsyncMock(side_effect=[waiting_call, completed_call])
+        ),
+        observation_inbox=SimpleNamespace(
+            list_due_for_call=AsyncMock(return_value=[terminal_inbox])
+        ),
+        observation_processor=SimpleNamespace(process=AsyncMock()),
+    )
+    router = DualRuntimeRouter(runtime=runtime)
+
+    result = await router.route_hitl_answer(
+        interaction_id="interaction-1",
+        answers=[{"request_id": "q1", "user_input": "yes"}],
+        responder_id="user-1",
+        room_id="room-1",
+    )
+
+    assert result == "completed"
+    assert runtime.call_ledger.load_by_record_id.await_count == 2
+    runtime.observation_processor.process.assert_awaited_once_with(
+        "terminal-with-artifacts"
+    )
+
+
+async def test_hitl_wake_delivers_distinct_follow_up_interaction_to_kernel():
+    runtime = SimpleNamespace(
+        call_ledger=SimpleNamespace(
+            load_by_record_id=AsyncMock(
+                return_value=SimpleNamespace(
+                    state="input_required",
+                    pending_interaction_id="interaction-2",
+                    recent_observation_ids=["observation-2"],
+                )
+            )
+        ),
+        observation_inbox=SimpleNamespace(list_due_for_call=AsyncMock(return_value=[])),
+        observation_processor=SimpleNamespace(process=AsyncMock()),
+    )
+
+    await DualRuntimeRouter(runtime=runtime)._wake_after_hitl_resume(
+        "record-1", answered_interaction_id="interaction-1"
+    )
+
+    runtime.observation_processor.process.assert_awaited_once_with("observation-2")
+
+
+async def test_hitl_wake_inbox_read_failure_is_best_effort():
+    runtime = SimpleNamespace(
+        call_ledger=SimpleNamespace(
+            load_by_record_id=AsyncMock(
+                return_value=SimpleNamespace(
+                    state="delivery_uncertain",
+                    recent_observation_ids=[],
+                )
+            )
+        ),
+        observation_inbox=SimpleNamespace(
+            list_due_for_call=AsyncMock(side_effect=RuntimeError("inbox unavailable"))
+        ),
+        observation_processor=SimpleNamespace(process=AsyncMock()),
+    )
+
+    await DualRuntimeRouter(runtime=runtime)._wake_after_hitl_resume("record-1")
+
+    runtime.observation_processor.process.assert_not_awaited()
 
 
 def test_v1_hitl_route_round_trips_unchanged():
@@ -98,6 +268,11 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
         == "accepted"
     )
     _, route, _ = owner.read_interaction_for_test(interaction_id)
+    assert (
+        await owner.publish(interaction_id, call_record_id=call.call_record_id)
+        == "accepted"
+    )
+    assert len(await owner.get_published_interactions(call.room_id)) == 1
     answers = [
         HITLQuestionAnswer.model_validate(
             {
@@ -125,6 +300,7 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
         verified_auth_references=[],
     )
     assert first == replay
+    assert await owner.get_published_interactions(call.room_id) == []
     with pytest.raises(ValueError, match="inventory"):
         await owner.answer(
             interaction_id=interaction_id,
@@ -135,6 +311,52 @@ async def test_typed_answers_validate_exact_question_inventory_and_replay():
             verified_auth_reference_digests=[],
             verified_auth_references=[],
         )
+
+
+async def test_cas_losing_interaction_observation_is_not_published_under_winner_id():
+    delivery = SimpleNamespace(emit_checked=AsyncMock())
+    control = AsyncMock()
+    coordinator = A2AContinuationCoordinator(
+        ledger=SimpleNamespace(),
+        bindings=SimpleNamespace(),
+        hitl=SimpleNamespace(),
+        room_epochs=SimpleNamespace(),
+        authorization=SimpleNamespace(),
+        auth_references=SimpleNamespace(),
+        dispatch=SimpleNamespace(),
+        observations=SimpleNamespace(mark_ledger_applied=AsyncMock()),
+        hitl_delivery=delivery,
+        run_store=SimpleNamespace(load=AsyncMock()),
+        canonical_hitl_control=control,
+    )
+    persisted = ledger_record(run_id="run-1", call_id="call-1").model_copy(
+        update={
+            "state": "input_required",
+            "pending_interaction_id": "interaction-winner",
+            "interaction_fingerprint": "winner-fingerprint",
+        }
+    )
+    observation = NormalizedA2AObservation(
+        observation_id="observation-loser",
+        call_record_id=persisted.call_record_id,
+        source_kind="inspection",
+        source_identity="inspection:loser",
+        binding_scope=persisted.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=datetime.now(UTC),
+        interaction_spec=interaction().model_dump(mode="json"),
+    )
+
+    await coordinator._after_typed_park(
+        persisted,
+        observation,
+        prior_interaction_id="interaction-winner",
+    )
+
+    coordinator.observations.mark_ledger_applied.assert_not_awaited()
+    delivery.emit_checked.assert_not_awaited()
+    control.assert_not_awaited()
+    coordinator.run_store.load.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -437,7 +659,7 @@ async def test_router_pending_hitl_uses_public_activity_message_id():
     router = DualRuntimeRouter.__new__(DualRuntimeRouter)
     router._runtime = SimpleNamespace(
         hitl_port=SimpleNamespace(
-            get_eligible_interactions=AsyncMock(
+            get_published_interactions=AsyncMock(
                 return_value=[
                     (
                         interaction(),

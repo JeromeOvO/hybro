@@ -64,7 +64,7 @@ def candidate(agent_id="agent-1", **updates):
     return AgentToolCandidate(**values)
 
 
-async def prepare(values):
+async def prepare(values, *, resource_manifest=None):
     epochs = InMemoryRoomEpochStore()
     assert (await epochs.activate("room-1", "create-1", activated_at=NOW))[
         0
@@ -76,7 +76,7 @@ async def prepare(values):
         binding_store=bindings,
         room_epoch_store=epochs,
     )
-    manifest = RunResourceManifestSnapshot(
+    manifest = resource_manifest or RunResourceManifestSnapshot(
         manifest_id="resources",
         refs=[
             PreparedResourceRef(
@@ -416,14 +416,36 @@ async def test_card_or_endpoint_change_changes_binding_digest_only_for_new_run()
 
 
 async def test_prepared_invocation_reconstructs_from_durable_run_and_binding():
-    prepared_catalog, _, binding_store = await prepare([candidate()])
+    root_manifest = RunResourceManifestSnapshot(
+        manifest_id="root-context",
+        refs=[
+            PreparedResourceRef(
+                ref_id="ctx:message:user-1",
+                kind="context",
+                source_message_id="user-1",
+                mime_type="text/plain",
+                size_bytes=5,
+                content_digest="root-context-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="attachment-1",
+                kind="attachment",
+                source_message_id="user-1",
+                mime_type="application/pdf",
+                size_bytes=10,
+                content_digest="attachment-digest",
+            ),
+        ],
+        content_digest="run-resource-digest",
+    )
+    prepared_catalog, _, binding_store = await prepare(
+        [candidate()], resource_manifest=root_manifest
+    )
     run = make_run().model_copy(
         update={
             "run_id": "run-1",
             "tool_catalog": prepared_catalog.snapshot,
-            "resource_manifest": RunResourceManifestSnapshot(
-                manifest_id="empty", refs=[], content_digest="empty"
-            ),
+            "resource_manifest": root_manifest,
             "request": make_run().request.model_copy(
                 update={"requesting_subject_id": "user-1", "room_epoch": 1}
             ),
@@ -448,6 +470,16 @@ async def test_prepared_invocation_reconstructs_from_durable_run_and_binding():
     assert snapshot is not None
     assert snapshot.requesting_subject_id == "user-1"
     assert snapshot.binding == prepared_catalog.bindings[0]
+    assert [ref.ref_id for ref in snapshot.resource_manifest.refs] == [
+        "ctx:message:user-1"
+    ]
+
+    recovered = await reader.read_prepared(call)
+    assert recovered is not None
+    assert recovered.resource_manifest == snapshot.resource_manifest
+    assert recovered.resource_manifest.manifest_id == (
+        f"call-resources-{recovered.resource_manifest.content_digest}"
+    )
 
 
 async def test_preparation_fails_closed_for_inactive_epoch():

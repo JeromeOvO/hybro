@@ -26,6 +26,7 @@ SessionEventType = Literal[
     "tool_execution_updated",
     "tool_execution_completed",
     "turn_completed",
+    "model_decision",
     "run_waiting_external",
     "run_awaiting_user",
     "run_final_answer_ready",

@@ -18,6 +18,18 @@ NON_TERMINAL_RUN_STATUSES = (
     "finalizing",
 )
 
+# Suspended Runs remain dormant until ``recovery_claim.next_attempt_at``.  At
+# the profile deadline generic recovery must terminalize even when no HITL
+# answer/cancel arrives, otherwise accepted public Tool children stay open
+# forever.
+RECOVERY_ELIGIBLE_RUN_STATUSES = (
+    "queued",
+    "running",
+    "waiting_external",
+    "awaiting_user",
+    "finalizing",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class MongoIndexDefinition:
@@ -101,8 +113,13 @@ ORCHESTRATOR_COLLECTIONS = (
                 unique=True,
             ),
             MongoIndexDefinition(
-                name="orchestrator_recovery_lease_expiry",
-                keys=(("lease_expires_at", 1),),
+                name="orchestrator_recovery_lease_due",
+                keys=(
+                    ("quarantined_at", 1),
+                    ("next_attempt_at", 1),
+                    ("lease_expires_at", 1),
+                    ("run_id", 1),
+                ),
             ),
         ),
     ),
