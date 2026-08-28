@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, model_validator
 
 from common.dto.base import FrozenDTO
-from common.dto.pi_lifecycle import (
+from common.dto.turn_lifecycle import (
     CANONICAL_RUN_EVENT_KINDS,
     CanonicalRunEventPayload,
     RunStartedPayload,

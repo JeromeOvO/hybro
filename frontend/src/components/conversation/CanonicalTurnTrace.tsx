@@ -11,7 +11,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import { cn } from '@/lib/utils'
-import type { TurnActivityItem, TurnProjection } from '@/lib/pi-turn/types'
+import type { TurnActivityItem, TurnProjection } from '@/lib/turn-lifecycle/types'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 import { useTurnDurationLabel } from './turn-trace-time'
 

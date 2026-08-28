@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { TurnProjection } from '@/lib/pi-turn/types'
+import type { TurnProjection } from '@/lib/turn-lifecycle/types'
 
 export interface TurnPresentationState {
   expanded: boolean

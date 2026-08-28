@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '../../../utils/test-utils'
 import { TurnRenderer } from '@/components/conversation/TurnRenderer'
-import type { TurnActivityItem, TurnProjection } from '@/lib/pi-turn/types'
+import type { TurnActivityItem, TurnProjection } from '@/lib/turn-lifecycle/types'
 import { useMessageStore } from '@/stores/message-store'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 import { fetchCanonicalAgentCallDetail } from '@/lib/api/agent-call-detail'

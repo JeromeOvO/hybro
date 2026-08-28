@@ -875,7 +875,7 @@
   font-weight: var(--conversation-content-font-weight);
 }
 
-/* ---------- Canonical Pi-aligned Turn ---------- */
+/* ---------- Canonical Turn ---------- */
 
 .canonical-turn-trace {
   min-width: 0;

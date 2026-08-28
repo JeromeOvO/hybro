@@ -3,7 +3,7 @@
 import { memo, type Ref, useMemo } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { useMessageStore } from '@/stores/message-store'
-import type { TurnProjection } from '@/lib/pi-turn/types'
+import type { TurnProjection } from '@/lib/turn-lifecycle/types'
 import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/types'
 import { MarkdownContent } from '@/components/markdown-content'
 import { Separator } from '@/components/ui/separator'

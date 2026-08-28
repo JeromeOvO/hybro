@@ -6,14 +6,14 @@ import type { TaskState as A2ATaskState } from '@a2a-js/sdk'
 import type {
   CanonicalRunEventData,
   RoomSnapshotTurn,
-} from '@/lib/pi-turn/types'
+} from '@/lib/turn-lifecycle/types'
 
 export type {
   CanonicalHITLRequestData,
   CanonicalHITLResponseData,
   CanonicalRunEventData,
   RoomSnapshotTurn,
-} from '@/lib/pi-turn/types'
+} from '@/lib/turn-lifecycle/types'
 
 export type TaskState = A2ATaskState | 'policy-required' | 'expired'
 

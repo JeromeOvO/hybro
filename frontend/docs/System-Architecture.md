@@ -347,8 +347,8 @@ otherwise the legacy renderer remains in use.
 
 ### Canonical Turn projection and Trace
 
-`src/lib/pi-turn/` defines the strict wire contract, snapshot mapping, and pure
-Turn fold. `run_started` is the only live root binding and must exactly match
+`src/lib/turn-lifecycle/` defines the strict wire contract, snapshot mapping,
+and pure Turn fold. `run_started` is the only live root binding and must exactly match
 `run_id`, `correlation_id`, and the durable User message. The projection owns
 internal turns, offset-checked Assistant assembly, and exact equality between
 an already assembled delta stream and `message_end.text`; a mismatch requests

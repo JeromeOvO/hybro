@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '../../../utils/test-utils'
 import { CanonicalTurnTrace } from '@/components/conversation/CanonicalTurnTrace'
-import type { TurnActivityItem, TurnProjection } from '@/lib/pi-turn/types'
+import type { TurnActivityItem, TurnProjection } from '@/lib/turn-lifecycle/types'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 
 function turn(activity: TurnActivityItem[]): TurnProjection {

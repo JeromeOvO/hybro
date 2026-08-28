@@ -1275,10 +1275,8 @@ listener task.
 #### Snapshot-driven room stream
 
 The room stream is snapshot-driven. The delivery foundation and canonical
-Turn lifecycle implement
-[`Pi-Aligned-Turn-Lifecycle-Plan.md`](Pi-Aligned-Turn-Lifecycle-Plan.md): an
-append-only `room_events` collection is the source of truth for the realtime
-UI. Every emitted frame is persisted to `room_events` BEFORE broadcast
+Turn lifecycle use an append-only `room_events` collection as the source of
+truth for the realtime UI. Every emitted frame is persisted to `room_events` BEFORE broadcast
 (persist-before-broadcast), with a per-room monotonic `room_seq` allocated
 atomically with the insert (a Mongo counter document advanced in the same
 transaction; non-replica-set environments fall back to counter-then-insert

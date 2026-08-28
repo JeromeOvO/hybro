@@ -12,7 +12,7 @@ from common.dto import (
     TaskSubmittedEvent,
     TaskUpdateEvent,
 )
-from common.dto.pi_lifecycle import CANONICAL_RUN_EVENT_PAYLOADS
+from common.dto.turn_lifecycle import CANONICAL_RUN_EVENT_PAYLOADS
 
 NOW = datetime(2030, 1, 1, tzinfo=UTC)
 

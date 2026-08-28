@@ -1,4 +1,4 @@
-"""Strict public DTOs for the Pi-aligned Hybro Turn lifecycle."""
+"""Strict public DTOs for the Hybro Turn lifecycle."""
 
 from __future__ import annotations
 
@@ -13,31 +13,31 @@ PublicSummary = Annotated[str, Field(max_length=1_000)]
 PublicTimestamp = datetime
 
 
-class PiPublicDTO(BaseModel):
+class CanonicalEventPayloadDTO(BaseModel):
     """Closed immutable boundary for content persisted to ``room_events``."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class RunStartedPayload(PiPublicDTO):
+class RunStartedPayload(CanonicalEventPayloadDTO):
     hybro_turn_id: PublicId
     user_message_id: PublicId
     started_at: PublicTimestamp
     mode: Literal["fast", "direct", "ultimate", "supervisor"]
 
 
-class TurnStartPayload(PiPublicDTO):
+class TurnStartPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     attempt: int = Field(ge=1)
 
 
-class MessageStartPayload(PiPublicDTO):
+class MessageStartPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     message_id: PublicId
     role: Literal["assistant"] = "assistant"
 
 
-class TextDeltaEvent(PiPublicDTO):
+class TextDeltaEvent(CanonicalEventPayloadDTO):
     type: Literal["text_delta"] = "text_delta"
     content_index: int = Field(ge=0)
     delta_index: int = Field(ge=0)
@@ -52,13 +52,13 @@ class TextDeltaEvent(PiPublicDTO):
         return self
 
 
-class MessageUpdatePayload(PiPublicDTO):
+class MessageUpdatePayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     message_id: PublicId
     assistant_message_event: TextDeltaEvent
 
 
-class MessageEndPayload(PiPublicDTO):
+class MessageEndPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     message_id: PublicId
     stop_reason: Literal[
@@ -95,7 +95,7 @@ SafeSummary = dict[str, str | int | float | bool | None]
 PublicLabel = Annotated[str, Field(min_length=1, max_length=160)]
 
 
-class ExecutionTargetPayload(PiPublicDTO):
+class ExecutionTargetPayload(CanonicalEventPayloadDTO):
     """Safe public identity of an Agent Execution.
 
     ``name`` is the base Agent Card name (never the skill-qualified trace
@@ -119,7 +119,7 @@ def _validate_execution_shape(
         raise ValueError("tool execution must not carry a target")
 
 
-class ToolExecutionStartPayload(PiPublicDTO):
+class ToolExecutionStartPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     tool_call_id: Annotated[str, Field(pattern=r"^inv_[A-Za-z0-9_-]{8,128}$")]
     tool_name: Annotated[str, Field(min_length=1, max_length=160)]
@@ -134,7 +134,7 @@ class ToolExecutionStartPayload(PiPublicDTO):
         return self
 
 
-class ToolExecutionUpdatePayload(PiPublicDTO):
+class ToolExecutionUpdatePayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     tool_call_id: Annotated[str, Field(pattern=r"^inv_[A-Za-z0-9_-]{8,128}$")]
     tool_name: Annotated[str, Field(min_length=1, max_length=160)]
@@ -150,7 +150,7 @@ class ToolExecutionUpdatePayload(PiPublicDTO):
         return self
 
 
-class ToolExecutionEndPayload(PiPublicDTO):
+class ToolExecutionEndPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     tool_call_id: Annotated[str, Field(pattern=r"^inv_[A-Za-z0-9_-]{8,128}$")]
     tool_name: Annotated[str, Field(min_length=1, max_length=160)]
@@ -184,7 +184,7 @@ class ToolExecutionEndPayload(PiPublicDTO):
         return self
 
 
-class TurnEndPayload(PiPublicDTO):
+class TurnEndPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     message_id: PublicId | None = None
     tool_call_ids: list[Annotated[str, Field(pattern=r"^inv_[A-Za-z0-9_-]{8,128}$")]]
@@ -199,7 +199,7 @@ class TurnEndPayload(PiPublicDTO):
         return self
 
 
-class RetryScheduledPayload(PiPublicDTO):
+class RetryScheduledPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     attempt: int = Field(ge=2)
     delay_ms: int = Field(ge=0)
@@ -213,7 +213,7 @@ class RetryScheduledPayload(PiPublicDTO):
     ]
 
 
-class ModelDecisionPayload(PiPublicDTO):
+class ModelDecisionPayload(CanonicalEventPayloadDTO):
     internal_turn_id: PublicId
     decision: Literal[
         "interaction_received",
@@ -238,7 +238,7 @@ class ModelDecisionPayload(PiPublicDTO):
         return self
 
 
-class RunWaitingInputPayload(PiPublicDTO):
+class RunWaitingInputPayload(CanonicalEventPayloadDTO):
     interaction_id: PublicId
     request_ids: list[PublicId] = Field(min_length=1)
     requested_at: PublicTimestamp
@@ -250,7 +250,7 @@ class RunWaitingInputPayload(PiPublicDTO):
         return self
 
 
-class RunResumedPayload(PiPublicDTO):
+class RunResumedPayload(CanonicalEventPayloadDTO):
     interaction_id: PublicId
     resolved_request_ids: list[PublicId] = Field(min_length=1)
     resumed_at: PublicTimestamp
@@ -262,7 +262,7 @@ class RunResumedPayload(PiPublicDTO):
         return self
 
 
-class RunSettledPayload(PiPublicDTO):
+class RunSettledPayload(CanonicalEventPayloadDTO):
     status: Literal["completed", "failed", "canceled"]
     started_at: PublicTimestamp
     settled_at: PublicTimestamp
@@ -332,7 +332,7 @@ CanonicalRunEventPayload = (
     | RunSettledPayload
 )
 
-CANONICAL_RUN_EVENT_PAYLOADS: dict[str, type[PiPublicDTO]] = {
+CANONICAL_RUN_EVENT_PAYLOADS: dict[str, type[CanonicalEventPayloadDTO]] = {
     "run_started": RunStartedPayload,
     "turn_start": TurnStartPayload,
     "message_start": MessageStartPayload,
@@ -369,7 +369,7 @@ __all__ = [
     "MessageStartPayload",
     "MessageUpdatePayload",
     "ModelDecisionPayload",
-    "PiPublicDTO",
+    "CanonicalEventPayloadDTO",
     "RetryScheduledPayload",
     "RunResumedPayload",
     "RunSettledPayload",

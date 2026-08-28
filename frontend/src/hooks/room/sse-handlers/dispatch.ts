@@ -19,7 +19,7 @@ import {
   isCanonicalHITLRequestData,
   isCanonicalHITLResponseData,
   validateCanonicalRunEventData,
-} from '@/lib/pi-turn/contract'
+} from '@/lib/turn-lifecycle/contract'
 import { isCanonicalRoot, useTurnStore } from '@/stores/turn-store'
 
 export const HANDLED_ROOM_SSE_TYPES = {

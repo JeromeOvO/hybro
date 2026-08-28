@@ -36,7 +36,7 @@ import {
 } from '@/lib/api/agent-call-detail'
 import { canonicalAgentCallDetailQueryOptions } from '@/lib/api/canonical-agent-call-detail-query'
 import type { MessageEntity } from '@/stores/message-store/types'
-import type { TurnActivityItem } from '@/lib/pi-turn/types'
+import type { TurnActivityItem } from '@/lib/turn-lifecycle/types'
 import { ApiError } from '@/lib/api-client'
 import { isTerminalState } from '@/lib/types/sse'
 

@@ -25,7 +25,7 @@ from common.dto.delivery import (
     TaskSubmittedEvent,
     TaskUpdateEvent,
 )
-from common.dto.pi_lifecycle import CANONICAL_RUN_EVENT_KINDS
+from common.dto.turn_lifecycle import CANONICAL_RUN_EVENT_KINDS
 from common.utils.logger import get_logger
 from delivery.room_events import RoomEventStore
 

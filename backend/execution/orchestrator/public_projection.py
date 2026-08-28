@@ -1,9 +1,8 @@
 """Public decision-visibility projection for the room SSE stream.
 
-Legacy decision-visibility projection retained during the proposed
-``backend/docs/Pi-Aligned-Turn-Lifecycle-Plan.md`` cutover: translate private
-kernel lifecycle ``SessionEvent`` values into public ``run_event`` payload types
-carried over the existing SSE ``run_event`` frame.
+Decision-visibility projection that translates private kernel lifecycle
+``SessionEvent`` values into public ``run_event`` payload types carried over the
+existing SSE ``run_event`` frame.
 
 The payloads produced here are the only public surface for decisions, LLM
 calls, retries, and tool calls. Raw system/user prompts, full tool arguments,
@@ -18,7 +17,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from common.dto.pi_lifecycle import CANONICAL_RUN_EVENT_KINDS
+from common.dto.turn_lifecycle import CANONICAL_RUN_EVENT_KINDS
 
 from .lifecycle import SessionEvent
 from .models import FrozenToolCatalogSnapshot, OrchestratorRunState

@@ -31,7 +31,7 @@ def _event(event_type: str, payload: dict | None = None) -> SessionEvent:
     )
 
 
-def test_public_kinds_are_the_pi_turn_lifecycle_vocabulary():
+def test_public_kinds_are_the_canonical_turn_lifecycle_vocabulary():
     assert PUBLIC_RUN_EVENT_KINDS == {
         "run_started",
         "turn_start",

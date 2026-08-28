@@ -1,12 +1,12 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
-import type { CanonicalFoldEvent, TurnProjectionMap } from '@/lib/pi-turn/fold'
+import type { CanonicalFoldEvent, TurnProjectionMap } from '@/lib/turn-lifecycle/fold'
 import {
   foldCanonicalEvent,
   snapshotTurnToProjection,
   validateProjectionClosure,
-} from '@/lib/pi-turn/fold'
-import type { RoomSnapshotTurn, TurnProjection } from '@/lib/pi-turn/types'
+} from '@/lib/turn-lifecycle/fold'
+import type { RoomSnapshotTurn, TurnProjection } from '@/lib/turn-lifecycle/types'
 import { useTurnPresentationStore } from './turn-presentation-store'
 
 interface CanonicalRoomState {

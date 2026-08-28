@@ -24,7 +24,7 @@ import {
   hasCanonicalSnapshotCapability,
   isCanonicalHITLRequestData,
   validateCanonicalSnapshotTurns,
-} from '@/lib/pi-turn/contract'
+} from '@/lib/turn-lifecycle/contract'
 import { useMessageStore } from '@/stores/message-store'
 import { useTurnStore } from '@/stores/turn-store'
 import { useStreamingStore } from '@/stores/streaming-store'

@@ -60,7 +60,7 @@ function finalReadyProjection(): TurnProjectionMap {
   return turns
 }
 
-describe('canonical Pi Turn contract and fold', () => {
+describe('canonical Turn contract and fold', () => {
   it('runtime-validates closed known subtypes and rejects unknown nested/private fields', () => {
     const valid = runEvent(1, 'message_update', {
       internal_turn_id: 'turn-1',
