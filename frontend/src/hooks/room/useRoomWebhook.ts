@@ -20,7 +20,6 @@ import { useRoomSSEConnection } from './useRoomSSEConnection'
 import { useSendMessage } from './useSendMessage'
 import { useRoomActions } from './useRoomActions'
 import type { UseRoomWebhookProps } from './types'
-import { flushPendingSseEvents } from './sse-handlers/pending-turn-buffer'
 
 export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWebhookProps) {
   // Read per-room flags reactively through narrow selectors.
@@ -108,6 +107,14 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   // O(1) lookup index: maps HITL request_id → message entity id
   const hitlRequestIndex = useRef(new Map<string, string>())
 
+  // Snapshot recovery surface (plan §4 rule 3): bound by useRoomSSEConnection
+  // to a reconnect-with-?snapshot=1 callback.
+  const requestSnapshotRef = useRef<(() => void) | null>(null)
+  const requestCanonicalSnapshot = useCallback(
+    () => requestSnapshotRef.current?.(),
+    [],
+  )
+
   // Room reset effect
   useRoomReset(roomId, lifecycle, hitlRequestIndex, resetAgentNameCache, setSending, setCancelling, setSseConnected, setSseError)
 
@@ -161,6 +168,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     () => createSSEDispatcher({
       roomId, lifecycle, getAgentName, getAgentSource, getToken,
       reconcileWithDb, hitlRequestIndex, setCancelling,
+      requestSnapshotRef,
     }),
     [roomId, lifecycle, getAgentName, getAgentSource, getToken,
      reconcileWithDb, setCancelling]
@@ -170,18 +178,13 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
   const { sseConnected: sseConnectedFromSSE, sseConnecting, sseError: sseErrorFromSSE } = useRoomSSEConnection(
     roomId, getToken, sseEnabled, processing, lifecycle, handleSSEMessage,
     getAgentName, getAgentSource, hitlRequestIndex, reconcileWithDb,
-    setSseConnected, setSseError,
+    setSseConnected, setSseError, requestSnapshotRef,
   )
-
-  const handlePostMessageIdResolved = useCallback(async (clientRequestId: string, messageId: string) => {
-    await flushPendingSseEvents(clientRequestId, handleSSEMessage, messageId)
-  }, [handleSSEMessage])
 
   // Send message
   const { sendUserMessage } = useSendMessage(
     roomId, userId, userName, room, getToken, sending, sseConnectedFromSSE,
     lifecycle, setSending, setCancelling, reconcileWithDb,
-    handlePostMessageIdResolved,
   )
 
   // Room actions
@@ -197,6 +200,7 @@ export function useRoomWebhook({ roomId, userId, userName, getToken }: UseRoomWe
     reconcileWithDb, setCancelling, setUpdatingRoom,
     sseEnabled, setSseEnabled,
     getAgentName, getAgentSource,
+    requestCanonicalSnapshot,
   )
 
   return {

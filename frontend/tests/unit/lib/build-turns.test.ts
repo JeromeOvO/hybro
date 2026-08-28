@@ -77,6 +77,28 @@ describe('buildTurns – core construction', () => {
     expect(turns[0].status).toBe('active')
   })
 
+  it('does not render request-scoped HITL projections as duplicate Agent cards', () => {
+    const user = makeUserEntity({ id: 'u1', clientRequestId: 'client-1' })
+    const agent = makeAgentEntity({
+      id: 'orchestrator:run-1:inv_agent', relatedMessageId: 'u1',
+      clientRequestId: 'client-1', taskStatus: 'input-required',
+    })
+    const question = makeAgentEntity({
+      id: 'hitl-question:orchestrator%3Arun-1%3Ainv_agent:question-1',
+      relatedMessageId: 'u1', clientRequestId: 'client-1',
+      hitlRequestId: 'question-1', hitlMessageId: agent.id,
+      hitlPrompt: 'Question?', taskStatus: 'input-required',
+    })
+
+    const turns = buildTurns(
+      entitiesToMap([user, agent, question]),
+      [user.id, agent.id, question.id],
+      [],
+    )
+
+    expect(turns[0].agentResults.map(result => result.messageId)).toEqual([agent.id])
+  })
+
   it('3. user + agent produces one turn with one agent result', () => {
     const user = makeUserEntity({ id: 'u1', timestamp: '2026-01-01T00:00:00Z' })
     const agent = makeAgentEntity({
@@ -253,6 +275,33 @@ describe('buildTurns – core construction', () => {
     expect(turns).toHaveLength(1)
     expect(turns[0].status).toBe('partial')
     expect(turns[0].agentResults).toHaveLength(2)
+  })
+
+  it('keeps one live card per durable orchestrator invocation from the same Agent', () => {
+    const user = makeUserEntity({
+      id: 'u1',
+      clientRequestId: 'request-1',
+      timestamp: '2026-01-01T00:00:00.000Z',
+    })
+    const calls = Array.from({ length: 5 }, (_, index) => makeAgentEntity({
+      id: `orchestrator:run-1:call-${index + 1}`,
+      agentId: 'broker-agent',
+      senderName: 'Broker Agent',
+      clientRequestId: 'request-1',
+      relatedMessageId: 'u1',
+      content: '',
+      taskStatus: 'working',
+      timestamp: `2026-01-01T00:00:0${index + 1}.000Z`,
+    }))
+    const entities = entitiesToMap([user, ...calls])
+
+    const turns = buildTurns(entities, ['u1', ...calls.map(call => call.id)], [])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]?.agentResults).toHaveLength(5)
+    expect(turns[0]?.agentResults.map(result => result.messageId)).toEqual(
+      calls.map(call => call.id),
+    )
   })
 
   describe('buildTurns – summary selection', () => {

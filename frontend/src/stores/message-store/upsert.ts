@@ -1,4 +1,5 @@
 import { isTerminalState } from '@/lib/types/sse'
+import { patchedPublicAgentName } from '@/lib/agent-display-name'
 import { resolveDisplayType } from './resolve-display-type'
 import type { MessageEntity, IncomingMessage, MessageSource, ArtifactData, ProcessingStatusLogEntry } from './types'
 
@@ -115,6 +116,7 @@ function mergeIncoming(
       totalSteps: incoming.totalSteps,
       relatedMessageId: incoming.relatedMessageId,
       hitlRequestId: incoming.hitlRequestId,
+      hitlMessageId: incoming.hitlMessageId,
       hitlSource: incoming.hitlSource,
       hitlPrompt: incoming.hitlPrompt,
       hitlPromptType: incoming.hitlPromptType,
@@ -142,6 +144,17 @@ function mergeIncoming(
     }
   }
 
+  const sameHitlIdentity = Boolean(
+    incoming.hitlRequestId !== undefined
+    && existing.hitlRequestId === incoming.hitlRequestId
+    && incoming.hitlInteractionId !== undefined
+    && existing.hitlInteractionId === incoming.hitlInteractionId
+  )
+  const incomingHitlIsNewer = Boolean(
+    incoming.hitlInteractionVersion !== undefined
+    && existing.hitlInteractionVersion !== undefined
+    && incoming.hitlInteractionVersion > existing.hitlInteractionVersion
+  )
   const isStaleHitlVersion = Boolean(
     incoming.hitlInteractionId !== undefined
     && existing.hitlInteractionId !== undefined
@@ -150,7 +163,27 @@ function mergeIncoming(
     && existing.hitlInteractionVersion !== undefined
     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
   )
-  const acceptsHitlUpdate = !isStaleHitlVersion
+  const incomingHitlIsTerminal = Boolean(
+    incoming.hitlResolved === true
+    || ['applied', 'responded', 'canceled', 'expired'].includes(
+      incoming.hitlInteractionStatus ?? '',
+    )
+    || incoming.hitlApplicationStatus === 'applied'
+  )
+  const existingHitlIsNonRegressible = Boolean(
+    sameHitlIdentity
+    && !incomingHitlIsNewer
+    && !incomingHitlIsTerminal
+    && (
+      existing.hitlResolved === true
+      || existing.hitlUserAnswer
+      || ['answers_recorded', 'applying', 'applied', 'responded'].includes(
+        existing.hitlInteractionStatus ?? '',
+      )
+      || ['applying', 'applied'].includes(existing.hitlApplicationStatus ?? '')
+    )
+  )
+  const acceptsHitlUpdate = !isStaleHitlVersion && !existingHitlIsNonRegressible
   const finalizesExistingHitl = Boolean(
     existing.hitlRequestId
     && existing.hitlUserAnswer
@@ -168,7 +201,9 @@ function mergeIncoming(
     roomId: incoming.roomId,
     messageType: incoming.messageType,
     content: incoming.content,
-    senderName: incoming.senderName,
+    senderName: incoming.messageType === 'agent'
+      ? (patchedPublicAgentName(existing.senderName, incoming.senderName) ?? incoming.senderName)
+      : incoming.senderName,
     timestamp: incoming.timestamp,
     agentId: incoming.agentId !== undefined ? incoming.agentId : existing.agentId,
     agentSource: incoming.agentSource !== undefined ? incoming.agentSource : existing.agentSource,
@@ -188,6 +223,7 @@ function mergeIncoming(
     totalSteps: incoming.totalSteps !== undefined ? incoming.totalSteps : existing.totalSteps,
     relatedMessageId: incoming.relatedMessageId !== undefined ? incoming.relatedMessageId : existing.relatedMessageId,
     hitlRequestId: acceptsHitlUpdate && incoming.hitlRequestId !== undefined ? incoming.hitlRequestId : existing.hitlRequestId,
+    hitlMessageId: acceptsHitlUpdate && incoming.hitlMessageId !== undefined ? incoming.hitlMessageId : existing.hitlMessageId,
     hitlSource: acceptsHitlUpdate && incoming.hitlSource !== undefined ? incoming.hitlSource : existing.hitlSource,
     hitlPrompt: acceptsHitlUpdate && incoming.hitlPrompt !== undefined ? incoming.hitlPrompt : existing.hitlPrompt,
     hitlPromptType: acceptsHitlUpdate && incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
@@ -209,11 +245,17 @@ function mergeIncoming(
       ? 'applied'
       : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
         ? incoming.hitlApplicationStatus
-        : existing.hitlApplicationStatus,
+        : incomingHitlIsNewer
+          ? undefined
+          : existing.hitlApplicationStatus,
     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
     hitlGroupTotal: acceptsHitlUpdate && incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: acceptsHitlUpdate && incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
-    hitlUserAnswer: acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : existing.hitlUserAnswer,
+    hitlUserAnswer: acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
+      ? incoming.hitlUserAnswer
+      : incomingHitlIsNewer
+        ? undefined
+        : existing.hitlUserAnswer,
     clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
@@ -303,6 +345,7 @@ export function isNoOpUpdate(
     existing.hitlApplicationStatus === coalesce(incoming.hitlApplicationStatus, existing.hitlApplicationStatus) &&
     existing.hitlPrompt        === coalesce(incoming.hitlPrompt, existing.hitlPrompt) &&
     existing.hitlRequestId     === coalesce(incoming.hitlRequestId, existing.hitlRequestId) &&
+    existing.hitlMessageId     === coalesce(incoming.hitlMessageId, existing.hitlMessageId) &&
     existing.hitlPromptType    === coalesce(incoming.hitlPromptType, existing.hitlPromptType) &&
     existing.hitlExpiresAt     === coalesce(incoming.hitlExpiresAt, existing.hitlExpiresAt) &&
     arraysShallowEqual(existing.hitlChoices, coalesce(incoming.hitlChoices, existing.hitlChoices)) &&

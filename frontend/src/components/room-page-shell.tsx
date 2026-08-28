@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '@/lib/types/agent-group'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -22,11 +23,34 @@ import { useMessageStore } from '@/stores/message-store'
 import { useStreamBuffer } from '@/hooks/useStreamBuffer'
 import { useRoomUiStore, useSelectedAgentMessageId } from '@/stores/room-ui-store'
 import { selectAgentResponseDetail } from '@/lib/selectors/select-agent-response-detail'
+import {
+  getAgentTheme,
+  type AgentResponseDetail,
+} from '@/lib/selectors/conversation-types'
+import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
+import { useCanonicalTurns } from '@/stores/turn-store'
+import {
+  canonicalAgentCallParts,
+  canonicalArtifactData,
+  parseCanonicalCardIdentity,
+} from '@/lib/api/agent-call-detail'
+import { canonicalAgentCallDetailQueryOptions } from '@/lib/api/canonical-agent-call-detail-query'
 import type { MessageEntity } from '@/stores/message-store/types'
+import type { TurnActivityItem } from '@/lib/turn-lifecycle/types'
+import { ApiError } from '@/lib/api-client'
+import { isTerminalState } from '@/lib/types/sse'
+
+function isAgentExecutionWithCallId(
+  item: TurnActivityItem,
+  publicCallId: string,
+): item is Extract<TurnActivityItem, { kind: 'tool' }> & { executionKind: 'agent' } {
+  return item.kind === 'tool' && item.executionKind === 'agent' && item.toolCallId === publicCallId
+}
 
 const EMPTY_ENTITIES: Record<string, MessageEntity> = {}
 const EMPTY_ORDERED_IDS: string[] = []
 const DETAIL_PANE_QUERY = '(min-width: 1024px)'
+
 const DETAIL_PANE_LAYOUT = {
   'conversation-primary-panel': 50,
   'conversation-detail-panel': 50,
@@ -77,7 +101,7 @@ export interface TimelineAdapter {
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
-  onCancelHitl: (requestId: string) => Promise<void>
+  onCancelHitl: (requestId: string, interactionId?: string) => Promise<void>
   onRefreshHitl: () => Promise<void>
   onChatModeChange: (mode: ChatMode) => void
   isSending: boolean
@@ -113,7 +137,7 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
   const orderedIds = useMessageStore(s => selectedMessageId ? s.orderedIds : EMPTY_ORDERED_IDS)
   const streamBuffer = useStreamBuffer(selectedMessageId)
 
-  const detail = useMemo(() => {
+  const baseDetail = useMemo(() => {
     if (!selectedMessageId) return null
     return selectAgentResponseDetail(
       adapter.roomId,
@@ -123,6 +147,118 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       streamBuffer,
     )
   }, [adapter.roomId, selectedMessageId, entities, orderedIds, streamBuffer])
+
+  // Canonical Agent Cards are folded from execution events, not MessageStore
+  // entities. When the card has no legacy entity (the canonical-only path),
+  // build the detail shell from the Turn projection so the private detail
+  // fetch still opens the pane with the durable request/status facts.
+  const canonicalTurns = useCanonicalTurns(adapter.roomId)
+  const canonicalCardDetail = useMemo<AgentResponseDetail | null>(() => {
+    if (!selectedMessageId || baseDetail) return null
+    const identity = parseCanonicalCardIdentity(selectedMessageId)
+    if (!identity) return null
+    for (const turn of canonicalTurns) {
+      if (turn.runId !== identity.runId) continue
+      const item = turn.activity.find((activity) => (
+        isAgentExecutionWithCallId(activity, identity.publicCallId)
+      ))
+      if (!item) continue
+      const agentName = item.targetName ?? 'Unknown agent'
+      const userEntity = entities[turn.userMessageId] ?? null
+      const status = item.status === 'completed'
+        ? 'completed'
+        : item.status === 'suspended'
+          ? 'awaiting_input'
+          : item.status === 'failed'
+            ? 'failed'
+            : item.status === 'canceled'
+              ? 'canceled'
+              : 'working'
+      return {
+        messageId: selectedMessageId,
+        agentName,
+        display: mapResultDisplayProps({
+          agentId: undefined,
+          agentName,
+          agentSource: undefined,
+          messageId: selectedMessageId,
+          status,
+          content: '',
+          artifacts: [],
+          isSummaryAgent: false,
+          isEphemeral: false,
+        }, false),
+        taskDescription: item.requestSummary,
+        theme: getAgentTheme(undefined, agentName),
+        content: '',
+        isStreaming: item.status === 'running',
+        artifacts: [],
+        requestMessage: userEntity,
+      }
+    }
+    return null
+  }, [baseDetail, canonicalTurns, entities, selectedMessageId])
+
+  const canonicalCardTerminal = useMemo(() => {
+    if (!selectedMessageId) return false
+    const identity = parseCanonicalCardIdentity(selectedMessageId)
+    if (!identity) return false
+    const turn = canonicalTurns.find((item) => item.runId === identity.runId)
+    if (!turn) return false
+    const item = turn.activity.find((activity) => (
+      isAgentExecutionWithCallId(activity, identity.publicCallId)
+    ))
+    return item != null && ['completed', 'failed', 'canceled'].includes(item.status)
+  }, [canonicalTurns, selectedMessageId])
+
+  const effectiveBaseDetail = baseDetail ?? canonicalCardDetail
+  const canonicalTerminal = parseCanonicalCardIdentity(selectedMessageId ?? '') != null
+    && (canonicalCardTerminal
+      || (baseDetail?.taskStatus != null && isTerminalState(baseDetail.taskStatus)))
+  const privateDetailQuery = useQuery(canonicalAgentCallDetailQueryOptions(
+    adapter.roomId,
+    selectedMessageId,
+    adapter.getToken,
+    canonicalTerminal,
+  ))
+
+  const detail = useMemo(() => {
+    if (!effectiveBaseDetail) return null
+    if (!canonicalTerminal) return effectiveBaseDetail
+    if (privateDetailQuery.isPending || privateDetailQuery.isFetching) {
+      return {
+        ...effectiveBaseDetail,
+        content: '',
+        parts: undefined,
+        artifacts: [],
+        isStreaming: true,
+      }
+    }
+    if (privateDetailQuery.isError) {
+      const error = privateDetailQuery.error
+      return {
+        ...effectiveBaseDetail,
+        content: '',
+        parts: undefined,
+        artifacts: [],
+        isStreaming: false,
+        taskError: error instanceof ApiError && error.status === 404
+          ? 'Private details are still being prepared. Close and reopen this response to retry.'
+          : error instanceof Error ? error.message : 'Private output unavailable',
+      }
+    }
+    const response = privateDetailQuery.data
+    const parts = canonicalAgentCallParts(response?.parts)
+    return {
+      ...effectiveBaseDetail,
+      // New backends preserve A2A part boundaries. ``output`` remains only as
+      // a rolling-deploy fallback for an older detail response.
+      content: parts === undefined ? response?.output ?? '' : '',
+      parts,
+      artifacts: canonicalArtifactData(response?.artifacts ?? []),
+      isStreaming: false,
+    }
+  }, [canonicalTerminal, effectiveBaseDetail, privateDetailQuery])
 
   const restoreSidebar = useCallback(() => {
     const snapshot = sidebarSnapshotRef.current

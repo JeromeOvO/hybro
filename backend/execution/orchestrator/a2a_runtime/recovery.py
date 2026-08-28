@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -11,10 +12,12 @@ from typing import Any
 from common.dto.hitl import A2AInteractionSpec
 from common.utils.logger import get_logger
 
+from ..kernel import KernelConflict
 from ..models import TextPart, ToolResult
 from ..ports import InvocationCheckpointReader
 from .cancellation import A2ACancellationCoordinator
 from .errors import (
+    AgentCardContractError,
     AmbiguousRemoteEffectError,
     RecoverableAdapterError,
     RecoverableCheckpointError,
@@ -23,7 +26,7 @@ from .errors import (
 from .hitl import A2AContinuationCoordinator
 from .ingress import A2AObservationProcessor
 from .interaction_outcome import (
-    emit_hitl_request_events,
+    CanonicalHITLControlPublisher,
     park_call_for_interaction,
 )
 from .ledger import (
@@ -36,6 +39,7 @@ from .models import (
     A2AObservationInboxRecord,
     A2ARuntimePolicy,
     AgentCallLedgerRecord,
+    MaterializedResourcePart,
     NormalizedA2AObservation,
 )
 from .ports import (
@@ -68,6 +72,8 @@ class A2ACallRecoveryService:
         hitl: HITLApplicationPort | None = None,
         hitl_delivery: Any | None = None,
         run_store: Any | None = None,
+        canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
+        public_secret_values: tuple[str, ...] = (),
     ) -> None:
         self.ledger = ledger
         self.checkpoints = checkpoints
@@ -80,6 +86,8 @@ class A2ACallRecoveryService:
         self.hitl = hitl
         self.hitl_delivery = hitl_delivery
         self.run_store = run_store
+        self.canonical_hitl_control = canonical_hitl_control
+        self.public_secret_values = public_secret_values
 
     async def recover_due(self, *, due_at: datetime) -> int:
         records = await self.ledger.list_due(
@@ -250,6 +258,8 @@ class A2ACallRecoveryService:
         command = dispatch_command(record)
         try:
             inspected = await self.dispatch.inspect(command)
+        except AgentCardContractError:
+            return await self._expire(record, now=now, code="agent_card_contract_error")
         except (
             RecoverableAdapterError,
             RecoverableTransportError,
@@ -262,7 +272,10 @@ class A2ACallRecoveryService:
             return False
         if inspected is not None and inspected.terminal_observation is not None:
             observation = inspected.terminal_observation
-            await self.observations.record(observation)
+            _record_outcome, persisted_observation = await self.observations.record(
+                observation
+            )
+            observation = persisted_observation.observation
             record = await self._renew(record, now=datetime.now(UTC))
             if record is None:
                 return False
@@ -287,7 +300,10 @@ class A2ACallRecoveryService:
                 observation = observation.model_copy(
                     update={"call_record_id": record.call_record_id}
                 )
-            await self.observations.record(observation)
+            _record_outcome, persisted_observation = await self.observations.record(
+                observation
+            )
+            observation = persisted_observation.observation
             record = await self._renew(record, now=datetime.now(UTC))
             if record is None:
                 return False
@@ -311,7 +327,11 @@ class A2ACallRecoveryService:
                     tool_name=record.tool_name,
                     status="completed",
                     content=content,
-                    artifact_refs=list(observation.artifact_refs or []),
+                    artifact_refs=list(
+                        dict.fromkeys(
+                            [*record.artifact_refs, *(observation.artifact_refs or [])]
+                        )
+                    ),
                     error_code=None,
                     error_message=None,
                 )
@@ -319,6 +339,7 @@ class A2ACallRecoveryService:
                     record,
                     to_state="completed",
                     updated_at=datetime.now(UTC),
+                    artifact_refs=result.artifact_refs,
                     terminal_result=result,
                     terminal_result_digest=sha256(
                         result.model_dump_json().encode()
@@ -363,13 +384,33 @@ class A2ACallRecoveryService:
                 raw_spec = observation.interaction_spec
                 if raw_spec is not None:
                     interaction = A2AInteractionSpec.model_validate(raw_spec)
-                    await emit_hitl_request_events(
-                        record=persisted,
-                        interaction=interaction,
-                        interaction_id=persisted.pending_interaction_id,
-                        hitl_delivery=self.hitl_delivery,
-                        run_store=self.run_store,
+                    fingerprint = sha256(
+                        json.dumps(
+                            interaction.model_dump(mode="json"),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ).encode()
+                    ).hexdigest()
+                    waiting_state = (
+                        observation.event_kind
+                        if observation.event_kind in {"input_required", "auth_required"}
+                        else "input_required"
                     )
+                    if (
+                        persisted.state == waiting_state
+                        and persisted.pending_interaction_id
+                        == interaction.interaction_id
+                        and persisted.interaction_fingerprint == fingerprint
+                    ):
+                        # A concurrent winner may have parked another round.
+                        # Mark the exact matching observation applied, but do
+                        # NOT publish the questionnaire here: model-first HITL
+                        # presents the interaction to the kernel/model, which
+                        # alone may escalate it to the user.
+                        await self.observations.mark_ledger_applied(
+                            observation.observation_id
+                        )
             return persisted.state in {
                 "input_required",
                 "auth_required",
@@ -591,6 +632,13 @@ class A2AInboxRecoveryService:
         for record in records:
             try:
                 outcome = await self.processor.process(record.observation_id)
+            except KernelConflict:
+                await self.processor.defer_poison(
+                    record.observation_id,
+                    error=_kernel_conflict_marker(),
+                    now=due_at,
+                )
+                continue
             except ValueError as exc:
                 await self.processor.defer_poison(
                     record.observation_id, error=type(exc).__name__, now=due_at
@@ -720,6 +768,11 @@ class A2ARecoveryCycle:
                 logger.error("A2A recovery phase failed: %s", name, exc_info=True)
 
 
+def _kernel_conflict_marker() -> str:
+    fingerprint = sha256(b"observation-sink:KernelConflict").hexdigest()[:16]
+    return f"KernelConflict:{fingerprint}"
+
+
 def _general_call_recovery_progressed(
     before: AgentCallLedgerRecord,
     current: AgentCallLedgerRecord | None,
@@ -784,7 +837,11 @@ def _call_recovery_progressed(
     )
 
 
-def dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
+def dispatch_command(
+    record: AgentCallLedgerRecord,
+    *,
+    materialized_resources: list[MaterializedResourcePart] | None = None,
+) -> A2ADispatchCommand:
     return A2ADispatchCommand(
         command_id=record.dispatch_snapshot.command_id,
         call_record_id=record.call_record_id,
@@ -797,7 +854,7 @@ def dispatch_command(record: AgentCallLedgerRecord) -> A2ADispatchCommand:
         transport_kind=record.transport_kind,
         direct_mode=record.dispatch_snapshot.direct_mode,
         task=record.dispatch_snapshot.task,
-        materialized_resources=[],
+        materialized_resources=list(materialized_resources or []),
         room_id=record.room_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,

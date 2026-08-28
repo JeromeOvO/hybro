@@ -30,6 +30,8 @@ export function mapResultDisplayProps(
       return make(name, 'Completed', 'muted', false)
     case 'failed':
       return make(name, 'Failed', 'danger', false)
+    case 'canceled':
+      return make(name, 'Canceled', 'muted', false)
     case 'awaiting_input':
       return make(name, 'Needs Input', 'warning', true)
   }

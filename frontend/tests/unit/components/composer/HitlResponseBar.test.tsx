@@ -56,6 +56,36 @@ describe('HitlResponseBar', () => {
     expect(screen.queryByRole('button', { name: 'Check status' })).toBeNull()
   })
 
+  it('cancels the exact interaction without submitting an unanswered questionnaire', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    render(
+      <HitlResponseBar
+        hitls={[
+          { ...baseHitl, hitlId: 'reused-question', interactionId: 'interaction-2', prompt: 'Company name?', promptType: 'text', groupIndex: 0 },
+          { ...baseHitl, hitlId: 'second-question', interactionId: 'interaction-2', prompt: 'Renewal date?', promptType: 'date', groupIndex: 1 },
+        ]}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />,
+    )
+
+    const cancel = screen.getByRole('button', { name: 'Cancel request' })
+    expect((cancel as HTMLButtonElement).type).toBe('button')
+    fireEvent.click(cancel)
+
+    await waitFor(() => expect(onCancel).toHaveBeenCalledWith(
+      'reused-question',
+      'interaction-2',
+    ))
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(screen.getAllByText('Choose an answer to continue.')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hidden: true }),
+      ]),
+    )
+  })
+
   it('submits a single question in one step without a review screen', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderBar([{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }], onSubmit)
@@ -146,6 +176,24 @@ describe('HitlResponseBar', () => {
     const email = screen.getByRole('checkbox', { name: 'Email' })
     fireEvent.click(email)
     expect((email as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('registers textarea answers and submits directly', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{
+      ...baseHitl,
+      prompt: 'Add itinerary details',
+      promptType: 'textarea',
+    }], onSubmit)
+
+    const textarea = screen.getByPlaceholderText('Add the details needed to continue…')
+    fireEvent.change(textarea, { target: { value: 'Window seat and vegetarian meal' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'Window seat and vegetarian meal' }],
+      undefined,
+    ))
   })
 
   it('never asks for authentication secrets in free text', () => {

@@ -282,7 +282,6 @@ Main responsibilities:
 - Convert backend messages into `IncomingMessage`.
 - Filter hydration data.
 - Detect stale tasks.
-- Infer terminal state from active-run context.
 - Resolve display type for renderer consumers.
 
 Key files:
@@ -293,8 +292,154 @@ Key files:
 - `convert-api-message.ts`
 - `hydration-filter.ts`
 - `stale-detection.ts`
-- `infer-turn-terminal-status.ts`
 - `resolve-display-type.ts`
+
+Turn-terminal state now arrives as durable-confirmed frames over the
+snapshot-driven room stream; the former `infer-turn-terminal-status.ts`
+inference module has been removed.
+
+### Snapshot-driven room sync (`src/lib/room-sync/room-reducer.ts`)
+
+The room stream is snapshot-driven: state = latest full snapshot + ordered
+deltas after it. `RoomReducer` remains the delivery entry point: it buffers
+pre-snapshot frames, applies only deltas above the watermark, drains the bounded
+`room_seq` reorder window, and requests `?snapshot=1` when continuity or the
+canonical protocol is violated. Heartbeats track the highest observed server
+watermark and recover even a single missing tail event. A snapshot older than
+an already-applied watermark is rejected before store mutation; accepted
+snapshots prune covered reorder entries and empty timers. The fetch transport
+awaits each `void | Promise<void>` message handler so frames fold in network
+order.
+
+A snapshot containing the paired capability fields
+`turn_lifecycle_schema: 1` and `turns` atomically replaces the server-owned
+projection in `turn-store`. Every snapshot Turn and every known canonical
+`run_event` payload is runtime validated against the closed backend DTO before
+it can mutate state. Buffered live deltas then replay through the same pure,
+idempotent fold used by normal live delivery. Invalid known events leave the
+projection unchanged and request one fresh snapshot. Presentation state is
+stored separately in `turn-presentation-store`, so snapshot replacement does
+not reset manual disclosure or pinned-bottom ownership. After a successful
+canonical replacement, `RoomReducer` clears the incumbent processing/send guard
+only when its stored User message ID and client request ID exactly match a
+terminal canonical root. This repairs a missed `run_settled` at or below the
+snapshot watermark without unlocking unrelated active legacy work in a mixed
+room.
+
+Snapshots without both capability fields remain pure legacy snapshots and
+continue to hydrate the incumbent message, streaming, and diagnostic trace
+stores. Mixed snapshots still hydrate legacy logs/trace/HITL for historical
+legacy roots; suppression is exact-root only, and canonical `awaiting_input`
+restores every actionable request-scoped HITL entity plus the dispatcher-owned
+`hitlRequestIndex` through the production `RoomReducer` snapshot path, without
+recency inference. Multiple requests may retain the same canonical Agent Card
+message identity but never share their client-side projection identity. During
+rolling-deploy recovery, an older legacy-shaped HITL
+request may recreate only its composer message projection when its
+`client_request_id` and related User message exactly match one canonical Turn;
+it never infers or mutates canonical Turn lifecycle state. This keeps rooms
+written before the producer upgrade answerable while new events use the strict
+canonical contract.
+Canonical renderers never consume legacy prose or diagnostic trace nodes. This
+is a per-User-request mutual-exclusion boundary:
+exact `run_started`/snapshot root binding selects the canonical renderer;
+otherwise the legacy renderer remains in use.
+
+### Canonical Turn projection and Trace
+
+`src/lib/turn-lifecycle/` defines the strict wire contract, snapshot mapping,
+and pure Turn fold. `run_started` is the only live root binding and must exactly match
+`run_id`, `correlation_id`, and the durable User message. The projection owns
+internal turns, offset-checked Assistant assembly, and exact equality between
+an already assembled delta stream and `message_end.text`; a mismatch requests
+protocol recovery instead of truncating/replacing text. It also owns commentary/final
+classification, opaque Tool rows, retries, exact-root HITL interactions, the
+provisional final, its three-field `agent_response` commitment, child closure,
+and `run_settled`. Activity order is `room_seq`; no timestamp, prose, content,
+Agent-name, card-status, or recency inference participates.
+
+`CanonicalTurnRenderer` has explicit User → Trace → Final Answer → Agent Cards
+DOM order. The Trace uses the owned shadcn `Marker` source plus shadcn
+`Collapsible` and presents only concise tool, Agent-call, retry, ask-user, and
+preparation actions; it never repeats Assistant prose or exposes input/output.
+Its trigger has no visible “Turn Trace” label or divider: the left-aligned status
+is `Running`, `Waiting for input`, or green `Finished`, followed immediately by
+the whole-Turn duration. Failed and canceled terminal Runs also display
+`Finished`; child action rows retain their truthful failure/cancellation state.
+The current Assistant safely renders through `MarkdownContent` in the final slot;
+`message_end(final)` remains provisional until the exact durable response commits
+it. Canonical terminal duration is server-authoritative; live canonical and legacy
+durations tick from the Turn start, while terminal legacy duration uses its last
+durable observation. Active traces initialize open, historical terminal snapshots
+initialize collapsed, and focus-safe auto-collapse is consumed once. Canonical and
+legacy Trace surfaces use the answer body's 1rem/1.75 typography and left edge,
+with no internal card borders. Tool/Agent-call rows use the Bot marker icon;
+completed rows and the terminal `Finished` status use the shared success green.
+Trace and Agent-call lists grow within the conversation's single scroll owner;
+they do not create clipped nested scroll regions when a Turn has many calls.
+Only active content is live-announced, and motion has reduced-motion fallbacks.
+HYBRO AI summary/presenter entities still own final-answer data but no
+longer render an Agent Card; only actual delegated Agent executions appear as
+Agent Cards.
+
+Trace and Agent Cards are separate UI projections of the same canonical
+`TurnProjection.activity` Tool row selected by `(run_id, tool_call_id)`;
+neither MessageStore task entities nor TraceStore nodes own execution state.
+Repeated calls remain separate and activity summaries count calls, not unique
+Agent names. Both surfaces expose the same `data-call-id` and normalized
+`data-status`, including cancellation.
+
+Canonical `model_decision` events fold into `TurnProjection.activity` entries of
+`kind:"decision"` (validated in `contract.ts`, folded in `fold.ts`, rendered by
+`CanonicalTurnTrace`). Decisions make the model-first HITL loop visible in the
+Trace: `interaction_received`, `answered_from_context`, `no_progress`, and
+`degraded_to_user`. Only backend-computed summaries and sanitized Agent labels
+are projected; raw model reasoning is never surfaced.
+ Cards prefer the durable sanitized root
+Agent name, and generic,
+blank, opaque, or internal update labels cannot downgrade it during live,
+snapshot, or database hydration. For old records only, the exact opaque-call
+Tool activity label is the final safe fallback. Live and snapshot guards require
+`run_id + opaque_public_call_id` and
+the exact derived `orchestrator:{run_id}:{opaque_public_call_id}` message
+identity. Any `task_*`, partial-agent, raw artifact, or compatibility processing
+frame is excluded from canonical lifecycle state only when it matches an exact
+canonical User/client root; canonical capability elsewhere in the same room does
+not suppress unrelated legacy activity. Malformed duplicate status owners
+trigger snapshot recovery. Before `run_started`, the latest optimistic
+User root renders a preparation-only live Trace shell from local send state so
+HTTP/preflight latency never leaves a blank conversation body. It owns no cards,
+final content, or server lifecycle and is atomically replaced when the exact
+canonical root arrives. Other message-derived turns remain User-only. Memoized
+Turn boundaries and card-ID-scoped selectors keep
+active deltas from rerendering historical Turns. Canonical cards without a
+real Agent profile ID render a non-link label (never a fabricated
+`/agents/orchestrator…` route), and clickable cards contain no nested interactive
+control. Private output is fetched only after a terminal card. A transient 404
+uses bounded backoff before showing an explicit reopen-to-retry message. The
+same authenticated detail boundary supplies room-owned artifact descriptors for
+completed canonical calls: the Final Answer aggregates and deduplicates those
+artifacts, while the selected Agent detail renders only that call's artifacts.
+Both surfaces use one TanStack Query identity per Room/run/opaque call, including
+bounded transient retry and a visible final-body retry state, so opening a card
+reuses the already fetched detail. Agent detail treats the authenticated A2A
+`parts` sequence as authoritative: declared `TextPart` values render as Markdown
+without JSON inference, while declared `DataPart` values render as collapsed JSON
+disclosures. The detail pane groups all Text Parts first, Data Parts second, and
+authorized file parts last, preserving source order within each type. This keeps
+type boundaries explicit instead of showing a flattened JSON-plus-text string.
+An absent `parts` field alone enables the
+legacy `output` fallback during a rolling deploy. Descriptors carry the durable room-file ID,
+MIME type, size, and display name and are mapped into the standard authenticated
+`ArtifactList`/`useRoomFile` preview path, including responses with no text.
+Room-file Blob reads use a user/file-keyed promise cache so simultaneous Final
+Answer and detail previews share one authenticated download while retaining
+independent object-URL lifetimes. The cache is bounded by entry count and 64 MiB,
+expires entries after five minutes, and never retains a single Blob over that byte
+budget. Model-authored `sandbox:/api/v1/files/…`
+Markdown destinations are never trusted as artifact identity; conversation
+Markdown preserves their label without a broken link, and the actual artifact is
+rendered from its authorized descriptor instead.
 
 ### Agent Dispatch Privacy
 
@@ -306,13 +451,19 @@ not drop that correlation field.
 
 ### `src/stores/room-ui-store.ts`
 
-The room UI store contains ephemeral per-room UI state:
+The room UI store contains ephemeral per-room UI state. Canonical per-Turn
+Trace disclosure and scroll-follow state lives separately in
+`turn-presentation-store` and is never snapshot-owned.
+
 
 - sending / processing / cancelling / updating flags
 - SSE enabled / connected / error state
 - initial hydration marker
 - pending room handoff data
 - selected agent-response detail state
+
+The SSE reconnect surface also exposes `reconnectWithSnapshot` (gap-recovery
+reconnect with `?snapshot=1`).
 
 ### `src/stores/streaming-store/`
 
@@ -322,11 +473,11 @@ Live buffer text is derived via `extractStreamTextFromArtifacts`, which concaten
 
 **Streaming invariants** (enforced after the convergence plan in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md)):
 
-- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that maps `content_delta` to a synthetic artifact and calls the same append.
+- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that first creates a correlation-preserving message shell, then maps `content_delta` to a synthetic artifact and calls the same append; a live buffer is never left without a renderable turn entity.
 - **I2** — Live buffer key is always `message_id`. `client_request_id` is correlation/cleanup metadata, never a buffer key or display merge dimension.
 - **I3** — Live text equals persisted text. `extractStreamTextFromArtifacts` over the live artifact list equals backend `extract_parts_from_artifacts` over the persisted artifact list at terminal.
 - **I4** — Detail pane content for terminal entities comes from `message-store`, never from the live buffer (strict terminal guard in `selectAgentResponseDetail`).
-- **I5** — Per-agent terminal SSE clears that message's buffer only. Turn-level clear runs exactly once per turn, on user-turn terminal `processing_status`.
+- **I5** — Per-agent terminal SSE clears that message's buffer only. Legacy Turn-level clear remains owned by terminal `processing_status`; canonical Turns do not use that frame for lifecycle or content.
 - **I6** — `streaming-store/append` does not import `mergeArtifacts` from `message-store/upsert`. Live merge is `mergeStreamArtifacts` (disjoint-segment push, prefix-relation replace).
 - **I7** — Streaming UI (badge, cursor, Streamdown caret) is driven only by an incomplete live buffer while the agent view-model status is `working`. Terminal agent status always wins over a stale buffer. Late `artifact_update` frames after terminal `task_update` are ignored and any leftover buffer for that `message_id` is cleared.
 
@@ -377,24 +528,40 @@ src/hooks/room/sse-handlers/
 
 Legacy `user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_update` frames are not part of the handled room SSE contract. Unknown frame types are ignored after a debug log.
 
-`createSSEDispatcher` resolves correlation before dispatch. Turn-correlated events must include a non-empty `client_request_id`; events without it are dropped defensively. Events that can arrive before the HTTP send response resolves the optimistic user message are buffered by `client_request_id`, then flushed once `useSendMessage` maps the request id to the server message id.
+`createSSEDispatcher` first offers ordered deltas to the canonical fold. Known
+canonical `run_event` payloads are closed runtime-validated unions; unknown
+subtypes remain rolling-deploy tolerant and continue only through the legacy
+handler. Canonical `processing_status` compatibility frames are ignored only
+after their allowlisted status, exact nonempty User/client roots,
+`details: null`, and absence of Agent/free-text fields validate; malformed
+adapters request snapshot recovery.
+Matching final responses and Agent-card task IDs enter the Turn projection by
+exact durable identity before their normalized message entities are updated.
 
-`hitl_request` and `hitl_response` are durable HITL lifecycle events rather than
-strict turn-correlated streaming events. They may include `client_request_id`
-when the backend can resolve it, but the UI must still apply them by `room_id`,
-`request_id`, and `message_id` when it is absent or stale. Live HITL SSE and
-`GET /api/v1/rooms/{room_id}/hitl/pending` hydration share the same message
-projection path so a pending HITL appears whether the user stays on the page,
-reconnects, or refreshes.
+Canonical `hitl_request` and `hitl_response` require exact `run_id`,
+`client_request_id`, related User-message roots, the opaque public Tool message
+ID, and durable interaction/request/question identities. The ordered
+`run_waiting_input` and `run_resumed` controls make the interaction and Turn
+state change explicit; they reconstruct Turn-owned HITL history without recency
+or REST inference. The producer persists responses and `run_resumed` before it
+can dispatch a continuation that might immediately ask a follow-up question.
+The legacy handler and pending REST overlay remain rolling-deploy recovery only.
+Snapshot HITL applies canonical claims only after exact-root validation even when
+a message entity already exists, and canceled/expired/error members hydrate as
+resolved so they cannot replace the normal composer.
+Live canonical requests also populate the incumbent HITL message projection so
+the existing dedicated response composer can render the validated request.
 The projection preserves HITL `source` as first-class message state. Agent
 requests therefore render the external agent name (for example,
 `Cyber Broker Agent · Needs Input`), while supervisor requests render HYBRO AI.
 Raw agent task states such as `input-required`, `auth-required`, and
 `policy-required` are not actionable UI state by themselves: until the message
 has a durable `hitlRequestId`, the timeline and agent header continue to show
-Working while backend recovery runs silently. Durable HITL replaces the primary
-surface with Needs Input (composer owns the answer form); work-log running
-state stays active through HITL wait. After answers apply, the HYBRO AI Working
+Working while backend recovery runs silently. Durable HITL content appears only
+in the composer questionnaire; the conversation body does not repeat its prompt
+or render an orphaned “Unattributed responses” Turn. The Turn Trace may still
+show the Waiting for input lifecycle state, and its running state stays active
+through the HITL wait. After answers apply, the HYBRO AI Working
 avatar spinner returns while the turn stays `active` (including synthesizing and
 any early `deterministic_done` surface) and stops when the turn leaves active /
 reaches `phase: completed`. Spinner state follows turn lifecycle, not finalAnswer
@@ -713,9 +880,26 @@ without a manual "Check status" click; that button remains only for
 `delivery_uncertain`. When both an applying recovery and a new open prompt exist,
 the composer prefers the open prompt. The client submits the complete answer
 inventory to `POST /rooms/{room_id}/hitl/respond-batch`, preserving
-`client_request_id` for run correlation. A 409 is reconciled and surfaced rather
-than assumed successful; 410, delivery uncertainty, routing failure, timeout, and
-applying states remain explicit. The frontend has no single-request response
+`client_request_id` for run correlation. When several questions share one A2A
+Agent `message_id`, each question receives a deterministic interaction-and-request-scoped
+MessageStore identity while retaining the wire message identity separately. This is
+also mandatory for singleton interactions: sequential one-question rounds from one
+Agent call never overwrite the prior round's entity. A rolling-deploy raw-message
+projection for the same request is resolved when the scoped entity arrives, avoiding
+a duplicate composer item without mutating the canonical Agent Card.
+SSE, snapshot, and `/hitl/pending` overlays use the same composite projection and
+request index, so sibling questions—and later interactions that reuse a stable
+question ID—cannot overwrite one another; request projections
+are composer-only and never create duplicate Agent Cards. Exact interaction/request
+state merges are monotonic: a REST recovery row with an equal, missing, or older
+version cannot clear a saved answer or regress responded/applying/applied state to
+open, while a genuinely new interaction identity can open normally. Concurrent
+submits are fenced per room and interaction. A 409/410 triggers DB reconciliation,
+a successful authoritative `/pending` overlay, and a best-effort forced canonical
+snapshot reconnect, but is never inferred as success from local state; identical
+durable retries already return success from the backend, so typed conflicts remain
+visible. A failed pending read is an explicit refresh error. Delivery uncertainty,
+routing failure, timeout, and applying states remain explicit. The frontend has no single-request response
 pipeline; even singleton interactions use the batch endpoint. File-upload
 instructions arrive in the ordinary terminal HYBRO summary message, so they do
 not replace the composer. Historical `file` and `unknown` prompt records remain
@@ -729,4 +913,28 @@ hydration may mark hydrated open HITL absent from pending as resolved via
 composer auto-refresh) only clears local *applying* projections that are no
 longer pending — open `input-required` prompts are left alone so a brief empty
 pending window cannot dismiss a still-open UI. Resolved answers remain
-non-actionable timeline summaries sourced from durable message projection.
+non-actionable timeline summaries sourced from durable message projection. The
+composer keeps answered siblings as context only inside their active questionnaire;
+its queue badge counts distinct other actionable/open interactions and excludes
+answered, applying, delivery-uncertain, and routing-failed rows.
+
+### Canonical HITL and private Agent details
+
+Canonical snapshot HITL requests normalize snapshot-only timestamp metadata before the
+strict live-wire validator is applied. Before any Turn or message store replacement,
+the complete top-level request set is checked against the exact Turn interaction
+inventory, User/client root, request fields, and any existing projection root; a
+contradiction rejects the whole snapshot and requests recovery without advancing the
+watermark. This lets snapshot-first hydration recreate the pending message entity and
+composer response controls atomically. The Composer exclusively owns
+question text and answer controls through the shadcn `Questionnaire` primitive composed
+inside the shared `Card`, `Input`, and `Button` surfaces. While the Turn awaits input,
+the canonical Final slot stays empty and the Conversation Body retains only the
+truthful `Asking you · Waiting for input` Trace event. Compatibility legacy HITL
+projections for the same active canonical interaction are suppressed from the Body so
+question content is never duplicated.
+
+Canonical cards use their opaque message identity only to derive the authenticated
+`run_id + public_call_id` detail request. The detail pane fetches private output from the
+room-authorized backend endpoint and does not reinterpret the opaque card/message ID as
+an Agent profile ID. Public message state remains output-free.

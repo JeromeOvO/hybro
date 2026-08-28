@@ -1,9 +1,12 @@
 'use client'
 
-import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import { useMessageStore } from '@/stores/message-store'
 import { useInitialHydrationSeq, useLocalSendSeq, useRoomProcessing, useRoomUiStore } from '@/stores/room-ui-store'
 import { useTurnViewModels } from '@/hooks/useTurnViewModels'
+import { useCanonicalTurns } from '@/stores/turn-store'
+import type { TurnProjection } from '@/lib/turn-lifecycle/types'
+import type { TurnViewModel } from '@/lib/room-timeline/types'
 import { usePrimaryStreamScroll } from '@/hooks/usePrimaryStreamScroll'
 import { useScrollUserMessageOnSend } from '@/hooks/useScrollUserMessageOnSend'
 import {
@@ -13,7 +16,10 @@ import {
 } from '@/lib/conversation/conversation-scroll'
 import { contentEndScrollTop, isNearContentEnd, scrollToContentEnd } from '@/lib/conversation/content-end-scroll'
 import { FOCUS_SCROLL_MIN_SPACER_PX } from '@/lib/conversation/focus-scroll'
+import { CanonicalTurnRenderer } from './CanonicalTurnRenderer'
 import { TurnRenderer } from './TurnRenderer'
+import { TurnTracePanel } from './TurnTracePanel'
+import { UserMessageBlock } from './UserMessageBlock'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { resolveScrollStateAfterEvent } from './scroll-state'
 interface ConversationMessageListProps {
@@ -35,8 +41,77 @@ function readMetrics(el: HTMLElement): ScrollMetrics {
   return { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop, clientHeight: el.clientHeight }
 }
 
+type ConversationTurn =
+  | { kind: 'pending-user'; id: string; messageId: string }
+  | { kind: 'legacy'; id: string; turn: TurnViewModel }
+  | { kind: 'canonical'; id: string; turn: TurnProjection }
+
+function PendingUserTurn({ messageId, live }: { messageId: string; live: boolean }) {
+  const entity = useMessageStore((state) => state.entities[messageId])
+  if (!entity || entity.messageType !== 'user') return null
+  return (
+    <div className="conversation-turn" data-turn-kind="pending-user">
+      <div className="conversation-user-sticky">
+        <UserMessageBlock entity={entity} />
+      </div>
+      {live ? (
+        <div className="conversation-body-frame conversation-turn-content flex flex-col">
+          <TurnTracePanel
+            nodes={[]}
+            statusEntries={entity.processingStatusLogs ?? []}
+            isRunning
+            startedAt={entity.timestamp}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function ConversationMessageList({ roomId, selectedAgentMessageId, enableAgentDetail = true }: ConversationMessageListProps) {
-  const turns = useTurnViewModels(roomId)
+  const legacyTurns = useTurnViewModels(roomId)
+  const canonicalTurns = useCanonicalTurns(roomId)
+  const processing = useRoomProcessing(roomId)
+  const turns = useMemo<ConversationTurn[]>(() => {
+    const canonicalByUser = new Map(canonicalTurns.map((turn) => [turn.userMessageId, turn]))
+    const included = new Set<string>()
+    const ordered: ConversationTurn[] = []
+    // Message-derived turns are used only to keep the optimistic User bubble
+    // visible before its canonical run_started root arrives. They never own
+    // Trace, Agent Cards, final content, or lifecycle status.
+    for (const pending of legacyTurns) {
+      if (!pending.userMessageId) {
+        // HITL prompts belong exclusively to the composer questionnaire. A
+        // message-derived orphan can otherwise duplicate the same request as
+        // an "Unattributed responses" card above the canonical Turn.
+        if (pending.finalAnswer.kind === 'hitl') continue
+        ordered.push({ kind: 'legacy', id: `legacy:${pending.id}`, turn: pending })
+        continue
+      }
+      const canonical = canonicalByUser.get(pending.userMessageId)
+      if (canonical) {
+        if (!included.has(canonical.id)) {
+          included.add(canonical.id)
+          ordered.push({ kind: 'canonical', id: canonical.id, turn: canonical })
+        }
+      } else {
+        const entity = useMessageStore.getState().entities[pending.userMessageId]
+        if (entity?.source === 'optimistic' && processing) {
+          ordered.push({
+            kind: 'pending-user',
+            id: `pending:${pending.userMessageId}`,
+            messageId: pending.userMessageId,
+          })
+        } else {
+          ordered.push({ kind: 'legacy', id: `legacy:${pending.id}`, turn: pending })
+        }
+      }
+    }
+    for (const turn of canonicalTurns) {
+      if (!included.has(turn.id)) ordered.push({ kind: 'canonical', id: turn.id, turn })
+    }
+    return ordered
+  }, [canonicalTurns, legacyTurns, processing])
   const scrollRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
@@ -44,7 +119,6 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
 
   const localSendSeq = useLocalSendSeq(roomId)
   const initialHydrationSeq = useInitialHydrationSeq(roomId)
-  const processing = useRoomProcessing(roomId)
   const prevRoomIdRef = useRef(roomId)
   const prevHydrationSeqRef = useRef(0)
   const initialScrollResolvedRef = useRef(false)
@@ -72,9 +146,19 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
   }, [])
 
   const lastTurn = turns[turns.length - 1]
-  const primaryStreamMessageId = lastTurn?.primaryStreamMessageId
-  const lastUserMessageId = lastTurn?.userMessageId ?? undefined
-  const turnLive = processing && Boolean(lastUserMessageId)
+  const primaryStreamMessageId = lastTurn?.kind === 'canonical'
+    ? lastTurn.turn.currentAssistant?.messageId
+    : lastTurn?.kind === 'legacy'
+      ? lastTurn.turn.primaryStreamMessageId
+      : undefined
+  const lastUserMessageId = lastTurn?.kind === 'canonical'
+    ? lastTurn.turn.userMessageId
+    : lastTurn?.kind === 'legacy'
+      ? lastTurn.turn.userMessageId ?? undefined
+      : lastTurn?.messageId
+  const turnLive = lastTurn?.kind === 'canonical'
+    ? lastTurn.turn.state === 'active'
+    : processing && Boolean(lastUserMessageId)
 
   const storeVersion = useMessageStore(s => s.version)
   const hydratedFromDb = useMessageStore(s => s.hydratedFromDb)
@@ -340,15 +424,32 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
             data-hydrated={hydratedFromDb || undefined}
             style={{ paddingTop: 'var(--conversation-sticky-top)', paddingBottom: 'calc(var(--conversation-dock-height, 120px) + 24px)' }}
           >
-            {turns.map((turn, index) => (
-              <TurnRenderer
-                key={turn.id}
-                turn={turn}
-                selectedAgentMessageId={selectedAgentMessageId}
-                onOpenAgentDetail={enableAgentDetail ? handleOpenAgentDetail : undefined}
-                primarySurfaceRef={index === turns.length - 1 ? primarySurfaceRef : undefined}
-                isLastTurn={index === turns.length - 1}
-              />
+            {turns.map((entry, index) => (
+              entry.kind === 'canonical' ? (
+                <CanonicalTurnRenderer
+                  key={entry.id}
+                  turn={entry.turn}
+                  selectedAgentMessageId={selectedAgentMessageId}
+                  onOpenAgentDetail={enableAgentDetail ? handleOpenAgentDetail : undefined}
+                  primarySurfaceRef={index === turns.length - 1 ? primarySurfaceRef : undefined}
+                  isLastTurn={index === turns.length - 1}
+                />
+              ) : entry.kind === 'legacy' ? (
+                <TurnRenderer
+                  key={entry.id}
+                  turn={entry.turn}
+                  selectedAgentMessageId={selectedAgentMessageId}
+                  onOpenAgentDetail={enableAgentDetail ? handleOpenAgentDetail : undefined}
+                  primarySurfaceRef={index === turns.length - 1 ? primarySurfaceRef : undefined}
+                  isLastTurn={index === turns.length - 1}
+                />
+              ) : (
+                <PendingUserTurn
+                  key={entry.id}
+                  messageId={entry.messageId}
+                  live={processing && index === turns.length - 1}
+                />
+              )
             ))}
             <div aria-hidden data-content-end />
             <div

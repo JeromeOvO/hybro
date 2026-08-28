@@ -123,6 +123,7 @@ class AgentToolCatalogAssembler:
                 "definition": definition.model_dump(mode="json"),
                 "agent_id": candidate.agent_id,
                 "skill_id": candidate.skill_id,
+                "agent_display_name": candidate.agent_display_name,
                 "card_digest": candidate.card_digest,
                 "endpoint_scope_digest": candidate.endpoint_scope_digest,
                 "candidate_scope_id": candidate_scope.snapshot_id,
@@ -146,6 +147,7 @@ class AgentToolCatalogAssembler:
                 definition=definition,
                 agent_id=candidate.agent_id,
                 skill_id=candidate.skill_id,
+                agent_display_name=candidate.agent_display_name,
                 card_digest=candidate.card_digest,
                 endpoint_scope=candidate.endpoint_scope,
                 endpoint_scope_digest=candidate.endpoint_scope_digest,
@@ -172,6 +174,7 @@ class AgentToolCatalogAssembler:
                         binding_id=binding_id, binding_digest=binding_digest
                     ),
                     input_modes=list(candidate.input_modes),
+                    agent_display_name=candidate.agent_display_name,
                 )
             )
         catalog_id = f"catalog-{_digest_json([entry.model_dump(mode='json') for entry in entries])}"

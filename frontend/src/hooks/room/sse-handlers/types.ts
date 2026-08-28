@@ -10,4 +10,7 @@ export interface SSEHandlerDeps {
   reconcileWithDb: (roomId: string) => Promise<void>
   hitlRequestIndex: MutableRefObject<Map<string, string>>
   setCancelling: (v: boolean) => void
+  /** Gap-recovery surface (plan §4 rule 3): reconnect with ?snapshot=1.
+   *  Held in a ref so useRoomSSEConnection can bind it after mount. */
+  requestSnapshotRef?: MutableRefObject<(() => void) | null>
 }

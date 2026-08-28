@@ -672,7 +672,20 @@ class HITLApplicationCoordinator:
                 recovery_result,
             )
             await self._mark_command_aggregate_applied(interaction)
-            await self.finalize_applied(service, interaction)
+            responses_projected = await self.finalize_applied(service, interaction)
+            if not responses_projected:
+                raise HITLRoutingFailedError(
+                    "HITL response projection remains incomplete"
+                )
+            # Crash-recovery replays re-publish the resumed control after the
+            # durable response events; the deterministic event identity
+            # collapses onto the original room event.
+            if interaction.get("application_route") == (
+                HITLApplicationRoute.SUPERVISOR_RUN.value
+            ):
+                emit_resumed = getattr(service, "emit_canonical_resumed_control", None)
+                if callable(emit_resumed):
+                    await emit_resumed(interaction)
             result = self._result(rows[0], status="applied", interaction=interaction)
             result["answer_records"] = [
                 {"request_id": row["request_id"], "response": row.get("user_input")}
@@ -719,6 +732,21 @@ class HITLApplicationCoordinator:
         route_result: dict[str, Any] = {}
         try:
             snapshot = validate_route_classifications(claimed)
+            # Public continuation is ordered answer received → run resumed →
+            # route effect for both A2A and supervisor-backed canonical Runs.
+            # Fail closed if the durable response projection is incomplete.
+            responses_projected = await self.finalize_applied(
+                service,
+                claimed,
+                reconcile_terminal=False,
+            )
+            if not responses_projected:
+                raise HITLRoutingFailedError(
+                    "HITL response projection remains incomplete"
+                )
+            emit_resumed = getattr(service, "emit_canonical_resumed_control", None)
+            if callable(emit_resumed):
+                await emit_resumed(claimed)
             if snapshot.route == HITLApplicationRoute.A2A_RESUME:
                 route_result = await self._apply_agent(
                     service,
@@ -818,7 +846,7 @@ class HITLApplicationCoordinator:
         result.update(route_result)
         return result
 
-    async def _apply_supervisor(
+    async def _apply_supervisor(  # noqa: C901
         self,
         service,
         *,
@@ -1140,7 +1168,13 @@ class HITLApplicationCoordinator:
                 command["command_id"]
             )
 
-    async def finalize_applied(self, service, interaction: dict[str, Any]) -> None:
+    async def finalize_applied(
+        self,
+        service,
+        interaction: dict[str, Any],
+        *,
+        reconcile_terminal: bool = True,
+    ) -> bool:
         rows = await self._request_rows(service, interaction)
         all_projected = True
         for row in rows:
@@ -1194,11 +1228,16 @@ class HITLApplicationCoordinator:
                     application_projected=True,
                 )
             all_projected = all_projected and bool(projection_ok)
-        if all_projected and not interaction.get("terminal_reconciled"):
+        if (
+            reconcile_terminal
+            and all_projected
+            and not interaction.get("terminal_reconciled")
+        ):
             await self._lifecycle.mark_interaction_terminal_reconciled(
                 interaction["interaction_id"],
                 version=int(interaction["version"]),
             )
+        return all_projected
 
     async def _request_rows(
         self,

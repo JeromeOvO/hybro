@@ -63,6 +63,113 @@ def test_selected_refs_are_frozen_with_room_epoch_and_digest():
     assert frozen.refs[0].content_digest == "digest-1"
 
 
+def test_omitted_context_refs_freeze_only_compatible_root_context_deterministically():
+    run_manifest = RunResourceManifestSnapshot(
+        manifest_id="run-resources",
+        refs=[
+            PreparedResourceRef(
+                ref_id="ctx:message:root",
+                kind="context",
+                source_message_id="root-message",
+                mime_type="text/plain",
+                size_bytes=12,
+                content_digest="root-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="ctx:message:other",
+                kind="context",
+                source_message_id="other-message",
+                mime_type="text/plain",
+                size_bytes=12,
+                content_digest="other-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="ctx:message:not-authorized",
+                kind="context",
+                source_message_id="root-message",
+                mime_type="text/plain",
+                size_bytes=12,
+                content_digest="unauthorized-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="artifact-1",
+                kind="artifact",
+                source_message_id="observation-1",
+                mime_type="application/json",
+                size_bytes=20,
+                content_digest="artifact-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="attachment-1",
+                kind="attachment",
+                source_message_id="root-message",
+                mime_type="application/pdf",
+                size_bytes=100,
+                content_digest="attachment-digest",
+            ),
+        ],
+        content_digest="run-digest",
+    )
+    bound = binding().model_copy(
+        update={
+            "input_modes": ["text", "application/pdf"],
+            "compatible_resource_refs": [
+                "ctx:message:root",
+                "ctx:message:other",
+                "attachment-1",
+            ],
+        }
+    )
+    kwargs = {
+        "arguments": {"task": "review"},
+        "run_manifest": run_manifest,
+        "binding": bound,
+        "source_room_id": "room-1",
+        "source_room_epoch": 1,
+        "root_context_source_message_id": "root-message",
+    }
+
+    frozen = freeze_call_manifest(**kwargs)
+    replay = freeze_call_manifest(**kwargs)
+
+    assert [ref.ref_id for ref in frozen.refs] == ["ctx:message:root"]
+    assert frozen == replay
+    assert frozen.manifest_id == f"call-resources-{frozen.content_digest}"
+
+
+def test_explicit_context_refs_remain_exact_without_implicit_root_context():
+    run_manifest = RunResourceManifestSnapshot(
+        manifest_id="run-resources",
+        refs=[
+            PreparedResourceRef(
+                ref_id="ctx:message:root",
+                kind="context",
+                source_message_id="root-message",
+                mime_type="text/plain",
+                content_digest="root-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="ctx:message:selected",
+                kind="context",
+                source_message_id="selected-message",
+                mime_type="text/plain",
+                content_digest="selected-digest",
+            ),
+        ],
+        content_digest="run-digest",
+    )
+    frozen = freeze_call_manifest(
+        arguments={"task": "review", "context_refs": ["ctx:message:selected"]},
+        run_manifest=run_manifest,
+        binding=binding().model_copy(update={"input_modes": ["text"]}),
+        source_room_id="room-1",
+        source_room_epoch=1,
+        root_context_source_message_id="root-message",
+    )
+
+    assert [ref.ref_id for ref in frozen.refs] == ["ctx:message:selected"]
+
+
 def test_unknown_or_wrong_kind_resource_ref_is_rejected():
     bound = binding().model_copy(update={"input_modes": ["application/pdf"]})
     with pytest.raises(ResourceSelectionError, match="not allowed"):

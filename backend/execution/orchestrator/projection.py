@@ -147,6 +147,15 @@ class ProjectionOutboxWorker:
 
         if intent.status != "pending":
             return False
+        if intent.kind == "project_terminal_run_status" and any(
+            item.required
+            and item.intent_id != intent.intent_id
+            and item.status != "completed"
+            for item in run.projection_outbox
+        ):
+            # Settlement publication is the durable dependent intent. Keep it
+            # pending until final-message/event projections are acknowledged.
+            return False
 
         claimed = await self.run_store.claim_projection_intent(
             run_id,
@@ -192,10 +201,14 @@ class ProjectionOutboxWorker:
             else:
                 run = await self.run_store.load(run_id) or run
             run = await self._settle(run, now)
-            # The SSE listener fires exactly once per terminal Run, only after
-            # settlement (all mandatory intents durable), never per intent:
-            # intent completion order is not stable across equal due keys.
-            if run.projection_state == "settled" and self.after_project is not None:
+            # Backward-compatible listeners remain supported for non-settlement
+            # intents. Canonical run_settled is projected inside its dependent
+            # durable intent, before completion, by the composition root.
+            if (
+                intent.kind != "project_terminal_run_status"
+                and run.projection_state == "settled"
+                and self.after_project is not None
+            ):
                 await self.after_project(run, intent)
             return True
 

@@ -17,10 +17,16 @@ SessionEventType = Literal[
     "model_attempt_started",
     "model_retry_scheduled",
     "model_attempt_failed",
+    "model_turn_completed",
+    "orchestrator_decision",
+    "message_started",
+    "message_updated",
     "message_completed",
     "tool_execution_started",
+    "tool_execution_updated",
     "tool_execution_completed",
     "turn_completed",
+    "model_decision",
     "run_waiting_external",
     "run_awaiting_user",
     "run_final_answer_ready",
@@ -44,6 +50,7 @@ class SessionEvent(ContractModel):
     room_id: str | None = None
     user_message_id: str | None = None
     client_request_id: str | None = None
+    lifecycle_family: Literal["legacy", "canonical"] = "legacy"
 
 
 SessionEventListener = Callable[[SessionEvent], Awaitable[None] | None]
@@ -73,27 +80,40 @@ class LifecycleEmitter:
 
     async def emit(self, event: SessionEvent, *, terminal: bool = False) -> None:
         listeners = list(self._listeners)
-        if terminal:
-            try:
-                async with asyncio.timeout(self._settlement_timeout):
-                    for listener in listeners:
-                        await self._invoke(listener, event)
-            except TimeoutError as exc:
-                self._error_hook(exc)
+        durable = terminal or event.lifecycle_family == "canonical"
+        if durable:
+            # Canonical lifecycle publication is part of the state machine: an
+            # acknowledged append must precede the next public state/offset.
+            # Listener failures therefore propagate instead of being converted
+            # into process-local best-effort diagnostics.
+            async with asyncio.timeout(self._settlement_timeout):
+                await asyncio.gather(
+                    *(
+                        self._invoke(listener, event, required=True)
+                        for listener in listeners
+                    )
+                )
             return
         for listener in listeners:
             asyncio.create_task(self._invoke(listener, event))
 
     async def _invoke(
-        self, listener: SessionEventListener, event: SessionEvent
+        self,
+        listener: SessionEventListener,
+        event: SessionEvent,
+        *,
+        required: bool = False,
     ) -> None:
         try:
-            async with asyncio.timeout(self._listener_timeout):
+            timeout = self._settlement_timeout if required else self._listener_timeout
+            async with asyncio.timeout(timeout):
                 result = listener(event)
                 if inspect.isawaitable(result):
                     await result
-        except BaseException as exc:  # listener failures never mutate Run state
+        except BaseException as exc:
             self._error_hook(exc)
+            if required:
+                raise
 
 
 __all__ = [

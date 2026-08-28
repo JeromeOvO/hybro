@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 import {
-  getActivityStripListMaxHeight,
   getAgentIndexSummary,
   getSupervisorStatusLine,
   defaultAgentIndexOpen,
-  STRIP_COMPACT_ROW_HEIGHT_PX,
-  STRIP_LIST_MAX_HEIGHT_CAP_PX,
-  STRIP_ROW_GAP_PX,
 } from '@/lib/room-timeline/turn-live-shell'
 
 function makeTurn(overrides: Partial<TurnViewModel>): TurnViewModel {
@@ -47,27 +43,6 @@ function makeAgentResult(
   }
 }
 
-describe('getActivityStripListMaxHeight', () => {
-  it('returns 0 for no agents', () => {
-    expect(getActivityStripListMaxHeight(0)).toBe(0)
-  })
-
-  it('does not cap when estimated height is under the scroll limit', () => {
-    const four =
-      4 * STRIP_COMPACT_ROW_HEIGHT_PX + 3 * STRIP_ROW_GAP_PX
-    expect(four).toBeLessThan(STRIP_LIST_MAX_HEIGHT_CAP_PX)
-    expect(getActivityStripListMaxHeight(4)).toBe(0)
-  })
-
-  it('caps height when estimated height exceeds the scroll limit', () => {
-    const six =
-      6 * STRIP_COMPACT_ROW_HEIGHT_PX + 5 * STRIP_ROW_GAP_PX
-    expect(six).toBeGreaterThan(STRIP_LIST_MAX_HEIGHT_CAP_PX)
-    expect(getActivityStripListMaxHeight(6)).toBe(STRIP_LIST_MAX_HEIGHT_CAP_PX)
-    expect(getActivityStripListMaxHeight(12)).toBe(STRIP_LIST_MAX_HEIGHT_CAP_PX)
-  })
-})
-
 describe('getAgentIndexSummary', () => {
   it('returns "Agent responses" prefix for deterministic_done live turn', () => {
     const agents = [
@@ -85,7 +60,7 @@ describe('getAgentIndexSummary', () => {
     expect(summary).toContain('2 done')
   })
 
-  it('returns "Agent responses · contributed" for deterministic_done completed turn', () => {
+  it('reports completed deterministic agent invocations as calls', () => {
     const agents = [
       makeAgentResult({ messageId: 'a1', agentId: 'agent-a' }),
       makeAgentResult({ messageId: 'a2', agentId: 'agent-b' }),
@@ -97,7 +72,7 @@ describe('getAgentIndexSummary', () => {
       agentResults: agents,
     })
     const summary = getAgentIndexSummary(turn, agents)
-    expect(summary).toBe('Agent responses · 2 agents contributed')
+    expect(summary).toBe('Agent responses · 2 calls')
   })
 
   it('returns "Sources" prefix for llm_synthesis turn', () => {
@@ -115,10 +90,10 @@ describe('getAgentIndexSummary', () => {
       ],
     })
     const summary = getAgentIndexSummary(turn, agents)
-    expect(summary).toBe('Sources · 2 agents contributed')
+    expect(summary).toBe('Sources · 2 agent calls')
   })
 
-  it('returns "Completed" prefix for hitl turn', () => {
+  it('reports that a HITL turn is waiting for input', () => {
     const agents = [
       makeAgentResult({ messageId: 'a1', status: 'completed' }),
     ]
@@ -128,7 +103,7 @@ describe('getAgentIndexSummary', () => {
       agentResults: agents,
     })
     const summary = getAgentIndexSummary(turn, agents)
-    expect(summary).toBe('Completed · 1 agent')
+    expect(summary).toBe('Waiting for input · 1 call')
   })
 
   it('returns "Activity" prefix for pending multi-agent turn', () => {

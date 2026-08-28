@@ -172,7 +172,9 @@ export interface AgentResultViewModel {
   agentSource?: 'cloud' | 'local' | 'hub'
   messageId: string
   clientRequestId?: string
-  status: 'completed' | 'failed' | 'awaiting_input' | 'working'
+  status: 'completed' | 'failed' | 'canceled' | 'awaiting_input' | 'working'
+  /** Canonical Tool lifecycle status shared verbatim by Trace and Agent Card. */
+  executionStatus?: 'running' | 'awaiting_input' | 'completed' | 'failed' | 'canceled'
   content: string
   artifacts: ArtifactData[]
   /** Task-level status hint (for terminal/interactive states). */

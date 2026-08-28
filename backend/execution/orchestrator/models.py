@@ -18,7 +18,7 @@ class ResolvedModelSnapshot(ContractModel):
     route: str
     provider: Literal["openai", "deepseek"]
     model_id: str
-    api: Literal["chat_completions"]
+    api: Literal["chat_completions", "responses"]
     supports_native_tools: bool
     supports_provider_strict_schema: bool
     supports_local_structured_action: bool
@@ -108,6 +108,7 @@ class DataPart(ContractModel):
     kind: Literal["data"] = "data"
     data: dict[str, object] | list[object]
     mime_type: str = "application/json"
+    metadata: dict[str, object] | None = None
 
 
 class ArtifactRefPart(ContractModel):
@@ -192,10 +193,35 @@ class ToolAcceptance(ContractModel):
 ToolSuspensionStatus = Literal["waiting_external", "input_required", "auth_required"]
 
 
+class ToolInteractionQuestion(ContractModel):
+    """Typed question inventory carried in the private model transcript."""
+
+    question_id: str
+    interaction_kind: str = "questionnaire"
+    prompt: str
+    answer_kind: str
+    required: bool = True
+    choices: list[str] | None = None
+
+
 class ToolSuspension(ContractModel):
     invocation_id: str
     status: ToolSuspensionStatus
     observation_cursor: str | None = None
+    # Model-reply continuation discriminator. ``accepted`` means the Agent
+    # acknowledged the reply and is still working (the response observation
+    # arrives later via the parent call's inbox/poll path and must NOT be
+    # re-sent). ``transport_uncertain`` means delivery may not have reached the
+    # Agent and the idempotent command is safe to re-dispatch. ``None`` for
+    # non-model-reply suspensions.
+    delivery_state: Literal["accepted", "transport_uncertain"] | None = None
+    # Interaction parking metadata carried by input_required/auth_required
+    # suspensions so the kernel can present a tool_interaction message and
+    # route model-driven replies without reading the runtime ledger.
+    call_record_id: str | None = None
+    interaction_id: str | None = None
+    interaction_fingerprint: str | None = None
+    questions: list[ToolInteractionQuestion] = Field(default_factory=list)
 
 
 ToolExecutionOutcome = ToolResult | ToolSuspension
@@ -212,6 +238,7 @@ ToolBatchEntryState = Literal[
     "pending",
     "invalid",
     "acceptance_failed",
+    "skipped",
     "accepted",
     "executing",
     "waiting_external",
@@ -223,6 +250,9 @@ ToolBatchEntryState = Literal[
 
 class ToolBatchEntry(ContractModel):
     call_id: str
+    # Durable public binding allocated only after ledger acceptance. It is the
+    # sole identity used by canonical Tool rows and Agent Cards.
+    opaque_public_call_id: str | None = None
     assistant_message_id: str
     source_index: int = Field(ge=0)
     tool_name: str
@@ -230,7 +260,29 @@ class ToolBatchEntry(ContractModel):
     invocation: ToolInvocation | None = None
     acceptance: ToolAcceptance | None = None
     buffered_terminal_result: ToolResult | None = None
+    public_update_index: int = Field(default=0, ge=0)
+    public_terminal_emitted: bool = False
     processed_observation_ids: list[str] = Field(default_factory=list)
+    # Model-first HITL: an input_required/auth_required entry whose interaction
+    # has been surfaced to the model (tool_interaction transcript message) is
+    # ``presented`` and must no longer be re-suspended/re-dispatched.
+    presented: bool = False
+    # Per-entry flush marker so a mixed batch can write terminal results
+    # immediately without a second ToolResultMessage at final flush.
+    result_flushed: bool = False
+    # Runtime call identity of a parked interaction (join routing / closeout).
+    suspended_call_record_id: str | None = None
+    # Parent call a ``surface_agent_questions`` entry forwards to the user.
+    # Closed by ``observe_tool`` when that parent resolves, because the user's
+    # answer flows through the parent continuation, not the surface entry.
+    surface_for_call_record_id: str | None = None
+    # Private interaction metadata for model-first presentation. The
+    # presentation id is platform-owned and only appears in model context/tool
+    # schemas; public lifecycle projections continue to use opaque call ids.
+    presentation_id: str | None = None
+    interaction_id: str | None = None
+    interaction_fingerprint: str | None = None
+    interaction_questions: list[ToolInteractionQuestion] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _entry_state_is_consistent(self) -> ToolBatchEntry:
@@ -242,6 +294,8 @@ class ToolBatchEntry(ContractModel):
             raise ValueError("terminal tool entry requires buffered result")
         if self.acceptance is not None and self.invocation is None:
             raise ValueError("tool acceptance requires an invocation")
+        if self.public_terminal_emitted and self.state != "terminal":
+            raise ValueError("public Tool terminal requires terminal durable state")
         return self
 
 
@@ -249,6 +303,10 @@ class ToolCallBatch(ContractModel):
     assistant_message_id: str
     entries: list[ToolBatchEntry]
     results_flushed: bool = False
+    # Canonical turn ownership. Batches created within the same active internal
+    # turn share this id so cross-batch turn_end can gather the ordered tool id
+    # union and defer closing until every entry is terminal.
+    internal_turn_id: str | None = None
 
     @model_validator(mode="after")
     def _call_ids_are_unique(self) -> ToolCallBatch:
@@ -299,6 +357,27 @@ class ToolResultMessage(ContractModel):
     created_at: datetime
 
 
+class ToolInteractionMessage(ContractModel):
+    """Model-visible agent input request presented before the call resolves.
+
+    Distinct from ``ToolResultMessage``: the call's real ToolResultMessage is
+    still written exactly once when the call terminalizes, while this message
+    lets the model continue reasoning without marking the batch flushed.
+    """
+
+    kind: Literal["tool_interaction"] = "tool_interaction"
+    message_id: str
+    call_id: str
+    tool_name: str
+    presentation_id: str | None = None
+    interaction_id: str
+    interaction_fingerprint: str
+    questions: list[ToolInteractionQuestion] = Field(default_factory=list)
+    artifact_refs: list[str] = Field(default_factory=list)
+    agent_label: str | None = None
+    created_at: datetime
+
+
 class SessionNotice(ContractModel):
     kind: Literal["session_notice"] = "session_notice"
     notice_id: str
@@ -309,7 +388,11 @@ class SessionNotice(ContractModel):
 
 
 AgentMessage = Annotated[
-    UserMessage | AssistantMessage | ToolResultMessage | SessionNotice,
+    UserMessage
+    | AssistantMessage
+    | ToolResultMessage
+    | ToolInteractionMessage
+    | SessionNotice,
     Field(discriminator="kind"),
 ]
 
@@ -464,6 +547,9 @@ class FrozenToolCatalogEntry(ContractModel):
     # Denormalized input contract so the synchronous catalog can rebuild the
     # per-turn ref enum without hitting the binding store.
     input_modes: list[str] = Field(default_factory=list)
+    # Base Agent Card name (skill-qualified labels stay in ``definition.label``).
+    # Optional for catalogs frozen before this field existed.
+    agent_display_name: str | None = None
 
 
 class FrozenToolCatalogSnapshot(ContractModel):
@@ -496,6 +582,18 @@ class RecoveryClaim(ContractModel):
     owner_id: str | None = None
     lease_expires_at: datetime | None = None
     next_attempt_at: datetime | None = None
+    # Consecutive KernelConflict count; non-invariant adapter failures reset it.
+    failure_count: int = Field(default=0, ge=0)
+    quarantined_at: datetime | None = None
+    quarantine_reason: Literal["terminal_invariant_conflict"] | None = None
+
+    @model_validator(mode="after")
+    def _quarantine_fields_are_paired(self) -> RecoveryClaim:
+        if (self.quarantined_at is None) != (self.quarantine_reason is None):
+            raise ValueError("recovery quarantine timestamp and reason must be paired")
+        if self.quarantined_at is not None and self.owner_id is not None:
+            raise ValueError("quarantined recovery cannot retain an owner")
+        return self
 
 
 ProjectionIntentStatus = Literal["pending", "claimed", "completed", "blocked"]
@@ -585,6 +683,9 @@ class CandidateScopeSnapshot(ContractModel):
     authorization_basis: AuthorizationBasis | None = None
 
 
+CancellationCause = Literal["user_requested", "room_closed", "shutdown", "policy"]
+
+
 RunStatus = Literal[
     "queued",
     "running",
@@ -599,7 +700,11 @@ RunStatus = Literal[
 
 
 class OrchestratorRunState(ContractModel):
-    schema_version: Literal[5] = 5
+    # Expand/contract reader accepts v5 legacy documents and v6 canonical
+    # documents. New canonical admission explicitly writes v6; legacy fixtures
+    # and already-running v5 Runs remain pinned and readable.
+    schema_version: Literal[5, 6] = 5
+    lifecycle_family: Literal["legacy", "canonical"] = "legacy"
     run_id: str
     # Explicit persisted execution-engine ownership, fixed at Run creation and
     # never re-evaluated afterwards (production cutover invariant). Runs owned by
@@ -623,8 +728,15 @@ class OrchestratorRunState(ContractModel):
     budget: BudgetState
     compaction_summary: str | None = None
     compaction_baseline_tokens: int | None = Field(default=None, ge=0)
+    active_internal_turn_id: str | None = None
+    active_assistant_message_id: str | None = None
+    active_attempt: int | None = Field(default=None, ge=1)
+    consecutive_model_joins: int = Field(default=0, ge=0)
+    greatest_public_text_offset: int = Field(default=0, ge=0)
+    active_public_text: str = Field(default="", max_length=32_000)
     proposed_final_message_id: str | None
     terminal_reason: str | None
+    cancellation_cause: CancellationCause | None = None
     projection_state: Literal["pending", "settled", "blocked"]
     recovery_claim: RecoveryClaim
     projection_outbox: list[ProjectionIntent]
@@ -634,7 +746,9 @@ class OrchestratorRunState(ContractModel):
     updated_at: datetime
 
     @model_validator(mode="after")
-    def _aggregate_identity_and_uniqueness(self) -> OrchestratorRunState:
+    def _aggregate_identity_and_uniqueness(  # noqa: C901
+        self,
+    ) -> OrchestratorRunState:
         batch_message_ids = [batch.assistant_message_id for batch in self.tool_batches]
         if len(batch_message_ids) != len(set(batch_message_ids)):
             raise ValueError("tool batch assistant message IDs must be unique")
@@ -653,6 +767,72 @@ class OrchestratorRunState(ContractModel):
         for label, values in inventories:
             if len(values) != len(set(values)):
                 raise ValueError(f"{label} must be unique")
+        public_call_ids = [
+            entry.opaque_public_call_id
+            for batch in self.tool_batches
+            for entry in batch.entries
+            if entry.opaque_public_call_id is not None
+        ]
+        if len(public_call_ids) != len(set(public_call_ids)):
+            raise ValueError("opaque public call IDs must be unique")
+        if self.status == "canceled" and self.lifecycle_family == "canonical":
+            if self.cancellation_cause is None:
+                raise ValueError("canceled canonical Runs require a cancellation cause")
+        elif self.cancellation_cause is not None and self.status != "canceled":
+            raise ValueError("cancellation cause is valid only for canceled Runs")
+        if self.lifecycle_family == "canonical":
+            if self.schema_version != 6:
+                raise ValueError("canonical Runs require schema version 6")
+            for batch in self.tool_batches:
+                for entry in batch.entries:
+                    if entry.acceptance is not None and not entry.opaque_public_call_id:
+                        raise ValueError(
+                            "accepted canonical tool entries require a public call ID"
+                        )
+        elif any(
+            (
+                self.active_internal_turn_id,
+                self.active_assistant_message_id,
+                self.active_attempt,
+                self.greatest_public_text_offset,
+                self.active_public_text,
+            )
+        ):
+            raise ValueError("legacy Runs cannot carry canonical active stream state")
+        if self.lifecycle_family == "canonical":
+            if self.greatest_public_text_offset != len(self.active_public_text):
+                raise ValueError(
+                    "canonical public offset must match active text checkpoint"
+                )
+            if self.status in {
+                "completed",
+                "failed",
+                "canceled",
+                "budget_exhausted",
+            }:
+                if any(
+                    (
+                        self.active_internal_turn_id,
+                        self.active_assistant_message_id,
+                        self.active_attempt,
+                        self.active_public_text,
+                    )
+                ):
+                    raise ValueError(
+                        "terminal canonical Runs cannot retain active lifecycle state"
+                    )
+                if any(
+                    entry.state != "terminal"
+                    for batch in self.tool_batches
+                    for entry in batch.entries
+                ):
+                    raise ValueError(
+                        "terminal canonical Runs cannot retain open declared Tools"
+                    )
+                if any(not batch.results_flushed for batch in self.tool_batches):
+                    raise ValueError(
+                        "terminal canonical Runs require every Tool batch flushed"
+                    )
         return self
 
 

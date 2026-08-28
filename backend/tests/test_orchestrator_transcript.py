@@ -9,6 +9,8 @@ from execution.orchestrator.models import (
     SessionNotice,
     TextPart,
     ToolCall,
+    ToolInteractionMessage,
+    ToolInteractionQuestion,
     ToolResultMessage,
     UsageRecord,
 )
@@ -72,6 +74,58 @@ def test_lossless_conversion_preserves_complete_tool_pairs_and_notices():
     assert unresolved_call_ids([assistant(), result()]) == set()
 
 
+def test_orchestration_context_bounds_resolved_plans_and_labels_result_provenance():
+    long_task = "A" * 3_000 + "PRIVATE_MIDDLE" + "Z" * 3_000
+    planned = assistant().model_copy(
+        update={
+            "tool_calls": [
+                ToolCall(
+                    call_id="call-1",
+                    tool_name="echo",
+                    arguments={"task": long_task, "attachment_refs": ["file-1"]},
+                )
+            ]
+        }
+    )
+
+    converted = agent_messages_to_model(
+        [planned, result()], prepare_orchestration_context=True
+    )
+
+    arguments = converted[0].content[1].arguments
+    assert arguments["task"].startswith(
+        "[historical plan, not evidence; middle omitted]"
+    )
+    assert "PRIVATE_MIDDLE" not in arguments["task"]
+    assert len(arguments["task"]) < 2_400
+    assert arguments["attachment_refs"] == ["file-1"]
+    observation = converted[1].content[0].content[0].text
+    assert observation.startswith(
+        "[agent observation: verified completed result; usable as evidence]"
+    )
+    # Context preparation never mutates the durable transcript.
+    assert planned.tool_calls[0].arguments["task"] == long_task
+
+
+def test_orchestration_context_marks_failed_results_as_diagnostic_only():
+    failed = result().model_copy(
+        update={"status": "failed", "is_error": True, "error_message": "timeout"}
+    )
+
+    converted = agent_messages_to_model(
+        [assistant(), failed], prepare_orchestration_context=True
+    )
+
+    assert (
+        converted[1]
+        .content[0]
+        .content[0]
+        .text.startswith(
+            "[agent observation: status=failed; diagnostic only, not evidence]"
+        )
+    )
+
+
 def test_unresolved_calls_are_reported_and_orphan_results_rejected():
     assert unresolved_call_ids([assistant()]) == {"call-1"}
     with pytest.raises(TranscriptCorruptionError, match="orphan"):
@@ -83,3 +137,43 @@ def test_duplicate_calls_and_results_are_rejected():
         agent_messages_to_model([assistant(), assistant()])
     with pytest.raises(TranscriptCorruptionError, match="duplicate tool result"):
         agent_messages_to_model([assistant(), result(), result()])
+
+
+def test_tool_interaction_presents_then_resolves_with_single_result():
+    interaction = ToolInteractionMessage(
+        message_id="interaction:call-1:fp",
+        call_id="call-1",
+        tool_name="echo",
+        presentation_id="prs_123",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="q-1",
+                interaction_kind="questionnaire",
+                prompt="Which provider?",
+                answer_kind="text",
+                required=True,
+            )
+        ],
+        created_at=NOW,
+    )
+    # A presented interaction closes the call for unresolved-call accounting
+    # without consuming the call's single ToolResultMessage slot.
+    assert unresolved_call_ids([assistant(), interaction]) == set()
+    converted = agent_messages_to_model([assistant(), interaction])
+    assert converted[1].role == "tool"
+    assert converted[1].content[0].call_id == "call-1"
+    observation = converted[1].content[0].content[0].text
+    assert "agent input request" in observation
+    assert '"presentation_id":"prs_123"' in observation
+    assert '"interaction_id":"interaction-1"' in observation
+    assert '"interaction_fingerprint":"fp"' in observation
+    assert '"question_id":"q-1"' in observation
+    assert '"interaction_kind":"questionnaire"' in observation
+    assert '"answer_kind":"text"' in observation
+    assert '"required":true' in observation
+    # The final ToolResultMessage for the same call is still accepted (the
+    # interaction message is a distinct kind, not a duplicate result).
+    final = agent_messages_to_model([assistant(), interaction, result()])
+    assert [message.role for message in final] == ["assistant", "tool", "tool"]

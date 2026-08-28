@@ -6,6 +6,7 @@ import { X, ChevronDown, Quote } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
+import { PartRenderer } from '@/components/part-renderer'
 import { filterDuplicateTextArtifacts } from '@/lib/artifacts/filter-display-artifacts'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
@@ -19,10 +20,10 @@ interface AgentResponseDetailPaneProps {
   onClose: () => void
 }
 
-function useAgentFromCatalog(agentId: string): Agent | undefined {
+function useAgentFromCatalog(agentId?: string): Agent | undefined {
   const qc = useQueryClient()
   const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
-  return agents?.find(a => a.agent_id === agentId)
+  return agentId ? agents?.find(a => a.agent_id === agentId) : undefined
 }
 
 function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
@@ -52,8 +53,24 @@ function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
   )
 }
 
+function groupA2AResponseParts(
+  parts: NonNullable<AgentResponseDetail['parts']>,
+): NonNullable<AgentResponseDetail['parts']> {
+  const textParts = [] as NonNullable<AgentResponseDetail['parts']>
+  const dataParts = [] as NonNullable<AgentResponseDetail['parts']>
+  const fileParts = [] as NonNullable<AgentResponseDetail['parts']>
+  for (const part of parts) {
+    if (part.kind === 'text') textParts.push(part)
+    else if (part.kind === 'data') dataParts.push(part)
+    else fileParts.push(part)
+  }
+  return [...textParts, ...dataParts, ...fileParts]
+}
+
 function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
-  const message = detail.taskError || detail.taskStatusMessage || 'No response content yet.'
+  const message = detail.taskError
+    || detail.taskStatusMessage
+    || (detail.isStreaming ? 'Loading response…' : 'No response content available.')
   return (
     <div className="text-sm" style={{ color: 'var(--conversation-text-muted)' }}>
       {message}
@@ -101,7 +118,7 @@ function AgentResponseDetailHeader({
             />
           ) : null}
           <img
-            src={getAgentAvatarUri(detail.agentId)}
+            src={getAgentAvatarUri(detail.agentId ?? detail.agentName)}
             alt=""
             className="w-full h-full"
             style={{ display: iconUrl ? 'none' : 'block' }}
@@ -111,12 +128,16 @@ function AgentResponseDetailHeader({
 
       <div className="conversation-detail-agent-main">
         <div className="conversation-detail-agent-name">
-          <Link
-            href={`/agents/${encodeURIComponent(detail.agentId)}`}
-            className="hover:underline focus-visible:outline-none truncate"
-          >
-            {detail.agentName}
-          </Link>
+          {detail.agentId ? (
+            <Link
+              href={`/agents/${encodeURIComponent(detail.agentId)}`}
+              className="hover:underline focus-visible:outline-none truncate"
+            >
+              {detail.agentName}
+            </Link>
+          ) : (
+            <span className="truncate">{detail.agentName}</span>
+          )}
           {detail.agentSource != null && (
             <AgentSourceBadge
               source={detail.agentSource}
@@ -172,15 +193,22 @@ function AgentResponseDetailHeader({
 }
 
 export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetailPaneProps) {
+  const hasTypedParts = detail.parts !== undefined
+  const groupedParts = detail.parts ? groupA2AResponseParts(detail.parts) : []
+  const hasPartContent = groupedParts.some((part) => (
+    (part.kind === 'text' && Boolean(part.text?.trim()))
+    || (part.kind === 'data' && part.data !== undefined)
+    || (part.kind === 'file' && part.file !== undefined)
+  ))
   const hasContent = detail.content.trim().length > 0
-  const displayArtifacts = filterDuplicateTextArtifacts(detail.artifacts, detail.content)
+  const displayArtifacts = filterDuplicateTextArtifacts(detail.artifacts, detail.content) ?? []
   const bodyRef = useRef<HTMLDivElement>(null)
 
   useDetailPaneScroll(
     bodyRef,
     detail.messageId,
     detail.isStreaming,
-    detail.content.length + (detail.artifacts?.length ?? 0),
+    detail.content.length + (detail.parts?.length ?? 0) + (detail.artifacts?.length ?? 0),
   )
 
   return (
@@ -193,13 +221,24 @@ export function AgentResponseDetailPane({ detail, onClose }: AgentResponseDetail
       <div ref={bodyRef} className="conversation-detail-body">
         <div className="conversation-detail-frame">
           <section className="conversation-detail-response" aria-label="Agent response" data-quote-message-id={detail.messageId} data-quote-agent-name={detail.agentName} data-quote-source-kind="agent">
-            {hasContent ? (
+            {hasTypedParts && hasPartContent ? (
+              <div className="flex min-w-0 flex-col gap-2" data-testid="agent-response-parts">
+                {groupedParts.map((part, index) => (
+                  <PartRenderer
+                    key={`${part.kind}-${index}`}
+                    part={part}
+                    isStreaming={detail.isStreaming}
+                    inferJsonFromText={false}
+                  />
+                ))}
+              </div>
+            ) : !hasTypedParts && hasContent ? (
               <div className={`conversation-content-body ${detail.isStreaming ? 'conversation-streaming-cursor' : ''}`}>
                 <MarkdownContent className="conversation-markdown-body" content={detail.content} isStreaming={detail.isStreaming} />
               </div>
-            ) : (
+            ) : displayArtifacts.length === 0 ? (
               <EmptyResponse detail={detail} />
-            )}
+            ) : null}
             {displayArtifacts && displayArtifacts.length > 0 && (
               <ArtifactList artifacts={displayArtifacts} />
             )}

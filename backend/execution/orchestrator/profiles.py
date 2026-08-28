@@ -23,7 +23,7 @@ class ModelRouteConfiguration(ContractModel):
     route: str
     provider: Literal["openai", "deepseek"]
     model_id: str
-    api: Literal["chat_completions"]
+    api: Literal["chat_completions", "responses"]
     supports_native_tools: bool = False
     supports_provider_strict_schema: bool = False
     supports_local_structured_action: bool = False

@@ -6,15 +6,23 @@ from hashlib import sha256
 
 import pytest
 
+from common.utils.a2a_artifacts import canonical_data_part_bytes
 from execution.adapters.resources import RoomFilesResourceMaterializer
+from execution.orchestrator.a2a_runtime.in_memory import (
+    InMemoryObservationInboxStore,
+)
 from execution.orchestrator.a2a_runtime.models import (
+    A2AObservationInboxRecord,
     FrozenCallResourceManifest,
     FrozenCallResourceRef,
+    InlineDataArtifact,
+    NormalizedA2AObservation,
 )
 from execution.orchestrator.a2a_runtime.resources import (
     BoundedResourceMaterializer,
     ResourceSelectionError,
 )
+from execution.orchestrator.models import DataPart
 
 
 def _future_deadline() -> datetime:
@@ -134,6 +142,100 @@ async def test_changed_content_is_rejected():
             allowed_input_modes=["file"],
             deadline_at=_future_deadline(),
         )
+
+
+async def test_inline_data_artifact_is_described_and_materialized_from_observation():
+    data = {"value": 42, "status": "ready"}
+    metadata = {"mime_type": "application/vnd.hybro.result+json", "schema": "v1"}
+    raw = canonical_data_part_bytes(
+        data, mime_type="application/vnd.hybro.result+json", metadata=metadata
+    )
+    digest = sha256(raw).hexdigest()
+    descriptor = InlineDataArtifact(
+        ref_id="art_inline",
+        artifact_id="artifact-1",
+        artifact_name="result",
+        artifact_index=0,
+        part_index=0,
+        content_index=0,
+        mime_type="application/vnd.hybro.result+json",
+        size_bytes=len(raw),
+        content_digest=digest,
+    )
+    observation = NormalizedA2AObservation(
+        observation_id="observation-1",
+        call_record_id="call-1",
+        source_kind="direct",
+        source_identity="direct:scope:task:terminal",
+        binding_scope="scope",
+        event_kind="terminal",
+        observed_at=datetime.now(UTC),
+        task_id="task-1",
+        status="completed",
+        content=[
+            DataPart(
+                data=data,
+                mime_type="application/vnd.hybro.result+json",
+                metadata=metadata,
+            )
+        ],
+        inline_artifacts=[descriptor],
+        artifact_refs=[descriptor.ref_id],
+    )
+    inbox = InMemoryObservationInboxStore()
+    await inbox.insert(
+        A2AObservationInboxRecord(
+            observation_id=observation.observation_id,
+            source_kind="direct",
+            source_identity=observation.source_identity,
+            payload_digest="payload-digest",
+            received_at=datetime.now(UTC),
+            binding_scope="scope",
+            room_id="room-1",
+            room_epoch=1,
+            call_record_id="call-1",
+            task_id="task-1",
+            event_kind="terminal",
+            observation=observation,
+        )
+    )
+    adapter = RoomFilesResourceMaterializer(
+        room_files=FakeRoomFiles({}),
+        artifact_writer=FakeWriter(),
+        inline_artifact_reader=inbox,
+    )
+
+    prepared = await adapter.describe_artifact(
+        descriptor.ref_id, room_id="room-1", room_epoch=1
+    )
+    assert prepared is not None
+    assert prepared.mime_type == "application/vnd.hybro.result+json"
+    assert prepared.content_digest == digest
+
+    ref = FrozenCallResourceRef(
+        ref_id=prepared.ref_id,
+        kind="artifact",
+        room_id="room-1",
+        room_epoch=1,
+        source_message_id=prepared.source_message_id,
+        mime_type=prepared.mime_type,
+        size_bytes=prepared.size_bytes,
+        content_digest=prepared.content_digest,
+    )
+    parts = await adapter.materialize(
+        FrozenCallResourceManifest(
+            manifest_id="m", refs=[ref], content_digest="manifest-digest"
+        ),
+        room_id="room-1",
+        room_epoch=1,
+        allowed_input_modes=["application/vnd.hybro.result+json"],
+        deadline_at=_future_deadline(),
+    )
+    assert len(parts) == 1
+    assert parts[0].kind == "data"
+    assert parts[0].payload == data
+    assert parts[0].metadata == metadata
+    assert parts[0].content_digest == digest
 
 
 async def test_inbound_artifacts_delegate_to_writer():

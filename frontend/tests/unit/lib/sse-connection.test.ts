@@ -142,6 +142,35 @@ describe('SSEConnection', () => {
       expect(onMessage).toHaveBeenCalledWith(frame)
     })
 
+    it('awaits async handlers so frames are dispatched in network order', async () => {
+      let releaseFirst!: () => void
+      const firstPending = new Promise<void>((resolve) => {
+        releaseFirst = resolve
+      })
+      const order: string[] = []
+      const onMessage = vi.fn(async (message: { data: { message_id: string } }) => {
+        if (message.data.message_id === 'first') await firstPending
+        order.push(message.data.message_id)
+      })
+      const { instance } = await connectAndOpen({ onMessage: onMessage as never })
+
+      const base = {
+        type: 'task_update', room_id: 'test-room', timestamp: new Date().toISOString(),
+      }
+      const first = { ...base, data: { message_id: 'first', status: 'working' } }
+      const second = { ...base, data: { message_id: 'second', status: 'completed' } }
+      instance.simulateRawData(
+        `data: ${JSON.stringify(first)}\n\ndata: ${JSON.stringify(second)}\n\n`,
+      )
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(order).toEqual([])
+      expect(onMessage).toHaveBeenCalledTimes(1)
+      releaseFirst()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(order).toEqual(['first', 'second'])
+    })
+
     it('should handle malformed JSON gracefully', async () => {
       const onMessage = vi.fn()
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})

@@ -193,7 +193,15 @@ def test_delivery_package_skeleton_and_config_exports():
     assert config.redis_subscription_reserved_connections == 10
     assert config.redis_max_connections == 50
     assert config.terminal_processing_statuses == frozenset(
-        {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
+        {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "expired",
+            "rate_limited",
+            "error",
+        }
     )
 
     assert issubclass(RoomSubscriptionLimitExceeded, RuntimeError)

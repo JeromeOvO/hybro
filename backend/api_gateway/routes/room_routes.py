@@ -528,6 +528,36 @@ async def update_room_extend_info(
     return room_center_response
 
 
+@router.get(
+    "/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    response_model=None,
+)
+async def get_canonical_agent_call_detail(
+    room_id: str,
+    run_id: str,
+    public_call_id: str,
+    request: Request,
+    user: ClerkUser = Depends(get_current_user),
+    store: RoomRouteReader = Depends(get_room_store),
+):
+    """Return authenticated private Tool output by opaque canonical identity."""
+
+    await verify_room_ownership(room_id, user, store)
+    if not public_call_id.startswith("inv_"):
+        raise HTTPException(status_code=404, detail="Agent call output not found")
+    reader = getattr(request.app.state, "canonical_agent_call_detail_reader", None)
+    if reader is None:
+        raise HTTPException(status_code=503, detail="Agent call detail is unavailable")
+    detail = await reader.get(
+        room_id=room_id,
+        run_id=run_id,
+        public_call_id=public_call_id,
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Agent call output not found")
+    return detail
+
+
 @router.post("/roomCenter/inquiryRoomMessagesByRoomId")
 async def inquiry_room_messages(
     request: Request,

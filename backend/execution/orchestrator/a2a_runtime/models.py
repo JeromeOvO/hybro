@@ -13,6 +13,7 @@ from common.dto.hitl import HITLQuestionAnswer
 from ..models import (
     ContentPart,
     ContractModel,
+    DataPart,
     ToolAcceptance,
     ToolDefinition,
     ToolResult,
@@ -74,6 +75,9 @@ class A2ARuntimePolicy(A2ADurableModel):
 class AgentToolCandidate(ContractModel):
     agent_id: str
     skill_id: str | None = None
+    # Root Agent Card name. ``display_name`` may include a skill suffix for
+    # trace/tool labels, while cards must retain the actual Agent identity.
+    agent_display_name: str | None = None
     display_name: str
     description: str = ""
     card_digest: str
@@ -102,6 +106,9 @@ class AgentToolBindingRecord(A2ADurableModel):
     definition: ToolDefinition
     agent_id: str
     skill_id: str | None = None
+    # Optional for schema-v1 compatibility with bindings written before the
+    # public Agent-card name was denormalized.
+    agent_display_name: str | None = None
     card_digest: str
     endpoint_scope: str
     endpoint_scope_digest: str
@@ -198,6 +205,8 @@ class AgentCallLedgerRecord(A2ADurableModel):
     assistant_message_id: str
     source_index: int = Field(ge=0)
     tool_name: str
+    execution_mode: Literal["sequential", "parallel"] = "parallel"
+    side_effect_level: Literal["read", "write", "external"] = "external"
     binding_id: str
     binding_digest: str
     agent_id: str
@@ -224,6 +233,9 @@ class AgentCallLedgerRecord(A2ADurableModel):
     pending_interaction_id: str | None = None
     interaction_revision: int | None = Field(default=None, ge=1)
     interaction_fingerprint: str | None = None
+    # Bounded model-driven reply accounting, persisted on the parent call.
+    model_reply_rounds: dict[str, int] = Field(default_factory=dict)
+    model_reply_joins: list[A2AJoinBinding] = Field(default_factory=list)
     answer_applied: HITLAnswerAppliedMarker | None = None
     consumed_auth_references: list[VerifiedAuthReferenceBinding] = Field(
         default_factory=list
@@ -233,6 +245,10 @@ class AgentCallLedgerRecord(A2ADurableModel):
         Literal["pending", "dispatching", "delivery_uncertain", "accepted"] | None
     ) = None
     continuation_attempts: int = Field(default=0, ge=0)
+    # Authorization refresh is distinct from remote delivery attempts. Keeping
+    # its own durable counter prevents denied/transient refresh outcomes from
+    # becoming an unbounded one-second recovery loop after an answer is saved.
+    authorization_refresh_attempts: int = Field(default=0, ge=0)
     artifact_refs: list[str] = Field(default_factory=list)
     latest_observation_cursor: str | None = None
     recent_observation_ids: list[str] = Field(default_factory=list, max_length=128)
@@ -351,8 +367,9 @@ class MaterializedResourcePart(ContractModel):
     ref_id: str
     kind: Literal["text", "data", "file"]
     content_digest: str
-    payload: str | dict[str, object]
+    payload: str | dict[str, object] | list[object]
     mime_type: str | None = None
+    metadata: dict[str, object] | None = None
 
 
 class DurableResourceProjection(A2ADurableModel):
@@ -381,6 +398,21 @@ class A2ADispatchCommand(ContractModel):
     deadline_at: datetime
 
 
+class InlineDataArtifact(A2ADurableModel):
+    """Addressable metadata for one DataPart retained in observation content."""
+
+    ref_id: str
+    artifact_id: str | None = None
+    artifact_name: str | None = None
+    artifact_description: str | None = None
+    artifact_index: int = Field(ge=0)
+    part_index: int = Field(ge=0)
+    content_index: int = Field(ge=0)
+    mime_type: str = "application/json"
+    size_bytes: int = Field(gt=0)
+    content_digest: str
+
+
 class NormalizedA2AObservation(A2ADurableModel):
     observation_id: str
     call_record_id: str | None = None
@@ -398,6 +430,9 @@ class NormalizedA2AObservation(A2ADurableModel):
         None
     )
     content: list[ContentPart] = Field(default_factory=list)
+    inline_artifacts: list[InlineDataArtifact] = Field(
+        default_factory=list, max_length=20
+    )
     artifact_refs: list[str] = Field(default_factory=list)
     interaction_spec: dict[str, object] | None = None
     error_code: str | None = None
@@ -410,6 +445,16 @@ class NormalizedA2AObservation(A2ADurableModel):
             raise ValueError("terminal observation requires status")
         if self.event_kind != "terminal" and self.status is not None:
             raise ValueError("only terminal observation may carry status")
+        refs = [artifact.ref_id for artifact in self.inline_artifacts]
+        if len(refs) != len(set(refs)):
+            raise ValueError("inline artifact refs must be unique")
+        if any(ref not in self.artifact_refs for ref in refs):
+            raise ValueError("inline artifact refs must be advertised")
+        for artifact in self.inline_artifacts:
+            if artifact.content_index >= len(self.content):
+                raise ValueError("inline artifact content index is out of range")
+            if not isinstance(self.content[artifact.content_index], DataPart):
+                raise ValueError("inline artifact must address a DataPart")
         return self
 
 
@@ -560,6 +605,43 @@ class A2AContinuationCommand(A2ADurableModel):
     context_id: str
     room_id: str
     room_epoch: int = Field(ge=1)
+    created_at: datetime
+
+
+class A2AModelReplyCommand(A2ADurableModel):
+    """Model-driven reply to an already-parked agent interaction.
+
+    Reuses the same remote task/context so the Agent keeps its session state.
+    Distinct from ``A2AContinuationCommand``: a model reply is free text, not a
+    typed answer inventory.
+    """
+
+    command_id: str
+    transport_kind: Literal["direct", "relay"]
+    call_record_id: str
+    binding_id: str
+    binding_digest: str
+    requesting_subject_digest: str
+    task_id: str
+    context_id: str
+    room_id: str
+    room_epoch: int = Field(ge=1)
+    message_text: str
+    interaction_fingerprint: str | None = None
+    source: Literal["model_reply"] = "model_reply"
+    created_at: datetime
+
+
+class A2AJoinBinding(A2ADurableModel):
+    """Durable correlation between a model-reply invocation and its parent call.
+
+    Persisted on the parent call ledger record; lets the runtime translate a
+    parent-keyed observation into the join invocation's kernel ToolObservation.
+    """
+
+    join_invocation_id: str
+    command_id: str
+    interaction_fingerprint: str | None = None
     created_at: datetime
 
 

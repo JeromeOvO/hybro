@@ -71,6 +71,8 @@ class DefaultRunFactory:
     ) -> OrchestratorRunState:
         now = self.clock.now()
         run_id = self.id_factory.new_id("run")
+        if not isinstance(client_request_id, str) or not client_request_id.strip():
+            raise ValueError("canonical Runs require a nonempty client_request_id")
         fingerprint = sha256(
             (
                 f"{config.room_id}:{config.room_epoch}:"
@@ -78,6 +80,8 @@ class DefaultRunFactory:
             ).encode()
         ).hexdigest()
         return OrchestratorRunState(
+            schema_version=6,
+            lifecycle_family="canonical",
             run_id=run_id,
             session_id=config.session_id,
             room_id=config.room_id,
@@ -104,7 +108,12 @@ class DefaultRunFactory:
             proposed_final_message_id=None,
             terminal_reason=None,
             projection_state="pending",
-            recovery_claim=RecoveryClaim(),
+            # A live provider session is not generic-recovery work. Schedule
+            # recovery only at the profile deadline/watchdog boundary; explicit
+            # suspension and shutdown recovery may move this boundary earlier.
+            recovery_claim=RecoveryClaim(
+                next_attempt_at=now + timedelta(seconds=config.profile.deadline_seconds)
+            ),
             projection_outbox=[],
             processed_command_ids=[],
             state_version=0,
@@ -154,6 +163,9 @@ class RoomAgentSession:
         self._idle = asyncio.Event()
         self._idle.set()
 
+    def owns_run(self, run_id: str) -> bool:
+        return self._run_id == run_id
+
     async def has_active_run(self) -> bool:
         """True while this session owns a non-terminal Run."""
         if self._task is not None and not self._task.done():
@@ -200,7 +212,14 @@ class RoomAgentSession:
         self._run_id = created.run.run_id
         self._signal = EventCancellationSignal()
         await self._emit("session_started", created.run)
-        await self._emit("run_started", created.run)
+        await self._emit(
+            "run_started",
+            created.run,
+            payload={
+                "status": created.run.status,
+                "mode": created.run.profile.profile_id,
+            },
+        )
         return await self._start_kernel()
 
     async def continue_run(self) -> KernelRunResult:
@@ -263,6 +282,38 @@ class RoomAgentSession:
             await task
         except asyncio.CancelledError:
             pass
+        await self._reschedule_interrupted_run()
+
+    async def _reschedule_interrupted_run(self) -> None:
+        if self._run_id is None:
+            return
+        for _attempt in range(4):
+            run = await self.run_store.load(self._run_id)
+            if run is None or run.status in {
+                "completed",
+                "failed",
+                "canceled",
+                "budget_exhausted",
+            }:
+                return
+            candidate = run.model_copy(
+                update={
+                    "recovery_claim": RecoveryClaim(next_attempt_at=self.clock.now()),
+                    "state_version": run.state_version + 1,
+                    "updated_at": self.clock.now(),
+                }
+            )
+            stored = await self.run_store.cas_mutate(
+                candidate,
+                expected_state_version=run.state_version,
+                command_id=(
+                    f"shutdown-reschedule:{self.config.session_id}:{run.state_version}"
+                ),
+            )
+            if stored.outcome in {"accepted", "replayed"}:
+                return
+            await asyncio.sleep(0)
+        raise SessionConflict("interrupted Run could not be rescheduled")
 
     def subscribe(self, listener: SessionEventListener):
         return self.lifecycle.subscribe(listener)
@@ -319,7 +370,19 @@ class RoomAgentSession:
         run: OrchestratorRunState,
         payload: dict[str, object],
     ) -> None:
-        await self._emit(event_type, run, payload=payload)
+        # A completed tool-result message is the durable boundary for the
+        # corresponding agent card. Await listener settlement so its terminal
+        # projection cannot be lost to the short best-effort listener timeout.
+        settle_agent_projection = (
+            event_type == "message_completed"
+            and payload.get("message_kind") == "tool_result"
+        )
+        await self._emit(
+            event_type,
+            run,
+            terminal=settle_agent_projection,
+            payload=payload,
+        )
 
     async def _emit(
         self,
@@ -342,6 +405,7 @@ class RoomAgentSession:
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
+                lifecycle_family=run.lifecycle_family,
             ),
             terminal=terminal,
         )

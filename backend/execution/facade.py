@@ -36,7 +36,10 @@ from execution.idempotency import (
     normalize_client_request_id,
 )
 from execution.orchestration.run_store import OrchestrationRunStore
-from execution.orchestrator_routing import OrchestratorRoutingError
+from execution.orchestrator_routing import (
+    OrchestratorHITLNotOwnedError,
+    OrchestratorRoutingError,
+)
 from execution.ports import (
     AgentTaskCleanupPort,
     CancellationStatePort,
@@ -181,6 +184,7 @@ class ExecutionFacade:
         self._hitl_manager = hitl_manager
         self._run_lifecycle = run_lifecycle
         self._run_reader = run_reader
+        self._active_run_reader = run_reader
         self._cancellation_state = cancellation_state
         self._hitl_message_cancellation = hitl_message_cancellation
         self._agent_task_cleanup = agent_task_cleanup
@@ -215,6 +219,10 @@ class ExecutionFacade:
     def bind_orchestrator_router(self, router: Any) -> None:
         """Attach the orchestrator ingress adapter after composition."""
         self._orchestrator_router = router
+
+    def bind_active_run_reader(self, run_reader: Any) -> None:
+        """Use the canonical aggregate for public and send-time active Runs."""
+        self._active_run_reader = run_reader
 
     async def route_webhook(
         self,
@@ -309,7 +317,9 @@ class ExecutionFacade:
         request: ExecutionRequest,
     ) -> ExecutionAck | None:
         try:
-            active_runs = await self._run_reader.get_runs_for_room(request.room_id)
+            active_runs = await self._active_run_reader.get_runs_for_room(
+                request.room_id
+            )
         except Exception:
             logger.warning(
                 "active room run lookup failed before execute", exc_info=True
@@ -342,6 +352,7 @@ class ExecutionFacade:
             event_publisher=self._event_publisher,
             run_event_enabled=self._run_event_enabled,
             client_request_id_resolver=self._client_request_id_resolver,
+            record_lifecycle=False,
             client_request_id=request.client_request_id,
         )
 
@@ -380,6 +391,7 @@ class ExecutionFacade:
             event_publisher=self._event_publisher,
             run_event_enabled=self._run_event_enabled,
             client_request_id_resolver=self._client_request_id_resolver,
+            record_lifecycle=False,
             client_request_id=request.client_request_id,
             details=ack.preflight_details or ack.error,
         )
@@ -675,6 +687,11 @@ class ExecutionFacade:
     ) -> bool | CancellationAck:
         router = self._orchestrator_router
         if router is not None:
+            # HITL ownership must clear before the Kernel exposes terminal Tool
+            # and Turn children. This path is idempotent when no request exists.
+            await self._hitl_message_cancellation.cancel_requests_for_message(
+                message_id
+            )
             results = await router.route_cancellation_by_user_message(
                 message_id,
                 reason=f"user:{requested_by_user_id}",
@@ -690,11 +707,15 @@ class ExecutionFacade:
         return await self._run_reader.get_run(run_id)
 
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
-        return await self._run_reader.get_runs_for_room(room_id)
+        return await self._active_run_reader.get_runs_for_room(room_id)
 
     async def get_latest_runs_for_rooms(
         self, room_ids: list[str]
     ) -> dict[str, RunInfo]:
+        reader = self._active_run_reader
+        bulk = getattr(reader, "get_latest_runs_for_rooms", None)
+        if bulk is not None:
+            return await bulk(room_ids)
         return await self._run_reader.get_latest_runs_for_rooms(room_ids)
 
     async def cancel_inflight_tasks(self) -> int:
@@ -732,18 +753,22 @@ class ExecutionFacade:
                     responder_id=responder_id,
                     room_id=room_id,
                 )
+            except OrchestratorHITLNotOwnedError:
+                # Supervisor ask_user interactions live in the unified HITL
+                # aggregate, not the orchestrator A2A call ledger.
+                pass
+            except KeyError as exc:
+                # Only fall through when the interaction is absent from the
+                # orchestrator store; other KeyErrors from resume stay fatal.
+                if exc.args != (interaction_id,):
+                    raise
+            else:
                 return HITLResponse(
                     request_id=interaction_id,
                     status="accepted",
                     responder_id=responder_id,
                     client_request_id=client_request_id,
                 )
-            except KeyError as exc:
-                # Only fall through when the interaction is absent from the
-                # orchestrator store; other KeyErrors from resume stay fatal.
-                if exc.args != (interaction_id,):
-                    raise
-
         result = await self._hitl_manager.handle_batch_response(
             room_id=room_id,
             interaction_id=interaction_id,

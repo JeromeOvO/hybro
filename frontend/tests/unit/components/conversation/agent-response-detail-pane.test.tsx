@@ -63,6 +63,51 @@ describe('AgentResponseDetailPane', () => {
     expect(screen.getByText('A2A findings.')).toBeInTheDocument()
   })
 
+  it('groups A2A text before data while preserving order within each type', async () => {
+    const view = render(
+      <AgentResponseDetailPane
+        detail={{
+          ...detail,
+          content: 'FLATTENED OUTPUT MUST NOT RENDER',
+          parts: [
+            { kind: 'data', data: { client: 'Acme SaaS Inc.', premium: 37200 } },
+            { kind: 'text', text: 'Submission prepared.' },
+            { kind: 'text', text: '{"declared":"text"}' },
+          ],
+          artifacts: [{
+            artifactId: 'quote-file',
+            name: 'quote.pdf',
+            parts: [{
+              kind: 'file',
+              file: { fileId: 'quote-file', name: 'quote.pdf', mime_type: 'application/pdf' },
+            }],
+          }],
+        }}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const pane = within(view.container).getByTestId('agent-response-detail-pane')
+    expect(within(pane).queryByText('FLATTENED OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
+    expect(within(pane).getByText('Submission prepared.')).toBeInTheDocument()
+    expect(within(pane).getByText('{"declared":"text"}')).toBeInTheDocument()
+    const jsonToggle = within(pane).getByRole('button', { name: /json.*lines/i })
+    expect(jsonToggle).toHaveAttribute('aria-expanded', 'false')
+    const orderedParts = [...within(pane).getByTestId('agent-response-parts').children]
+    expect(orderedParts).toHaveLength(3)
+    expect(orderedParts[0]).toHaveTextContent('Submission prepared.')
+    expect(orderedParts[1]).toHaveTextContent('{"declared":"text"}')
+    expect(orderedParts[2]).toContainElement(jsonToggle)
+    const fileButton = within(pane).getByRole('button', { name: 'quote.pdf' })
+    expect(jsonToggle.compareDocumentPosition(fileButton) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy()
+
+    await userEvent.click(jsonToggle)
+
+    expect(jsonToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(pane.querySelector('pre code')).toHaveTextContent('"premium": 37200')
+  })
+
   it('shows quoted user context when the request message includes a quote', () => {
     render(
       <AgentResponseDetailPane

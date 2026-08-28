@@ -20,8 +20,6 @@ export interface HydrateRoomOptions extends HydrateRoomAgentResolver {
   getToken?: () => Promise<string | null>
   userId?: string
   userName?: string
-  /** Required for `initial` stampInferredTurnTerminalStatus. */
-  room?: unknown
   hitlRequestIndex?: MutableRefObject<Map<string, string>>
 }
 

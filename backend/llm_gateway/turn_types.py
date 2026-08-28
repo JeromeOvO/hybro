@@ -58,7 +58,7 @@ class GatewayUsage(GatewayContract):
 class GatewayTurnRequest(GatewayContract):
     provider: Literal["openai", "deepseek"]
     model_id: str
-    api: Literal["chat_completions"]
+    api: Literal["chat_completions", "responses"]
     system_prompt: str
     messages: list[GatewayTurnMessage]
     tools: list[GatewayToolDefinition]
@@ -76,6 +76,8 @@ class GatewayTurnRequest(GatewayContract):
             raise ValueError("OpenAI route requires native tools")
         if self.provider == "deepseek" and self.tool_strategy != "structured_action":
             raise ValueError("DeepSeek route requires structured action")
+        if self.provider == "deepseek" and self.api != "chat_completions":
+            raise ValueError("DeepSeek route requires chat completions")
         return self
 
 

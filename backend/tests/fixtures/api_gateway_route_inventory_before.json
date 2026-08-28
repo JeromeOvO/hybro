@@ -951,6 +951,27 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_canonical_agent_call_detail",
+    "endpoint_module": "api_gateway.routes.room_routes",
+    "declared_owner": "api_gateway.routes.room_routes",
+    "tags": [
+      "room"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user",
+      "get_room_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/rooms/{room_id}/hitl/interactions/{interaction_id}/cancel",
     "methods": [
       "POST"
@@ -1042,6 +1063,27 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/sse/room/{room_id}/events",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_room_events",
+    "endpoint_module": "api_gateway.routes.sse_routes",
+    "declared_owner": "api_gateway.routes.sse_routes",
+    "tags": [
+      "sse"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_current_user_with_query_token",
+      "get_sse_store"
+    ],
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/sse/room/{room_id}/status",
     "methods": [
       "GET"
@@ -1118,9 +1160,7 @@
       "webhooks"
     ],
     "status_code": null,
-    "dependencies": [
-      "get_webhook_receiver"
-    ],
+    "dependencies": [],
     "auth_dependencies": [],
     "include_in_schema": true
   },

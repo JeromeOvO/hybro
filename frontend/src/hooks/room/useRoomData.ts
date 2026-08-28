@@ -6,6 +6,7 @@ import {
 import { banner } from '@/components/ui/banner'
 import type { Agent } from '@/lib/types/agent'
 import type { Room, RoomAgentRefWire, ActiveRunRefWire } from '@/lib/types/response'
+import { roomUsesSupervisorByDefault } from '@/lib/types/chat-mode'
 
 export type RoomWithActiveRuns = Room & { active_runs?: ActiveRunRefWire[] | null }
 
@@ -65,9 +66,8 @@ export function useRoomData(
   const room = roomQuery.data ?? null
 
   const getSupervisorMode = useCallback((): boolean => {
-    if (!room?.extend_info) return false
-    const extendInfo = room.extend_info as { use_supervisor?: boolean }
-    return extendInfo.use_supervisor || false
+    const extendInfo = room?.extend_info as { use_supervisor?: boolean } | undefined
+    return roomUsesSupervisorByDefault(extendInfo?.use_supervisor)
   }, [room])
 
   const loading = roomQuery.isLoading

@@ -1,3 +1,11 @@
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+
 interface UserAnswerCardProps {
   agentName: string
   question: string
@@ -6,16 +14,12 @@ interface UserAnswerCardProps {
 
 export function UserAnswerCard({ agentName, question, answer }: UserAnswerCardProps) {
   return (
-    <div className="conversation-hitl-answer" data-testid="hitl-answer-card">
-      <div className="conversation-hitl-answer-header">
-        Response to {agentName}
-      </div>
-      <div className="conversation-hitl-answer-prompt">
-        {question}
-      </div>
-      <div className="conversation-hitl-answer-value">
-        {answer}
-      </div>
-    </div>
+    <Card className="gap-3 py-3 shadow-none" data-testid="hitl-answer-card">
+      <CardHeader className="gap-1 px-3">
+        <CardTitle className="text-sm">Response to {agentName}</CardTitle>
+        <CardDescription>{question}</CardDescription>
+      </CardHeader>
+      <CardContent className="break-words px-3 text-sm">{answer}</CardContent>
+    </Card>
   )
 }

@@ -59,8 +59,16 @@ def _skill_items(raw_card: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(skill, dict):
             items.append(skill)
         elif hasattr(skill, "model_dump"):
-            items.append(skill.model_dump(mode="json"))
+            dumped = skill.model_dump(mode="json")
+            if isinstance(dumped, dict):
+                items.append(dumped)
     return items
+
+
+def _nonblank_string(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 class AgentServiceCandidateSource:
@@ -130,19 +138,27 @@ class AgentServiceCandidateSource:
             )
             capabilities = _direct_capabilities(info, raw_card)
 
+            usable_skills: list[tuple[str, str, dict[str, Any]]] = []
+            card_skill_ids: set[str] = set()
             for skill in _skill_items(raw_card):
-                skill_id = str(skill.get("id") or skill.get("name") or "")
+                skill_name = _nonblank_string(skill.get("name"))
+                skill_id = _nonblank_string(skill.get("id")) or skill_name
+                if skill_id is None or skill_id in card_skill_ids:
+                    continue
+                card_skill_ids.add(skill_id)
+                usable_skills.append((skill_id, skill_name or skill_id, skill))
+
+            for skill_id, skill_name, skill in usable_skills:
                 identity = (info.agent_id, skill_id)
-                if not skill_id or identity in seen:
+                if identity in seen:
                     continue
                 seen.add(identity)
                 candidates.append(
                     AgentToolCandidate(
                         agent_id=info.agent_id,
                         skill_id=skill_id,
-                        display_name=(
-                            f"{display_name} - {skill.get('name') or skill_id}"
-                        ).strip()[:120],
+                        agent_display_name=display_name.strip()[:120] or None,
+                        display_name=f"{display_name} - {skill_name}".strip()[:120],
                         description=str(
                             skill.get("description") or description or ""
                         ).strip()[:500],
@@ -158,29 +174,33 @@ class AgentServiceCandidateSource:
                         output_modes=output_modes,
                     )
                 )
-            # An agent without skills (or with unusable skill entries) still
-            # exposes one whole-agent tool.
-            identity = (info.agent_id, None)
-            if identity not in seen:
-                seen.add(identity)
-                candidates.append(
-                    AgentToolCandidate(
-                        agent_id=info.agent_id,
-                        skill_id=None,
-                        display_name=display_name.strip()[:120] or "Agent",
-                        description=description.strip()[:500],
-                        card_digest=card_digest,
-                        endpoint_scope=endpoint_scope,
-                        endpoint_scope_digest=scope_digest,
-                        transport_kind=transport_kind,
-                        direct_capabilities=capabilities,
-                        active=active,
-                        authorized=authorized,
-                        excluded=info.agent_id in excluded,
-                        input_modes=input_modes,
-                        output_modes=output_modes,
+
+            # Skill-bearing cards expose only their explicit skill tools. A
+            # skill-less legacy card (including one with no usable entries)
+            # retains a single whole-Agent fallback.
+            if not usable_skills:
+                identity = (info.agent_id, None)
+                if identity not in seen:
+                    seen.add(identity)
+                    candidates.append(
+                        AgentToolCandidate(
+                            agent_id=info.agent_id,
+                            skill_id=None,
+                            agent_display_name=display_name.strip()[:120] or None,
+                            display_name=display_name.strip()[:120] or "Agent",
+                            description=description.strip()[:500],
+                            card_digest=card_digest,
+                            endpoint_scope=endpoint_scope,
+                            endpoint_scope_digest=scope_digest,
+                            transport_kind=transport_kind,
+                            direct_capabilities=capabilities,
+                            active=active,
+                            authorized=authorized,
+                            excluded=info.agent_id in excluded,
+                            input_modes=input_modes,
+                            output_modes=output_modes,
+                        )
                     )
-                )
         return candidates
 
 

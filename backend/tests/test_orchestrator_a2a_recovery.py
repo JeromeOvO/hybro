@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
@@ -171,6 +173,75 @@ class RecoveryCASRaceLedger(InMemoryAgentCallLedgerStore):
                 return None
             raise RecoverableCheckpointError("winner temporarily unavailable")
         return await super().load_by_record_id(call_record_id)
+
+
+class InteractionAttachCasLoserLedger(InMemoryAgentCallLedgerStore):
+    def __init__(self):
+        super().__init__()
+        self.lost = False
+
+    async def cas(self, record, *, expected_state_version):
+        if record.state == "continuation_pending" and not self.lost:
+            current = await self.load_by_record_id(record.call_record_id)
+            assert current is not None
+            winner_spec = {
+                "schema_version": 1,
+                "interaction_id": "interaction-winner",
+                "questions": [
+                    {
+                        "question_id": "question-winner",
+                        "interaction_kind": "questionnaire",
+                        "prompt": "Winner question?",
+                        "answer_kind": "text",
+                        "required": True,
+                    }
+                ],
+            }
+            winner_observation = NormalizedA2AObservation(
+                observation_id="recovery-winner",
+                call_record_id=current.call_record_id,
+                source_kind="inspection",
+                source_identity="recovery:winner",
+                binding_scope=current.endpoint_scope_digest,
+                event_kind="input_required",
+                observed_at=NOW,
+                task_id="task-1",
+                context_id="context-1",
+                agent_id=current.agent_id,
+                interaction_spec=winner_spec,
+            )
+            pending = apply_observation(
+                current,
+                winner_observation,
+                recent_limit=current.runtime_policy.recent_observation_id_limit,
+            )
+            assert (
+                await super().cas(pending, expected_state_version=current.state_version)
+                == "accepted"
+            )
+            fingerprint = sha256(
+                json.dumps(
+                    winner_spec,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest()
+            winner = transition_call(
+                pending,
+                to_state="input_required",
+                updated_at=NOW,
+                pending_interaction_id="interaction-winner",
+                interaction_revision=1,
+                interaction_fingerprint=fingerprint,
+            )
+            assert (
+                await super().cas(winner, expected_state_version=pending.state_version)
+                == "accepted"
+            )
+            self.lost = True
+            return "conflict"
+        return await super().cas(record, expected_state_version=expected_state_version)
 
 
 class PerRecordLoadOutageLedger(InMemoryAgentCallLedgerStore):
@@ -371,6 +442,61 @@ async def test_call_recovery_typed_interaction_parks_instead_of_completing():
     assert persisted.pending_interaction_id == "recovery:clarify-1"
     assert persisted.terminal_result is None
     assert hitl.read_interaction_for_test("recovery:clarify-1") is not None
+
+
+async def test_call_recovery_does_not_checkpoint_losing_typed_interaction():
+    from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
+
+    record = transition_call(
+        ledger_record(), to_state="ready_to_dispatch", updated_at=NOW
+    )
+    record = transition_call(record, to_state="dispatching", updated_at=NOW)
+    record = transition_call(record, to_state="delivery_uncertain", updated_at=NOW)
+    losing_observation = NormalizedA2AObservation(
+        observation_id="recovery-loser",
+        call_record_id=record.call_record_id,
+        source_kind="inspection",
+        source_identity="recovery:loser",
+        binding_scope=record.endpoint_scope_digest,
+        event_kind="input_required",
+        observed_at=NOW,
+        task_id="task-1",
+        context_id="context-1",
+        agent_id=record.agent_id,
+        interaction_spec={
+            "schema_version": 1,
+            "interaction_id": "interaction-loser",
+            "questions": [
+                {
+                    "question_id": "question-loser",
+                    "interaction_kind": "questionnaire",
+                    "prompt": "Loser question?",
+                    "answer_kind": "text",
+                    "required": True,
+                }
+            ],
+        },
+    )
+    ledger = InteractionAttachCasLoserLedger()
+    hitl = InMemoryHITLApplicationPort()
+    runtime, ledger, _ = await service(
+        record,
+        checkpointed=True,
+        dispatch=Dispatch(
+            outcome="interaction", interaction_observation=losing_observation
+        ),
+        ledger=ledger,
+        hitl=hitl,
+    )
+
+    assert await runtime.recover_call(record, now=NOW + timedelta(seconds=1))
+
+    persisted = await ledger.load_by_record_id(record.call_record_id)
+    assert persisted.pending_interaction_id == "interaction-winner"
+    assert hitl.read_interaction_for_test("interaction-loser") is None
+    inbox = await runtime.observations.inbox.load(losing_observation.observation_id)
+    assert inbox.state == "pending"
+    assert inbox.delivery_route == "unresolved"
 
 
 async def test_call_recovery_defers_continuation_owned_delivery_uncertain():

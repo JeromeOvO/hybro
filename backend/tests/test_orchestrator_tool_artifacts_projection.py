@@ -134,6 +134,7 @@ async def test_project_orchestrator_agent_activity_emits_artifacts_and_sse_parts
     run = MagicMock(spec=OrchestratorRunState)
     run.run_id = "run-1"
     run.room_id = "room-100"
+    run.lifecycle_family = "legacy"
     run.client_request_id = "cr-1"
     run.tool_catalog = catalog
     run.transcript = [assistant_msg]

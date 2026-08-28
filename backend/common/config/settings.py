@@ -71,9 +71,9 @@ class Settings(BaseSettings):
     # those reserved dimensions are consumed by the kernel.
     orchestrator_fast_model_route: str = "supervisor_model"
     orchestrator_fast_prompt_id: str = "orchestrator_fast"
-    orchestrator_fast_prompt_version: str = "1"
+    orchestrator_fast_prompt_version: str = "5"
     orchestrator_fast_thinking_level: str | None = None
-    orchestrator_fast_max_model_turns: int = 6
+    orchestrator_fast_max_model_turns: int = 12
     orchestrator_fast_grace_model_turns: int = 1
     orchestrator_fast_max_agent_calls: int = 10
     orchestrator_fast_max_parallel_calls: int = 3
@@ -86,9 +86,9 @@ class Settings(BaseSettings):
 
     orchestrator_ultimate_model_route: str = "supervisor_model"
     orchestrator_ultimate_prompt_id: str = "orchestrator_ultimate"
-    orchestrator_ultimate_prompt_version: str = "1"
+    orchestrator_ultimate_prompt_version: str = "5"
     orchestrator_ultimate_thinking_level: str | None = None
-    orchestrator_ultimate_max_model_turns: int = 12
+    orchestrator_ultimate_max_model_turns: int = 24
     orchestrator_ultimate_grace_model_turns: int = 2
     orchestrator_ultimate_max_agent_calls: int = 20
     orchestrator_ultimate_max_parallel_calls: int = 4
@@ -99,10 +99,7 @@ class Settings(BaseSettings):
     orchestrator_ultimate_tool_execution: str = "parallel"
     orchestrator_ultimate_finalization: str = "pass_through"
 
-    # Orchestrator background workers (step 6). Both default OFF: legacy jobs
-    # already run and no traffic is routed to the orchestrator until step 8.
-    orchestrator_recovery_enabled: bool = False
-    orchestrator_projection_enabled: bool = False
+    # Mandatory canonical lifecycle worker cadence.
     orchestrator_worker_interval_seconds: int = Field(default=30, gt=0)
 
     # Orchestrator canary observability (step 8). The canary job is disabled by
@@ -119,8 +116,7 @@ class Settings(BaseSettings):
     log_format: str = "auto"
 
     # Feature Flags (runtime-toggleable behavior gates)
-    feature_run_event_sse: bool = False
-    feature_run_watchdog: bool = True
+    feature_run_event_sse: bool = True
     orchestration_outcome_guardrails: bool = True
 
     # Execution Tuning
@@ -229,7 +225,15 @@ class Settings(BaseSettings):
     redis_room_subscription_production_limit: int = 40
     redis_room_subscription_ready_timeout_seconds: float = 5.0
     terminal_processing_statuses: frozenset[str] = frozenset(
-        {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
+        {
+            "completed",
+            "failed",
+            "canceled",
+            "rejected",
+            "expired",
+            "rate_limited",
+            "error",
+        }
     )
 
     # Execution cancellation runtime (environment names remain compatible)
@@ -376,15 +380,6 @@ class Settings(BaseSettings):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    @field_validator("feature_run_watchdog", mode="before")
-    @classmethod
-    def normalize_feature_run_watchdog(cls, value):
-        if value is None or str(value).strip() == "":
-            return True
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() not in {"0", "false", "off"}
-
     @field_validator("orchestration_outcome_guardrails", mode="before")
     @classmethod
     def normalize_orchestration_outcome_guardrails(cls, value):
@@ -395,8 +390,6 @@ class Settings(BaseSettings):
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     @field_validator(
-        "orchestrator_recovery_enabled",
-        "orchestrator_projection_enabled",
         "orchestrator_canary_enabled",
         mode="before",
     )

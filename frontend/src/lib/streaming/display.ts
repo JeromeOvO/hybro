@@ -43,7 +43,7 @@ export function isBufferStreaming(buffer: StreamBuffer | undefined): boolean {
 /** Streaming for timeline view models (AgentResultViewModel.status). */
 export function resolveViewModelStreaming(
   buffer: StreamBuffer | undefined,
-  status: 'completed' | 'failed' | 'awaiting_input' | 'working',
+  status: 'completed' | 'failed' | 'canceled' | 'awaiting_input' | 'working',
 ): boolean {
   if (status !== 'working') return false
   return isBufferStreaming(buffer)

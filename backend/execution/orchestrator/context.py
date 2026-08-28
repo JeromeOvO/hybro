@@ -11,6 +11,7 @@ from .models import (
     ModelMessage,
     OrchestratorRunState,
     ToolDefinition,
+    ToolInteractionMessage,
     ToolResultMessage,
     UserMessage,
 )
@@ -81,7 +82,9 @@ class ContextCompiler:
                 retained_transcript_indexes=(),
             )
 
-        converted = agent_messages_to_model(run.transcript)
+        converted = agent_messages_to_model(
+            run.transcript, prepare_orchestration_context=True
+        )
         full = [*background, *converted]
         estimate = mandatory - reserve + self.estimator.estimate_messages(converted)
         if summary is None:
@@ -128,7 +131,9 @@ class ContextCompiler:
         selected_messages = (
             []
             if first_user is None
-            else agent_messages_to_model([run.transcript[first_user]])
+            else agent_messages_to_model(
+                [run.transcript[first_user]], prepare_orchestration_context=True
+            )
         )
         if self.estimator.estimate_messages(selected_messages) > available:
             return CompiledContext(
@@ -151,7 +156,9 @@ class ContextCompiler:
             candidate_transcript = [
                 run.transcript[index] for index in candidate_indexes
             ]
-            candidate = agent_messages_to_model(candidate_transcript)
+            candidate = agent_messages_to_model(
+                candidate_transcript, prepare_orchestration_context=True
+            )
             if self.estimator.estimate_messages(candidate) > available:
                 continue
             selected = candidate_indexes
@@ -182,7 +189,7 @@ def _pair_safe_tail_indexes(messages: list[object]) -> list[list[int]]:
             while index < len(messages) and call_ids:
                 current = messages[index]
                 group.append(index)
-                if isinstance(current, ToolResultMessage):
+                if isinstance(current, (ToolResultMessage, ToolInteractionMessage)):
                     call_ids.discard(current.call_id)
                 index += 1
             groups.append(group)

@@ -55,7 +55,10 @@ def make_session(scripts, *, lifecycle=None):
         config=config,
         kernel=kernel,
         run_store=store,
-        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        run_factory=DefaultRunFactory(
+            clock=FixedClock(),
+            id_factory=FixedIDs(),
+        ),
         lifecycle=lifecycle,
         clock=FixedClock(),
     ), runtime
@@ -77,7 +80,7 @@ async def test_session_prompt_subscribe_and_awaited_idle_listener_barrier():
     lifecycle.subscribe(listener)
     session, _ = make_session([final_events()], lifecycle=lifecycle)
 
-    result = await session.prompt(user_message())
+    result = await session.prompt(user_message(), client_request_id="request-1")
     await session.wait_for_idle()
 
     assert result.outcome == "final_answer"
@@ -104,7 +107,9 @@ async def test_wait_for_idle_waits_for_terminal_listener_settlement():
     lifecycle = LifecycleEmitter(settlement_timeout_seconds=30)
     lifecycle.subscribe(listener)
     session, _ = make_session([final_events()], lifecycle=lifecycle)
-    prompt_task = asyncio.create_task(session.prompt(user_message()))
+    prompt_task = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-1")
+    )
     await idle_listener_entered.wait()
     idle_task = asyncio.create_task(session.wait_for_idle())
     await asyncio.sleep(0)
@@ -123,7 +128,7 @@ async def test_session_generic_observation_resumes_suspended_run():
             final_events("resumed"),
         ]
     )
-    waiting = await session.prompt(user_message())
+    waiting = await session.prompt(user_message(), client_request_id="request-1")
     assert waiting.outcome == "waiting_external"
 
     result = await session.observe_tool(
@@ -161,7 +166,7 @@ async def test_session_emits_tool_lifecycle_inventory():
         lifecycle=lifecycle,
     )
 
-    await session.prompt(user_message())
+    await session.prompt(user_message(), client_request_id="request-1")
     await asyncio.sleep(0)
 
     assert "tool_execution_started" in event_types
@@ -169,6 +174,114 @@ async def test_session_emits_tool_lifecycle_inventory():
 
 
 @pytest.mark.asyncio
+async def test_tool_result_message_waits_for_agent_projection_settlement():
+    projection_entered = asyncio.Event()
+    release_projection = asyncio.Event()
+
+    async def listener(event):
+        if (
+            event.event_type == "message_completed"
+            and event.payload.get("message_kind") == "tool_result"
+        ):
+            projection_entered.set()
+            await release_projection.wait()
+
+    lifecycle = LifecycleEmitter(settlement_timeout_seconds=30)
+    lifecycle.subscribe(listener)
+    session, _ = make_session(
+        [
+            tool_events(("call-1", "fake_agent_echo", '{"value":"ok"}')),
+            final_events(),
+        ],
+        lifecycle=lifecycle,
+    )
+
+    prompt_task = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-1")
+    )
+    await projection_entered.wait()
+    await asyncio.sleep(0)
+
+    assert prompt_task.done() is False
+    release_projection.set()
+    result = await prompt_task
+    assert result.outcome == "final_answer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase_status", "phase_outcome"),
+    [
+        ("waiting_external", "waiting_external"),
+        ("awaiting_user", "awaiting_user"),
+    ],
+)
+async def test_shutdown_immediately_reschedules_interrupted_tool_and_hitl_continuations(
+    phase_status,
+    phase_outcome,
+):
+    store = InMemoryOrchestratorRunStore()
+    observation_started = asyncio.Event()
+
+    class PhaseBlockingKernel:
+        async def run(self, run_id, *, signal, lifecycle=None):
+            del signal, lifecycle
+            run = await store.load(run_id)
+            candidate = run.model_copy(
+                update={
+                    "status": phase_status,
+                    "state_version": run.state_version + 1,
+                }
+            )
+            saved = await store.cas_mutate(
+                candidate,
+                expected_state_version=run.state_version,
+                command_id=f"enter:{phase_status}",
+            )
+            return KernelRunResult(phase_outcome, saved.run)
+
+        async def observe_tool(self, run_id, observation, *, signal, lifecycle=None):
+            del run_id, observation, signal, lifecycle
+            observation_started.set()
+            await asyncio.Event().wait()
+
+    session = RoomAgentSession(
+        config=session_config(),
+        kernel=PhaseBlockingKernel(),
+        run_store=store,
+        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        clock=FixedClock(),
+    )
+    waiting = await session.prompt(user_message(), client_request_id="request-1")
+    assert waiting.outcome == phase_outcome
+    observation_task = asyncio.create_task(
+        session.observe_tool(
+            ToolObservation(
+                observation_id=f"observation:{phase_status}",
+                invocation_id="call-1",
+                outcome=ToolResult(
+                    call_id="call-1",
+                    tool_name="fake_agent_pause",
+                    status="completed",
+                    content=[],
+                    artifact_refs=[],
+                ),
+                observed_at=NOW,
+            )
+        )
+    )
+    await observation_started.wait()
+
+    await session.shutdown()
+    with pytest.raises(asyncio.CancelledError):
+        await observation_task
+
+    saved = next(iter(store.runs.values()))
+    assert saved.status == phase_status
+    assert saved.recovery_claim.next_attempt_at == NOW
+    assert saved.recovery_claim.next_attempt_at < saved.budget.deadline_at
+
+
 async def test_session_events_carry_delivery_correlation_fields():
     """SSE work-log listeners must address room/message without a store hit."""
     observed = []
@@ -214,13 +327,18 @@ async def test_session_rejects_second_prompt_while_active_and_abort_becomes_idle
         config=session_config(),
         kernel=BlockingKernel(),
         run_store=store,
-        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        run_factory=DefaultRunFactory(
+            clock=FixedClock(),
+            id_factory=FixedIDs(),
+        ),
         clock=FixedClock(),
     )
-    first = asyncio.create_task(session.prompt(user_message()))
+    first = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-1")
+    )
     await entered.wait()
     with pytest.raises(SessionConflict, match="already active"):
-        await session.prompt(user_message("second"))
+        await session.prompt(user_message("second"), client_request_id="request-2")
     release.set()
     await first
     await session.wait_for_idle()
@@ -267,7 +385,10 @@ async def test_replayed_active_client_request_does_not_start_second_kernel():
             config=session_config(),
             kernel=kernel,
             run_store=store,
-            run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+            run_factory=DefaultRunFactory(
+                clock=FixedClock(),
+                id_factory=FixedIDs(),
+            ),
             clock=FixedClock(),
         )
 
@@ -313,11 +434,16 @@ async def test_concurrent_prompt_and_abort_settle_lifecycle_once():
         config=session_config(),
         kernel=AbortableKernel(),
         run_store=store,
-        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        run_factory=DefaultRunFactory(
+            clock=FixedClock(),
+            id_factory=FixedIDs(),
+        ),
         lifecycle=lifecycle,
         clock=FixedClock(),
     )
-    prompt_task = asyncio.create_task(session.prompt(user_message()))
+    prompt_task = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-1")
+    )
     await entered.wait()
     abort_task = asyncio.create_task(session.abort())
     await asyncio.gather(prompt_task, abort_task)
@@ -356,11 +482,16 @@ async def test_abort_during_terminal_listener_does_not_start_second_kernel_task(
         config=session_config(),
         kernel=kernel,
         run_store=store,
-        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        run_factory=DefaultRunFactory(
+            clock=FixedClock(),
+            id_factory=FixedIDs(),
+        ),
         lifecycle=lifecycle,
         clock=FixedClock(),
     )
-    prompt_task = asyncio.create_task(session.prompt(user_message()))
+    prompt_task = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-1")
+    )
     await terminal_listener_entered.wait()
     abort_task = asyncio.create_task(session.abort())
     await asyncio.sleep(0)
@@ -379,6 +510,6 @@ async def test_continue_requires_run_and_suspended_run_requires_observation():
     )
     with pytest.raises(SessionConflict, match="no active"):
         await session.continue_run()
-    await session.prompt(user_message())
+    await session.prompt(user_message(), client_request_id="request-1")
     with pytest.raises(SessionConflict, match="requires a new ToolObservation"):
         await session.continue_run()

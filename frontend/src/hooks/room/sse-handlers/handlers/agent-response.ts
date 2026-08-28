@@ -11,8 +11,7 @@ import { scheduleTurnTerminalBackendTruthCheck } from '@/lib/room-timeline/turn-
 import type { SummaryOrigin } from '@/lib/room-timeline/types'
 import { partsToReplacementArtifacts } from '../artifacts'
 import type { SSEHandlerDeps } from '../types'
-import type { CorrelationResult } from '../correlation'
-import { getResolvedMessageId } from '../pending-turn-buffer'
+import { resolveUserMessageId } from '../client-request'
 
 function isSummaryAgentResponse(agentId: string | undefined, messageId: string): boolean {
   if (messageId.startsWith('summary-')) return true
@@ -76,12 +75,32 @@ function artifactsEqual(a: ArtifactData[] | undefined, b: ArtifactData[] | undef
 export function handleAgentResponsePartial(
   ctx: SSEHandlerDeps,
   sseMessage: RoomSSEFrameMap['agent_response_partial'],
-  correlation: CorrelationResult,
+  clientReqId: string | null,
 ): void {
   const { message_id, content_delta } = sseMessage.data
   if (!message_id || typeof content_delta !== 'string') return
 
+  const store = useMessageStore.getState()
   const streaming = useStreamingStore.getState()
+  if (!store.entities[message_id]) {
+    const agentId = sseMessage.data.agent_id
+    const userMessageId = resolveUserMessageId(ctx.roomId, clientReqId)
+    store.upsertMessage({
+      id: message_id,
+      roomId: ctx.roomId,
+      messageType: 'agent',
+      content: '',
+      senderName: agentId || 'Agent',
+      agentId,
+      agentSource: agentId ? ctx.getAgentSource?.(agentId) : undefined,
+      clientRequestId: clientReqId ?? undefined,
+      relatedMessageId: userMessageId ?? undefined,
+      timestamp: normalizeTimestampOrNow(sseMessage.timestamp),
+      taskStatus: TASK_STATE.WORKING,
+      taskContent: '',
+      isEphemeral: false,
+    }, 'sse')
+  }
   const hasPartialArtifact = (streaming.buffers[message_id]?.artifacts ?? [])
     .some(a => a.artifactId === partialStreamArtifactId(message_id))
 
@@ -91,15 +110,17 @@ export function handleAgentResponsePartial(
     textPartialToArtifact(message_id, content_delta),
     hasPartialArtifact,
     {
-      clientRequestId: correlation.clientReqId,
-      userMessageId: correlation.clientReqId
-        ? getResolvedMessageId(correlation.clientReqId)
-        : undefined,
+      clientRequestId: clientReqId ?? undefined,
+      userMessageId: resolveUserMessageId(ctx.roomId, clientReqId),
     },
   )
 }
 
-export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomSSEFrameMap['agent_response']): Promise<void> {
+export async function handleAgentResponse(
+  ctx: SSEHandlerDeps,
+  sseMessage: RoomSSEFrameMap['agent_response'],
+  canonical = false,
+): Promise<void> {
   if (!sseMessage.data.message_id) return
 
   const store = useMessageStore.getState()
@@ -143,15 +164,17 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
         }, 'sse')
       }
       streaming.clear(messageId)
-      const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
-        clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
-        relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
-      })
-      if (!stamped) {
-        maybeScheduleTurnTerminalRecovery(ctx, {
+      if (!canonical) {
+        const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
           clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
           relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
-        }, messageId, existing.agentId)
+        })
+        if (!stamped) {
+          maybeScheduleTurnTerminalRecovery(ctx, {
+            clientRequestId: existing.clientRequestId || sseMessage.data.client_request_id,
+            relatedMessageId: existing.relatedMessageId ?? sseMessage.data.related_message_id,
+          }, messageId, existing.agentId)
+        }
       }
       return
     }
@@ -192,14 +215,16 @@ export async function handleAgentResponse(ctx: SSEHandlerDeps, sseMessage: RoomS
   }, 'sse')
   streaming.clear(messageId)
 
-  const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
-    clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
-    relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
-  })
-  if (!stamped) {
-    maybeScheduleTurnTerminalRecovery(ctx, {
+  if (!canonical) {
+    const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {
       clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
       relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
-    }, messageId, agentId)
+    })
+    if (!stamped) {
+      maybeScheduleTurnTerminalRecovery(ctx, {
+        clientRequestId: entity?.clientRequestId || sseMessage.data.client_request_id,
+        relatedMessageId: entity?.relatedMessageId ?? sseMessage.data.related_message_id,
+      }, messageId, agentId)
+    }
   }
 }

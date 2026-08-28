@@ -1108,6 +1108,31 @@
     ],
     "dependencies": [
       "get_current_user",
+      "get_room_store"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.room_routes",
+    "name": "get_canonical_agent_call_detail",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "common.protocols.RoomRouteReader",
+    "path": "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": []
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user"
+    ],
+    "dependencies": [
+      "get_current_user",
       "get_hitl_manager",
       "get_room_ownership_reader"
     ],
@@ -1206,6 +1231,33 @@
     ],
     "owning_protocol": "common.protocols.ExecutionEngine",
     "path": "/api/v1/sse/message/{message_id}/cancel",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "streaming_response": null,
+    "supporting_protocols": [
+      "common.protocols.SSEStateReader"
+    ]
+  },
+  {
+    "auth_dependencies": [
+      "get_current_user_with_query_token"
+    ],
+    "dependencies": [
+      "get_current_user_with_query_token",
+      "get_sse_store"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.sse_routes",
+    "name": "get_room_events",
+    "openapi_response_codes": [
+      "200",
+      "422"
+    ],
+    "owning_protocol": "common.protocols.SSEStateReader",
+    "path": "/api/v1/sse/room/{room_id}/events",
     "response_class": null,
     "response_model": null,
     "status_code": null,

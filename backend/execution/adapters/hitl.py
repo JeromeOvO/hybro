@@ -53,7 +53,13 @@ class HITLApplicationStore(Protocol):
         self, room_id: str
     ) -> list[StoredHITLInteraction]: ...
 
+    async def get_published_interactions(
+        self, room_id: str
+    ) -> list[StoredHITLInteraction]: ...
+
     async def mark_eligible(self, interaction_id: str) -> str: ...
+
+    async def mark_published(self, interaction_id: str) -> str: ...
 
     async def abandon(
         self, interaction_id: str, *, call_record_id: str, reason: str
@@ -80,6 +86,7 @@ class StoredHITLInteraction:
     fingerprint: str
     eligible: bool
     abandoned: tuple[str, str] | None = None
+    published: bool = False
 
 
 class InMemoryHITLApplicationStore:
@@ -110,6 +117,7 @@ class InMemoryHITLApplicationStore:
             route=_clone_route(route),
             fingerprint=fingerprint,
             eligible=False,
+            published=False,
         )
         return "accepted"
 
@@ -127,6 +135,19 @@ class InMemoryHITLApplicationStore:
             if i.route.room_id == room_id and i.eligible and i.abandoned is None
         ]
 
+    async def get_published_interactions(
+        self, room_id: str
+    ) -> list[StoredHITLInteraction]:
+        return [
+            i
+            for i in self._interactions.values()
+            if i.route.room_id == room_id
+            and i.eligible
+            and i.abandoned is None
+            and i.published
+            and (i.interaction_id, i.route.interaction_revision) not in self._answers
+        ]
+
     async def mark_eligible(self, interaction_id: str) -> str:
         stored = self._interactions.get(interaction_id)
         if stored is None:
@@ -140,6 +161,24 @@ class InMemoryHITLApplicationStore:
             fingerprint=stored.fingerprint,
             eligible=True,
             abandoned=stored.abandoned,
+            published=stored.published,
+        )
+        return "accepted"
+
+    async def mark_published(self, interaction_id: str) -> str:
+        stored = self._interactions.get(interaction_id)
+        if stored is None:
+            return "error"
+        if stored.published:
+            return "replayed"
+        self._interactions[interaction_id] = StoredHITLInteraction(
+            interaction_id=stored.interaction_id,
+            spec=stored.spec,
+            route=stored.route,
+            fingerprint=stored.fingerprint,
+            eligible=stored.eligible,
+            abandoned=stored.abandoned,
+            published=True,
         )
         return "accepted"
 
@@ -151,6 +190,18 @@ class InMemoryHITLApplicationStore:
             return "absent"
         if stored.abandoned is not None:
             return "replayed" if stored.abandoned[0] == call_record_id else "conflict"
+        lifecycle_close = reason.startswith("terminal_winner:") or (
+            reason == "superseded_by_new_interaction"
+        )
+        if stored.route.call_record_id != call_record_id or (
+            not lifecycle_close and not stored.eligible
+        ):
+            return "conflict"
+        if (
+            not lifecycle_close
+            and (interaction_id, stored.route.interaction_revision) in self._answers
+        ):
+            return "conflict"
         self._interactions[interaction_id] = StoredHITLInteraction(
             interaction_id=stored.interaction_id,
             spec=stored.spec,
@@ -158,6 +209,7 @@ class InMemoryHITLApplicationStore:
             fingerprint=stored.fingerprint,
             eligible=False,
             abandoned=(call_record_id, reason),
+            published=stored.published,
         )
         return "accepted"
 
@@ -174,6 +226,17 @@ class InMemoryHITLApplicationStore:
         interaction_revision: int,
         record: DurableHITLAnswerRecord,
     ) -> str:
+        stored = self._interactions.get(interaction_id)
+        if (
+            stored is None
+            or not stored.eligible
+            or stored.abandoned is not None
+            or stored.route.interaction_revision != interaction_revision
+            or record.interaction_id != interaction_id
+            or record.interaction_revision != interaction_revision
+            or record.route_fingerprint != stored.route.fingerprint
+        ):
+            return "conflict"
         key = (interaction_id, interaction_revision)
         existing = self._answers.get(key)
         if existing is not None:
@@ -258,6 +321,34 @@ class DurableHITLApplicationPort:
             for doc in docs
         ]
 
+    async def get_published_interactions(
+        self, room_id: str
+    ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
+        docs = await self._hitl_store.get_published_interactions(room_id)
+        actionable: list[StoredHITLInteraction] = []
+        for doc in docs:
+            answer = await self._hitl_store.load_answer(
+                doc.interaction_id, doc.route.interaction_revision
+            )
+            if answer is None:
+                actionable.append(doc)
+        return [
+            (
+                A2AInteractionSpec.model_validate(doc.spec.model_dump(mode="python")),
+                HITLRouteSnapshotV2.model_validate(doc.route.model_dump(mode="python")),
+                doc.fingerprint,
+            )
+            for doc in actionable
+        ]
+
+    async def publish(self, interaction_id: str, *, call_record_id: str) -> str:
+        stored = await self._hitl_store.load_interaction(interaction_id)
+        if stored is None:
+            return "error"
+        if stored.route.call_record_id != call_record_id:
+            return "conflict"
+        return await self._hitl_store.mark_published(interaction_id)
+
     async def abandon(
         self,
         interaction_id: str,
@@ -312,8 +403,11 @@ class DurableHITLApplicationPort:
         stored = await self._hitl_store.load_interaction(interaction_id)
         if stored is None or not stored.eligible or stored.abandoned is not None:
             raise KeyError(interaction_id)
-        if stored.route.fingerprint != route_fingerprint:
-            raise ValueError("HITL route fingerprint changed")
+        if (
+            stored.route.interaction_revision != interaction_revision
+            or stored.route.fingerprint != route_fingerprint
+        ):
+            raise ValueError("HITL route fingerprint or revision changed")
         inventory = {
             question.question_id: question for question in stored.spec.questions
         }

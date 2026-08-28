@@ -16,6 +16,10 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         "lifecycle",
         "application",
         "room_files",
+        "canonical_control_publisher",
+        "lifecycle_family_reader",
+        "supervisor_resume",
+        "public_secret_values",
     }
     legacy_aliases = {
         "store",
@@ -36,6 +40,10 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         lifecycle=kwargs.get("lifecycle"),
         application=kwargs.get("application"),
         room_files=kwargs.get("room_files"),
+        canonical_control_publisher=kwargs.get("canonical_control_publisher"),
+        lifecycle_family_reader=kwargs.get("lifecycle_family_reader"),
+        supervisor_resume=kwargs.get("supervisor_resume"),
+        public_secret_values=kwargs.get("public_secret_values", ()),
     )
     service._persistence = kwargs.get("persistence")
     service._delivery = kwargs.get("delivery")

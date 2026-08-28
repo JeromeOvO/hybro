@@ -7,6 +7,8 @@ unique indexes make crash replay harmless.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +16,7 @@ from pymongo.errors import DuplicateKeyError
 
 from execution.orchestrator.models import (
     AssistantMessage,
+    DataPart,
     OrchestratorEvent,
     OrchestratorRunState,
     ProjectionIntent,
@@ -25,6 +28,9 @@ from models.run import TERMINAL_RUN_STATES, RunState
 from room.timeline import normalize_timeline_document
 
 _TERMINAL_RUN_STATE_VALUES = [state.value for state in TERMINAL_RUN_STATES]
+FinalMessageDelivery = Callable[
+    [OrchestratorRunState, AssistantMessage, str], Awaitable[bool]
+]
 
 
 class MongoAppendEventProjector:
@@ -44,8 +50,13 @@ class MongoAppendEventProjector:
 class MongoFinalMessageProjector:
     """Deliver the terminal assistant message into ``room_agent_messages``."""
 
-    def __init__(self, messages: Any) -> None:
+    def __init__(
+        self,
+        messages: Any,
+        delivery: FinalMessageDelivery | None = None,
+    ) -> None:
         self.messages = messages
+        self.delivery = delivery
 
     async def project(
         self, intent: ProjectionIntent, run: OrchestratorRunState
@@ -61,17 +72,25 @@ class MongoFinalMessageProjector:
         # frontend/terminal-state consumers read this shape; enrich with the
         # full message_task surface only if a consumer requires it.
         document = _final_message_document(run, final)
+        outcome: StoreOutcome = "accepted"
         existing = await self.messages.find_one({"message_id": message_id})
         if existing is not None:
-            return "replayed" if existing.get("room_id") == run.room_id else "conflict"
-        try:
-            await self.messages.insert_one(document)
-        except DuplicateKeyError:
-            existing = await self.messages.find_one({"message_id": message_id})
-            if existing is not None and existing.get("room_id") == run.room_id:
-                return "replayed"
-            return "conflict"
-        return "accepted"
+            if existing.get("room_id") != run.room_id:
+                return "conflict"
+            outcome = "replayed"
+        else:
+            try:
+                await self.messages.insert_one(document)
+            except DuplicateKeyError:
+                existing = await self.messages.find_one({"message_id": message_id})
+                if existing is None or existing.get("room_id") != run.room_id:
+                    return "conflict"
+                outcome = "replayed"
+        if self.delivery is not None:
+            delivered = await self.delivery(run, final, _assistant_text(final))
+            if not delivered:
+                return "error"
+        return outcome
 
 
 class MongoTerminalRunStatusProjector:
@@ -85,8 +104,9 @@ class MongoTerminalRunStatusProjector:
     ``processing``.
     """
 
-    def __init__(self, runs: Any) -> None:
+    def __init__(self, runs: Any, messages: Any | None = None) -> None:
         self.runs = runs
+        self.messages = messages
 
     async def project(
         self, intent: ProjectionIntent, run: OrchestratorRunState
@@ -130,7 +150,78 @@ class MongoTerminalRunStatusProjector:
             return "conflict"
         if existing.get("state") != state.value:
             return "conflict"
+        if self.messages is not None:
+            await _repair_terminal_agent_cards(self.messages, run)
         return "replayed" if already_terminal else "accepted"
+
+
+async def _repair_terminal_agent_cards(
+    messages: Any,
+    run: OrchestratorRunState,
+) -> None:
+    """Converge live compatibility cards from the durable terminal Run.
+
+    The real-time lifecycle projection is only a latency optimization. This
+    outbox-owned repair makes a checkpoint/crash or transient listener failure
+    replay-safe and prevents a durable ``working`` card after the Run settles.
+    """
+    state_map = {
+        "completed": "completed",
+        "failed": "failed",
+        "canceled": "canceled",
+        "rejected": "rejected",
+        "expired": "expired",
+    }
+    terminal_at = run.updated_at
+    lifecycle_family = getattr(run, "lifecycle_family", "legacy")
+    unresolved_state = "canceled" if run.status == "canceled" else "failed"
+    for batch in run.tool_batches:
+        for entry in batch.entries:
+            result = entry.buffered_terminal_result
+            state = (
+                state_map.get(result.status, "failed")
+                if result is not None
+                else unresolved_state
+            )
+            updates: dict[str, Any] = {
+                "message_content.message_task.status.state": state,
+                "message_content.message_task.status.timestamp": (
+                    terminal_at.isoformat()
+                ),
+                "task_updated_at": terminal_at,
+            }
+            if result is not None and lifecycle_family == "legacy":
+                rendered_parts = [
+                    part.text
+                    if isinstance(part, TextPart)
+                    else json.dumps(
+                        part.data,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    )
+                    for part in result.content
+                    if isinstance(part, (TextPart, DataPart))
+                ]
+                text = "\n".join(part for part in rendered_parts if part).strip()
+                if text:
+                    updates["message_content.message_text"] = text
+            public_call_id = (
+                entry.opaque_public_call_id
+                if lifecycle_family == "canonical"
+                else entry.call_id
+            )
+            if not public_call_id:
+                continue
+            await messages.update_one(
+                {
+                    "room_id": run.room_id,
+                    "message_id": f"orchestrator:{run.run_id}:{public_call_id}",
+                    "extend_info.orchestrator_run_id": run.run_id,
+                },
+                {"$set": updates},
+                upsert=False,
+            )
 
 
 def _final_assistant_message(

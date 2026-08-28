@@ -30,6 +30,7 @@ function createLifecycle({
     isSendGuardActive: vi.fn(() => false),
     setMessageId: vi.fn(),
     getMessageId: vi.fn(() => messageId),
+    getClientRequestId: vi.fn(() => null),
     dismissPlaceholder: vi.fn(),
     resetPlaceholder: vi.fn(),
     isPlaceholderDismissed: vi.fn(() => placeholderDismissed),

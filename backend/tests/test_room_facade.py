@@ -650,6 +650,39 @@ async def test_auto_fail_stale_does_not_fail_working_messages_without_task_times
 
 
 @pytest.mark.asyncio
+async def test_auto_fail_ignores_durable_orchestrator_projection():
+    facade, _, messages, _, _ = _facade(ids=["unused-id"])
+    messages.agent_messages["orchestrator-card"] = {
+        "room_id": "r1",
+        "message_id": "orchestrator-card",
+        "message_type": "agent",
+        "agent_id": "weather-agent",
+        "related_message_id": "u1",
+        "message_created_at": NOW,
+        "message_content": {
+            "message_text": "Checking weather",
+            "message_task": {
+                "id": "orchestrator-task-call-1",
+                "kind": "task",
+                "status": {"state": "working"},
+                "artifacts": [],
+            },
+        },
+        "has_task_tracking": False,
+        "extend_info": {"orchestrator_run_id": "run-1"},
+    }
+
+    returned = await facade.get_agent_messages_for_room("r1")
+
+    assert len(returned) == 1
+    assert returned[0].message_content.message_task.status.state == TaskState.working
+    stored_task = messages.agent_messages["orchestrator-card"]["message_content"][
+        "message_task"
+    ]
+    assert stored_task["status"]["state"] == "working"
+
+
+@pytest.mark.asyncio
 async def test_legacy_user_message_persistence_strips_ephemeral_fields():
     facade, _, messages, _, _ = _facade(ids=["unused-id"])
     user_message = RoomUserMessage(

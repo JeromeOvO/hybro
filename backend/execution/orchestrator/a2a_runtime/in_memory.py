@@ -15,6 +15,7 @@ from .models import (
     A2AObservationInboxRecord,
     AgentCallLedgerRecord,
     AgentToolBindingRecord,
+    InlineDataArtifact,
     PreparedInvocationSnapshot,
     RoomEpoch,
 )
@@ -404,6 +405,22 @@ class InMemoryObservationInboxStore:
         record = self._records.get(self._by_source.get(source_identity, ""))
         return _clone(record) if record is not None else None
 
+    async def load_inline_artifact(
+        self, ref_id: str
+    ) -> tuple[A2AObservationInboxRecord, InlineDataArtifact] | None:
+        matches = [
+            (record, artifact)
+            for record in self._records.values()
+            for artifact in record.observation.inline_artifacts
+            if artifact.ref_id == ref_id
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ValueError("inline artifact Ref is ambiguous")
+        record, artifact = matches[0]
+        return _clone(record), _clone(artifact)
+
     async def cas(
         self,
         record: A2AObservationInboxRecord,
@@ -510,6 +527,14 @@ class InMemoryObservationInboxStore:
             and (record.next_attempt_at is None or record.next_attempt_at <= due_at)
             and (record.claim_expires_at is None or record.claim_expires_at <= due_at)
         ][:limit]
+
+    async def list_due_for_call(
+        self, call_record_id: str, *, due_at: datetime, limit: int
+    ) -> list[A2AObservationInboxRecord]:
+        due = await self.list_due(due_at=due_at, limit=len(self._records))
+        return [record for record in due if record.call_record_id == call_record_id][
+            :limit
+        ]
 
     async def delete_by_binding_scope(self, binding_scope: str) -> int:
         ids = [
@@ -690,6 +715,15 @@ class RunCheckpointReader:
             for batch in run.tool_batches
             for entry in batch.entries
         )
+
+    async def is_run_terminal(self, run_id: str) -> bool:
+        run = await self.run_store.load(run_id)
+        return run is not None and run.status in {
+            "completed",
+            "failed",
+            "canceled",
+            "budget_exhausted",
+        }
 
     async def is_outcome_checkpointed(
         self, run_id: str, invocation_id: str, outcome_digest: str

@@ -13,6 +13,8 @@ import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import type { ChatMode } from '@/lib/types/chat-mode'
+import { useCanonicalComposerAuthority } from '@/stores/turn-store'
+import { Badge } from '@/components/ui/badge'
 
 function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
   return {
@@ -36,7 +38,7 @@ export interface ComposerShellAdapter {
   onSendMessage: (message: string, dispatch: MessageDispatchInput, quoteData?: QuoteData | null, attachments?: PendingAttachment[]) => void
   onCancelProcessing: () => void
   onRespondToHitlBatch: (interactionId: string, answers: HitlBatchAnswer[], clientRequestId?: string) => Promise<void>
-  onCancelHitl: (requestId: string) => Promise<void>
+  onCancelHitl: (requestId: string, interactionId?: string) => Promise<void>
   onRefreshHitl: () => Promise<void>
   onChatModeChange?: (mode: ChatMode) => void
   isSending: boolean
@@ -79,6 +81,7 @@ function samePendingHitl(left: PendingHitl, right: PendingHitl | undefined): boo
     && left.promptType === right.promptType
     && left.messageId === right.messageId
     && left.interactionId === right.interactionId
+    && left.interactionVersion === right.interactionVersion
     && left.interactionStatus === right.interactionStatus
     && left.applicationStatus === right.applicationStatus
     && left.lifecycleState === right.lifecycleState
@@ -114,30 +117,56 @@ function useComposerState(roomId: string): ComposerState {
 
 export function ComposerShell({ adapter }: ComposerShellProps) {
   const composerState = useComposerState(adapter.roomId)
+  const canonical = useCanonicalComposerAuthority(adapter.roomId)
   const isHitlMode = composerState.mode === 'hitl_responding'
-  const isProcessing = composerState.isProcessing || adapter.isProcessing
+    || (canonical.awaitingInput && composerState.pendingHitls.length > 0)
+  // Mixed rooms retain independent authorities: a completed canonical Turn
+  // must never mask an active legacy processing/HITL/send guard (or vice versa).
+  const legacyProcessing = composerState.isProcessing || adapter.isProcessing
+  const isProcessing = canonical.processing || legacyProcessing
+  const normalComposerBlocked = canonical.normalComposerBlocked || legacyProcessing
 
   // Prefer an actionable open prompt over a transient applying recovery
   // state so follow-up HITL questions are not covered by "Applying…".
-  const preferredHitl = composerState.pendingHitls.find(hitl => hitl.lifecycleState === 'open')
-    ?? composerState.pendingHitls[0]
+  const actionableOpenHitls = composerState.pendingHitls.filter(
+    hitl => hitl.lifecycleState === 'open' && !hitl.isAnswered,
+  )
+  const preferredHitl = actionableOpenHitls[0] ?? composerState.pendingHitls[0]
   const activeInteractionId = preferredHitl?.interactionId
+  // Answered siblings remain questionnaire context for the active interaction,
+  // but must never be counted as queued work.
   const activeHitls = activeInteractionId
     ? composerState.pendingHitls.filter(hitl => hitl.interactionId === activeInteractionId)
     : []
 
   if (isHitlMode && activeHitls.length > 0) {
-    const queuedCount = composerState.pendingHitls.length - activeHitls.length
+    const activeInteractionKey = JSON.stringify([
+      activeInteractionId,
+      Math.max(...activeHitls.map(hitl => hitl.interactionVersion ?? 0)),
+      activeHitls.map(hitl => [
+        hitl.hitlId,
+        hitl.question,
+        hitl.promptType,
+        hitl.choices ?? [],
+      ]),
+    ])
+    const queuedInteractionIds = new Set(
+      actionableOpenHitls
+        .map(hitl => hitl.interactionId)
+        .filter(interactionId => interactionId !== activeInteractionId),
+    )
+    const queuedCount = queuedInteractionIds.size
     return (
       <div className="conversation-hitl-response-frame" data-testid="hitl-response-frame">
         {queuedCount > 0 ? (
-          <div className="conversation-hitl-queue-note" data-testid="hitl-queue-note">
+          <Badge variant="secondary" className="mb-2" data-testid="hitl-queue-note">
             {queuedCount === 1
               ? '1 more input request is queued after this one.'
               : `${queuedCount} more input requests are queued after this one.`}
-          </div>
+          </Badge>
         ) : null}
         <HitlResponseBar
+          key={activeInteractionKey}
           hitls={activeHitls.map(toHitlPromptView)}
           onSubmit={adapter.onRespondToHitlBatch}
           onCancel={adapter.onCancelHitl}
@@ -150,7 +179,7 @@ export function ComposerShell({ adapter }: ComposerShellProps) {
   return (
     <RoomChatInput
         onSubmit={adapter.onSendMessage}
-        disableSend={adapter.isSending || isProcessing || isHitlMode}
+        disableSend={adapter.isSending || normalComposerBlocked || isHitlMode}
         sending={adapter.isSending}
         processing={isProcessing}
         cancelling={adapter.isCancelling && isProcessing}

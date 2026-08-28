@@ -3,11 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowRight,
   CalendarDays,
-  Check,
-  CheckCircle2,
   KeyRound,
   LoaderCircle,
   MessageCircleQuestion,
@@ -21,6 +18,29 @@ import type { HitlDraftValue } from '@/lib/hitl/interaction-controller'
 import type { HITLPromptType } from '@/lib/types/sse'
 import type { HitlLifecycleState } from '@/lib/selectors/conversation-types'
 import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoices,
+  QuestionnaireError,
+  QuestionnaireInput,
+  QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireProgress,
+  QuestionnaireSubmit,
+  QuestionnaireTextarea,
+  QuestionnaireTitle,
+} from '@/components/ui/questionnaire'
 
 export interface HitlPromptView {
   hitlId: string
@@ -49,7 +69,7 @@ interface HitlResponseBarProps {
     answers: HitlBatchAnswer[],
     clientRequestId?: string,
   ) => Promise<void>
-  onCancel?: (requestId: string) => Promise<void>
+  onCancel?: (requestId: string, interactionId?: string) => Promise<void>
   onRefresh?: () => Promise<void>
 }
 
@@ -57,6 +77,26 @@ type DraftValue = HitlDraftValue
 
 const GENERIC_PROMPT = /^the agent needs additional information\.?$/i
 const APPLYING_REFRESH_MS = 1500
+const APPROVAL_CHOICES = ['Approve', 'Reject']
+const CONFIRMATION_CHOICES = ['Confirm', 'Decline']
+const AUTHENTICATION_CHOICES = [
+  'Authentication complete',
+  'Unable to authenticate',
+]
+
+function choiceOptions(hitl: HitlPromptView): string[] {
+  if (
+    hitl.promptType === 'choice'
+    || hitl.promptType === 'single_choice'
+    || hitl.promptType === 'multi_choice'
+  ) {
+    return hitl.choices ?? []
+  }
+  if (hitl.promptType === 'approval') return APPROVAL_CHOICES
+  if (hitl.promptType === 'confirmation') return CONFIRMATION_CHOICES
+  if (hitl.promptType === 'authentication') return AUTHENTICATION_CHOICES
+  return []
+}
 
 function answerText(value: DraftValue | undefined): string {
   if (Array.isArray(value)) return value.join(', ')
@@ -137,173 +177,159 @@ function RecoveryState({
   }
 
   return (
-    <div className="conversation-hitl-recovery" role="status" aria-live="polite">
-      <Icon className={`h-5 w-5 ${state === 'applying' ? 'animate-spin motion-reduce:animate-none' : ''}`} aria-hidden="true" />
-      <div className="conversation-hitl-recovery-copy">
-        <h3>{copy.title}</h3>
-        <p>{message || copy.body}</p>
-        {actionError ? (
-          <p className="conversation-hitl-recovery-error" role="alert">
-            {actionError}
+    <Card role="status" aria-live="polite" className="gap-0 overflow-hidden py-0 shadow-lg">
+      <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-start">
+        <Icon
+          className={state === 'applying' ? 'size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none' : 'size-5 shrink-0 text-primary'}
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold">{copy.title}</h3>
+          <p className="mt-1 max-w-[68ch] text-sm text-muted-foreground">
+            {message || copy.body}
           </p>
-        ) : null}
-      </div>
-      <div className="conversation-hitl-recovery-actions">
-        {state === 'delivery_uncertain' && onRefresh ? (
-          <Button variant="outline" disabled={working} onClick={() => run(onRefresh)}>
-            <RefreshCw className="h-4 w-4" aria-hidden="true" />
-            Check status
-          </Button>
-        ) : null}
-        {(state === 'agent_timeout' || state === 'routing_failed') && onCancel ? (
-          <Button variant="outline" disabled={working} onClick={() => run(onCancel)}>
-            Cancel request
-          </Button>
-        ) : null}
-      </div>
-    </div>
+          {actionError ? (
+            <p className="mt-2 text-sm text-destructive" role="alert">
+              {actionError}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {state === 'delivery_uncertain' && onRefresh ? (
+            <Button type="button" variant="outline" disabled={working} onClick={() => run(onRefresh)}>
+              <RefreshCw data-icon="inline-start" aria-hidden="true" />
+              Check status
+            </Button>
+          ) : null}
+          {(state === 'agent_timeout' || state === 'routing_failed') && onCancel ? (
+            <Button type="button" variant="outline" disabled={working} onClick={() => run(onCancel)}>
+              Cancel request
+            </Button>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
-function ChoiceControl({
+function PromptQuestion({
   hitl,
   value,
+  active,
   onChange,
-  multiple = false,
 }: {
   hitl: HitlPromptView
   value: DraftValue | undefined
+  active: boolean
   onChange: (value: DraftValue) => void
-  multiple?: boolean
 }) {
   const selected = new Set(Array.isArray(value) ? value : value ? [value] : [])
-  return (
-    <div
-      className="conversation-hitl-options"
-      role={multiple ? 'group' : 'radiogroup'}
-      aria-label={hitl.prompt}
-      data-testid="hitl-actions"
-    >
-      {(hitl.choices ?? []).map(choice => {
-        const checked = selected.has(choice)
-        return (
-          <label
+  const textValue = Array.isArray(value) ? value.join(', ') : value ?? ''
+
+  if (hitl.promptType === 'choice' || hitl.promptType === 'single_choice') {
+    return (
+      <QuestionnaireChoices>
+        {(hitl.choices ?? []).map(choice => (
+          <QuestionnaireChoice
             key={choice}
-            className="conversation-hitl-option-button"
-            data-selected={checked ? 'true' : 'false'}
+            value={choice}
+            checked={selected.has(choice)}
+            onChange={() => onChange(choice)}
           >
-            <input
-              type={multiple ? 'checkbox' : 'radio'}
-              name={`hitl-choice-${hitl.hitlId}`}
+            <span className="font-medium">{choice}</span>
+          </QuestionnaireChoice>
+        ))}
+      </QuestionnaireChoices>
+    )
+  }
+  if (hitl.promptType === 'multi_choice') {
+    return (
+      <QuestionnaireChoices>
+        {(hitl.choices ?? []).map(choice => {
+          const checked = selected.has(choice)
+          return (
+            <QuestionnaireChoice
+              key={choice}
               value={choice}
               checked={checked}
               onChange={() => {
-                if (!multiple) {
-                  onChange(choice)
-                  return
-                }
                 const next = new Set(selected)
                 if (checked) next.delete(choice)
                 else next.add(choice)
                 onChange([...next])
               }}
-              className="sr-only"
-            />
-            <span className="conversation-hitl-option-mark" aria-hidden="true">
-              {checked ? <Check className="h-3.5 w-3.5" /> : null}
-            </span>
-            <span>{choice}</span>
-          </label>
-        )
-      })}
-    </div>
-  )
-}
-
-function PromptControl({
-  hitl,
-  value,
-  onChange,
-  inputRef,
-  onSubmit,
-}: {
-  hitl: HitlPromptView
-  value: DraftValue | undefined
-  onChange: (value: DraftValue) => void
-  inputRef: React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>
-  onSubmit?: () => void
-}) {
-  const textValue = Array.isArray(value) ? value.join(', ') : value ?? ''
-
-  if (hitl.promptType === 'choice' || hitl.promptType === 'single_choice') {
-    return <ChoiceControl hitl={hitl} value={value} onChange={onChange} />
-  }
-  if (hitl.promptType === 'multi_choice') {
-    return <ChoiceControl hitl={hitl} value={value} onChange={onChange} multiple />
+            >
+              <span className="font-medium">{choice}</span>
+            </QuestionnaireChoice>
+          )
+        })}
+      </QuestionnaireChoices>
+    )
   }
   if (hitl.promptType === 'confirmation' || hitl.promptType === 'approval') {
-    const choices = hitl.promptType === 'approval'
-      ? ['Approve', 'Reject']
-      : ['Confirm', 'Decline']
-    return <ChoiceControl hitl={{ ...hitl, choices }} value={value} onChange={onChange} />
+    const choices = choiceOptions(hitl)
+    return (
+      <QuestionnaireChoices>
+        {choices.map(choice => (
+          <QuestionnaireChoice
+            key={choice}
+            value={choice}
+            checked={selected.has(choice)}
+            onChange={() => onChange(choice)}
+          >
+            <span className="font-medium">{choice}</span>
+          </QuestionnaireChoice>
+        ))}
+      </QuestionnaireChoices>
+    )
   }
   if (hitl.promptType === 'authentication') {
     return (
-      <div className="conversation-hitl-auth-control">
-        <KeyRound className="h-5 w-5" aria-hidden="true" />
-        <div>
-          <strong>Use the provider&apos;s secure sign-in page</strong>
-          <p>Never paste passwords, API keys, one-time codes, or recovery secrets into this chat.</p>
+      <div className="grid gap-3 rounded-lg border bg-muted/40 p-3 sm:grid-cols-[auto_minmax(0,1fr)]">
+        <KeyRound className="size-5 text-muted-foreground" aria-hidden="true" />
+        <div className="min-w-0">
+          <strong className="text-sm font-medium">Use the provider&apos;s secure sign-in page</strong>
+          <p className="mt-1 text-sm text-muted-foreground">Never paste passwords, API keys, one-time codes, or recovery secrets into this chat.</p>
         </div>
-        <ChoiceControl
-          hitl={{ ...hitl, choices: ['Authentication complete', 'Unable to authenticate'] }}
-          value={value}
-          onChange={onChange}
-        />
+        <QuestionnaireChoices className="sm:col-span-2">
+          {choiceOptions(hitl).map(choice => (
+            <QuestionnaireChoice
+              key={choice}
+              value={choice}
+              checked={selected.has(choice)}
+              onChange={() => onChange(choice)}
+            >
+              <span className="font-medium">{choice}</span>
+            </QuestionnaireChoice>
+          ))}
+        </QuestionnaireChoices>
       </div>
     )
   }
   if (hitl.promptType === 'date') {
     return (
-      <input
-        ref={inputRef as React.RefObject<HTMLInputElement>}
-        id={`hitl-answer-${hitl.hitlId}`}
+      <QuestionnaireInput
         type="date"
         value={textValue}
         onChange={event => onChange(event.target.value)}
-        className="conversation-hitl-text-input"
       />
     )
   }
   if (hitl.promptType === 'textarea') {
     return (
-      <textarea
-        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
-        id={`hitl-answer-${hitl.hitlId}`}
+      <QuestionnaireTextarea
         value={textValue}
         onChange={event => onChange(event.target.value)}
-        placeholder="Add the details needed to continue…"
+        placeholder={active ? 'Add the details needed to continue…' : undefined}
         rows={4}
-        className="conversation-hitl-text-input conversation-hitl-textarea"
       />
     )
   }
   return (
-    <input
-      ref={inputRef as React.RefObject<HTMLInputElement>}
-      id={`hitl-answer-${hitl.hitlId}`}
-      type="text"
-      autoComplete="off"
+    <QuestionnaireInput
       value={textValue}
       onChange={event => onChange(event.target.value)}
-      onKeyDown={event => {
-        if (event.key === 'Enter' && !event.shiftKey && onSubmit) {
-          event.preventDefault()
-          onSubmit()
-        }
-      }}
-      placeholder="Type your answer…"
-      className="conversation-hitl-text-input"
+      placeholder={active ? 'Type your answer…' : undefined}
     />
   )
 }
@@ -330,7 +356,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   const submitting = controller.submission === 'submitting'
   const submitted = controller.submission === 'submitted'
   const headingRef = useRef<HTMLHeadingElement>(null)
-  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
+  const questionnaireRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
     if (currentId && ordered.some(hitl => hitl.hitlId === currentId)) return
@@ -341,7 +367,6 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   const currentIndex = Math.max(0, ordered.findIndex(hitl => hitl.hitlId === currentId))
   const current = ordered[currentIndex] ?? ordered[0]
   const allAnswered = ordered.every(hitl => hasAnswer(hitl, drafts[hitl.hitlId]))
-  const isLastQuestion = currentIndex === ordered.length - 1
 
   // Authoritative lifecycle reconciliation: local submit/recovery state must
   // never override a fresher store lifecycle (e.g. SSE/refresh reporting
@@ -425,45 +450,37 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
     }
   }, [allAnswered, dispatch, drafts, interactionId, onSubmit, ordered, submitting])
 
-  const handlePrimaryAction = useCallback(() => {
-    if (!current) return
-    if (!hasAnswer(current, drafts[current.hitlId])) return
-    if (isLastQuestion) {
-      void handleSubmit()
-      return
-    }
-    goTo(currentIndex + 1)
-  }, [current, currentIndex, drafts, goTo, handleSubmit, isLastQuestion])
-
   const lifecycleState = errorState ?? current?.lifecycleState
-  const invalidPrompt = !current?.prompt.trim() || GENERIC_PROMPT.test(current?.prompt.trim() ?? '')
-  // Local submit or server applying both show the transient recovery state.
-  // A follow-up open prompt arrives with a new interactionKey, which resets
-  // the controller and replaces this UI automatically.
-  const showApplying = Boolean(current && (submitted || lifecycleState === 'applying'))
-  // Answer controls mount only on the open questionnaire surface. Focus must
-  // re-run when that surface appears — not only when `currentId` changes —
-  // because follow-up rounds often navigate to the new request id while still
-  // showing "Applying…", then mount the input without another `currentId` change.
+  const invalidPrompt = !current?.prompt.trim()
+    || GENERIC_PROMPT.test(current?.prompt.trim() ?? '')
+  const showApplying = Boolean(
+    current && (submitted || lifecycleState === 'applying'),
+  )
   const answerSurfaceReady = Boolean(
     current
     && !showApplying
     && lifecycleState === 'open'
     && !invalidPrompt,
   )
+  const currentPromptType = current?.promptType
 
   useEffect(() => {
     if (!answerSurfaceReady) return
     const frame = window.requestAnimationFrame(() => {
-      const target = inputRef.current ?? headingRef.current
+      const acceptsTextInput = currentPromptType === 'text'
+        || currentPromptType === 'textarea'
+        || currentPromptType === 'date'
+      const activeControl = acceptsTextInput
+        ? questionnaireRef.current?.querySelector<HTMLElement>(
+          '[data-slot="questionnaire-item"]:not([hidden]) input:not([disabled]), [data-slot="questionnaire-item"]:not([hidden]) textarea:not([disabled])',
+        )
+        : null
+      const target = activeControl ?? headingRef.current
       target?.focus()
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [answerSurfaceReady, currentId, submissionError, interactionKey])
+  }, [answerSurfaceReady, currentId, currentPromptType, submissionError, interactionKey])
 
-  // While answers are applying, poll pending HITL so a follow-up prompt
-  // replaces this recovery state automatically instead of waiting on
-  // a manual "Check status" click.
   useEffect(() => {
     if (!showApplying || !onRefresh) return
     let cancelled = false
@@ -471,7 +488,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
       try {
         await onRefresh()
       } catch {
-        // Keep polling; transient refresh failures should not sticky-block UX.
+        // Transient refresh failures must not leave follow-up input hidden.
       }
     }
     void refresh()
@@ -488,7 +505,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
 
   if (showApplying) {
     return (
-      <section className="conversation-hitl-panel" data-testid="hitl-response-bar" aria-label="Human input status">
+      <section data-testid="hitl-response-bar" aria-label="Human input status">
         <RecoveryState state="applying" />
       </section>
     )
@@ -496,98 +513,133 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   if (lifecycleState !== 'open' || invalidPrompt) {
     const state = invalidPrompt ? 'routing_failed' : lifecycleState
     return (
-      <section className="conversation-hitl-panel" data-testid="hitl-response-bar" aria-label="Human input status">
+      <section data-testid="hitl-response-bar" aria-label="Human input status">
         <RecoveryState
           state={state as Exclude<HitlLifecycleState, 'open'>}
           message={submissionError ?? current.errorMessage}
           onRefresh={onRefresh}
-          onCancel={onCancel ? () => onCancel(current.hitlId) : undefined}
+          onCancel={onCancel
+            ? () => onCancel(current.hitlId, current.interactionId)
+            : undefined}
         />
       </section>
     )
   }
 
   const sourceLabel = current.source === 'agent' ? (current.agentName ?? 'Agent') : 'HYBRO AI'
+  const items = ordered.map(hitl => ({
+    name: hitl.hitlId,
+    required: true,
+    choices: choiceOptions(hitl).map(value => ({ value })),
+  }))
+  const isLast = currentIndex === ordered.length - 1
+  const currentAnswered = hasAnswer(current, drafts[current.hitlId])
+
+  const handleFormSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (isLast) {
+      if (allAnswered) void handleSubmit()
+      return
+    }
+    if (currentAnswered) goTo(currentIndex + 1)
+  }
 
   return (
-    <section className="conversation-hitl-panel" data-testid="hitl-response-bar" aria-labelledby="hitl-heading">
-      <header className="conversation-hitl-panel-header">
-        <MessageCircleQuestion className="h-5 w-5 conversation-hitl-panel-icon" aria-hidden="true" />
-        <div className="conversation-hitl-panel-heading-copy">
-          <span className="conversation-hitl-panel-title">{sourceLabel} needs your input</span>
-          {ordered.length > 1 ? (
-            <span className="conversation-hitl-panel-progress" aria-live="polite">
-              Question {currentIndex + 1} of {ordered.length}
-            </span>
-          ) : null}
-        </div>
-        {ordered.length > 1 ? (
-          <div className="conversation-hitl-progress-dots" aria-hidden="true">
-            {ordered.map((hitl, index) => (
-              <span
+    <section data-testid="hitl-response-bar" aria-labelledby="hitl-heading">
+      <Questionnaire
+        ref={questionnaireRef}
+        items={items}
+        item={currentId ?? undefined}
+        onItemChange={requestId => {
+          if (requestId && ordered.some(hitl => hitl.hitlId === requestId)) {
+            dispatch({ type: 'navigate', requestId })
+          }
+        }}
+        shortcuts="numbers"
+        onSubmit={handleFormSubmit}
+      >
+        <Card className="gap-0 overflow-hidden py-0 shadow-lg">
+          <CardHeader className="border-b py-4">
+            <CardTitle className="flex items-center gap-2">
+              <MessageCircleQuestion className="size-5 text-primary" aria-hidden="true" />
+              <h2 id="hitl-heading" ref={headingRef} tabIndex={-1} className="outline-none">
+                {sourceLabel} needs your input
+              </h2>
+            </CardTitle>
+            {ordered.length > 1 ? (
+              <CardDescription>
+                <QuestionnaireProgress
+                  render={(props, { current, total }) => (
+                    <span {...props}>Question {current} of {total}</span>
+                  )}
+                />
+              </CardDescription>
+            ) : null}
+          </CardHeader>
+
+          <CardContent className="py-5">
+            {ordered.map(hitl => (
+              <QuestionnaireItem
                 key={hitl.hitlId}
-                data-state={hasAnswer(hitl, drafts[hitl.hitlId]) ? 'answered' : index === currentIndex ? 'current' : 'pending'}
-              />
+                name={hitl.hitlId}
+                required
+                multiple={hitl.promptType === 'multi_choice'}
+              >
+                <QuestionnaireTitle>{hitl.prompt}</QuestionnaireTitle>
+                <PromptQuestion
+                  hitl={hitl}
+                  value={drafts[hitl.hitlId]}
+                  active={hitl.hitlId === current.hitlId}
+                  onChange={value => setDraft(hitl.hitlId, value)}
+                />
+                <QuestionnaireError />
+              </QuestionnaireItem>
             ))}
-          </div>
-        ) : null}
-      </header>
+            {submissionError ? (
+              <p className="mt-3 text-sm text-destructive" role="alert">{submissionError}</p>
+            ) : null}
+          </CardContent>
 
-      <div className="conversation-hitl-question" key={current.hitlId}>
-        <h2 id="hitl-heading" ref={headingRef} tabIndex={-1}>{current.prompt}</h2>
-        <label className="sr-only" htmlFor={`hitl-answer-${current.hitlId}`}>Answer</label>
-        <PromptControl
-          hitl={current}
-          value={drafts[current.hitlId]}
-          onChange={value => setDraft(current.hitlId, value)}
-          inputRef={inputRef}
-          onSubmit={handlePrimaryAction}
-        />
-      </div>
-
-      {submissionError ? (
-        <div className="conversation-hitl-error" role="alert">{submissionError}</div>
-      ) : null}
-
-      <footer className="conversation-hitl-footer">
-        <div className="conversation-hitl-secondary-actions">
-          {onCancel ? (
-            <Button variant="ghost" disabled={submitting} onClick={() => onCancel(current.hitlId)}>
-              Cancel request
-            </Button>
-          ) : null}
-        </div>
-        <div className="conversation-hitl-navigation">
-          {ordered.length > 1 ? (
-            <Button
-              variant="outline"
-              disabled={submitting || currentIndex === 0}
-              onClick={() => goTo(currentIndex - 1)}
-            >
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-              Back
-            </Button>
-          ) : null}
-          <Button
-            disabled={submitting || !hasAnswer(current, drafts[current.hitlId]) || (isLastQuestion && !allAnswered)}
-            onClick={handlePrimaryAction}
-          >
-            {isLastQuestion ? (
-              <>
-                {submitting
-                  ? <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
-                {submitting ? 'Submitting…' : 'Submit'}
-              </>
-            ) : (
-              <>
-                Next
-                <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </>
-            )}
-          </Button>
-        </div>
-      </footer>
+          <CardFooter className="flex flex-col-reverse gap-2 border-t py-3 sm:flex-row sm:justify-between">
+            <div>
+              {onCancel ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={submitting}
+                  onClick={() => onCancel(current.hitlId, current.interactionId)}
+                >
+                  Cancel request
+                </Button>
+              ) : null}
+            </div>
+            <QuestionnaireActions className="w-full sm:w-auto">
+              {ordered.length > 1 ? (
+                <QuestionnairePrevious disabled={submitting || currentIndex === 0}>
+                  Back
+                </QuestionnairePrevious>
+              ) : null}
+              {isLast ? (
+                <QuestionnaireSubmit disabled={submitting || !allAnswered}>
+                  {submitting ? (
+                    <LoaderCircle
+                      data-icon="inline-start"
+                      className="animate-spin motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {submitting ? 'Submitting…' : 'Submit'}
+                </QuestionnaireSubmit>
+              ) : (
+                <QuestionnaireNext disabled={submitting || !currentAnswered}>
+                  Next
+                  <ArrowRight data-icon="inline-end" aria-hidden="true" />
+                </QuestionnaireNext>
+              )}
+            </QuestionnaireActions>
+          </CardFooter>
+        </Card>
+      </Questionnaire>
     </section>
   )
 }

@@ -11,7 +11,7 @@ from .models import (
     ProjectionIntent,
     RecoveryClaim,
 )
-from .persistence import NON_TERMINAL_RUN_STATUSES
+from .persistence import NON_TERMINAL_RUN_STATUSES, RECOVERY_ELIGIBLE_RUN_STATUSES
 from .settlement import transition_projection_intent, transition_projection_settlement
 
 HarnessOutcome = Literal["accepted", "replayed", "conflict", "gone"]
@@ -79,8 +79,12 @@ class InMemoryOrchestratorContractHarness:
         self._room_locks[run.room_id] = owner_id
         self.runs[run_id] = run.model_copy(
             update={
-                "recovery_claim": RecoveryClaim(
-                    owner_id=owner_id, lease_expires_at=lease_expires_at
+                "recovery_claim": run.recovery_claim.model_copy(
+                    update={
+                        "owner_id": owner_id,
+                        "lease_expires_at": lease_expires_at,
+                        "next_attempt_at": None,
+                    }
                 ),
                 "state_version": run.state_version + 1,
                 "updated_at": claimed_at,
@@ -128,7 +132,9 @@ class InMemoryOrchestratorContractHarness:
         expected_state_version: int,
         owner_id: str,
         next_attempt_at: datetime | None,
-        released_at: datetime,
+        failure_count: int = 0,
+        quarantined_at: datetime | None = None,
+        quarantine_reason: Literal["terminal_invariant_conflict"] | None = None,
     ) -> HarnessOutcome:
         run = self.runs.get(run_id)
         if run is None or not self._has_active_epoch(run):
@@ -141,9 +147,13 @@ class InMemoryOrchestratorContractHarness:
             return "conflict"
         self.runs[run_id] = run.model_copy(
             update={
-                "recovery_claim": RecoveryClaim(next_attempt_at=next_attempt_at),
+                "recovery_claim": RecoveryClaim(
+                    next_attempt_at=next_attempt_at,
+                    failure_count=failure_count,
+                    quarantined_at=quarantined_at,
+                    quarantine_reason=quarantine_reason,
+                ),
                 "state_version": run.state_version + 1,
-                "updated_at": released_at,
             }
         )
         self._room_locks.pop(run.room_id, None)
@@ -239,8 +249,9 @@ class InMemoryOrchestratorContractHarness:
     def _is_recovery_due(self, run: OrchestratorRunState, *, at: datetime) -> bool:
         claim = run.recovery_claim
         return (
-            run.status in NON_TERMINAL_RUN_STATUSES
+            run.status in RECOVERY_ELIGIBLE_RUN_STATUSES
             and self._has_active_epoch(run)
+            and claim.quarantined_at is None
             and (claim.next_attempt_at is None or claim.next_attempt_at <= at)
             and (claim.lease_expires_at is None or claim.lease_expires_at <= at)
         )

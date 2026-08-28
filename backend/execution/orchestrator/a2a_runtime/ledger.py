@@ -25,6 +25,7 @@ AGENT_CALL_TRANSITIONS: dict[AgentCallState, frozenset[AgentCallState]] = {
     ),
     "dispatching": frozenset(
         {
+            "ready_to_dispatch",
             "delivery_uncertain",
             "working",
             "continuation_pending",
@@ -71,9 +72,11 @@ AGENT_CALL_TRANSITIONS: dict[AgentCallState, frozenset[AgentCallState]] = {
             "cancel_pending",
         }
     ),
-    "input_required": frozenset({"resuming", "canceled", "expired", "cancel_pending"}),
+    "input_required": frozenset(
+        {"resuming", "failed", "canceled", "expired", "cancel_pending"}
+    ),
     "auth_required": frozenset(
-        {"resuming", "canceled", "rejected", "expired", "cancel_pending"}
+        {"resuming", "failed", "canceled", "rejected", "expired", "cancel_pending"}
     ),
     "resuming": frozenset(
         {
@@ -225,6 +228,7 @@ def apply_observation(
             continuation_command=None,
             continuation_state=None,
             continuation_attempts=0,
+            authorization_refresh_attempts=0,
             next_attempt_at=None,
             **common,
         )
@@ -285,7 +289,9 @@ def _observation_result(
         tool_name=record.tool_name,
         status=observation.status,
         content=observation.content,
-        artifact_refs=observation.artifact_refs,
+        artifact_refs=list(
+            dict.fromkeys([*record.artifact_refs, *observation.artifact_refs])
+        ),
         error_code=observation.error_code,
         error_message=observation.error_message,
     )

@@ -126,6 +126,10 @@ export function buildTurns(
       continue
     }
 
+    // Multi-question HITL rows are composer-only projections. The wire Agent
+    // message/card remains the sole timeline identity for the underlying call.
+    if (entity.hitlMessageId && entity.id !== entity.hitlMessageId) continue
+
     // Agent message — find its turn
     const targetTurn = routeAgentToTurn(
       entity,
@@ -257,9 +261,9 @@ function assembleTurn(
     )
     .filter((r): r is AgentResultViewModel => r !== null)
 
-  // Deduplicate: when both task_update and agent_response SSE events create
-  // separate entities for the same agentId, keep the one with the most content
-  // (or terminal status). This avoids rendering the same agent response twice.
+  // Deduplicate compatibility aliases without collapsing durable orchestrator
+  // invocations. Every opaque orchestrator message id represents one real call,
+  // even when the same Agent is called repeatedly with empty live content.
   const dedupedResults = deduplicateAgentResults(rawAgentResults)
   const agentResults = suppressEphemeralResults(dedupedResults, entities, scaffold.userEntity)
 
@@ -498,26 +502,23 @@ function buildAgentResult(
 // ── Agent result deduplication ─────────────────────────────────
 
 /**
- * Deduplicate agent results with the same agentId within a turn.
- * This handles the case where both task_update and agent_response SSE events
- * create separate entities for the same agent (different message IDs) with
- * substantially the same content.
+ * Deduplicate legacy compatibility aliases with the same Agent identity.
  *
- * Within a single turn, the same agentId can appear multiple times due to:
- * 1. SSE race conditions — agent_response + task_update/task_submitted create
- *    separate entities with the same or similar content. → Deduplicate.
- * 2. relatedMessageId routing — a late response routed to an older turn produces
- *    a second entity with genuinely different content. → Keep both.
- *
- * Heuristic: if content is identical, one side is empty, or both share the same
- * first 100 characters (same response, different completeness), it's a duplicate.
- * Genuinely different responses from relatedMessageId won't share the same prefix.
+ * Durable orchestrator card ids are invocation ids, not Agent ids. They must
+ * remain one-to-one with calls even while their content is empty; otherwise
+ * five live calls to one Agent collapse into one card and fan out only after
+ * terminal content arrives. Non-orchestrator aliases retain the incumbent
+ * content/status heuristic for task_update + agent_response compatibility.
  */
 function deduplicateAgentResults(results: AgentResultViewModel[]): AgentResultViewModel[] {
   const seen = new Map<string, AgentResultViewModel>()
   const output: AgentResultViewModel[] = []
 
   for (const r of results) {
+    if (r.messageId.startsWith('orchestrator:')) {
+      output.push(r)
+      continue
+    }
     if (!r.agentId) {
       output.push(r)
       continue

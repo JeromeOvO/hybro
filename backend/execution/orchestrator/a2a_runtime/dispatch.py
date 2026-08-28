@@ -17,6 +17,7 @@ from .models import (
     A2AContinuationCommand,
     A2ADispatchCommand,
     A2ADispatchReceipt,
+    A2AModelReplyCommand,
     NormalizedA2AObservation,
 )
 from .ports import NormalizedObservationRecorder
@@ -41,6 +42,10 @@ class DirectA2AClient(Protocol):
 
     async def continue_task(
         self, command: A2AContinuationCommand
+    ) -> A2ADispatchReceipt: ...
+
+    async def send_model_reply(
+        self, command: A2AModelReplyCommand
     ) -> A2ADispatchReceipt: ...
 
     async def inspect_continuation(
@@ -155,7 +160,18 @@ class DirectA2ADispatchAdapter:
             raise AmbiguousRemoteEffectError(
                 "direct stream delivery is ambiguous"
             ) from exc
-        except (AmbiguousRemoteEffectError, RecoverableTransportError):
+        except RecoverableTransportError:
+            if stream is None:
+                # Agent Card resolution happens before the remote stream can
+                # produce an effect, so preserve retry-safe transport semantics.
+                close_reason = "transport_retry_safe"
+                raise
+            return A2ADispatchReceipt(
+                outcome="delivery_uncertain",
+                task_id=task_id,
+                context_id=context_id,
+            )
+        except AmbiguousRemoteEffectError:
             return A2ADispatchReceipt(
                 outcome="delivery_uncertain",
                 task_id=task_id,
@@ -199,6 +215,16 @@ class DirectA2ADispatchAdapter:
         except (ConnectionError, TimeoutError) as exc:
             raise AmbiguousRemoteEffectError(
                 "direct continuation acknowledgement is ambiguous"
+            ) from exc
+
+    async def dispatch_model_reply(
+        self, command: A2AModelReplyCommand
+    ) -> A2ADispatchReceipt:
+        try:
+            return await self.client.send_model_reply(command)
+        except (ConnectionError, TimeoutError) as exc:
+            raise AmbiguousRemoteEffectError(
+                "direct model-reply acknowledgement is ambiguous"
             ) from exc
 
     async def inspect_continuation(

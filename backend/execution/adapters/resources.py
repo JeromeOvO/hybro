@@ -7,21 +7,34 @@ from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from typing import Any, Protocol
 
+from common.utils.a2a_artifacts import canonical_data_part_bytes, data_part_digest
 from execution.orchestrator.a2a_runtime.models import (
+    A2AObservationInboxRecord,
     AgentCallLedgerRecord,
     FrozenCallResourceManifest,
     FrozenCallResourceRef,
+    InlineDataArtifact,
     MaterializedResourcePart,
 )
 from execution.orchestrator.a2a_runtime.resources import (
     BoundedResourceMaterializer,
     ResourceSelectionError,
 )
+from execution.orchestrator.models import DataPart, PreparedResourceRef
 
 
 class RoomFileReader(Protocol):
     async def get_bytes(self, file_id: str, *, max_bytes: int) -> bytes | None: ...
-    async def get_for_room_file(self, room_id: str, file_id: str) -> Any: ...
+
+    async def get_for_room_file(
+        self, room_id: str, file_id: str
+    ) -> dict[str, Any] | None: ...
+
+
+class InlineArtifactReader(Protocol):
+    async def load_inline_artifact(
+        self, ref_id: str
+    ) -> tuple[A2AObservationInboxRecord, InlineDataArtifact] | None: ...
 
 
 class InboundArtifactWriter(Protocol):
@@ -52,6 +65,7 @@ class RoomFilesResourceMaterializer:
         *,
         room_files: RoomFileReader,
         artifact_writer: InboundArtifactWriter,
+        inline_artifact_reader: InlineArtifactReader | None = None,
         context_text_reader: (Callable[[str], Awaitable[str | None]] | None) = None,
         max_outbound_count: int = 20,
         max_outbound_bytes: int = 25 * 1024 * 1024,
@@ -61,6 +75,7 @@ class RoomFilesResourceMaterializer:
         max_file_bytes: int = 50 * 1024 * 1024,
     ) -> None:
         self._room_files = room_files
+        self._inline_artifact_reader = inline_artifact_reader
         self._context_text_reader = context_text_reader
         self._max_file_bytes = max_file_bytes
         self._bounded = BoundedResourceMaterializer(
@@ -109,6 +124,38 @@ class RoomFilesResourceMaterializer:
             observation_id=observation_id,
         )
 
+    async def describe_artifact(
+        self, ref_id: str, *, room_id: str, room_epoch: int
+    ) -> PreparedResourceRef | None:
+        inline = await self._read_inline_artifact(ref_id)
+        if inline is not None:
+            record, artifact, _part = inline
+            if record.room_id != room_id or record.room_epoch != room_epoch:
+                raise ResourceSelectionError("inline artifact Room ownership changed")
+            return PreparedResourceRef(
+                ref_id=ref_id,
+                kind="artifact",
+                source_message_id=record.observation_id,
+                mime_type=artifact.mime_type,
+                size_bytes=artifact.size_bytes,
+                content_digest=artifact.content_digest,
+            )
+        file_id = _file_id_from_artifact_ref(ref_id)
+        metadata = await self._room_files.get_for_room_file(room_id, file_id)
+        if metadata is None:
+            return None
+        digest = str(metadata.get("sha256") or "")
+        if not digest:
+            raise ResourceSelectionError("artifact file has no content digest")
+        return PreparedResourceRef(
+            ref_id=ref_id,
+            kind="artifact",
+            source_message_id=str(metadata.get("source_message_id") or file_id),
+            mime_type=str(metadata.get("mime_type") or "application/octet-stream"),
+            size_bytes=int(metadata.get("size_bytes") or 0),
+            content_digest=digest,
+        )
+
     async def _load_outbound(
         self,
         ref: FrozenCallResourceRef,
@@ -121,6 +168,10 @@ class RoomFilesResourceMaterializer:
         del allowed_input_modes, deadline_at
         if ref.kind == "context":
             return await self._load_context(ref)
+        if ref.kind == "artifact":
+            inline = await self._read_inline_artifact(ref.ref_id)
+            if inline is not None:
+                return self._materialize_inline_artifact(ref, inline)
         file_id = (
             _file_id_from_artifact_ref(ref.ref_id)
             if ref.kind == "artifact"
@@ -145,6 +196,50 @@ class RoomFilesResourceMaterializer:
             content_digest=content_digest,
             payload={"name": file_id, "bytes": encoded, "mime_type": mime_type},
             mime_type=mime_type,
+        )
+
+    async def _read_inline_artifact(
+        self, ref_id: str
+    ) -> tuple[A2AObservationInboxRecord, InlineDataArtifact, DataPart] | None:
+        if self._inline_artifact_reader is None:
+            return None
+        resolved = await self._inline_artifact_reader.load_inline_artifact(ref_id)
+        if resolved is None:
+            return None
+        record, artifact = resolved
+        part = record.observation.content[artifact.content_index]
+        if not isinstance(part, DataPart):
+            raise ResourceSelectionError("inline artifact source is not a DataPart")
+        canonical = canonical_data_part_bytes(
+            part.data, mime_type=part.mime_type, metadata=part.metadata
+        )
+        if (
+            data_part_digest(canonical) != artifact.content_digest
+            or len(canonical) != artifact.size_bytes
+            or part.mime_type != artifact.mime_type
+        ):
+            raise ResourceSelectionError("inline artifact content changed")
+        return record, artifact, part
+
+    @staticmethod
+    def _materialize_inline_artifact(
+        ref: FrozenCallResourceRef,
+        inline: tuple[A2AObservationInboxRecord, InlineDataArtifact, DataPart],
+    ) -> MaterializedResourcePart:
+        record, artifact, part = inline
+        if record.room_id != ref.room_id or record.room_epoch != ref.room_epoch:
+            raise ResourceSelectionError("inline artifact Room ownership changed")
+        if ref.content_digest and ref.content_digest != artifact.content_digest:
+            raise ResourceSelectionError("inline artifact digest changed")
+        if ref.mime_type and ref.mime_type != artifact.mime_type:
+            raise ResourceSelectionError("inline artifact MIME changed")
+        return MaterializedResourcePart(
+            ref_id=ref.ref_id,
+            kind="data",
+            content_digest=artifact.content_digest,
+            payload=part.data,
+            mime_type=part.mime_type,
+            metadata=part.metadata,
         )
 
     async def _load_context(

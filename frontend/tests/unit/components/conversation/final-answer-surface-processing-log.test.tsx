@@ -106,7 +106,8 @@ describe('FinalAnswerSurface processing logs', () => {
     expect(screen.getByRole('button', { name: /work logs/i })).toBeInTheDocument()
     expect(within(screen.getByRole('log')).getByText('Synthesizing responses')).toBeInTheDocument()
     expect(screen.getByText('Combined answer text')).toBeInTheDocument()
-    expect(screen.getByLabelText('HYBRO AI — Synthesizing')).toBeInTheDocument()
+    expect(screen.queryByLabelText('HYBRO AI — Synthesizing')).not.toBeInTheDocument()
+    expect(screen.queryByText('HYBRO AI')).not.toBeInTheDocument()
 
     const processingLog = container.querySelector('.conversation-processing-log')
     const synthesisContent = container.querySelector('[data-quote-source-kind="synthesis"]')
@@ -188,7 +189,7 @@ describe('FinalAnswerSurface processing logs', () => {
     expect(screen.queryByText('Agents working on your request…')).not.toBeInTheDocument()
   })
 
-  it('keeps work-log running during HITL without replacing Needs Input with Working', () => {
+  it('keeps only the work log running while HITL content stays in the composer', () => {
     const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
@@ -229,14 +230,15 @@ describe('FinalAnswerSurface processing logs', () => {
       />,
     )
 
-    expect(screen.getByText('Where are you going?')).toBeInTheDocument()
+    expect(screen.queryByText('Where are you going?')).not.toBeInTheDocument()
+    expect(screen.getByText('Delegating to Travel Planner Agent')).toBeInTheDocument()
     expect(screen.queryByLabelText('HYBRO AI — Working')).not.toBeInTheDocument()
     expect(container.querySelector('.conversation-processing-log')).toHaveClass(
       'conversation-processing-log-running',
     )
   })
 
-  it('keeps the HYBRO AI Working spinner after HITL while the turn is still pending', () => {
+  it('keeps the work log running after HITL while the turn is still pending', () => {
     const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
@@ -266,11 +268,13 @@ describe('FinalAnswerSurface processing logs', () => {
       />,
     )
 
-    expect(screen.getByLabelText('HYBRO AI — Working')).toBeInTheDocument()
-    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
+    expect(screen.queryByLabelText('HYBRO AI — Working')).not.toBeInTheDocument()
+    expect(container.querySelector('.conversation-processing-log')).toHaveClass(
+      'conversation-processing-log-running',
+    )
   })
 
-  it('keeps the spinner while an active turn already shows deterministic_done', () => {
+  it('keeps the work log running while an active turn already shows deterministic_done', () => {
     const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
@@ -304,14 +308,14 @@ describe('FinalAnswerSurface processing logs', () => {
       />,
     )
 
-    expect(screen.getByLabelText('HYBRO AI — Combined agent responses')).toBeInTheDocument()
-    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
+    expect(screen.queryByLabelText('HYBRO AI — Combined agent responses')).not.toBeInTheDocument()
+    expect(screen.getByText('1 agent responded. Expand below to read each answer.')).toBeInTheDocument()
     expect(container.querySelector('.conversation-processing-log')).toHaveClass(
       'conversation-processing-log-running',
     )
   })
 
-  it('stops the HYBRO AI Working spinner after the turn completes', () => {
+  it('does not fabricate a HYBRO AI card after the turn completes', () => {
     const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
@@ -338,11 +342,12 @@ describe('FinalAnswerSurface processing logs', () => {
       />,
     )
 
-    expect(screen.getByLabelText('HYBRO AI — Combined agent responses')).toBeInTheDocument()
+    expect(screen.queryByLabelText('HYBRO AI — Combined agent responses')).not.toBeInTheDocument()
+    expect(screen.getByText('1 agent responded. Expand below to read each answer.')).toBeInTheDocument()
     expect(container.querySelector('.conversation-avatar-working')).toBeNull()
   })
 
-  it('shows Synthesizing CollectingBlock while phase is synthesizing', () => {
+  it('shows a running work log while phase is synthesizing', () => {
     const { container } = render(
       <FinalAnswerSurface
         turn={makeTurn({
@@ -360,8 +365,10 @@ describe('FinalAnswerSurface processing logs', () => {
       />,
     )
 
-    expect(screen.getByLabelText('HYBRO AI — Synthesizing')).toBeInTheDocument()
-    expect(container.querySelector('.conversation-avatar-working')).toBeTruthy()
+    expect(screen.queryByLabelText('HYBRO AI — Synthesizing')).not.toBeInTheDocument()
+    expect(container.querySelector('.conversation-processing-log')).toHaveClass(
+      'conversation-processing-log-running',
+    )
   })
 
   it('keeps processing status logs visible after a single-agent turn completes', () => {

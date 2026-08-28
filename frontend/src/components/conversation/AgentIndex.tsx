@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/types'
-import { getAgentTheme } from '@/lib/selectors/conversation-types'
+import { getAgentTheme, type AgentDisplayProps } from '@/lib/selectors/conversation-types'
 import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
 import {
   countDurableArtifactFiles,
@@ -12,7 +12,6 @@ import {
   hasUsableArtifactOutput,
 } from '@/lib/artifacts/artifact-identity'
 import {
-  getActivityStripListMaxHeight,
   getAgentIndexSummary,
   defaultAgentIndexOpen,
   getStripSourceResults,
@@ -25,7 +24,7 @@ interface AgentIndexProps {
   turn: TurnViewModel
   sourceResults: AgentResultViewModel[]
   selectedAgentMessageId?: string
-  onOpenDetail: (messageId: string) => void
+  onOpenDetail?: (messageId: string) => void
   isLastTurn?: boolean
 }
 
@@ -36,10 +35,37 @@ function IndexRow({
 }: {
   result: AgentResultViewModel
   selected: boolean
-  onOpenDetail: (messageId: string) => void
+  onOpenDetail?: (messageId: string) => void
 }) {
   const { content, isStreaming, artifacts } = useResultStreamDisplay(result)
   const baseDisplay = mapResultDisplayProps(result, isStreaming, content)
+  const canonicalDisplay: AgentDisplayProps | undefined = result.executionStatus
+    ? ({
+        running: {
+          label: 'Running', tone: 'accent', isAnimated: true,
+          ariaLabel: `${result.agentName} — Running`,
+        },
+        awaiting_input: {
+          label: 'Waiting for input', tone: 'warning', isAnimated: true,
+          ariaLabel: `${result.agentName} — Waiting for input`,
+        },
+        completed: {
+          label: 'Completed', tone: 'muted', isAnimated: false,
+          ariaLabel: `${result.agentName} — Completed`,
+        },
+        failed: {
+          label: 'Failed', tone: 'danger', isAnimated: false,
+          ariaLabel: `${result.agentName} — Failed`,
+        },
+        canceled: {
+          label: 'Canceled', tone: 'muted', isAnimated: false,
+          ariaLabel: `${result.agentName} — Canceled`,
+        },
+      } satisfies Record<
+        NonNullable<AgentResultViewModel['executionStatus']>,
+        AgentDisplayProps
+      >)[result.executionStatus]
+    : undefined
   const theme = getAgentTheme(result.agentId, result.agentName)
   const fileCount = countDurableArtifactFiles(artifacts)
   const hasUnavailable = hasUnavailableArtifactOutput(artifacts)
@@ -52,7 +78,7 @@ function IndexRow({
         isAnimated: false,
         ariaLabel: `${result.agentName} — Output unavailable`,
       }
-    : baseDisplay
+    : (canonicalDisplay ?? baseDisplay)
   const statusSuffix = hasUnavailable && hasUsefulOutput
     ? 'partial output'
     : fileCount > 0
@@ -62,7 +88,7 @@ function IndexRow({
   return (
     <AgentCard
       messageId={result.messageId}
-      agentId={result.agentId ?? result.messageId}
+      agentId={result.agentId}
       agentName={result.agentName}
       taskDescription={result.taskStatusMessage ?? ''}
       theme={theme}
@@ -72,6 +98,7 @@ function IndexRow({
       onOpen={onOpenDetail}
       compact
       statusSuffix={statusSuffix}
+      lifecycleStatus={result.executionStatus}
     />
   )
 }
@@ -86,24 +113,14 @@ export function AgentIndex({
   const { finalAnswer } = turn
   const [open, setOpen] = useState(() => defaultAgentIndexOpen(turn, isLastTurn))
 
-  useEffect(() => {
-    if (!isLastTurn) setOpen(false)
-  }, [isLastTurn])
-
   if (sourceResults.length === 0) return null
-  if (finalAnswer.kind === 'single') return null
 
   const summary = getAgentIndexSummary(turn, sourceResults, finalAnswer.kind)
   const forceExpand = sourceResults.some(r => r.messageId === selectedAgentMessageId)
   const expanded = open || forceExpand
-  const stripResults =
-    finalAnswer.kind === 'hitl'
-      ? sourceResults.filter(r => r.status === 'completed')
-      : sourceResults
+  const stripResults = sourceResults
 
   if (stripResults.length === 0) return null
-
-  const listMaxHeight = getActivityStripListMaxHeight(stripResults.length)
 
   return (
     <Collapsible
@@ -122,14 +139,8 @@ export function AgentIndex({
       </CollapsibleTrigger>
       <CollapsibleContent className="turn-activity-strip-content data-[state=open]:animate-collapsible-down overflow-hidden data-[state=open]:overflow-visible">
         <div
-          className={cn(
-            'turn-activity-strip-list mt-2 flex flex-col',
-            listMaxHeight > 0 && 'overflow-y-auto overscroll-y-contain',
-          )}
-          style={{
-            gap: 'var(--conversation-gap-block)',
-            maxHeight: listMaxHeight > 0 ? `${listMaxHeight}px` : undefined,
-          }}
+          className="turn-activity-strip-list mt-2 flex flex-col"
+          style={{ gap: 'var(--conversation-gap-block)' }}
         >
           {stripResults.map(result => (
             <IndexRow
@@ -145,10 +156,6 @@ export function AgentIndex({
   )
 }
 
-export function shouldShowAgentIndex(turn: TurnViewModel, onOpenDetail?: (id: string) => void): boolean {
-  if (!onOpenDetail) return false
-  const sourceResults = getStripSourceResults(turn)
-  if (sourceResults.length <= 1 && turn.finalAnswer.kind === 'single') return false
-  if (turn.finalAnswer.kind === 'single') return false
-  return sourceResults.length > 0
+export function shouldShowAgentIndex(turn: TurnViewModel): boolean {
+  return getStripSourceResults(turn).length > 0
 }

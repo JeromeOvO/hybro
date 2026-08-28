@@ -194,6 +194,42 @@ class RecordingFakeToolRuntime:
         self.outcomes[acceptance.acceptance_id] = outcome
         return outcome
 
+    async def dispatch_model_reply(
+        self,
+        invocation: ToolInvocation,
+        *,
+        parent_call_record_id: str,
+        interaction_fingerprint: str | None,
+        signal: CancellationSignal,
+    ) -> ToolExecutionOutcome:
+        del parent_call_record_id, interaction_fingerprint
+        outcome = self.outcomes.get(f"model-reply:{invocation.invocation_id}")
+        if outcome is not None:
+            return outcome
+        return ToolSuspension(
+            invocation_id=invocation.invocation_id,
+            status="waiting_external",
+        )
+
+    async def publish_parked_interaction(
+        self,
+        *,
+        call_record_id: str,
+        interaction_id: str,
+    ) -> None:
+        del call_record_id, interaction_id
+        return None
+
+    async def abandon_parked_interaction(
+        self,
+        *,
+        call_record_id: str,
+        interaction_id: str,
+        terminal_state: str,
+    ) -> None:
+        del call_record_id, interaction_id, terminal_state
+        return None
+
 
 async def _cancellable_sleep(seconds: float, signal: CancellationSignal) -> None:
     if signal.cancelled:

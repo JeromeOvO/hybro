@@ -200,3 +200,52 @@ async def test_answer_inventory_mismatch_raises():
             verified_auth_reference_digests=[],
             verified_auth_references=[],
         )
+
+
+async def test_publish_marks_interaction_user_visible():
+    port = DurableHITLApplicationPort(hitl_store=InMemoryHITLApplicationStore())
+    call = _waiting_call()
+    await port.create_or_replay(
+        call=call,
+        interaction=_interaction(),
+        interaction_fingerprint="fingerprint-1",
+    )
+
+    # Parked (eligible but unpublished) is NOT user-visible.
+    assert await port.get_published_interactions(call.room_id) == []
+    # The unanswered interaction is still answerable/eligible.
+    assert len(await port.get_eligible_interactions(call.room_id)) == 1
+
+    # Publish requires exact call ownership.
+    assert (
+        await port.publish("interaction-1", call_record_id="wrong-call") == "conflict"
+    )
+    assert (
+        await port.publish("interaction-1", call_record_id=call.call_record_id)
+        == "accepted"
+    )
+
+    published = await port.get_published_interactions(call.room_id)
+    assert [spec.interaction_id for spec, _route, _fp in published] == ["interaction-1"]
+
+    # A durable answer removes user actionability immediately while retaining
+    # eligibility for continuation recovery.
+    route_fingerprint = published[0][1].fingerprint
+    await port.answer(
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route_fingerprint,
+        answers=[_answer()],
+        authenticated_answerer_id="user-1",
+        verified_auth_reference_digests=[],
+        verified_auth_references=[],
+    )
+    assert await port.get_published_interactions(call.room_id) == []
+    assert len(await port.get_eligible_interactions(call.room_id)) == 1
+
+    # Publishing again is idempotent.
+    assert (
+        await port.publish("interaction-1", call_record_id=call.call_record_id)
+        == "replayed"
+    )
+    assert await port.publish("missing", call_record_id=call.call_record_id) == "error"

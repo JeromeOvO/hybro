@@ -14,10 +14,13 @@ import failures) are intentionally *not* swallowed here.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+from urllib.parse import unquote, urlsplit
 
 from a2a_adapter.client_facade import (
     cancel_remote_task as sdk_cancel_remote_task,
@@ -36,7 +39,6 @@ from dal.orchestrator.hitl import MongoHITLApplicationStore
 from dal.orchestrator.projection import (
     MongoAppendEventProjector,
     MongoFinalMessageProjector,
-    MongoTerminalRunStatusProjector,
 )
 from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
@@ -62,7 +64,9 @@ from execution.orchestrator.a2a_runtime.catalog_assembler import (
 )
 from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
+    AgentCardContractError,
     RecoverableAdapterError,
+    RecoverableTransportError,
 )
 from execution.orchestrator.a2a_runtime.hitl import A2AContinuationCoordinator
 from execution.orchestrator.a2a_runtime.in_memory import RunCheckpointReader
@@ -76,6 +80,7 @@ from execution.orchestrator.a2a_runtime.models import (
     NormalizedA2AObservation,
 )
 from execution.orchestrator.a2a_runtime.preparation import (
+    RunBackedDispatchRecovery,
     RunPreparedInvocationSnapshotReader,
 )
 from execution.orchestrator.a2a_runtime.recovery import (
@@ -85,7 +90,6 @@ from execution.orchestrator.a2a_runtime.recovery import (
     A2AContinuationRecoveryService,
     A2AInboxRecoveryService,
     A2ARecoveryCycle,
-    dispatch_command,
 )
 from execution.orchestrator.a2a_runtime.runtime import A2AAgentToolRuntime
 from execution.orchestrator.a2a_runtime.terminal_interactions import (
@@ -93,11 +97,13 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
 )
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.kernel import OrchestratorKernel
+from execution.orchestrator.kernel import KernelConflict, OrchestratorKernel
+from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.model_runtime import GatewayModelRuntime
 from execution.orchestrator.models import (
     FrozenToolCatalogSnapshot,
     OrchestratorProfile,
+    RecoveryClaim,
 )
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
 from execution.orchestrator.projection import (
@@ -105,12 +111,52 @@ from execution.orchestrator.projection import (
     ProjectionOutboxWorker,
     SettlingProjectionDriver,
 )
+from execution.orchestrator.session import DefaultRunFactory, EventCancellationSignal
 
 logger = get_logger(__name__)
 
 
 class OrchestratorCompositionError(RuntimeError):
     """Adapter-level composition failure; safe to degrade the dark launch."""
+
+
+_GENERIC_RECOVERY_MAX_INVARIANT_FAILURES = 3
+_GENERIC_RECOVERY_BASE_BACKOFF_SECONDS = 5
+_GENERIC_RECOVERY_MAX_BACKOFF_SECONDS = 300
+
+
+@dataclass(frozen=True, slots=True)
+class GenericRecoveryFailureDecision:
+    failure_count: int
+    next_attempt_at: datetime | None
+    quarantined_at: datetime | None
+    quarantine_reason: Literal["terminal_invariant_conflict"] | None
+
+
+def _generic_recovery_failure_decision(
+    claim: RecoveryClaim, exc: Exception, *, now: datetime
+) -> GenericRecoveryFailureDecision:
+    """Bound persistent recovery conflicts without mutating the Run winner."""
+
+    invariant_conflict = isinstance(exc, KernelConflict)
+    failure_count = claim.failure_count + 1 if invariant_conflict else 0
+    if invariant_conflict and failure_count >= _GENERIC_RECOVERY_MAX_INVARIANT_FAILURES:
+        return GenericRecoveryFailureDecision(
+            failure_count=failure_count,
+            next_attempt_at=None,
+            quarantined_at=now,
+            quarantine_reason="terminal_invariant_conflict",
+        )
+    delay = min(
+        _GENERIC_RECOVERY_BASE_BACKOFF_SECONDS * (2 ** (max(failure_count, 1) - 1)),
+        _GENERIC_RECOVERY_MAX_BACKOFF_SECONDS,
+    )
+    return GenericRecoveryFailureDecision(
+        failure_count=failure_count,
+        next_attempt_at=now + timedelta(seconds=delay),
+        quarantined_at=None,
+        quarantine_reason=None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +186,7 @@ class OrchestratorRuntime:
     kernel_factory: Callable[[FrozenToolCatalogSnapshot], OrchestratorKernel]
     projection_worker: Any
     recovery_cycle: Any
+    public_secret_values: tuple[str, ...]
 
 
 _RUNTIME_BINDINGS = (
@@ -168,6 +215,7 @@ _RUNTIME_BINDINGS = (
     "kernel_factory",
     "projection_worker",
     "recovery_cycle",
+    "public_secret_values",
 )
 
 
@@ -176,6 +224,84 @@ def validate_orchestrator_runtime(runtime: Any) -> list[str]:
     if runtime is None:
         return ["runtime"]
     return [name for name in _RUNTIME_BINDINGS if getattr(runtime, name, None) is None]
+
+
+def configured_public_secret_values(settings_obj: Any) -> tuple[str, ...]:
+    """Collect configured credential values without logging or serializing them."""
+
+    values: set[str] = set()
+    for name in getattr(type(settings_obj), "model_fields", {}):
+        lowered = name.lower()
+        value = getattr(settings_obj, name, None)
+        getter = getattr(value, "get_secret_value", None)
+        if callable(getter):
+            value = getter()
+        if not isinstance(value, str):
+            continue
+        if (
+            any(
+                marker in lowered
+                for marker in ("api_key", "secret", "token", "password", "credential")
+            )
+            and len(value) >= 4
+        ):
+            values.add(value)
+        # Credentials embedded in configured DSNs are just as sensitive as
+        # explicitly named secrets. urlsplit handles mongodb(+srv), redis(s),
+        # AMQP, SQL, and HTTP-family schemes without maintaining a scheme list.
+        if "://" in value:
+            try:
+                parsed = urlsplit(value)
+            except ValueError:
+                continue
+            for credential in (parsed.username, parsed.password):
+                if credential is not None:
+                    decoded = unquote(credential)
+                    if len(decoded) >= 4:
+                        values.add(decoded)
+    return tuple(sorted(values, key=len, reverse=True))
+
+
+async def _run_with_recovery_lease(
+    *,
+    run_store: Any,
+    run_id: str,
+    owner_id: str,
+    work: Any,
+    lease_duration: timedelta,
+    renew_interval_seconds: float,
+) -> Any:
+    """Run Kernel work while periodically renewing its token-fenced lease."""
+
+    task = asyncio.create_task(work)
+    try:
+        while not task.done():
+            done, _pending = await asyncio.wait({task}, timeout=renew_interval_seconds)
+            if done:
+                break
+            renewed = None
+            for _renew_attempt in range(4):
+                current = await run_store.load(run_id)
+                if current is None or current.recovery_claim.owner_id != owner_id:
+                    raise RecoverableAdapterError("generic recovery lease was replaced")
+                renewed = await run_store.renew_recovery(
+                    run_id,
+                    expected_state_version=current.state_version,
+                    owner_id=owner_id,
+                    lease_expires_at=datetime.now(UTC) + lease_duration,
+                )
+                if renewed.outcome in {"accepted", "replayed"}:
+                    break
+                await asyncio.sleep(0)
+            if renewed is None or renewed.outcome not in {"accepted", "replayed"}:
+                raise RecoverableAdapterError(
+                    "generic recovery lease renewal conflicted"
+                )
+        return await task
+    except BaseException:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 def create_orchestrator_runtime(  # noqa: C901
@@ -194,13 +320,19 @@ def create_orchestrator_runtime(  # noqa: C901
     projection_listener: ProjectionListener | None = None,
     user_message_text_reader: Callable[[str], Any] | None = None,
     hitl_delivery: Any | None = None,
+    final_message_delivery: Callable[..., Any] | None = None,
+    canonical_event_reader: Callable[[str, str], Any] | None = None,
+    canonical_hitl_control: Callable[[str, str, str, list[str]], Any] | None = None,
+    supervisor_hitl: Any | None = None,
 ) -> OrchestratorRuntime:
     """Compose the full orchestrator runtime over the registered Mongo stores.
 
     No Mongo or LLM calls are made during construction; this is wiring only.
     """
+    public_secret_values = configured_public_secret_values(settings_obj)
     run_store = MongoOrchestratorRunStore(
-        mongo.collection("orchestrator_runs").raw_collection
+        mongo.collection("orchestrator_runs").raw_collection,
+        mongo.collection("orchestrator_recovery_leases").raw_collection,
     )
     # The event store is bound for the projection worker (step 6), which
     # appends durable Run events through the outbox projector.
@@ -278,6 +410,7 @@ def create_orchestrator_runtime(  # noqa: C901
     resources = RoomFilesResourceMaterializer(
         room_files=room_files,
         artifact_writer=artifact_writer,
+        inline_artifact_reader=observation_inbox,
         context_text_reader=user_message_text_reader,
     )
 
@@ -302,6 +435,8 @@ def create_orchestrator_runtime(  # noqa: C901
         fetch_agent_card=sdk_fetch_agent_card,
         receipt_factory=A2ADispatchReceipt,
         observation_factory=NormalizedA2AObservation,
+        recoverable_transport_error_factory=RecoverableTransportError,
+        agent_card_contract_error_factory=AgentCardContractError,
         epoch_owner=artifact_writer.epoch_owner,
         call_resolver=resolve_call_address,
     )
@@ -326,6 +461,8 @@ def create_orchestrator_runtime(  # noqa: C901
         hitl=hitl_port,
         hitl_delivery=hitl_delivery,
         run_store=run_store,
+        canonical_hitl_control=canonical_hitl_control,
+        public_secret_values=public_secret_values,
     )
 
     model_runtime = GatewayModelRuntime(llm_gateway)
@@ -346,30 +483,45 @@ def create_orchestrator_runtime(  # noqa: C901
             context_compiler=ContextCompiler(),
             budget_policy=BudgetPolicy(),
             projection_driver=SettlingProjectionDriver(run_store),
+            public_secret_values=public_secret_values,
+            canonical_event_reader=canonical_event_reader,
+            artifact_metadata_reader=resources.describe_artifact,
+            supervisor_hitl=supervisor_hitl,
         )
 
+    run_factory = DefaultRunFactory()
     session_host = RoomSessionHost(
         kernel_factory=kernel_for_catalog,
         run_store=run_store,
         epoch_store=epoch_store,
         listener=session_listener,
+        run_factory=run_factory,
     )
 
     observation_sink = session_host.observation_sink()
 
+    async def project_terminal_run_status(intent, run):
+        # Canonical Run state remains in the orchestrator aggregate. This
+        # outbox intent publishes run_settled but never mirrors status into the
+        # removed compatibility `runs`/task-card projection.
+        if projection_listener is not None:
+            # run_settled is part of this durable dependent intent. A failure
+            # leaves the intent claimed/pending for lease-based retry; an append
+            # followed by a crash is read back by its deterministic delivery ID.
+            await projection_listener(run, intent)
+        return "accepted"
+
     projectors = {
         "append_orchestrator_event": MongoAppendEventProjector(event_store).project,
         "deliver_final_message": MongoFinalMessageProjector(
-            mongo.collection("room_agent_messages")
+            mongo.collection("room_agent_messages"),
+            final_message_delivery,
         ).project,
-        "project_terminal_run_status": MongoTerminalRunStatusProjector(
-            mongo.collection("runs")
-        ).project,
+        "project_terminal_run_status": project_terminal_run_status,
     }
     projection_worker = ProjectionOutboxWorker(
         run_store=run_store,
         projectors=projectors,
-        after_project=projection_listener,
     )
 
     cancellation_coordinator = A2ACancellationCoordinator(
@@ -399,25 +551,10 @@ def create_orchestrator_runtime(  # noqa: C901
         inbox=observation_inbox,
     )
 
-    async def recover_dispatch(record: Any) -> None:
-        # Re-delivery for checkpointed accepted/ready_to_dispatch calls. The
-        # shared dispatch_command helper builds materialized_resources=[];
-        # a resource-bearing Run re-dispatch would silently drop attachments
-        # and context refs. Until the step-7 resource re-materialization path
-        # lands, refuse that case loudly instead of dispatching empty
-        # resources.
-        if getattr(record, "resource_manifest", None) is not None and getattr(
-            record.resource_manifest, "refs", []
-        ):
-            logger.warning(
-                "orchestrator recovery: resource-bearing re-dispatch is "
-                "unsupported until step 7; call %s stays due",
-                record.call_record_id,
-            )
-            raise RecoverableAdapterError(
-                "resource-bearing re-dispatch is not implemented"
-            )
-        await dispatch.dispatch(dispatch_command(record))
+    recover_dispatch = RunBackedDispatchRecovery(
+        prepared_reader=prepared_reader,
+        runtime=tool_runtime,
+    )
 
     call_recovery = A2ACallRecoveryService(
         ledger=call_ledger,
@@ -429,20 +566,148 @@ def create_orchestrator_runtime(  # noqa: C901
         hitl=hitl_port,
         hitl_delivery=hitl_delivery,
         run_store=run_store,
+        canonical_hitl_control=canonical_hitl_control,
+        public_secret_values=public_secret_values,
     )
     artifact_recovery = A2AArtifactRecoveryService(inbox_recovery)
 
     async def _recovery_noop() -> None:
-        # Generic Run re-entry and the orchestrator watchdog are bound in later
-        # steps. HITL continuation recovery is wired below.
+        # HITL continuation and the watchdog remain separate recovery phases.
         return None
 
-    if getattr(settings_obj, "orchestrator_recovery_enabled", False):
-        logger.warning(
-            "orchestrator recovery enabled while generic_runs/watchdog phases "
-            "are still no-ops; generic Run re-entry will not run until step 7 "
-            "binds them"
-        )
+    recovery_instance = f"orchestrator-generic-runs:{uuid.uuid4().hex}"
+    recovery_lease = timedelta(seconds=60)
+    recovery_renew_interval = 20.0
+
+    async def recover_generic_runs() -> None:  # noqa: C901
+        now = datetime.now(UTC)
+        due = await run_store.list_due_runs(due_at=now, limit=100)
+        for candidate in due:
+            claim_now = datetime.now(UTC)
+            recovery_owner = f"{recovery_instance}:{uuid.uuid4().hex}"
+            claimed = await run_store.claim_recovery(
+                candidate.run_id,
+                expected_state_version=candidate.state_version,
+                owner_id=recovery_owner,
+                lease_expires_at=claim_now + recovery_lease,
+                claimed_at=claim_now,
+            )
+            if claimed.run is None or claimed.outcome not in {"accepted", "replayed"}:
+                continue
+            run = claimed.run
+
+            async def emit(event_type, current, payload, _owner_id=recovery_owner):
+                latest = await run_store.load(current.run_id)
+                if latest is None or latest.recovery_claim.owner_id != _owner_id:
+                    raise RecoverableAdapterError("generic recovery lease was lost")
+                if session_listener is None:
+                    return
+                result = session_listener(
+                    SessionEvent(
+                        event_type=event_type,
+                        session_id=f"recovery:{current.run_id}",
+                        run_id=current.run_id,
+                        causation_id=current.request.user_message_id,
+                        sequence=current.state_version,
+                        timestamp=datetime.now(UTC),
+                        payload=payload,
+                        room_id=current.room_id,
+                        user_message_id=current.request.user_message_id,
+                        client_request_id=current.client_request_id,
+                        lifecycle_family=current.lifecycle_family,
+                    )
+                )
+                if hasattr(result, "__await__"):
+                    await result
+
+            try:
+                # This deterministic root is safe both before and after its
+                # original append; the publisher reads back the same room row.
+                await emit(
+                    "run_started",
+                    run,
+                    {
+                        "status": run.status,
+                        "mode": run.profile.profile_id,
+                        "started_at": run.created_at,
+                    },
+                )
+                if run.tool_catalog is None:
+                    raise RecoverableAdapterError("recoverable Run has no tool catalog")
+                await _run_with_recovery_lease(
+                    run_store=run_store,
+                    run_id=run.run_id,
+                    owner_id=recovery_owner,
+                    work=kernel_for_catalog(run.tool_catalog).run(
+                        run.run_id,
+                        signal=EventCancellationSignal(),
+                        lifecycle=emit,
+                    ),
+                    lease_duration=recovery_lease,
+                    renew_interval_seconds=recovery_renew_interval,
+                )
+                current = await run_store.load(run.run_id)
+                if (
+                    current is not None
+                    and current.recovery_claim.owner_id == recovery_owner
+                ):
+                    await run_store.release_recovery(
+                        run.run_id,
+                        expected_state_version=current.state_version,
+                        owner_id=recovery_owner,
+                        next_attempt_at=(
+                            None
+                            if current.status
+                            in {"completed", "failed", "canceled", "budget_exhausted"}
+                            else datetime.now(UTC) + timedelta(seconds=2)
+                        ),
+                    )
+            except Exception as exc:
+                current = await run_store.load(run.run_id)
+                if (
+                    current is not None
+                    and current.recovery_claim.owner_id == recovery_owner
+                ):
+                    failure_at = datetime.now(UTC)
+                    decision = _generic_recovery_failure_decision(
+                        current.recovery_claim, exc, now=failure_at
+                    )
+                    released = await run_store.release_recovery(
+                        run.run_id,
+                        expected_state_version=current.state_version,
+                        owner_id=recovery_owner,
+                        next_attempt_at=decision.next_attempt_at,
+                        failure_count=decision.failure_count,
+                        quarantined_at=decision.quarantined_at,
+                        quarantine_reason=decision.quarantine_reason,
+                    )
+                    if (
+                        released.outcome in {"accepted", "replayed"}
+                        and decision.quarantined_at is not None
+                    ):
+                        # The dedicated lease makes this warning exactly-once:
+                        # quarantined rows are excluded from every future scan.
+                        logger.warning(
+                            "generic orchestrator Run recovery quarantined "
+                            "run_id=%s reason=%s attempts=%s",
+                            run.run_id,
+                            decision.quarantine_reason,
+                            decision.failure_count,
+                        )
+                    elif isinstance(exc, KernelConflict):
+                        logger.debug(
+                            "generic orchestrator Run recovery invariant retry "
+                            "run_id=%s attempt=%s",
+                            run.run_id,
+                            decision.failure_count,
+                        )
+                    else:
+                        logger.warning(
+                            "generic orchestrator Run recovery failed "
+                            "run_id=%s error_type=%s retry_scheduled=true",
+                            run.run_id,
+                            type(exc).__name__,
+                        )
 
     def _due_phase(recover: Callable[..., Any]) -> Callable[[], Any]:
         async def run() -> None:
@@ -466,6 +731,8 @@ def create_orchestrator_runtime(  # noqa: C901
         observations=observation_ingress,
         hitl_delivery=hitl_delivery,
         run_store=run_store,
+        canonical_hitl_control=canonical_hitl_control,
+        public_secret_values=public_secret_values,
     )
     continuation_recovery = A2AContinuationRecoveryService(
         coordinator=continuation_coordinator,
@@ -482,7 +749,7 @@ def create_orchestrator_runtime(  # noqa: C901
         observations=_due_phase(inbox_recovery.recover_due),
         calls=_due_phase(call_recovery.recover_due),
         artifacts=_due_phase(artifact_recovery.recover_due),
-        generic_runs=_recovery_noop,
+        generic_runs=recover_generic_runs,
         projection=projection_worker.run_once,
         watchdog=_recovery_noop,
     )
@@ -515,6 +782,7 @@ def create_orchestrator_runtime(  # noqa: C901
         kernel_factory=kernel_for_catalog,
         projection_worker=projection_worker,
         recovery_cycle=recovery_cycle,
+        public_secret_values=public_secret_values,
     )
 
 

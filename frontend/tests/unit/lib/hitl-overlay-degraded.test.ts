@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { overlayHitlForRoom } from '@/lib/room-sync/hitl-overlay'
 import { useMessageStore } from '@/stores/message-store'
-import { fetchPendingHitlRequests } from '@/lib/api/hitl'
+import { fetchPendingHitlRequests, type HitlPendingRequest } from '@/lib/api/hitl'
 import { selectPendingHitls } from '@/lib/selectors/select-hitl'
+import {
+  hitlQuestionEntityId,
+  hitlRequestKey,
+} from '@/lib/hitl/hitl-message-projection'
 
 vi.mock('@/lib/api/hitl', () => ({
   fetchPendingHitlRequests: vi.fn(),
@@ -78,6 +82,122 @@ describe('degraded HITL pending hydration', () => {
       errorMessage: 'Answer delivery is uncertain',
       clientRequestId: 'client-1',
     })
+  })
+
+  it('restores and independently reconciles sibling questions sharing one message', async () => {
+    const store = useMessageStore.getState()
+    store.clearRoom()
+    store.setRoom('room-1')
+    store.upsertMessage({
+      id: 'agent-message-1', roomId: 'room-1', messageType: 'agent', content: '',
+      senderName: 'Broker', timestamp: '2027-01-01T00:00:00Z',
+      taskStatus: 'input-required', relatedMessageId: 'user-1', clientRequestId: 'client-1',
+    }, 'db')
+    const requests: HitlPendingRequest[] = [
+      {
+        request_id: 'security_training', message_id: 'agent-message-1', source: 'agent' as const,
+        agent_name: 'Broker', prompt: 'Is training in place?', prompt_type: 'confirmation',
+        status: 'pending' as const, created_at: '2027-01-01T00:00:00Z',
+        interaction_id: 'interaction-1', interaction_status: 'open',
+        question_count: 2, question_index: 0, related_message_id: 'user-1',
+        client_request_id: 'client-1',
+      },
+      {
+        request_id: 'cloud_providers', message_id: 'agent-message-1', source: 'agent' as const,
+        agent_name: 'Broker', prompt: 'Which cloud providers?', prompt_type: 'text',
+        status: 'pending' as const, created_at: '2027-01-01T00:00:00Z',
+        interaction_id: 'interaction-1', interaction_status: 'open',
+        question_count: 2, question_index: 1, related_message_id: 'user-1',
+        client_request_id: 'client-1',
+      },
+    ]
+    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests })
+    const index = { current: new Map<string, string>() }
+
+    const pendingIds = await overlayHitlForRoom({
+      roomId: 'room-1', hitlRequestIndex: index,
+      getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
+    })
+
+    const trainingKey = hitlRequestKey('interaction-1', 'security_training')
+    const providersKey = hitlRequestKey('interaction-1', 'cloud_providers')
+    const trainingId = hitlQuestionEntityId(
+      'agent-message-1', 'interaction-1', 'security_training', 2,
+    )
+    const providersId = hitlQuestionEntityId(
+      'agent-message-1', 'interaction-1', 'cloud_providers', 2,
+    )
+    expect(pendingIds).toEqual(new Set([trainingKey, providersKey]))
+    expect(index.current).toEqual(new Map([
+      [trainingKey, trainingId],
+      [providersKey, providersId],
+    ]))
+    const restored = useMessageStore.getState()
+    expect(selectPendingHitls('room-1', restored.entities, restored.orderedIds)).toHaveLength(2)
+
+    restored.upsertMessage({
+      id: trainingId, roomId: 'room-1', messageType: 'agent', content: 'Is training in place?',
+      senderName: 'Broker', timestamp: '2027-01-01T00:00:00Z',
+      hitlInteractionStatus: 'applying', hitlApplicationStatus: 'applying',
+    }, 'optimistic')
+    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [requests[1]] })
+    await overlayHitlForRoom({
+      roomId: 'room-1', hitlRequestIndex: index,
+      getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
+    })
+
+    const reconciled = useMessageStore.getState()
+    expect(reconciled.entities[trainingId]).toMatchObject({
+      hitlResolved: true, hitlApplicationStatus: 'applied',
+    })
+    expect(reconciled.entities[providersId].hitlResolved).toBe(false)
+    expect(index.current).toEqual(new Map([[providersKey, providersId]]))
+  })
+
+  it('does not reopen an exact resolved interaction from stale REST pending', async () => {
+    const request: HitlPendingRequest = {
+      request_id: 'request-1',
+      message_id: 'agent-message-1',
+      source: 'agent',
+      agent_name: 'Broker',
+      prompt: 'Which market?',
+      prompt_type: 'text',
+      status: 'pending',
+      created_at: '2027-01-01T00:00:00Z',
+      interaction_id: 'interaction-1',
+      interaction_status: 'open',
+      interaction_version: 1,
+      question_count: 1,
+      question_index: 0,
+    }
+    vi.mocked(fetchPendingHitlRequests).mockResolvedValue({ requests: [request] })
+    const index = { current: new Map<string, string>() }
+    await overlayHitlForRoom({
+      roomId: 'room-1', hitlRequestIndex: index,
+      getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
+    })
+    const entityId = hitlQuestionEntityId(
+      'agent-message-1', 'interaction-1', 'request-1', 1,
+    )
+    useMessageStore.getState().upsertMessage({
+      id: entityId, roomId: 'room-1', messageType: 'agent', content: 'Which market?',
+      senderName: 'Broker', timestamp: '2027-01-01T00:00:00Z',
+      hitlResolved: true, hitlUserAnswer: 'London',
+      hitlInteractionStatus: 'responded', hitlApplicationStatus: 'applied',
+      hitlInteractionVersion: 1,
+    }, 'sse')
+
+    const pendingIds = await overlayHitlForRoom({
+      roomId: 'room-1', hitlRequestIndex: index,
+      getAgentName: async () => 'Broker', getAgentSource: () => 'cloud',
+    })
+
+    const entity = useMessageStore.getState().entities[entityId]
+    expect(pendingIds).toEqual(new Set())
+    expect(entity.hitlResolved).toBe(true)
+    expect(entity.hitlUserAnswer).toBe('London')
+    expect(entity.hitlInteractionStatus).toBe('responded')
+    expect(index.current.size).toBe(0)
   })
 
   it('clears local applying HITL when the pending set is empty', async () => {

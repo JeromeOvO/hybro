@@ -16,6 +16,25 @@ from llm_gateway.turn_types import (
 )
 
 
+class _OpenAIResponsesStreamError(RuntimeError):
+    def __init__(self, message: str, *, code: str | None) -> None:
+        super().__init__(message)
+        self.code = code
+        normalized = (code or "").lower()
+        if normalized in {"rate_limit_exceeded", "rate_limit_error"}:
+            self.status_code = 429
+        elif normalized in {
+            "server_error",
+            "internal_server_error",
+            "service_unavailable",
+        }:
+            self.status_code = 500
+        elif normalized:
+            self.status_code = 400
+        else:
+            self.status_code = None
+
+
 class OpenAIProvider:
     def __init__(
         self,
@@ -110,8 +129,28 @@ class OpenAIProvider:
         *,
         cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GatewayTurnEvent]:
-        if request.provider != "openai" or request.api != "chat_completions":
-            raise ValueError("OpenAI adapter received unsupported route")
+        if request.provider != "openai":
+            raise ValueError("OpenAI adapter received unsupported provider")
+        if request.api == "responses":
+            async for event in self._stream_responses_turn_once(
+                request, cancel_event=cancel_event
+            ):
+                yield event
+            return
+        if request.api == "chat_completions":
+            async for event in self._stream_chat_turn_once(
+                request, cancel_event=cancel_event
+            ):
+                yield event
+            return
+        raise ValueError("OpenAI adapter received unsupported API")
+
+    async def _stream_chat_turn_once(
+        self,
+        request: GatewayTurnRequest,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[GatewayTurnEvent]:
         kwargs: dict[str, Any] = {
             "model": request.model_id,
             "messages": _gateway_messages(request),
@@ -133,6 +172,8 @@ class OpenAIProvider:
         }
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
+        if request.thinking_level is not None:
+            kwargs["reasoning_effort"] = request.thinking_level
         stream = await self._client.chat.completions.create(**kwargs)
         call_state: dict[int, dict[str, Any]] = {}
         pending_finish: str | None = None
@@ -255,6 +296,194 @@ class OpenAIProvider:
                 if hasattr(result, "__await__"):
                     await result
 
+    async def _stream_responses_turn_once(
+        self,
+        request: GatewayTurnRequest,
+        *,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[GatewayTurnEvent]:
+        kwargs: dict[str, Any] = {
+            "model": request.model_id,
+            "instructions": request.system_prompt,
+            "input": _responses_input(request),
+            "stream": True,
+            "store": False,
+            "max_output_tokens": request.max_output_tokens,
+        }
+        if request.tools:
+            kwargs["tools"] = [
+                _responses_tool(
+                    tool, strict=request.tool_strategy == "structured_action"
+                )
+                for tool in request.tools
+            ]
+            kwargs["tool_choice"] = request.tool_choice
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.thinking_level is not None:
+            kwargs["reasoning"] = {"effort": request.thinking_level}
+
+        stream = await self._client.responses.create(**kwargs)
+        call_state: dict[int, dict[str, Any]] = {}
+        request_id: str | None = None
+        terminal = False
+        try:
+            async for event in stream:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise asyncio.CancelledError
+                event_type = str(getattr(event, "type", "") or "")
+                response = getattr(event, "response", None)
+                response_id = str(getattr(response, "id", "") or "") or None
+                request_id = response_id or request_id
+
+                if event_type == "response.output_text.delta":
+                    delta = str(getattr(event, "delta", "") or "")
+                    if delta:
+                        yield GatewayTurnEvent(
+                            kind="text_delta",
+                            delta=delta,
+                            provider_request_id=request_id,
+                        )
+                    continue
+
+                if event_type == "response.output_item.added":
+                    item = getattr(event, "item", None)
+                    if getattr(item, "type", None) != "function_call":
+                        continue
+                    index = int(getattr(event, "output_index", 0) or 0)
+                    call_id = str(getattr(item, "call_id", "") or "")
+                    name = str(getattr(item, "name", "") or "")
+                    if not call_id or not name:
+                        raise ValueError(
+                            "Responses function call started without ID and name"
+                        )
+                    call_state[index] = {
+                        "id": call_id,
+                        "name": name,
+                        "started": True,
+                        "saw_delta": False,
+                        "ended": False,
+                    }
+                    yield GatewayTurnEvent(
+                        kind="tool_call_start",
+                        tool_index=index,
+                        call_id=call_id,
+                        tool_name=name,
+                        provider_request_id=request_id,
+                    )
+                    continue
+
+                if event_type == "response.function_call_arguments.delta":
+                    index = int(getattr(event, "output_index", 0) or 0)
+                    state = call_state.get(index)
+                    if state is None:
+                        raise ValueError(
+                            "Responses arguments arrived before function call start"
+                        )
+                    delta = str(getattr(event, "delta", "") or "")
+                    if delta:
+                        state["saw_delta"] = True
+                        yield GatewayTurnEvent(
+                            kind="tool_call_arguments_delta",
+                            tool_index=index,
+                            call_id=state["id"],
+                            delta=delta,
+                            provider_request_id=request_id,
+                        )
+                    continue
+
+                if event_type == "response.output_item.done":
+                    item = getattr(event, "item", None)
+                    if getattr(item, "type", None) != "function_call":
+                        continue
+                    index = int(getattr(event, "output_index", 0) or 0)
+                    state = call_state.get(index)
+                    if state is None:
+                        call_id = str(getattr(item, "call_id", "") or "")
+                        name = str(getattr(item, "name", "") or "")
+                        if not call_id or not name:
+                            raise ValueError(
+                                "Responses function call ended without ID and name"
+                            )
+                        state = {
+                            "id": call_id,
+                            "name": name,
+                            "started": True,
+                            "saw_delta": False,
+                            "ended": False,
+                        }
+                        call_state[index] = state
+                        yield GatewayTurnEvent(
+                            kind="tool_call_start",
+                            tool_index=index,
+                            call_id=call_id,
+                            tool_name=name,
+                            provider_request_id=request_id,
+                        )
+                    if not state["saw_delta"]:
+                        arguments = str(getattr(item, "arguments", "") or "")
+                        if arguments:
+                            yield GatewayTurnEvent(
+                                kind="tool_call_arguments_delta",
+                                tool_index=index,
+                                call_id=state["id"],
+                                delta=arguments,
+                                provider_request_id=request_id,
+                            )
+                    if not state["ended"]:
+                        state["ended"] = True
+                        yield GatewayTurnEvent(
+                            kind="tool_call_end",
+                            tool_index=index,
+                            call_id=state["id"],
+                            provider_request_id=request_id,
+                        )
+                    continue
+
+                if event_type in {"response.completed", "response.incomplete"}:
+                    terminal = True
+                    if response is None:
+                        raise ValueError("Responses terminal event omitted response")
+                    usage = _responses_usage(response)
+                    if usage is not None:
+                        yield GatewayTurnEvent(
+                            kind="usage",
+                            usage=usage,
+                            provider_request_id=request_id,
+                        )
+                    yield GatewayTurnEvent(
+                        kind="finish",
+                        finish_reason=_responses_finish_reason(
+                            response, has_tool_calls=bool(call_state)
+                        ),
+                        provider_request_id=request_id,
+                    )
+                    continue
+
+                if event_type in {"response.failed", "error"}:
+                    terminal = True
+                    error = getattr(response, "error", None) or getattr(
+                        event, "error", None
+                    )
+                    message = str(
+                        _response_error_field(error, "message") or error or event_type
+                    )
+                    code = str(_response_error_field(error, "code") or "") or None
+                    raise _OpenAIResponsesStreamError(
+                        f"OpenAI Responses stream failed: {message}", code=code
+                    )
+
+            if not terminal:
+                raise ValueError(
+                    "OpenAI Responses stream ended without a terminal event"
+                )
+        finally:
+            close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+            if close is not None:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
+
     async def embed(self, text: str, model: str) -> list[float]:
         embeddings = await self.embed_batch([text], model=model)
         return embeddings[0] if embeddings else []
@@ -350,6 +579,101 @@ def _gateway_messages(request: GatewayTurnRequest) -> list[dict[str, Any]]:
             }
         )
     return messages
+
+
+def _responses_input(request: GatewayTurnRequest) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for message in request.messages:
+        if message.role == "assistant":
+            text = "".join(part.text for part in message.parts if part.kind == "text")
+            if text:
+                items.append({"role": "assistant", "content": text})
+            items.extend(
+                {
+                    "type": "function_call",
+                    "call_id": part.call_id,
+                    "name": part.tool_name,
+                    "arguments": json.dumps(part.arguments, separators=(",", ":")),
+                }
+                for part in message.parts
+                if isinstance(part, GatewayToolCallPart)
+            )
+            continue
+        tool_results = [
+            part for part in message.parts if isinstance(part, GatewayToolResultPart)
+        ]
+        if message.role == "tool" and tool_results:
+            items.extend(
+                {
+                    "type": "function_call_output",
+                    "call_id": part.call_id,
+                    "output": part.content,
+                }
+                for part in tool_results
+            )
+            continue
+        items.append(
+            {
+                "role": message.role,
+                "content": "".join(
+                    part.text for part in message.parts if part.kind == "text"
+                ),
+            }
+        )
+    return items
+
+
+def _responses_tool(tool: Any, *, strict: bool) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": (
+            _strictify_schema(tool.input_schema) if strict else tool.input_schema
+        ),
+        "strict": strict,
+    }
+
+
+def _response_error_field(error: Any, field: str) -> Any:
+    if isinstance(error, dict):
+        return error.get(field)
+    return getattr(error, field, None)
+
+
+def _responses_usage(response: Any) -> GatewayUsage | None:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    input_details = getattr(usage, "input_tokens_details", None)
+    return GatewayUsage(
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        cache_read_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
+    )
+
+
+def _responses_finish_reason(response: Any, *, has_tool_calls: bool) -> str:
+    if _responses_has_refusal(response):
+        return "content_filter"
+    incomplete = getattr(response, "incomplete_details", None)
+    reason = str(getattr(incomplete, "reason", "") or "")
+    if reason in {"max_output_tokens", "max_tokens"}:
+        return "length"
+    if reason in {"content_filter", "safety"}:
+        return "content_filter"
+    status = str(getattr(response, "status", "") or "")
+    if status == "incomplete":
+        return "error"
+    return "tool_calls" if has_tool_calls else "stop"
+
+
+def _responses_has_refusal(response: Any) -> bool:
+    for item in getattr(response, "output", None) or []:
+        for content in getattr(item, "content", None) or []:
+            if getattr(content, "type", None) == "refusal":
+                return True
+    return False
 
 
 def _strictify_schema(schema: Any) -> Any:

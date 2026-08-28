@@ -12,7 +12,7 @@ import type { Agent } from '@/lib/types/agent'
 interface AgentCardProps {
   messageId?: string
   agentName: string
-  agentId: string
+  agentId?: string
   taskDescription: string
   theme: AgentTheme
   display: AgentDisplayProps
@@ -25,12 +25,13 @@ interface AgentCardProps {
   compact?: boolean
   /** Appended to status label in compact mode (e.g. artifact count). */
   statusSuffix?: string
+  lifecycleStatus?: 'running' | 'awaiting_input' | 'completed' | 'failed' | 'canceled'
 }
 
-function useAgentFromCatalog(agentId: string): Agent | undefined {
+function useAgentFromCatalog(agentId: string | undefined): Agent | undefined {
   const qc = useQueryClient()
   const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
-  return agents?.find(a => a.agent_id === agentId)
+  return agentId ? agents?.find(a => a.agent_id === agentId) : undefined
 }
 
 function AgentAvatar({
@@ -90,6 +91,7 @@ export function AgentCard({
   agentSource,
   compact = false,
   statusSuffix,
+  lifecycleStatus,
 }: AgentCardProps) {
   const catalogAgent = useAgentFromCatalog(agentId)
   const isHubOnline = catalogAgent?.is_hub_online
@@ -126,15 +128,23 @@ export function AgentCard({
   const content = (
     <>
       <div className={cn('flex items-center gap-2.5', compact && 'gap-2')} style={{ position: 'relative', zIndex: 1 }}>
-        <AgentAvatar agentId={agentId} theme={theme} isAnimated={display.isAnimated} compact={compact} />
-        <Link
-          href={`/agents/${encodeURIComponent(agentId)}`}
-          className="text-[13px] font-medium hover:underline focus-visible:outline-none"
-          style={{ color: 'var(--conversation-text-primary)' }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {agentName}
-        </Link>
+        <AgentAvatar agentId={agentId ?? agentName} theme={theme} isAnimated={display.isAnimated} compact={compact} />
+        {agentId && !canOpen ? (
+          <Link
+            href={`/agents/${encodeURIComponent(agentId)}`}
+            className="text-[13px] font-medium hover:underline focus-visible:outline-none"
+            style={{ color: 'var(--conversation-text-primary)' }}
+          >
+            {agentName}
+          </Link>
+        ) : (
+          <span
+            className="text-[13px] font-medium"
+            style={{ color: 'var(--conversation-text-primary)' }}
+          >
+            {agentName}
+          </span>
+        )}
         {agentSource != null && (
           <AgentSourceBadge
             source={agentSource}
@@ -173,6 +183,8 @@ export function AgentCard({
       <button
         type="button"
         aria-label={`${selected ? 'Close' : 'Open'} ${agentName} response`}
+        data-call-id={messageId?.split(':').at(-1)}
+        data-status={lifecycleStatus}
         data-selected={selected ? 'true' : undefined}
         className={className}
         style={style}
@@ -185,6 +197,8 @@ export function AgentCard({
 
   return (
     <div
+      data-call-id={messageId?.split(':').at(-1)}
+      data-status={lifecycleStatus}
       data-selected={selected ? 'true' : undefined}
       className={className}
       style={style}

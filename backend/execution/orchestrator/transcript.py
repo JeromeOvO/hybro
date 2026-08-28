@@ -14,6 +14,7 @@ from .models import (
     ModelToolResultPart,
     SessionNotice,
     TextPart,
+    ToolInteractionMessage,
     ToolResultMessage,
     UserMessage,
 )
@@ -27,10 +28,22 @@ def agent_messages_to_model(
     messages: list[object],
     *,
     include_notices: bool = True,
+    prepare_orchestration_context: bool = False,
 ) -> list[ModelMessage]:
+    """Convert the durable transcript into provider messages.
+
+    Durable messages remain lossless. The optional orchestration view only
+    bounds already-resolved historical call plans and labels Tool results by
+    provenance so the model cannot mistake its own prior arguments for facts.
+    """
     result: list[ModelMessage] = []
     calls: set[str] = set()
     results: set[str] = set()
+    resolved_call_ids = {
+        message.call_id
+        for message in messages
+        if isinstance(message, (ToolResultMessage, ToolInteractionMessage))
+    }
     for message in messages:
         if isinstance(message, UserMessage):
             result.append(
@@ -48,11 +61,14 @@ def agent_messages_to_model(
                 if call.call_id in calls:
                     raise TranscriptCorruptionError("duplicate assistant tool call")
                 calls.add(call.call_id)
+                arguments = call.arguments
+                if prepare_orchestration_context and call.call_id in resolved_call_ids:
+                    arguments = _historical_tool_arguments(arguments)
                 parts.append(
                     ModelToolCallPart(
                         call_id=call.call_id,
                         tool_name=call.tool_name,
-                        arguments=call.arguments,
+                        arguments=arguments,
                     )
                 )
             result.append(ModelMessage(role="assistant", content=parts))
@@ -70,6 +86,17 @@ def agent_messages_to_model(
                 text = f"{text}\n{refs}".strip()
             if message.error_message:
                 text = f"{text}\n{message.error_message}".strip()
+            if prepare_orchestration_context:
+                evidence = message.status == "completed" and not message.is_error
+                provenance = (
+                    "[agent observation: verified completed result; usable as evidence]"
+                    if evidence
+                    else (
+                        f"[agent observation: status={message.status}; "
+                        "diagnostic only, not evidence]"
+                    )
+                )
+                text = f"{provenance}\n{text}".strip()
             result.append(
                 ModelMessage(
                     role="tool",
@@ -79,6 +106,22 @@ def agent_messages_to_model(
                             tool_name=message.tool_name,
                             content=[ModelTextPart(text=text)],
                             is_error=message.is_error,
+                        )
+                    ],
+                )
+            )
+        elif isinstance(message, ToolInteractionMessage):
+            if message.call_id not in calls:
+                raise TranscriptCorruptionError("orphan tool interaction")
+            result.append(
+                ModelMessage(
+                    role="tool",
+                    content=[
+                        ModelToolResultPart(
+                            call_id=message.call_id,
+                            tool_name=message.tool_name,
+                            content=[ModelTextPart(text=_interaction_text(message))],
+                            is_error=False,
                         )
                     ],
                 )
@@ -102,15 +145,91 @@ def agent_messages_to_model(
     return result
 
 
+_HISTORICAL_TASK_MAX_CHARS = 2_400
+_HISTORICAL_COLLECTION_MAX_ITEMS = 20
+
+
+def _historical_tool_arguments(arguments: dict[str, object]) -> dict[str, object]:
+    """Build a bounded private context view for an already-resolved call."""
+
+    bounded: dict[str, object] = {}
+    for key, value in arguments.items():
+        if key == "task" and isinstance(value, str):
+            if len(value) <= _HISTORICAL_TASK_MAX_CHARS:
+                bounded[key] = f"[historical plan, not evidence]\n{value}"
+            else:
+                head = value[:1_800].rstrip()
+                tail = value[-400:].lstrip()
+                bounded[key] = (
+                    "[historical plan, not evidence; middle omitted]\n"
+                    f"{head}\n…\n{tail}"
+                )
+            continue
+        if isinstance(value, list):
+            bounded[key] = value[:_HISTORICAL_COLLECTION_MAX_ITEMS]
+            continue
+        if isinstance(value, dict):
+            serialized = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            bounded[key] = (
+                value
+                if len(serialized) <= 1_000
+                else "[historical structured argument omitted]"
+            )
+            continue
+        bounded[key] = value
+    return bounded
+
+
 def unresolved_call_ids(messages: list[object]) -> set[str]:
     calls: set[str] = set()
     results: set[str] = set()
     for message in messages:
         if isinstance(message, AssistantMessage):
             calls.update(call.call_id for call in message.tool_calls)
-        elif isinstance(message, ToolResultMessage):
+        elif isinstance(message, (ToolResultMessage, ToolInteractionMessage)):
             results.add(message.call_id)
     return calls - results
+
+
+def _interaction_text(message: ToolInteractionMessage) -> str:
+    """Render an executable, provider-neutral private interaction observation.
+
+    The model must receive the exact platform presentation target and typed
+    question inventory. Public projections never use this transcript text.
+    """
+
+    payload = {
+        "presentation_id": message.presentation_id,
+        "interaction_id": message.interaction_id,
+        "interaction_fingerprint": message.interaction_fingerprint,
+        "questions": [
+            {
+                "question_id": question.question_id,
+                "interaction_kind": question.interaction_kind,
+                "answer_kind": question.answer_kind,
+                "required": question.required,
+                "prompt": question.prompt,
+                "choices": question.choices,
+            }
+            for question in message.questions
+        ],
+        "artifact_refs": list(message.artifact_refs),
+    }
+    return (
+        "[agent input request; answer it from existing evidence, or ask the user]\n"
+        + json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _content_text(parts: list[object]) -> str:

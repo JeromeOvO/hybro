@@ -1,7 +1,8 @@
 # api/sse.py
 import json
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
 from api_gateway.dependencies import (
@@ -27,15 +28,42 @@ _PUBLIC_TERMINAL_ORCHESTRATION_STATUS = {
 }
 
 
+async def _fetch_connect_snapshot(
+    snapshot_service: Any, room_id: str, *, force: bool
+) -> dict[str, Any] | None:
+    """Build the initial snapshot for one connect, tolerating failures."""
+
+    if snapshot_service is None:
+        return None
+    try:
+        return await snapshot_service.snapshot(room_id, force=force)
+    except Exception:
+        logger.warning(
+            "room snapshot build failed; stream continues delta-only",
+            extra={"room_id": room_id},
+            exc_info=True,
+        )
+        return None
+
+
 @router.get("/sse/room/{room_id}/stream")
-async def stream_room_messages(
+async def stream_room_messages(  # noqa: C901
     room_id: str = Path(..., description="room ID"),
     user: ClerkUser = Depends(get_current_user_with_query_token),
     transport: SSERouteTransport = Depends(get_sse_transport),
     db: SSEStateReader = Depends(get_sse_store),
+    request: Request = None,  # noqa: B008 — FastAPI injected
+    snapshot: str | None = None,
 ):
     """
     create SSE message stream for specified room
+
+    The stream is snapshot-driven (Room Stream Snapshot plan §4): the
+    ``connected`` handshake carries the room's latest contiguous ``room_seq``
+    and a ``snapshot`` frame follows as the first frame. ``?snapshot=1``
+    forces a fresh fold from the authoritative room event log (gap recovery).
+    Without a bound snapshot service the stream degrades to the legacy
+    notification-driven behavior with an unchanged envelope.
 
     Args:
         room_id: room ID
@@ -53,6 +81,10 @@ async def stream_room_messages(
             detail="You do not have permission to stream this room",
         )
 
+    snapshot_service = None
+    if request is not None:
+        snapshot_service = getattr(request.app.state, "room_snapshot_service", None)
+
     async def event_generator():
         connection = None
         try:
@@ -60,14 +92,35 @@ async def stream_room_messages(
             connection = await transport.add_connection(room_id)
             logger.info(f"SSE stream started for room {room_id}")
 
-            # send connected message
+            # Build the snapshot before the handshake so the connected frame
+            # can carry the same watermark the snapshot folds to.
+            snapshot_data = await _fetch_connect_snapshot(
+                snapshot_service, room_id, force=snapshot == "1"
+            )
+
+            # send connected message (handshake gains room_seq)
+            connected_data: dict[str, Any] = {
+                "connection_id": connection.connection_id,
+            }
+            if snapshot_data is not None:
+                connected_data["room_seq"] = snapshot_data["room_seq"]
             connected_message = {
                 "type": "connected",
                 "room_id": room_id,
                 "timestamp": utcnow().isoformat(),
-                "data": {"connection_id": connection.connection_id},
+                "data": connected_data,
             }
             yield f"data: {json.dumps(connected_message)}\n\n"
+
+            # Snapshot as the first frame after connected.
+            if snapshot_data is not None:
+                snapshot_frame = {
+                    "type": "snapshot",
+                    "room_id": room_id,
+                    "timestamp": utcnow().isoformat(),
+                    "data": snapshot_data,
+                }
+                yield f"data: {json.dumps(snapshot_frame)}\n\n"
 
             while connection.is_active:
                 try:
@@ -136,6 +189,39 @@ async def get_room_sse_status(
             detail="You do not have permission to inspect this room",
         )
     return transport.get_room_status(room_id)
+
+
+@router.get("/sse/room/{room_id}/events")
+async def get_room_events(
+    room_id: str = Path(..., description="room ID"),
+    request: Request = None,  # noqa: B008 — FastAPI injected
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=500, ge=1, le=1000),
+    user: ClerkUser = Depends(get_current_user_with_query_token),
+    db: SSEStateReader = Depends(get_sse_store),
+):
+    """
+    Replay persisted public room events (Room Stream Snapshot plan §5).
+
+    This is a fallback read path, not a delivery channel: the primary
+    live-recovery path remains re-requesting a snapshot over the stream.
+    Cold hydration (no ``after`` yet) is ``after=0``. Auth is identical to
+    the SSE stream route.
+    """
+    room = await db.get_room_by_room_id(room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    if room.room_owner_id != user.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to replay this room",
+        )
+
+    store = getattr(request.app.state, "room_event_store", None)
+    if store is None:
+        return {"room_seq": 0, "events": []}
+    records = await store.read_range(room_id, after=after, limit=limit)
+    return {"room_seq": await store.latest_seq(room_id), "events": records}
 
 
 @router.post("/sse/message/{message_id}/cancel")

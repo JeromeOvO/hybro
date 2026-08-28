@@ -7,7 +7,7 @@ from common.config.settings import Settings
 
 RUNTIME_CONFIG_ENV_VARS = (
     "FEATURE_RUN_EVENT_SSE",
-    "FEATURE_RUN_WATCHDOG",
+    "ORCHESTRATOR_WORKER_INTERVAL_SECONDS",
     "ORCHESTRATION_OUTCOME_GUARDRAILS",
     "SUPERVISOR_MAX_STEPS",
     "RUN_WATCHDOG_STALE_MINUTES",
@@ -19,6 +19,20 @@ RUNTIME_CONFIG_ENV_VARS = (
 def _clear_runtime_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in RUNTIME_CONFIG_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+def test_canonical_lifecycle_has_no_runtime_admission_or_worker_switches():
+    settings = Settings(_env_file=None)
+
+    assert not hasattr(settings, "feature_canonical_turn_lifecycle")
+    assert not hasattr(settings, "orchestrator_projection_enabled")
+    assert not hasattr(settings, "orchestrator_recovery_enabled")
+
+
+def test_feature_run_event_sse_defaults_on(monkeypatch):
+    monkeypatch.delenv("FEATURE_RUN_EVENT_SSE", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.feature_run_event_sse is True
 
 
 def test_orchestration_outcome_guardrails_defaults_on(monkeypatch):
@@ -76,27 +90,6 @@ def test_feature_run_event_sse_parses_legacy_values(raw: str, expected: bool) ->
     settings = Settings(_env_file=None, feature_run_event_sse=raw)
 
     assert settings.feature_run_event_sse is expected
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("", True),
-        ("0", False),
-        ("false", False),
-        ("no", True),
-        ("off", False),
-        ("1", True),
-        ("true", True),
-        ("yes", True),
-        ("on", True),
-        ("garbage", True),
-    ],
-)
-def test_feature_run_watchdog_parses_legacy_values(raw: str, expected: bool) -> None:
-    settings = Settings(_env_file=None, feature_run_watchdog=raw)
-
-    assert settings.feature_run_watchdog is expected
 
 
 def test_runtime_config_unification_env_overrides(

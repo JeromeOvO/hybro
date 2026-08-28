@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from ..models import ToolInvocation
 from ..ports import OrchestratorRunStore
-from .models import PreparedInvocationSnapshot
+from .errors import RecoverableCheckpointError
+from .models import AgentCallLedgerRecord, PreparedInvocationSnapshot
 from .ports import AgentToolBindingStore
 from .resources import freeze_call_manifest
+
+
+class AcceptedCallRecoveryRuntime(Protocol):
+    async def recover_dispatch(
+        self,
+        record: AgentCallLedgerRecord,
+        invocation: ToolInvocation,
+    ) -> None: ...
 
 
 class RunPreparedInvocationSnapshotReader:
@@ -41,6 +52,7 @@ class RunPreparedInvocationSnapshotReader:
             binding=binding,
             source_room_id=run.room_id,
             source_room_epoch=run.request.room_epoch,
+            root_context_source_message_id=run.request.user_message_id,
         )
         return PreparedInvocationSnapshot(
             run_id=run.run_id,
@@ -51,3 +63,45 @@ class RunPreparedInvocationSnapshotReader:
             binding=binding,
             resource_manifest=manifest,
         )
+
+    async def read_invocation(
+        self, *, run_id: str, invocation_id: str
+    ) -> ToolInvocation | None:
+        """Reload the exact durable invocation for background dispatch recovery."""
+
+        run = await self.run_store.load(run_id)
+        if run is None:
+            return None
+        matches = [
+            entry.invocation
+            for batch in run.tool_batches
+            for entry in batch.entries
+            if entry.call_id == invocation_id and entry.invocation is not None
+        ]
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+
+class RunBackedDispatchRecovery:
+    """Production recovery adapter from durable Run invocation to Tool runtime."""
+
+    def __init__(
+        self,
+        *,
+        prepared_reader: RunPreparedInvocationSnapshotReader,
+        runtime: AcceptedCallRecoveryRuntime,
+    ) -> None:
+        self.prepared_reader = prepared_reader
+        self.runtime = runtime
+
+    async def __call__(self, record: AgentCallLedgerRecord) -> None:
+        invocation = await self.prepared_reader.read_invocation(
+            run_id=record.run_id,
+            invocation_id=record.invocation_id,
+        )
+        if invocation is None:
+            raise RecoverableCheckpointError(
+                "durable invocation is unavailable for call recovery"
+            )
+        await self.runtime.recover_dispatch(record, invocation)

@@ -13,11 +13,6 @@ export { detectAndMarkStaleTasks } from './stale-detection'
 export { filterHydrationMessages } from './hydration-filter'
 export { convertApiMessageToIncoming } from './convert-api-message'
 export type { ConvertApiMessageOptions } from './convert-api-message'
-export {
-  stampInferredTurnTerminalStatus,
-  collectActiveRunTriggerMessageIds,
-} from './infer-turn-terminal-status'
-export type { StampInferredTurnTerminalOptions } from './infer-turn-terminal-status'
 
 interface MessageStoreState {
   // ── Per-room entity storage ───────────────────────────────

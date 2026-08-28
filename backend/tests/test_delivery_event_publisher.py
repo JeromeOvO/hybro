@@ -5,6 +5,8 @@ import pytest
 
 from common.dto import (
     DeliveryEmitStatus,
+    HITLRequestEvent,
+    HITLResolvedEvent,
     MessageCommitted,
     ProcessingStatusEvent,
     RunEventNotification,
@@ -99,6 +101,8 @@ def make_publisher(
     task_runner=None,
     metrics=None,
     config=None,
+    room_events=None,
+    projection_settlement=None,
 ):
     return EventPublisherImpl(
         sse_transport=transport or FakeTransport(),
@@ -108,6 +112,45 @@ def make_publisher(
         now=fixed_now,
         instance_id="worker-1",
         metrics=metrics,
+        room_events=room_events,
+        projection_settlement=projection_settlement,
+    )
+
+
+def test_hitl_idempotency_keys_are_scoped_to_room_and_interaction():
+    publisher = make_publisher()
+    request_a = HITLRequestEvent(
+        room_id="room-a",
+        request_id="cloud_providers",
+        message_id="agent-message",
+        source="agent",
+        prompt="Which providers?",
+        prompt_type="text",
+        interaction_id="interaction-a",
+        question_count=2,
+        question_index=1,
+    )
+    request_b = request_a.model_copy(
+        update={"room_id": "room-b", "interaction_id": "interaction-b"}
+    )
+    resolved_a = HITLResolvedEvent(
+        room_id="room-a",
+        request_id="cloud_providers",
+        message_id="agent-message",
+        source="agent",
+        status="responded",
+        interaction_id="interaction-a",
+        question_count=2,
+        question_index=1,
+    )
+
+    request_key_a = publisher._idempotency_key(request_a, {})
+    request_key_b = publisher._idempotency_key(request_b, {})
+    resolved_key_a = publisher._idempotency_key(resolved_a, {})
+    assert request_key_a == ("hitl_request:room-a:interaction-a:cloud_providers:1")
+    assert request_key_b != request_key_a
+    assert resolved_key_a == (
+        "hitl_response:room-a:interaction-a:cloud_providers:responded"
     )
 
 

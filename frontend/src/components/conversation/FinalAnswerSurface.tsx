@@ -1,23 +1,20 @@
 'use client'
 
 import type { Ref, ReactNode } from 'react'
-import type { TurnViewModel, AgentResultViewModel } from '@/lib/room-timeline/types'
+import type { AgentResultViewModel, TurnViewModel } from '@/lib/room-timeline/types'
 import { getSupervisorStatusLine, getStripSourceResults } from '@/lib/room-timeline/turn-live-shell'
-import { getAgentTheme } from '@/lib/selectors/conversation-types'
-import { mapResultDisplayProps } from '@/lib/room-timeline/map-result-display'
 import { useResultStreamDisplay } from '@/hooks/useStreamBuffer'
 import { MarkdownContent } from '@/components/markdown-content'
-import { AgentCard } from './AgentCard'
 import { AgentResultContent } from './AgentResultContent'
 import { ProcessingStatusLog } from './ProcessingStatusLog'
 import { SynthesisContent, SynthesisContentFromStream } from './SynthesisContent'
-import { UserAnswerCard } from './UserAnswerCard'
 
 interface FinalAnswerSurfaceProps {
   turn: TurnViewModel
   surfaceRef?: Ref<HTMLDivElement>
   selectedAgentMessageId?: string
   onOpenDetail?: (messageId: string) => void
+  renderProcessingLog?: boolean
 }
 
 /**
@@ -32,121 +29,28 @@ function isProcessingStatusRunning(turn: TurnViewModel): boolean {
   return turn.status === 'active' && turn.phase !== 'completed'
 }
 
-function CollectingBlock({
-  phase,
-  processingStatusLogs,
+function ProcessingBlock({
+  entries,
   isRunning,
+  show,
 }: {
-  phase?: TurnViewModel['phase']
-  processingStatusLogs?: TurnViewModel['processingStatusLogs']
+  entries?: TurnViewModel['processingStatusLogs']
   isRunning: boolean
+  show: boolean
 }) {
-  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
-  const synthesizing = phase === 'synthesizing'
-  const display = {
-    label: synthesizing ? 'Synthesizing' : 'Working',
-    tone: 'accent' as const,
-    isAnimated: isRunning,
-    ariaLabel: `HYBRO AI — ${synthesizing ? 'Synthesizing' : 'Working'}`,
-  }
-
-  return (
-    <>
-      <AgentCard
-        agentId="system:hybro"
-        agentName="HYBRO AI"
-        taskDescription=""
-        theme={theme}
-        display={display}
-        interactive={false}
-      />
-      <ProcessingStatusLog entries={processingStatusLogs ?? []} isRunning={isRunning} />
-    </>
-  )
+  return show ? <ProcessingStatusLog entries={entries ?? []} isRunning={isRunning} /> : null
 }
 
-function ResultHeader({
-  result,
-  isStreaming,
-  displayContent,
-}: {
-  result: AgentResultViewModel
-  isStreaming: boolean
-  displayContent?: string
-}) {
-  const theme = getAgentTheme(result.agentId, result.agentName)
-  const display = mapResultDisplayProps(result, isStreaming, displayContent)
-  
-  // A synthesis result is the final answer, not another delegated task. Live
-  // SSE events may have left a task/status label on the same entity; never show
-  // that control-plane text above the user-facing answer.
-  let taskDescription = result.isSummaryAgent ? '' : (result.taskStatusMessage ?? '')
-  if (taskDescription.trim() === result.content.trim()) {
-    taskDescription = ''
-  }
-
+function TerminalContent({ intro, turnId }: { intro: string; turnId?: string }) {
   return (
-    <AgentCard
-      agentId={result.agentId ?? result.messageId}
-      agentName={result.agentName}
-      taskDescription={taskDescription}
-      theme={theme}
-      display={display}
-      agentSource={result.agentSource}
-      interactive={false}
-    />
-  )
-}
-
-function FailedBlock({ intro, turnId }: { intro: string; turnId?: string }) {
-  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
-  const display = {
-    label: 'Failed',
-    tone: 'danger' as const,
-    isAnimated: false,
-    ariaLabel: 'HYBRO AI — Failed',
-  }
-
-  return (
-    <>
-      <AgentCard
-        agentId="system:hybro"
-        agentName="HYBRO AI"
-        taskDescription=""
-        theme={theme}
-        display={display}
-        interactive={false}
-      />
-      <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body" content={intro} />
-      </div>
-    </>
-  )
-}
-
-function CanceledBlock({ intro, turnId }: { intro: string; turnId?: string }) {
-  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
-  const display = {
-    label: 'Canceled',
-    tone: 'danger' as const,
-    isAnimated: false,
-    ariaLabel: 'HYBRO AI — Canceled',
-  }
-
-  return (
-    <>
-      <AgentCard
-        agentId="system:hybro"
-        agentName="HYBRO AI"
-        taskDescription=""
-        theme={theme}
-        display={display}
-        interactive={false}
-      />
-      <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body" content={intro} />
-      </div>
-    </>
+    <div
+      className="conversation-content-body"
+      data-quote-message-id={turnId}
+      data-quote-agent-name="HYBRO AI"
+      data-quote-source-kind="user_turn"
+    >
+      <MarkdownContent className="conversation-markdown-body" content={intro} />
+    </div>
   )
 }
 
@@ -155,90 +59,16 @@ function DeterministicDoneBlock({
   summaryResult,
   turnArtifacts,
   turnId,
-  isRunning,
 }: {
   intro: string
   summaryResult?: AgentResultViewModel
   turnArtifacts?: TurnViewModel['agentResults'][number]['artifacts']
   turnId?: string
-  isRunning: boolean
 }) {
-  const theme = getAgentTheme('system:hybro', 'HYBRO AI')
-  const display = {
-    label: 'Combined agent responses',
-    tone: 'muted' as const,
-    // Keep the avatar spinning while the turn is still active (e.g. single
-    // agent already terminal but room processing_status has not completed).
-    isAnimated: isRunning,
-    ariaLabel: 'HYBRO AI — Combined agent responses',
-  }
-
   if (summaryResult) {
-    return (
-      <>
-        <ResultHeader result={summaryResult} isStreaming={false} />
-        <SynthesisContent summaryResult={summaryResult} turnArtifacts={turnArtifacts} />
-      </>
-    )
+    return <SynthesisContent summaryResult={summaryResult} turnArtifacts={turnArtifacts} />
   }
-
-  return (
-    <>
-      <AgentCard
-        agentId="system:hybro"
-        agentName="HYBRO AI"
-        taskDescription=""
-        theme={theme}
-        display={display}
-        interactive={false}
-      />
-      <div className="conversation-content-body" data-quote-message-id={turnId} data-quote-agent-name="HYBRO AI" data-quote-source-kind="user_turn">
-        <MarkdownContent className="conversation-markdown-body" content={intro} />
-      </div>
-    </>
-  )
-}
-
-function HitlPrimary({ turn, isRunning }: { turn: TurnViewModel; isRunning: boolean }) {
-  const hitl = turn.finalAnswer.hitl
-  if (!hitl || hitl.prompts.length === 0) {
-    return <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={isRunning} />
-  }
-
-  return (
-    <div className="flex flex-col" style={{ gap: 'var(--conversation-gap-block)' }}>
-      {hitl.prompts.map(p => (
-        <div
-          key={p.messageId}
-          className="rounded-xl border px-4 py-3"
-          style={{
-            borderColor: 'hsl(var(--agent-color-4) / 0.18)',
-            backgroundColor: 'hsl(var(--agent-color-4) / 0.08)',
-          }}
-        >
-          <div className="text-xs font-medium mb-2" style={{ color: 'var(--conversation-text-muted)' }}>
-            {p.agentName} · Needs Input
-          </div>
-          <div
-            className="conversation-user-message-text whitespace-pre-wrap"
-            style={{ color: 'var(--conversation-text-primary)' }}
-          >
-            {p.prompt}
-          </div>
-        </div>
-      ))}
-      {turn.agentResults
-        .filter(r => r.hitlResolved)
-        .map(r => (
-          <UserAnswerCard
-            key={r.messageId}
-            agentName={r.agentName}
-            question={r.hitlResolved!.prompt}
-            answer={r.hitlResolved!.answer}
-          />
-        ))}
-    </div>
-  )
+  return <TerminalContent intro={intro} turnId={turnId} />
 }
 
 function SynthesisBlock({
@@ -247,36 +77,29 @@ function SynthesisBlock({
   supervisorStatus,
   processingStatusLogs,
   processingStatusRunning,
+  showProcessingLog,
 }: {
   turn: TurnViewModel
   summaryResult: AgentResultViewModel
   supervisorStatus: string | null
   processingStatusLogs?: TurnViewModel['processingStatusLogs']
   processingStatusRunning: boolean
+  showProcessingLog: boolean
 }) {
   const stream = useResultStreamDisplay(summaryResult)
   const logs = processingStatusLogs ?? []
-  const showProcessingLog = logs.length > 0
-  const turnArtifacts = turn.agentResults.flatMap(r => r.artifacts ?? [])
+  const turnArtifacts = turn.agentResults.flatMap((result) => result.artifacts ?? [])
 
   return (
     <>
-      <ResultHeader
-        result={summaryResult}
-        isStreaming={stream.isStreaming}
-        displayContent={stream.content}
-      />
-      {showProcessingLog && (
-        <ProcessingStatusLog
-          entries={logs}
-          isRunning={processingStatusRunning}
-        />
-      )}
-      {supervisorStatus && !stream.isStreaming && (
-        <p className="text-xs mt-1" style={{ color: 'var(--conversation-text-muted)' }} aria-live="polite">
+      {showProcessingLog && logs.length > 0 ? (
+        <ProcessingStatusLog entries={logs} isRunning={processingStatusRunning} />
+      ) : null}
+      {supervisorStatus && !stream.isStreaming ? (
+        <p className="mt-1 text-xs" style={{ color: 'var(--conversation-text-muted)' }} aria-live="polite">
           {supervisorStatus}
         </p>
-      )}
+      ) : null}
       <SynthesisContentFromStream
         stream={stream}
         turnArtifacts={turnArtifacts}
@@ -292,60 +115,62 @@ export function FinalAnswerSurface({
   surfaceRef,
   selectedAgentMessageId,
   onOpenDetail,
+  renderProcessingLog = true,
 }: FinalAnswerSurfaceProps) {
   const supervisorStatus = getSupervisorStatusLine(turn)
-  const summaryResult = turn.agentResults.find(r => r.isSummaryAgent)
+  const summaryResult = turn.agentResults.find((result) => result.isSummaryAgent)
   const realAgents = getStripSourceResults(turn)
   const { finalAnswer } = turn
-  const shouldShowProcessingLog = turn.processingStatusLogs.length > 0
+  const shouldShowProcessingLog = renderProcessingLog && turn.processingStatusLogs.length > 0
   const processingStatusRunning = isProcessingStatusRunning(turn)
   let processingLogRenderedInBody = false
-
   let body: ReactNode = null
 
   switch (finalAnswer.kind) {
     case 'hitl':
-      body = <HitlPrimary turn={turn} isRunning={processingStatusRunning} />
+      // The composer questionnaire is the sole HITL interaction surface.
+      // Keep lifecycle feedback here only when this component owns the log.
+      processingLogRenderedInBody = true
+      body = (
+        <ProcessingBlock
+          entries={turn.processingStatusLogs}
+          isRunning={processingStatusRunning}
+          show={renderProcessingLog}
+        />
+      )
       break
     case 'llm_synthesis':
-      if (summaryResult) {
-        processingLogRenderedInBody = true
-        body = (
-          <SynthesisBlock
-            turn={turn}
-            summaryResult={summaryResult}
-            supervisorStatus={supervisorStatus}
-            processingStatusLogs={turn.processingStatusLogs ?? []}
-            processingStatusRunning={processingStatusRunning}
-          />
-        )
-      } else {
-        processingLogRenderedInBody = true
-        body = (
-          <CollectingBlock
-            phase={turn.phase}
-            processingStatusLogs={turn.processingStatusLogs ?? []}
-            isRunning={processingStatusRunning}
-          />
-        )
-      }
+      processingLogRenderedInBody = true
+      body = summaryResult ? (
+        <SynthesisBlock
+          turn={turn}
+          summaryResult={summaryResult}
+          supervisorStatus={supervisorStatus}
+          processingStatusLogs={turn.processingStatusLogs}
+          processingStatusRunning={processingStatusRunning}
+          showProcessingLog={renderProcessingLog}
+        />
+      ) : (
+        <ProcessingBlock
+          entries={turn.processingStatusLogs}
+          isRunning={processingStatusRunning}
+          show={renderProcessingLog}
+        />
+      )
       break
     case 'canceled':
-      body = <CanceledBlock intro={finalAnswer.canceledIntro ?? ''} turnId={turn.id} />
+      body = <TerminalContent intro={finalAnswer.canceledIntro ?? ''} turnId={turn.id} />
       break
     case 'failed':
-      body = <FailedBlock intro={finalAnswer.failedIntro ?? ''} turnId={turn.id} />
+      body = <TerminalContent intro={finalAnswer.failedIntro ?? ''} turnId={turn.id} />
       break
     case 'deterministic_done':
       body = (
         <DeterministicDoneBlock
           intro={finalAnswer.deterministicIntro ?? ''}
-          summaryResult={
-            summaryResult?.summaryOrigin === 'deterministic' ? summaryResult : undefined
-          }
-          turnArtifacts={turn.agentResults.flatMap(r => r.artifacts ?? [])}
+          summaryResult={summaryResult?.summaryOrigin === 'deterministic' ? summaryResult : undefined}
+          turnArtifacts={turn.agentResults.flatMap((result) => result.artifacts ?? [])}
           turnId={turn.id}
-          isRunning={processingStatusRunning}
         />
       )
       break
@@ -362,10 +187,10 @@ export function FinalAnswerSurface({
       } else {
         processingLogRenderedInBody = true
         body = (
-          <CollectingBlock
-            phase={turn.phase}
-            processingStatusLogs={turn.processingStatusLogs}
+          <ProcessingBlock
+            entries={turn.processingStatusLogs}
             isRunning={processingStatusRunning}
+            show={renderProcessingLog}
           />
         )
       }
@@ -375,10 +200,10 @@ export function FinalAnswerSurface({
     default:
       processingLogRenderedInBody = true
       body = (
-        <CollectingBlock
-          phase={turn.phase}
-          processingStatusLogs={turn.processingStatusLogs}
+        <ProcessingBlock
+          entries={turn.processingStatusLogs}
           isRunning={processingStatusRunning}
+          show={renderProcessingLog}
         />
       )
       break
@@ -393,9 +218,9 @@ export function FinalAnswerSurface({
       data-final-answer-kind={finalAnswer.kind}
       data-primary-stream-id={turn.primaryStreamMessageId ?? ''}
     >
-      {shouldShowProcessingLog && !processingLogRenderedInBody && (
+      {shouldShowProcessingLog && !processingLogRenderedInBody ? (
         <ProcessingStatusLog entries={turn.processingStatusLogs} isRunning={processingStatusRunning} />
-      )}
+      ) : null}
       {body}
     </div>
   )

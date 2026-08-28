@@ -72,18 +72,33 @@ export function useRoomSSEConnection(
   reconcileWithDb: (roomId: string) => Promise<void>,
   setSseConnected: (v: boolean) => void,
   setSseError: (v: string | null) => void,
+  requestSnapshotRef?: MutableRefObject<(() => void) | null>,
 ) {
   // Initialize SSE connection
   const {
     connected: sseConnected,
     connecting: sseConnecting,
-    error: sseError
+    error: sseError,
+    reconnectWithSnapshot,
   } = useRoomSSE({
     roomId,
     enabled: sseEnabled && !!roomId,
     getToken,
     onMessage: handleSSEMessage,
   })
+
+  // Expose the gap-recovery surface to the SSE dispatcher's reducer
+  // (plan §4 rule 3: reconnect to the same endpoint with ?snapshot=1).
+  useEffect(() => {
+    if (requestSnapshotRef) {
+      requestSnapshotRef.current = reconnectWithSnapshot
+    }
+    return () => {
+      if (requestSnapshotRef && requestSnapshotRef.current === reconnectWithSnapshot) {
+        requestSnapshotRef.current = null
+      }
+    }
+  }, [requestSnapshotRef, reconnectWithSnapshot])
 
   // Sync SSE state to zustand
   useEffect(() => {
@@ -159,52 +174,11 @@ export function useRoomSSEConnection(
       }).catch(() => { /* ignore — safety-net, not critical */ })
     }
 
-    // Safety-net: keep verifying backend truth for the entire active turn.
-    // A one-shot check can observe the run while it is still active and then
-    // never notice a later missed terminal SSE, leaving the UI spinning until
-    // the page is refreshed.
-    let safetyTimer: ReturnType<typeof setTimeout> | null = null
-    let safetyCheckCancelled = false
-    const scheduleSafetyCheck = () => {
-      safetyTimer = setTimeout(async () => {
-        let terminalRecovered = false
-        try {
-          const hasActiveLifecycle = await backendHasActiveLifecycle()
-          if (safetyCheckCancelled) return
-
-          if (hasActiveLifecycle === false) {
-            await reconcileWithDb(roomId)
-            if (safetyCheckCancelled) return
-            await tryRecoverTurnTerminalFromBackendTruth(roomId, lifecycle, getToken)
-            if (safetyCheckCancelled) return
-            if (hasTerminalEvidenceForCurrentTurn(roomId, lifecycle)) {
-              lifecycle.stopProcessing()
-              lifecycle.clearSseDisconnection()
-              terminalRecovered = true
-            }
-          }
-        } catch {
-          // A transient reconcile failure must not permanently disable the
-          // lifecycle safety-net. The next bounded poll retries backend truth.
-        } finally {
-          // Keep polling while React still considers this lifecycle active. The
-          // effect cleanup cancels the loop as soon as processing resolves.
-          if (!safetyCheckCancelled && !terminalRecovered) {
-            scheduleSafetyCheck()
-          }
-        }
-      }, 5000)
-    }
-    if (sseConnected && processing) {
-      scheduleSafetyCheck()
-    }
+    // Phase 3 (Room Stream Snapshot plan §8): the fixed 5 s safety-net poll
+    // is removed. Missed events are recovered by the reducer's gap self-heal
+    // (snapshot re-request) — the only recovery path.
 
     prevSseConnectedRef.current = sseConnected
-
-    return () => {
-      safetyCheckCancelled = true
-      if (safetyTimer) clearTimeout(safetyTimer)
-    }
   }, [sseConnected, processing, roomId, getToken, getAgentName, getAgentSource, hitlRequestIndex, lifecycle, reconcileWithDb])
 
   return { sseConnected, sseConnecting, sseError }

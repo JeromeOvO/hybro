@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from execution.adapters.hitl import HITLApplicationStore
 from execution.orchestrator import (
     ORCHESTRATOR_COLLECTIONS,
     TOOL_RESULT_STATUSES,
@@ -51,7 +52,9 @@ from execution.orchestrator import (
     validate_tool_result_correlation,
 )
 from execution.orchestrator.a2a_runtime.models import AGENT_CALL_STATES
+from execution.orchestrator.a2a_runtime.ports import HITLApplicationPort
 from execution.orchestrator.models import AgentMessage
+from execution.orchestrator.ports import InvocationOutcomeCheckpointReader
 
 NOW = datetime(2026, 3, 12, tzinfo=UTC)
 
@@ -759,9 +762,43 @@ def test_event_envelope_ordering_and_idempotency():
 def test_protocols_are_narrow_and_explicit():
     expected = {
         ModelRuntime: {"stream_turn"},
-        ToolRuntime: {"accept", "execute"},
+        ToolRuntime: {
+            "accept",
+            "execute",
+            "dispatch_model_reply",
+            "publish_parked_interaction",
+            "abandon_parked_interaction",
+        },
         ToolCatalog: {"list_tools", "resolve"},
+        HITLApplicationPort: {
+            "create_or_replay",
+            "activate",
+            "abandon",
+            "read_interaction",
+            "get_eligible_interactions",
+            "get_published_interactions",
+            "publish",
+            "read_answers",
+            "read_answer_record",
+            "answer",
+        },
+        HITLApplicationStore: {
+            "ensure_interaction",
+            "load_interaction",
+            "get_eligible_interactions",
+            "get_published_interactions",
+            "mark_eligible",
+            "mark_published",
+            "abandon",
+            "load_answer",
+            "ensure_answer",
+        },
         OrchestratorEventStore: {"append", "read"},
+        InvocationOutcomeCheckpointReader: {
+            "is_outcome_checkpointed",
+            "has_processed_observation",
+            "is_run_terminal",
+        },
         EventProjector: {"project"},
         OrchestratorRunStore: {
             "create",
@@ -805,7 +842,21 @@ def test_unbound_collection_metadata_contains_required_indexes():
     assert set(collections) == {
         "orchestrator_runs",
         "orchestrator_run_events",
+        "orchestrator_recovery_leases",
     }
+    lease_indexes = {
+        item.name: item for item in collections["orchestrator_recovery_leases"].indexes
+    }
+    assert set(lease_indexes) == {
+        "orchestrator_recovery_lease_run_unique",
+        "orchestrator_recovery_lease_due",
+    }
+    assert lease_indexes["orchestrator_recovery_lease_due"].keys == (
+        ("quarantined_at", 1),
+        ("next_attempt_at", 1),
+        ("lease_expires_at", 1),
+        ("run_id", 1),
+    )
     run_names = {item.name for item in collections["orchestrator_runs"].indexes}
     assert {
         "orchestrator_run_id_unique",

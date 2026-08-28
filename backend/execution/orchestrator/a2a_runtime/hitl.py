@@ -16,15 +16,17 @@ from common.dto.hitl import (
     HITLRouteSnapshotV2,
 )
 
-from ..models import TextPart
+from ..models import TextPart, ToolResult
 from .errors import (
+    AgentCardContractError,
     AmbiguousRemoteEffectError,
     RecoverableAdapterError,
     RecoverableCheckpointError,
     RecoverableTransportError,
 )
 from .interaction_outcome import (
-    emit_hitl_request_events,
+    CanonicalHITLControlPublisher,
+    emit_hitl_resolved_events,
     park_call_for_interaction,
 )
 from .ledger import (
@@ -63,6 +65,7 @@ class InMemoryHITLApplicationPort:
         ] = {}
         self._answer_records: dict[tuple[str, int], DurableHITLAnswerRecord] = {}
         self._eligible_interactions: set[str] = set()
+        self._published_interactions: set[str] = set()
         self._abandoned_interactions: dict[str, tuple[str, str]] = {}
 
     async def create_or_replay(
@@ -134,12 +137,25 @@ class InMemoryHITLApplicationPort:
         stored = self._interactions.get(interaction_id)
         if stored is None:
             return "absent"
-        if stored[1].call_record_id != call_record_id:
+        _spec, route, _fingerprint = stored
+        if route.call_record_id != call_record_id:
             return "conflict"
         desired = (call_record_id, reason)
         existing = self._abandoned_interactions.get(interaction_id)
         if existing is not None:
             return "replayed" if existing[0] == call_record_id else "conflict"
+        lifecycle_close = reason.startswith("terminal_winner:") or (
+            reason == "superseded_by_new_interaction"
+        )
+        if not lifecycle_close and interaction_id not in self._eligible_interactions:
+            return "conflict"
+        if (
+            not lifecycle_close
+            and (interaction_id, route.interaction_revision) in self._answer_records
+        ):
+            return "conflict"
+        # No await occurs between the answer fence and mutation, so this has
+        # the same single-winner semantics as the Mongo conditional update.
         self._eligible_interactions.discard(interaction_id)
         self._abandoned_interactions[interaction_id] = desired
         return "accepted"
@@ -190,6 +206,44 @@ class InMemoryHITLApplicationPort:
             )
         return interactions
 
+    async def get_published_interactions(
+        self, room_id: str
+    ) -> list[tuple[A2AInteractionSpec, HITLRouteSnapshotV2, str]]:
+        interactions = []
+        for interaction_id, stored in self._interactions.items():
+            if interaction_id not in self._eligible_interactions:
+                continue
+            if interaction_id not in self._published_interactions:
+                continue
+            if interaction_id in self._abandoned_interactions:
+                continue
+            spec, route, fingerprint = stored
+            if route.room_id != room_id:
+                continue
+            if (interaction_id, route.interaction_revision) in self._answer_records:
+                continue
+            interactions.append(
+                (
+                    A2AInteractionSpec.model_validate(spec.model_dump(mode="python")),
+                    HITLRouteSnapshotV2.model_validate(route.model_dump(mode="python")),
+                    fingerprint,
+                )
+            )
+        return interactions
+
+    async def publish(self, interaction_id: str, *, call_record_id: str) -> str:
+        stored = self._interactions.get(interaction_id)
+        if stored is None:
+            return "error"
+        if stored[1].call_record_id != call_record_id:
+            return "conflict"
+        if interaction_id in self._abandoned_interactions:
+            return "conflict"
+        if interaction_id in self._published_interactions:
+            return "replayed"
+        self._published_interactions.add(interaction_id)
+        return "accepted"
+
     async def read_answers(
         self, interaction_id: str, interaction_revision: int
     ) -> list[HITLQuestionAnswer] | None:
@@ -226,8 +280,11 @@ class InMemoryHITLApplicationPort:
         ):
             raise KeyError(interaction_id)
         spec, route, _ = stored
-        if route.fingerprint != route_fingerprint:
-            raise ValueError("HITL route fingerprint changed")
+        if (
+            interaction_revision != route.interaction_revision
+            or route.fingerprint != route_fingerprint
+        ):
+            raise ValueError("HITL route fingerprint or revision changed")
         inventory = {question.question_id: question for question in spec.questions}
         if set(inventory) != {answer.question_id for answer in answers}:
             raise ValueError("HITL answer inventory does not match")
@@ -274,6 +331,8 @@ class A2AContinuationCoordinator:
         worker_id: str = "a2a-continuation",
         hitl_delivery: Any | None = None,
         run_store: Any | None = None,
+        canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
+        public_secret_values: tuple[str, ...] = (),
     ) -> None:
         self.ledger = ledger
         self.bindings = bindings
@@ -288,6 +347,8 @@ class A2AContinuationCoordinator:
         self.worker_id = worker_id
         self.hitl_delivery = hitl_delivery
         self.run_store = run_store
+        self.canonical_hitl_control = canonical_hitl_control
+        self.public_secret_values = public_secret_values
 
     async def resume(
         self,
@@ -687,11 +748,52 @@ class A2AContinuationCoordinator:
         )
         return persisted if persisted.answer_applied == marker else None
 
+    async def _ensure_resumed_projection(
+        self,
+        call: AgentCallLedgerRecord,
+        answer_record: DurableHITLAnswerRecord,
+    ) -> None:
+        stored = await self.hitl.read_interaction(answer_record.interaction_id)
+        if stored is None:
+            raise RecoverableCheckpointError(
+                "answered HITL interaction is unavailable for public projection"
+            )
+        interaction, route, _fingerprint = stored
+        if (
+            route.call_record_id != call.call_record_id
+            or route.interaction_revision != answer_record.interaction_revision
+        ):
+            raise RecoverableCheckpointError(
+                "answered HITL route changed before public projection"
+            )
+        await emit_hitl_resolved_events(
+            record=call,
+            interaction=interaction,
+            interaction_id=answer_record.interaction_id,
+            status="responded",
+            hitl_delivery=self.hitl_delivery,
+            run_store=self.run_store,
+            canonical_control=self.canonical_hitl_control,
+            answer_ref=(
+                "answer_"
+                + sha256(
+                    (
+                        f"{answer_record.interaction_id}:"
+                        f"{answer_record.interaction_revision}"
+                    ).encode()
+                ).hexdigest()
+            ),
+        )
+
     async def _create_or_replay_command(
         self,
         call: AgentCallLedgerRecord,
         answer_record: DurableHITLAnswerRecord,
     ) -> str:
+        # The public response and run_resumed boundary must be durable before
+        # continuation dispatch can synchronously produce a follow-up challenge.
+        # Deterministic delivery identities make this replay-safe.
+        await self._ensure_resumed_projection(call, answer_record)
         if call.continuation_command is not None:
             return await self.recover_call(call_record_id=call.call_record_id)
         binding = await self.bindings.load(call.binding_id)
@@ -709,8 +811,11 @@ class A2AContinuationCoordinator:
         if not await self.room_epochs.verify_active(
             claimed.room_id, claimed.room_epoch
         ):
-            await self._release(claimed)
-            raise PermissionError("Room epoch is inactive")
+            return await self._terminalize_authorization_failure(
+                claimed,
+                error_code="continuation_room_inactive",
+                error_message="The continuation is no longer authorized.",
+            )
         authorization = await self.authorization.authorize(
             binding=binding,
             requesting_subject_id=answer_record.authenticated_answerer_id,
@@ -721,9 +826,14 @@ class A2AContinuationCoordinator:
         claimed = await self._renew_and_verify(claimed)
         if claimed is None:
             return "delivery_uncertain"
-        if authorization != "authorized":
-            await self._release(claimed)
-            raise PermissionError("continuation authorization failed")
+        if authorization == "denied":
+            return await self._terminalize_authorization_failure(
+                claimed,
+                error_code="continuation_authorization_denied",
+                error_message="The continuation is no longer authorized.",
+            )
+        if authorization == "transient_failure":
+            return await self._defer_authorization_refresh(claimed)
         command = A2AContinuationCommand(
             command_id=f"continuation-{_stable([claimed.call_record_id, answer_record.interaction_id, str(answer_record.interaction_revision), answer_record.answer_digest])}",
             transport_kind=claimed.transport_kind,
@@ -747,6 +857,7 @@ class A2AContinuationCoordinator:
             updated_at=datetime.now(UTC),
             continuation_command=command,
             continuation_state="pending",
+            authorization_refresh_attempts=0,
         )
         persisted = await self._cas_or_load_winner(
             resuming, expected_state_version=claimed.state_version
@@ -757,6 +868,68 @@ class A2AContinuationCoordinator:
         ):
             return await self._finalized_state(persisted)
         return await self._deliver(persisted, inspect=False)
+
+    async def _terminalize_authorization_failure(
+        self,
+        call: AgentCallLedgerRecord,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> str:
+        result = ToolResult(
+            call_id=call.invocation_id,
+            tool_name=call.tool_name,
+            status="failed",
+            content=[],
+            artifact_refs=[],
+            error_code=error_code,
+            error_message=error_message,
+        )
+        terminal = transition_call(
+            call,
+            to_state="failed",
+            updated_at=datetime.now(UTC),
+            terminal_result=result,
+            terminal_result_digest=sha256(
+                result.model_dump_json().encode()
+            ).hexdigest(),
+            error_code=error_code,
+            error_message=error_message,
+            authorization_refresh_attempts=(call.authorization_refresh_attempts + 1),
+        )
+        persisted = await self._cas_or_load_winner(
+            terminal, expected_state_version=call.state_version
+        )
+        return await self._finalized_state(persisted)
+
+    async def _defer_authorization_refresh(self, call: AgentCallLedgerRecord) -> str:
+        attempts = call.authorization_refresh_attempts + 1
+        if attempts >= call.runtime_policy.max_authorization_refresh_attempts:
+            return await self._terminalize_authorization_failure(
+                call,
+                error_code="continuation_authorization_unavailable",
+                error_message="Continuation authorization could not be refreshed.",
+            )
+        delay = min(
+            call.runtime_policy.retry_backoff_initial_seconds * (2 ** (attempts - 1)),
+            call.runtime_policy.retry_backoff_max_seconds,
+        )
+        deferred = call.model_copy(
+            update={
+                "authorization_refresh_attempts": attempts,
+                "claim_owner": None,
+                "claim_expires_at": None,
+                "next_attempt_at": datetime.now(UTC) + timedelta(seconds=delay),
+                "state_version": call.state_version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        persisted = await self._cas_or_load_winner(
+            deferred, expected_state_version=call.state_version
+        )
+        if persisted.state in TERMINAL_AGENT_CALL_STATES:
+            return await self._finalized_state(persisted)
+        return "delivery_uncertain"
 
     async def _deliver(  # noqa: C901
         self, call: AgentCallLedgerRecord, *, inspect: bool
@@ -801,9 +974,30 @@ class A2AContinuationCoordinator:
             receipt, call = await self._run_fenced_continuation(
                 call, command, inspect=inspect
             )
+        except AgentCardContractError:
+            latest = await self.ledger.load_by_record_id(call.call_record_id)
+            if latest is not None and latest.claim_owner == self.worker_id:
+                call = latest
+            renewed = await self._renew_and_verify(call)
+            if renewed is None:
+                return "delivery_uncertain"
+            return await self._terminalize_continuation_transport_failure(
+                renewed,
+                error_code="agent_card_contract_error",
+                error_message="Agent Card could not be resolved.",
+            )
+        except RecoverableTransportError:
+            latest = await self.ledger.load_by_record_id(call.call_record_id)
+            if latest is not None and latest.claim_owner == self.worker_id:
+                call = latest
+            renewed = await self._renew_and_verify(call)
+            if renewed is None:
+                return "delivery_uncertain"
+            if inspect:
+                return await self._mark_uncertain(renewed)
+            return await self._retry_safe_continuation(renewed)
         except (
             RecoverableAdapterError,
-            RecoverableTransportError,
             AmbiguousRemoteEffectError,
             TimeoutError,
         ):
@@ -860,15 +1054,20 @@ class A2AContinuationCoordinator:
             receipt.outcome == "interaction"
             and receipt.interaction_observation is not None
         ):
-            if _should_retry_continuation_send(call, receipt.interaction_observation):
-                # Inspect still seeing the answered challenge (or a cleared
-                # status.message) means the continuation send may not have
-                # progressed the Agent. Resend once from inspect. If the
-                # continue send itself returns that same stale challenge,
-                # stay delivery_uncertain so recovery backs off — do not
-                # re-park the answered interaction or untyped-complete.
+            if _repeats_answered_challenge(call, receipt.interaction_observation):
                 if inspect:
-                    return await self._deliver(call, inspect=False)
+                    # Inspection cannot prove whether an ambiguous send was
+                    # accepted. Never convert the old challenge into permission
+                    # to repeat the remote effect.
+                    return await self._mark_uncertain(call)
+                # A synchronous continuation response proves that the Agent
+                # received the answer. Returning the exact answered challenge
+                # is an Agent no-progress terminal, not delivery uncertainty and
+                # not a new questionnaire round.
+                return await self._fail_no_progress(call)
+            if _blocks_untyped_interaction_completion(
+                call, receipt.interaction_observation
+            ):
                 return await self._mark_uncertain(call)
             return await self._park_interaction(call, receipt.interaction_observation)
         if receipt.outcome == "accepted":
@@ -969,6 +1168,28 @@ class A2AContinuationCoordinator:
     ) -> None:
         if persisted.pending_interaction_id is None:
             return
+        raw_spec = observation.interaction_spec
+        if raw_spec is None:
+            return
+        interaction = A2AInteractionSpec.model_validate(raw_spec)
+        interaction_fingerprint = _digest_json(interaction.model_dump(mode="json"))
+        waiting_state = (
+            observation.event_kind
+            if observation.event_kind in {"input_required", "auth_required"}
+            else "input_required"
+        )
+        if (
+            persisted.state != waiting_state
+            or persisted.pending_interaction_id != interaction.interaction_id
+            or persisted.interaction_fingerprint != interaction_fingerprint
+        ):
+            # A concurrent CAS winner may still point at an older parked
+            # questionnaire. Never publish the losing observation's questions
+            # under that settled interaction identity; recovery will process a
+            # later observation or terminalize the call without corrupting the
+            # canonical snapshot inventory.
+            return
+        await self.observations.mark_ledger_applied(observation.observation_id)
         if (
             prior_interaction_id is not None
             and prior_interaction_id != persisted.pending_interaction_id
@@ -979,17 +1200,11 @@ class A2AContinuationCoordinator:
                     call_record_id=persisted.call_record_id,
                     reason="superseded_by_new_interaction",
                 )
-        raw_spec = observation.interaction_spec
-        if raw_spec is None:
-            return
-        interaction = A2AInteractionSpec.model_validate(raw_spec)
-        await emit_hitl_request_events(
-            record=persisted,
-            interaction=interaction,
-            interaction_id=persisted.pending_interaction_id,
-            hitl_delivery=self.hitl_delivery,
-            run_store=self.run_store,
-        )
+        # A distinct continuation challenge re-enters model-first decision.
+        # Keep it private here: the exact observation is delivered back to the
+        # kernel, which assigns a fresh presentation identity and decides
+        # whether to join, surface, or degrade. Publishing here would bypass
+        # the Supervisor and reintroduce the late/generic questionnaire race.
 
     async def _mark_parked_terminal_outcome(
         self,
@@ -1007,6 +1222,63 @@ class A2AContinuationCoordinator:
                 outcome_digest=persisted.terminal_result_digest,
             )
 
+    async def _fail_no_progress(self, call: AgentCallLedgerRecord) -> str:
+        command = call.continuation_command
+        assert command is not None
+        observed_at = datetime.now(UTC)
+        observation = NormalizedA2AObservation(
+            observation_id=f"continuation-no-progress-{command.command_id}",
+            call_record_id=call.call_record_id,
+            source_kind="inspection",
+            source_identity=f"continuation-no-progress:{command.command_id}",
+            binding_scope=call.endpoint_scope_digest,
+            event_kind="terminal",
+            observed_at=observed_at,
+            task_id=call.a2a_task_id,
+            context_id=call.a2a_context_id,
+            status="failed",
+            content=[
+                TextPart(
+                    text="The Agent repeated an answered input request without making progress."
+                )
+            ],
+            error_code="agent_interaction_no_progress",
+            error_message="The Agent repeated the answered interaction.",
+        )
+        _, inbox_record = await self.observations.record(observation)
+        renewed = await self._renew_and_verify(call)
+        if renewed is None:
+            return "delivery_uncertain"
+        observation = inbox_record.observation
+        if (
+            observation.event_kind != "terminal"
+            or observation.artifact_refs
+            or inbox_record.state == "claimed"
+            or inbox_record.delivery_route == "observation_sink"
+        ):
+            return await self._mark_uncertain(renewed)
+        failed = apply_observation(
+            renewed,
+            observation,
+            recent_limit=renewed.runtime_policy.recent_observation_id_limit,
+        )
+        failed = failed.model_copy(update={"continuation_state": "accepted"})
+        persisted = await self._cas_or_load_winner(
+            failed, expected_state_version=renewed.state_version
+        )
+        if (
+            inbox_record.delivery_route == "unresolved"
+            and inbox_record.delivery_state == "pending"
+            and persisted.terminal_result_digest is not None
+            and observation.observation_id in persisted.recent_observation_ids
+            and persisted.terminal_result_digest == failed.terminal_result_digest
+        ):
+            await self.observations.mark_executor_outcome(
+                observation.observation_id,
+                outcome_digest=persisted.terminal_result_digest,
+            )
+        return await self._finalized_state(persisted)
+
     async def _expire(self, call: AgentCallLedgerRecord) -> str:
         command = call.continuation_command
         assert command is not None
@@ -1017,7 +1289,7 @@ class A2AContinuationCoordinator:
             source_identity=f"continuation-expired:{command.command_id}",
             binding_scope=call.endpoint_scope_digest,
             event_kind="terminal",
-            observed_at=command.created_at,
+            observed_at=datetime.now(UTC),
             task_id=call.a2a_task_id,
             context_id=call.a2a_context_id,
             status="expired",
@@ -1058,6 +1330,66 @@ class A2AContinuationCoordinator:
                 observation.observation_id,
                 outcome_digest=persisted.terminal_result_digest,
             )
+        return await self._finalized_state(persisted)
+
+    async def _terminalize_continuation_transport_failure(
+        self,
+        call: AgentCallLedgerRecord,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> str:
+        result = ToolResult(
+            call_id=call.invocation_id,
+            tool_name=call.tool_name,
+            status="failed",
+            content=[],
+            artifact_refs=[],
+            error_code=error_code,
+            error_message=error_message,
+        )
+        terminal = transition_call(
+            call,
+            to_state="failed",
+            updated_at=datetime.now(UTC),
+            terminal_result=result,
+            terminal_result_digest=sha256(
+                result.model_dump_json().encode()
+            ).hexdigest(),
+            error_code=error_code,
+            error_message=error_message,
+            continuation_state="accepted",
+        )
+        persisted = await self._cas_or_load_winner(
+            terminal, expected_state_version=call.state_version
+        )
+        return await self._finalized_state(persisted)
+
+    async def _retry_safe_continuation(self, call: AgentCallLedgerRecord) -> str:
+        if call.continuation_attempts >= call.runtime_policy.max_transport_attempts:
+            return await self._terminalize_continuation_transport_failure(
+                call,
+                error_code="agent_card_transport_unavailable",
+                error_message="Agent Card remained unavailable after bounded retries.",
+            )
+        delay = min(
+            call.runtime_policy.retry_backoff_initial_seconds
+            * (2 ** max(call.continuation_attempts - 1, 0)),
+            call.runtime_policy.retry_backoff_max_seconds,
+        )
+        retry = call.model_copy(
+            update={
+                "continuation_state": "pending",
+                "claim_owner": None,
+                "claim_expires_at": None,
+                "next_attempt_at": datetime.now(UTC) + timedelta(seconds=delay),
+                "state_version": call.state_version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        persisted = await self._cas_or_load_winner(
+            retry, expected_state_version=call.state_version
+        )
         return await self._finalized_state(persisted)
 
     async def _mark_uncertain(self, call: AgentCallLedgerRecord) -> str:
@@ -1206,20 +1538,10 @@ class A2AContinuationCoordinator:
         )
 
 
-def _should_retry_continuation_send(
+def _repeats_answered_challenge(
     call: AgentCallLedgerRecord, observation: NormalizedA2AObservation
 ) -> bool:
-    """True when inspect still shows the challenge we already answered.
-
-    That means the continuation send never landed, so recovery must resend
-    instead of re-parking the same interaction.
-
-    Also true when the task is still interactive but the typed
-    ``interaction_spec`` is missing (status.message cleared into history
-    while state remains input-required). Missing-spec must not untyped-
-    complete during continuation — that completes the call and the kernel
-    writes the ask as a final HYBRO answer.
-    """
+    """Return whether the Agent repeated the exact challenge already answered."""
     marker = call.answer_applied
     if marker is None or call.continuation_command is None:
         return False
@@ -1227,8 +1549,16 @@ def _should_retry_continuation_send(
         return False
     raw = observation.interaction_spec
     if not isinstance(raw, dict):
-        return True
-    return raw.get("interaction_id") == marker.interaction_id
+        return False
+    try:
+        interaction = A2AInteractionSpec.model_validate(raw)
+    except (TypeError, ValueError):
+        return False
+    fingerprint = _digest_json(interaction.model_dump(mode="json"))
+    return (
+        interaction.interaction_id == marker.interaction_id
+        and fingerprint == call.interaction_fingerprint
+    )
 
 
 def _blocks_untyped_interaction_completion(

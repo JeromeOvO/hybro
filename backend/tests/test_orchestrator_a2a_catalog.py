@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+from container import _project_orchestrator_agent_activity
 from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
 from execution.orchestrator.a2a_runtime.catalog_assembler import (
     AgentToolCatalogAssembler,
@@ -16,9 +20,17 @@ from execution.orchestrator.a2a_runtime.preparation import (
 )
 from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
 from execution.orchestrator.models import (
+    AssistantMessage,
     CandidateScopeSnapshot,
     PreparedResourceRef,
     RunResourceManifestSnapshot,
+    TextPart,
+    ToolAcceptance,
+    ToolBatchEntry,
+    ToolCall,
+    ToolCallBatch,
+    ToolInvocation,
+    ToolResult,
 )
 
 from ._orchestrator_a2a_helpers import invocation
@@ -39,7 +51,8 @@ class Candidates:
 def candidate(agent_id="agent-1", **updates):
     values = {
         "agent_id": agent_id,
-        "display_name": "Broker",
+        "agent_display_name": "Broker Agent",
+        "display_name": "Broker Agent - Place Policy",
         "description": "Places insurance",
         "card_digest": "card-1",
         "endpoint_scope": "https://agent.example/a2a",
@@ -51,7 +64,7 @@ def candidate(agent_id="agent-1", **updates):
     return AgentToolCandidate(**values)
 
 
-async def prepare(values):
+async def prepare(values, *, resource_manifest=None):
     epochs = InMemoryRoomEpochStore()
     assert (await epochs.activate("room-1", "create-1", activated_at=NOW))[
         0
@@ -63,7 +76,7 @@ async def prepare(values):
         binding_store=bindings,
         room_epoch_store=epochs,
     )
-    manifest = RunResourceManifestSnapshot(
+    manifest = resource_manifest or RunResourceManifestSnapshot(
         manifest_id="resources",
         refs=[
             PreparedResourceRef(
@@ -117,7 +130,11 @@ async def test_async_assembler_filters_candidates_and_persists_private_bindings(
     assert source.calls == 1
     assert len(prepared.snapshot.entries) == 1
     assert len(prepared.bindings) == 1
-    assert (await store.load(prepared.bindings[0].binding_id)) == prepared.bindings[0]
+    persisted = await store.load(prepared.bindings[0].binding_id)
+    assert persisted == prepared.bindings[0]
+    assert persisted is not None
+    assert persisted.agent_display_name == "Broker Agent"
+    assert persisted.definition.label == "Broker Agent - Place Policy"
     schema = prepared.snapshot.entries[0].definition.input_schema
     # The tool description carries the agent's I/O contract so the kernel can
     # match capabilities instead of relying on a one-line blurb.
@@ -126,6 +143,202 @@ async def test_async_assembler_filters_candidates_and_persists_private_bindings(
     assert "Input: text, application/pdf" in description
     assert "agent_id" not in schema["properties"]
     assert schema["properties"]["artifact_refs"]["items"]["enum"] == ["artifact-1"]
+
+
+async def test_root_agent_name_survives_binding_projection_delivery_and_persistence():
+    prepared, _, bindings = await prepare(
+        [
+            candidate(
+                agent_display_name="Weather Agent",
+                display_name="Weather Agent - Get Current Weather",
+            )
+        ]
+    )
+    binding = prepared.bindings[0]
+    assert binding.agent_display_name == "Weather Agent"
+    assert binding.definition.label == "Weather Agent - Get Current Weather"
+
+    run = make_run().model_copy(update={"tool_catalog": prepared.snapshot})
+    tool_name = prepared.snapshot.entries[0].definition.name
+    resolved = FrozenToolCatalog(prepared.snapshot).resolve(run, tool_name)
+    assistant = AssistantMessage(
+        message_id="assistant-weather",
+        content=[TextPart(text="Check the weather")],
+        tool_calls=[
+            ToolCall(
+                call_id="call-weather",
+                tool_name=tool_name,
+                arguments={"task": "Get current weather"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    invocation = ToolInvocation(
+        invocation_id="call-weather",
+        run_id=run.run_id,
+        expected_run_version=run.state_version,
+        assistant_message_id=assistant.message_id,
+        source_index=0,
+        causation_id=run.request.user_message_id,
+        idempotency_key="invoke-weather",
+        tool=resolved,
+        arguments={"task": "Get current weather"},
+        deadline_at=NOW,
+    )
+    acceptance = ToolAcceptance(
+        acceptance_id="accept-weather",
+        invocation_id=invocation.invocation_id,
+        idempotency_key=invocation.idempotency_key,
+        accepted_at=NOW,
+    )
+    run = run.model_copy(
+        update={
+            "transcript": [*run.transcript, assistant],
+            "tool_batches": [
+                ToolCallBatch(
+                    assistant_message_id=assistant.message_id,
+                    entries=[
+                        ToolBatchEntry(
+                            call_id="call-weather",
+                            opaque_public_call_id="inv_weather_0001",
+                            assistant_message_id=assistant.message_id,
+                            source_index=0,
+                            tool_name=tool_name,
+                            state="accepted",
+                            invocation=invocation,
+                            acceptance=acceptance,
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+    runtime = SimpleNamespace(
+        run_store=SimpleNamespace(load=AsyncMock(return_value=run)),
+        binding_store=bindings,
+        public_secret_values=(),
+    )
+    message_store = SimpleNamespace(upsert_room_agent_message=AsyncMock())
+    delivery = SimpleNamespace(
+        send_task_submitted=AsyncMock(), send_task_update=AsyncMock()
+    )
+
+    await _project_orchestrator_agent_activity(
+        SimpleNamespace(
+            event_type="tool_execution_started",
+            run_id=run.run_id,
+            payload={"call_id": "call-weather"},
+        ),
+        runtime,
+        message_store,
+        delivery,
+    )
+
+    persisted = message_store.upsert_room_agent_message.await_args.args[0]
+    assert persisted.extend_info["public_agent_name"] == "Weather Agent"
+    assert persisted.extend_info["public_task_label"] == (
+        "Requesting Weather Agent - Get Current Weather"
+    )
+    # Canonical Runs fold Agent Cards from tool_execution_* events and never
+    # emit the legacy task_submitted/task_update card contract.
+    assert delivery.send_task_submitted.await_args is None
+    assert delivery.send_task_update.await_args is None
+
+    # Legacy Runs keep the task_* card contract with the exact root Agent name.
+    legacy_run = run.model_copy(update={"lifecycle_family": "legacy"})
+    legacy_runtime = SimpleNamespace(
+        run_store=SimpleNamespace(load=AsyncMock(return_value=legacy_run)),
+        binding_store=bindings,
+        public_secret_values=(),
+    )
+    legacy_delivery = SimpleNamespace(
+        send_task_submitted=AsyncMock(), send_task_update=AsyncMock()
+    )
+    await _project_orchestrator_agent_activity(
+        SimpleNamespace(
+            event_type="tool_execution_started",
+            run_id=run.run_id,
+            payload={"call_id": "call-weather"},
+        ),
+        legacy_runtime,
+        message_store,
+        legacy_delivery,
+    )
+    submitted = legacy_delivery.send_task_submitted.await_args.kwargs
+    assert submitted["agent_name"] == "Weather Agent"
+    assert submitted["agent_name"] != "Weather Agent - Get Current Weather"
+
+    terminal_entry = (
+        legacy_run.tool_batches[0]
+        .entries[0]
+        .model_copy(
+            update={
+                "state": "terminal",
+                "buffered_terminal_result": ToolResult(
+                    call_id="call-weather",
+                    tool_name=tool_name,
+                    status="completed",
+                    content=[TextPart(text="Sunny")],
+                    artifact_refs=[],
+                ),
+            }
+        )
+    )
+    terminal_run = legacy_run.model_copy(
+        update={
+            "tool_batches": [
+                legacy_run.tool_batches[0].model_copy(
+                    update={"entries": [terminal_entry]}
+                )
+            ]
+        }
+    )
+    legacy_runtime.run_store.load = AsyncMock(return_value=terminal_run)
+    await _project_orchestrator_agent_activity(
+        SimpleNamespace(
+            event_type="message_completed",
+            run_id=run.run_id,
+            payload={"call_id": "call-weather", "message_kind": "tool_result"},
+        ),
+        legacy_runtime,
+        message_store,
+        legacy_delivery,
+    )
+    terminal_update = legacy_delivery.send_task_update.await_args.kwargs
+    assert terminal_update["status"] == "completed"
+    assert terminal_update["content"] == "Sunny"
+    assert terminal_update["delivery_id"] == (
+        f"orchestrator:{run.run_id}:call-weather:terminal:completed"
+    )
+
+    # A canonical Run with an unreadable binding still never leaks the
+    # skill-qualified Trace label into the card projection.
+    missing_binding_store = SimpleNamespace(upsert_room_agent_message=AsyncMock())
+    missing_binding_delivery = SimpleNamespace(
+        send_task_submitted=AsyncMock(), send_task_update=AsyncMock()
+    )
+    missing_binding_runtime = SimpleNamespace(
+        run_store=SimpleNamespace(load=AsyncMock(return_value=run)),
+        binding_store=SimpleNamespace(load=AsyncMock(return_value=None)),
+        public_secret_values=(),
+    )
+    await _project_orchestrator_agent_activity(
+        SimpleNamespace(
+            event_type="tool_execution_started",
+            run_id=run.run_id,
+            payload={"call_id": "call-weather"},
+        ),
+        missing_binding_runtime,
+        missing_binding_store,
+        missing_binding_delivery,
+    )
+    missing_doc = missing_binding_store.upsert_room_agent_message.await_args.args[0]
+    assert missing_doc.extend_info["public_agent_name"] == "Unknown agent"
+    assert missing_doc.extend_info["public_agent_name"] != (
+        "Weather Agent - Get Current Weather"
+    )
 
 
 def test_input_schema_omits_ref_fields_when_no_resources_available():
@@ -159,6 +372,39 @@ async def test_frozen_catalog_is_synchronous_and_run_bound():
     assert resolved.binding == prepared.snapshot.entries[0].binding
 
 
+async def test_live_artifact_schema_is_identical_for_listing_and_resolution():
+    prepared, _, _ = await prepare(
+        [candidate(input_modes=["text", "application/json"])]
+    )
+    run = make_run().model_copy(
+        update={
+            "tool_catalog": prepared.snapshot,
+            "resource_manifest": RunResourceManifestSnapshot(
+                manifest_id="live-resources",
+                refs=[
+                    PreparedResourceRef(
+                        ref_id="art_inline",
+                        kind="artifact",
+                        source_message_id="observation-1",
+                        mime_type="application/json",
+                        size_bytes=42,
+                        content_digest="inline-digest",
+                    )
+                ],
+                content_digest="live-manifest-digest",
+            ),
+        }
+    )
+    catalog = FrozenToolCatalog(prepared.snapshot)
+    listed = catalog.list_tools(run)[0]
+    resolved = catalog.resolve(run, listed.name)
+
+    assert listed.input_schema == resolved.definition.input_schema
+    assert listed.input_schema["properties"]["artifact_refs"]["items"]["enum"] == [
+        "art_inline"
+    ]
+
+
 async def test_card_or_endpoint_change_changes_binding_digest_only_for_new_run():
     first, _, _ = await prepare([candidate()])
     second, _, _ = await prepare([candidate(card_digest="card-2")])
@@ -170,14 +416,36 @@ async def test_card_or_endpoint_change_changes_binding_digest_only_for_new_run()
 
 
 async def test_prepared_invocation_reconstructs_from_durable_run_and_binding():
-    prepared_catalog, _, binding_store = await prepare([candidate()])
+    root_manifest = RunResourceManifestSnapshot(
+        manifest_id="root-context",
+        refs=[
+            PreparedResourceRef(
+                ref_id="ctx:message:user-1",
+                kind="context",
+                source_message_id="user-1",
+                mime_type="text/plain",
+                size_bytes=5,
+                content_digest="root-context-digest",
+            ),
+            PreparedResourceRef(
+                ref_id="attachment-1",
+                kind="attachment",
+                source_message_id="user-1",
+                mime_type="application/pdf",
+                size_bytes=10,
+                content_digest="attachment-digest",
+            ),
+        ],
+        content_digest="run-resource-digest",
+    )
+    prepared_catalog, _, binding_store = await prepare(
+        [candidate()], resource_manifest=root_manifest
+    )
     run = make_run().model_copy(
         update={
             "run_id": "run-1",
             "tool_catalog": prepared_catalog.snapshot,
-            "resource_manifest": RunResourceManifestSnapshot(
-                manifest_id="empty", refs=[], content_digest="empty"
-            ),
+            "resource_manifest": root_manifest,
             "request": make_run().request.model_copy(
                 update={"requesting_subject_id": "user-1", "room_epoch": 1}
             ),
@@ -202,6 +470,16 @@ async def test_prepared_invocation_reconstructs_from_durable_run_and_binding():
     assert snapshot is not None
     assert snapshot.requesting_subject_id == "user-1"
     assert snapshot.binding == prepared_catalog.bindings[0]
+    assert [ref.ref_id for ref in snapshot.resource_manifest.refs] == [
+        "ctx:message:user-1"
+    ]
+
+    recovered = await reader.read_prepared(call)
+    assert recovered is not None
+    assert recovered.resource_manifest == snapshot.resource_manifest
+    assert recovered.resource_manifest.manifest_id == (
+        f"call-resources-{recovered.resource_manifest.content_digest}"
+    )
 
 
 async def test_preparation_fails_closed_for_inactive_epoch():

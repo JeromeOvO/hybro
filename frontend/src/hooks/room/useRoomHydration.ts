@@ -8,7 +8,7 @@ export function useRoomHydration(
   userId: string | undefined,
   userName: string | undefined,
   getToken: (() => Promise<string | null>) | undefined,
-  room: unknown,
+  _room: unknown,
   hitlRequestIndex: MutableRefObject<Map<string, string>>,
   getAgentName: (agentId: string) => Promise<string>,
   getAgentSource: (agentId: string | undefined) => 'cloud' | 'local' | 'hub' | undefined,
@@ -26,12 +26,11 @@ export function useRoomHydration(
       getToken,
       userId,
       userName,
-      room,
       getAgentName,
       getAgentSource,
       hitlRequestIndex,
     })
-  }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex, room])
+  }, [getToken, userId, userName, getAgentName, getAgentSource, hitlRequestIndex])
 
   const reconcileWithDb = useCallback(async (targetRoomId: string) => {
     if (reconcileInflightRef.current === targetRoomId) return
@@ -75,11 +74,11 @@ export function useRoomHydration(
   }, [roomId])
 
   useEffect(() => {
-    if (!roomId || !userName || !room) return
+    if (!roomId || !userName || !_room) return
     if (hydrationStartedRef.current === roomId) return
     hydrationStartedRef.current = roomId
     hydrateFromDb(roomId)
-  }, [roomId, userName, room, hydrateFromDb])
+  }, [roomId, userName, _room, hydrateFromDb])
 
   return { hydrateFromDb, reconcileWithDb }
 }

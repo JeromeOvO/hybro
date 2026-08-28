@@ -222,7 +222,7 @@ function orderDigestSections(
     agentName: r.agentName,
     content: r.content,
     artifacts: r.artifacts,
-    status: r.status,
+    status: r.status === 'canceled' ? 'failed' : r.status,
   }))
 }
 

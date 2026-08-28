@@ -93,6 +93,21 @@ async def _resolve_processing_status_client_request_id(
         return client_request_id
 
 
+def _legacy_run_event_wire_type(payload: dict[str, Any]) -> str:
+    """Keep legacy run-head events disjoint from strict canonical subtypes."""
+
+    event_type = str(_require_payload_field(payload, "type"))
+    event_payload = payload.get("payload")
+    # The legacy RunCommandHandler writes these two transitions with an empty
+    # payload. Any non-empty payload is treated as a canonical claim and must
+    # pass the closed DTO; malformed canonical shapes are never reclassified.
+    if event_type == "run_started" and event_payload == {}:
+        return "legacy_run_started"
+    if event_type == "run_resumed" and event_payload == {}:
+        return "legacy_run_resumed"
+    return event_type
+
+
 def run_event_notification_from_payload(
     *,
     room_id: str,
@@ -100,14 +115,17 @@ def run_event_notification_from_payload(
     correlation_id: str | None = None,
 ) -> RunEventNotification:
     event_id = str(_require_payload_field(payload, "event_id"))
+    if "payload" not in payload:
+        raise ValueError("Run event payload missing required field: payload")
+    event_payload = payload["payload"]
     return RunEventNotification(
         room_id=room_id,
         event_id=event_id,
         delivery_id=f"terminal:{event_id}:run-event",
         run_id=str(_require_payload_field(payload, "run_id")),
         seq=int(_require_payload_field(payload, "seq")),
-        run_event_type=str(_require_payload_field(payload, "type")),
-        payload=payload.get("payload") or {},
+        run_event_type=_legacy_run_event_wire_type(payload),
+        payload=event_payload,
         correlation_id=payload.get("correlation_id") or correlation_id,
     )
 
@@ -319,6 +337,11 @@ async def emit_processing_status(
                     exc_info=True,
                 )
             return payload
+        # No bound finalizer: the terminal fallback direct emit is eliminated
+        # (Room Stream Snapshot plan §4.1). Terminal frames are delivered
+        # exclusively by durable projection recovery; in production the
+        # finalizer is always bound (``RunLifecycleAdapter``).
+        return payload
     elif record_lifecycle:
         payload = await run_lifecycle.record_processing_status(
             room_id,
@@ -328,14 +351,13 @@ async def emit_processing_status(
             details=typed_details,
             error_message=error_message,
         )
-    if payload and run_event_enabled():
-        await event_publisher.emit(
-            run_event_notification_from_payload(
-                room_id=room_id,
-                payload=payload,
-                correlation_id=client_request_id,
-            )
-        )
+    # Non-terminal statuses are the main direct-emit path (work log and
+    # spinner lifecycle). Terminal frames never reach this block: the
+    # terminal branch returns above, so only the finalizer emits them.
+    # The compatibility RunLifecycle write may still support terminal storage,
+    # but it never emits a second public run_event family. Canonical kernel
+    # events are the sole Turn/Trace/Card lifecycle stream.
+    del run_event_enabled
     await event_publisher.emit(
         ProcessingStatusEvent(
             room_id=room_id,

@@ -17,16 +17,50 @@ from fastapi import HTTPException
 from api_gateway.routes.hitl_routes import (
     cancel_hitl_interaction,
     get_pending_hitl_requests,
+    respond_to_hitl_interaction,
 )
 from common.dto import HITLCancelCommand
 from common.dto import HITLRequest as CommonHITLRequest
-from execution.hitl.exceptions import HITLRoomMismatchError
+from execution.hitl.exceptions import HITLConflictError, HITLRoomMismatchError
+from models.hitl import HITLBatchResponseRequest
 
 
 def _room_ownership(owner_id):
     reader = MagicMock()
     reader.get_room_owner = AsyncMock(return_value=owner_id)
     return reader
+
+
+@pytest.mark.asyncio
+async def test_batch_inventory_conflict_returns_safe_409(mock_user, sample_room):
+    manager = MagicMock()
+    manager.resolve_hitl_batch = AsyncMock(
+        side_effect=HITLConflictError(
+            "The input request changed before submission. Refresh and try again."
+        )
+    )
+    body = HITLBatchResponseRequest.model_validate(
+        {
+            "interaction_id": "interaction-1",
+            "answers": [{"request_id": "question-1", "user_input": "answer"}],
+            "client_request_id": "client-1",
+        }
+    )
+
+    with pytest.raises(HTTPException) as conflict:
+        await respond_to_hitl_interaction(
+            sample_room.room_id,
+            body,
+            mock_user,
+            manager=manager,
+            room_ownership=_room_ownership(mock_user.user_id),
+        )
+
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail == (
+        "The input request changed before submission. Refresh and try again."
+    )
+    assert "inventory" not in str(conflict.value.detail).lower()
 
 
 # =============================================================================

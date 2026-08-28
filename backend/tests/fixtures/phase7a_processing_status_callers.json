@@ -11,9 +11,10 @@
     "client_request_id_expression": "request.client_request_id",
     "details_expression": null,
     "delivery_expression": "self._event_publisher",
-    "recording_kind": "record_processing_status",
-    "requires_recording": true,
-    "expects_run_event_sse": true
+    "recording_kind": "transport_only",
+    "requires_recording": false,
+    "expects_run_event_sse": false,
+    "transport_only_reason": "Canonical run_started is the sole lifecycle root"
   },
   {
     "call_id": "execution.facade.ExecutionFacade._emit_room_preflight_terminal_status.status",
@@ -27,9 +28,10 @@
     "client_request_id_expression": "request.client_request_id",
     "details_expression": "ack.preflight_details or ack.error",
     "delivery_expression": "self._event_publisher",
-    "recording_kind": "record_processing_status",
-    "requires_recording": true,
-    "expects_run_event_sse": true,
+    "recording_kind": "transport_only",
+    "requires_recording": false,
+    "expects_run_event_sse": false,
+    "transport_only_reason": "Canonical terminal events and run_settled own closure",
     "terminal_status": true
   }
 ]

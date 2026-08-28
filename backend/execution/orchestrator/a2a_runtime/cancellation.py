@@ -8,6 +8,7 @@ from hashlib import sha256
 
 from ..models import TextPart
 from .errors import (
+    AgentCardContractError,
     AmbiguousRemoteEffectError,
     RecoverableAdapterError,
     RecoverableCheckpointError,
@@ -175,9 +176,24 @@ class A2ACancellationCoordinator:
                 if inspect
                 else await self.dispatch.cancel(command)
             )
+        except AgentCardContractError:
+            renewed = await self._renew_and_verify(call, command.deletion_id)
+            if renewed is None:
+                return await self._load_finalized_state(call_record_id)
+            return await self._expire(
+                renewed,
+                error_code="agent_card_contract_error",
+                error_message="Agent Card could not be resolved for cancellation.",
+            )
+        except RecoverableTransportError:
+            renewed = await self._renew_and_verify(call, command.deletion_id)
+            if renewed is None:
+                return await self._load_finalized_state(call_record_id)
+            if inspect:
+                return await self._mark_uncertain(renewed)
+            return await self._retry_safe_cancellation(renewed)
         except (
             RecoverableAdapterError,
-            RecoverableTransportError,
             AmbiguousRemoteEffectError,
             TimeoutError,
         ):
@@ -207,7 +223,13 @@ class A2ACancellationCoordinator:
         )
         return await self._finalized_state(persisted)
 
-    async def _expire(self, call: AgentCallLedgerRecord) -> str:
+    async def _expire(
+        self,
+        call: AgentCallLedgerRecord,
+        *,
+        error_code: str = "cancellation_uncertainty_exhausted",
+        error_message: str = "Cancellation delivery could not be reconciled.",
+    ) -> str:
         command = call.cancellation_command
         assert command is not None
         observation = NormalizedA2AObservation(
@@ -222,8 +244,8 @@ class A2ACancellationCoordinator:
             context_id=call.a2a_context_id,
             status="expired",
             content=[TextPart(text="The Agent cancellation could not be reconciled.")],
-            error_code="cancellation_uncertainty_exhausted",
-            error_message="Cancellation delivery could not be reconciled.",
+            error_code=error_code,
+            error_message=error_message,
         )
         await self.observations.record(observation)
         renewed = await self._renew_and_verify(call, command.deletion_id)
@@ -236,6 +258,33 @@ class A2ACancellationCoordinator:
         )
         persisted = await self._cas_or_load_winner(
             expired, expected_state_version=renewed.state_version
+        )
+        return await self._finalized_state(persisted)
+
+    async def _retry_safe_cancellation(self, call: AgentCallLedgerRecord) -> str:
+        if call.cancellation_attempts >= call.runtime_policy.max_transport_attempts:
+            return await self._expire(
+                call,
+                error_code="agent_card_transport_unavailable",
+                error_message="Agent Card remained unavailable after bounded retries.",
+            )
+        delay = min(
+            call.runtime_policy.retry_backoff_initial_seconds
+            * (2 ** max(call.cancellation_attempts - 1, 0)),
+            call.runtime_policy.retry_backoff_max_seconds,
+        )
+        retry = call.model_copy(
+            update={
+                "cancellation_state": "pending",
+                "claim_owner": None,
+                "claim_expires_at": None,
+                "next_attempt_at": datetime.now(UTC) + timedelta(seconds=delay),
+                "state_version": call.state_version + 1,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        persisted = await self._cas_or_load_winner(
+            retry, expected_state_version=call.state_version
         )
         return await self._finalized_state(persisted)
 

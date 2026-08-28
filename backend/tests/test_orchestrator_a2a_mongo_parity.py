@@ -9,7 +9,14 @@ import pytest
 from pydantic import ValidationError
 from pymongo.errors import AutoReconnect, DuplicateKeyError
 
-from common.dto.hitl import HITLQuestionAnswer, HITLTextAnswer
+from common.dto.hitl import (
+    A2AInteractionSpec,
+    HITLInteractionKind,
+    HITLQuestionAnswer,
+    HITLQuestionSpec,
+    HITLRouteSnapshotV2,
+    HITLTextAnswer,
+)
 from dal.orchestrator.hitl import MongoHITLApplicationStore
 from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
@@ -32,7 +39,8 @@ from execution.orchestrator.a2a_runtime.models import (
     DurableHITLAnswerRecord,
     NormalizedA2AObservation,
 )
-from execution.orchestrator.models import ProjectionIntent
+from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
+from execution.orchestrator.models import ProjectionIntent, RecoveryClaim
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW, make_run
@@ -42,7 +50,7 @@ class Cursor:
     def __init__(self, values):
         self.values = values
 
-    async def to_list(self, *, length=None):
+    async def to_list(self, length=None):
         return deepcopy(self.values if length is None else self.values[:length])
 
 
@@ -440,6 +448,262 @@ async def test_mongo_run_create_exact_retry_replays_persisted_candidate():
     assert replayed.run.processed_command_ids == ["create:run-1"]
 
 
+async def test_mongo_recovery_lease_takeover_fences_stale_owner():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    created = await store.create(make_run(), command_id="create:lease-takeover")
+    assert created.run is not None
+
+    claim_a_at = created.run.recovery_claim.next_attempt_at
+    assert claim_a_at is not None
+    owner_a = "instance-a:token-a"
+    claimed_a = await store.claim_recovery(
+        created.run.run_id,
+        expected_state_version=created.run.state_version,
+        owner_id=owner_a,
+        lease_expires_at=claim_a_at + timedelta(seconds=1),
+        claimed_at=claim_a_at,
+    )
+    assert claimed_a.outcome == "accepted"
+    assert claimed_a.run is not None
+
+    owner_b = "instance-b:token-b"
+    claimed_b = await store.claim_recovery(
+        created.run.run_id,
+        expected_state_version=claimed_a.run.state_version,
+        owner_id=owner_b,
+        lease_expires_at=claim_a_at + timedelta(minutes=1),
+        claimed_at=claim_a_at + timedelta(seconds=2),
+    )
+    assert claimed_b.outcome == "accepted"
+    assert claimed_b.run is not None
+    assert claimed_b.run.recovery_claim.owner_id == owner_b
+    assert len(leases.values) == 1
+    assert leases.values[0]["owner_id"] == owner_b
+
+    stale_renewal = await store.renew_recovery(
+        created.run.run_id,
+        expected_state_version=claimed_b.run.state_version,
+        owner_id=owner_a,
+        lease_expires_at=datetime.now(UTC) + timedelta(minutes=2),
+    )
+    stale_release = await store.release_recovery(
+        created.run.run_id,
+        expected_state_version=claimed_b.run.state_version,
+        owner_id=owner_a,
+        next_attempt_at=None,
+    )
+
+    assert stale_renewal.outcome == "conflict"
+    assert stale_release.outcome == "conflict"
+    latest = await store.load(created.run.run_id)
+    assert latest is not None
+    assert latest.recovery_claim.owner_id == owner_b
+    assert leases.values[0]["owner_id"] == owner_b
+
+
+async def test_mongo_recovery_lease_release_is_token_fenced():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    created = await store.create(make_run(), command_id="create:lease-release")
+    assert created.run is not None
+    owner = "instance:token"
+    claimed_at = created.run.recovery_claim.next_attempt_at
+    assert claimed_at is not None
+    claimed = await store.claim_recovery(
+        created.run.run_id,
+        expected_state_version=created.run.state_version,
+        owner_id=owner,
+        lease_expires_at=claimed_at + timedelta(minutes=1),
+        claimed_at=claimed_at,
+    )
+    assert claimed.run is not None
+
+    released = await store.release_recovery(
+        created.run.run_id,
+        expected_state_version=claimed.run.state_version,
+        owner_id=owner,
+        next_attempt_at=datetime.now(UTC) + timedelta(seconds=5),
+    )
+
+    assert released.outcome == "accepted"
+    assert released.run is not None
+    assert released.run.recovery_claim.owner_id is None
+    assert leases.values[0]["owner_id"] is None
+
+
+async def test_mongo_recovery_dedicated_backoff_is_authoritative_and_starvation_free():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+
+    def due_run(run_id):
+        run = make_run().model_copy(
+            update={
+                "run_id": run_id,
+                "room_id": f"room-{run_id}",
+                "session_id": f"room-{run_id}",
+                "status": "running",
+                "updated_at": NOW - timedelta(minutes=10),
+                "recovery_claim": RecoveryClaim(
+                    next_attempt_at=NOW - timedelta(minutes=1)
+                ),
+                "request": make_run().request.model_copy(
+                    update={
+                        "request_fingerprint": f"fingerprint-{run_id}",
+                        "user_message_id": f"message-{run_id}",
+                    }
+                ),
+            }
+        )
+        return run
+
+    blocked = due_run("run-a-blocked")
+    quarantined = due_run("run-b-quarantined")
+    valid = due_run("run-z-valid")
+    for run in (blocked, quarantined, valid):
+        assert (await store.create(run, command_id=f"create:{run.run_id}")).run
+
+    await leases.insert_one(
+        {
+            "run_id": blocked.run_id,
+            **RecoveryClaim(
+                next_attempt_at=NOW + timedelta(hours=1), failure_count=1
+            ).model_dump(mode="python"),
+        }
+    )
+    await leases.insert_one(
+        {
+            "run_id": quarantined.run_id,
+            **RecoveryClaim(
+                failure_count=3,
+                quarantined_at=NOW - timedelta(seconds=1),
+                quarantine_reason="terminal_invariant_conflict",
+            ).model_dump(mode="python"),
+        }
+    )
+
+    due = await store.list_due_runs(due_at=NOW, limit=1)
+    assert [item.run_id for item in due] == [valid.run_id]
+
+    stale = await store.load(blocked.run_id)
+    assert stale is not None
+    early = await store.claim_recovery(
+        blocked.run_id,
+        expected_state_version=stale.state_version,
+        owner_id="worker:early",
+        lease_expires_at=NOW + timedelta(minutes=1),
+        claimed_at=NOW,
+    )
+    assert early.outcome == "conflict"
+
+    due_at = NOW + timedelta(hours=1)
+    eligible = await store.list_due_runs(due_at=due_at, limit=10)
+    assert blocked.run_id in {item.run_id for item in eligible}
+    current = await store.load(blocked.run_id)
+    assert current is not None
+    claimed = await store.claim_recovery(
+        blocked.run_id,
+        expected_state_version=current.state_version,
+        owner_id="worker:due",
+        lease_expires_at=due_at + timedelta(minutes=1),
+        claimed_at=due_at,
+    )
+    assert claimed.outcome == "accepted"
+
+
+async def test_mongo_recovery_naive_bson_dates_load_as_utc_and_allow_expired_takeover():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    run = make_run().model_copy(
+        update={
+            "status": "running",
+            "recovery_claim": RecoveryClaim(next_attempt_at=NOW - timedelta(minutes=2)),
+        }
+    )
+    created = await store.create(run, command_id="create:naive-lease")
+    assert created.run is not None
+    await leases.insert_one(
+        {
+            "run_id": run.run_id,
+            "owner_id": "worker:expired",
+            "lease_expires_at": (NOW - timedelta(minutes=1)).replace(tzinfo=None),
+            "next_attempt_at": (NOW - timedelta(minutes=2)).replace(tzinfo=None),
+            "failure_count": 2,
+            "quarantined_at": None,
+            "quarantine_reason": None,
+        }
+    )
+
+    loaded = await store.load(run.run_id)
+    assert loaded is not None
+    assert loaded.recovery_claim.lease_expires_at.tzinfo is UTC
+    assert loaded.recovery_claim.next_attempt_at.tzinfo is UTC
+    claimed = await store.claim_recovery(
+        run.run_id,
+        expected_state_version=loaded.state_version,
+        owner_id="worker:takeover",
+        lease_expires_at=NOW + timedelta(minutes=1),
+        claimed_at=NOW,
+    )
+    assert claimed.outcome == "accepted"
+
+    leases.values[0].update(
+        {
+            "owner_id": None,
+            "lease_expires_at": None,
+            "next_attempt_at": None,
+            "quarantined_at": NOW.replace(tzinfo=None),
+            "quarantine_reason": "terminal_invariant_conflict",
+        }
+    )
+    quarantined = await store.load(run.run_id)
+    assert quarantined is not None
+    assert quarantined.recovery_claim.quarantined_at.tzinfo is UTC
+
+
+async def test_mongo_recovery_quarantine_persists_in_dedicated_lease_and_is_not_due():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    run = make_run().model_copy(update={"status": "running"})
+    created = await store.create(run, command_id="create:quarantine")
+    assert created.run is not None
+    owner = "instance:quarantine"
+    claimed = await store.claim_recovery(
+        run.run_id,
+        expected_state_version=created.run.state_version,
+        owner_id=owner,
+        lease_expires_at=run.budget.deadline_at + timedelta(minutes=1),
+        claimed_at=run.budget.deadline_at,
+    )
+    assert claimed.run is not None
+
+    quarantined_at = NOW + timedelta(seconds=1)
+    released = await store.release_recovery(
+        run.run_id,
+        expected_state_version=claimed.run.state_version,
+        owner_id=owner,
+        next_attempt_at=None,
+        failure_count=3,
+        quarantined_at=quarantined_at,
+        quarantine_reason="terminal_invariant_conflict",
+    )
+
+    assert released.outcome == "accepted"
+    assert released.run is not None
+    assert released.run.recovery_claim.failure_count == 3
+    assert released.run.recovery_claim.quarantined_at == quarantined_at
+    assert leases.values[0]["quarantine_reason"] == "terminal_invariant_conflict"
+    assert await store.list_due_runs(due_at=NOW + timedelta(days=3650), limit=10) == []
+    reloaded = await store.load(run.run_id)
+    assert reloaded is not None
+    assert reloaded.recovery_claim == released.run.recovery_claim
+
+
 async def test_mongo_run_replay_and_ack_loss_use_bson_datetime_precision():
     collection = MongoPrecisionCollection()
     store = MongoOrchestratorRunStore(collection)
@@ -593,12 +857,40 @@ async def test_mongo_run_cas_does_not_duplicate_preapplied_command_id():
 async def test_mongo_due_run_listing_ignores_mongo_id():
     collection = FakeCollection()
     store = MongoOrchestratorRunStore(collection)
-    created = await store.create(make_run(), command_id="create:run-1")
+    due_run = make_run().model_copy(
+        update={"recovery_claim": RecoveryClaim(next_attempt_at=NOW)}
+    )
+    created = await store.create(due_run, command_id="create:run-1")
     collection.values[0]["_id"] = "mongo-generated-id"
 
     due = await store.list_due_runs(due_at=NOW, limit=10)
 
     assert due == [created.run]
+
+
+@pytest.mark.parametrize(
+    "store",
+    [
+        InMemoryOrchestratorRunStore(),
+        MongoOrchestratorRunStore(FakeCollection()),
+    ],
+)
+async def test_awaiting_user_run_is_dormant_until_scheduled_deadline(store):
+    deadline = NOW + timedelta(minutes=1)
+    dormant = make_run().model_copy(
+        update={
+            "status": "awaiting_user",
+            "recovery_claim": RecoveryClaim(next_attempt_at=deadline),
+        }
+    )
+    assert (await store.create(dormant, command_id="create:dormant")).outcome == (
+        "accepted"
+    )
+
+    assert await store.list_due_runs(due_at=NOW, limit=10) == []
+    assert [
+        run.run_id for run in await store.list_due_runs(due_at=deadline, limit=10)
+    ] == [dormant.run_id]
 
 
 async def test_mongo_due_run_listing_uses_contract_order_before_limit():
@@ -741,6 +1033,23 @@ async def test_mongo_and_memory_call_lease_contracts_match():
             released_at=NOW + timedelta(seconds=2),
         )
         assert released is not None
+
+
+@pytest.mark.parametrize(
+    "store",
+    [
+        InMemoryObservationInboxStore(),
+        MongoObservationInboxStore(FakeCollection()),
+    ],
+)
+async def test_due_observation_lookup_uses_denormalized_call_identity(store):
+    record = _inbox_record().model_copy(update={"call_record_id": "call-1"})
+    assert record.observation.call_record_id is None
+    assert await store.insert(record) == "accepted"
+
+    due = await store.list_due_for_call("call-1", due_at=NOW, limit=10)
+
+    assert due == [record]
 
 
 async def test_mongo_and_memory_inbox_claim_takeover_and_stale_fence_match():
@@ -892,11 +1201,13 @@ async def test_mongo_and_memory_room_epoch_recreation_rules_match():
         assert recreated.epoch == active.epoch + 1
 
 
-def _answer_record(text: str) -> DurableHITLAnswerRecord:
+def _answer_record(
+    text: str, *, route_fingerprint: str = "route-fingerprint"
+) -> DurableHITLAnswerRecord:
     return DurableHITLAnswerRecord(
         interaction_id="interaction-1",
         interaction_revision=1,
-        route_fingerprint="route-fingerprint",
+        route_fingerprint=route_fingerprint,
         authenticated_answerer_id="user-1",
         answer_digest=f"digest:{text}",
         answers=[
@@ -909,12 +1220,29 @@ def _answer_record(text: str) -> DurableHITLAnswerRecord:
 
 
 async def test_mongo_and_memory_hitl_concurrent_differing_answers_match():
+    interaction_doc = _published_interaction_doc(
+        "room-1", "interaction-1", published=True
+    )
+    spec = A2AInteractionSpec.model_validate(interaction_doc["spec"])
+    route = HITLRouteSnapshotV2.model_validate(interaction_doc["route"])
+    route_fingerprint = route.fingerprint
+
     memory = InMemoryHITLApplicationStore()
+    assert (
+        await memory.ensure_interaction(
+            interaction_id="interaction-1",
+            spec=spec,
+            route=route,
+            fingerprint="fp-1",
+        )
+        == "accepted"
+    )
+    assert await memory.mark_eligible("interaction-1") == "accepted"
     assert (
         await memory.ensure_answer(
             interaction_id="interaction-1",
             interaction_revision=1,
-            record=_answer_record("Ada"),
+            record=_answer_record("Ada", route_fingerprint=route_fingerprint),
         )
         == "accepted"
     )
@@ -922,31 +1250,111 @@ async def test_mongo_and_memory_hitl_concurrent_differing_answers_match():
         await memory.ensure_answer(
             interaction_id="interaction-1",
             interaction_revision=1,
-            record=_answer_record("Bob"),
+            record=_answer_record("Bob", route_fingerprint=route_fingerprint),
         )
         == "conflict"
     )
 
     collection = ConcurrentAnswerCollection()
-    collection.values.append({"interaction_id": "interaction-1", "answers": {}})
+    collection.values.append(interaction_doc)
     mongo = MongoHITLApplicationStore(collection)
     first = asyncio.create_task(
         mongo.ensure_answer(
             interaction_id="interaction-1",
             interaction_revision=1,
-            record=_answer_record("Ada"),
+            record=_answer_record("Ada", route_fingerprint=route_fingerprint),
         )
     )
     second = asyncio.create_task(
         mongo.ensure_answer(
             interaction_id="interaction-1",
             interaction_revision=1,
-            record=_answer_record("Bob"),
+            record=_answer_record("Bob", route_fingerprint=route_fingerprint),
         )
     )
     await collection._both_waiting.wait()
     collection._release.set()
     assert sorted(await asyncio.gather(first, second)) == ["accepted", "conflict"]
+
+
+@pytest.mark.parametrize("backend", ["memory", "mongo"])
+async def test_hitl_answer_winner_excludes_abandon_with_store_parity(backend):
+    interaction_doc = _published_interaction_doc(
+        "room-1", "interaction-1", published=True
+    )
+    spec = A2AInteractionSpec.model_validate(interaction_doc["spec"])
+    route = HITLRouteSnapshotV2.model_validate(interaction_doc["route"])
+    if backend == "memory":
+        store = InMemoryHITLApplicationStore()
+        assert (
+            await store.ensure_interaction(
+                interaction_id="interaction-1",
+                spec=spec,
+                route=route,
+                fingerprint="fp-1",
+            )
+            == "accepted"
+        )
+        assert await store.mark_eligible("interaction-1") == "accepted"
+    else:
+        collection = FakeCollection()
+        collection.values.append(interaction_doc)
+        store = MongoHITLApplicationStore(collection)
+
+    assert (
+        await store.ensure_answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            record=_answer_record("Ada", route_fingerprint=route.fingerprint),
+        )
+        == "accepted"
+    )
+    assert (
+        await store.abandon(
+            "interaction-1", call_record_id="call-1", reason="user_canceled"
+        )
+        == "conflict"
+    )
+
+
+@pytest.mark.parametrize("backend", ["memory", "mongo"])
+async def test_hitl_abandon_winner_excludes_answer_with_store_parity(backend):
+    interaction_doc = _published_interaction_doc(
+        "room-1", "interaction-1", published=True
+    )
+    spec = A2AInteractionSpec.model_validate(interaction_doc["spec"])
+    route = HITLRouteSnapshotV2.model_validate(interaction_doc["route"])
+    if backend == "memory":
+        store = InMemoryHITLApplicationStore()
+        assert (
+            await store.ensure_interaction(
+                interaction_id="interaction-1",
+                spec=spec,
+                route=route,
+                fingerprint="fp-1",
+            )
+            == "accepted"
+        )
+        assert await store.mark_eligible("interaction-1") == "accepted"
+    else:
+        collection = FakeCollection()
+        collection.values.append(interaction_doc)
+        store = MongoHITLApplicationStore(collection)
+
+    assert (
+        await store.abandon(
+            "interaction-1", call_record_id="call-1", reason="user_canceled"
+        )
+        == "accepted"
+    )
+    assert (
+        await store.ensure_answer(
+            interaction_id="interaction-1",
+            interaction_revision=1,
+            record=_answer_record("Ada", route_fingerprint=route.fingerprint),
+        )
+        == "conflict"
+    )
 
 
 def _intent_doc(intent_id: str, *, status: str, next_attempt_at=None) -> dict:
@@ -1045,3 +1453,90 @@ async def test_mongo_release_projection_intent_backs_off_durably():
     )
     assert intent.status == "pending"
     assert intent.next_attempt_at == NOW + timedelta(seconds=5)
+
+
+def _published_interaction_doc(
+    room_id: str,
+    interaction_id: str,
+    *,
+    published: bool | None,
+    eligible: bool = True,
+) -> dict:
+    spec = A2AInteractionSpec(
+        schema_version=1,
+        interaction_id=interaction_id,
+        questions=[
+            HITLQuestionSpec(
+                question_id="q-1",
+                interaction_kind=HITLInteractionKind.QUESTIONNAIRE,
+                prompt="What?",
+                answer_kind="text",
+                required=True,
+            )
+        ],
+    )
+    route = HITLRouteSnapshotV2(
+        orchestration_run_id="run-1",
+        call_record_id="call-1",
+        invocation_id="inv-1",
+        room_id=room_id,
+        room_epoch=1,
+        binding_id="binding-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_revision=1,
+        interaction_fingerprint="fp-1",
+    )
+    doc = {
+        "interaction_id": interaction_id,
+        "spec": spec.model_dump(mode="python"),
+        "route": route.model_dump(mode="python"),
+        "fingerprint": "fp-1",
+        "eligible": eligible,
+        "abandoned": None,
+        "answers": {},
+    }
+    if published is not None:
+        doc["published"] = published
+    return doc
+
+
+async def test_mongo_hitl_published_flag_filter_and_transitions():
+    collection = FakeCollection()
+    answered = _published_interaction_doc(
+        "room-1", "published-answered", published=True
+    )
+    answered["answers"] = {"1": {"durable": "answer"}}
+    collection.values.extend(
+        [
+            _published_interaction_doc("room-1", "published-true", published=True),
+            answered,
+            _published_interaction_doc("room-1", "published-false", published=False),
+            # Missing flag = legacy auto-published document; must still surface.
+            _published_interaction_doc("room-1", "published-missing", published=None),
+            _published_interaction_doc(
+                "room-1", "not-eligible", published=True, eligible=False
+            ),
+            _published_interaction_doc("room-2", "other-room", published=True),
+        ]
+    )
+    store = MongoHITLApplicationStore(collection)
+
+    visible = [
+        item.interaction_id for item in await store.get_published_interactions("room-1")
+    ]
+    # published=False is suppressed; missing (legacy) and True are visible;
+    # non-eligible interactions and other rooms are excluded.
+    assert visible == ["published-true", "published-missing"]
+
+    assert await store.mark_published("published-false") == "accepted"
+    assert await store.mark_published("published-false") == "replayed"
+    # Legacy docs with no flag are already treated as published.
+    assert await store.mark_published("published-missing") == "replayed"
+    assert await store.mark_published("does-not-exist") == "error"
+
+    visible_after = [
+        item.interaction_id for item in await store.get_published_interactions("room-1")
+    ]
+    assert visible_after == ["published-true", "published-false", "published-missing"]
