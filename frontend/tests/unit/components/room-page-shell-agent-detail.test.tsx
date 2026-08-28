@@ -377,7 +377,7 @@ describe('RoomPageShell agent detail pane', () => {
         }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       if (url.includes(`/files/${fileId}/content`)) {
-        return new Response(new Blob(['image'], { type: 'image/png' }), {
+        return new Response('image', {
           status: 200,
           headers: { 'Content-Type': 'image/png' },
         })
