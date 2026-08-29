@@ -952,6 +952,18 @@ class OrchestratorKernel:
                         },
                     )
                 continue
+
+            if run.lifecycle_family == "canonical" and _has_presentable_interactions(
+                run
+            ):
+                run = await self._present_interactions(run, lifecycle=lifecycle)
+                run = await self._checkpoint(
+                    run,
+                    updates={"status": "running"},
+                    command_id=f"present-interactions:sync:{run.state_version}",
+                )
+                continue
+
             recover_initial_state = False
             if run.status == "finalizing":
                 assistant = _finalization_candidate(run)

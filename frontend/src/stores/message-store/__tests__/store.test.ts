@@ -429,4 +429,60 @@ describe('useMessageStore', () => {
       expect(state.entities['agent-reply'].relatedMessageId).toBe('srv-1')
     })
   })
+
+  describe('multi-round HITL upsert', () => {
+    it('allows transitioning completed entity back to input-required on follow-up HITL request', () => {
+      const store = useMessageStore.getState()
+      // Round 1 arrives as input-required
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-1',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlPrompt: 'Round 1 Question',
+          hitlResolved: false,
+        }),
+        'sse',
+      )
+
+      // Round 1 is answered and completed
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-1',
+          taskStatus: 'completed',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlResolved: true,
+          hitlUserAnswer: 'Answer 1',
+        }),
+        'sse',
+      )
+
+      expect(useMessageStore.getState().entities['agent-msg-1'].taskStatus).toBe('completed')
+      expect(useMessageStore.getState().entities['agent-msg-1'].hitlResolved).toBe(true)
+
+      // Round 2 arrives with new hitlRequestId / interactionId
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-1',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-2',
+          hitlInteractionId: 'interaction-2',
+          hitlPrompt: 'Round 2 Question',
+          hitlResolved: false,
+          hitlUserAnswer: '',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-1'].taskStatus).toBe('input-required')
+      expect(state.entities['agent-msg-1'].hitlRequestId).toBe('req-2')
+      expect(state.entities['agent-msg-1'].hitlInteractionId).toBe('interaction-2')
+      expect(state.entities['agent-msg-1'].hitlPrompt).toBe('Round 2 Question')
+      expect(state.entities['agent-msg-1'].hitlResolved).toBe(false)
+      expect(state.entities['agent-msg-1'].hitlUserAnswer).toBe('')
+    })
+  })
 })

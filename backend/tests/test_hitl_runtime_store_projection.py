@@ -159,6 +159,10 @@ def _matches_query(document: dict[str, Any], query: dict[str, Any]) -> bool:
         if isinstance(expected, dict) and "$nin" in expected:
             if actual in expected["$nin"]:
                 return False
+        elif isinstance(expected, dict) and "$exists" in expected:
+            exists = actual is not _MISSING
+            if exists != expected["$exists"]:
+                return False
         elif actual != expected:
             return False
     return True
@@ -482,7 +486,9 @@ async def test_persist_pending_hitl_on_agent_message_projects_metadata_noop_succ
     assert len(room_agent_messages.find_one_and_update_calls) == 1
     query, update, kwargs = room_agent_messages.find_one_and_update_calls[0]
     assert query["message_id"] == "agent-msg-1"
-    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
+    assert "failed" in query["message_content.message_task.status.state"]["$nin"]
+    assert "canceled" in query["message_content.message_task.status.state"]["$nin"]
+    assert query["terminal_projection_event_id"] == {"$exists": False}
     assert kwargs == {"return_document": ReturnDocument.AFTER}
 
     sets = update["$set"]
@@ -545,7 +551,9 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
     assert len(room_agent_messages.find_one_and_update_calls) == 1
     query, update, kwargs = room_agent_messages.find_one_and_update_calls[0]
     assert query["message_id"] == "agent-msg-1"
-    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
+    assert "failed" in query["message_content.message_task.status.state"]["$nin"]
+    assert "canceled" in query["message_content.message_task.status.state"]["$nin"]
+    assert query["terminal_projection_event_id"] == {"$exists": False}
     assert kwargs == {"return_document": ReturnDocument.AFTER}
 
     expected_metadata = {
@@ -574,6 +582,55 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
     )
     assert projected["message_content"]["message_task"]["metadata"] == expected_metadata
     assert private_sentinel not in json.dumps(projected, default=str, sort_keys=True)
+
+
+@pytest.mark.asyncio
+async def test_persist_pending_hitl_can_reopen_completed_message_for_follow_up_round():
+    completed_intermediate = {
+        "message_id": "agent-msg-1",
+        "message_content": {
+            "message_task": {
+                "status": {"state": "completed"},
+                "metadata": {
+                    "hitl_request_id": "req-1",
+                    "user_answer": "Round 1 Answer",
+                },
+            }
+        },
+    }
+    room_agent_messages = _FakeCollection(documents=[completed_intermediate])
+    store = _store(room_agent_messages=room_agent_messages)
+
+    result = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-2",
+        prompt="Round 2 prompt: Which date?",
+        prompt_type=HITLPromptType.TEXT,
+        choices=None,
+        a2a_task_id="task-1",
+        a2a_context_id="ctx-1",
+        interaction_id="interaction-2",
+        question_count=1,
+        question_index=0,
+    )
+
+    assert result is True
+    projected = room_agent_messages.documents[0]
+    assert (
+        projected["message_content"]["message_task"]["status"]["state"]
+        == "input-required"
+    )
+    assert (
+        projected["message_content"]["message_task"]["metadata"]["hitl_request_id"]
+        == "req-2"
+    )
+    assert (
+        projected["message_content"]["message_task"]["metadata"]["user_answer"] is None
+    )
+    assert (
+        projected["message_content"]["message_task"]["metadata"]["hitl_interaction_id"]
+        == "interaction-2"
+    )
 
 
 @pytest.mark.asyncio

@@ -142,7 +142,55 @@ def agent_messages_to_model(
             raise TranscriptCorruptionError(
                 f"unsupported transcript message {type(message).__name__}"
             )
-    return result
+
+    folded: list[ModelMessage] = []
+    tool_blocks: dict[str, ModelToolResultPart] = {}
+
+    for msg in result:
+        if msg.role == "assistant":
+            parts = []
+            for part in msg.content:
+                if getattr(part, "tool_name", None) == "surface_agent_questions":
+                    continue
+                parts.append(part)
+            if not parts:
+                continue
+            folded.append(msg.model_copy(update={"content": parts}))
+
+        elif msg.role == "tool":
+            part = msg.content[0]
+            if getattr(part, "tool_name", None) == "surface_agent_questions":
+                continue
+
+            if hasattr(part, "call_id") and part.call_id in tool_blocks:
+                existing = tool_blocks[part.call_id]
+                existing_text = existing.content[0].text
+                new_text = part.content[0].text
+                updated = existing.model_copy(
+                    update={
+                        "content": [
+                            ModelTextPart(text=f"{existing_text}\n\n{new_text}")
+                        ],
+                        "is_error": existing.is_error or part.is_error,
+                    }
+                )
+                tool_blocks[part.call_id] = updated
+                for i in range(len(folded) - 1, -1, -1):
+                    if (
+                        folded[i].role == "tool"
+                        and getattr(folded[i].content[0], "call_id", None)
+                        == part.call_id
+                    ):
+                        folded[i] = folded[i].model_copy(update={"content": [updated]})
+                        break
+            else:
+                if hasattr(part, "call_id"):
+                    tool_blocks[part.call_id] = part  # type: ignore
+                folded.append(msg)
+        else:
+            folded.append(msg)
+
+    return folded
 
 
 _HISTORICAL_TASK_MAX_CHARS = 2_400

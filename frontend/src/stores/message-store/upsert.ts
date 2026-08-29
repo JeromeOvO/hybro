@@ -29,11 +29,19 @@ export function applyUpsert(
 
   if (existing) {
     // ── Rule 1: Never downgrade terminal status ──
+    const isNewHitlFollowUp = Boolean(
+      incoming.taskStatus === 'input-required' &&
+      ((incoming.hitlRequestId && incoming.hitlRequestId !== existing.hitlRequestId) ||
+       (incoming.hitlInteractionId && incoming.hitlInteractionId !== existing.hitlInteractionId) ||
+       (incoming.hitlInteractionVersion && existing.hitlInteractionVersion && incoming.hitlInteractionVersion > existing.hitlInteractionVersion))
+    )
+
     if (
       existing.taskStatus &&
       isTerminalState(existing.taskStatus) &&
       incoming.taskStatus &&
-      !isTerminalState(incoming.taskStatus)
+      !isTerminalState(incoming.taskStatus) &&
+      !isNewHitlFollowUp
     ) {
       return null
     }
@@ -163,6 +171,11 @@ function mergeIncoming(
     && existing.hitlInteractionVersion !== undefined
     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
   )
+  const isNewHitlFollowUp = Boolean(
+    (incoming.hitlRequestId !== undefined && existing.hitlRequestId !== undefined && incoming.hitlRequestId !== existing.hitlRequestId)
+    || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
+    || (incoming.hitlInteractionVersion !== undefined && existing.hitlInteractionVersion !== undefined && incoming.hitlInteractionVersion > existing.hitlInteractionVersion)
+  )
   const incomingHitlIsTerminal = Boolean(
     incoming.hitlResolved === true
     || ['applied', 'responded', 'canceled', 'expired'].includes(
@@ -231,31 +244,37 @@ function mergeIncoming(
     hitlExpiresAt: acceptsHitlUpdate && incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
     hitlResolved: finalizesExistingHitl
       ? true
-      : acceptsHitlUpdate && incoming.hitlResolved !== undefined
-        ? incoming.hitlResolved
-        : existing.hitlResolved,
+      : isNewHitlFollowUp
+        ? (incoming.hitlResolved !== undefined ? incoming.hitlResolved : false)
+        : acceptsHitlUpdate && incoming.hitlResolved !== undefined
+          ? incoming.hitlResolved
+          : existing.hitlResolved,
     hitlInteractionId: acceptsHitlUpdate && incoming.hitlInteractionId !== undefined ? incoming.hitlInteractionId : existing.hitlInteractionId,
     hitlInteractionStatus: finalizesExistingHitl
       ? 'responded'
       : acceptsHitlUpdate && incoming.hitlInteractionStatus !== undefined
         ? incoming.hitlInteractionStatus
-        : existing.hitlInteractionStatus,
+        : isNewHitlFollowUp
+          ? 'open'
+          : existing.hitlInteractionStatus,
     hitlInteractionVersion: acceptsHitlUpdate && incoming.hitlInteractionVersion !== undefined ? incoming.hitlInteractionVersion : existing.hitlInteractionVersion,
     hitlApplicationStatus: finalizesExistingHitl
       ? 'applied'
       : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
         ? incoming.hitlApplicationStatus
-        : incomingHitlIsNewer
+        : incomingHitlIsNewer || isNewHitlFollowUp
           ? undefined
           : existing.hitlApplicationStatus,
     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
     hitlGroupTotal: acceptsHitlUpdate && incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: acceptsHitlUpdate && incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
-    hitlUserAnswer: acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
-      ? incoming.hitlUserAnswer
-      : incomingHitlIsNewer
-        ? undefined
-        : existing.hitlUserAnswer,
+    hitlUserAnswer: isNewHitlFollowUp
+      ? (incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : undefined)
+      : acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
+        ? incoming.hitlUserAnswer
+        : incomingHitlIsNewer
+          ? undefined
+          : existing.hitlUserAnswer,
     clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,

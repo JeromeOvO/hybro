@@ -13,6 +13,7 @@ from execution.orchestrator.models import (
     ToolInteractionQuestion,
     ToolResultMessage,
     UsageRecord,
+    UserMessage,
 )
 from execution.orchestrator.transcript import (
     TranscriptCorruptionError,
@@ -173,7 +174,118 @@ def test_tool_interaction_presents_then_resolves_with_single_result():
     assert '"interaction_kind":"questionnaire"' in observation
     assert '"answer_kind":"text"' in observation
     assert '"required":true' in observation
-    # The final ToolResultMessage for the same call is still accepted (the
-    # interaction message is a distinct kind, not a duplicate result).
+    # The final ToolResultMessage for the same call folds into the call's
+    # single tool response message, keeping a valid assistant-tool structure.
     final = agent_messages_to_model([assistant(), interaction, result()])
-    assert [message.role for message in final] == ["assistant", "tool", "tool"]
+    assert [message.role for message in final] == ["assistant", "tool"]
+    final_text = final[1].content[0].content[0].text
+    assert "agent input request" in final_text
+    assert "artifact-1" in final_text
+
+
+def test_multi_round_hitl_transcript_folding_strips_surface_questions_and_reconciles_turns():
+    interaction1 = ToolInteractionMessage(
+        message_id="interaction:call-1:fp1",
+        call_id="call-1",
+        tool_name="travel_planner",
+        presentation_id="prs_1",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp1",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="q-1",
+                interaction_kind="questionnaire",
+                prompt="Destination?",
+                answer_kind="text",
+                required=True,
+            )
+        ],
+        created_at=NOW,
+    )
+    surface_call = AssistantMessage(
+        message_id="assistant-surface",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-surface",
+                tool_name="surface_agent_questions",
+                arguments={},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    surface_result = ToolResultMessage(
+        message_id="result-surface",
+        call_id="call-surface",
+        tool_name="surface_agent_questions",
+        status="completed",
+        content=[TextPart(text="Answers applied")],
+        artifact_refs=[],
+        is_error=False,
+        created_at=NOW,
+    )
+    interaction2 = ToolInteractionMessage(
+        message_id="interaction:call-1:fp2",
+        call_id="call-1",
+        tool_name="travel_planner",
+        presentation_id="prs_2",
+        interaction_id="interaction-2",
+        interaction_fingerprint="fp2",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="q-2",
+                interaction_kind="questionnaire",
+                prompt="Duration?",
+                answer_kind="text",
+                required=True,
+            )
+        ],
+        created_at=NOW,
+    )
+    completed = ToolResultMessage(
+        message_id="result-final",
+        call_id="call-1",
+        tool_name="travel_planner",
+        status="completed",
+        content=[TextPart(text="Here is your travel plan")],
+        artifact_refs=[],
+        is_error=False,
+        created_at=NOW,
+    )
+
+    transcript = [
+        UserMessage(
+            message_id="u1",
+            content=[TextPart(text="Plan trip")],
+            created_at=NOW,
+        ),
+        AssistantMessage(
+            message_id="a1",
+            content=[],
+            tool_calls=[
+                ToolCall(
+                    call_id="call-1",
+                    tool_name="travel_planner",
+                    arguments={"task": "Plan trip"},
+                )
+            ],
+            finish_reason="tool_calls",
+            usage=None,
+            created_at=NOW,
+        ),
+        interaction1,
+        surface_call,
+        surface_result,
+        interaction2,
+        completed,
+    ]
+
+    converted = agent_messages_to_model(transcript, prepare_orchestration_context=True)
+    assert [m.role for m in converted] == ["user", "assistant", "tool"]
+    assert converted[1].content[0].call_id == "call-1"
+    tool_text = converted[2].content[0].content[0].text
+    assert "Destination?" in tool_text
+    assert "Duration?" in tool_text
+    assert "Here is your travel plan" in tool_text
