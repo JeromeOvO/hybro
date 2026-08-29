@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -40,9 +41,18 @@ class OpenAIProvider:
         self,
         client: Any | None = None,
         api_key: str | None = None,
+        base_url: str | None = None,
     ) -> None:
+        resolved_base_url = (
+            base_url
+            or getattr(settings, "openai_base_url", None)
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or None
+        )
         self._client = client or AsyncOpenAI(
-            api_key=api_key or settings.openai_api_key or "missing"
+            api_key=api_key or settings.openai_api_key or "missing",
+            base_url=resolved_base_url,
         )
 
     async def generate(

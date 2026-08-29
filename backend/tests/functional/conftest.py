@@ -13,6 +13,49 @@ TRAVEL_PLANNER_AGENT_ID = "575ee896f1e24823943a1e98aee111c9"
 WEATHER_AGENT_ID = "c13e753ad4f74c25bfb684de5572622a"
 
 
+async def get_active_agent_id(
+    client: httpx.AsyncClient, name_keyword: str, default_id: str
+) -> str:
+    """Dynamically resolves registered agent ID by keyword, falling back to default."""
+    try:
+        resp = await client.get("/agent/getAllActiveAgents")
+        if resp.status_code == 200:
+            agents = resp.json().get("agents", [])
+            for a in agents:
+                card = a.get("agent_card") or {}
+                if name_keyword.lower() in card.get("name", "").lower():
+                    return a.get("agent_id") or default_id
+    except Exception:
+        pass
+    return default_id
+
+
+def _is_backend_available() -> bool:
+    """Check if live backend service is reachable."""
+    try:
+        resp = httpx.get(
+            f"{API_BASE_URL}/roomCenter/inquiryActiveRuns",
+            timeout=1.0,
+        )
+        return resp.status_code in {200, 401, 403, 422}
+    except Exception:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Automatically skip functional tests if live backend service is unreachable (e.g. offline CI)."""
+    if os.environ.get("HYBRO_FORCE_FUNCTIONAL_TESTS") == "1":
+        return
+
+    if not _is_backend_available():
+        skip_marker = pytest.mark.skip(
+            reason="Live Hybro backend service is not running (set HYBRO_FORCE_FUNCTIONAL_TESTS=1 or start services)"
+        )
+        for item in items:
+            if "functional" in item.keywords:
+                item.add_marker(skip_marker)
+
+
 @pytest.fixture
 async def functional_client() -> AsyncGenerator[httpx.AsyncClient, None]:
     """Provides an AsyncClient connected to the running backend service."""

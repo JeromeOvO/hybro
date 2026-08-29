@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     mongodb_password: str = ""
 
     openai_api_key: str = ""
+    openai_base_url: str = ""
     lead_ai_model: str = "gpt-5-mini"
     classifier_ai_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"

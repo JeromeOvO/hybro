@@ -332,9 +332,14 @@ _LLM_CACHE: dict[tuple[str, float], Any] = {}
 def _get_llm(model: str, temperature: float):
     key = (model, temperature)
     if key not in _LLM_CACHE:
-        _LLM_CACHE[key] = ChatOpenAI(model=model, temperature=temperature).bind_tools(
-            TOOLS
+        resolved_base_url = (
+            os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or None
         )
+        _LLM_CACHE[key] = ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            base_url=resolved_base_url,
+        ).bind_tools(TOOLS)
     return _LLM_CACHE[key]
 
 

@@ -55,8 +55,9 @@ jobs:
       - name: Run Core Backend Baseline
         run: uv run pytest -m core
 
-      - name: Run Backend Tests
-        run: uv run pytest
+      - name: Run Backend Unit Tests
+        run: uv run pytest -m "not integration and not functional"
+
 
   default-agents-ci:
     name: Default Agents CI (compose sync)
@@ -82,6 +83,7 @@ jobs:
       # running: python default_agents/render_compose.py
       - name: Check docker-compose.yml is in sync with agents.yaml
         run: uv run --with pyyaml python default_agents/render_compose.py --check
+
 
   frontend-ci:
     name: Frontend CI (Next.js / React)
@@ -111,4 +113,69 @@ jobs:
         run: npm run test
 
 
+  functional-ci:
+    name: Functional Regression CI (Docker Stack + Mock LLM)
+    runs-on: ubuntu-latest
+    needs: [backend-ci, frontend-ci, default-agents-ci]
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-suffix: "functional-uv"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js 20.19
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies & Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Install Backend Test Runner Dependencies
+        working-directory: backend
+        run: uv sync --frozen --extra dev
+
+      - name: Start Full Hybro Container Stack with Mock LLM
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build
+          echo "Waiting for backend health check..."
+          timeout 180s bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
+          echo "Backend container is healthy and ready!"
+
+      - name: Run Backend Functional Tests Against Live Containers
+        working-directory: backend
+        env:
+          HYBRO_API_URL: http://localhost:8000/api/v1
+          HYBRO_FORCE_FUNCTIONAL_TESTS: "1"
+        run: uv run pytest tests/functional/ -v --tb=short
+
+      - name: Run Frontend Playwright Functional E2E Against Live Containers
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+        run: npx playwright test tests/e2e/functional-hitl-workflow.spec.ts
+
+      - name: Dump Container Logs on Failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --tail=100
+
+      - name: Tear Down Stack
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
