@@ -74,6 +74,7 @@ markers = [
     "asyncio: mark test as async",
     "core: critical local product-flow regression baseline",
     "integration: requires an explicitly configured external service",
+    "functional: automated end-to-end functional regression tests",
 ]
 asyncio_mode = "auto"
 
