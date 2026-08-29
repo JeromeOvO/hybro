@@ -37,7 +37,7 @@ def _is_backend_available() -> bool:
             f"{API_BASE_URL}/roomCenter/inquiryActiveRuns",
             timeout=1.0,
         )
-        return resp.status_code in {200, 401, 403, 422}
+        return resp.status_code in {200, 401, 403, 405, 422}
     except Exception:
         return False
 
