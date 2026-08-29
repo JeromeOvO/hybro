@@ -2,7 +2,27 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1'
-const TRAVEL_PLANNER_AGENT_ID = '575ee896f1e24823943a1e98aee111c9'
+const DEFAULT_TRAVEL_PLANNER_AGENT_ID = '575ee896f1e24823943a1e98aee111c9'
+
+/**
+ * Resolves active Travel Planner Agent ID dynamically.
+ */
+async function getTravelPlannerAgentId(request: APIRequestContext): Promise<string> {
+  try {
+    const resp = await request.get(`${BACKEND_URL}/agent/getAllActiveAgents`)
+    if (resp.ok()) {
+      const data = await resp.json()
+      const agents = data.agents || []
+      for (const a of agents) {
+        const name = (a.agent_card?.name || '').toLowerCase()
+        if (name.includes('travel') || name.includes('planner')) {
+          return a.agent_id || DEFAULT_TRAVEL_PLANNER_AGENT_ID
+        }
+      }
+    }
+  } catch {}
+  return DEFAULT_TRAVEL_PLANNER_AGENT_ID
+}
 
 /**
  * Automatically detects and responds to any Human-in-the-Loop (HITL) prompt,
@@ -58,12 +78,15 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     page,
     request,
   }) => {
+    // 0. Resolve active travel planner agent ID
+    const travelAgentId = await getTravelPlannerAgentId(request)
+
     // 1. Create a real room in backend
     const createResp = await request.post(`${BACKEND_URL}/roomCenter/createNewRoom`, {
       data: {
         room_name: 'E2E Functional Test Room',
         room_owner_name: 'Developer Local',
-        room_agent_ids: [TRAVEL_PLANNER_AGENT_ID],
+        room_agent_ids: [travelAgentId],
         extend_info: { use_supervisor: true },
       },
     })
@@ -90,7 +113,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
         client_request_id: `e2e-req-${Date.now()}`,
         agent_scope: {
           source: 'mention',
-          agent_ids: [TRAVEL_PLANNER_AGENT_ID],
+          agent_ids: [travelAgentId],
         },
       },
     })

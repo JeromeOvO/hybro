@@ -24,6 +24,7 @@ services:
       - SUPERVISOR_MODEL=gpt-4o
       - LEAD_AI_MODEL=gpt-4o
       - CLASSIFIER_AI_MODEL=gpt-4o-mini
+      - DEFAULT_AGENT_REGISTRAR_TOKEN=ci-service-registrar-token
     depends_on:
       mock-llm:
         condition: service_healthy
@@ -58,4 +59,11 @@ services:
       - OPENAI_API_KEY=mock-api-key-ci
     depends_on:
       mock-llm:
+        condition: service_healthy
+
+  registrar:
+    environment:
+      - AGENT_REGISTRAR_TOKEN=ci-service-registrar-token
+    depends_on:
+      backend:
         condition: service_healthy

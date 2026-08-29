@@ -13,11 +13,7 @@ import uuid
 import httpx
 import pytest
 
-from tests.functional.conftest import (
-    TRAVEL_PLANNER_AGENT_ID,
-    WEATHER_AGENT_ID,
-    wait_for_completion_with_auto_hitl,
-)
+from tests.functional.conftest import wait_for_completion_with_auto_hitl
 
 pytestmark = [pytest.mark.functional]
 
@@ -26,6 +22,8 @@ pytestmark = [pytest.mark.functional]
 async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
     functional_client: httpx.AsyncClient,
     test_room_payload,
+    travel_planner_agent_id: str,
+    weather_agent_id: str,
 ):
     """Verifies that multi-agent delegation produces synthesis and hydrates completely on reload."""
     # 1. Create Room with Travel Team (Travel Planner + Weather Agent)
@@ -33,7 +31,7 @@ async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
         "/roomCenter/createNewRoom",
         json=test_room_payload(
             room_name="Multi-Agent Synthesis Room",
-            agent_ids=[TRAVEL_PLANNER_AGENT_ID, WEATHER_AGENT_ID],
+            agent_ids=[travel_planner_agent_id, weather_agent_id],
             use_supervisor=True,
         ),
     )
@@ -59,7 +57,7 @@ async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
             "client_request_id": client_req_id,
             "agent_scope": {
                 "source": "mention",
-                "agent_ids": [TRAVEL_PLANNER_AGENT_ID, WEATHER_AGENT_ID],
+                "agent_ids": [travel_planner_agent_id, weather_agent_id],
             },
         },
     )

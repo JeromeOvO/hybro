@@ -9,25 +9,8 @@ import httpx
 import pytest
 
 API_BASE_URL = os.environ.get("HYBRO_API_URL", "http://localhost:8000/api/v1")
-TRAVEL_PLANNER_AGENT_ID = "575ee896f1e24823943a1e98aee111c9"
-WEATHER_AGENT_ID = "c13e753ad4f74c25bfb684de5572622a"
-
-
-async def get_active_agent_id(
-    client: httpx.AsyncClient, name_keyword: str, default_id: str
-) -> str:
-    """Dynamically resolves registered agent ID by keyword, falling back to default."""
-    try:
-        resp = await client.get("/agent/getAllActiveAgents")
-        if resp.status_code == 200:
-            agents = resp.json().get("agents", [])
-            for a in agents:
-                card = a.get("agent_card") or {}
-                if name_keyword.lower() in card.get("name", "").lower():
-                    return a.get("agent_id") or default_id
-    except Exception:
-        pass
-    return default_id
+DEFAULT_TRAVEL_PLANNER_ID = "575ee896f1e24823943a1e98aee111c9"
+DEFAULT_WEATHER_ID = "c13e753ad4f74c25bfb684de5572622a"
 
 
 def _is_backend_available() -> bool:
@@ -64,8 +47,46 @@ async def functional_client() -> AsyncGenerator[httpx.AsyncClient, None]:
 
 
 @pytest.fixture
-def test_room_payload():
-    """Generates a default test room payload."""
+async def travel_planner_agent_id(functional_client: httpx.AsyncClient) -> str:
+    """Resolves the live Travel Planner Agent ID, polling until registered."""
+    for _ in range(20):
+        try:
+            resp = await functional_client.get("/agent/getAllActiveAgents")
+            if resp.status_code == 200:
+                agents = resp.json().get("agents", [])
+                for a in agents:
+                    card = a.get("agent_card") or {}
+                    name = card.get("name", "").lower()
+                    if "travel" in name or "planner" in name:
+                        return a.get("agent_id")
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+    return DEFAULT_TRAVEL_PLANNER_ID
+
+
+@pytest.fixture
+async def weather_agent_id(functional_client: httpx.AsyncClient) -> str:
+    """Resolves the live Weather Agent ID, polling until registered."""
+    for _ in range(20):
+        try:
+            resp = await functional_client.get("/agent/getAllActiveAgents")
+            if resp.status_code == 200:
+                agents = resp.json().get("agents", [])
+                for a in agents:
+                    card = a.get("agent_card") or {}
+                    name = card.get("name", "").lower()
+                    if "weather" in name:
+                        return a.get("agent_id")
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+    return DEFAULT_WEATHER_ID
+
+
+@pytest.fixture
+def test_room_payload(travel_planner_agent_id: str):
+    """Generates a default test room payload using resolved agent IDs."""
 
     def _factory(
         room_name: str = "Functional Test Room",
@@ -75,7 +96,7 @@ def test_room_payload():
         return {
             "room_name": room_name,
             "room_owner_name": "Developer",
-            "room_agent_ids": agent_ids or [TRAVEL_PLANNER_AGENT_ID],
+            "room_agent_ids": agent_ids or [travel_planner_agent_id],
             "extend_info": {"use_supervisor": use_supervisor},
         }
 

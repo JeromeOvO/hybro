@@ -13,10 +13,7 @@ import uuid
 import httpx
 import pytest
 
-from tests.functional.conftest import (
-    TRAVEL_PLANNER_AGENT_ID,
-    wait_for_completion_with_auto_hitl,
-)
+from tests.functional.conftest import wait_for_completion_with_auto_hitl
 
 pytestmark = [pytest.mark.functional]
 
@@ -25,12 +22,16 @@ pytestmark = [pytest.mark.functional]
 async def test_multi_round_hitl_questionnaire_and_resumption(
     functional_client: httpx.AsyncClient,
     test_room_payload,
+    travel_planner_agent_id: str,
 ):
     """Verifies that HITL triggers questionnaires, accepts answers automatically, and resumes."""
     # 1. Create Room
     room_resp = await functional_client.post(
         "/roomCenter/createNewRoom",
-        json=test_room_payload("Multi-Round HITL Functional Room"),
+        json=test_room_payload(
+            "Multi-Round HITL Functional Room",
+            agent_ids=[travel_planner_agent_id],
+        ),
     )
     assert room_resp.status_code == 200, f"Room creation failed: {room_resp.text}"
     room_id = room_resp.json().get("room_id")
@@ -54,7 +55,7 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
             "client_request_id": client_req_id,
             "agent_scope": {
                 "source": "mention",
-                "agent_ids": [TRAVEL_PLANNER_AGENT_ID],
+                "agent_ids": [travel_planner_agent_id],
             },
         },
     )

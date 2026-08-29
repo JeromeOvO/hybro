@@ -11,8 +11,6 @@ import uuid
 import httpx
 import pytest
 
-from tests.functional.conftest import TRAVEL_PLANNER_AGENT_ID
-
 pytestmark = [pytest.mark.functional]
 
 
@@ -20,12 +18,15 @@ pytestmark = [pytest.mark.functional]
 async def test_mention_scope_validation_and_rejection_of_legacy_fields(
     functional_client: httpx.AsyncClient,
     test_room_payload,
+    travel_planner_agent_id: str,
 ):
     """Verifies that modern agent_scope is validated and legacy fields are cleanly rejected."""
     # Create room
     room_resp = await functional_client.post(
         "/roomCenter/createNewRoom",
-        json=test_room_payload("Scope Validation Room"),
+        json=test_room_payload(
+            "Scope Validation Room", agent_ids=[travel_planner_agent_id]
+        ),
     )
     assert room_resp.status_code == 200
     room_id = room_resp.json().get("room_id")
@@ -38,7 +39,7 @@ async def test_mention_scope_validation_and_rejection_of_legacy_fields(
             "message": "Hello",
             "mode": "supervisor",
             "client_request_id": str(uuid.uuid4()),
-            "target_agent_ids": [TRAVEL_PLANNER_AGENT_ID],
+            "target_agent_ids": [travel_planner_agent_id],
         },
     )
     assert legacy_resp.status_code == 200
@@ -80,7 +81,7 @@ async def test_mention_scope_validation_and_rejection_of_legacy_fields(
             "client_request_id": str(uuid.uuid4()),
             "agent_scope": {
                 "source": "mention",
-                "agent_ids": [TRAVEL_PLANNER_AGENT_ID],
+                "agent_ids": [travel_planner_agent_id],
             },
         },
     )
