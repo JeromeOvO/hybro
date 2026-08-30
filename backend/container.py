@@ -2380,12 +2380,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 else None
             )
             if current_run is None:
-                raise RuntimeError("canonical lifecycle event has no durable Run")
+                raise RuntimeError(
+                    f"canonical lifecycle event has no durable Run for run_id={event.run_id}"
+                )
             if (
                 event.lifecycle_family != "canonical"
                 or current_run.lifecycle_family != event.lifecycle_family
             ):
-                raise RuntimeError("canonical lifecycle family mismatch")
+                raise RuntimeError(
+                    f"canonical lifecycle family mismatch: event={event.lifecycle_family}, "
+                    f"run={current_run.lifecycle_family}"
+                )
             is_canonical = True
             mapped = None
             if mapped is not None:
@@ -2466,7 +2471,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                             DeliveryEmitStatus.DEDUPLICATED,
                         }:
                             raise RuntimeError(
-                                "canonical lifecycle event was not durably persisted"
+                                f"canonical lifecycle event was not durably persisted: status={status}, "
+                                f"event={public_event.kind}, parent={parent_event_id}"
                             )
                         if room_event_id is not None:
                             _canonical_parent_ids[public_event.run_id] = room_event_id
@@ -2524,7 +2530,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     )
                     if final_parent_id is None:
                         raise RuntimeError(
-                            "canonical final message_end parent is not durable"
+                            f"canonical final message_end parent is not durable for message_id={final.message_id}, "
+                            f"records_count={len(records)}"
                         )
                 (
                     status,

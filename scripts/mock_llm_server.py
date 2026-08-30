@@ -33,6 +33,7 @@ def extract_last_user_and_tool_info(messages: list[dict]) -> tuple[str, list[dic
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
+        tool_call_id = msg.get("tool_call_id")
         if isinstance(content, list):
             text_parts = []
             for p in content:
@@ -48,7 +49,7 @@ def extract_last_user_and_tool_info(messages: list[dict]) -> tuple[str, list[dic
 
         if role == "user":
             last_user_text = content_str
-        elif role == "tool":
+        elif role == "tool" or tool_call_id:
             has_tool_results = True
             tool_results.append(content_str)
 
@@ -123,8 +124,11 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             tools = payload.get("tools", [])
             model = payload.get("model", "gpt-4o")
 
-            # Determine response logic based on tools and messages
-            tool_calls, text_content, finish_reason = self._decide_response(messages, tools)
+            tool_calls, text_content, finish_reason = self._decide_response(messages, tools, payload)
+            logger.info("Chat: model=%s, stream=%s, tools=%d, msgs=%d => finish=%s, has_tools=%s, tool_calls=%s",
+                        model, stream, len(tools), len(messages), finish_reason, bool(tool_calls),
+                        [tc.get("function", {}).get("name") for tc in (tool_calls or [])])
+            logger.info("Chat messages roles: %s", [m.get("role") for m in messages])
 
             if stream:
                 self._stream_response(model, tool_calls, text_content, finish_reason)
@@ -134,9 +138,30 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             logger.exception("Error handling chat completions: %s", exc)
             self.send_error(500, str(exc))
 
-    def _decide_response(self, messages: list[dict], tools: list[dict]) -> tuple[list[dict] | None, str, str]:
+    def _decide_response(self, messages: list[dict], tools: list[dict], payload: dict) -> tuple[list[dict] | None, str, str]:
         last_user_text, tool_results, has_tool_results = extract_last_user_and_tool_info(messages)
         tool_names = [t.get("function", {}).get("name") or t.get("name") for t in tools]
+
+        # Case 0: Structured JSON request (response_format provided)
+        response_format = payload.get("response_format")
+        if response_format:
+            data = {
+                "message_type": "text",
+                "original_text": last_user_text,
+                "needs_decomposition": False,
+                "decomposition_reason": "Single cohesive task",
+                "task_steps": [{
+                    "step_id": "step_1",
+                    "agent_id": None,
+                    "agent_name": None,
+                    "task_content": last_user_text,
+                    "dependencies": [],
+                }],
+                "selected_agents": [],
+                "summary": last_user_text,
+                "key_points": [last_user_text],
+            }
+            return None, json.dumps(data), "stop"
 
         # Case 1: Supervisor Turn 2 (We already received agent tool results)
         if has_tool_results and any(t and t.startswith("agent_") for t in tool_names):
@@ -165,10 +190,23 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             }]
             return tool_calls, "", "tool_calls"
 
-        # Case 3: Travel Planner Agent (LangChain tool AskUserForClarification)
+        # Case 4: Weather Agent (get_weather / get_forecast)
+        weather_tools = [name for name in tool_names if name in {"get_weather", "get_forecast"}]
+        if weather_tools and not has_tool_results:
+            call_id = f"call_weather_{uuid.uuid4().hex[:8]}"
+            args = json.dumps({"city": "San Francisco", "days": 3})
+            tool_calls = [{
+                "id": call_id,
+                "type": "function",
+                "function": {"name": weather_tools[0], "arguments": args},
+            }]
+            return tool_calls, "", "tool_calls"
+        elif weather_tools and has_tool_results:
+            return None, "The weather is currently clear and sunny with highs around 22°C (72°F).", "stop"
+
+        # Case 3: Travel Planner Agent (LangChain tool AskUserForClarification or direct)
         if "AskUserForClarification" in tool_names:
-            # Check if user query has duration and destination
-            has_details = any(kw in last_user_text.lower() for kw in ["kyoto", "san francisco", "tokyo", "3 days", "3-day", "sept"])
+            has_details = any(kw in last_user_text.lower() for kw in ["kyoto", "san francisco", "tokyo", "3 days", "3-day", "sept", "budget"])
             if not has_details and len(messages) <= 2:
                 # Ask clarification question
                 call_id = f"call_clarify_{uuid.uuid4().hex[:8]}"
@@ -190,20 +228,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 )
                 return None, itinerary_text, "stop"
 
-        # Case 4: Weather Agent (get_weather / get_forecast)
-        weather_tools = [name for name in tool_names if name in {"get_weather", "get_forecast"}]
-        if weather_tools and not has_tool_results:
-            call_id = f"call_weather_{uuid.uuid4().hex[:8]}"
-            args = json.dumps({"city": "San Francisco", "location": "San Francisco", "days": 3})
-            tool_calls = [{
-                "id": call_id,
-                "type": "function",
-                "function": {"name": weather_tools[0], "arguments": args},
-            }]
-            return tool_calls, "", "tool_calls"
-        elif weather_tools and has_tool_results:
-            return None, "The weather is currently clear and sunny with highs around 22°C (72°F).", "stop"
-
         # Default fallback
         fallback_text = "I have processed your request and completed the task successfully."
         return None, fallback_text, "stop"
@@ -212,16 +236,17 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.end_headers()
+        self.close_connection = True
 
         req_id = f"chatcmpl-mock-{uuid.uuid4().hex[:8]}"
         created = int(time.time())
 
         if tool_calls:
-            # Emit tool call delta
             for idx, tc in enumerate(tool_calls):
-                chunk = {
+                # Chunk 1: ID and Name
+                chunk_meta = {
                     "id": req_id,
                     "object": "chat.completion.chunk",
                     "created": created,
@@ -236,6 +261,28 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                                 "type": "function",
                                 "function": {
                                     "name": tc["function"]["name"],
+                                    "arguments": "",
+                                },
+                            }],
+                        },
+                        "finish_reason": None,
+                    }],
+                }
+                self.wfile.write(f"data: {json.dumps(chunk_meta)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+                # Chunk 2: Arguments
+                chunk_args = {
+                    "id": req_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": idx,
+                                "function": {
                                     "arguments": tc["function"]["arguments"],
                                 },
                             }],
@@ -243,10 +290,9 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                         "finish_reason": None,
                     }],
                 }
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+                self.wfile.write(f"data: {json.dumps(chunk_args)}\n\n".encode("utf-8"))
                 self.wfile.flush()
 
-            # Terminal chunk
             terminal_chunk = {
                 "id": req_id,
                 "object": "chat.completion.chunk",
@@ -261,7 +307,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"data: {json.dumps(terminal_chunk)}\n\n".encode("utf-8"))
             self.wfile.flush()
         else:
-            # Text stream chunks
             words = text_content.split(" ")
             for i in range(0, len(words), 4):
                 chunk_text = " ".join(words[i:i + 4]) + (" " if i + 4 < len(words) else "")
@@ -279,7 +324,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
                 self.wfile.flush()
 
-            # Terminal chunk
             terminal_chunk = {
                 "id": req_id,
                 "object": "chat.completion.chunk",
@@ -324,7 +368,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self._send_json(response)
 
     def log_message(self, format, *args):
-        # Keep logs concise
         logger.info("%s - %s", self.address_string(), format % args)
 
 

@@ -54,7 +54,8 @@ class LLMGatewayImpl:
         if providers is None:
             providers = {
                 "openai": OpenAIProvider(
-                    api_key=getattr(settings_obj, "openai_api_key", "")
+                    api_key=getattr(settings_obj, "openai_api_key", ""),
+                    base_url=getattr(settings_obj, "openai_base_url", None) or None,
                 ),
                 "deepseek": DeepSeekProvider(
                     api_key=getattr(settings_obj, "deepseek_api_key", ""),
