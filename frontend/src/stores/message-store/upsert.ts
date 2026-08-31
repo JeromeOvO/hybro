@@ -30,10 +30,10 @@ export function applyUpsert(
   if (existing) {
     // ── Rule 1: Never downgrade terminal status ──
     const isNewHitlFollowUp = Boolean(
+      existing.taskStatus === 'completed' &&
       incoming.taskStatus === 'input-required' &&
-      ((incoming.hitlRequestId && incoming.hitlRequestId !== existing.hitlRequestId) ||
-       (incoming.hitlInteractionId && incoming.hitlInteractionId !== existing.hitlInteractionId) ||
-       (incoming.hitlInteractionVersion && existing.hitlInteractionVersion && incoming.hitlInteractionVersion > existing.hitlInteractionVersion))
+      incoming.taskUpdatedAt && existing.taskUpdatedAt &&
+      new Date(incoming.taskUpdatedAt).getTime() > new Date(existing.taskUpdatedAt).getTime()
     )
 
     if (

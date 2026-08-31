@@ -143,6 +143,14 @@ def agent_messages_to_model(
                 f"unsupported transcript message {type(message).__name__}"
             )
 
+    failed_surface_calls = {
+        msg.content[0].call_id
+        for msg in result
+        if msg.role == "tool"
+        and getattr(msg.content[0], "tool_name", None) == "surface_agent_questions"
+        and getattr(msg.content[0], "is_error", False)
+    }
+
     folded: list[ModelMessage] = []
     tool_blocks: dict[str, ModelToolResultPart] = {}
 
@@ -151,7 +159,8 @@ def agent_messages_to_model(
             parts = []
             for part in msg.content:
                 if getattr(part, "tool_name", None) == "surface_agent_questions":
-                    continue
+                    if getattr(part, "call_id", None) not in failed_surface_calls:
+                        continue
                 parts.append(part)
             if not parts:
                 continue
@@ -160,7 +169,8 @@ def agent_messages_to_model(
         elif msg.role == "tool":
             part = msg.content[0]
             if getattr(part, "tool_name", None) == "surface_agent_questions":
-                continue
+                if getattr(part, "call_id", None) not in failed_surface_calls:
+                    continue
 
             if hasattr(part, "call_id") and part.call_id in tool_blocks:
                 existing = tool_blocks[part.call_id]

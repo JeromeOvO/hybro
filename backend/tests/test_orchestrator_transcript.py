@@ -289,3 +289,40 @@ def test_multi_round_hitl_transcript_folding_strips_surface_questions_and_reconc
     assert "Destination?" in tool_text
     assert "Duration?" in tool_text
     assert "Here is your travel plan" in tool_text
+
+
+def test_transcript_preserves_rejected_surface_call():
+    assistant = AssistantMessage(
+        message_id="m1",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-fail",
+                tool_name="surface_agent_questions",
+                arguments={},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    result = ToolResultMessage(
+        message_id="m2",
+        call_id="call-fail",
+        tool_name="surface_agent_questions",
+        status="completed",
+        content=[TextPart(text="schema validation error")],
+        artifact_refs=[],
+        is_error=True,
+        created_at=NOW,
+    )
+
+    transcript = [assistant, result]
+    folded = agent_messages_to_model(transcript)
+
+    assert len(folded) == 2
+    assert folded[0].role == "assistant"
+    assert folded[0].content[0].tool_name == "surface_agent_questions"
+    assert folded[1].role == "tool"
+    assert "schema validation error" in folded[1].content[0].content[0].text
+    assert folded[1].content[0].is_error is True

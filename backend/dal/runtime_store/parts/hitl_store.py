@@ -221,14 +221,25 @@ class HITLRuntimeStorePart:
                 if state in {"input-required", "completed"}
                 else _TERMINAL_TASK_STATES
             )
-            return await self._room_agent_messages.update_one(
-                {
-                    "message_id": message_id,
-                    "message_content.message_task.status.state": {
-                        "$nin": allowed_terminal_guard
-                    },
+            query = {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {
+                    "$nin": allowed_terminal_guard
                 },
+            }
+            if state == "input-required":
+                query["$or"] = [
+                    {"terminal_projection_event_id": {"$exists": False}},
+                    {"terminal_projection_event_id": None},
+                ]
+
+            result = await self._room_agent_messages.update_one(
+                query,
                 {"$set": {"message_content.message_task.status.state": state}},
+            )
+            return bool(
+                getattr(result, "modified_count", 0)
+                or getattr(result, "matched_count", 0)
             )
         except Exception:
             logger.error("Failed to update agent message task state", exc_info=True)
@@ -588,7 +599,10 @@ class HITLRuntimeStorePart:
             projected = await self._room_agent_messages.find_one_and_update(
                 {
                     "message_id": message_id,
-                    "terminal_projection_event_id": {"$exists": False},
+                    "$or": [
+                        {"terminal_projection_event_id": {"$exists": False}},
+                        {"terminal_projection_event_id": None},
+                    ],
                     "message_content.message_task.status.state": {
                         "$nin": _UNRESUMABLE_TASK_STATES
                     },

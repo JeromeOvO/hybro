@@ -1,0 +1,416 @@
+[
+  {
+    "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020127",
+    "pull_request_review_id": 5062357377,
+    "id": 3891020127,
+    "node_id": "PRRC_kwDOTDtZ7c7n7EFf",
+    "diff_hunk": "@@ -46,7 +46,7 @@ REDIS_URL=\n \n LEAD_AI_MODEL=gpt-4o-mini\n CLASSIFIER_AI_MODEL=gpt-4o-mini\n-SUPERVISOR_MODEL=gpt-5.4-mini\n+SUPERVISOR_MODEL=gpt-4o",
+    "path": ".env.example",
+    "commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "original_commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "user": {
+      "login": "JeromeOvO",
+      "id": 63946990,
+      "node_id": "MDQ6VXNlcjYzOTQ2OTkw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63946990?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/JeromeOvO",
+      "html_url": "https://github.com/JeromeOvO",
+      "followers_url": "https://api.github.com/users/JeromeOvO/followers",
+      "following_url": "https://api.github.com/users/JeromeOvO/following{/other_user}",
+      "gists_url": "https://api.github.com/users/JeromeOvO/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/JeromeOvO/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/JeromeOvO/subscriptions",
+      "organizations_url": "https://api.github.com/users/JeromeOvO/orgs",
+      "repos_url": "https://api.github.com/users/JeromeOvO/repos",
+      "events_url": "https://api.github.com/users/JeromeOvO/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/JeromeOvO/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**P0 — This example configuration prevents both orchestrator profiles from resolving.** `gpt-4o` has no supported thinking levels in `ModelRegistryImpl`, while the example still sets `ORCHESTRATOR_FAST_THINKING_LEVEL=low` and `ORCHESTRATOR_ULTIMATE_THINKING_LEVEL=high` on lines 52–53. Copying `.env.example` therefore raises `ValidationError: thinking_level is unsupported by the frozen model route` for Fast and Ultimate. Please either remove those explicit thinking-level variables when selecting `gpt-4o`, or keep a reasoning-capable supervisor model; a profile-resolution test for this example combination would prevent recurrence.",
+    "created_at": "2026-08-31T00:41:46Z",
+    "updated_at": "2026-08-31T00:41:46Z",
+    "html_url": "https://github.com/hybroai/hybro/pull/169#discussion_r3891020127",
+    "pull_request_url": "https://api.github.com/repos/hybroai/hybro/pulls/169",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020127"
+      },
+      "html": {
+        "href": "https://github.com/hybroai/hybro/pull/169#discussion_r3891020127"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/169"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020127/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 49,
+    "original_line": 49,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 5,
+    "position": 5,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020475",
+    "pull_request_review_id": 5062357743,
+    "id": 3891020475,
+    "node_id": "PRRC_kwDOTDtZ7c7n7EK7",
+    "diff_hunk": "@@ -142,7 +142,55 @@ def agent_messages_to_model(\n             raise TranscriptCorruptionError(\n                 f\"unsupported transcript message {type(message).__name__}\"\n             )\n-    return result\n+\n+    folded: list[ModelMessage] = []\n+    tool_blocks: dict[str, ModelToolResultPart] = {}\n+\n+    for msg in result:\n+        if msg.role == \"assistant\":\n+            parts = []\n+            for part in msg.content:\n+                if getattr(part, \"tool_name\", None) == \"surface_agent_questions\":\n+                    continue\n+                parts.append(part)\n+            if not parts:\n+                continue\n+            folded.append(msg.model_copy(update={\"content\": parts}))\n+\n+        elif msg.role == \"tool\":\n+            part = msg.content[0]\n+            if getattr(part, \"tool_name\", None) == \"surface_agent_questions\":\n+                continue\n+\n+            if hasattr(part, \"call_id\") and part.call_id in tool_blocks:",
+    "path": "backend/execution/orchestrator/transcript.py",
+    "commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "original_commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "user": {
+      "login": "JeromeOvO",
+      "id": 63946990,
+      "node_id": "MDQ6VXNlcjYzOTQ2OTkw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63946990?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/JeromeOvO",
+      "html_url": "https://github.com/JeromeOvO",
+      "followers_url": "https://api.github.com/users/JeromeOvO/followers",
+      "following_url": "https://api.github.com/users/JeromeOvO/following{/other_user}",
+      "gists_url": "https://api.github.com/users/JeromeOvO/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/JeromeOvO/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/JeromeOvO/subscriptions",
+      "organizations_url": "https://api.github.com/users/JeromeOvO/orgs",
+      "repos_url": "https://api.github.com/users/JeromeOvO/repos",
+      "events_url": "https://api.github.com/users/JeromeOvO/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/JeromeOvO/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**P1 — The folded transcript still fails when context compaction is active.** `ContextCompiler._pair_safe_tail_indexes()` currently removes a call ID as soon as it encounters the first `ToolInteractionMessage` (`backend/execution/orchestrator/context.py:192`). The later interaction/final result for this same call is consequently selected as a standalone group, and `compile(..., summary=...)` raises `TranscriptCorruptionError: orphan tool result` (or `orphan tool interaction`) before provider submission. Please keep the originating assistant/tool group open across interaction messages and close it only on the final `ToolResultMessage`, with a summarized-compilation regression test using the multi-round fixture added here.",
+    "created_at": "2026-08-31T00:41:55Z",
+    "updated_at": "2026-08-31T00:41:55Z",
+    "html_url": "https://github.com/hybroai/hybro/pull/169#discussion_r3891020475",
+    "pull_request_url": "https://api.github.com/repos/hybroai/hybro/pulls/169",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020475"
+      },
+      "html": {
+        "href": "https://github.com/hybroai/hybro/pull/169#discussion_r3891020475"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/169"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020475/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 165,
+    "original_line": 165,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 25,
+    "position": 25,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020840",
+    "pull_request_review_id": 5062358073,
+    "id": 3891020840,
+    "node_id": "PRRC_kwDOTDtZ7c7n7EQo",
+    "diff_hunk": "@@ -215,11 +216,16 @@ async def update_agent_message_task_state(\n         state: str,\n     ) -> bool:\n         try:\n+            allowed_terminal_guard = (",
+    "path": "backend/dal/runtime_store/parts/hitl_store.py",
+    "commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "original_commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "user": {
+      "login": "JeromeOvO",
+      "id": 63946990,
+      "node_id": "MDQ6VXNlcjYzOTQ2OTkw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63946990?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/JeromeOvO",
+      "html_url": "https://github.com/JeromeOvO",
+      "followers_url": "https://api.github.com/users/JeromeOvO/followers",
+      "following_url": "https://api.github.com/users/JeromeOvO/following{/other_user}",
+      "gists_url": "https://api.github.com/users/JeromeOvO/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/JeromeOvO/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/JeromeOvO/subscriptions",
+      "organizations_url": "https://api.github.com/users/JeromeOvO/orgs",
+      "repos_url": "https://api.github.com/users/JeromeOvO/repos",
+      "events_url": "https://api.github.com/users/JeromeOvO/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/JeromeOvO/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**P1 — This permits a durable terminal winner to be reopened.** The failure-only state guard allows `completed -> input-required`, but this update does not fence on `terminal_projection_event_id`. The non-agent/supervisor HITL projection path calls this method from `execution/hitl/service.py:748-753`, so a late follow-up can produce an interactive row that still carries a terminal projection winner. Please make the reopen a CAS that also requires the terminal marker to be absent or null, and add a regression test with a completed row whose marker is non-null.",
+    "created_at": "2026-08-31T00:42:03Z",
+    "updated_at": "2026-08-31T00:42:03Z",
+    "html_url": "https://github.com/hybroai/hybro/pull/169#discussion_r3891020840",
+    "pull_request_url": "https://api.github.com/repos/hybroai/hybro/pulls/169",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020840"
+      },
+      "html": {
+        "href": "https://github.com/hybroai/hybro/pull/169#discussion_r3891020840"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/169"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891020840/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 219,
+    "original_line": 219,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 19,
+    "position": 19,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891021228",
+    "pull_request_review_id": 5062358472,
+    "id": 3891021228,
+    "node_id": "PRRC_kwDOTDtZ7c7n7EWs",
+    "diff_hunk": "@@ -29,11 +29,19 @@ export function applyUpsert(\n \n   if (existing) {\n     // ── Rule 1: Never downgrade terminal status ──\n+    const isNewHitlFollowUp = Boolean(",
+    "path": "frontend/src/stores/message-store/upsert.ts",
+    "commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "original_commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "user": {
+      "login": "JeromeOvO",
+      "id": 63946990,
+      "node_id": "MDQ6VXNlcjYzOTQ2OTkw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63946990?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/JeromeOvO",
+      "html_url": "https://github.com/JeromeOvO",
+      "followers_url": "https://api.github.com/users/JeromeOvO/followers",
+      "following_url": "https://api.github.com/users/JeromeOvO/following{/other_user}",
+      "gists_url": "https://api.github.com/users/JeromeOvO/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/JeromeOvO/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/JeromeOvO/subscriptions",
+      "organizations_url": "https://api.github.com/users/JeromeOvO/orgs",
+      "repos_url": "https://api.github.com/users/JeromeOvO/repos",
+      "events_url": "https://api.github.com/users/JeromeOvO/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/JeromeOvO/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**P1 — Different opaque IDs do not prove that this event is newer.** After round 2 completes, a delayed `input-required` event from round 1 has different request/interaction IDs and therefore bypasses the terminal-state guard, replacing the current prompt/resolution state with stale data. The same exception also reopens `failed`/`canceled` entities even though the backend treats those states as unresumable. Please require an authoritative monotonic generation/event sequence (or newer trusted timestamp) before reopening, restrict the exception to the backend-supported prior state, and add reverse-order plus failure-state tests.",
+    "created_at": "2026-08-31T00:42:13Z",
+    "updated_at": "2026-08-31T00:42:13Z",
+    "html_url": "https://github.com/hybroai/hybro/pull/169#discussion_r3891021228",
+    "pull_request_url": "https://api.github.com/repos/hybroai/hybro/pulls/169",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891021228"
+      },
+      "html": {
+        "href": "https://github.com/hybroai/hybro/pull/169#discussion_r3891021228"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/169"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891021228/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 32,
+    "original_line": 32,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 4,
+    "position": 4,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891021592",
+    "pull_request_review_id": 5062358809,
+    "id": 3891021592,
+    "node_id": "PRRC_kwDOTDtZ7c7n7EcY",
+    "diff_hunk": "@@ -142,7 +142,55 @@ def agent_messages_to_model(\n             raise TranscriptCorruptionError(\n                 f\"unsupported transcript message {type(message).__name__}\"\n             )\n-    return result\n+\n+    folded: list[ModelMessage] = []\n+    tool_blocks: dict[str, ModelToolResultPart] = {}\n+\n+    for msg in result:\n+        if msg.role == \"assistant\":\n+            parts = []\n+            for part in msg.content:\n+                if getattr(part, \"tool_name\", None) == \"surface_agent_questions\":",
+    "path": "backend/execution/orchestrator/transcript.py",
+    "commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "original_commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "user": {
+      "login": "JeromeOvO",
+      "id": 63946990,
+      "node_id": "MDQ6VXNlcjYzOTQ2OTkw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63946990?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/JeromeOvO",
+      "html_url": "https://github.com/JeromeOvO",
+      "followers_url": "https://api.github.com/users/JeromeOvO/followers",
+      "following_url": "https://api.github.com/users/JeromeOvO/following{/other_user}",
+      "gists_url": "https://api.github.com/users/JeromeOvO/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/JeromeOvO/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/JeromeOvO/subscriptions",
+      "organizations_url": "https://api.github.com/users/JeromeOvO/orgs",
+      "repos_url": "https://api.github.com/users/JeromeOvO/repos",
+      "events_url": "https://api.github.com/users/JeromeOvO/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/JeromeOvO/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**P2 — This also removes rejected/failed surface-call diagnostics.** Schema errors, unknown presentation IDs, and publication failures produce a rejected `ToolResultMessage`, and the kernel explicitly returns `\"retry\"` so that diagnostic is available on the next model turn. Filtering solely by `tool_name` removes both sides of that pair (a rejected pair converts to `[]`), so the model cannot learn why the call failed and can repeat it until budget exhaustion. Please strip only successfully completed surface pairs and preserve failed/rejected assistant-result pairs; add transcript coverage for a rejected surface call.",
+    "created_at": "2026-08-31T00:42:21Z",
+    "updated_at": "2026-08-31T00:42:21Z",
+    "html_url": "https://github.com/hybroai/hybro/pull/169#discussion_r3891021592",
+    "pull_request_url": "https://api.github.com/repos/hybroai/hybro/pulls/169",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891021592"
+      },
+      "html": {
+        "href": "https://github.com/hybroai/hybro/pull/169#discussion_r3891021592"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/169"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891021592/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 153,
+    "original_line": 153,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 13,
+    "position": 13,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891022030",
+    "pull_request_review_id": 5062359251,
+    "id": 3891022030,
+    "node_id": "PRRC_kwDOTDtZ7c7n7EjO",
+    "diff_hunk": "@@ -582,8 +588,9 @@ async def persist_pending_hitl_on_agent_message(\n             projected = await self._room_agent_messages.find_one_and_update(\n                 {\n                     \"message_id\": message_id,\n+                    \"terminal_projection_event_id\": {\"$exists\": False},",
+    "path": "backend/dal/runtime_store/parts/hitl_store.py",
+    "commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "original_commit_id": "a3a5151a377ecc1f53b3d0b9aaeb0e3f9a6c3e80",
+    "user": {
+      "login": "JeromeOvO",
+      "id": 63946990,
+      "node_id": "MDQ6VXNlcjYzOTQ2OTkw",
+      "avatar_url": "https://avatars.githubusercontent.com/u/63946990?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/JeromeOvO",
+      "html_url": "https://github.com/JeromeOvO",
+      "followers_url": "https://api.github.com/users/JeromeOvO/followers",
+      "following_url": "https://api.github.com/users/JeromeOvO/following{/other_user}",
+      "gists_url": "https://api.github.com/users/JeromeOvO/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/JeromeOvO/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/JeromeOvO/subscriptions",
+      "organizations_url": "https://api.github.com/users/JeromeOvO/orgs",
+      "repos_url": "https://api.github.com/users/JeromeOvO/repos",
+      "events_url": "https://api.github.com/users/JeromeOvO/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/JeromeOvO/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**P2 — A null marker is treated as a terminal winner here.** This query accepts only `$exists: false`, but the repository's other terminal-winner CAS paths intentionally treat a missing marker and `terminal_projection_event_id: null` as equivalent (`message_store.py:229-234,343-346`). A reusable completed row carrying the legacy/null representation therefore cannot open its next valid HITL round, and projection aborts before emitting the request. Please use an `$or` for missing or null while continuing to reject non-null winners, and add a null-marker test beside the existing winner case.",
+    "created_at": "2026-08-31T00:42:32Z",
+    "updated_at": "2026-08-31T00:42:32Z",
+    "html_url": "https://github.com/hybroai/hybro/pull/169#discussion_r3891022030",
+    "pull_request_url": "https://api.github.com/repos/hybroai/hybro/pulls/169",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891022030"
+      },
+      "html": {
+        "href": "https://github.com/hybroai/hybro/pull/169#discussion_r3891022030"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/hybroai/hybro/pulls/169"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/hybroai/hybro/pulls/comments/3891022030/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 591,
+    "original_line": 591,
+    "side": "RIGHT",
+    "author_association": "CONTRIBUTOR",
+    "original_position": 37,
+    "position": 37,
+    "subject_type": "line"
+  }
+]
