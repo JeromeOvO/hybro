@@ -24,40 +24,102 @@ async function getTravelPlannerAgentId(request: APIRequestContext): Promise<stri
   return DEFAULT_TRAVEL_PLANNER_AGENT_ID
 }
 
-/**
- * Automatically detects and responds to any Human-in-the-Loop (HITL) prompt,
- * submitting automated user inputs immediately without waiting for human intervention.
- */
-async function autoRespondHitlIfPresent(
-  page: Page,
-  request: APIRequestContext,
-  roomId: string,
-  answerText = 'Kyoto, 3 days, $1500 budget'
-) {
-  // 1. Submit through backend API if pending requests exist
-  const pendingResp = await request
-    .get(`${BACKEND_URL}/rooms/${roomId}/hitl/pending`)
-    .catch(() => null)
+function messageText(msg: Record<string, unknown>): string {
+  const content = msg.message_content as { message_text?: string } | undefined
+  return (content?.message_text || '').trim()
+}
 
-  if (pendingResp && pendingResp.ok()) {
-    const data = await pendingResp.json().catch(() => ({}))
-    const requests = data.requests || []
-    for (const req of requests) {
-      if (req.request_id && req.interaction_id) {
-        await request
-          .post(`${BACKEND_URL}/rooms/${roomId}/hitl/respond-batch`, {
-            data: {
-              interaction_id: req.interaction_id,
-              answers: [{ request_id: req.request_id, user_input: answerText }],
-              client_request_id: req.client_request_id || `hitl-auto-${Date.now()}`,
-            },
-          })
-          .catch(() => {})
-      }
+function taskState(msg: Record<string, unknown>): string | undefined {
+  const content = msg.message_content as { message_task?: { status?: { state?: string } } } | undefined
+  return content?.message_task?.status?.state
+}
+
+function findTerminalSynthesis(
+  messages: Record<string, unknown>[],
+  clientRequestId: string,
+): Record<string, unknown> | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const msg = messages[index]
+    if (msg.message_type !== 'agent') continue
+    if (msg.client_request_id !== clientRequestId) continue
+    if (msg.agent_id !== 'system:hybro') continue
+    const text = messageText(msg)
+    if (text.length <= 30) continue
+    const state = taskState(msg)
+    if (state === undefined || state === 'completed') {
+      return msg
     }
   }
+  return undefined
+}
 
-  // 2. Also submit via UI if the Questionnaire / HitlResponseBar is rendered
+async function pollPendingHitl(
+  request: APIRequestContext,
+  roomId: string,
+  timeoutMs = 45_000,
+): Promise<Record<string, unknown>[]> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const pendingResp = await request.get(`${BACKEND_URL}/rooms/${roomId}/hitl/pending`)
+    expect(pendingResp.ok()).toBeTruthy()
+    const data = await pendingResp.json()
+    const requests = (data.requests || []) as Record<string, unknown>[]
+    if (requests.length > 0) {
+      return requests
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+  return []
+}
+
+async function submitHitlAnswers(
+  request: APIRequestContext,
+  roomId: string,
+  pendingRequests: Record<string, unknown>[],
+  answerText: string,
+  clientRequestId: string,
+) {
+  for (const req of pendingRequests) {
+    expect(req.request_id).toBeTruthy()
+    expect(req.interaction_id).toBeTruthy()
+    const submitResp = await request.post(`${BACKEND_URL}/rooms/${roomId}/hitl/respond-batch`, {
+      data: {
+        interaction_id: req.interaction_id,
+        answers: [{ request_id: req.request_id, user_input: answerText }],
+        client_request_id: req.client_request_id || clientRequestId,
+      },
+    })
+    expect(submitResp.ok()).toBeTruthy()
+  }
+}
+
+async function waitForTerminalSynthesis(
+  request: APIRequestContext,
+  roomId: string,
+  clientRequestId: string,
+  timeoutMs = 75_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
+      data: { room_id: roomId },
+    })
+    expect(historyResp.ok()).toBeTruthy()
+    const data = await historyResp.json()
+    const messages = (data.message_list || []) as Record<string, unknown>[]
+    const synthesis = findTerminalSynthesis(messages, clientRequestId)
+    if (synthesis) {
+      return synthesis
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+  throw new Error('Timed out waiting for terminal supervisor synthesis')
+}
+
+async function autoRespondHitlViaUiIfPresent(
+  page: Page,
+  answerText: string,
+) {
   const hitlBar = page.locator('[data-testid="hitl-response-bar"]')
   if (await hitlBar.isVisible({ timeout: 1500 }).catch(() => false)) {
     const textInput = hitlBar.locator('textarea, input[type="text"]').first()
@@ -67,7 +129,7 @@ async function autoRespondHitlIfPresent(
         .locator('button[type="submit"], button:has-text("Submit"), button:has-text("Send")')
         .first()
       if (await submitBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await submitBtn.click().catch(() => {})
+        await submitBtn.click()
       }
     }
   }
@@ -78,10 +140,8 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     page,
     request,
   }) => {
-    // 0. Resolve active travel planner agent ID
     const travelAgentId = await getTravelPlannerAgentId(request)
 
-    // 1. Create a real room in backend
     const createResp = await request.post(`${BACKEND_URL}/roomCenter/createNewRoom`, {
       data: {
         room_name: 'E2E Functional Test Room',
@@ -95,8 +155,9 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     const roomId = roomData.room_id
     expect(roomId).toBeTruthy()
 
-    // 2. Dispatch a message to the room
-    const promptText = 'Plan a 3-day trip to Tokyo'
+    const promptText = 'Generate a travel plan'
+    const answerText = 'Kyoto, 3 days, $1500 budget'
+    const clientRequestId = `e2e-req-${Date.now()}`
     const sendResp = await request.post(`${BACKEND_URL}/roomCenter/sendMessage`, {
       data: {
         room_id: roomId,
@@ -110,7 +171,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
           },
         },
         mode: 'supervisor',
-        client_request_id: `e2e-req-${Date.now()}`,
+        client_request_id: clientRequestId,
         agent_scope: {
           source: 'mention',
           agent_ids: [travelAgentId],
@@ -119,19 +180,23 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     })
     expect(sendResp.ok()).toBeTruthy()
 
-    // 3. Navigate to the real room in browser
     await page.goto(`/room/${roomId}`)
-
-    // 4. Verify that the sent user prompt is rendered in the timeline
     await expect(page.getByText(promptText)).toBeVisible({ timeout: 15000 })
 
-    // 5. Automatically send input if human input is requested
-    await autoRespondHitlIfPresent(page, request, roomId, 'Kyoto, 3 days, $1500')
+    const pendingRequests = await pollPendingHitl(request, roomId)
+    expect(pendingRequests.length).toBeGreaterThan(0)
+    await submitHitlAnswers(request, roomId, pendingRequests, answerText, clientRequestId)
+    await autoRespondHitlViaUiIfPresent(page, answerText)
 
-    // 6. Simulate page reload to verify timeline hydration
+    const synthesis = await waitForTerminalSynthesis(request, roomId, clientRequestId)
+    const synthesisText = messageText(synthesis)
+    expect(synthesisText.length).toBeGreaterThan(30)
+
     await page.reload()
-
-    // 7. Verify user prompt and message persistence after reload
     await expect(page.getByText(promptText)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(answerText.split(',')[0])).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/Travel Plan|Day 1|Custom Travel Plan/i)).toBeVisible({
+      timeout: 15000,
+    })
   })
 })

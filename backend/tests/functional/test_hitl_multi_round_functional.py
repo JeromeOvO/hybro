@@ -73,13 +73,22 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
         answers=automated_answers,
         client_request_id=client_req_id,
         timeout_seconds=65.0,
+        min_hitl_answers=1,
     )
 
-    # 4. Verify that whenever human input was requested, answers were sent automatically and completion was reached
-    assert completed_itinerary is not None, (
-        "Workflow did not produce completed final answer after automated HITL input"
+    # 4. Verify HITL was observed, answered automatically, and synthesis completed
+    assert len(hitls_answered) >= 1, (
+        "Expected at least one distinct HITL interaction to be observed and answered"
     )
-    # If HITL was triggered, verify answers were dispatched automatically
-    if hitls_answered:
-        for item in hitls_answered:
-            assert item["response"].get("status") in {"accepted", "applied"}
+    distinct_interactions = {
+        item["request"].get("interaction_id")
+        for item in hitls_answered
+        if item["request"].get("interaction_id")
+    }
+    assert len(distinct_interactions) >= 1
+    assert completed_itinerary is not None, (
+        "Workflow did not produce completed supervisor synthesis after automated HITL input"
+    )
+    assert completed_itinerary.get("agent_id") == "system:hybro"
+    for item in hitls_answered:
+        assert item["response"].get("status") in {"accepted", "applied"}

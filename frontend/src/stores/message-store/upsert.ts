@@ -43,7 +43,11 @@ export function applyUpsert(
       existing.taskStatus === 'completed' &&
       incoming.taskStatus === 'input-required' &&
       incoming.taskUpdatedAt && existing.taskUpdatedAt &&
-      new Date(incoming.taskUpdatedAt).getTime() > new Date(existing.taskUpdatedAt).getTime()
+      new Date(incoming.taskUpdatedAt).getTime() > new Date(existing.taskUpdatedAt).getTime() &&
+      (
+        (incoming.hitlRequestId !== undefined && existing.hitlRequestId !== undefined && incoming.hitlRequestId !== existing.hitlRequestId)
+        || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
+      )
     )
 
     if (
@@ -196,8 +200,9 @@ function mergeIncoming(
     || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
   )
   const isNewHitlFollowUp = Boolean(
-    (isDifferentHitlRound && !incomingIsOlderByTime && (incomingIsNewerByTime || incomingHitlIsNewer || (!hasTimestamps && existing.hitlInteractionVersion === undefined)))
-    || incomingHitlIsNewer
+    isDifferentHitlRound
+    && !incomingIsOlderByTime
+    && (incomingIsNewerByTime || (!hasTimestamps && existing.hitlInteractionVersion === undefined))
   )
   const isStaleHitl = Boolean(
     incomingIsOlderByTime
@@ -213,7 +218,6 @@ function mergeIncoming(
   )
   const existingHitlIsNonRegressible = Boolean(
     sameHitlIdentity
-    && !incomingHitlIsNewer
     && !incomingHitlIsTerminal
     && (
       existing.hitlResolved === true
@@ -320,7 +324,7 @@ function mergeIncoming(
       ? 'applied'
       : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
         ? incoming.hitlApplicationStatus
-        : incomingHitlIsNewer || isNewHitlFollowUp
+        : isNewHitlFollowUp
           ? undefined
           : existing.hitlApplicationStatus,
     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
@@ -330,9 +334,7 @@ function mergeIncoming(
       ? (incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : undefined)
       : acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
         ? incoming.hitlUserAnswer
-        : incomingHitlIsNewer
-          ? undefined
-          : existing.hitlUserAnswer,
+        : existing.hitlUserAnswer,
     clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,

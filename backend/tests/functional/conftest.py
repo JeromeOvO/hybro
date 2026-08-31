@@ -119,44 +119,73 @@ async def auto_respond_pending_hitl(
         "Mid-range hotels and public transit",
     ]
     answered = []
-    try:
-        pending_resp = await client.get(f"/rooms/{room_id}/hitl/pending")
-        if pending_resp.status_code == 200:
-            requests = pending_resp.json().get("requests", [])
-            for r in requests:
-                req_id = r.get("request_id")
-                if req_id and req_id not in seen_request_ids:
-                    seen_request_ids.add(req_id)
-                    answer_idx = min(
-                        len(seen_request_ids) - 1, len(default_answers) - 1
-                    )
-                    user_answer = default_answers[answer_idx]
+    pending_resp = await client.get(f"/rooms/{room_id}/hitl/pending")
+    if pending_resp.status_code != 200:
+        return answered
 
-                    submit_resp = await client.post(
-                        f"/rooms/{room_id}/hitl/respond-batch",
-                        json={
-                            "interaction_id": r["interaction_id"],
-                            "answers": [
-                                {
-                                    "request_id": req_id,
-                                    "user_input": user_answer,
-                                }
-                            ],
-                            "client_request_id": r.get("client_request_id")
-                            or client_request_id,
-                        },
-                    )
-                    if submit_resp.status_code == 200:
-                        answered.append(
-                            {
-                                "request": r,
-                                "answer": user_answer,
-                                "response": submit_resp.json(),
-                            }
-                        )
-    except Exception:
-        pass
+    requests = pending_resp.json().get("requests", [])
+    for r in requests:
+        req_id = r.get("request_id")
+        if req_id and req_id not in seen_request_ids:
+            seen_request_ids.add(req_id)
+            answer_idx = min(len(seen_request_ids) - 1, len(default_answers) - 1)
+            user_answer = default_answers[answer_idx]
+
+            submit_resp = await client.post(
+                f"/rooms/{room_id}/hitl/respond-batch",
+                json={
+                    "interaction_id": r["interaction_id"],
+                    "answers": [
+                        {
+                            "request_id": req_id,
+                            "user_input": user_answer,
+                        }
+                    ],
+                    "client_request_id": r.get("client_request_id")
+                    or client_request_id,
+                },
+            )
+            if submit_resp.status_code == 200:
+                answered.append(
+                    {
+                        "request": r,
+                        "answer": user_answer,
+                        "response": submit_resp.json(),
+                    }
+                )
     return answered
+
+
+def _message_text(msg: dict) -> str:
+    return ((msg.get("message_content") or {}).get("message_text") or "").strip()
+
+
+def _task_state(msg: dict) -> str | None:
+    task = (msg.get("message_content") or {}).get("message_task") or {}
+    status = task.get("status") or {}
+    state = status.get("state")
+    return state if isinstance(state, str) else None
+
+
+def find_terminal_synthesis(
+    messages: list[dict],
+    client_request_id: str | None = None,
+) -> dict | None:
+    """Return the completed supervisor synthesis for the current client_request_id, if present."""
+    for msg in reversed(messages):
+        if msg.get("message_type") != "agent":
+            continue
+        if client_request_id and msg.get("client_request_id") != client_request_id:
+            continue
+        if msg.get("agent_id") != "system:hybro":
+            continue
+        text = _message_text(msg)
+        if len(text) <= 30:
+            continue
+        state = _task_state(msg)
+        if state in {None, "completed"}:
+            return msg
+    return None
 
 
 async def wait_for_completion_with_auto_hitl(
@@ -166,6 +195,7 @@ async def wait_for_completion_with_auto_hitl(
     client_request_id: str | None = None,
     timeout_seconds: float = 65.0,
     poll_interval: float = 1.0,
+    min_hitl_answers: int = 0,
 ) -> tuple[dict | None, list[dict]]:
     """Polls room messages until final agent synthesis is complete, automatically responding to any HITL questions."""
     start_time = time.time()
@@ -174,7 +204,6 @@ async def wait_for_completion_with_auto_hitl(
     completed_agent_message = None
 
     while time.time() - start_time < timeout_seconds:
-        # 1. Check for pending HITL requests and auto-respond immediately
         newly_answered = await auto_respond_pending_hitl(
             client=client,
             room_id=room_id,
@@ -184,19 +213,17 @@ async def wait_for_completion_with_auto_hitl(
         )
         all_hitl_answered.extend(newly_answered)
 
-        # 2. Check room messages for completed synthesis
         history_resp = await client.post(
             "/roomCenter/inquiryRoomMessagesByRoomId",
             json={"room_id": room_id},
         )
         if history_resp.status_code == 200:
             messages = history_resp.json().get("message_list", [])
-            for msg in messages:
-                text = (msg.get("message_content") or {}).get("message_text", "")
-                if msg.get("message_type") == "agent" and len(text.strip()) > 30:
-                    completed_agent_message = msg
-                    break
-        if completed_agent_message:
+            completed_agent_message = find_terminal_synthesis(
+                messages,
+                client_request_id=client_request_id,
+            )
+        if completed_agent_message and len(all_hitl_answered) >= min_hitl_answers:
             break
 
         await asyncio.sleep(poll_interval)

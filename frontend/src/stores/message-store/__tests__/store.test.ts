@@ -578,5 +578,41 @@ describe('useMessageStore', () => {
       expect(state.entities['agent-msg-fail'].taskStatus).toBe('failed')
       expect(state.entities['agent-msg-fail'].hitlRequestId).toBeUndefined()
     })
+
+    it('preserves resolved HITL state when same-identity interaction version increments', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-version',
+          taskStatus: 'completed',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlInteractionVersion: 1,
+          hitlResolved: true,
+          hitlUserAnswer: 'Kyoto',
+          taskUpdatedAt: '2026-08-30T10:05:00Z',
+        }),
+        'sse',
+      )
+
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-version',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlInteractionVersion: 2,
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:06:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-version'].taskStatus).toBe('completed')
+      expect(state.entities['agent-msg-version'].hitlResolved).toBe(true)
+      expect(state.entities['agent-msg-version'].hitlUserAnswer).toBe('Kyoto')
+      expect(state.entities['agent-msg-version'].hitlInteractionVersion).toBe(1)
+    })
   })
 })
