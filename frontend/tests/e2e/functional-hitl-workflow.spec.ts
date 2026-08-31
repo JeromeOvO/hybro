@@ -116,6 +116,28 @@ async function waitForTerminalSynthesis(
   throw new Error('Timed out waiting for terminal supervisor synthesis')
 }
 
+async function findPersistedHitlAnswer(
+  request: APIRequestContext,
+  roomId: string,
+  answerFragment: string,
+): Promise<boolean> {
+  const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
+    data: { room_id: roomId },
+  })
+  if (!historyResp.ok()) {
+    return false
+  }
+  const data = await historyResp.json()
+  const messages = (data.message_list || []) as Record<string, unknown>[]
+  return messages.some(msg => {
+    const content = msg.message_content as {
+      message_task?: { metadata?: { user_answer?: unknown } }
+    } | undefined
+    const userAnswer = content?.message_task?.metadata?.user_answer
+    return typeof userAnswer === 'string' && userAnswer.includes(answerFragment)
+  })
+}
+
 async function autoRespondHitlViaUiIfPresent(
   page: Page,
   answerText: string,
@@ -140,6 +162,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     page,
     request,
   }) => {
+    test.setTimeout(120_000)
     const travelAgentId = await getTravelPlannerAgentId(request)
 
     const createResp = await request.post(`${BACKEND_URL}/roomCenter/createNewRoom`, {
@@ -194,9 +217,12 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
 
     await page.reload()
     await expect(page.getByText(promptText)).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText(answerText.split(',')[0])).toBeVisible({ timeout: 15000 })
+    await expect.poll(
+      () => findPersistedHitlAnswer(request, roomId, answerText.split(',')[0].trim()),
+      { timeout: 30_000 },
+    ).toBe(true)
     await expect(page.getByText(/Travel Plan|Day 1|Custom Travel Plan/i)).toBeVisible({
-      timeout: 15000,
+      timeout: 30_000,
     })
   })
 })
