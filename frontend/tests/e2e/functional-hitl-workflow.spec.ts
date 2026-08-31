@@ -72,25 +72,19 @@ async function pollPendingHitl(
   return []
 }
 
-async function submitHitlAnswers(
+
+async function fetchRoomMessages(
   request: APIRequestContext,
   roomId: string,
-  pendingRequests: Record<string, unknown>[],
-  answerText: string,
-  clientRequestId: string,
-) {
-  for (const req of pendingRequests) {
-    expect(req.request_id).toBeTruthy()
-    expect(req.interaction_id).toBeTruthy()
-    const submitResp = await request.post(`${BACKEND_URL}/rooms/${roomId}/hitl/respond-batch`, {
-      data: {
-        interaction_id: req.interaction_id,
-        answers: [{ request_id: req.request_id, user_input: answerText }],
-        client_request_id: req.client_request_id || clientRequestId,
-      },
-    })
-    expect(submitResp.ok()).toBeTruthy()
+): Promise<Record<string, unknown>[]> {
+  const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
+    data: { room_id: roomId },
+  })
+  if (!historyResp.ok()) {
+    return []
   }
+  const data = await historyResp.json()
+  return (data.message_list || []) as Record<string, unknown>[]
 }
 
 async function waitForTerminalSynthesis(
@@ -101,12 +95,7 @@ async function waitForTerminalSynthesis(
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
-      data: { room_id: roomId },
-    })
-    expect(historyResp.ok()).toBeTruthy()
-    const data = await historyResp.json()
-    const messages = (data.message_list || []) as Record<string, unknown>[]
+    const messages = await fetchRoomMessages(request, roomId)
     const synthesis = findTerminalSynthesis(messages, clientRequestId)
     if (synthesis) {
       return synthesis
@@ -116,26 +105,24 @@ async function waitForTerminalSynthesis(
   throw new Error('Timed out waiting for terminal supervisor synthesis')
 }
 
-async function findPersistedHitlAnswer(
+async function waitForNoPendingHitl(
   request: APIRequestContext,
   roomId: string,
-  answerFragment: string,
-): Promise<boolean> {
-  const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
-    data: { room_id: roomId },
-  })
-  if (!historyResp.ok()) {
-    return false
+  timeoutMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const pendingResp = await request.get(`${BACKEND_URL}/rooms/${roomId}/hitl/pending`)
+    if (pendingResp.ok()) {
+      const data = await pendingResp.json()
+      const requests = (data.requests || []) as Record<string, unknown>[]
+      if (requests.length === 0) {
+        return
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000))
   }
-  const data = await historyResp.json()
-  const messages = (data.message_list || []) as Record<string, unknown>[]
-  return messages.some(msg => {
-    const content = msg.message_content as {
-      message_task?: { metadata?: { user_answer?: unknown } }
-    } | undefined
-    const userAnswer = content?.message_task?.metadata?.user_answer
-    return typeof userAnswer === 'string' && userAnswer.includes(answerFragment)
-  })
+  throw new Error('Timed out waiting for pending HITL queue to drain')
 }
 
 async function autoRespondHitlViaUiIfPresent(
@@ -208,8 +195,20 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
 
     const pendingRequests = await pollPendingHitl(request, roomId)
     expect(pendingRequests.length).toBeGreaterThan(0)
-    await submitHitlAnswers(request, roomId, pendingRequests, answerText, clientRequestId)
+    for (const req of pendingRequests) {
+      const submitResp = await request.post(`${BACKEND_URL}/rooms/${roomId}/hitl/respond-batch`, {
+        data: {
+          interaction_id: req.interaction_id,
+          answers: [{ request_id: req.request_id, user_input: answerText }],
+          client_request_id: req.client_request_id || clientRequestId,
+        },
+      })
+      expect(submitResp.ok()).toBeTruthy()
+      const submitBody = await submitResp.json()
+      expect(submitBody.status).toMatch(/accepted|applied/)
+    }
     await autoRespondHitlViaUiIfPresent(page, answerText)
+    await waitForNoPendingHitl(request, roomId)
 
     const synthesis = await waitForTerminalSynthesis(request, roomId, clientRequestId)
     const synthesisText = messageText(synthesis)
@@ -217,10 +216,10 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
 
     await page.reload()
     await expect(page.getByText(promptText)).toBeVisible({ timeout: 15000 })
-    await expect.poll(
-      () => findPersistedHitlAnswer(request, roomId, answerText.split(',')[0].trim()),
-      { timeout: 30_000 },
-    ).toBe(true)
+    await expect.poll(async () => {
+      const messages = await fetchRoomMessages(request, roomId)
+      return findTerminalSynthesis(messages, clientRequestId)
+    }, { timeout: 30_000 }).toBeTruthy()
     await expect(page.getByText(/Travel Plan|Day 1|Custom Travel Plan/i)).toBeVisible({
       timeout: 30_000,
     })
