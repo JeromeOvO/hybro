@@ -130,6 +130,7 @@ class HITLPersistencePort(Protocol):
         interaction_id: str,
         question_count: int,
         question_index: int,
+        expected_request_id: str | None = None,
     ) -> bool: ...
     async def persist_hitl_user_answer(
         self, message_id: str, user_input: str | None

@@ -188,7 +188,9 @@ def _pair_safe_tail_indexes(messages: list[object]) -> list[list[int]]:
             while index < len(messages) and call_ids:
                 current = messages[index]
                 group.append(index)
-                if isinstance(current, ToolResultMessage):
+                if isinstance(current, AssistantMessage) and current.tool_calls:
+                    call_ids.update(call.call_id for call in current.tool_calls)
+                elif isinstance(current, ToolResultMessage):
                     call_ids.discard(current.call_id)
                 index += 1
             groups.append(group)

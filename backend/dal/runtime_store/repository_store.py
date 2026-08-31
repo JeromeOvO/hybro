@@ -757,6 +757,7 @@ class RuntimeRepositoryStore:
         interaction_id: str,
         question_count: int,
         question_index: int,
+        expected_request_id: str | None = None,
     ) -> bool:
         return await self._hitl_delegate().persist_pending_hitl_on_agent_message(
             message_id,
@@ -769,6 +770,7 @@ class RuntimeRepositoryStore:
             interaction_id=interaction_id,
             question_count=question_count,
             question_index=question_index,
+            expected_request_id=expected_request_id,
         )
 
     async def _ensure_message_task_metadata(self, message_id: str) -> None:

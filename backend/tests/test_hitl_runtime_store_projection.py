@@ -85,19 +85,19 @@ class _FakeCollection:
                 return before
         return None
 
-    async def update_one(self, query: dict[str, Any], update: dict, **kwargs):
+    async def update_one(self, query: dict[str, Any], update: dict, **kwargs) -> bool:
         self.update_one_calls.append(
             (deepcopy(query), deepcopy(update), deepcopy(kwargs))
         )
         if self.update_one_results:
-            return self.update_one_results.pop(0)
+            return bool(self.update_one_results.pop(0))
         for document in self.documents:
             if _matches_query(document, query):
                 _apply_update(document, update)
-                return SimpleNamespace(modified_count=1, matched_count=1)
+                return True
         if self.documents:
-            return SimpleNamespace(modified_count=0, matched_count=0)
-        return SimpleNamespace(modified_count=1, matched_count=1)
+            return False
+        return True
 
     async def create_index(self, keys: list[tuple[str, int]], **kwargs):
         self.create_index_calls.append((deepcopy(keys), deepcopy(kwargs)))
@@ -159,33 +159,37 @@ def _unset_dotted(document: dict[str, Any], path: str) -> None:
     current.pop(parts[-1], None)
 
 
-def _matches_clause(document: dict[str, Any], path: str, expected: Any) -> bool:
-    actual = _get_dotted(document, path)
-    if isinstance(expected, dict) and "$nin" in expected:
-        if actual in expected["$nin"]:
-            return False
-    elif isinstance(expected, dict) and "$exists" in expected:
-        exists = actual is not _MISSING
-        if exists != expected["$exists"]:
-            return False
-    elif expected is None:
-        if actual is not None and actual is not _MISSING:
-            return False
-    elif actual != expected:
+def _matches_operator_dict(actual: Any, expected: dict[str, Any]) -> bool:
+    if "$nin" in expected and actual in expected["$nin"]:
+        return False
+    if "$ne" in expected and actual == expected["$ne"]:
+        return False
+    if "$lte" in expected and (
+        actual is _MISSING or actual is None or actual > expected["$lte"]
+    ):
+        return False
+    if "$exists" in expected and (actual is not _MISSING) != expected["$exists"]:
         return False
     return True
+
+
+def _matches_clause(document: dict[str, Any], path: str, expected: Any) -> bool:
+    actual = _get_dotted(document, path)
+    if isinstance(expected, dict):
+        return _matches_operator_dict(actual, expected)
+    if expected is None:
+        return actual is None or actual is _MISSING
+    return actual == expected
 
 
 def _matches_query(document: dict[str, Any], query: dict[str, Any]) -> bool:
     for path, expected in query.items():
         if path == "$or":
-            if not any(
-                all(
-                    _matches_clause(document, subpath, subexp)
-                    for subpath, subexp in subclause.items()
-                )
-                for subclause in expected
-            ):
+            if not any(_matches_query(document, subclause) for subclause in expected):
+                return False
+            continue
+        if path == "$and":
+            if not all(_matches_query(document, subclause) for subclause in expected):
                 return False
             continue
         if not _matches_clause(document, path, expected):
@@ -692,8 +696,8 @@ async def test_update_agent_message_task_state_reopen_rejects_terminal_winner():
     )
 
     assert result is False
-    assert len(room_agent_messages.update_one_calls) == 1
-    query, update, _ = room_agent_messages.update_one_calls[0]
+    assert len(room_agent_messages.find_one_and_update_calls) == 1
+    query, update, _ = room_agent_messages.find_one_and_update_calls[0]
 
     assert query["message_id"] == "agent-msg-1"
     assert "failed" in query["message_content.message_task.status.state"]["$nin"]
@@ -838,6 +842,150 @@ async def test_persist_pending_hitl_on_missing_agent_message_returns_false():
     )
 
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_persist_pending_hitl_reopen_rejects_delayed_older_round_projection_after_newer_completed():
+    doc = {
+        "message_id": "agent-msg-1",
+        "terminal_projection_event_id": None,
+        "message_content": {
+            "message_task": {
+                "status": {"state": "working"},
+                "metadata": {},
+            }
+        },
+    }
+    room_agent_messages = _FakeCollection(documents=[doc])
+    store = _store(room_agent_messages=room_agent_messages)
+
+    # 1. Project Round 1
+    r1_ok = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-1",
+        prompt="Round 1 Prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-1",
+        question_count=2,
+        question_index=0,
+    )
+    assert r1_ok is True
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "input-required"
+    )
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["metadata"][
+            "hitl_request_id"
+        ]
+        == "req-1"
+    )
+
+    # 2. Complete Round 1
+    c1_ok = await store.update_agent_message_task_state("agent-msg-1", "completed")
+    assert c1_ok is True
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "completed"
+    )
+
+    # 3. Delayed projection retry for Round 1 is rejected because req-1 was already completed
+    delayed_r1_ok = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-1",
+        prompt="Round 1 Prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-1",
+        question_count=2,
+        question_index=0,
+    )
+    assert delayed_r1_ok is False
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "completed"
+    )
+
+    # 4. Project Round 2 (follow-up round)
+    r2_ok = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-2",
+        prompt="Round 2 Prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-1",
+        question_count=2,
+        question_index=1,
+    )
+    assert r2_ok is True
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "input-required"
+    )
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["metadata"][
+            "hitl_request_id"
+        ]
+        == "req-2"
+    )
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["metadata"][
+            "hitl_question_index"
+        ]
+        == 1
+    )
+
+    # 5. Complete Round 2
+    c2_ok = await store.update_agent_message_task_state("agent-msg-1", "completed")
+    assert c2_ok is True
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "completed"
+    )
+
+    # 6. Delayed projection retry for Round 1 is rejected (round 2 is already completed/newer)
+    delayed_r1_after_r2 = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-1",
+        prompt="Round 1 Prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-1",
+        question_count=2,
+        question_index=0,
+    )
+    assert delayed_r1_after_r2 is False
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "completed"
+    )
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["metadata"][
+            "hitl_request_id"
+        ]
+        == "req-2"
+    )
 
 
 @pytest.mark.asyncio

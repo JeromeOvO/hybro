@@ -517,6 +517,41 @@ describe('useMessageStore', () => {
       expect(state.entities['agent-msg-late'].hitlRequestId).toBe('req-2')
     })
 
+    it('rejects out-of-order delayed input-required events when currently in nonterminal input-required state', () => {
+      const store = useMessageStore.getState()
+      // Currently on Round 2 active (input-required at 10:20)
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-nonterminal-late',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-2',
+          hitlPrompt: 'Round 2 Question',
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:20:00Z',
+        }),
+        'sse',
+      )
+
+      // A delayed event from Round 1 arrives (input-required at 10:15)
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-nonterminal-late',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlPrompt: 'Round 1 Question',
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:15:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-nonterminal-late'].taskStatus).toBe('input-required')
+      expect(state.entities['agent-msg-nonterminal-late'].hitlRequestId).toBe('req-2')
+      expect(state.entities['agent-msg-nonterminal-late'].hitlPrompt).toBe('Round 2 Question')
+      expect(state.entities['agent-msg-nonterminal-late'].taskUpdatedAt).toBe('2026-08-30T10:20:00Z')
+    })
+
     it('rejects reopening failed or canceled states', () => {
       const store = useMessageStore.getState()
       store.upsertMessage(

@@ -394,3 +394,90 @@ def test_context_compaction_with_multi_round_interactions():
     assert "Plan trip" in compiled.messages[1].content[0].text
     assert compiled.messages[2].role == "assistant"
     assert compiled.messages[3].role == "tool"
+
+
+def test_context_compaction_with_terminal_flush_order():
+    run = make_run(context_window=4000, max_output_tokens=100)
+
+    parent_assistant = AssistantMessage(
+        message_id="a-parent",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-parent",
+                tool_name="travel_planner",
+                arguments={"task": "Plan trip"},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    interaction = ToolInteractionMessage(
+        message_id="interaction:call-parent:fp1",
+        call_id="call-parent",
+        tool_name="travel_planner",
+        presentation_id="prs_1",
+        interaction_id="interaction-1",
+        interaction_fingerprint="fp1",
+        questions=[
+            ToolInteractionQuestion(
+                question_id="q-1",
+                interaction_kind="questionnaire",
+                prompt="Destination?",
+                answer_kind="text",
+                required=True,
+            )
+        ],
+        created_at=NOW,
+    )
+    surface_assistant = AssistantMessage(
+        message_id="a-surface",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                call_id="call-surface",
+                tool_name="surface_agent_questions",
+                arguments={},
+            )
+        ],
+        finish_reason="tool_calls",
+        usage=None,
+        created_at=NOW,
+    )
+    parent_result = ToolResultMessage(
+        message_id="result-parent",
+        call_id="call-parent",
+        tool_name="travel_planner",
+        status="completed",
+        content=[TextPart(text="Travel plan generated")],
+        artifact_refs=[],
+        is_error=False,
+        created_at=NOW,
+    )
+    surface_result = ToolResultMessage(
+        message_id="result-surface",
+        call_id="call-surface",
+        tool_name="surface_agent_questions",
+        status="completed",
+        content=[TextPart(text="Answers applied")],
+        artifact_refs=[],
+        is_error=False,
+        created_at=NOW,
+    )
+
+    # Actual terminal flush order: parent assistant -> interaction -> surface assistant -> parent result -> surface result
+    transcript = [
+        user_message("Plan trip"),
+        parent_assistant,
+        interaction,
+        surface_assistant,
+        parent_result,
+        surface_result,
+    ]
+
+    run = run.model_copy(update={"transcript": transcript})
+    compiled = ContextCompiler().compile(run, tools=[], summary="Previous summary")
+    assert compiled.kind == "ready"
+    assert compiled.compacted is True
+    assert len(compiled.messages) == 4

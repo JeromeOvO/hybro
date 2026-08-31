@@ -221,7 +221,7 @@ class HITLRuntimeStorePart:
                 if state in {"input-required", "completed"}
                 else _TERMINAL_TASK_STATES
             )
-            query = {
+            query: dict[str, Any] = {
                 "message_id": message_id,
                 "message_content.message_task.status.state": {
                     "$nin": allowed_terminal_guard
@@ -233,14 +233,15 @@ class HITLRuntimeStorePart:
                     {"terminal_projection_event_id": None},
                 ]
 
-            result = await self._room_agent_messages.update_one(
+            projected = await self._room_agent_messages.find_one_and_update(
                 query,
                 {"$set": {"message_content.message_task.status.state": state}},
+                return_document=ReturnDocument.AFTER,
             )
-            return bool(
-                getattr(result, "modified_count", 0)
-                or getattr(result, "matched_count", 0)
-            )
+            if not isinstance(projected, dict):
+                return False
+            message_task = projected.get("message_content", {}).get("message_task", {})
+            return (message_task.get("status") or {}).get("state") == state
         except Exception:
             logger.error("Failed to update agent message task state", exc_info=True)
             return False
@@ -566,6 +567,7 @@ class HITLRuntimeStorePart:
         interaction_id: str,
         question_count: int,
         question_index: int,
+        expected_request_id: str | None = None,
     ) -> bool:
         try:
             metadata: dict[str, Any] = {
@@ -596,17 +598,58 @@ class HITLRuntimeStorePart:
                 "task_updated_at": utcnow(),
             }
 
-            projected = await self._room_agent_messages.find_one_and_update(
-                {
-                    "message_id": message_id,
-                    "$or": [
-                        {"terminal_projection_event_id": {"$exists": False}},
-                        {"terminal_projection_event_id": None},
-                    ],
-                    "message_content.message_task.status.state": {
-                        "$nin": _UNRESUMABLE_TASK_STATES
-                    },
+            query: dict[str, Any] = {
+                "message_id": message_id,
+                "$or": [
+                    {"terminal_projection_event_id": {"$exists": False}},
+                    {"terminal_projection_event_id": None},
+                ],
+                "message_content.message_task.status.state": {
+                    "$nin": _UNRESUMABLE_TASK_STATES
                 },
+            }
+
+            if expected_request_id is not None:
+                query["message_content.message_task.metadata.hitl_request_id"] = (
+                    expected_request_id
+                )
+            else:
+                query["$and"] = [
+                    {
+                        "$or": [
+                            {
+                                "message_content.message_task.status.state": {
+                                    "$ne": "completed"
+                                }
+                            },
+                            {
+                                "message_content.message_task.metadata.hitl_request_id": {
+                                    "$ne": request_id
+                                }
+                            },
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {
+                                "message_content.message_task.metadata.hitl_question_index": {
+                                    "$exists": False
+                                }
+                            },
+                            {
+                                "message_content.message_task.metadata.hitl_question_index": None
+                            },
+                            {
+                                "message_content.message_task.metadata.hitl_question_index": {
+                                    "$lte": question_index
+                                }
+                            },
+                        ]
+                    },
+                ]
+
+            projected = await self._room_agent_messages.find_one_and_update(
+                query,
                 {"$set": updates},
                 return_document=ReturnDocument.AFTER,
             )

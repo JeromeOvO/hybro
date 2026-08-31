@@ -28,6 +28,16 @@ export function applyUpsert(
   }
 
   if (existing) {
+    // ── Rule 0: Skip stale updates when incoming has an older task timestamp ──
+    const incomingIsOlder = Boolean(
+      existing.taskUpdatedAt &&
+      incoming.taskUpdatedAt &&
+      new Date(incoming.taskUpdatedAt).getTime() < new Date(existing.taskUpdatedAt).getTime()
+    )
+    if (incomingIsOlder) {
+      return null
+    }
+
     // ── Rule 1: Never downgrade terminal status ──
     const isNewHitlFollowUp = Boolean(
       existing.taskStatus === 'completed' &&
@@ -152,6 +162,16 @@ function mergeIncoming(
     }
   }
 
+  const hasTimestamps = Boolean(incoming.taskUpdatedAt && existing.taskUpdatedAt)
+  const incomingIsNewerByTime = Boolean(
+    hasTimestamps &&
+    new Date(incoming.taskUpdatedAt!).getTime() > new Date(existing.taskUpdatedAt!).getTime()
+  )
+  const incomingIsOlderByTime = Boolean(
+    hasTimestamps &&
+    new Date(incoming.taskUpdatedAt!).getTime() < new Date(existing.taskUpdatedAt!).getTime()
+  )
+
   const sameHitlIdentity = Boolean(
     incoming.hitlRequestId !== undefined
     && existing.hitlRequestId === incoming.hitlRequestId
@@ -171,10 +191,18 @@ function mergeIncoming(
     && existing.hitlInteractionVersion !== undefined
     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
   )
-  const isNewHitlFollowUp = Boolean(
+  const isDifferentHitlRound = Boolean(
     (incoming.hitlRequestId !== undefined && existing.hitlRequestId !== undefined && incoming.hitlRequestId !== existing.hitlRequestId)
     || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
-    || (incoming.hitlInteractionVersion !== undefined && existing.hitlInteractionVersion !== undefined && incoming.hitlInteractionVersion > existing.hitlInteractionVersion)
+  )
+  const isNewHitlFollowUp = Boolean(
+    (isDifferentHitlRound && !incomingIsOlderByTime && (incomingIsNewerByTime || incomingHitlIsNewer || (!hasTimestamps && existing.hitlInteractionVersion === undefined)))
+    || incomingHitlIsNewer
+  )
+  const isStaleHitl = Boolean(
+    incomingIsOlderByTime
+    || isStaleHitlVersion
+    || (isDifferentHitlRound && !incomingHitlIsNewer && incomingIsOlderByTime)
   )
   const incomingHitlIsTerminal = Boolean(
     incoming.hitlResolved === true
@@ -196,7 +224,7 @@ function mergeIncoming(
       || ['applying', 'applied'].includes(existing.hitlApplicationStatus ?? '')
     )
   )
-  const acceptsHitlUpdate = !isStaleHitlVersion && !existingHitlIsNonRegressible
+  const acceptsHitlUpdate = !isStaleHitl && !existingHitlIsNonRegressible
   const finalizesExistingHitl = Boolean(
     existing.hitlRequestId
     && existing.hitlUserAnswer
@@ -221,17 +249,47 @@ function mergeIncoming(
     agentId: incoming.agentId !== undefined ? incoming.agentId : existing.agentId,
     agentSource: incoming.agentSource !== undefined ? incoming.agentSource : existing.agentSource,
     userId: incoming.userId !== undefined ? incoming.userId : existing.userId,
-    taskStatus: incoming.taskStatus !== undefined
-      ? (incoming.taskStatus ?? undefined)  // null → undefined (clear the field)
-      : existing.taskStatus,
-    taskError: incoming.taskError !== undefined ? incoming.taskError : existing.taskError,
-    taskStatusMessage: incoming.taskStatusMessage !== undefined ? incoming.taskStatusMessage : existing.taskStatusMessage,
-    taskRequiresInput: incoming.taskRequiresInput !== undefined ? incoming.taskRequiresInput : existing.taskRequiresInput,
-    taskRequiresAuth: incoming.taskRequiresAuth !== undefined ? incoming.taskRequiresAuth : existing.taskRequiresAuth,
-    taskContent: incoming.taskContent !== undefined ? incoming.taskContent : existing.taskContent,
-    dispatchText: incoming.dispatchText !== undefined ? incoming.dispatchText : existing.dispatchText,
+    taskStatus: incomingIsOlderByTime
+      ? existing.taskStatus
+      : incoming.taskStatus !== undefined
+        ? (incoming.taskStatus ?? undefined) // null → undefined (clear the field)
+        : existing.taskStatus,
+    taskError: incomingIsOlderByTime
+      ? existing.taskError
+      : incoming.taskError !== undefined
+        ? incoming.taskError
+        : existing.taskError,
+    taskStatusMessage: incomingIsOlderByTime
+      ? existing.taskStatusMessage
+      : incoming.taskStatusMessage !== undefined
+        ? incoming.taskStatusMessage
+        : existing.taskStatusMessage,
+    taskRequiresInput: incomingIsOlderByTime
+      ? existing.taskRequiresInput
+      : incoming.taskRequiresInput !== undefined
+        ? incoming.taskRequiresInput
+        : existing.taskRequiresInput,
+    taskRequiresAuth: incomingIsOlderByTime
+      ? existing.taskRequiresAuth
+      : incoming.taskRequiresAuth !== undefined
+        ? incoming.taskRequiresAuth
+        : existing.taskRequiresAuth,
+    taskContent: incomingIsOlderByTime
+      ? existing.taskContent
+      : incoming.taskContent !== undefined
+        ? incoming.taskContent
+        : existing.taskContent,
+    dispatchText: incomingIsOlderByTime
+      ? existing.dispatchText
+      : incoming.dispatchText !== undefined
+        ? incoming.dispatchText
+        : existing.dispatchText,
     taskCreatedAt: incoming.taskCreatedAt !== undefined ? incoming.taskCreatedAt : existing.taskCreatedAt,
-    taskUpdatedAt: incoming.taskUpdatedAt !== undefined ? incoming.taskUpdatedAt : existing.taskUpdatedAt,
+    taskUpdatedAt: incomingIsOlderByTime
+      ? existing.taskUpdatedAt
+      : incoming.taskUpdatedAt !== undefined
+        ? incoming.taskUpdatedAt
+        : existing.taskUpdatedAt,
     stepNumber: incoming.stepNumber !== undefined ? incoming.stepNumber : existing.stepNumber,
     totalSteps: incoming.totalSteps !== undefined ? incoming.totalSteps : existing.totalSteps,
     relatedMessageId: incoming.relatedMessageId !== undefined ? incoming.relatedMessageId : existing.relatedMessageId,
