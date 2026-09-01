@@ -624,9 +624,7 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
         projected["message_content"]["message_task"]["status"]["state"]
         == "input-required"
     )
-    projected_metadata = dict(
-        projected["message_content"]["message_task"]["metadata"]
-    )
+    projected_metadata = dict(projected["message_content"]["message_task"]["metadata"])
     assert projected_metadata.pop("hitl_projection_at")
     assert projected_metadata == expected_metadata
     assert private_sentinel not in json.dumps(projected, default=str, sort_keys=True)
@@ -684,9 +682,7 @@ async def test_persist_pending_hitl_accepts_null_terminal_marker():
         projected["message_content"]["message_task"]["status"]["state"]
         == "input-required"
     )
-    projected_metadata = dict(
-        projected["message_content"]["message_task"]["metadata"]
-    )
+    projected_metadata = dict(projected["message_content"]["message_task"]["metadata"])
     assert projected_metadata.pop("hitl_projection_at")
     assert projected_metadata == expected_metadata
 

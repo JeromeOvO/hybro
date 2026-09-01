@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sys
 import time
 import uuid
@@ -22,6 +21,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logging.basicConfig(level=logging.INFO, format="[mock-llm] %(asctime)s - %(message)s")
 logger = logging.getLogger("mock_llm")
+
+
+def _message_content_text(content) -> str:
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_parts.append(part.get("text", ""))
+            elif isinstance(part, str):
+                text_parts.append(part)
+        return " ".join(text_parts)
+    if isinstance(content, str):
+        return content
+    return str(content or "")
 
 
 def extract_last_user_and_tool_info(messages: list[dict]) -> tuple[str, list[dict], bool]:
@@ -32,20 +45,8 @@ def extract_last_user_and_tool_info(messages: list[dict]) -> tuple[str, list[dic
 
     for msg in messages:
         role = msg.get("role")
-        content = msg.get("content")
+        content_str = _message_content_text(msg.get("content"))
         tool_call_id = msg.get("tool_call_id")
-        if isinstance(content, list):
-            text_parts = []
-            for p in content:
-                if isinstance(p, dict) and p.get("type") == "text":
-                    text_parts.append(p.get("text", ""))
-                elif isinstance(p, str):
-                    text_parts.append(p)
-            content_str = " ".join(text_parts)
-        elif isinstance(content, str):
-            content_str = content
-        else:
-            content_str = str(content or "")
 
         if role == "user":
             last_user_text = content_str
@@ -54,6 +55,31 @@ def extract_last_user_and_tool_info(messages: list[dict]) -> tuple[str, list[dic
             tool_results.append(content_str)
 
     return last_user_text, tool_results, has_tool_results
+
+
+def collect_user_text(messages: list[dict]) -> str:
+    """Aggregate user-role text for travel planner routing."""
+    chunks: list[str] = []
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content_str = _message_content_text(msg.get("content"))
+        if content_str.strip():
+            chunks.append(content_str)
+    return " ".join(chunks).lower()
+
+
+def collect_conversation_text(messages: list[dict]) -> str:
+    """Aggregate user and tool text so resumed HITL answers affect routing."""
+    chunks: list[str] = []
+    for msg in messages:
+        role = msg.get("role")
+        content_str = _message_content_text(msg.get("content"))
+        if not content_str.strip():
+            continue
+        if role in {"user", "tool"} or msg.get("tool_call_id"):
+            chunks.append(content_str)
+    return " ".join(chunks).lower()
 
 
 class MockLLMHandler(BaseHTTPRequestHandler):
@@ -206,35 +232,24 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
         # Case 3: Travel Planner Agent (LangChain tool AskUserForClarification or direct)
         if "AskUserForClarification" in tool_names:
-            text_lower = last_user_text.lower()
-            has_destination = any(
-                kw in text_lower
-                for kw in ["kyoto", "san francisco", "tokyo", "japan"]
+            conversation_text = collect_conversation_text(messages)
+            has_details = any(
+                kw in conversation_text
+                for kw in [
+                    "kyoto",
+                    "san francisco",
+                    "tokyo",
+                    "japan",
+                    "3 days",
+                    "3-day",
+                    "sept",
+                    "budget",
+                ]
             )
-            has_duration = any(
-                kw in text_lower for kw in ["3 days", "3-day", "days", "day trip"]
-            )
-            has_budget = "budget" in text_lower or "$" in text_lower
-
-            if not has_destination:
-                call_id = f"call_clarify_dest_{uuid.uuid4().hex[:8]}"
+            if not has_details and len(messages) <= 2:
+                call_id = f"call_clarify_{uuid.uuid4().hex[:8]}"
                 args = json.dumps(
-                    {"question": "Where would you like to travel?"}
-                )
-                tool_calls = [{
-                    "id": call_id,
-                    "type": "function",
-                    "function": {"name": "AskUserForClarification", "arguments": args},
-                }]
-                return tool_calls, "", "tool_calls"
-            if not (has_duration and has_budget):
-                call_id = f"call_clarify_details_{uuid.uuid4().hex[:8]}"
-                args = json.dumps(
-                    {
-                        "question": (
-                            "How many days will you stay, and what is your budget?"
-                        )
-                    }
+                    {"question": "Where would you like to travel, and for how many days?"}
                 )
                 tool_calls = [{
                     "id": call_id,

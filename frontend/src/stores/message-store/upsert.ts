@@ -36,8 +36,8 @@ export function applyUpsert(
     )
     const isAuthoritativeTerminalDbReconciliation = Boolean(
       source === 'db' &&
-      incoming.taskStatus !== undefined &&
-      isTerminalState(incoming.taskStatus ?? '')
+      incoming.taskStatus != null &&
+      isTerminalState(incoming.taskStatus)
     )
     if (incomingIsOlder && !isAuthoritativeTerminalDbReconciliation) {
       return null
