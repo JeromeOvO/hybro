@@ -7,12 +7,13 @@ from typing import Any
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
-from common.a2a_constants import TERMINAL_STATES
+from common.a2a_constants import FAILURE_STATES, TERMINAL_STATES
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 
 logger = get_logger(__name__)
 _TERMINAL_TASK_STATES = sorted(state.value for state in TERMINAL_STATES)
+_UNRESUMABLE_TASK_STATES = sorted(state.value for state in FAILURE_STATES)
 
 _PENDING_HITL_DISPLAY_INDEX = "uq_pending_hitl_display_message"
 _PENDING_HITL_CONTINUATION_INDEX = "uq_pending_hitl_continuation_message"
@@ -215,15 +216,32 @@ class HITLRuntimeStorePart:
         state: str,
     ) -> bool:
         try:
-            return await self._room_agent_messages.update_one(
-                {
-                    "message_id": message_id,
-                    "message_content.message_task.status.state": {
-                        "$nin": _TERMINAL_TASK_STATES
-                    },
-                },
-                {"$set": {"message_content.message_task.status.state": state}},
+            allowed_terminal_guard = (
+                _UNRESUMABLE_TASK_STATES
+                if state in {"input-required", "completed"}
+                else _TERMINAL_TASK_STATES
             )
+            query: dict[str, Any] = {
+                "message_id": message_id,
+                "message_content.message_task.status.state": {
+                    "$nin": allowed_terminal_guard
+                },
+            }
+            if state == "input-required":
+                query["$or"] = [
+                    {"terminal_projection_event_id": {"$exists": False}},
+                    {"terminal_projection_event_id": None},
+                ]
+
+            projected = await self._room_agent_messages.find_one_and_update(
+                query,
+                {"$set": {"message_content.message_task.status.state": state}},
+                return_document=ReturnDocument.AFTER,
+            )
+            if not isinstance(projected, dict):
+                return False
+            message_task = projected.get("message_content", {}).get("message_task", {})
+            return (message_task.get("status") or {}).get("state") == state
         except Exception:
             logger.error("Failed to update agent message task state", exc_info=True)
             return False
@@ -549,6 +567,7 @@ class HITLRuntimeStorePart:
         interaction_id: str,
         question_count: int,
         question_index: int,
+        expected_request_id: str | None = None,
     ) -> bool:
         try:
             metadata: dict[str, Any] = {
@@ -579,13 +598,58 @@ class HITLRuntimeStorePart:
                 "task_updated_at": utcnow(),
             }
 
-            projected = await self._room_agent_messages.find_one_and_update(
-                {
-                    "message_id": message_id,
-                    "message_content.message_task.status.state": {
-                        "$nin": _TERMINAL_TASK_STATES
-                    },
+            query: dict[str, Any] = {
+                "message_id": message_id,
+                "$or": [
+                    {"terminal_projection_event_id": {"$exists": False}},
+                    {"terminal_projection_event_id": None},
+                ],
+                "message_content.message_task.status.state": {
+                    "$nin": _UNRESUMABLE_TASK_STATES
                 },
+            }
+
+            if expected_request_id is not None:
+                query["message_content.message_task.metadata.hitl_request_id"] = (
+                    expected_request_id
+                )
+            else:
+                query["$and"] = [
+                    {
+                        "$or": [
+                            {
+                                "message_content.message_task.status.state": {
+                                    "$ne": "completed"
+                                }
+                            },
+                            {
+                                "message_content.message_task.metadata.hitl_request_id": {
+                                    "$ne": request_id
+                                }
+                            },
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {
+                                "message_content.message_task.metadata.hitl_question_index": {
+                                    "$exists": False
+                                }
+                            },
+                            {
+                                "message_content.message_task.metadata.hitl_question_index": None
+                            },
+                            {
+                                "message_content.message_task.metadata.hitl_question_index": {
+                                    "$lte": question_index
+                                }
+                            },
+                        ]
+                    },
+                ]
+
+            projected = await self._room_agent_messages.find_one_and_update(
+                query,
                 {"$set": updates},
                 return_document=ReturnDocument.AFTER,
             )

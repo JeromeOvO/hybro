@@ -127,3 +127,44 @@ def test_generation_provider_rejects_selected_route_without_model():
 
     with pytest.raises(UnsupportedConfiguredProvider, match="model route is empty"):
         LLMGatewayConfig.from_settings(settings)
+
+
+def test_env_example_orchestrator_profiles_resolve_successfully():
+    from dotenv import dotenv_values
+
+    from common.config.settings import Settings
+    from execution.adapters.profiles import OrchestratorProfileResolver
+    from llm_gateway.model_registry import ModelRegistryImpl
+
+    env_path = Path(__file__).parents[2] / ".env.example"
+    env_dict = {
+        k.lower(): v for k, v in dotenv_values(env_path).items() if v is not None
+    }
+
+    # Mock required keys that are empty in .env.example
+    env_dict["openai_api_key"] = "fake-key"
+    env_dict["webhook_signing_key"] = "12345678901234567890123456789012"
+
+    settings = Settings(_env_file=None, **env_dict)
+    assert settings.supervisor_model == "gpt-5.4-mini"
+
+    registry = ModelRegistryImpl(settings)
+    route = registry.get_route_configuration("supervisor_model")
+    assert route.model_id == "gpt-5.4-mini"
+    assert "low" in route.supported_thinking_levels
+    assert "high" in route.supported_thinking_levels
+
+    resolver = OrchestratorProfileResolver(
+        model_registry=registry, settings_obj=settings
+    )
+
+    fast = resolver.resolve("fast")
+    ultimate = resolver.resolve("ultimate")
+
+    assert fast.profile_id == "fast"
+    assert fast.model.route == "supervisor_model"
+    assert fast.thinking_level == "low"
+
+    assert ultimate.profile_id == "ultimate"
+    assert ultimate.model.route == "supervisor_model"
+    assert ultimate.thinking_level == "high"

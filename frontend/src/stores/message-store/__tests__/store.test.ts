@@ -429,4 +429,154 @@ describe('useMessageStore', () => {
       expect(state.entities['agent-reply'].relatedMessageId).toBe('srv-1')
     })
   })
+
+  describe('multi-round HITL upsert', () => {
+    it('allows transitioning completed entity back to input-required on chronologically newer follow-up', () => {
+      const store = useMessageStore.getState()
+      // Round 1 arrives as input-required
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-1',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlPrompt: 'Round 1 Question',
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:00:00Z',
+        }),
+        'sse',
+      )
+
+      // Round 1 is answered and completed
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-1',
+          taskStatus: 'completed',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlResolved: true,
+          hitlUserAnswer: 'Answer 1',
+          taskUpdatedAt: '2026-08-30T10:05:00Z',
+        }),
+        'sse',
+      )
+
+      expect(useMessageStore.getState().entities['agent-msg-1'].taskStatus).toBe('completed')
+      expect(useMessageStore.getState().entities['agent-msg-1'].hitlResolved).toBe(true)
+
+      // Round 2 arrives with newer timestamp
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-1',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-2',
+          hitlInteractionId: 'interaction-2',
+          hitlPrompt: 'Round 2 Question',
+          hitlResolved: false,
+          hitlUserAnswer: '',
+          taskUpdatedAt: '2026-08-30T10:10:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-1'].taskStatus).toBe('input-required')
+      expect(state.entities['agent-msg-1'].hitlRequestId).toBe('req-2')
+      expect(state.entities['agent-msg-1'].hitlInteractionId).toBe('interaction-2')
+      expect(state.entities['agent-msg-1'].hitlPrompt).toBe('Round 2 Question')
+      expect(state.entities['agent-msg-1'].hitlResolved).toBe(false)
+      expect(state.entities['agent-msg-1'].hitlUserAnswer).toBe('')
+    })
+
+    it('rejects out-of-order delayed input-required events from previous rounds', () => {
+      const store = useMessageStore.getState()
+      // Currently on Round 2 completed
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-late',
+          taskStatus: 'completed',
+          hitlRequestId: 'req-2',
+          taskUpdatedAt: '2026-08-30T10:20:00Z',
+        }),
+        'sse',
+      )
+
+      // A delayed event from Round 1 arrives
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-late',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          taskUpdatedAt: '2026-08-30T10:15:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-late'].taskStatus).toBe('completed')
+      expect(state.entities['agent-msg-late'].hitlRequestId).toBe('req-2')
+    })
+
+    it('rejects out-of-order delayed input-required events when currently in nonterminal input-required state', () => {
+      const store = useMessageStore.getState()
+      // Currently on Round 2 active (input-required at 10:20)
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-nonterminal-late',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-2',
+          hitlPrompt: 'Round 2 Question',
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:20:00Z',
+        }),
+        'sse',
+      )
+
+      // A delayed event from Round 1 arrives (input-required at 10:15)
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-nonterminal-late',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlPrompt: 'Round 1 Question',
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:15:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-nonterminal-late'].taskStatus).toBe('input-required')
+      expect(state.entities['agent-msg-nonterminal-late'].hitlRequestId).toBe('req-2')
+      expect(state.entities['agent-msg-nonterminal-late'].hitlPrompt).toBe('Round 2 Question')
+      expect(state.entities['agent-msg-nonterminal-late'].taskUpdatedAt).toBe('2026-08-30T10:20:00Z')
+    })
+
+    it('rejects reopening failed or canceled states', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-fail',
+          taskStatus: 'failed',
+          taskUpdatedAt: '2026-08-30T10:30:00Z',
+        }),
+        'sse',
+      )
+
+      // Attempt to reopen with newer timestamp
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-fail',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-new',
+          taskUpdatedAt: '2026-08-30T10:35:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-fail'].taskStatus).toBe('failed')
+      expect(state.entities['agent-msg-fail'].hitlRequestId).toBeUndefined()
+    })
+  })
 })

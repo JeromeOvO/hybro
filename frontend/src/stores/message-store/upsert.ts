@@ -28,12 +28,30 @@ export function applyUpsert(
   }
 
   if (existing) {
+    // ── Rule 0: Skip stale updates when incoming has an older task timestamp ──
+    const incomingIsOlder = Boolean(
+      existing.taskUpdatedAt &&
+      incoming.taskUpdatedAt &&
+      new Date(incoming.taskUpdatedAt).getTime() < new Date(existing.taskUpdatedAt).getTime()
+    )
+    if (incomingIsOlder) {
+      return null
+    }
+
     // ── Rule 1: Never downgrade terminal status ──
+    const isNewHitlFollowUp = Boolean(
+      existing.taskStatus === 'completed' &&
+      incoming.taskStatus === 'input-required' &&
+      incoming.taskUpdatedAt && existing.taskUpdatedAt &&
+      new Date(incoming.taskUpdatedAt).getTime() > new Date(existing.taskUpdatedAt).getTime()
+    )
+
     if (
       existing.taskStatus &&
       isTerminalState(existing.taskStatus) &&
       incoming.taskStatus &&
-      !isTerminalState(incoming.taskStatus)
+      !isTerminalState(incoming.taskStatus) &&
+      !isNewHitlFollowUp
     ) {
       return null
     }
@@ -144,6 +162,16 @@ function mergeIncoming(
     }
   }
 
+  const hasTimestamps = Boolean(incoming.taskUpdatedAt && existing.taskUpdatedAt)
+  const incomingIsNewerByTime = Boolean(
+    hasTimestamps &&
+    new Date(incoming.taskUpdatedAt!).getTime() > new Date(existing.taskUpdatedAt!).getTime()
+  )
+  const incomingIsOlderByTime = Boolean(
+    hasTimestamps &&
+    new Date(incoming.taskUpdatedAt!).getTime() < new Date(existing.taskUpdatedAt!).getTime()
+  )
+
   const sameHitlIdentity = Boolean(
     incoming.hitlRequestId !== undefined
     && existing.hitlRequestId === incoming.hitlRequestId
@@ -162,6 +190,19 @@ function mergeIncoming(
     && incoming.hitlInteractionVersion !== undefined
     && existing.hitlInteractionVersion !== undefined
     && incoming.hitlInteractionVersion < existing.hitlInteractionVersion
+  )
+  const isDifferentHitlRound = Boolean(
+    (incoming.hitlRequestId !== undefined && existing.hitlRequestId !== undefined && incoming.hitlRequestId !== existing.hitlRequestId)
+    || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
+  )
+  const isNewHitlFollowUp = Boolean(
+    (isDifferentHitlRound && !incomingIsOlderByTime && (incomingIsNewerByTime || incomingHitlIsNewer || (!hasTimestamps && existing.hitlInteractionVersion === undefined)))
+    || incomingHitlIsNewer
+  )
+  const isStaleHitl = Boolean(
+    incomingIsOlderByTime
+    || isStaleHitlVersion
+    || (isDifferentHitlRound && !incomingHitlIsNewer && incomingIsOlderByTime)
   )
   const incomingHitlIsTerminal = Boolean(
     incoming.hitlResolved === true
@@ -183,7 +224,7 @@ function mergeIncoming(
       || ['applying', 'applied'].includes(existing.hitlApplicationStatus ?? '')
     )
   )
-  const acceptsHitlUpdate = !isStaleHitlVersion && !existingHitlIsNonRegressible
+  const acceptsHitlUpdate = !isStaleHitl && !existingHitlIsNonRegressible
   const finalizesExistingHitl = Boolean(
     existing.hitlRequestId
     && existing.hitlUserAnswer
@@ -208,17 +249,47 @@ function mergeIncoming(
     agentId: incoming.agentId !== undefined ? incoming.agentId : existing.agentId,
     agentSource: incoming.agentSource !== undefined ? incoming.agentSource : existing.agentSource,
     userId: incoming.userId !== undefined ? incoming.userId : existing.userId,
-    taskStatus: incoming.taskStatus !== undefined
-      ? (incoming.taskStatus ?? undefined)  // null → undefined (clear the field)
-      : existing.taskStatus,
-    taskError: incoming.taskError !== undefined ? incoming.taskError : existing.taskError,
-    taskStatusMessage: incoming.taskStatusMessage !== undefined ? incoming.taskStatusMessage : existing.taskStatusMessage,
-    taskRequiresInput: incoming.taskRequiresInput !== undefined ? incoming.taskRequiresInput : existing.taskRequiresInput,
-    taskRequiresAuth: incoming.taskRequiresAuth !== undefined ? incoming.taskRequiresAuth : existing.taskRequiresAuth,
-    taskContent: incoming.taskContent !== undefined ? incoming.taskContent : existing.taskContent,
-    dispatchText: incoming.dispatchText !== undefined ? incoming.dispatchText : existing.dispatchText,
+    taskStatus: incomingIsOlderByTime
+      ? existing.taskStatus
+      : incoming.taskStatus !== undefined
+        ? (incoming.taskStatus ?? undefined) // null → undefined (clear the field)
+        : existing.taskStatus,
+    taskError: incomingIsOlderByTime
+      ? existing.taskError
+      : incoming.taskError !== undefined
+        ? incoming.taskError
+        : existing.taskError,
+    taskStatusMessage: incomingIsOlderByTime
+      ? existing.taskStatusMessage
+      : incoming.taskStatusMessage !== undefined
+        ? incoming.taskStatusMessage
+        : existing.taskStatusMessage,
+    taskRequiresInput: incomingIsOlderByTime
+      ? existing.taskRequiresInput
+      : incoming.taskRequiresInput !== undefined
+        ? incoming.taskRequiresInput
+        : existing.taskRequiresInput,
+    taskRequiresAuth: incomingIsOlderByTime
+      ? existing.taskRequiresAuth
+      : incoming.taskRequiresAuth !== undefined
+        ? incoming.taskRequiresAuth
+        : existing.taskRequiresAuth,
+    taskContent: incomingIsOlderByTime
+      ? existing.taskContent
+      : incoming.taskContent !== undefined
+        ? incoming.taskContent
+        : existing.taskContent,
+    dispatchText: incomingIsOlderByTime
+      ? existing.dispatchText
+      : incoming.dispatchText !== undefined
+        ? incoming.dispatchText
+        : existing.dispatchText,
     taskCreatedAt: incoming.taskCreatedAt !== undefined ? incoming.taskCreatedAt : existing.taskCreatedAt,
-    taskUpdatedAt: incoming.taskUpdatedAt !== undefined ? incoming.taskUpdatedAt : existing.taskUpdatedAt,
+    taskUpdatedAt: incomingIsOlderByTime
+      ? existing.taskUpdatedAt
+      : incoming.taskUpdatedAt !== undefined
+        ? incoming.taskUpdatedAt
+        : existing.taskUpdatedAt,
     stepNumber: incoming.stepNumber !== undefined ? incoming.stepNumber : existing.stepNumber,
     totalSteps: incoming.totalSteps !== undefined ? incoming.totalSteps : existing.totalSteps,
     relatedMessageId: incoming.relatedMessageId !== undefined ? incoming.relatedMessageId : existing.relatedMessageId,
@@ -231,31 +302,37 @@ function mergeIncoming(
     hitlExpiresAt: acceptsHitlUpdate && incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
     hitlResolved: finalizesExistingHitl
       ? true
-      : acceptsHitlUpdate && incoming.hitlResolved !== undefined
-        ? incoming.hitlResolved
-        : existing.hitlResolved,
+      : isNewHitlFollowUp
+        ? (incoming.hitlResolved !== undefined ? incoming.hitlResolved : false)
+        : acceptsHitlUpdate && incoming.hitlResolved !== undefined
+          ? incoming.hitlResolved
+          : existing.hitlResolved,
     hitlInteractionId: acceptsHitlUpdate && incoming.hitlInteractionId !== undefined ? incoming.hitlInteractionId : existing.hitlInteractionId,
     hitlInteractionStatus: finalizesExistingHitl
       ? 'responded'
       : acceptsHitlUpdate && incoming.hitlInteractionStatus !== undefined
         ? incoming.hitlInteractionStatus
-        : existing.hitlInteractionStatus,
+        : isNewHitlFollowUp
+          ? 'open'
+          : existing.hitlInteractionStatus,
     hitlInteractionVersion: acceptsHitlUpdate && incoming.hitlInteractionVersion !== undefined ? incoming.hitlInteractionVersion : existing.hitlInteractionVersion,
     hitlApplicationStatus: finalizesExistingHitl
       ? 'applied'
       : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
         ? incoming.hitlApplicationStatus
-        : incomingHitlIsNewer
+        : incomingHitlIsNewer || isNewHitlFollowUp
           ? undefined
           : existing.hitlApplicationStatus,
     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
     hitlGroupTotal: acceptsHitlUpdate && incoming.hitlGroupTotal !== undefined ? incoming.hitlGroupTotal : existing.hitlGroupTotal,
     hitlGroupIndex: acceptsHitlUpdate && incoming.hitlGroupIndex !== undefined ? incoming.hitlGroupIndex : existing.hitlGroupIndex,
-    hitlUserAnswer: acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
-      ? incoming.hitlUserAnswer
-      : incomingHitlIsNewer
-        ? undefined
-        : existing.hitlUserAnswer,
+    hitlUserAnswer: isNewHitlFollowUp
+      ? (incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : undefined)
+      : acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
+        ? incoming.hitlUserAnswer
+        : incomingHitlIsNewer
+          ? undefined
+          : existing.hitlUserAnswer,
     clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
