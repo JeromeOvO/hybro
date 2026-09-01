@@ -99,4 +99,32 @@ describe('handleTaskUpdate', () => {
     expect(entity.taskContent).toBeUndefined()
     expect(JSON.stringify(entity)).not.toContain(privateTaskContent)
   })
+
+  it('populates taskUpdatedAt so delayed task_update frames are rejected', async () => {
+    await handleTaskUpdate(
+      makeDeps(),
+      makeTaskUpdate({
+        status: TASK_STATE.WORKING,
+        status_message: 'Working on request',
+      }),
+      'req-1',
+    )
+
+    await handleTaskUpdate(
+      makeDeps(),
+      {
+        ...makeTaskUpdate({
+          status: TASK_STATE.SUBMITTED,
+          status_message: 'Submitted',
+        }),
+        timestamp: '2026-02-17T09:55:00Z',
+      },
+      'req-1',
+    )
+
+    const entity = useMessageStore.getState().entities['agent-message-1']
+    expect(entity.taskStatus).toBe(TASK_STATE.WORKING)
+    expect(entity.taskStatusMessage).toBe('Working on request')
+    expect(entity.taskUpdatedAt).toBe('2026-02-17T10:00:00.000Z')
+  })
 })

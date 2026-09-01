@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol
 
@@ -131,6 +132,7 @@ class HITLPersistencePort(Protocol):
         question_count: int,
         question_index: int,
         expected_request_id: str | None = None,
+        projection_at: datetime | None = None,
     ) -> bool: ...
     async def persist_hitl_user_answer(
         self, message_id: str, user_input: str | None

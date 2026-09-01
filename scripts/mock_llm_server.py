@@ -206,27 +206,51 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
         # Case 3: Travel Planner Agent (LangChain tool AskUserForClarification or direct)
         if "AskUserForClarification" in tool_names:
-            has_details = any(kw in last_user_text.lower() for kw in ["kyoto", "san francisco", "tokyo", "3 days", "3-day", "sept", "budget"])
-            if not has_details and len(messages) <= 2:
-                # Ask clarification question
-                call_id = f"call_clarify_{uuid.uuid4().hex[:8]}"
-                args = json.dumps({"question": "Where would you like to travel, and for how many days?"})
+            text_lower = last_user_text.lower()
+            has_destination = any(
+                kw in text_lower
+                for kw in ["kyoto", "san francisco", "tokyo", "japan"]
+            )
+            has_duration = any(
+                kw in text_lower for kw in ["3 days", "3-day", "days", "day trip"]
+            )
+            has_budget = "budget" in text_lower or "$" in text_lower
+
+            if not has_destination:
+                call_id = f"call_clarify_dest_{uuid.uuid4().hex[:8]}"
+                args = json.dumps(
+                    {"question": "Where would you like to travel?"}
+                )
                 tool_calls = [{
                     "id": call_id,
                     "type": "function",
                     "function": {"name": "AskUserForClarification", "arguments": args},
                 }]
                 return tool_calls, "", "tool_calls"
-            else:
-                # Return completed itinerary
-                itinerary_text = (
-                    "### Custom Travel Plan\n\n"
-                    "**Day 1:** Arrival, city center exploration, and local dining.\n"
-                    "**Day 2:** Iconic historical sights and scenic viewpoints.\n"
-                    "**Day 3:** Local markets, cultural activities, and departure.\n\n"
-                    "Have a wonderful trip!"
+            if not (has_duration and has_budget):
+                call_id = f"call_clarify_details_{uuid.uuid4().hex[:8]}"
+                args = json.dumps(
+                    {
+                        "question": (
+                            "How many days will you stay, and what is your budget?"
+                        )
+                    }
                 )
-                return None, itinerary_text, "stop"
+                tool_calls = [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "AskUserForClarification", "arguments": args},
+                }]
+                return tool_calls, "", "tool_calls"
+
+            itinerary_text = (
+                "### Custom Travel Plan\n\n"
+                "**Day 1:** Arrival, city center exploration, and local dining.\n"
+                "**Day 2:** Iconic historical sights and scenic viewpoints.\n"
+                "**Day 3:** Local markets, cultural activities, and departure.\n\n"
+                "Have a wonderful trip!"
+            )
+            return None, itinerary_text, "stop"
 
         # Default fallback
         fallback_text = "I have processed your request and completed the task successfully."

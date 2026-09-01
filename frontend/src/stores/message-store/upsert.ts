@@ -34,7 +34,12 @@ export function applyUpsert(
       incoming.taskUpdatedAt &&
       new Date(incoming.taskUpdatedAt).getTime() < new Date(existing.taskUpdatedAt).getTime()
     )
-    if (incomingIsOlder) {
+    const isAuthoritativeTerminalDbReconciliation = Boolean(
+      source === 'db' &&
+      incoming.taskStatus !== undefined &&
+      isTerminalState(incoming.taskStatus ?? '')
+    )
+    if (incomingIsOlder && !isAuthoritativeTerminalDbReconciliation) {
       return null
     }
 
@@ -416,6 +421,7 @@ export function isNoOpUpdate(
     existing.dispatchText      === coalesce(incoming.dispatchText, existing.dispatchText) &&
     existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
     existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
+    existing.taskUpdatedAt       === coalesce(incoming.taskUpdatedAt, existing.taskUpdatedAt) &&
     existing.hitlResolved      === coalesce(incoming.hitlResolved, existing.hitlResolved) &&
     existing.hitlSource        === coalesce(incoming.hitlSource, existing.hitlSource) &&
     existing.hitlInteractionId === coalesce(incoming.hitlInteractionId, existing.hitlInteractionId) &&
