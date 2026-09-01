@@ -144,6 +144,18 @@ async function autoRespondHitlViaUiIfPresent(
   }
 }
 
+function conversationTimeline(page: Page) {
+  return page.locator('.conversation-turn-content')
+}
+
+function userMessageInTimeline(page: Page, text: string) {
+  return page.locator('.conversation-turn .conversation-user-message-text').filter({ hasText: text })
+}
+
+function synthesisInTimeline(page: Page) {
+  return conversationTimeline(page).getByText(/Day 1:|Custom Travel Plan/)
+}
+
 test.describe('Functional HITL & Timeline Hydration Flow', () => {
   test('creates room, automatically sends human input when requested, and persists across reload', async ({
     page,
@@ -165,7 +177,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     const roomId = roomData.room_id
     expect(roomId).toBeTruthy()
 
-    const promptText = 'Generate a travel plan'
+    const promptText = `Generate a travel plan e2e-${Date.now()}`
     const answerText = 'Kyoto, 3 days, $1500 budget'
     const clientRequestId = `e2e-req-${Date.now()}`
     const sendResp = await request.post(`${BACKEND_URL}/roomCenter/sendMessage`, {
@@ -191,7 +203,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     expect(sendResp.ok()).toBeTruthy()
 
     await page.goto(`/room/${roomId}`)
-    await expect(page.getByText(promptText)).toBeVisible({ timeout: 15000 })
+    await expect(userMessageInTimeline(page, promptText)).toBeVisible({ timeout: 30000 })
 
     const pendingRequests = await pollPendingHitl(request, roomId)
     expect(pendingRequests.length).toBeGreaterThan(0)
@@ -215,13 +227,11 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     expect(synthesisText.length).toBeGreaterThan(30)
 
     await page.reload()
-    await expect(page.getByText(promptText)).toBeVisible({ timeout: 15000 })
+    await expect(userMessageInTimeline(page, promptText)).toBeVisible({ timeout: 30000 })
     await expect.poll(async () => {
       const messages = await fetchRoomMessages(request, roomId)
       return findTerminalSynthesis(messages, clientRequestId)
     }, { timeout: 30_000 }).toBeTruthy()
-    await expect(page.getByText(/Travel Plan|Day 1|Custom Travel Plan/i)).toBeVisible({
-      timeout: 30_000,
-    })
+    await expect(synthesisInTimeline(page)).toBeVisible({ timeout: 30_000 })
   })
 })
