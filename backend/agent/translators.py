@@ -12,7 +12,7 @@ def agent_info_from_doc(doc: dict[str, Any]) -> AgentInfo:
         agent_id=doc["agent_id"],
         name=card.get("name"),
         description=card.get("description"),
-        url=card.get("url"),
+        url=doc.get("normalized_url") or card.get("url") or doc.get("public_url"),
         provider_id=doc.get("provider_id"),
         status=_status_value(doc.get("agent_status", "active")) or "active",
         capabilities=list(doc.get("capabilities") or _card_capabilities(card)),
@@ -32,7 +32,7 @@ def agent_card_from_doc(doc: dict[str, Any]) -> AgentCardSnapshot:
         agent_id=doc["agent_id"],
         name=card.get("name"),
         description=card.get("description"),
-        url=card.get("url") or "",
+        url=doc.get("normalized_url") or card.get("url") or doc.get("public_url") or "",
         capabilities=list(doc.get("capabilities") or _card_capabilities(card)),
         raw_card=dict(card),
     )

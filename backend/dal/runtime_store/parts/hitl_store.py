@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from pymongo import ReturnDocument
@@ -568,8 +568,11 @@ class HITLRuntimeStorePart:
         question_count: int,
         question_index: int,
         expected_request_id: str | None = None,
+        projection_at: datetime | None = None,
     ) -> bool:
         try:
+            projection_timestamp = projection_at or utcnow()
+            projection_at_iso = projection_timestamp.isoformat()
             metadata: dict[str, Any] = {
                 "hitl_request_id": request_id,
                 "hitl_prompt": prompt,
@@ -584,6 +587,7 @@ class HITLRuntimeStorePart:
                 "hitl_interaction_id": interaction_id,
                 "hitl_question_count": question_count,
                 "hitl_question_index": question_index,
+                "hitl_projection_at": projection_at_iso,
             }
             metadata.update(
                 {
@@ -623,9 +627,30 @@ class HITLRuntimeStorePart:
                                 }
                             },
                             {
-                                "message_content.message_task.metadata.hitl_request_id": {
-                                    "$ne": request_id
-                                }
+                                "$and": [
+                                    {
+                                        "message_content.message_task.metadata.hitl_request_id": {
+                                            "$ne": request_id
+                                        }
+                                    },
+                                    {
+                                        "$or": [
+                                            {
+                                                "message_content.message_task.metadata.hitl_projection_at": {
+                                                    "$exists": False
+                                                }
+                                            },
+                                            {
+                                                "message_content.message_task.metadata.hitl_projection_at": None
+                                            },
+                                            {
+                                                "message_content.message_task.metadata.hitl_projection_at": {
+                                                    "$lt": projection_at_iso
+                                                }
+                                            },
+                                        ]
+                                    },
+                                ]
                             },
                         ]
                     },

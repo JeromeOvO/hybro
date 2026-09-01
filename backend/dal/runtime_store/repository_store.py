@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Any
 
 from common.dto import (
@@ -758,6 +759,7 @@ class RuntimeRepositoryStore:
         question_count: int,
         question_index: int,
         expected_request_id: str | None = None,
+        projection_at: datetime | None = None,
     ) -> bool:
         return await self._hitl_delegate().persist_pending_hitl_on_agent_message(
             message_id,
@@ -771,6 +773,7 @@ class RuntimeRepositoryStore:
             question_count=question_count,
             question_index=question_index,
             expected_request_id=expected_request_id,
+            projection_at=projection_at,
         )
 
     async def _ensure_message_task_metadata(self, message_id: str) -> None:

@@ -34,7 +34,12 @@ export function applyUpsert(
       incoming.taskUpdatedAt &&
       new Date(incoming.taskUpdatedAt).getTime() < new Date(existing.taskUpdatedAt).getTime()
     )
-    if (incomingIsOlder) {
+    const isAuthoritativeTerminalDbReconciliation = Boolean(
+      source === 'db' &&
+      incoming.taskStatus != null &&
+      isTerminalState(incoming.taskStatus)
+    )
+    if (incomingIsOlder && !isAuthoritativeTerminalDbReconciliation) {
       return null
     }
 
@@ -43,7 +48,11 @@ export function applyUpsert(
       existing.taskStatus === 'completed' &&
       incoming.taskStatus === 'input-required' &&
       incoming.taskUpdatedAt && existing.taskUpdatedAt &&
-      new Date(incoming.taskUpdatedAt).getTime() > new Date(existing.taskUpdatedAt).getTime()
+      new Date(incoming.taskUpdatedAt).getTime() > new Date(existing.taskUpdatedAt).getTime() &&
+      (
+        (incoming.hitlRequestId !== undefined && existing.hitlRequestId !== undefined && incoming.hitlRequestId !== existing.hitlRequestId)
+        || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
+      )
     )
 
     if (
@@ -196,8 +205,9 @@ function mergeIncoming(
     || (incoming.hitlInteractionId !== undefined && existing.hitlInteractionId !== undefined && incoming.hitlInteractionId !== existing.hitlInteractionId)
   )
   const isNewHitlFollowUp = Boolean(
-    (isDifferentHitlRound && !incomingIsOlderByTime && (incomingIsNewerByTime || incomingHitlIsNewer || (!hasTimestamps && existing.hitlInteractionVersion === undefined)))
-    || incomingHitlIsNewer
+    isDifferentHitlRound
+    && !incomingIsOlderByTime
+    && (incomingIsNewerByTime || (!hasTimestamps && existing.hitlInteractionVersion === undefined))
   )
   const isStaleHitl = Boolean(
     incomingIsOlderByTime
@@ -213,7 +223,6 @@ function mergeIncoming(
   )
   const existingHitlIsNonRegressible = Boolean(
     sameHitlIdentity
-    && !incomingHitlIsNewer
     && !incomingHitlIsTerminal
     && (
       existing.hitlResolved === true
@@ -320,7 +329,7 @@ function mergeIncoming(
       ? 'applied'
       : acceptsHitlUpdate && incoming.hitlApplicationStatus !== undefined
         ? incoming.hitlApplicationStatus
-        : incomingHitlIsNewer || isNewHitlFollowUp
+        : isNewHitlFollowUp
           ? undefined
           : existing.hitlApplicationStatus,
     hitlGroupId: acceptsHitlUpdate && incoming.hitlGroupId !== undefined ? incoming.hitlGroupId : existing.hitlGroupId,
@@ -330,9 +339,7 @@ function mergeIncoming(
       ? (incoming.hitlUserAnswer !== undefined ? incoming.hitlUserAnswer : undefined)
       : acceptsHitlUpdate && incoming.hitlUserAnswer !== undefined
         ? incoming.hitlUserAnswer
-        : incomingHitlIsNewer
-          ? undefined
-          : existing.hitlUserAnswer,
+        : existing.hitlUserAnswer,
     clientRequestId: incoming.clientRequestId !== undefined ? incoming.clientRequestId : existing.clientRequestId,
     artifacts: incoming.artifacts !== undefined ? incoming.artifacts : existing.artifacts,
     attachments: incoming.attachments !== undefined ? incoming.attachments : existing.attachments,
@@ -414,6 +421,7 @@ export function isNoOpUpdate(
     existing.dispatchText      === coalesce(incoming.dispatchText, existing.dispatchText) &&
     existing.taskRequiresInput === coalesce(incoming.taskRequiresInput, existing.taskRequiresInput) &&
     existing.taskRequiresAuth  === coalesce(incoming.taskRequiresAuth, existing.taskRequiresAuth) &&
+    existing.taskUpdatedAt       === coalesce(incoming.taskUpdatedAt, existing.taskUpdatedAt) &&
     existing.hitlResolved      === coalesce(incoming.hitlResolved, existing.hitlResolved) &&
     existing.hitlSource        === coalesce(incoming.hitlSource, existing.hitlSource) &&
     existing.hitlInteractionId === coalesce(incoming.hitlInteractionId, existing.hitlInteractionId) &&

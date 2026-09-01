@@ -743,6 +743,7 @@ class HITLService:
                             interaction_id=request.interaction_id,
                             question_count=request.question_count,
                             question_index=request.question_index,
+                            projection_at=request.created_at,
                         )
                     )
                 elif display_id:

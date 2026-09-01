@@ -702,11 +702,12 @@ def create_orchestrator_runtime(  # noqa: C901
                             decision.failure_count,
                         )
                     else:
-                        logger.warning(
+                        logger.exception(
                             "generic orchestrator Run recovery failed "
-                            "run_id=%s error_type=%s retry_scheduled=true",
+                            "run_id=%s error_type=%s retry_scheduled=true: %s",
                             run.run_id,
                             type(exc).__name__,
+                            exc,
                         )
 
     def _due_phase(recover: Callable[..., Any]) -> Callable[[], Any]:

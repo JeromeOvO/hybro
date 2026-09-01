@@ -74,6 +74,7 @@ export async function handleTaskUpdate(
     relatedMessageId: sseMessage.data.related_message_id ?? undefined,
     timestamp: normalizeTimestampOrNow(taskTimestamp),
     taskCreatedAt: normalizeTimestampOrNow(taskTimestamp),
+    taskUpdatedAt: normalizeTimestampOrNow(taskTimestamp),
   }
 
   const store = useMessageStore.getState()

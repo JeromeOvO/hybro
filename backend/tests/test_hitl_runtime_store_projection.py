@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -166,6 +167,10 @@ def _matches_operator_dict(actual: Any, expected: dict[str, Any]) -> bool:
         return False
     if "$lte" in expected and (
         actual is _MISSING or actual is None or actual > expected["$lte"]
+    ):
+        return False
+    if "$lt" in expected and (
+        actual is _MISSING or actual is None or actual >= expected["$lt"]
     ):
         return False
     if "$exists" in expected and (actual is not _MISSING) != expected["$exists"]:
@@ -525,7 +530,9 @@ async def test_persist_pending_hitl_on_agent_message_projects_metadata_noop_succ
 
     sets = update["$set"]
     assert sets["message_content.message_task.status.state"] == "input-required"
-    assert sets["message_content.message_task.metadata"] == {
+    metadata = sets["message_content.message_task.metadata"]
+    assert metadata.pop("hitl_projection_at")
+    assert metadata == {
         "hitl_request_id": "req-1",
         "hitl_prompt": "Need policy effective date",
         "hitl_prompt_type": "text",
@@ -605,7 +612,9 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
     }
     sets = update["$set"]
     assert sets["message_content.message_task.status.state"] == "input-required"
-    assert sets["message_content.message_task.metadata"] == expected_metadata
+    metadata = sets["message_content.message_task.metadata"]
+    assert metadata.pop("hitl_projection_at")
+    assert metadata == expected_metadata
     assert "task_updated_at" in sets
     assert all(".metadata." not in path for path in sets)
     assert "$unset" not in update
@@ -615,7 +624,9 @@ async def test_persist_pending_hitl_replaces_stale_metadata_projection():
         projected["message_content"]["message_task"]["status"]["state"]
         == "input-required"
     )
-    assert projected["message_content"]["message_task"]["metadata"] == expected_metadata
+    projected_metadata = dict(projected["message_content"]["message_task"]["metadata"])
+    assert projected_metadata.pop("hitl_projection_at")
+    assert projected_metadata == expected_metadata
     assert private_sentinel not in json.dumps(projected, default=str, sort_keys=True)
 
 
@@ -671,7 +682,9 @@ async def test_persist_pending_hitl_accepts_null_terminal_marker():
         projected["message_content"]["message_task"]["status"]["state"]
         == "input-required"
     )
-    assert projected["message_content"]["message_task"]["metadata"] == expected_metadata
+    projected_metadata = dict(projected["message_content"]["message_task"]["metadata"])
+    assert projected_metadata.pop("hitl_projection_at")
+    assert projected_metadata == expected_metadata
 
 
 @pytest.mark.asyncio
@@ -985,6 +998,82 @@ async def test_persist_pending_hitl_reopen_rejects_delayed_older_round_projectio
             "hitl_request_id"
         ]
         == "req-2"
+    )
+
+
+@pytest.mark.asyncio
+async def test_persist_pending_hitl_rejects_delayed_cross_interaction_projection():
+    doc = {
+        "message_id": "agent-msg-1",
+        "terminal_projection_event_id": None,
+        "message_content": {
+            "message_task": {
+                "status": {"state": "working"},
+                "metadata": {},
+            }
+        },
+    }
+    room_agent_messages = _FakeCollection(documents=[doc])
+    store = _store(room_agent_messages=room_agent_messages)
+
+    projection_a = datetime(2026, 8, 30, 10, 0, 0, tzinfo=UTC)
+    projection_b = datetime(2026, 8, 30, 10, 5, 0, tzinfo=UTC)
+
+    assert await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-a",
+        prompt="Interaction A prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-a",
+        question_count=1,
+        question_index=0,
+        projection_at=projection_a,
+    )
+    assert await store.update_agent_message_task_state("agent-msg-1", "completed")
+
+    assert await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-b",
+        prompt="Interaction B prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-b",
+        question_count=1,
+        question_index=0,
+        projection_at=projection_b,
+    )
+    assert await store.update_agent_message_task_state("agent-msg-1", "completed")
+
+    delayed_a = await store.persist_pending_hitl_on_agent_message(
+        "agent-msg-1",
+        request_id="req-a",
+        prompt="Interaction A prompt",
+        prompt_type="text",
+        choices=None,
+        a2a_task_id=None,
+        a2a_context_id=None,
+        interaction_id="interaction-a",
+        question_count=1,
+        question_index=0,
+        projection_at=projection_a,
+    )
+    assert delayed_a is False
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["status"][
+            "state"
+        ]
+        == "completed"
+    )
+    assert (
+        room_agent_messages.documents[0]["message_content"]["message_task"]["metadata"][
+            "hitl_request_id"
+        ]
+        == "req-b"
     )
 
 

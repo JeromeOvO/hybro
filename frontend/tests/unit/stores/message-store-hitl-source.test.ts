@@ -94,7 +94,7 @@ describe('message store HITL source projection', () => {
       hitlApplicationStatus: 'applied',
     }, 'sse')!
 
-    for (const version of [2, undefined, 1]) {
+    for (const version of [2, undefined, 1, 3]) {
       const attempted = applyUpsert(terminal.entities, [pending.id], {
         ...pending,
         hitlInteractionVersion: version,
@@ -109,7 +109,7 @@ describe('message store HITL source projection', () => {
       expect(entity.hitlInteractionStatus).toBe('responded')
     }
 
-    const newer = applyUpsert(terminal.entities, [pending.id], {
+    const sameIdentityRevision = applyUpsert(terminal.entities, [pending.id], {
       ...pending,
       hitlPrompt: 'Round two?',
       hitlInteractionVersion: 3,
@@ -117,15 +117,15 @@ describe('message store HITL source projection', () => {
       hitlInteractionStatus: 'open',
       hitlApplicationStatus: undefined,
       hitlUserAnswer: undefined,
-    }, 'sse')!
-    expect(newer.entities[pending.id]).toMatchObject({
-      hitlResolved: false,
-      hitlPrompt: 'Round two?',
-      hitlInteractionVersion: 3,
-      hitlInteractionStatus: 'open',
+    }, 'sse')
+    const revised = (sameIdentityRevision ?? terminal).entities[pending.id]
+    expect(revised).toMatchObject({
+      hitlResolved: true,
+      hitlPrompt: 'Round one?',
+      hitlInteractionVersion: 2,
+      hitlInteractionStatus: 'responded',
+      hitlUserAnswer: 'saved answer',
     })
-    expect(newer.entities[pending.id].hitlUserAnswer).toBeUndefined()
-    expect(newer.entities[pending.id].hitlApplicationStatus).toBeUndefined()
 
     const newInteraction = buildPendingHitlIncomingMessage({
       roomId: 'room-1', messageId: 'message-1', requestId: 'request-1',

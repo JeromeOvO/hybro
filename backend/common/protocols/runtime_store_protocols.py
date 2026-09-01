@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from common.dto import (
@@ -338,6 +339,7 @@ class RuntimeHITLStore(Protocol):
         question_count: int,
         question_index: int,
         expected_request_id: str | None = None,
+        projection_at: datetime | None = None,
     ) -> bool: ...
     async def persist_hitl_user_answer(
         self,

@@ -578,5 +578,113 @@ describe('useMessageStore', () => {
       expect(state.entities['agent-msg-fail'].taskStatus).toBe('failed')
       expect(state.entities['agent-msg-fail'].hitlRequestId).toBeUndefined()
     })
+
+    it('preserves resolved HITL state when same-identity interaction version increments', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-version',
+          taskStatus: 'completed',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlInteractionVersion: 1,
+          hitlResolved: true,
+          hitlUserAnswer: 'Kyoto',
+          taskUpdatedAt: '2026-08-30T10:05:00Z',
+        }),
+        'sse',
+      )
+
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-version',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlInteractionId: 'interaction-1',
+          hitlInteractionVersion: 2,
+          hitlResolved: false,
+          taskUpdatedAt: '2026-08-30T10:06:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-version'].taskStatus).toBe('completed')
+      expect(state.entities['agent-msg-version'].hitlResolved).toBe(true)
+      expect(state.entities['agent-msg-version'].hitlUserAnswer).toBe('Kyoto')
+      expect(state.entities['agent-msg-version'].hitlInteractionVersion).toBe(1)
+    })
+
+    it('accepts timestamp-only refresh so delayed round events are rejected', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-refresh',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlPrompt: 'Round 1 Question',
+          taskUpdatedAt: '2026-08-30T10:00:00Z',
+        }),
+        'sse',
+      )
+
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-refresh',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-2',
+          hitlPrompt: 'Round 2 Question',
+          taskUpdatedAt: '2026-08-30T10:20:00Z',
+        }),
+        'sse',
+      )
+
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-refresh',
+          taskStatus: 'input-required',
+          hitlRequestId: 'req-1',
+          hitlPrompt: 'Round 1 Question',
+          taskUpdatedAt: '2026-08-30T10:15:00Z',
+        }),
+        'sse',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-refresh'].hitlRequestId).toBe('req-2')
+      expect(state.entities['agent-msg-refresh'].taskUpdatedAt).toBe('2026-08-30T10:20:00Z')
+    })
+
+    it('allows older terminal DB reconciliation after newer SSE completion', () => {
+      const store = useMessageStore.getState()
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-db-terminal',
+          taskStatus: 'completed',
+          content: 'SSE streaming content',
+          taskUpdatedAt: '2026-08-30T10:20:00Z',
+        }),
+        'sse',
+      )
+
+      store.upsertMessage(
+        makeIncoming({
+          id: 'agent-msg-db-terminal',
+          taskStatus: 'completed',
+          content: 'Canonical DB content with artifacts',
+          taskUpdatedAt: '2026-08-30T10:15:00Z',
+        }),
+        'db',
+      )
+
+      const state = useMessageStore.getState()
+      expect(state.entities['agent-msg-db-terminal'].taskStatus).toBe('completed')
+      expect(state.entities['agent-msg-db-terminal'].content).toBe(
+        'Canonical DB content with artifacts',
+      )
+      expect(state.entities['agent-msg-db-terminal'].taskUpdatedAt).toBe(
+        '2026-08-30T10:20:00Z',
+      )
+    })
   })
 })

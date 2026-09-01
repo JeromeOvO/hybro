@@ -91,9 +91,15 @@ class TravelPlannerAgent:
         if not api_key:
             raise RuntimeError(f"{api_key_var} environment variable not set.")
 
+        resolved_base_url = (
+            config.get("base_url")
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or None
+        )
         self._model = ChatOpenAI(
             model=config.get("model_name") or "gpt-4o",
-            base_url=config.get("base_url") or None,
+            base_url=resolved_base_url,
             api_key=api_key,
             temperature=0.7,
         )

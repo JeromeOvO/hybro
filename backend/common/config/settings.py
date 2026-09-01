@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     mongodb_password: str = ""
 
     openai_api_key: str = ""
+    openai_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "OPENAI_BASE_URL", "OPENAI_API_BASE", "openai_base_url"
+        ),
+    )
     lead_ai_model: str = "gpt-5-mini"
     classifier_ai_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
