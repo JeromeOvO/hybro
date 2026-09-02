@@ -20,10 +20,13 @@ interface AgentResponseDetailPaneProps {
   onClose: () => void
 }
 
-function useAgentFromCatalog(agentId?: string): Agent | undefined {
+function useAgentFromCatalog(agentId: string | undefined, agentName: string): Agent | undefined {
   const qc = useQueryClient()
   const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
-  return agentId ? agents?.find(a => a.agent_id === agentId) : undefined
+  if (agentId) return agents?.find(a => a.agent_id === agentId)
+
+  const matchingAgents = agents?.filter(a => a.agent_card.name === agentName)
+  return matchingAgents?.length === 1 ? matchingAgents[0] : undefined
 }
 
 function QuotedUserContext({ detail }: { detail: AgentResponseDetail }) {
@@ -78,11 +81,50 @@ function EmptyResponse({ detail }: { detail: AgentResponseDetail }) {
   )
 }
 
+function AgentDetailAvatar({
+  detail,
+  iconUrl,
+  avatarId,
+}: {
+  detail: AgentResponseDetail
+  iconUrl?: string
+  avatarId: string
+}) {
+  return (
+    <div
+      className={cn(
+        'conversation-detail-agent-avatar',
+        detail.isStreaming && 'conversation-avatar-working',
+      )}
+    >
+      <div className="conversation-detail-agent-avatar-inner relative" style={{ backgroundColor: detail.theme.avatarLightBg }}>
+        {iconUrl ? (
+          <img
+            src={iconUrl}
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none'
+            }}
+          />
+        ) : null}
+        <img
+          src={getAgentAvatarUri(avatarId)}
+          alt=""
+          className="w-full h-full"
+          style={{ display: iconUrl ? 'none' : 'block' }}
+        />
+      </div>
+    </div>
+  )
+}
+
 function AgentResponseDetailHeader({
   detail,
   onClose,
 }: AgentResponseDetailPaneProps) {
-  const catalogAgent = useAgentFromCatalog(detail.agentId)
+  const catalogAgent = useAgentFromCatalog(detail.agentId, detail.agentName)
+  const profileAgentId = detail.agentId ?? catalogAgent?.agent_id
   const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
   const isHubOnline = catalogAgent?.is_hub_online
   const [taskExpanded, setTaskExpanded] = useState(false)
@@ -100,37 +142,23 @@ function AgentResponseDetailHeader({
       data-testid="agent-response-detail-header"
       style={{ backgroundColor: detail.theme.cardBg }}
     >
-      <div
-        className={cn(
-          "conversation-detail-agent-avatar",
-          detail.isStreaming && "conversation-avatar-working",
-        )}
-      >
-        <div className="conversation-detail-agent-avatar-inner relative" style={{ backgroundColor: detail.theme.avatarLightBg }}>
-          {iconUrl ? (
-            <img
-              src={iconUrl}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none'
-              }}
-            />
-          ) : null}
-          <img
-            src={getAgentAvatarUri(detail.agentId ?? detail.agentName)}
-            alt=""
-            className="w-full h-full"
-            style={{ display: iconUrl ? 'none' : 'block' }}
-          />
-        </div>
-      </div>
+      {profileAgentId ? (
+        <Link
+          href={`/agents/${encodeURIComponent(profileAgentId)}`}
+          aria-label={`View ${detail.agentName} profile`}
+          className="block shrink-0 rounded-[var(--chat-input-radius)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/35"
+        >
+          <AgentDetailAvatar detail={detail} iconUrl={iconUrl} avatarId={profileAgentId} />
+        </Link>
+      ) : (
+        <AgentDetailAvatar detail={detail} iconUrl={iconUrl} avatarId={detail.agentName} />
+      )}
 
       <div className="conversation-detail-agent-main">
         <div className="conversation-detail-agent-name">
-          {detail.agentId ? (
+          {profileAgentId ? (
             <Link
-              href={`/agents/${encodeURIComponent(detail.agentId)}`}
+              href={`/agents/${encodeURIComponent(profileAgentId)}`}
               className="hover:underline focus-visible:outline-none truncate"
             >
               {detail.agentName}

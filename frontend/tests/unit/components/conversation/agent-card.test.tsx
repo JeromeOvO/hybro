@@ -56,6 +56,30 @@ describe('AgentCard', () => {
     expect(onOpen).toHaveBeenCalledWith('agent-message-1')
   })
 
+  it('links the avatar to the agent profile without opening response detail', async () => {
+    const onOpen = vi.fn()
+    const { container } = render(
+      <AgentCard
+        messageId="agent-message-1"
+        agentId="agent-abc"
+        agentName="Planner"
+        taskDescription="Plan the trip"
+        theme={AGENT_THEMES[0]}
+        display={{ label: 'Completed', tone: 'muted', isAnimated: false, ariaLabel: 'Completed' }}
+        onOpen={onOpen}
+      />
+    )
+
+    const avatarLink = container.querySelector('a[aria-label="View Planner profile"]')
+    expect(avatarLink).not.toBeNull()
+    expect(avatarLink).toHaveAttribute('href', '/agents/agent-abc')
+    avatarLink!.addEventListener('click', event => event.preventDefault())
+
+    await userEvent.click(avatarLink!)
+
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
   it('marks selected cards without changing the card element', () => {
     const { container } = render(
       <AgentCard
@@ -108,9 +132,9 @@ describe('AgentCard', () => {
       />
     )
 
-    const link = container.querySelector('a[href="/agents/agent-abc"]')
-    expect(link).not.toBeNull()
-    expect(link).toHaveTextContent('Planner')
+    const links = Array.from(container.querySelectorAll('a[href="/agents/agent-abc"]'))
+    expect(links).toHaveLength(2)
+    expect(links.some(link => link.textContent === 'Planner')).toBe(true)
   })
 
   it('renders AgentSourceBadge when agentSource is provided', () => {
