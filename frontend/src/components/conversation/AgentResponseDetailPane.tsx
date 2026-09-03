@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react'
 import Link from 'next/link'
 import { X, ChevronDown, Quote } from 'lucide-react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useCachedAgentCatalog } from '@/hooks/room/useAgentCatalog'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ArtifactList } from '@/components/artifact-list'
 import { PartRenderer } from '@/components/part-renderer'
@@ -21,8 +21,7 @@ interface AgentResponseDetailPaneProps {
 }
 
 function useAgentFromCatalog(agentId: string | undefined, agentName: string): Agent | undefined {
-  const qc = useQueryClient()
-  const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
+  const agents = useCachedAgentCatalog()
   if (agentId) return agents?.find(a => a.agent_id === agentId)
 
   const matchingAgents = agents?.filter(a => a.agent_card.name === agentName)

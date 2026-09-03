@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useQueryClient } from '@tanstack/react-query'
+import { useCachedAgentCatalog } from '@/hooks/room/useAgentCatalog'
 import type { AgentDisplayProps, AgentTheme } from '@/lib/selectors/conversation-types'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
@@ -29,8 +29,7 @@ interface AgentCardProps {
 }
 
 function useAgentFromCatalog(agentId: string | undefined, agentName: string): Agent | undefined {
-  const qc = useQueryClient()
-  const agents = qc.getQueryData<Agent[]>(['agents', 'all'])
+  const agents = useCachedAgentCatalog()
   if (agentId) return agents?.find(a => a.agent_id === agentId)
 
   const matchingAgents = agents?.filter(a => a.agent_card.name === agentName)
