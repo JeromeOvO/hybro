@@ -106,11 +106,6 @@ class RoomRouteAdapter:
             use_supervisor=use_supervisor,
         )
 
-    async def update_room_extend_info(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_services().update_room_extend_info(request)
-
     async def inquiry_room_messages_by_room_id(
         self, request: RoomCenterRoomMessageRequest
     ) -> RoomCenterRoomMessageResponse:

@@ -78,11 +78,15 @@ def test_public_route_inventory_matches_pre_gateway_contract():
     ]
 
 
-def test_removed_agent_viewset_is_absent_from_checked_in_openapi():
+def test_removed_routes_are_absent_from_checked_in_openapi():
     openapi = _load_fixture("../../openapi.json")
 
-    assert "/api/v1/agents" not in openapi["paths"]
-    assert "/api/v1/agents/{item_id}" not in openapi["paths"]
+    assert {
+        "/api/v1/agents",
+        "/api/v1/agents/{item_id}",
+        "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
+        "/api/v1/roomCenter/updateRoomExtendInfo",
+    }.isdisjoint(openapi["paths"])
     schemas = openapi.get("components", {}).get("schemas", {})
     assert {
         "AgentCreate",

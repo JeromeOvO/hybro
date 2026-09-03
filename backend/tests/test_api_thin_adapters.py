@@ -586,10 +586,6 @@ def test_room_center_route_inventory_records_live_protocol_owners():
             "owner": "room.protocols.RoomCenterCompatibility",
             "supporting": {"common.protocols.RoomRouteReader"},
         },
-        "update_room_extend_info": {
-            "owner": "room.protocols.RoomCenterCompatibility",
-            "supporting": {"common.protocols.RoomRouteReader"},
-        },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
             "supporting": {

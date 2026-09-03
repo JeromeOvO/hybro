@@ -664,27 +664,6 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
-    "methods": [
-      "POST"
-    ],
-    "name": "inquiry_rooms_by_room_owner_id",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_room_center"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
     "path": "/api/v1/roomCenter/sendMessage",
     "methods": [
       "POST"
@@ -733,28 +712,6 @@
       "POST"
     ],
     "name": "update_room_agent_set",
-    "endpoint_module": "api_gateway.routes.room_routes",
-    "declared_owner": "api_gateway.routes.room_routes",
-    "tags": [
-      "room"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/roomCenter/updateRoomExtendInfo",
-    "methods": [
-      "POST"
-    ],
-    "name": "update_room_extend_info",
     "endpoint_module": "api_gateway.routes.room_routes",
     "declared_owner": "api_gateway.routes.room_routes",
     "tags": [

@@ -782,29 +782,6 @@
     ],
     "dependencies": [
       "get_current_user",
-      "get_room_center"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "inquiry_rooms_by_room_owner_id",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
       "get_execution_engine",
       "get_room_center",
       "get_room_store"
@@ -870,33 +847,6 @@
     ],
     "owning_protocol": "room.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomAgentSet",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "update_room_extend_info",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/updateRoomExtendInfo",
     "response_class": null,
     "response_model": null,
     "status_code": null,

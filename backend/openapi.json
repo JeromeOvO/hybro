@@ -540,25 +540,6 @@
         }
       }
     },
-    "/api/v1/roomCenter/inquiryRoomsByRoomOwnerId": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Rooms By Room Owner Id",
-        "operationId": "inquiry_rooms_by_room_owner_id_api_v1_roomCenter_inquiryRoomsByRoomOwnerId_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/roomCenter/history": {
       "get": {
         "tags": [
@@ -737,26 +718,6 @@
         "summary": "Update Room Name",
         "description": "Update room name - PROTECTED (requires room ownership)",
         "operationId": "update_room_name_api_v1_roomCenter_updateRoomName_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/updateRoomExtendInfo": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Update Room Extend Info",
-        "description": "Update room extended info - PROTECTED (requires room ownership)",
-        "operationId": "update_room_extend_info_api_v1_roomCenter_updateRoomExtendInfo_post",
         "responses": {
           "200": {
             "description": "Successful Response",

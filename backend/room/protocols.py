@@ -69,9 +69,6 @@ class RoomCenterCompatibility(Protocol):
         *,
         use_supervisor: bool,
     ) -> bool: ...
-    async def update_room_extend_info(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse: ...
 
 
 __all__ = ["A2ATaskReaderCompatibility", "RoomCenterCompatibility"]

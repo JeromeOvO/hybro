@@ -291,27 +291,6 @@ async def inquiry_active_runs(
     )
 
 
-@router.post("/roomCenter/inquiryRoomsByRoomOwnerId")
-async def inquiry_rooms_by_room_owner_id(
-    request: Request,
-    user: ClerkUser = Depends(get_current_user),
-    center: RoomCenterCompatibility = Depends(get_room_center),
-):
-    request_data = await request.json()
-    room_owner_id = request_data.get("room_owner_id")
-
-    # Verify user is requesting their own rooms
-    if room_owner_id != user.user_id:
-        raise HTTPException(
-            status_code=403, detail="You do not have permission to access these rooms"
-        )
-    room_center_request = RoomCenterRoomSettingRequest(room_owner_id=room_owner_id)
-    room_center_response = await center.inquiry_rooms_by_room_owner_id(
-        room_center_request
-    )
-    return room_center_response
-
-
 @router.get("/roomCenter/history", response_model=RoomHistoryResponse)
 async def get_room_history(
     user: ClerkUser = Depends(get_current_user),
@@ -528,28 +507,6 @@ async def update_room_name(
         room_id=room_id, room_name=room_name
     )
     room_center_response = await center.update_room_name(room_center_request)
-    return room_center_response
-
-
-@router.post("/roomCenter/updateRoomExtendInfo")
-async def update_room_extend_info(
-    request: Request,
-    user: ClerkUser = Depends(get_current_user),
-    store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
-):
-    """Update room extended info - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-    extend_info = request_data.get("extend_info")
-
-    # Verify user owns the room
-    await verify_room_ownership(room_id, user, store)
-
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id, extend_info=extend_info
-    )
-    room_center_response = await center.update_room_extend_info(room_center_request)
     return room_center_response
 
 
