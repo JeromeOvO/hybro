@@ -954,6 +954,7 @@
     "dependencies": [
       "get_current_user",
       "get_execution_engine",
+      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -971,7 +972,8 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
+      "common.protocols.RoomRouteReader",
+      "room.protocols.RoomCenterCompatibility"
     ]
   },
   {

@@ -233,6 +233,7 @@ def test_room_route_owner_protocol_covers_room_route_calls():
         "inquiry_active_runs",
         "update_room_agent_set",
         "update_room_name",
+        "update_room_default_mode",
         "update_room_extend_info",
     }
 

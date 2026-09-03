@@ -2448,10 +2448,16 @@ visibility. Per-turn explicit scopes (`mention`, `explicit_selection`,
 roster-derived scopes (`room_member`, `saved_group_member`) do.
 
 The resolved `execution_mode` is persisted in the user-message orchestration
-envelope. `mode=supervisor` is the only Supervisor gate; `room.use_supervisor` is
-retained only as a frontend default for newly composed messages. The v2 request
-fingerprint hashes `mode + agent_scope`, so retries with the same
-`client_request_id` must reuse exactly the same contract.
+envelope. `mode=supervisor` is the only Supervisor gate. Before handing a valid,
+authorized send attempt to Execution, the gateway compares its mode with
+`room.extend_info.use_supervisor`; when they differ, Room atomically sets only the
+nested mode flag. The write completes before any Execution acknowledgement and
+does not replace unrelated room metadata. A missing flag has the product-default
+meaning `supervisor`. Consequently, the most recent send attempt that changes the
+selector becomes the room default restored by the frontend after a refresh,
+including an idempotent replay or an attempt later rejected by Execution. The v2
+request fingerprint still hashes `mode + agent_scope`, so retries with the same
+`client_request_id` must reuse exactly the same execution contract.
 
 Supervisor planner actions are `DELEGATE`, `ASK_USER`, `PLATFORM_ANSWER`,
 `COMPLETE`, and `FAIL`. Provider aliases are normalized only at the provider

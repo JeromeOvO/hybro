@@ -690,7 +690,10 @@ def test_room_center_route_inventory_records_live_protocol_owners():
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
-            "supporting": {"common.protocols.RoomRouteReader"},
+            "supporting": {
+                "common.protocols.RoomRouteReader",
+                "room.protocols.RoomCenterCompatibility",
+            },
         },
         "suggest_agents": {
             "owner": "agent.protocols.AgentSuggestionService",

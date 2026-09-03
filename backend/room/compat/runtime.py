@@ -817,6 +817,19 @@ class RoomServices:
             )
         return self._room_setting_response_from_info(info)
 
+    async def update_room_default_mode(
+        self,
+        room_id: str,
+        *,
+        use_supervisor: bool,
+    ) -> bool:
+        return bool(
+            await self._require_facade().update_room_default_mode(
+                room_id,
+                use_supervisor=use_supervisor,
+            )
+        )
+
     async def update_room_extend_info(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
