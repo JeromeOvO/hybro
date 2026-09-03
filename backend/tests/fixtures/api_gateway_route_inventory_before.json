@@ -125,27 +125,6 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/agent/getAgentListWithConditions",
-    "methods": [
-      "POST"
-    ],
-    "name": "get_agent_list_with_conditions",
-    "endpoint_module": "api_gateway.routes.agent_routes",
-    "declared_owner": "api_gateway.routes.agent_routes",
-    "tags": [
-      "agent"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_agent_center",
-      "get_optional_user"
-    ],
-    "auth_dependencies": [
-      "get_optional_user"
-    ],
-    "include_in_schema": true
-  },
-  {
     "path": "/api/v1/agent/getAllActiveAgents",
     "methods": [
       "GET"
@@ -205,27 +184,6 @@
     ],
     "auth_dependencies": [
       "get_current_user_or_service"
-    ],
-    "include_in_schema": true
-  },
-  {
-    "path": "/api/v1/agent/updateAgent/{agent_id}",
-    "methods": [
-      "PUT"
-    ],
-    "name": "update_agent",
-    "endpoint_module": "api_gateway.routes.agent_routes",
-    "declared_owner": "api_gateway.routes.agent_routes",
-    "tags": [
-      "agent"
-    ],
-    "status_code": null,
-    "dependencies": [
-      "get_agent_center",
-      "get_current_user"
-    ],
-    "auth_dependencies": [
-      "get_current_user"
     ],
     "include_in_schema": true
   },

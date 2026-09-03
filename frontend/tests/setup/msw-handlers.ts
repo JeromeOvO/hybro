@@ -157,10 +157,6 @@ export const handlers = [
     return HttpResponse.json({ success: true, agents: [] })
   }),
 
-  http.put(`${agent}/updateAgent/:agentId`, async () => {
-    return HttpResponse.json({ success: true })
-  }),
-
   http.post(`${agent}/deleteAgent`, async () => {
     return HttpResponse.json({ success: true })
   }),
@@ -181,10 +177,6 @@ export const handlers = [
   }),
 
   http.get(`${agent}/getAllActiveAgents`, async () => {
-    return HttpResponse.json({ success: true, agents: [] })
-  }),
-
-  http.post(`${agent}/getAgentListWithConditions`, async () => {
     return HttpResponse.json({ success: true, agents: [] })
   }),
 

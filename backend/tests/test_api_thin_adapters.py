@@ -736,10 +736,8 @@ def test_route_owner_protocols_match_handler_calls():
             "get_agent_card_from_url_for_route",
             "get_agents_by_provider_for_route",
             "get_visible_agent_for_route",
-            "list_agents_with_conditions_for_route",
             "list_visible_agents_for_route",
             "register_agent_from_route",
-            "update_agent_settings_from_route",
         },
         AgentLivenessChecker: {
             "__call__",
@@ -857,9 +855,6 @@ def test_agent_routes_expose_typed_dependency_providers():
         agent.delete_agent: {
             "center": AgentCenterCompatibility,
         },
-        agent.update_agent: {
-            "center": AgentCenterCompatibility,
-        },
         agent.get_capability_issues: {
             "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
@@ -879,7 +874,6 @@ def test_agent_routes_expose_typed_dependency_providers():
         },
         agent.get_agent_list: {"center": AgentCenterCompatibility},
         agent.get_all_active_agents: {"center": AgentCenterCompatibility},
-        agent.get_agent_list_with_conditions: {"center": AgentCenterCompatibility},
     }
     missing: list[str] = []
     for handler, expected_params in route_expectations.items():
@@ -916,17 +910,9 @@ def test_agent_route_inventory_records_live_protocol_owners():
             {"agent.protocols.AgentLivenessChecker"},
         ),
         "get_agent_card_from_url": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent_list_with_conditions": (
-            "agent.protocols.AgentCenterCompatibility",
-            set(),
-        ),
         "get_all_active_agents": ("agent.protocols.AgentCenterCompatibility", set()),
         "get_agent_list": ("agent.protocols.AgentCenterCompatibility", set()),
         "register_agent": ("agent.protocols.AgentCenterCompatibility", set()),
-        "update_agent": (
-            "agent.protocols.AgentCenterCompatibility",
-            set(),
-        ),
         "get_capability_issues": (
             "agent.protocols.AgentCapabilityIssueStore",
             {"common.protocols.AgentRegistry"},

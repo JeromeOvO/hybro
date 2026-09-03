@@ -475,7 +475,6 @@ def mock_agent_center():
     mock.get_all_agents = AsyncMock()
     mock.get_all_active_agents = AsyncMock()
     mock.remove_agent = AsyncMock()
-    mock.update_agent = AsyncMock()
     mock.finalize_agent_response_for_route = MagicMock(
         side_effect=lambda response: response
     )
@@ -501,13 +500,6 @@ def mock_agent_center():
             AgentCenterRequest(agent_id=agent_id, provider_id=provider_id)
         )
 
-    async def update_agent_settings_from_route(
-        *, agent_id: str, provider_id: str, settings
-    ):
-        from models.request import AgentCenterRequest
-
-        return await mock.update_agent(AgentCenterRequest(agent_id=agent_id))
-
     async def get_agent_card_from_url_for_route(*, agent_url: str):
         from models.request import AgentCenterRequest
 
@@ -532,21 +524,11 @@ def mock_agent_center():
             return await mock.get_all_active_agents(request)
         return await mock.get_all_agents(request)
 
-    async def list_agents_with_conditions_for_route(*, user_id: str | None):
-        from models.request import AgentCenterRequest
-
-        return await mock.get_agents_with_conditions(
-            AgentCenterRequest(user_id=user_id)
-        )
-
     mock.register_agent_from_route = AsyncMock(side_effect=register_agent_from_route)
     mock.get_agents_by_provider_for_route = AsyncMock(
         side_effect=get_agents_by_provider_for_route
     )
     mock.delete_agent_from_route = AsyncMock(side_effect=delete_agent_from_route)
-    mock.update_agent_settings_from_route = AsyncMock(
-        side_effect=update_agent_settings_from_route
-    )
     mock.get_agent_card_from_url_for_route = AsyncMock(
         side_effect=get_agent_card_from_url_for_route
     )
@@ -555,9 +537,6 @@ def mock_agent_center():
     )
     mock.list_visible_agents_for_route = AsyncMock(
         side_effect=list_visible_agents_for_route
-    )
-    mock.list_agents_with_conditions_for_route = AsyncMock(
-        side_effect=list_agents_with_conditions_for_route
     )
     return mock
 

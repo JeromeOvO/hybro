@@ -2,16 +2,11 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-)
+from pydantic import BaseModel, Field, field_validator
 
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
-from models.agent import Agent, AgentStatus, coerce_legacy_agent_card
+from models.agent import Agent, coerce_legacy_agent_card
 from models.room import (
     Room,
     RoomAgentMessage,
@@ -176,16 +171,6 @@ class AgentCenterRequest(BaseModel):
     @classmethod
     def _coerce_agent_card(cls, value: Any) -> Any:
         return coerce_legacy_agent_card(value)
-
-
-class AgentSettingsUpdateRequest(BaseModel):
-    """Request model for updating agent settings (rate limits, status, visibility)."""
-
-    rate_limit_per_user_per_hour: int | None = None
-    rate_limit_system_per_hour: int | None = None
-    agent_status: AgentStatus | None = None
-    is_public: bool | None = None
-    model_config = ConfigDict(use_enum_values=True)
 
 
 class ChatRequest(BaseModel):

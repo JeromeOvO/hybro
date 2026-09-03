@@ -154,29 +154,6 @@
       "get_optional_user"
     ],
     "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "get_agent_list_with_conditions",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/getAgentListWithConditions",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_optional_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_optional_user"
-    ],
-    "methods": [
       "GET"
     ],
     "module": "api_gateway.routes.agent_routes",
@@ -232,30 +209,6 @@
     ],
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/registerAgent",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_agent_center",
-      "get_current_user"
-    ],
-    "methods": [
-      "PUT"
-    ],
-    "module": "api_gateway.routes.agent_routes",
-    "name": "update_agent",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "agent.protocols.AgentCenterCompatibility",
-    "path": "/api/v1/agent/updateAgent/{agent_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
