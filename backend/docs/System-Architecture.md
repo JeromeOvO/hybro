@@ -2387,8 +2387,8 @@ not import runtime implementation packages; they receive owner protocols through
 `APIGatewayDeps`.
 
 API Gateway route modules are thin HTTP adapters. Business dependencies for
-routes and API viewsets are assembled once during application startup into
-`APIGatewayDeps` and stored on `app.state.api_gateway_deps`; provider functions
+routes are assembled once during application startup into `APIGatewayDeps` and
+stored on `app.state.api_gateway_deps`; provider functions
 in `api_gateway.dependencies` expose those objects through FastAPI `Depends`;
 route-owned SSE streaming uses the `sse_transport` provider rather than an
 application-level manager dependency.

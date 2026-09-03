@@ -13,7 +13,6 @@ from api_gateway.dependencies import (
     get_local_agent_discovery,
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
-from api_gateway.viewsets.agent import AgentViewSet
 from common.auth import (
     ClerkUser,
     get_current_user,
@@ -28,8 +27,6 @@ from models.request import AgentSettingsUpdateRequest
 from models.response import AgentCenterResponse
 
 router = APIRouter()
-agent_viewset = AgentViewSet()
-router.include_router(agent_viewset.get_router())
 
 
 # ============= PROTECTED ENDPOINTS (Auth Required) =============

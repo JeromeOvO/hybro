@@ -78,6 +78,22 @@ def test_public_route_inventory_matches_pre_gateway_contract():
     ]
 
 
+def test_removed_agent_viewset_is_absent_from_checked_in_openapi():
+    openapi = _load_fixture("../../openapi.json")
+
+    assert "/api/v1/agents" not in openapi["paths"]
+    assert "/api/v1/agents/{item_id}" not in openapi["paths"]
+    schemas = openapi.get("components", {}).get("schemas", {})
+    assert {
+        "AgentCreate",
+        "AgentPatch",
+        "AgentResponse",
+        "AgentUpdate",
+        "PaginatedResponse_AgentResponse_",
+        "PaginationMeta",
+    }.isdisjoint(schemas)
+
+
 def test_security_hardening_contract_changes_are_explicitly_documented():
     from main import app
 

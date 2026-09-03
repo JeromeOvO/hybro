@@ -705,7 +705,6 @@ def make_api_gateway_deps(
             "execution_engine": execution_engine,
             "sse_store": mock_db_service,
             "sse_transport": mock_sse_transport,
-            "repository_provider": MagicMock(),
         }
         defaults.update(overrides)
         return APIGatewayDeps(**defaults)
