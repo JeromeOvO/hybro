@@ -75,6 +75,7 @@ from execution.orchestrator.a2a_runtime.ingress import (
     A2AObservationProcessor,
     RejectExternalIngressAuthenticator,
 )
+from execution.orchestrator.a2a_runtime.ledger import TERMINAL_AGENT_CALL_STATES
 from execution.orchestrator.a2a_runtime.models import (
     A2ADispatchReceipt,
     NormalizedA2AObservation,
@@ -631,24 +632,23 @@ def create_orchestrator_runtime(  # noqa: C901
                         raise KernelConflict(
                             "canceling Run has no cancellation command"
                         )
-                    session_stopped = await session_host.interrupt_run(run, command_id)
                     cancellation_results = await cancellation_coordinator.cancel_run(
                         run.run_id,
                         reason="cancellation_recovery",
                     )
+                    if any(
+                        state not in TERMINAL_AGENT_CALL_STATES
+                        for state in cancellation_results.values()
+                    ):
+                        raise RecoverableAdapterError(
+                            "local cancellation persistence remains pending"
+                        )
                     if supervisor_hitl_cancellation is not None:
                         cleanup = supervisor_hitl_cancellation(
                             run.request.user_message_id
                         )
                         if hasattr(cleanup, "__await__"):
                             await cleanup
-                    if not session_stopped or any(
-                        state == "cancel_pending"
-                        for state in cancellation_results.values()
-                    ):
-                        raise RecoverableAdapterError(
-                            "cancellation cleanup remains pending"
-                        )
                     await _run_with_recovery_lease(
                         run_store=run_store,
                         run_id=run.run_id,
@@ -657,6 +657,7 @@ def create_orchestrator_runtime(  # noqa: C901
                         lease_duration=recovery_lease,
                         renew_interval_seconds=recovery_renew_interval,
                     )
+                    await session_host.signal_run_cancellation(run, command_id)
                 else:
                     # This deterministic root is safe both before and after its
                     # original append; the publisher reads back the same room row.

@@ -661,7 +661,10 @@ def _terminal_closure_plan(
                 or payload.get("outcome") != expected_outcome
                 or type(payload.get("is_error")) is not bool
                 or payload.get("is_error") is not expected_is_error
-                or (expected_failure_reason is None and "failure_reason" in payload)
+                or (
+                    expected_failure_reason is None
+                    and payload.get("failure_reason") is not None
+                )
                 or (
                     expected_failure_reason is not None
                     and (

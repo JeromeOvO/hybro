@@ -574,9 +574,8 @@ async def test_router_full_cancellation_claims_run_before_descendant_cleanup():
         order.append("cancel_calls")
         return {"call-1": "canceled"}
 
-    async def interrupt_run(*_args):
-        order.append("interrupt")
-        return True
+    async def signal_run_cancellation(*_args):
+        order.append("signal")
 
     async def reconcile_cancellation(_run):
         order.append("reconcile")
@@ -600,7 +599,7 @@ async def test_router_full_cancellation_claims_run_before_descendant_cleanup():
         continuation=SimpleNamespace(canonical_hitl_control=AsyncMock()),
         cancellation_coordinator=SimpleNamespace(cancel_run=cancel_run),
         session_host=SimpleNamespace(
-            interrupt_run=interrupt_run,
+            signal_run_cancellation=signal_run_cancellation,
             reconcile_cancellation=reconcile_cancellation,
         ),
     )
@@ -609,10 +608,10 @@ async def test_router_full_cancellation_claims_run_before_descendant_cleanup():
 
     assert order == [
         "cas",
-        "interrupt",
         "cancel_calls",
         "hitl_response",
         "reconcile",
+        "signal",
     ]
 
 
@@ -668,9 +667,8 @@ async def test_router_direct_hitl_cancellation_aborts_the_owning_run():
         order.append("cancel_calls")
         return {"call-1": "canceled"}
 
-    async def interrupt_run(*_args):
-        order.append("interrupt")
-        return True
+    async def signal_run_cancellation(*_args):
+        order.append("signal")
 
     async def reconcile_cancellation(_run):
         order.append("reconcile")
@@ -693,7 +691,7 @@ async def test_router_direct_hitl_cancellation_aborts_the_owning_run():
         continuation=SimpleNamespace(canonical_hitl_control=AsyncMock()),
         cancellation_coordinator=SimpleNamespace(cancel_run=cancel_run),
         session_host=SimpleNamespace(
-            interrupt_run=interrupt_run,
+            signal_run_cancellation=signal_run_cancellation,
             reconcile_cancellation=reconcile_cancellation,
         ),
     )
@@ -707,10 +705,10 @@ async def test_router_direct_hitl_cancellation_aborts_the_owning_run():
     assert version == 1
     assert order == [
         "cas",
-        "interrupt",
         "cancel_calls",
         "hitl_response",
         "reconcile",
+        "signal",
     ]
 
 

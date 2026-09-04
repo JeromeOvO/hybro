@@ -95,14 +95,19 @@ describe('useRoomActions cancellation', () => {
     }, 'sse')
   })
 
-  it('preserves correlation and processing while reconciliation is pending', async () => {
-    mocks.cancelMessage.mockResolvedValue({
-      success: true,
-      message_id: 'user-1',
-      message: 'pending',
-      status: 'cancellation_pending',
-      outcome: 'pending_reconciliation',
-    })
+  it.each([
+    ['pending_reconciliation', 'cancellation_pending'],
+    ['canceled', 'canceled'],
+  ] as const)(
+    'preserves correlation and processing until terminal Run state for %s',
+    async (outcome, status) => {
+      mocks.cancelMessage.mockResolvedValue({
+        success: true,
+        message_id: 'user-1',
+        message: 'Stopping',
+        status,
+        outcome,
+      })
     const { hook, lifecycle, requestSnapshot, setCancelling } = setup()
 
     await expect(hook.result.current.cancelProcessing()).resolves.toBe(true)
@@ -117,11 +122,12 @@ describe('useRoomActions cancellation', () => {
     expect(requestSnapshot).toHaveBeenCalledOnce()
     expect(useMessageStore.getState().entities['agent-1'].taskStatus).toBe('working')
     expect(useMessageStore.getState().entities['user-1'].turnTerminalStatus).toBeUndefined()
-    expect(
-      useMessageStore.getState().entities['user-1'].processingStatusLogs
-        ?.map(entry => entry.message),
-    ).toContain('Stopping...')
-  })
+      expect(
+        useMessageStore.getState().entities['user-1'].processingStatusLogs
+          ?.map(entry => entry.message),
+      ).toContain('Stopping...')
+    },
+  )
 
   it('keeps an accepted Stop pending when best-effort reconciliation fails', async () => {
     mocks.cancelMessage.mockResolvedValue({

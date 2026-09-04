@@ -874,32 +874,37 @@ class DualRuntimeRouter:
                 reconciled=run.status != "canceling",
             )
         try:
-            session_stopped = await self._runtime.session_host.interrupt_run(
-                run, command_id
-            )
             results = await self._runtime.cancellation_coordinator.cancel_run(
                 run.run_id, reason=reason, deletion_id=deletion_id
             )
+            if any(
+                state not in TERMINAL_AGENT_CALL_STATES for state in results.values()
+            ):
+                return self._pending_cancellation_ack()
             await self._cancel_owned_hitl_for_run(run, reason=reason)
             if post_claim_cleanup is not None:
                 await post_claim_cleanup()
-            if not session_stopped or any(
-                state == "cancel_pending" for state in results.values()
-            ):
-                return self._pending_cancellation_ack()
             settled = await self._runtime.session_host.reconcile_cancellation(run)
         except Exception:
             logger.warning(
-                "orchestrator cancellation reconciliation remains pending",
+                "orchestrator local cancellation reconciliation remains pending",
                 extra={"run_id": run.run_id},
                 exc_info=True,
             )
             return self._pending_cancellation_ack()
-        if settled.run.status == "canceled":
-            return CancellationAck(
-                status="canceled", cancellation_applied=True, reconciled=True
+        if settled.run.status != "canceled":
+            return self._pending_cancellation_ack()
+        try:
+            await self._runtime.session_host.signal_run_cancellation(run, command_id)
+        except Exception:
+            logger.warning(
+                "orchestrator post-cancellation cleanup failed",
+                extra={"run_id": run.run_id},
+                exc_info=True,
             )
-        return self._pending_cancellation_ack()
+        return CancellationAck(
+            status="canceled", cancellation_applied=True, reconciled=True
+        )
 
     async def _request_run_cancellation(self, run: Any) -> Any:
         return await request_run_cancellation(self._runtime.run_store, run)
@@ -1013,13 +1018,14 @@ class DualRuntimeRouter:
             raise HITLConflictError(
                 f"Run cancellation lost to durable state {run.status}"
             )
-        session_stopped = await self._runtime.session_host.interrupt_run(
-            run, command_id
-        )
         results = await self._runtime.cancellation_coordinator.cancel_run(
             route.orchestration_run_id,
             reason="hitl_canceled",
         )
+        if any(state not in TERMINAL_AGENT_CALL_STATES for state in results.values()):
+            raise OrchestratorRoutingError(
+                "local Agent-call cancellation remains pending"
+            )
         abandoned = await self._runtime.hitl_port.abandon(
             interaction_id,
             call_record_id=route.call_record_id,
@@ -1035,10 +1041,8 @@ class DualRuntimeRouter:
             route=route,
             status="canceled",
         )
-        if session_stopped and not any(
-            state == "cancel_pending" for state in results.values()
-        ):
-            await self._runtime.session_host.reconcile_cancellation(run)
+        await self._runtime.session_host.reconcile_cancellation(run)
+        await self._runtime.session_host.signal_run_cancellation(run, command_id)
         return expected_version
 
     async def _cancel_owned_hitl_for_run(self, run: Any, *, reason: str) -> None:

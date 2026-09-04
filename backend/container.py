@@ -1566,6 +1566,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 terminal_status: str,
                 reason: str,
             ) -> bool:
+                from execution.orchestrator.a2a_runtime.ledger import (
+                    TERMINAL_AGENT_CALL_STATES,
+                )
                 from execution.orchestrator.lifecycle import SessionEvent
 
                 orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
@@ -1581,21 +1584,20 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     command_id = run.cancellation_command_id
                     if run.status != "canceling" or command_id is None:
                         return run.status == "canceled"
-                    session_stopped = (
-                        await orchestrator_runtime.session_host.interrupt_run(
-                            run, command_id
-                        )
-                    )
                     results = (
                         await orchestrator_runtime.cancellation_coordinator.cancel_run(
                             run_id, reason="canonical_hitl_canceled"
                         )
                     )
-                    if not session_stopped or any(
-                        state == "cancel_pending" for state in results.values()
+                    if any(
+                        state not in TERMINAL_AGENT_CALL_STATES
+                        for state in results.values()
                     ):
                         return True
                     await orchestrator_runtime.session_host.reconcile_cancellation(run)
+                    await orchestrator_runtime.session_host.signal_run_cancellation(
+                        run, command_id
+                    )
                     return True
 
                 async def emit(event_type, current, payload):

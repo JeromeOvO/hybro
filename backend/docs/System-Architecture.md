@@ -585,10 +585,11 @@ The process-local session signal only interrupts matching active work and verifi
 the durable postcondition; it never settles the root.
 
 Generic Run recovery repairs missing or wrong-kind dedicated cancellation rows
-before due selection. Its cancellation branch reuses descendant A2A/HITL cleanup
-and closes the root through the existing Kernel terminalizer only after cleanup
-is no longer pending. A crash at either side of the aggregate/dedicated-row write
-therefore leaves bounded recovery work. The active-room unique index includes
+before due selection. Its cancellation branch first terminalizes every local A2A
+call as `canceled`, then closes Tool entries, the active Turn, and the root through
+the existing Kernel terminalizer. Remote Agent acknowledgement is not a settlement
+precondition. A crash at either side of the aggregate/dedicated-row write therefore
+leaves bounded local recovery work. The active-room unique index includes
 `canceling`, and a focused `(updated_at, run_id)` partial index supports the repair
 scan. Active-Run reads expose `canceling` with the originating message identity so
 clients retain correlation until durable `canceled` settlement.
@@ -1328,9 +1329,12 @@ affected historical/active Turn (message owner, ordered public Tool inventory,
 and existing canonical events). Only after the complete plan succeeds may exact
 parked HITL ownership be abandoned, Tool/Turn ends be published, or aggregate
 state change; abandonment/store failure remains retryable and fail-closed.
-User cancellation first clears HITL ownership, signals a hosted provider/Tool
-session, and then runs the same child-closure/settlement state machine; it never
-stops at call-ledger cancellation. Canceled Runs persist one typed cause
+User cancellation first persists an absorbing local `canceled` winner for every
+nonterminal Agent call and closes owned HITL state, then runs the same
+Tool/Turn/root closure and settlement state machine before signaling hosted work.
+The API and terminal SSE therefore do not wait for remote Agent cancellation or
+provider cooperation. Late Agent observations remain audit evidence and cannot overwrite
+the canceled call, Tool, Turn, or Run. Canceled Runs persist one typed cause
 (`user_requested`, `room_closed`, `shutdown`, or `policy`) and settlement maps
 that stored cause rather than inferring it. Public text uses bounded
 stateful look-behind, provider-loop time/size/semantic coalescing, UTF-8-bounded

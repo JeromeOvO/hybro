@@ -41,7 +41,10 @@ export function useRoomActions(
       lifecycle.setCancelTimedOut(false)
       const cancellation = await cancelMessage(messageId, getToken)
 
-      if (cancellation.outcome === 'pending_reconciliation') {
+      if (
+        cancellation.outcome === 'pending_reconciliation'
+        || cancellation.outcome === 'canceled'
+      ) {
         const store = useMessageStore.getState()
         const userMessage = store.entities[messageId]
         ensureInitialProcessingStatusLog(roomId, userMessage)
@@ -80,30 +83,6 @@ export function useRoomActions(
           lifecycle.disarmCancelTimeout()
           useMessageStore.getState().removeMessage(lifecycle.placeholderId(roomId))
         }
-        return true
-      }
-
-      if (cancellation.outcome === 'canceled') {
-        const store = useMessageStore.getState()
-        store.cancelAllNonTerminal(roomId)
-        const userMessage = store.entities[messageId]
-        if (userMessage?.messageType === 'user') {
-          store.upsertMessage({
-            id: userMessage.id,
-            roomId,
-            messageType: 'user',
-            content: userMessage.content,
-            senderName: userMessage.senderName,
-            timestamp: userMessage.timestamp,
-            turnTerminalStatus: 'canceled',
-          }, 'sse')
-        }
-        lifecycle.markProcessingResolved()
-        lifecycle.stopProcessing()
-        lifecycle.disarmCancelTimeout()
-        setCancelling(false)
-        store.removeMessage(lifecycle.placeholderId(roomId))
-        await reconcileWithDb(roomId)
         return true
       }
 

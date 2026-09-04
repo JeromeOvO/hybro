@@ -94,7 +94,9 @@ class MongoOrchestratorRunStore:
         return MongoRunStoreResult("accepted", candidate)
 
     async def load(self, run_id: str) -> OrchestratorRunState | None:
-        value = await self.collection.find_one({"run_id": run_id})
+        value = await self.collection.find_one(
+            {"run_id": run_id, "schema_version": {"$in": [5, 6]}}
+        )
         if not value:
             return None
         run = _run_from_document(value)
@@ -225,7 +227,10 @@ class MongoOrchestratorRunStore:
     ) -> OrchestratorRunState | None:
         """Correlate an orchestrator Run by its originating room user message."""
         value = await self.collection.find_one(
-            {"request.user_message_id": user_message_id}
+            {
+                "request.user_message_id": user_message_id,
+                "schema_version": {"$in": [5, 6]},
+            }
         )
         return _run_from_document(value) if value else None
 
@@ -360,7 +365,12 @@ class MongoOrchestratorRunStore:
         if limit <= 0:
             return 0
         pipeline: list[dict[str, object]] = [
-            {"$match": {"status": "canceling"}},
+            {
+                "$match": {
+                    "schema_version": {"$in": [5, 6]},
+                    "status": "canceling",
+                }
+            },
             {"$sort": {"updated_at": 1, "run_id": 1}},
         ]
         if isinstance(self._recovery_collection_name, str):
@@ -603,6 +613,7 @@ class MongoOrchestratorRunStore:
                 if isinstance(value.get("run_id"), str)
             }
         never_leased_query: dict[str, object] = {
+            "schema_version": {"$in": [5, 6]},
             "status": {"$in": list(RECOVERY_ELIGIBLE_RUN_STATUSES)},
             "$and": [
                 {
@@ -651,7 +662,9 @@ class MongoOrchestratorRunStore:
         # Fetch dedicated-due aggregates independently; stale aggregate mirrors
         # are deliberately irrelevant to this branch.
         for run_id in sorted(dedicated_due_ids):
-            value = await self.collection.find_one({"run_id": run_id})
+            value = await self.collection.find_one(
+                {"run_id": run_id, "schema_version": {"$in": [5, 6]}}
+            )
             if value is None:
                 continue
             run = _run_from_document(value)

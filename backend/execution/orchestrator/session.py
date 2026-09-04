@@ -248,12 +248,27 @@ class RoomAgentSession:
         self._settled_task = None
         return await self._await_task()
 
+    async def signal_interrupt(self, run_id: str, cancellation_command_id: str) -> None:
+        """Signal matching live work without waiting for provider cooperation."""
+
+        if not self.owns_run(run_id):
+            return
+        self._signal.cancel()
+        run = await self.run_store.load(run_id)
+        if run is None:
+            raise SessionConflict("interrupted Run is missing")
+        if (
+            run.status not in {"canceling", "canceled"}
+            or run.cancellation_command_id != cancellation_command_id
+        ):
+            raise SessionConflict("invalid durable cancellation postcondition")
+
     async def interrupt(self, run_id: str, cancellation_command_id: str) -> bool:
-        """Signal matching live work after the durable cancellation CAS wins."""
+        """Signal matching live work and wait briefly for cooperative shutdown."""
 
         if not self.owns_run(run_id):
             return True
-        self._signal.cancel()
+        await self.signal_interrupt(run_id, cancellation_command_id)
         stopped = True
         task = self._task
         if task is not None and not task.done():
@@ -266,14 +281,6 @@ class RoomAgentSession:
                 # Durable recovery remains due; descendant cleanup must not be
                 # blocked by a provider task that ignores its signal.
                 stopped = False
-        run = await self.run_store.load(run_id)
-        if run is None:
-            raise SessionConflict("interrupted Run is missing")
-        if (
-            run.status not in {"canceling", "canceled"}
-            or run.cancellation_command_id != cancellation_command_id
-        ):
-            raise SessionConflict("invalid durable cancellation postcondition")
         return stopped
 
     async def abort(self) -> None:

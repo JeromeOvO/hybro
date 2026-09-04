@@ -464,12 +464,13 @@ Trace disclosure and scroll-follow state lives separately in
 The SSE reconnect surface also exposes `reconnectWithSnapshot` (gap-recovery
 reconnect with `?snapshot=1`).
 
-Cancellation is nonterminal while the backend Run is `canceling`. A
-`pending_reconciliation` Stop response keeps the processing message ID,
-`client_request_id`, placeholder, and `cancelling` flag intact and displays
-`Stopping...`; its timeout is warning-only. Nonterminal processing and child-task
-updates cannot clear that state. Durable terminal `processing_status` owns cleanup.
-After refresh, the existing room `active_runs` response restores `canceling` and
+Cancellation remains a pending UI operation until the root terminal lifecycle is
+folded. Both `pending_reconciliation` and `canceled` Stop responses keep the
+processing message ID, `client_request_id`, placeholder, and `cancelling` flag
+intact and display a disabled `Stopping...` spinner; the timeout is warning-only.
+The HTTP response and child-task updates cannot clear that state. Durable terminal
+`run_settled` (canonical) or `processing_status` (legacy) owns cleanup. After
+refresh, the existing room `active_runs` response restores `canceling` and
 hydrates both message and client-request correlation from the triggering user
 message; the canonical room-event snapshot schema is unchanged.
 

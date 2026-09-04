@@ -150,8 +150,16 @@ class RoomSessionHost:
     async def abort(self, room_id: str) -> None:
         await self._require_session(room_id).abort()
 
+    async def signal_run_cancellation(self, run, cancellation_command_id: str) -> None:
+        """Signal a matching hosted Run without waiting for it to stop."""
+
+        session = self._sessions.get(run.room_id)
+        if session is None or not session.owns_run(run.run_id):
+            return
+        await session.signal_interrupt(run.run_id, cancellation_command_id)
+
     async def interrupt_run(self, run, cancellation_command_id: str) -> bool:
-        """Signal a matching hosted Run without starting or settling work."""
+        """Signal a matching hosted Run and wait briefly for it to stop."""
 
         session = self._sessions.get(run.room_id)
         if session is None or not session.owns_run(run.run_id):

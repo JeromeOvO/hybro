@@ -23,6 +23,7 @@ from ..models import (
     ToolSuspension,
 )
 from ..ports import CancellationSignal, InvocationCheckpointReader
+from .cancellation import persist_local_cancellation
 from .errors import (
     AgentCardContractError,
     AmbiguousRemoteEffectError,
@@ -150,6 +151,7 @@ class A2AAgentToolRuntime:
             prepared.room_id, prepared.room_epoch
         ):
             raise A2AAcceptanceDenied("Room epoch is not active")
+        await self._require_run_accepts_new_call(invocation.run_id)
         parsed = AgentToolInput.model_validate(invocation.arguments)
         resource_refs = [ref.ref_id for ref in prepared.resource_manifest.refs]
         decision = await self.authorization.authorize(
@@ -230,7 +232,36 @@ class A2AAgentToolRuntime:
         persisted = await self.ledger.load(invocation.run_id, invocation.invocation_id)
         if persisted is None or _record_acceptance_material(persisted) != identity:
             raise A2AAcceptanceConflict("persisted acceptance does not correlate")
+        await self._fence_accepted_call(persisted)
         return persisted.acceptance
+
+    async def _require_run_accepts_new_call(self, run_id: str) -> None:
+        if await self._run_blocks_new_call(run_id):
+            raise A2AAcceptanceDenied("owning Run is not accepting Agent calls")
+
+    async def _fence_accepted_call(self, call: AgentCallLedgerRecord) -> None:
+        if not await self._run_blocks_new_call(call.run_id):
+            return
+        canceled = await persist_local_cancellation(
+            self.ledger,
+            call,
+            reason="owning Run was canceled during Agent-call acceptance",
+        )
+        raise A2AAcceptanceDenied(
+            f"owning Run stopped while Agent call became {canceled.state}"
+        )
+
+    async def _run_blocks_new_call(self, run_id: str) -> bool:
+        if self.run_store is None:
+            return False
+        run = await self.run_store.load(run_id)
+        return run is None or run.status in {
+            "canceling",
+            "completed",
+            "failed",
+            "canceled",
+            "budget_exhausted",
+        }
 
     async def execute(
         self,
