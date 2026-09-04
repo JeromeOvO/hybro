@@ -590,7 +590,9 @@ call as `canceled`, then closes Tool entries, the active Turn, and the root thro
 the existing Kernel terminalizer. Remote Agent acknowledgement is not a settlement
 precondition. A crash at either side of the aggregate/dedicated-row write therefore
 leaves bounded local recovery work. The active-room unique index includes
-`canceling`, and a focused `(updated_at, run_id)` partial index supports the repair
+`canceling`, and startup removes the obsolete pre-cancellation index name before
+ensuring the replacement definition so upgrades do not retain two overlapping
+unique indexes. A focused `(updated_at, run_id)` partial index supports the repair
 scan. Active-Run reads expose `canceling` with the originating message identity so
 clients retain correlation until durable `canceled` settlement.
 

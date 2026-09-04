@@ -10,6 +10,8 @@ ORCHESTRATOR_RUNS_COLLECTION = "orchestrator_runs"
 ORCHESTRATOR_RUN_EVENTS_COLLECTION = "orchestrator_run_events"
 ORCHESTRATOR_RECOVERY_LEASES_COLLECTION = "orchestrator_recovery_leases"
 
+OBSOLETE_ORCHESTRATOR_RUN_INDEXES = ("orchestrator_active_room_unique",)
+
 NON_TERMINAL_RUN_STATUSES = (
     "queued",
     "running",

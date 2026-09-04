@@ -3476,7 +3476,29 @@ async def _ensure_orchestrator_indexes(mongo: MongoDAL) -> None:
     from execution.orchestrator.a2a_runtime.persistence import (
         A2A_RUNTIME_COLLECTIONS,
     )
-    from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+    from execution.orchestrator.persistence import (
+        OBSOLETE_ORCHESTRATOR_RUN_INDEXES,
+        ORCHESTRATOR_COLLECTIONS,
+        ORCHESTRATOR_RUNS_COLLECTION,
+    )
+
+    runs = mongo.collection(ORCHESTRATOR_RUNS_COLLECTION)
+    existing_run_indexes = await runs.index_information()
+    for obsolete_name in OBSOLETE_ORCHESTRATOR_RUN_INDEXES:
+        if obsolete_name not in existing_run_indexes:
+            continue
+        try:
+            await runs.drop_index(obsolete_name)
+        except Exception as exc:
+            logger.error(
+                "Critical obsolete index removal failed for %s.%s",
+                ORCHESTRATOR_RUNS_COLLECTION,
+                obsolete_name,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                "Critical obsolete orchestrator Run index removal failed"
+            ) from exc
 
     for collection_definition in (*ORCHESTRATOR_COLLECTIONS, *A2A_RUNTIME_COLLECTIONS):
         for index in collection_definition.indexes:
