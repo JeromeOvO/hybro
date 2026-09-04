@@ -15,6 +15,7 @@ NON_TERMINAL_RUN_STATUSES = (
     "running",
     "waiting_external",
     "awaiting_user",
+    "canceling",
     "finalizing",
 )
 
@@ -27,6 +28,7 @@ RECOVERY_ELIGIBLE_RUN_STATUSES = (
     "running",
     "waiting_external",
     "awaiting_user",
+    "canceling",
     "finalizing",
 )
 
@@ -50,7 +52,7 @@ ORCHESTRATOR_RUN_INDEXES = (
         name="orchestrator_run_id_unique", keys=(("run_id", 1),), unique=True
     ),
     MongoIndexDefinition(
-        name="orchestrator_active_room_unique",
+        name="orchestrator_active_room_unique_canceling",
         keys=(("room_id", 1),),
         unique=True,
         partial_filter=MappingProxyType(
@@ -67,6 +69,11 @@ ORCHESTRATOR_RUN_INDEXES = (
         name="orchestrator_tool_call_id",
         keys=(("run_id", 1), ("tool_batches.entries.call_id", 1)),
         unique=True,
+    ),
+    MongoIndexDefinition(
+        name="orchestrator_canceling_recovery",
+        keys=(("updated_at", 1), ("run_id", 1)),
+        partial_filter=MappingProxyType({"status": "canceling"}),
     ),
     MongoIndexDefinition(
         name="orchestrator_recovery_due",

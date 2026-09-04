@@ -464,6 +464,15 @@ Trace disclosure and scroll-follow state lives separately in
 The SSE reconnect surface also exposes `reconnectWithSnapshot` (gap-recovery
 reconnect with `?snapshot=1`).
 
+Cancellation is nonterminal while the backend Run is `canceling`. A
+`pending_reconciliation` Stop response keeps the processing message ID,
+`client_request_id`, placeholder, and `cancelling` flag intact and displays
+`Stopping...`; its timeout is warning-only. Nonterminal processing and child-task
+updates cannot clear that state. Durable terminal `processing_status` owns cleanup.
+After refresh, the existing room `active_runs` response restores `canceling` and
+hydrates both message and client-request correlation from the triggering user
+message; the canonical room-event snapshot schema is unchanged.
+
 ### `src/stores/streaming-store/`
 
 The streaming store contains transient live artifact/text buffers. It is intentionally separate from `message-store`: streaming artifacts are displayed live, then cleared after DB reconcile or task checkpoint persistence.

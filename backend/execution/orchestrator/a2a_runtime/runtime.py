@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionSpec
 
+from ..control import ClientCancellationRequested
 from ..models import (
     AgentToolInput,
     TextPart,
@@ -418,6 +419,16 @@ class A2AAgentToolRuntime:
             return _suspension(invocation)
 
         command = _dispatch_command(record, materialized_resources=materialized)
+        if self.run_store is not None:
+            owning_run = await self.run_store.load(invocation.run_id)
+            if owning_run is None or owning_run.status in {
+                "canceling",
+                "completed",
+                "failed",
+                "canceled",
+                "budget_exhausted",
+            }:
+                raise ClientCancellationRequested("owning Run is not dispatchable")
         try:
             receipt, record = await self._run_fenced_dispatch(
                 record, command, signal=signal
@@ -1206,7 +1217,7 @@ class A2AAgentToolRuntime:
             )
 
             if cancellation_task in done or (signal is not None and signal.cancelled):
-                raise RecoverableEpochError("dispatch cancelled by client signal")
+                raise ClientCancellationRequested("dispatch cancelled by client signal")
 
             if not stop_heartbeat.is_set() and dispatch_task not in done:
                 raise RecoverableEpochError(

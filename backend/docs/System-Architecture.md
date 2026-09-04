@@ -573,6 +573,26 @@ uses native streamed tool calls; DeepSeek uses the named locally validated
 structured-action route. Gemini credentials remain only as fail-fast migration
 input and cannot select an adapter.
 
+User Stop for an admitted orchestrator Run first performs a versioned Run-store
+transition from `queued`, `running`, `waiting_external`, or `awaiting_user` to
+`canceling`. That transition persists a deterministic cancellation command,
+request time, cause, and cancellation-kind recovery claim before any session,
+A2A, or HITL interruption. While `canceling`, store and settlement guards allow
+only an idempotent `canceling` update or a matching `canceled` terminal exit;
+normal Kernel execution, late Tool observations, fresh/recovered A2A dispatch,
+and HITL answer/continuation delivery stop after observing this durable state.
+The process-local session signal only interrupts matching active work and verifies
+the durable postcondition; it never settles the root.
+
+Generic Run recovery repairs missing or wrong-kind dedicated cancellation rows
+before due selection. Its cancellation branch reuses descendant A2A/HITL cleanup
+and closes the root through the existing Kernel terminalizer only after cleanup
+is no longer pending. A crash at either side of the aggregate/dedicated-row write
+therefore leaves bounded recovery work. The active-room unique index includes
+`canceling`, and a focused `(updated_at, run_id)` partial index supports the repair
+scan. Active-Run reads expose `canceling` with the originating message identity so
+clients retain correlation until durable `canceled` settlement.
+
 Execution also defines a durable orchestration run-state foundation. The
 versioned `OrchestrationRunState` model, pure reducer transitions, and
 `OrchestrationRunStore` contract support optimistic state writes, append-only

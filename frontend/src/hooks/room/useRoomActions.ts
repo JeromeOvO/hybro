@@ -41,11 +41,51 @@ export function useRoomActions(
       lifecycle.setCancelTimedOut(false)
       const cancellation = await cancelMessage(messageId, getToken)
 
-      // Batch cancel all non-terminal tasks in the normalized store
-      useMessageStore.getState().cancelAllNonTerminal(roomId)
-
-      if (cancellation.status) {
+      if (cancellation.outcome === 'pending_reconciliation') {
         const store = useMessageStore.getState()
+        const userMessage = store.entities[messageId]
+        ensureInitialProcessingStatusLog(roomId, userMessage)
+        appendProcessingStatusLog(
+          roomId,
+          userMessage,
+          'Stopping...',
+          new Date().toISOString(),
+        )
+        lifecycle.armCancelTimeout(() => {
+          const cancelling = useRoomUiStore.getState().getRoomFlags(roomId).cancelling
+          if (cancelling) {
+            lifecycle.setCancelTimedOut(true)
+            banner.warning('Cancellation is taking longer than expected — the agent may still be stopping')
+          }
+        })
+        try {
+          await reconcileWithDb(roomId)
+        } catch (reconcileError) {
+          console.error('Failed to reconcile pending cancellation:', reconcileError)
+        }
+        try {
+          requestCanonicalSnapshot?.()
+        } catch (snapshotError) {
+          console.error('Failed to request cancellation snapshot:', snapshotError)
+        }
+        return true
+      }
+
+      if (cancellation.outcome === 'already_terminal') {
+        await reconcileWithDb(roomId)
+        setCancelling(false)
+        if (cancellation.status !== 'finalizing') {
+          lifecycle.markProcessingResolved()
+          lifecycle.stopProcessing()
+          lifecycle.disarmCancelTimeout()
+          useMessageStore.getState().removeMessage(lifecycle.placeholderId(roomId))
+        }
+        return true
+      }
+
+      if (cancellation.outcome === 'canceled') {
+        const store = useMessageStore.getState()
+        store.cancelAllNonTerminal(roomId)
         const userMessage = store.entities[messageId]
         if (userMessage?.messageType === 'user') {
           store.upsertMessage({
@@ -55,7 +95,7 @@ export function useRoomActions(
             content: userMessage.content,
             senderName: userMessage.senderName,
             timestamp: userMessage.timestamp,
-            turnTerminalStatus: cancellation.status,
+            turnTerminalStatus: 'canceled',
           }, 'sse')
         }
         lifecycle.markProcessingResolved()
@@ -67,25 +107,21 @@ export function useRoomActions(
         return true
       }
 
-      // Start cancellation timeout safety net (Gap 11)
-      lifecycle.armCancelTimeout(() => {
-        const cancelling = useRoomUiStore.getState().getRoomFlags(roomId).cancelling
-        if (cancelling) {
-          lifecycle.setCancelTimedOut(true)
-          setCancelling(false)
-          lifecycle.stopProcessing({ clearMessageId: false })
-          banner.warning('Cancellation timed out — the agent may still be running')
-        }
-      })
-
-      return true
+      throw new Error('Cancellation response did not include a recognized outcome')
     } catch (error) {
       console.error('Error cancelling message:', error)
       setCancelling(false)
       banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
-  }, [getToken, setCancelling, lifecycle, roomId, reconcileWithDb])
+  }, [
+    getToken,
+    setCancelling,
+    lifecycle,
+    roomId,
+    reconcileWithDb,
+    requestCanonicalSnapshot,
+  ])
 
   const respondToHitlBatch = useCallback(async (
     interactionId: string,

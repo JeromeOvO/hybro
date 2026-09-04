@@ -248,24 +248,45 @@ class RoomAgentSession:
         self._settled_task = None
         return await self._await_task()
 
+    async def interrupt(self, run_id: str, cancellation_command_id: str) -> bool:
+        """Signal matching live work after the durable cancellation CAS wins."""
+
+        if not self.owns_run(run_id):
+            return True
+        self._signal.cancel()
+        stopped = True
+        task = self._task
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._await_task()),
+                    timeout=5.0,
+                )
+            except TimeoutError:
+                # Durable recovery remains due; descendant cleanup must not be
+                # blocked by a provider task that ignores its signal.
+                stopped = False
+        run = await self.run_store.load(run_id)
+        if run is None:
+            raise SessionConflict("interrupted Run is missing")
+        if (
+            run.status not in {"canceling", "canceled"}
+            or run.cancellation_command_id != cancellation_command_id
+        ):
+            raise SessionConflict("invalid durable cancellation postcondition")
+        return stopped
+
     async def abort(self) -> None:
+        """Signal only after another owner has durably claimed cancellation."""
+
         if self._run_id is None:
             return
-        self._signal.cancel()
-        task = self._task
-        if task is None or (task.done() and self._settled_task is task):
-            run = await self._current_run()
-            if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
-                return
-            self._task = asyncio.create_task(
-                self.kernel.run(
-                    self._run_id,
-                    signal=self._signal,
-                    lifecycle=self._emit_kernel_event,
-                )
-            )
-            self._settled_task = None
-        await self._await_task()
+        run = await self._current_run()
+        if run.status == "canceled":
+            return
+        if run.status != "canceling" or run.cancellation_command_id is None:
+            raise SessionConflict("Run cancellation has not been durably claimed")
+        await self.interrupt(run.run_id, run.cancellation_command_id)
 
     async def wait_for_idle(self) -> None:
         await self._idle.wait()
@@ -349,8 +370,9 @@ class RoomAgentSession:
                     "budget_exhausted": "run_budget_exhausted",
                     "aborted": "run_canceled",
                     "failed": "run_failed",
-                }[result.outcome]
-                await self._emit(terminal_type, result.run, terminal=True)
+                }.get(result.outcome)
+                if terminal_type is not None:
+                    await self._emit(terminal_type, result.run, terminal=True)
                 if self._run_id is not None:
                     run = await self.run_store.load(self._run_id)
                     if run is not None:
