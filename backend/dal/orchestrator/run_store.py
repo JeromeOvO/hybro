@@ -407,6 +407,73 @@ class MongoOrchestratorRunStore:
                 break
         return repaired
 
+    async def schedule_recovery(
+        self,
+        run_id: str,
+        *,
+        expected_state_version: int,
+        next_attempt_at: datetime,
+    ) -> MongoRunStoreResult:
+        """Advance an unowned execution schedule, never steal a worker token.
+
+        Run admission is version-fenced; the separate schedule write is not a
+        cross-document transaction. Terminal/cancellation races stay excluded
+        by due selection and the dedicated row's kind/owner predicates.
+        """
+        run = await self.load(run_id)
+        if (
+            run is None
+            or run.state_version != expected_state_version
+            or run.status not in RECOVERY_ELIGIBLE_RUN_STATUSES
+            or run.status == "canceling"
+            or run.recovery_claim.kind != "execution"
+            or run.recovery_claim.owner_id is not None
+            or run.recovery_claim.quarantined_at is not None
+        ):
+            return MongoRunStoreResult("conflict", run)
+        due = run.recovery_claim.next_attempt_at
+        if due is None or due <= next_attempt_at:
+            return MongoRunStoreResult("replayed", run)
+        claim = run.recovery_claim.model_copy(
+            update={"next_attempt_at": next_attempt_at}
+        )
+        admitted = await self.cas_mutate(
+            run.model_copy(
+                update={"recovery_claim": claim, "state_version": run.state_version + 1}
+            ),
+            expected_state_version=run.state_version,
+            command_id=f"schedule-recovery:{run.state_version}:{next_attempt_at.isoformat()}",
+        )
+        if admitted.outcome not in {"accepted", "replayed"}:
+            return admitted
+        if self._recovery_collection is None:
+            self._recovery_claims[run_id] = claim
+        else:
+            # Compare the observed schedule too: a concurrently earlier wake
+            # must not be delayed, and a newly claimed worker must not be lost.
+            result = await self._recovery_collection.update_one(
+                {
+                    "run_id": run_id,
+                    "kind": "execution",
+                    "owner_id": None,
+                    "quarantined_at": None,
+                    "next_attempt_at": due,
+                },
+                {"$set": {"next_attempt_at": next_attempt_at}},
+            )
+            if int(getattr(result, "matched_count", 0)) != 1:
+                if await self._load_recovery_claim(run_id) is not None:
+                    return MongoRunStoreResult("conflict", await self.load(run_id))
+                try:
+                    await self._recovery_collection.insert_one(
+                        {"run_id": run_id, **claim.model_dump(mode="python")}
+                    )
+                except DuplicateKeyError:
+                    return MongoRunStoreResult("conflict", await self.load(run_id))
+        # Do not mirror an unowned snapshot after a worker acquires the row.
+        # load()/due selection always use the dedicated authority once present.
+        return MongoRunStoreResult("accepted", await self.load(run_id))
+
     async def claim_recovery(
         self,
         run_id: str,
@@ -654,8 +721,11 @@ class MongoOrchestratorRunStore:
             # A dedicated row created between scans owns scheduling. Skipping it
             # here is safe; if due it is selected by this or the next dedicated
             # scan, while a new backoff can never be bypassed.
-            if await self._load_recovery_claim(run.run_id) is not None:
-                continue
+            claim = await self._load_recovery_claim(run.run_id)
+            if claim is not None:
+                if self._recovery_collection is not None:
+                    continue
+                run = run.model_copy(update={"recovery_claim": claim})
             if _recovery_claim_is_due(run.recovery_claim, due_at=due_at):
                 due_by_id[run.run_id] = run
 

@@ -2,13 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from ..kernel import KernelLifecycle, OrchestratorKernel
+from ..kernel import KernelLifecycle, KernelRunResult, OrchestratorKernel, SystemClock
 from ..lifecycle import LifecycleEmitter, SessionEvent, SessionEventListener
 from ..models import OrchestratorRunState, ToolObservation
 from ..ports import CancellationSignal, OrchestratorRunStore
+from ..session import schedule_run_recovery
+from .errors import RecoverableAdapterError
+
+logger = logging.getLogger(__name__)
+
+
+async def await_recoverable(
+    work: Awaitable[KernelRunResult],
+    *,
+    schedule_recovery: Callable[[datetime], Awaitable[None]],
+    now: Callable[[], datetime],
+) -> KernelRunResult:
+    """Request the same early wake at every accepted Kernel re-entry boundary."""
+    try:
+        return await work
+    except RecoverableAdapterError:
+        try:
+            await schedule_recovery(now() + timedelta(seconds=5))
+        except Exception:
+            logger.exception("failed to schedule recoverable Run")
+        raise
+
 
 KernelFactory = Callable[
     [OrchestratorRunState], OrchestratorKernel | Awaitable[OrchestratorKernel]
@@ -26,12 +49,14 @@ class RunAddressedToolObservationSink:
         signal_factory: SignalFactory,
         lifecycle_factory: LifecycleFactory | None = None,
         listener: SessionEventListener | None = None,
+        clock: SystemClock | None = None,
     ) -> None:
         self.run_store = run_store
         self.kernel_factory = kernel_factory
         self.signal_factory = signal_factory
         self.lifecycle_factory = lifecycle_factory
         self.listener = listener
+        self.clock = clock or SystemClock()
 
     async def deliver(self, run_id: str, observation: ToolObservation) -> None:
         run = await self.run_store.load(run_id)
@@ -70,9 +95,15 @@ class RunAddressedToolObservationSink:
 
             lifecycle = emit_kernel_event
 
-        await kernel.observe_tool(
-            run_id,
-            observation,
-            signal=self.signal_factory(),
-            lifecycle=lifecycle,
+        await await_recoverable(
+            kernel.observe_tool(
+                run_id,
+                observation,
+                signal=self.signal_factory(),
+                lifecycle=lifecycle,
+            ),
+            schedule_recovery=lambda due: schedule_run_recovery(
+                self.run_store, run_id, next_attempt_at=due
+            ),
+            now=self.clock.now,
         )

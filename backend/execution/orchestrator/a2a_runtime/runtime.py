@@ -22,7 +22,12 @@ from ..models import (
     ToolResult,
     ToolSuspension,
 )
-from ..ports import CancellationSignal, InvocationCheckpointReader
+from ..ports import (
+    CancellationSignal,
+    InvalidParkedInteractionTarget,
+    InvocationCheckpointReader,
+    ParkedInteractionCloseout,
+)
 from .cancellation import persist_local_cancellation
 from .errors import (
     AgentCardContractError,
@@ -41,6 +46,7 @@ from .interaction_outcome import (
     park_call_for_interaction,
 )
 from .ledger import (
+    TERMINAL_AGENT_CALL_STATES,
     apply_observation,
     bind_authoritative_aliases,
     ownership_alias_keys,
@@ -75,6 +81,9 @@ class A2AAcceptanceConflict(RuntimeError):
 
 class A2AAcceptanceDenied(PermissionError):
     pass
+
+
+_PARKED_CLOSEOUT_REASON = "parked interaction abandoned by orchestrator closeout"
 
 
 class _RecoveryCancellationSignal:
@@ -746,9 +755,9 @@ class A2AAgentToolRuntime:
             await self.observations.mark_ledger_applied(observation.observation_id)
             # Model-first HITL: the interaction is presented to the model as a
             # tool_interaction message. User-facing hitl_request publication is
-            # deferred until the kernel escalates (request_user_input) or
-            # degrades; it must never fire here or the user is asked before the
-            # model has decided.
+            # deferred until the kernel explicitly executes
+            # surface_agent_questions; it must never fire here or the user is
+            # asked before the model has decided.
             return self._interaction_suspension(
                 invocation, persisted, observation, interaction
             )
@@ -1130,45 +1139,110 @@ class A2AAgentToolRuntime:
         call_record_id: str,
         interaction_id: str,
     ) -> None:
-        """Deferred user-facing publication of a parked interaction (F5 degrade).
+        """Publish a parked interaction selected by the explicit surface tool.
 
-        The initial/join park paths stay silent (model-first); the kernel calls
-        this only when it escalates the interaction to the user directly.
+        Initial and join park paths stay silent for the model-first decision;
+        only ``surface_agent_questions`` calls this user-facing boundary.
         """
         call = await self.ledger.load_by_record_id(call_record_id)
-        if call is None or call.pending_interaction_id != interaction_id:
-            return
+        if call is None:
+            raise InvalidParkedInteractionTarget(
+                "parked Agent-call ledger record is unavailable"
+            )
+        if call.pending_interaction_id != interaction_id or call.state not in {
+            "input_required",
+            "auth_required",
+        }:
+            raise InvalidParkedInteractionTarget(
+                "parked Agent-call interaction ownership changed"
+            )
         if self.hitl is None:
-            return
+            raise RecoverableCheckpointError("parked HITL port is unavailable")
         parked = await self.hitl.read_interaction(interaction_id)
         if parked is None:
-            return
-        interaction, _route, _fingerprint = parked
+            raise InvalidParkedInteractionTarget(
+                "parked HITL interaction is unavailable"
+            )
+        interaction, route, fingerprint = parked
+        if (
+            interaction.interaction_id != interaction_id
+            or route.call_record_id != call_record_id
+            or route.orchestration_run_id != call.run_id
+            or route.invocation_id != call.invocation_id
+            or route.interaction_revision != call.interaction_revision
+            or route.interaction_fingerprint != call.interaction_fingerprint
+            or fingerprint != call.interaction_fingerprint
+        ):
+            raise InvalidParkedInteractionTarget(
+                "parked HITL interaction ownership changed"
+            )
         # Durable user-visibility switch: only published interactions enter
         # the pending projection (REST/snapshot). Mark before emitting so the
-        # projection can never observe a half-published interaction.
-        await self.hitl.publish(interaction_id, call_record_id=call_record_id)
-        await self._emit_parked_hitl_events(call, interaction)
+        # event recovery can finish any missing questionnaire/control suffix.
+        try:
+            outcome = await self.hitl.publish(
+                interaction_id, call_record_id=call_record_id
+            )
+            if outcome in {"stale", "conflict", "absent"}:
+                raise InvalidParkedInteractionTarget(
+                    "parked HITL publication was rejected"
+                )
+            if outcome not in {"accepted", "replayed"}:
+                raise RecoverableCheckpointError(
+                    "parked HITL publication was not confirmed"
+                )
+            await self._emit_parked_hitl_events(call, interaction)
+        except (InvalidParkedInteractionTarget, RecoverableCheckpointError):
+            raise
+        except Exception as exc:
+            # Visibility and any prefix of the questionnaire/control events may
+            # already be durable. Preserve the caller's pending entry for replay.
+            raise RecoverableCheckpointError(
+                "parked HITL publication needs recovery"
+            ) from exc
 
     async def abandon_parked_interaction(
         self,
         *,
         call_record_id: str,
         interaction_id: str,
-        terminal_state: str,
-    ) -> None:
-        """Close exact parked ownership before Run terminalization.
+    ) -> ParkedInteractionCloseout:
+        """Terminalize an exact parked child and its HITL ownership.
 
-        The finalizer is idempotent (``absent`` is a valid replay), so the
-        kernel must call it even when the call ledger has already converged.
-        Store/finalizer failures propagate: closing the public Tool/Run while
-        the exact interaction may remain actionable would violate the terminal
-        winner invariant.
+        This local cancellation does not cancel the owning root Run. Missing
+        ledger ownership and nonterminal winners fail closed; an absent HITL
+        aggregate remains an idempotent replay outcome in the shared finalizer.
         """
+        call = await self.ledger.load_by_record_id(call_record_id)
+        if call is None:
+            raise RecoverableCheckpointError(
+                "parked Agent-call ledger record is unavailable"
+            )
+        if call.pending_interaction_id != interaction_id:
+            raise RecoverableCheckpointError(
+                "parked Agent-call interaction ownership changed"
+            )
+        if call.state not in TERMINAL_AGENT_CALL_STATES:
+            call = await persist_local_cancellation(
+                self.ledger,
+                call,
+                reason=_PARKED_CLOSEOUT_REASON,
+            )
+        if call.state not in TERMINAL_AGENT_CALL_STATES or call.terminal_result is None:
+            raise RecoverableCheckpointError(
+                "parked Agent call did not reach a terminal state"
+            )
         await self.terminal_finalizer.finalize_interaction(
             interaction_id=interaction_id,
             call_record_id=call_record_id,
-            terminal_state=terminal_state,
+            terminal_state=call.state,
+        )
+        return ParkedInteractionCloseout(
+            result=call.terminal_result,
+            local_cancellation_won=(
+                call.state == "canceled"
+                and call.cancellation_reason == _PARKED_CLOSEOUT_REASON
+            ),
         )
 
     async def _finalize_interaction_terminal(

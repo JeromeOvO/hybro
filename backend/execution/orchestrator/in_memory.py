@@ -155,6 +155,40 @@ class InMemoryOrchestratorRunStore:
             repaired += 1
         return repaired
 
+    async def schedule_recovery(
+        self,
+        run_id: str,
+        *,
+        expected_state_version: int,
+        next_attempt_at: datetime,
+    ) -> InMemoryRunStoreResult:
+        run = self.runs.get(run_id)
+        if (
+            run is None
+            or run.state_version != expected_state_version
+            or run.status not in RECOVERY_ELIGIBLE_RUN_STATUSES
+            or run.status == "canceling"
+            or run.recovery_claim.kind != "execution"
+            or run.recovery_claim.owner_id is not None
+            or run.recovery_claim.quarantined_at is not None
+        ):
+            return InMemoryRunStoreResult("conflict", run)
+        due = run.recovery_claim.next_attempt_at
+        if due is None or due <= next_attempt_at:
+            return InMemoryRunStoreResult("replayed", run)
+        return await self.cas_mutate(
+            run.model_copy(
+                update={
+                    "recovery_claim": run.recovery_claim.model_copy(
+                        update={"next_attempt_at": next_attempt_at}
+                    ),
+                    "state_version": run.state_version + 1,
+                }
+            ),
+            expected_state_version=run.state_version,
+            command_id=f"schedule-recovery:{run.state_version}:{next_attempt_at.isoformat()}",
+        )
+
     async def claim_recovery(
         self,
         run_id: str,

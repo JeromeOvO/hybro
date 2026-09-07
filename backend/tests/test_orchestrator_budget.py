@@ -73,3 +73,35 @@ def test_compaction_uses_its_own_budget_without_incrementing_normal_turns():
     assert compacted.model_turns_used == 0
     with pytest.raises(BudgetExceeded, match="compactions"):
         policy.before_model_turn(compacted, profile(), now=NOW, purpose="compaction")
+
+
+def test_kernel_reschedule_and_gateway_attempts_share_idempotent_retry_budget():
+    policy = BudgetPolicy()
+    configured = profile().model_copy(update={"max_provider_retries_total": 2})
+    current = policy.record_provider_attempt(
+        budget(), configured, attempt_key="turn:assistant:1", retry=False
+    )
+    current = policy.record_provider_attempt(
+        current, configured, attempt_key="turn:assistant:2", retry=True
+    )
+    current = policy.record_provider_attempt(
+        current, configured, attempt_key="kernel-retry:turn:assistant", retry=True
+    )
+    assert current.provider_retries_used == 2
+    assert policy.remaining_provider_retries(current, configured) == 0
+    # An ambiguous checkpoint acknowledgement replays the SAME reservation,
+    # even at the limit. The ensuing attempt 1 is not charged again.
+    assert (
+        policy.record_provider_attempt(
+            current, configured, attempt_key="kernel-retry:turn:assistant", retry=True
+        )
+        is current
+    )
+    current = policy.record_provider_attempt(
+        current, configured, attempt_key="next:assistant-next:1", retry=False
+    )
+    assert current.provider_retries_used == 2
+    with pytest.raises(BudgetExceeded, match="provider_retries"):
+        policy.record_provider_attempt(
+            current, configured, attempt_key="next:assistant-next:2", retry=True
+        )

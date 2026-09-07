@@ -662,3 +662,43 @@ async def test_shutdown_cancels_tasks_without_persisting_terminal_state(catalog)
     assert run.status == "running"
     assert run.recovery_claim.next_attempt_at is not None
     assert run.recovery_claim.next_attempt_at < run.budget.deadline_at
+
+
+@pytest.mark.parametrize("failure", ["recoverable", "bug", "cancellation"])
+async def test_host_only_schedules_typed_recoverable_failures(catalog, failure):
+    from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
+
+    error = {
+        "recoverable": RecoverableCheckpointError("publication uncertain"),
+        "bug": RuntimeError("programming defect"),
+        "cancellation": asyncio.CancelledError(),
+    }[failure]
+
+    class FailingModel:
+        async def stream_turn(self, request, *, signal):
+            raise error
+            yield  # pragma: no cover - iterator contract
+
+    store = InMemoryOrchestratorRunStore()
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "create-1", activated_at=NOW)
+    host = _host(run_store=store, epoch_store=epochs, runtime=FailingModel())
+    await host.create_session(
+        room_id="room-1",
+        profile=profile(),
+        candidate_scope=make_run().candidate_scope,
+        requesting_subject_id="user-1",
+        frozen_catalog=catalog,
+    )
+    with pytest.raises(type(error)):
+        await host.prompt("room-1", user_message(), client_request_id="request-1")
+    current = next(iter(store.runs.values()))
+    assert current.status == "running"
+    if failure == "recoverable":
+        assert (
+            current.created_at
+            < current.recovery_claim.next_attempt_at
+            < current.budget.deadline_at
+        )
+    else:
+        assert current.recovery_claim.next_attempt_at == current.budget.deadline_at

@@ -1002,6 +1002,55 @@ an identity-less suspension. Presentation IDs, Agent interaction aliases, finger
 and question IDs never enter public lifecycle/SSE/snapshot/REST payloads. Local tool
 declaration rejection also stays within the same internal turn while any parent
 Tool row is suspended; only a complete terminal Tool inventory can close the turn.
+An Assistant response with tool calls is commentary and executes its declared
+batch, including recovery after the Assistant/batch checkpoint but before its
+commentary `message_end`. Recovery uses only the exact active Assistant and
+requires agreement with durable public text; it neither retries that successful
+model invocation nor replaces a conflicting terminal event. An Assistant response
+without tool calls is always final. Before that
+final `message_end`, the kernel asks the A2A runtime to terminalize every unused
+exact parked child call and abandon its interaction. The runtime returns the
+durable terminal winner; the kernel records `interaction_abandoned` only when
+its local cancellation won, otherwise it preserves the concurrent completed or
+failed ToolResult. After checkpointing and publishing one terminal event per
+Tool and flushing all ToolResults, it closes every affected historical Turn
+before the final message, then closes the current Turn with that final Assistant
+message and only the current Turn's complete Tool inventory. Only an
+explicit `surface_agent_questions` call publishes parked questions or moves the
+Run to `awaiting_user`. Publication requires the exact parked ledger/HITL owner
+and an accepted or replayed visibility write. Each Assistant batch can accept only
+one surface entry, including on replay; rejected declarations do not consume that
+slot. Missing, changed, or explicitly rejected targets become ordinary Tool errors
+without opening a public surface Tool. The exact target is checkpointed before
+publication. Ambiguous visibility or event-append failures propagate as
+`RecoverableCheckpointError`; recovery retries the same pending entry and stable
+HITL identities, completing missing questionnaire/control events before continuing.
+REST visibility can precede that acknowledgement. An answer may be durably captured
+in this window, but the continuation coordinator gates response/resume projection
+and remote dispatch on the exact surface entry leaving `pending`. The Kernel remains
+the only publication owner. After its recovery completes the request/control prefix,
+the existing continuation recovery applies the recorded answer without another user
+submission; answer capture does not invalidate publication replay.
+After one surfaced child completes, its ToolResult and surface Tool close. Any
+remaining visible input keeps the Run `awaiting_user`, even while remote siblings
+continue. Without visible input, remote children retain `waiting_external`; only
+remaining private presentations return to the model decision loop.
+Provider failures use the generic bounded retry/failure
+path and never substitute automatic HITL. Kernel reschedules and Gateway-internal
+attempts share the persisted `BudgetState` provider retry budget. The first
+attempt identity is checkpointed before provider I/O; a reschedule reserves one
+idempotent `provider_attempt_keys` entry keyed by the preceding unsuccessful
+invocation. Closure recovery and the next model-call boundary replay that same
+reservation even after active Turn pointers were cleared. A committed Assistant
+marks a successful invocation, so its next model turn is not charged as a retry.
+Context overflow instead records an attempt-correlated private notice and reserves
+one independent compaction allowance before closing the failed Turn. Recovery
+finishes that same closure/compaction checkpoint without double charging or treating
+the overflow as a provider retry; zero provider retries still permits compaction.
+The Gateway is resumed only after its attempt accounting checkpoint. Exhausted
+Kernel provider retries fail the Run without waiting for its deadline or exposing
+parked HITL. An interrupted admitted invocation is conservatively treated as
+unsuccessful because recovery cannot prove whether provider I/O occurred.
 Model-driven replies
 use `A2AModelReplyCommand` on the same task/context (durable `command_id` as the
 remote message id), bounded per interaction fingerprint and by a run-level
@@ -1307,7 +1356,25 @@ shapes. Canonical Assistant IDs and internal-turn
 IDs are checkpointed before provider I/O. Recovery restores/adopts any missing
 `turn_start` and `message_start` parents before terminal children, and live Runs
 schedule generic recovery only at their durable deadline/watchdog boundary so a
-normal recovery tick cannot preempt a healthy provider stream. Recovery lease
+normal recovery tick cannot preempt a healthy provider stream. A
+`RecoverableAdapterError` from hosted prompt/continuation/observation work or the
+run-addressed observation sink requests the same early recovery wake after five
+seconds, even without a live session. This includes an observation already
+checkpointed before a partial HITL publication leaves the Run `running` with a
+pending surface; generic Run recovery completes that publication without waiting
+for inbox redelivery or the deadline. Ordinary programming failures and cancellation
+are propagated without rescheduling.
+`OrchestratorRunStore.schedule_recovery(run_id, expected_state_version,
+next_attempt_at)` only advances an unowned execution schedule. Run admission uses
+version CAS; the independent recovery row uses kind, owner, quarantine, and observed
+due-time predicates plus unique insertion. It never replaces a claimed worker or
+delays an earlier wake. This is not a cross-document transaction: terminal and
+cancellation races remain excluded by authoritative due selection and existing
+worker/cancellation fencing. Early scheduling is best-effort: failure of the
+dedicated lease write after aggregate admission is logged and the original
+recoverable error is preserved. If a dedicated row already exists, its older due
+time remains authoritative; the five-second wake is not guaranteed across that
+write failure. Recovery lease
 heartbeats persist in `orchestrator_recovery_leases` outside the execution
 aggregate version, so renewal cannot conflict with a slow Kernel CAS. The
 unique lease row atomically fences claim, renewal, and release by the
@@ -2495,15 +2562,26 @@ Canonical recovery claims use instance-and-attempt-unique owner tokens. Kernel w
 renews the token-fenced lease periodically; lifecycle publication and release both
 re-read the durable claim, so a replaced worker cannot continue or clear another
 worker's lease. On restart, the latest semantic parent is recovered from durable
-`room_events`, including HITL control boundaries. Terminal recovery sweeps every
-incomplete durable Tool batch even when the active-Turn pointer is missing. It abandons
-each exact parked interaction once, attributes every public Tool end to the batch's
-owning internal Turn, flushes all ToolResult batches, closes each affected Turn with
-its latest durable Assistant message and full public Tool inventory, and then proves
-the descendant invariant again before terminal CAS. Accepted Tool terminals gate both
-successful and unsuccessful Run settlement until their public end is durable. HITL
-terminal reconciliation persists every member response and clears aggregate ownership
-before invoking the lifecycle-family-specific Run terminalizer.
+`room_events`, including HITL control boundaries. A persisted no-tool finalization
+candidate resumes successful child closeout rather than being reclassified as an
+aborted attempt; recovery on either side of its final `message_end` retains the full
+Tool inventory and stable public event identities. Successful and unsuccessful
+terminal recovery sweep every incomplete durable Tool batch even when an older
+active-Turn pointer is missing. They idempotently converge each exact parked
+interaction to durable terminal state, retain any concurrent durable terminal child
+winner, and attribute every public Tool end
+to the batch's owning internal Turn, flush all ToolResult batches, and close each
+affected Turn with its own message and Tool inventory. Successful closeout orders
+historical Turn ends before the current final message/Turn end. Missing or nonterminal
+Agent-call ledger ownership fails closed, while an already-absent HITL aggregate is an
+idempotent closeout result. If HITL abandonment fails after the child terminal CAS,
+replay reads the same terminal ledger winner and retries only exact interaction
+closure; it does not transition the child again. Generic provider failure closes
+parked children and HITL ownership before scheduling its bounded retry. Accepted Tool terminals gate both successful and
+unsuccessful Run
+settlement until their public end is durable. HITL terminal reconciliation persists
+every member response and clears aggregate ownership before invoking the
+lifecycle-family-specific Run terminalizer.
 
 Canonical Agent cards carry only `run_id + opaque_public_call_id`. Authenticated room
 owners may fetch full private Tool output at

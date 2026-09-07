@@ -759,6 +759,24 @@ class A2AContinuationCoordinator:
         call: AgentCallLedgerRecord,
         answer_record: DurableHITLAnswerRecord,
     ) -> None:
+        if self.run_store is not None:
+            run = await self.run_store.load(call.run_id)
+            if (
+                run is not None
+                and run.lifecycle_family == "canonical"
+                and any(
+                    entry.surface_for_call_record_id == call.call_record_id
+                    and entry.interaction_id == answer_record.interaction_id
+                    and entry.state == "pending"
+                    for batch in run.tool_batches
+                    for entry in batch.entries
+                )
+            ):
+                # Answers may be captured from REST visibility before the full
+                # request/control prefix is acknowledged. Only its existing
+                # Kernel owner may finish publication; keep the exact parked
+                # ledger state for automatic continuation recovery meanwhile.
+                raise RecoverableCheckpointError("surface publication is pending")
         stored = await self.hitl.read_interaction(answer_record.interaction_id)
         if stored is None:
             raise RecoverableCheckpointError(
@@ -1215,9 +1233,10 @@ class A2AContinuationCoordinator:
                 )
         # A distinct continuation challenge re-enters model-first decision.
         # Keep it private here: the exact observation is delivered back to the
-        # kernel, which assigns a fresh presentation identity and decides
-        # whether to join, surface, or degrade. Publishing here would bypass
-        # the Supervisor and reintroduce the late/generic questionnaire race.
+        # kernel, which assigns a fresh presentation identity. The Supervisor
+        # can continue the Agent, explicitly forward its questions, or finish
+        # without tools after closing unused interactions. Publishing here
+        # would bypass that decision.
 
     async def _mark_parked_terminal_outcome(
         self,

@@ -5,6 +5,8 @@ import { ApiError } from '@/lib/api-client'
 import { banner } from '@/components/ui/banner'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore } from '@/stores/message-store'
+import { useTurnStore } from '@/stores/turn-store'
+import { selectPendingHitls } from '@/lib/selectors/select-hitl'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import {
   appendProcessingStatusLog,
@@ -161,6 +163,9 @@ export function useRoomActions(
       releaseSubmissionFence()
     }
 
+    // MessageStore and the lifecycle may now belong to a different room.
+    if (useMessageStore.getState().roomId !== roomId) return
+
     const applied = response.status === 'applied' || response.status === 'responded'
     for (const entity of entities) {
       const requestId = entity.hitlRequestId
@@ -185,14 +190,56 @@ export function useRoomActions(
 
     if (applied) {
       const first = entities[0]
-      lifecycle.resetPlaceholder()
-      lifecycle.resetProcessingResolved()
-      lifecycle.setPendingRunEventAck(clientRequestId ?? first?.clientRequestId ?? null)
+      const resumeClientRequestId = clientRequestId ?? first?.clientRequestId
       const processingUserEntity = findProcessingStatusUserEntity(roomId, {
         relatedMessageId: first?.relatedMessageId,
-        clientRequestId: clientRequestId ?? first?.clientRequestId,
+        clientRequestId: resumeClientRequestId,
         beforeTimestamp: first?.timestamp,
       })
+      const currentMessageId = lifecycle.getMessageId()
+      const currentClientRequestId = lifecycle.getClientRequestId()
+      const pendingAck = lifecycle.getPendingRunEventAck()
+      if (
+        (currentMessageId && currentMessageId !== processingUserEntity?.id)
+        || (currentClientRequestId && currentClientRequestId !== resumeClientRequestId)
+        || (pendingAck && pendingAck !== resumeClientRequestId)
+        || (first?.clientRequestId && first.clientRequestId !== resumeClientRequestId)
+        || useRoomUiStore.getState().getRoomFlags(roomId).cancelling
+      ) return
+
+      // The HTTP request waits for continuation: newer SSE may already have
+      // settled this exact root or paused it at a subsequent questionnaire.
+      // HITL itself marks processing resolved, so that flag cannot fence ACKs.
+      const turns = useTurnStore.getState().rooms[roomId]?.turns
+      const turn = Object.values(turns ?? {}).find(candidate => (
+        (candidate.userMessageId === processingUserEntity?.id
+          && candidate.clientRequestId === resumeClientRequestId)
+        || candidate.hitlInteractions.some(item => item.interactionId === interactionId)
+      ))
+      if (turn) {
+        const interaction = turn.hitlInteractions.find(item => item.interactionId === interactionId)
+        if (
+          turn.userMessageId !== processingUserEntity?.id
+          || turn.clientRequestId !== resumeClientRequestId
+          || !['active', 'awaiting_input'].includes(turn.state)
+          || !interaction
+          || !['awaiting_input', 'resumed'].includes(interaction.state)
+          || (turn.activeInteractionId && turn.activeInteractionId !== interactionId)
+          || turn.hitlInteractions.some(item => (
+            item.interactionId !== interactionId && item.state === 'awaiting_input'
+          ))
+        ) return
+      } else if (processingUserEntity?.turnTerminalStatus) {
+        return
+      }
+      const latestStore = useMessageStore.getState()
+      if (selectPendingHitls(roomId, latestStore.entities, latestStore.orderedIds).some(hitl => (
+        hitl.interactionId !== interactionId && !hitl.isAnswered
+      ))) return
+
+      lifecycle.resetPlaceholder()
+      lifecycle.resetProcessingResolved()
+      lifecycle.setPendingRunEventAck(resumeClientRequestId ?? null)
       store.removeMessage(lifecycle.placeholderId(roomId))
       ensureInitialProcessingStatusLog(roomId, processingUserEntity)
       appendProcessingStatusLog(
@@ -234,9 +281,11 @@ export function useRoomActions(
     if (!interactionId || !target?.hitlInteractionVersion) {
       throw new Error('The interaction changed before it could be canceled.')
     }
-    const { cancelHitl } = await import('@/lib/api/hitl')
+    setCancelling(true)
+    lifecycle.setCancelTimedOut(false)
     let result
     try {
+      const { cancelHitl } = await import('@/lib/api/hitl')
       result = await cancelHitl(
         roomId,
         interactionId,
@@ -246,8 +295,13 @@ export function useRoomActions(
       )
     } catch (error) {
       if (error instanceof ApiError && (error.status === 404 || error.status === 409 || error.status === 410)) {
-        await reconcileWithDb(roomId)
+        try {
+          await reconcileWithDb(roomId)
+        } catch (reconcileError) {
+          console.error('Failed to reconcile rejected HITL cancellation:', reconcileError)
+        }
       }
+      setCancelling(false)
       throw error
     }
 
@@ -275,7 +329,26 @@ export function useRoomActions(
         hitlRequestIndex.current.delete(entity.hitlRequestId)
       }
     }
-  }, [getToken, hitlRequestIndex, reconcileWithDb, roomId])
+
+    try {
+      await reconcileWithDb(roomId)
+    } catch (reconcileError) {
+      console.error('Failed to reconcile accepted HITL cancellation:', reconcileError)
+    }
+    try {
+      requestCanonicalSnapshot?.()
+    } catch (snapshotError) {
+      console.error('Failed to request HITL cancellation snapshot:', snapshotError)
+    }
+  }, [
+    getToken,
+    hitlRequestIndex,
+    lifecycle,
+    reconcileWithDb,
+    requestCanonicalSnapshot,
+    roomId,
+    setCancelling,
+  ])
 
   // Manually refresh messages — reconciles from DB and re-overlays any pending HITL questions
   // that may have been missed by SSE (e.g. during the "Applying your answers" transition).
