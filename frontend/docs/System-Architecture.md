@@ -902,7 +902,14 @@ without a manual "Check status" click; that button remains only for
 `delivery_uncertain`. When both an applying recovery and a new open prompt exist,
 the composer prefers the open prompt. The client submits the complete answer
 inventory to `POST /rooms/{room_id}/hitl/respond-batch`, preserving
-`client_request_id` for run correlation. When several questions share one A2A
+`client_request_id` for run correlation. A successful answer acknowledgement
+confirms the submitted answers, but resumes processing only if the current exact
+User/client root and interaction still permit it. Terminal canonical state, a
+subsequent waiting interaction, pending cancellation, or a newer processing root
+cannot be overwritten by a late HTTP acknowledgement; an acknowledgement for a
+room already left cannot mutate the newly selected room. Legacy roots retain
+their existing resume path, subject to current-root and terminal-state checks.
+When several questions share one A2A
 Agent `message_id`, each question receives a deterministic interaction-and-request-scoped
 MessageStore identity while retaining the wire message identity separately. This is
 also mandatory for singleton interactions: sequential one-question rounds from one
