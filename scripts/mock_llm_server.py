@@ -82,6 +82,81 @@ def collect_conversation_text(messages: list[dict]) -> str:
     return " ".join(chunks).lower()
 
 
+def _supervisor_observations(
+    messages: list[dict], agent_tools: list[str]
+) -> tuple[list[str], bool]:
+    """Read canonical private observations, not user text or surface results.
+
+    Transcript conversion folds all interaction rounds and the eventual terminal
+    result into one tool message. Only the latest request per call is pending;
+    a terminal observation supersedes every historical request for that call.
+    """
+    call_names = {
+        call["id"]: call.get("function", {}).get("name")
+        for message in messages
+        if message.get("role") == "assistant"
+        for call in message.get("tool_calls", [])
+    }
+    pending: dict[str, str] = {}
+    completed = False
+    marker = "[agent input request; answer it from existing evidence, or ask the user]"
+    for message in messages:
+        call_id = message.get("tool_call_id")
+        if message.get("role") != "tool" or call_names.get(call_id) not in agent_tools:
+            continue
+        lines = _message_content_text(message.get("content")).splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith("[agent observation:"):
+                pending.pop(call_id, None)
+                completed |= line == (
+                    "[agent observation: verified completed result; usable as evidence]"
+                )
+            elif line == marker and index + 1 < len(lines):
+                try:
+                    observation = json.loads(lines[index + 1])
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(observation, dict):
+                    continue
+                presentation_id = observation.get("presentation_id")
+                if isinstance(presentation_id, str) and presentation_id:
+                    pending[call_id] = presentation_id
+    return list(pending.values()), completed
+
+
+def _surface_call(pending: list[str], tools: list[dict]) -> dict | None:
+    surface_tool = next(
+        (
+            tool["function"]
+            for tool in tools
+            if tool.get("function", {}).get("name") == "surface_agent_questions"
+        ),
+        None,
+    )
+    if surface_tool is None:
+        return None
+    target_schema = (
+        surface_tool["parameters"].get("properties", {}).get("presentation_id")
+    )
+    for presentation_id in pending:
+        if target_schema is not None and presentation_id not in target_schema["enum"]:
+            continue
+        # The singleton schema forbids arguments; multiple targets require
+        # the exact private presentation ID from the tool observation.
+        arguments = (
+            {} if target_schema is None else {"presentation_id": presentation_id}
+        )
+        return {
+            "id": f"call_surface_{uuid.uuid4().hex[:8]}",
+            "type": "function",
+            "function": {
+                "name": "surface_agent_questions",
+                "arguments": json.dumps(arguments),
+            },
+        }
+    return None
+
+
 class MockLLMHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -189,8 +264,15 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             }
             return None, json.dumps(data), "stop"
 
-        # Case 1: Supervisor Turn 2 (We already received agent tool results)
-        if has_tool_results and any(t and t.startswith("agent_") for t in tool_names):
+        # Case 1: Supervisor continuation (private questions precede synthesis).
+        agent_tools = [name for name in tool_names if name and name.startswith("agent_")]
+        if has_tool_results and agent_tools:
+            pending, completed = _supervisor_observations(messages, agent_tools)
+            surface_call = _surface_call(pending, tools)
+            if surface_call is not None:
+                return [surface_call], "", "tool_calls"
+            if pending or not completed:
+                return None, "No completed agent result is available yet.", "stop"
             synthesis_text = (
                 "### Final Synthesized Trip Plan & Itinerary\n\n"
                 "Here is the complete trip plan compiled from our specialist agents:\n\n"
@@ -204,7 +286,6 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             return None, synthesis_text, "stop"
 
         # Case 2: Supervisor Turn 1 (Has agent delegation tools like agent_*)
-        agent_tools = [name for name in tool_names if name and name.startswith("agent_")]
         if agent_tools and not has_tool_results:
             selected_tool = agent_tools[0]
             call_id = f"call_{uuid.uuid4().hex[:12]}"
