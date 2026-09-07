@@ -27,6 +27,7 @@ import {
 } from '@/lib/turn-lifecycle/contract'
 import { useMessageStore } from '@/stores/message-store'
 import { useTurnStore } from '@/stores/turn-store'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { useTraceStore } from '@/stores/trace-store'
 import type { ArtifactData, MessageEntity } from '@/stores/message-store/types'
@@ -347,7 +348,7 @@ function reconcileCanonicalSnapshotProcessingGuard(
   roomId: string,
   lifecycle: ProcessingLifecycle,
 ): void {
-  if (!lifecycle.isSendGuardActive()) return
+  // HITL pauses clear the send guard but retain the exact owning root.
   const userMessageId = lifecycle.getMessageId()
   const clientRequestId = lifecycle.getClientRequestId()
   if (!userMessageId || !clientRequestId) return
@@ -357,7 +358,12 @@ function reconcileCanonicalSnapshotProcessingGuard(
     && turn.clientRequestId === clientRequestId
   ))
   if (guardedTurn && ['completed', 'failed', 'canceled'].includes(guardedTurn.state)) {
+    lifecycle.markProcessingResolved()
     lifecycle.stopProcessing()
+    lifecycle.disarmCancelTimeout()
+    useRoomUiStore.getState().setCancelling(roomId, false)
+    useMessageStore.getState().removeMessage(lifecycle.placeholderId(roomId))
+    lifecycle.dismissPlaceholder()
   }
 }
 

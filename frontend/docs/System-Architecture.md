@@ -319,11 +319,13 @@ idempotent fold used by normal live delivery. Invalid known events leave the
 projection unchanged and request one fresh snapshot. Presentation state is
 stored separately in `turn-presentation-store`, so snapshot replacement does
 not reset manual disclosure or pinned-bottom ownership. After a successful
-canonical replacement, `RoomReducer` clears the incumbent processing/send guard
+canonical replacement, `RoomReducer` performs authoritative terminal cleanup
 only when its stored User message ID and client request ID exactly match a
-terminal canonical root. This repairs a missed `run_settled` at or below the
-snapshot watermark without unlocking unrelated active legacy work in a mixed
-room.
+terminal canonical root, even if HITL already cleared the send guard. Like live
+`run_settled`, it marks processing resolved, stops processing, disarms the cancel
+timeout, clears `cancelling`, and removes/dismisses the placeholder. This repairs
+a missed `run_settled` at or below the snapshot watermark. Wrong-root,
+nonterminal, invalid, and stale snapshots cannot unlock unrelated work.
 
 Snapshots without both capability fields remain pure legacy snapshots and
 continue to hydrate the incumbent message, streaming, and diagnostic trace
@@ -390,10 +392,11 @@ Agent names. Both surfaces expose the same `data-call-id` and normalized
 
 Canonical `model_decision` events fold into `TurnProjection.activity` entries of
 `kind:"decision"` (validated in `contract.ts`, folded in `fold.ts`, rendered by
-`CanonicalTurnTrace`). Decisions make the model-first HITL loop visible in the
-Trace: `interaction_received`, `answered_from_context`, `no_progress`, and
-`degraded_to_user`. Only backend-computed summaries and sanitized Agent labels
-are projected; raw model reasoning is never surfaced.
+`CanonicalTurnTrace`). Current decisions make the model-first HITL loop visible
+through `interaction_received`, `answered_from_context`, `no_progress`, and
+explicit `forwarded_to_user` events. Historical `degraded_to_user` records remain
+readable, but the backend no longer produces them. Only backend-computed summaries
+and sanitized Agent labels are projected; raw model reasoning is never surfaced.
  Cards prefer the durable sanitized root
 Agent name, and generic,
 blank, opaque, or internal update labels cannot downgrade it during live,
@@ -468,8 +471,15 @@ Cancellation remains a pending UI operation until the root terminal lifecycle is
 folded. Both `pending_reconciliation` and `canceled` Stop responses keep the
 processing message ID, `client_request_id`, placeholder, and `cancelling` flag
 intact and display a disabled `Stopping...` spinner; the timeout is warning-only.
-The HTTP response and child-task updates cannot clear that state. Durable terminal
-`run_settled` (canonical) or `processing_status` (legacy) owns cleanup. After
+HITL Cancel follows the same ownership rule locally: it sets `cancelling` before
+its version-fenced request, optimistically closes only the interaction after
+success, then performs best-effort DB reconciliation and a forced canonical
+snapshot request. Recovery failure does not turn an accepted cancellation into a
+request failure, and no second Stop request is sent. A rejected HITL cancellation
+clears `cancelling` after any conflict reconciliation. The HTTP response and
+child-task updates cannot otherwise clear that state. Durable terminal
+`run_settled` or an accepted exact-root terminal snapshot (canonical), or
+`processing_status` (legacy), owns cleanup. After
 refresh, the existing room `active_runs` response restores `canceling` and
 hydrates both message and client-request correlation from the triggering user
 message; the canonical room-event snapshot schema is unchanged.

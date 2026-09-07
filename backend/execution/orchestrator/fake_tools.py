@@ -18,7 +18,7 @@ from .models import (
     ToolResult,
     ToolSuspension,
 )
-from .ports import CancellationSignal
+from .ports import CancellationSignal, ParkedInteractionCloseout
 
 
 def fake_agent_definitions() -> list[ToolDefinition]:
@@ -225,10 +225,19 @@ class RecordingFakeToolRuntime:
         *,
         call_record_id: str,
         interaction_id: str,
-        terminal_state: str,
-    ) -> None:
-        del call_record_id, interaction_id, terminal_state
-        return None
+    ) -> ParkedInteractionCloseout:
+        del interaction_id
+        return ParkedInteractionCloseout(
+            result=ToolResult(
+                call_id=call_record_id,
+                tool_name="fake_agent_pause",
+                status="canceled",
+                content=[],
+                artifact_refs=[],
+                error_code="canceled",
+            ),
+            local_cancellation_won=True,
+        )
 
 
 async def _cancellable_sleep(seconds: float, signal: CancellationSignal) -> None:

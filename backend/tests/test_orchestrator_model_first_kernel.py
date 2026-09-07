@@ -1,9 +1,10 @@
-"""Kernel integration tests for the model-first HITL loop (Phase 1 polish).
+"""Kernel integration tests for the canonical model-first HITL loop.
 
-Covers join routing, per-fingerprint no-progress, F5 degrade, abandon closeout,
-and per-decision-turn provider-error retry. These exercise the kernel through
-``kernel.run`` / ``kernel.observe_tool`` with a deterministic fake runtime so the
-assertions observe real public event emission and durable entry transitions.
+Covers join routing, per-fingerprint no-progress, explicit question forwarding,
+successful parked-child closeout, and generic provider-error retry. These
+exercise the kernel through ``kernel.run`` / ``kernel.observe_tool`` with a
+deterministic fake runtime so assertions observe public events and durable entry
+transitions.
 """
 
 from __future__ import annotations
@@ -20,13 +21,19 @@ from execution.orchestrator.kernel import (
     _surface_agent_questions_tool_definition,
 )
 from execution.orchestrator.models import (
+    AssistantMessage,
     TextPart,
+    ToolAcceptance,
     ToolBatchEntry,
     ToolCallBatch,
     ToolInteractionMessage,
     ToolInteractionQuestion,
     ToolResult,
     ToolSuspension,
+)
+from execution.orchestrator.ports import (
+    InvalidParkedInteractionTarget,
+    ParkedInteractionCloseout,
 )
 from tests._orchestrator_a2a_helpers import invocation as _a2a_invocation
 from tests._orchestrator_helpers import (
@@ -129,13 +136,20 @@ class InteractionRuntime(RecordingFakeToolRuntime):
         self.model_replies: dict[str, ToolResult | ToolSuspension] = {}
         self.model_reply_calls: list[tuple[str, str, str | None]] = []
         self.published: list[tuple[str, str]] = []
-        self.abandoned: list[tuple[str, str, str]] = []
+        self.abandoned: list[tuple[str, str]] = []
+        self.parked_calls: dict[str, tuple[str, str]] = {}
+        self.closeout_winners: dict[str, ParkedInteractionCloseout] = {}
 
     async def execute(self, invocation, acceptance, *, signal):
         suspension = self.suspensions.get(invocation.invocation_id)
         if suspension is not None:
             self.execute_log.append(invocation.invocation_id)
             self.acceptances[invocation.idempotency_key] = acceptance
+            if suspension.call_record_id is not None:
+                self.parked_calls[suspension.call_record_id] = (
+                    invocation.invocation_id,
+                    invocation.tool.definition.name,
+                )
             return suspension
         return await super().execute(invocation, acceptance, signal=signal)
 
@@ -166,9 +180,27 @@ class InteractionRuntime(RecordingFakeToolRuntime):
         self.published.append((call_record_id, interaction_id))
 
     async def abandon_parked_interaction(
-        self, *, call_record_id: str, interaction_id: str, terminal_state: str
-    ) -> None:
-        self.abandoned.append((call_record_id, interaction_id, terminal_state))
+        self, *, call_record_id: str, interaction_id: str
+    ) -> ParkedInteractionCloseout:
+        self.abandoned.append((call_record_id, interaction_id))
+        winner = self.closeout_winners.get(call_record_id)
+        if winner is not None:
+            return winner
+        call_id, tool_name = self.parked_calls.get(
+            call_record_id,
+            (call_record_id.replace("parent", "call", 1), "fake_agent_pause"),
+        )
+        return ParkedInteractionCloseout(
+            result=ToolResult(
+                call_id=call_id,
+                tool_name=tool_name,
+                status="canceled",
+                content=[],
+                artifact_refs=[],
+                error_code="canceled",
+            ),
+            local_cancellation_won=True,
+        )
 
 
 class FatalMixedRuntime(InteractionRuntime):
@@ -215,7 +247,7 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
     assert by_call["call-1"].buffered_terminal_result.error_code == (
         "interaction_abandoned"
     )
-    assert runtime.abandoned == [("parent-1", "interaction-1", "failed")]
+    assert runtime.abandoned == [("parent-1", "interaction-1")]
     assert by_call["call-2"].state == "terminal"
     assert by_call["call-2"].buffered_terminal_result.error_code == (
         "acceptance_failed"
@@ -364,17 +396,19 @@ async def test_model_first_per_fingerprint_bound_emits_no_progress():
     assert len(no_progress) == 1
     assert no_progress[0]["reason"] == "auto_reply_limit_reached"
 
-    # A failed join does NOT close the parked parent entry: the Agent's question
-    # is still unanswered and must remain eligible for user input / abandon.
+    # The failed join leaves the parent parked until the subsequent no-tool
+    # answer closes that unused interaction and completes the root successfully.
     parked = [
         entry
         for batch in result.run.tool_batches
         for entry in batch.entries
         if entry.call_id == "call-1"
     ][0]
-    assert parked.state == "input_required"
-    assert parked.presented is True
-    assert parked.buffered_terminal_result is None
+    assert result.outcome == "final_answer"
+    assert parked.state == "terminal"
+    assert parked.buffered_terminal_result is not None
+    assert parked.buffered_terminal_result.error_code == "interaction_abandoned"
+    assert runtime.published == []
 
 
 @pytest.mark.asyncio
@@ -488,72 +522,202 @@ async def test_model_first_join_transport_uncertain_retries_then_fails(
     assert join.state == "terminal"
     assert join.buffered_terminal_result is not None
     assert join.buffered_terminal_result.error_code == "model_reply_dispatch_failed"
-    # The parent parked entry is not terminalized by the failed join.
+    # The parent remains parked through the failed join, then the no-tool final
+    # answer closes it without publishing HITL.
     parked = [
         entry
         for batch in result.run.tool_batches
         for entry in batch.entries
         if entry.call_id == "call-1"
     ][0]
-    assert parked.state == "input_required"
-    assert parked.presented is True
+    assert result.outcome == "final_answer"
+    assert parked.state == "terminal"
+    assert parked.buffered_terminal_result is not None
+    assert parked.buffered_terminal_result.error_code == "interaction_abandoned"
+    assert runtime.published == []
 
 
 @pytest.mark.asyncio
-async def test_failed_join_then_termination_abandons_parked_interaction():
-    """A failed join leaves the parent parked; Run termination abandons it.
-
-    ``model_reply_dispatch_failed`` must not terminalize the parked parent
-    entries (no state divergence with the still-parked runtime call). A later
-    Run termination must still abandon the parked interaction cleanly.
-    """
+@pytest.mark.parametrize("parked_count", [1, 2])
+async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     runtime = InteractionRuntime()
-    runtime.suspensions["call-1"] = _interaction_suspension("call-1")
-    runtime.model_replies["call-2"] = ToolResult(
-        call_id="call-2",
-        tool_name="fake_agent_pause",
-        status="failed",
-        content=[],
-        artifact_refs=[],
-        error_code="model_reply_dispatch_failed",
-        error_message="The platform could not deliver the reply to the Agent.",
-    )
+    calls = []
+    for index in range(parked_count):
+        call_id = f"call-{index + 1}"
+        runtime.suspensions[call_id] = _interaction_suspension(
+            call_id,
+            call_record_id=f"parent-{index + 1}",
+            interaction_id=f"interaction-{index + 1}",
+            fingerprint=f"fp-{index + 1}",
+        )
+        calls.append((call_id, "fake_agent_pause", '{"status":"input_required"}'))
     kernel, store, _, _ = await make_kernel(
-        [
-            tool_events(("call-1", "fake_agent_pause", '{"status":"input_required"}')),
-            tool_events(("call-2", "fake_agent_pause", '{"status":"input_required"}')),
-            final_events("done"),
-        ],
+        [tool_events(*calls), final_events("done")],
         tool_runtime=runtime,
     )
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        events.append((event_type, payload))
 
     result = await kernel.run(
-        next(iter(store.runs)), signal=NeverCancelled(), lifecycle=None
+        next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
     )
 
-    parked = [
-        entry
-        for batch in result.run.tool_batches
-        for entry in batch.entries
-        if entry.call_id == "call-1"
-    ][0]
-    assert parked.state == "input_required"
-    assert parked.presented is True
-    assert parked.buffered_terminal_result is None
-
-    # Run termination still abandons the parked interaction (no divergence).
-    terminated = await kernel.terminalize(
-        next(iter(store.runs)), status="failed", reason="test termination"
+    assert result.outcome == "final_answer"
+    assert result.run.status == "completed"
+    assert runtime.published == []
+    assert runtime.abandoned == [
+        (f"parent-{index + 1}", f"interaction-{index + 1}")
+        for index in range(parked_count)
+    ]
+    entries = [entry for batch in result.run.tool_batches for entry in batch.entries]
+    assert all(entry.state == "terminal" for entry in entries)
+    assert all(entry.result_flushed for entry in entries)
+    assert all(entry.public_terminal_emitted for entry in entries)
+    assert all(
+        entry.buffered_terminal_result is not None
+        and entry.buffered_terminal_result.error_code == "interaction_abandoned"
+        for entry in entries
     )
-    assert runtime.abandoned == [("parent-1", "interaction-1", "failed")]
-    assert terminated.outcome == "failed"
+    event_types = [event_type for event_type, _payload in events]
+    assert "hitl_request" not in event_types
+    assert "run_waiting_input" not in event_types
+    tool_end_positions = [
+        index
+        for index, (event_type, _payload) in enumerate(events)
+        if event_type == "tool_execution_completed"
+    ]
+    final_position = next(
+        index
+        for index, (event_type, payload) in enumerate(events)
+        if event_type == "message_completed" and payload.get("disposition") == "final"
+    )
+    turn_position = next(
+        index
+        for index, (event_type, _payload) in enumerate(events)
+        if event_type == "turn_completed"
+    )
+    assert (
+        tool_end_positions and max(tool_end_positions) < final_position < turn_position
+    )
+    turn_end = events[turn_position][1]
+    assert turn_end["tool_call_ids"] == [
+        entry.opaque_public_call_id for entry in entries
+    ]
 
+    from delivery.snapshot import RoomEventFold
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.public_projection import PublicProjectionTranslator
+
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    fold = RoomEventFold()
+    assistant_id = result.run.proposed_final_message_id
+    assert assistant_id is not None
+    room_sequence = 0
+    applied_event_ids: set[str] = set()
+    for sequence, (event_type, payload) in enumerate(
+        [("run_started", {"mode": "ultimate"}), *events], start=1
+    ):
+        projected = translator.translate(
+            SessionEvent(
+                event_type=event_type,
+                session_id=result.run.session_id,
+                run_id=result.run.run_id,
+                causation_id=result.run.request.user_message_id,
+                sequence=sequence,
+                timestamp=NOW,
+                payload=payload,
+                room_id=result.run.room_id,
+                user_message_id=result.run.request.user_message_id,
+                client_request_id=result.run.client_request_id,
+                lifecycle_family="canonical",
+            ),
+            catalog=result.run.tool_catalog,
+        )
+        if projected is None or projected.event_id in applied_event_ids:
+            continue
+        applied_event_ids.add(projected.event_id)
+        room_sequence += 1
+        assert fold.apply(
+            {
+                "room_id": result.run.room_id,
+                "room_seq": room_sequence,
+                "kind": "run_event",
+                "ts": NOW.isoformat(),
+                "payload_public": {
+                    "event_id": projected.event_id,
+                    "run_id": projected.run_id,
+                    "seq": projected.seq,
+                    "type": projected.kind,
+                    "payload": projected.payload,
+                    "correlation_id": projected.client_request_id,
+                },
+            }
+        )
+    room_sequence += 1
+    assert fold.apply(
+        {
+            "room_id": result.run.room_id,
+            "room_seq": room_sequence,
+            "kind": "agent_response",
+            "ts": NOW.isoformat(),
+            "payload_public": {
+                "message_id": assistant_id,
+                "content": "done",
+                "client_request_id": result.run.client_request_id,
+                "related_message_id": result.run.request.user_message_id,
+            },
+        }
+    )
+    room_sequence += 1
+    assert fold.apply(
+        {
+            "room_id": result.run.room_id,
+            "room_seq": room_sequence,
+            "kind": "run_event",
+            "ts": NOW.isoformat(),
+            "payload_public": {
+                "event_id": f"settled:{result.run.run_id}",
+                "run_id": result.run.run_id,
+                "seq": len(events) + 2,
+                "type": "run_settled",
+                "correlation_id": result.run.client_request_id,
+                "payload": {
+                    "status": "completed",
+                    "started_at": result.run.created_at.isoformat(),
+                    "settled_at": result.run.updated_at.isoformat(),
+                    "duration_ms": 0,
+                    "final_message_id": assistant_id,
+                },
+            },
+        }
+    )
+    folded = fold.state(room_seq=room_sequence)["turns"][0]
+    assert folded["state"] == "completed"
+    assert folded["internal_turns"][0]["tool_call_ids"] == [
+        entry.opaque_public_call_id for entry in entries
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_tool_answer_uses_concurrent_completed_child_winner():
     runtime = InteractionRuntime()
     runtime.suspensions["call-1"] = _interaction_suspension("call-1")
+    runtime.closeout_winners["parent-1"] = ParkedInteractionCloseout(
+        result=ToolResult(
+            call_id="call-1",
+            tool_name="fake_agent_pause",
+            status="completed",
+            content=[TextPart(text="completed concurrently")],
+            artifact_refs=[],
+        ),
+        local_cancellation_won=False,
+    )
     kernel, store, _, _ = await make_kernel(
         [
             tool_events(("call-1", "fake_agent_pause", '{"status":"input_required"}')),
-            final_events("I need help from the user"),
+            final_events("done"),
         ],
         tool_runtime=runtime,
     )
@@ -566,16 +730,401 @@ async def test_failed_join_then_termination_abandons_parked_interaction():
         next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
     )
 
-    assert result.outcome == "awaiting_user"
-    assert runtime.published == [("parent-1", "interaction-1")]
-    decisions = _decision_payloads(events)
-    degraded = [d for d in decisions if d["decision"] == "degraded_to_user"]
-    assert len(degraded) == 1
-    assert degraded[0]["reason"] == "decision_turn_inconclusive"
+    assert result.outcome == "final_answer"
+    entry = result.run.tool_batches[0].entries[0]
+    assert entry.buffered_terminal_result is not None
+    assert entry.buffered_terminal_result.status == "completed"
+    assert entry.buffered_terminal_result.content == [
+        TextPart(text="completed concurrently")
+    ]
+    assert entry.buffered_terminal_result.error_code is None
+    tool_end = next(
+        payload for kind, payload in events if kind == "tool_execution_completed"
+    )
+    assert tool_end["call_id"] == "call-1"
+    assert tool_end["result_status"] == "completed"
 
 
 @pytest.mark.asyncio
-async def test_provider_error_decision_retry_is_per_decision_turn():
+async def test_nth_parked_closeout_failure_blocks_final_publication_and_settlement():
+    class FailSecondCloseoutRuntime(InteractionRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closeout_attempts = 0
+
+        async def abandon_parked_interaction(self, **kwargs):
+            self.closeout_attempts += 1
+            if self.closeout_attempts == 2:
+                raise RecoverableCheckpointError("second HITL closeout failed")
+            return await super().abandon_parked_interaction(**kwargs)
+
+    runtime = FailSecondCloseoutRuntime()
+    calls = []
+    for index in range(3):
+        call_id = f"call-{index + 1}"
+        runtime.suspensions[call_id] = _interaction_suspension(
+            call_id,
+            call_record_id=f"parent-{index + 1}",
+            interaction_id=f"interaction-{index + 1}",
+        )
+        calls.append((call_id, "fake_agent_pause", '{"status":"input_required"}'))
+    kernel, store, _, _ = await make_kernel(
+        [tool_events(*calls), final_events("done")], tool_runtime=runtime
+    )
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        events.append((event_type, payload))
+
+    with pytest.raises(RecoverableCheckpointError, match="second HITL closeout"):
+        await kernel.run(
+            next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
+        )
+
+    interrupted = await store.load(next(iter(store.runs)))
+    assert interrupted is not None
+    assert interrupted.status == "finalizing"
+    assert interrupted.projection_state != "settled"
+    assert not [
+        payload
+        for event_type, payload in events
+        if event_type == "message_completed" and payload.get("disposition") == "final"
+    ]
+    assert not [
+        payload
+        for event_type, payload in events
+        if event_type == "turn_completed" and payload.get("status") == "completed"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_successful_finalization_closes_historical_owner_before_final_fold():
+    from delivery.snapshot import RoomEventFold
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.public_projection import PublicProjectionTranslator
+
+    base = make_run()
+    final = AssistantMessage(
+        message_id="assistant-final",
+        content=[TextPart(text="done")],
+        tool_calls=[],
+        finish_reason="stop",
+        usage=None,
+        created_at=NOW,
+    )
+    batches = []
+    runtime = InteractionRuntime()
+    for owner, suffix in (("turn-historical", "historical"), ("turn-final", "final")):
+        call_id = f"call-{suffix}"
+        assistant_id = f"assistant-{suffix}-tools"
+        invocation = _a2a_invocation(run_id=base.run_id, call_id=call_id).model_copy(
+            update={
+                "assistant_message_id": assistant_id,
+                "causation_id": assistant_id,
+            }
+        )
+        acceptance = ToolAcceptance(
+            acceptance_id=f"accept-{suffix}",
+            invocation_id=call_id,
+            idempotency_key=invocation.idempotency_key,
+            accepted_at=NOW,
+        )
+        call_record_id = f"parent-{suffix}"
+        runtime.parked_calls[call_record_id] = (call_id, "fake_agent_pause")
+        batches.append(
+            ToolCallBatch(
+                assistant_message_id=assistant_id,
+                internal_turn_id=owner,
+                entries=[
+                    ToolBatchEntry(
+                        call_id=call_id,
+                        assistant_message_id=assistant_id,
+                        source_index=0,
+                        tool_name="fake_agent_pause",
+                        state="input_required",
+                        invocation=invocation,
+                        acceptance=acceptance,
+                        presented=True,
+                        suspended_call_record_id=call_record_id,
+                        interaction_id=f"interaction-{suffix}",
+                        interaction_fingerprint=f"fp-{suffix}",
+                        opaque_public_call_id=(
+                            "inv_final000" if suffix == "final" else "inv_historical"
+                        ),
+                    )
+                ],
+            )
+        )
+    run = base.model_copy(
+        update={
+            "status": "finalizing",
+            "transcript": [*base.transcript, final],
+            "tool_batches": batches,
+            "proposed_final_message_id": final.message_id,
+            "active_internal_turn_id": "turn-final",
+            "active_assistant_message_id": final.message_id,
+            "active_attempt": 1,
+            "active_public_text": "done",
+            "greatest_public_text_offset": 4,
+        }
+    )
+    kernel, store, _, _ = await make_kernel([], run=run, tool_runtime=runtime)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def lifecycle(event_type, _run, payload):
+        events.append((event_type, payload))
+
+    result = await kernel.run(run.run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+
+    assert result.outcome == "final_answer"
+    turn_ends = [payload for kind, payload in events if kind == "turn_completed"]
+    assert [payload["internal_turn_id"] for payload in turn_ends] == [
+        "turn-historical",
+        "turn-final",
+    ]
+    assert turn_ends[0]["message_id"] == "assistant-historical-tools"
+    assert turn_ends[0]["tool_call_ids"] == ["inv_historical"]
+    assert turn_ends[1]["message_id"] == final.message_id
+    assert turn_ends[1]["tool_call_ids"] == ["inv_final000"]
+    historical_end_position = next(
+        index
+        for index, (kind, payload) in enumerate(events)
+        if kind == "turn_completed" and payload["internal_turn_id"] == "turn-historical"
+    )
+    final_message_position = next(
+        index
+        for index, (kind, payload) in enumerate(events)
+        if kind == "message_completed" and payload.get("disposition") == "final"
+    )
+    assert historical_end_position < final_message_position
+
+    fold = RoomEventFold()
+    fold.turns[run.run_id] = {
+        "run_id": run.run_id,
+        "client_request_id": run.client_request_id,
+        "user_message_id": run.request.user_message_id,
+        "state": "running",
+        "started_at": NOW.isoformat(),
+        "settled_at": None,
+        "duration_ms": None,
+        "terminal_code": None,
+        "terminal_summary": None,
+        "internal_turns": [
+            {
+                "internal_turn_id": "turn-historical",
+                "attempt": 1,
+                "message_ids": ["assistant-historical-tools"],
+                "tool_call_ids": ["inv_historical"],
+                "status": "active",
+            },
+            {
+                "internal_turn_id": "turn-final",
+                "attempt": 1,
+                "message_ids": [final.message_id],
+                "tool_call_ids": ["inv_final000"],
+                "status": "active",
+            },
+        ],
+        "activity": [
+            {
+                "kind": "tool",
+                "tool_call_id": "inv_historical",
+                "internal_turn_id": "turn-historical",
+                "status": "running",
+                "execution_kind": "tool",
+            },
+            {
+                "kind": "tool",
+                "tool_call_id": "inv_final000",
+                "internal_turn_id": "turn-final",
+                "status": "running",
+                "execution_kind": "tool",
+            },
+        ],
+        "current_assistant": {
+            "message_id": final.message_id,
+            "internal_turn_id": "turn-final",
+            "text": "done",
+            "status": "streaming",
+            "content_index": 0,
+            "next_delta_index": 1,
+            "end_offset": 4,
+            "order": 1,
+        },
+        "final_answer": None,
+        "final_committed": False,
+        "hitl_interactions": [],
+        "active_interaction_id": None,
+        "agent_call_message_ids": [],
+    }
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    room_sequence = 0
+    closeout_started = False
+    for sequence, (event_type, payload) in enumerate(events, start=1):
+        if event_type == "tool_execution_completed":
+            closeout_started = True
+        if not closeout_started:
+            continue
+        projected = translator.translate(
+            SessionEvent(
+                event_type=event_type,
+                session_id=run.session_id,
+                run_id=run.run_id,
+                causation_id=run.request.user_message_id,
+                sequence=sequence,
+                timestamp=NOW,
+                payload=payload,
+                room_id=run.room_id,
+                user_message_id=run.request.user_message_id,
+                client_request_id=run.client_request_id,
+                lifecycle_family="canonical",
+            ),
+            catalog=run.tool_catalog,
+        )
+        if projected is None:
+            continue
+        room_sequence += 1
+        record = {
+            "room_id": run.room_id,
+            "room_seq": room_sequence,
+            "kind": "run_event",
+            "ts": NOW.isoformat(),
+            "payload_public": {
+                "event_id": projected.event_id,
+                "run_id": projected.run_id,
+                "seq": projected.seq,
+                "type": projected.kind,
+                "payload": projected.payload,
+                "correlation_id": projected.client_request_id,
+            },
+        }
+        assert fold.apply(record), projected.payload
+    folded = fold.state(room_seq=room_sequence)["turns"][0]
+    assert [turn["status"] for turn in folded["internal_turns"]] == [
+        "completed",
+        "completed",
+    ]
+    assert folded["final_answer"]["message_id"] == final.message_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_boundary", ["tool_end", "final_message_end"])
+async def test_no_tool_finalization_replays_across_public_closeout_crashes(
+    crash_boundary,
+):
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.public_projection import PublicProjectionTranslator
+
+    class SimulatedRestart(RuntimeError):
+        pass
+
+    runtime = InteractionRuntime()
+    runtime.suspensions["call-1"] = _interaction_suspension("call-1")
+    kernel, store, _, _ = await make_kernel(
+        [
+            tool_events(("call-1", "fake_agent_pause", '{"status":"input_required"}')),
+            final_events("done"),
+        ],
+        tool_runtime=runtime,
+    )
+    run_id = next(iter(store.runs))
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    records: dict[str, dict[str, object]] = {}
+    emission_attempts: dict[str, int] = {}
+    private_sequence = 0
+    room_sequence = 0
+    crashed = False
+
+    async def lifecycle(event_type, run, payload):
+        nonlocal private_sequence, room_sequence, crashed
+        private_sequence += 1
+        projected = translator.translate(
+            SessionEvent(
+                event_type=event_type,
+                session_id=run.session_id,
+                run_id=run.run_id,
+                causation_id=run.request.user_message_id,
+                sequence=private_sequence,
+                timestamp=NOW,
+                payload=payload,
+                room_id=run.room_id,
+                user_message_id=run.request.user_message_id,
+                client_request_id=run.client_request_id,
+                lifecycle_family="canonical",
+            ),
+            catalog=run.tool_catalog,
+        )
+        if projected is not None:
+            emission_attempts[projected.event_id] = (
+                emission_attempts.get(projected.event_id, 0) + 1
+            )
+            if projected.event_id not in records:
+                room_sequence += 1
+                records[projected.event_id] = {
+                    "room_id": run.room_id,
+                    "room_seq": room_sequence,
+                    "kind": "run_event",
+                    "ts": NOW.isoformat(),
+                    "payload_public": {
+                        "event_id": projected.event_id,
+                        "run_id": projected.run_id,
+                        "seq": projected.seq,
+                        "type": projected.kind,
+                        "payload": projected.payload,
+                        "correlation_id": projected.client_request_id,
+                    },
+                }
+        at_boundary = (
+            crash_boundary == "tool_end" and event_type == "tool_execution_completed"
+        ) or (
+            crash_boundary == "final_message_end"
+            and event_type == "message_completed"
+            and payload.get("disposition") == "final"
+        )
+        if at_boundary and not crashed:
+            crashed = True
+            raise SimulatedRestart(crash_boundary)
+
+    with pytest.raises(SimulatedRestart, match=crash_boundary):
+        await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+    interrupted = await store.load(run_id)
+    assert interrupted is not None
+    assert interrupted.status == "finalizing"
+    assert interrupted.proposed_final_message_id is not None
+
+    async def read_canonical_events(_room_id, _run_id):
+        return list(records.values())
+
+    kernel.canonical_event_reader = read_canonical_events
+    result = await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+
+    assert result.outcome == "final_answer"
+    assert result.run.status == "completed"
+    public = [record["payload_public"] for record in records.values()]
+    tool_ends = [event for event in public if event["type"] == "tool_execution_end"]
+    final_ends = [
+        event
+        for event in public
+        if event["type"] == "message_end"
+        and event["payload"].get("disposition") == "final"
+    ]
+    turn_ends = [event for event in public if event["type"] == "turn_end"]
+    assert len(tool_ends) == len(final_ends) == len(turn_ends) == 1
+    assert turn_ends[0]["payload"]["tool_call_ids"] == [
+        tool_ends[0]["payload"]["tool_call_id"]
+    ]
+    assert not [
+        event
+        for event in public
+        if event["type"] in {"hitl_request", "run_waiting_input"}
+        or event["payload"].get("disposition") == "aborted"
+    ]
+    expected_attempts = 2 if crash_boundary == "tool_end" else 1
+    assert emission_attempts[tool_ends[0]["event_id"]] == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_provider_errors_use_generic_bounded_failure_without_hitl():
     from execution.orchestrator.models import ModelStreamEvent
 
     def provider_error_events() -> list[ModelStreamEvent]:
@@ -592,11 +1141,39 @@ async def test_provider_error_decision_retry_is_per_decision_turn():
             ),
         ]
 
+    from tests._orchestrator_a2a_helpers import ledger_record
+    from tests.test_orchestrator_a2a_runtime import _interaction, setup
+
+    run = make_run()
+    run = run.model_copy(
+        update={
+            "profile": run.profile.model_copy(update={"max_provider_retries_total": 2})
+        }
+    )
+    a2a, ledger, _, dispatch, _ = await setup()
+    parked = ledger_record(run_id=run.run_id, state="input_required").model_copy(
+        update={
+            "tool_name": "fake_agent_pause",
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    await a2a.hitl.create_or_replay(
+        call=parked,
+        interaction=_interaction("input_required"),
+        interaction_fingerprint="fp-1",
+    )
     runtime = InteractionRuntime()
-    runtime.suspensions["call-1"] = _interaction_suspension("call-1")
-    # Turn 1 is an unrelated provider error; it must not consume the decision
-    # turn's single retry. Turn 1's retry parks a question; the decision turn
-    # then gets exactly one retry before degrading.
+    runtime.suspensions["call-1"] = _interaction_suspension(
+        "call-1", call_record_id=parked.call_record_id
+    )
+    # Keep network execution scripted, but use the production exact-child
+    # closeout against a real ledger and HITL owner, not the fake abandoned log.
+    runtime.abandon_parked_interaction = a2a.abandon_parked_interaction
+    # The second failed attempt is a decision continuation. It must close the
+    # parked child through the generic failed-attempt path before retrying.
     kernel, store, _, _ = await make_kernel(
         [
             provider_error_events(),
@@ -604,26 +1181,121 @@ async def test_provider_error_decision_retry_is_per_decision_turn():
             provider_error_events(),
             provider_error_events(),
         ],
+        run=run,
         tool_runtime=runtime,
     )
     events: list[tuple[str, dict[str, object]]] = []
+    checked_parked_retry = False
 
     async def lifecycle(event_type, _run, payload):
+        nonlocal checked_parked_retry
         events.append((event_type, payload))
+        if event_type == "model_retry_scheduled" and _run.tool_batches:
+            child = await ledger.load_by_record_id(parked.call_record_id)
+            assert child.state == "canceled"
+            assert child.terminal_result is not None
+            assert a2a.hitl.is_abandoned_for_test("interaction-1")
+            assert await a2a.hitl.get_eligible_interactions(run.room_id) == []
+            assert all(
+                entry.state == "terminal"
+                for batch in _run.tool_batches
+                for entry in batch.entries
+            )
+            checked_parked_retry = True
 
     result = await kernel.run(
         next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
     )
 
-    assert result.outcome == "awaiting_user"
-    assert runtime.published == [("parent-1", "interaction-1")]
-    degraded = [
-        p
-        for e, p in events
-        if e == "model_decision" and p.get("decision") == "degraded_to_user"
+    assert result.outcome == "failed"
+    assert checked_parked_retry
+    assert (await ledger.load_by_record_id(parked.call_record_id)).state == "canceled"
+    assert a2a.hitl.is_abandoned_for_test("interaction-1")
+    assert dispatch.commands == []
+    assert runtime.published == []
+    assert not [
+        payload
+        for event_type, payload in events
+        if event_type in {"hitl_request", "run_waiting_input"}
+        or payload.get("decision") == "degraded_to_user"
     ]
-    assert len(degraded) == 1
-    assert degraded[0]["reason"] == "provider_error"
+    assert (
+        len([event for event, _payload in events if event == "model_retry_scheduled"])
+        == 2
+    )
+
+    from delivery.snapshot import RoomEventFold
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.public_projection import PublicProjectionTranslator
+
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    fold = RoomEventFold()
+    room_sequence = 0
+    applied_event_ids: set[str] = set()
+    for sequence, (event_type, payload) in enumerate(
+        [("run_started", {"mode": "ultimate"}), *events], start=1
+    ):
+        projected = translator.translate(
+            SessionEvent(
+                event_type=event_type,
+                session_id=result.run.session_id,
+                run_id=result.run.run_id,
+                causation_id=result.run.request.user_message_id,
+                sequence=sequence,
+                timestamp=NOW,
+                payload=payload,
+                room_id=result.run.room_id,
+                user_message_id=result.run.request.user_message_id,
+                client_request_id=result.run.client_request_id,
+                lifecycle_family="canonical",
+            ),
+            catalog=result.run.tool_catalog,
+        )
+        if projected is None or projected.event_id in applied_event_ids:
+            continue
+        applied_event_ids.add(projected.event_id)
+        room_sequence += 1
+        assert fold.apply(
+            {
+                "room_id": result.run.room_id,
+                "room_seq": room_sequence,
+                "kind": "run_event",
+                "ts": NOW.isoformat(),
+                "payload_public": {
+                    "event_id": projected.event_id,
+                    "run_id": projected.run_id,
+                    "seq": projected.seq,
+                    "type": projected.kind,
+                    "payload": projected.payload,
+                    "correlation_id": projected.client_request_id,
+                },
+            }
+        )
+    room_sequence += 1
+    assert fold.apply(
+        {
+            "room_id": result.run.room_id,
+            "room_seq": room_sequence,
+            "kind": "run_event",
+            "ts": NOW.isoformat(),
+            "payload_public": {
+                "event_id": f"settled:{result.run.run_id}",
+                "run_id": result.run.run_id,
+                "seq": len(events) + 2,
+                "type": "run_settled",
+                "correlation_id": result.run.client_request_id,
+                "payload": {
+                    "status": "failed",
+                    "started_at": result.run.created_at.isoformat(),
+                    "settled_at": result.run.updated_at.isoformat(),
+                    "duration_ms": 0,
+                    "failure_code": "internal_error",
+                    "error_summary": "The run could not be completed.",
+                },
+            },
+        }
+    )
+    assert fold.state(room_seq=room_sequence)["turns"][0]["state"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -666,7 +1338,7 @@ async def test_termination_abandons_parked_interaction():
     )
 
     assert result.outcome == "failed"
-    assert runtime.abandoned == [("parent-1", "interaction-1", "failed")]
+    assert runtime.abandoned == [("parent-1", "interaction-1")]
     parked = [
         entry
         for batch in result.run.tool_batches
@@ -744,7 +1416,7 @@ async def test_terminal_abandonment_failure_is_mutation_free_and_retries_exactly
             if self.failures_remaining:
                 self.failures_remaining -= 1
                 raise RecoverableCheckpointError("HITL store unavailable")
-            await super().abandon_parked_interaction(**kwargs)
+            return await super().abandon_parked_interaction(**kwargs)
 
     run = make_run().model_copy(
         update={
@@ -798,7 +1470,7 @@ async def test_terminal_abandonment_failure_is_mutation_free_and_retries_exactly
         lifecycle=lifecycle,
     )
     assert result.outcome == "failed"
-    assert runtime.abandoned == [("parent-1", "interaction-1", "failed")]
+    assert runtime.abandoned == [("parent-1", "interaction-1")]
 
 
 @pytest.mark.asyncio
@@ -908,7 +1580,7 @@ async def test_expired_suspended_run_closes_all_descendants_and_replays_noop(
     assert terminal.run.status == "budget_exhausted"
     assert terminal.run.projection_state == "settled"
     assert all(item.status == "completed" for item in terminal.run.projection_outbox)
-    assert runtime.abandoned == [("parent-1", "interaction-1", "failed")]
+    assert runtime.abandoned == [("parent-1", "interaction-1")]
     assert all(
         batch.results_flushed
         and all(
@@ -948,7 +1620,7 @@ async def test_expired_suspended_run_closes_all_descendants_and_replays_noop(
     replay = await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
     assert replay.run.state_version == terminal.run.state_version
     assert len(records) == emitted_before_replay
-    assert runtime.abandoned == [("parent-1", "interaction-1", "failed")]
+    assert runtime.abandoned == [("parent-1", "interaction-1")]
 
     fold = RoomEventFold()
     for record in records.values():
@@ -1562,8 +2234,8 @@ async def test_termination_closes_each_historical_turn_under_its_own_owner():
 
     assert terminal.outcome == "failed"
     assert runtime.abandoned == [
-        ("parent-1", "interaction-1", "failed"),
-        ("parent-2", "interaction-2", "failed"),
+        ("parent-1", "interaction-1"),
+        ("parent-2", "interaction-2"),
     ]
     ends = [payload for kind, payload in events if kind == "tool_execution_completed"]
     assert [(item["call_id"], item["internal_turn_id"]) for item in ends] == [
@@ -2595,8 +3267,8 @@ async def test_surface_agent_questions_unknown_interaction_rejected():
     assert surface.state == "terminal"
     assert surface.buffered_terminal_result is not None
     assert surface.buffered_terminal_result.error_code == "invalid_tool_call"
-    # The surface tool did not publish the (unknown) target. Any later F5
-    # degrade publication is a separate decision-turn path, not this rejection.
+    # The surface tool did not publish the unknown target; the later no-tool
+    # answer closes the real parked parent without exposing it.
 
 
 @pytest.mark.asyncio
@@ -2692,15 +3364,19 @@ async def test_request_user_input_rejected_while_agent_questions_pending():
     ]
     assert "call-2" not in started_calls
 
-    # The parked Agent question is still open and unanswered.
+    # The invalid ask does not publish the Agent question. The subsequent
+    # no-tool answer closes the parked parent as unused.
     parent = [
         entry
         for batch in result.run.tool_batches
         for entry in batch.entries
         if entry.call_id == "call-1"
     ][0]
-    assert parent.state == "input_required"
-    assert parent.presented is True
+    assert result.outcome == "final_answer"
+    assert parent.state == "terminal"
+    assert parent.buffered_terminal_result is not None
+    assert parent.buffered_terminal_result.error_code == "interaction_abandoned"
+    assert runtime.published == []
 
 
 @pytest.mark.asyncio
@@ -2958,8 +3634,8 @@ async def test_surface_unknown_interaction_rejection_leaves_no_open_tool_row():
         next(iter(store.runs)), signal=NeverCancelled(), lifecycle=lifecycle
     )
 
-    # The unknown target was never forwarded; any later publish is the
-    # separate F5 degrade path publishing the real parked parent.
+    # The unknown target was never forwarded, and no implicit publication
+    # exposes the real parked parent.
     assert ("parent-1", "missing") not in runtime.published
     started_calls = [
         payload.get("call_id")
@@ -2987,7 +3663,7 @@ async def test_surface_publication_failure_leaves_no_open_tool_row():
     runtime.suspensions["call-1"] = _interaction_suspension("call-1")
 
     async def fail_publish(*, call_record_id, interaction_id):
-        raise RuntimeError("publish boom")
+        raise InvalidParkedInteractionTarget("publication rejected")
 
     runtime.publish_parked_interaction = fail_publish  # type: ignore[method-assign]
 

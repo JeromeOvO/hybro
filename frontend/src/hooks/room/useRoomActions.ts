@@ -234,9 +234,11 @@ export function useRoomActions(
     if (!interactionId || !target?.hitlInteractionVersion) {
       throw new Error('The interaction changed before it could be canceled.')
     }
-    const { cancelHitl } = await import('@/lib/api/hitl')
+    setCancelling(true)
+    lifecycle.setCancelTimedOut(false)
     let result
     try {
+      const { cancelHitl } = await import('@/lib/api/hitl')
       result = await cancelHitl(
         roomId,
         interactionId,
@@ -246,8 +248,13 @@ export function useRoomActions(
       )
     } catch (error) {
       if (error instanceof ApiError && (error.status === 404 || error.status === 409 || error.status === 410)) {
-        await reconcileWithDb(roomId)
+        try {
+          await reconcileWithDb(roomId)
+        } catch (reconcileError) {
+          console.error('Failed to reconcile rejected HITL cancellation:', reconcileError)
+        }
       }
+      setCancelling(false)
       throw error
     }
 
@@ -275,7 +282,26 @@ export function useRoomActions(
         hitlRequestIndex.current.delete(entity.hitlRequestId)
       }
     }
-  }, [getToken, hitlRequestIndex, reconcileWithDb, roomId])
+
+    try {
+      await reconcileWithDb(roomId)
+    } catch (reconcileError) {
+      console.error('Failed to reconcile accepted HITL cancellation:', reconcileError)
+    }
+    try {
+      requestCanonicalSnapshot?.()
+    } catch (snapshotError) {
+      console.error('Failed to request HITL cancellation snapshot:', snapshotError)
+    }
+  }, [
+    getToken,
+    hitlRequestIndex,
+    lifecycle,
+    reconcileWithDb,
+    requestCanonicalSnapshot,
+    roomId,
+    setCancelling,
+  ])
 
   // Manually refresh messages — reconciles from DB and re-overlays any pending HITL questions
   // that may have been missed by SSE (e.g. during the "Applying your answers" transition).

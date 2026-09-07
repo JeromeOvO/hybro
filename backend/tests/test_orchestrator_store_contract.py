@@ -502,3 +502,183 @@ def test_crash_after_terminal_cas_repairs_outbox_idempotently():
     assert store.repair_outbox("run-1", repaired_at=NOW + timedelta(seconds=1)) == 3
     assert store.runs["run-1"].projection_state == "settled"
     assert store.repair_outbox("run-1", repaired_at=NOW + timedelta(seconds=2)) == 0
+
+
+@pytest.mark.parametrize("implementation", ["memory", "mongo", "mongo_dedicated"])
+@pytest.mark.parametrize(
+    "fence", [None, "version", "owner", "quarantine", "terminal", "canceling"]
+)
+async def test_early_recovery_schedule_is_version_owner_and_terminal_fenced(
+    implementation, fence
+):
+    from tests.test_orchestrator_a2a_mongo_parity import FakeCollection
+
+    store = (
+        InMemoryOrchestratorRunStore()
+        if implementation == "memory"
+        else MongoOrchestratorRunStore(
+            FakeCollection(),
+            FakeCollection() if implementation == "mongo_dedicated" else None,
+        )
+    )
+    run = make_run()
+    claim = run.recovery_claim
+    updates = {}
+    if fence == "owner":
+        claim = claim.model_copy(
+            update={
+                "owner_id": "worker",
+                "lease_expires_at": NOW + timedelta(seconds=60),
+            }
+        )
+    elif fence == "quarantine":
+        claim = claim.model_copy(
+            update={
+                "quarantined_at": NOW,
+                "quarantine_reason": "terminal_invariant_conflict",
+                "failure_count": 3,
+            }
+        )
+    elif fence == "terminal":
+        updates["status"] = "completed"
+    elif fence == "canceling":
+        updates.update(
+            status="canceling",
+            cancellation_command_id="cancel",
+            cancellation_requested_at=NOW,
+            cancellation_cause="user_requested",
+        )
+        claim = claim.model_copy(update={"kind": "cancellation"})
+    run = run.model_copy(update={**updates, "recovery_claim": claim})
+    created = await store.create(run, command_id="create")
+    original = created.run
+    scheduled = await store.schedule_recovery(
+        run.run_id,
+        expected_state_version=original.state_version + int(fence == "version"),
+        next_attempt_at=NOW + timedelta(seconds=5),
+    )
+    if fence:
+        assert scheduled.outcome == "conflict"
+        assert await store.load(run.run_id) == original
+        return
+    assert scheduled.outcome == "accepted"
+    assert await store.list_due_runs(due_at=NOW, limit=10) == []
+    due = await store.list_due_runs(due_at=NOW + timedelta(seconds=5), limit=10)
+    assert [item.run_id for item in due] == [run.run_id]
+    assert due[0].recovery_claim.next_attempt_at == NOW + timedelta(seconds=5)
+    replay = await store.schedule_recovery(
+        run.run_id,
+        expected_state_version=due[0].state_version,
+        next_attempt_at=NOW + timedelta(seconds=10),
+    )
+    assert replay.outcome == "replayed"
+    assert replay.run.recovery_claim.next_attempt_at == NOW + timedelta(seconds=5)
+
+
+def test_early_schedule_port_has_exact_signature():
+    for implementation in (
+        OrchestratorRunStore,
+        InMemoryOrchestratorRunStore,
+        MongoOrchestratorRunStore,
+    ):
+        assert set(inspect.signature(implementation.schedule_recovery).parameters) == {
+            "self",
+            "run_id",
+            "expected_state_version",
+            "next_attempt_at",
+        }
+
+
+@pytest.mark.parametrize("race", ["claim", "insert", "earlier", "cancellation"])
+async def test_mongo_early_schedule_cannot_overwrite_concurrent_dedicated_winner(race):
+    from pymongo.errors import DuplicateKeyError
+
+    from tests.test_orchestrator_a2a_mongo_parity import FakeCollection
+
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    original = (await store.create(make_run(), command_id="create")).run
+    desired = NOW + timedelta(seconds=5)
+    claim = original.recovery_claim.model_copy(
+        update={
+            "owner_id": "winner",
+            "lease_expires_at": NOW + timedelta(seconds=60),
+            "next_attempt_at": None,
+        }
+    )
+    if race == "earlier":
+        claim = RecoveryClaim(next_attempt_at=NOW + timedelta(seconds=1))
+    elif race == "cancellation":
+        claim = RecoveryClaim(kind="cancellation", next_attempt_at=NOW)
+    update = leases.update_one
+    insert = leases.insert_one
+
+    async def raced_update(query, changes, **kwargs):
+        if race != "insert":
+            await insert({"run_id": original.run_id, **claim.model_dump(mode="python")})
+        return await update(query, changes, **kwargs)
+
+    async def raced_insert(document):
+        await insert({"run_id": original.run_id, **claim.model_dump(mode="python")})
+        raise DuplicateKeyError("unique run lease winner")
+
+    leases.update_one = raced_update
+    if race == "insert":
+        leases.insert_one = raced_insert
+    result = await store.schedule_recovery(
+        original.run_id,
+        expected_state_version=original.state_version,
+        next_attempt_at=desired,
+    )
+    assert result.outcome == "conflict"
+    assert len(leases.values) == 1
+    assert (await store.load(original.run_id)).recovery_claim == claim
+
+
+async def test_mongo_early_schedule_losing_run_version_has_no_schedule_effect():
+    from tests.test_orchestrator_a2a_mongo_parity import FakeCollection
+
+    runs, leases = FakeCollection(), FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    original = (await store.create(make_run(), command_id="create")).run
+    replace = runs.replace_one
+
+    async def competing_version(query, document, **kwargs):
+        runs.values[0]["state_version"] += 1
+        return await replace(query, document, **kwargs)
+
+    runs.replace_one = competing_version
+    scheduled = await store.schedule_recovery(
+        original.run_id,
+        expected_state_version=original.state_version,
+        next_attempt_at=NOW + timedelta(seconds=5),
+    )
+    assert scheduled.outcome == "conflict"
+    assert leases.values == []
+    assert (await store.load(original.run_id)).recovery_claim == original.recovery_claim
+
+
+async def test_mongo_early_schedule_advances_released_dedicated_row():
+    from tests.test_orchestrator_a2a_mongo_parity import FakeCollection
+
+    runs, leases = FakeCollection(), FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    original = (await store.create(make_run(), command_id="create")).run
+    await leases.insert_one(
+        {"run_id": original.run_id, **original.recovery_claim.model_dump(mode="python")}
+    )
+    requested = NOW + timedelta(seconds=5)
+    scheduled = await store.schedule_recovery(
+        original.run_id,
+        expected_state_version=original.state_version,
+        next_attempt_at=requested,
+    )
+    assert scheduled.outcome == "accepted"
+    assert scheduled.run.recovery_claim.next_attempt_at == requested
+    # Existing dedicated authority must advance even though cas_mutate mirrors
+    # its old schedule over the provisional aggregate admission.
+    assert [
+        run.run_id for run in await store.list_due_runs(due_at=requested, limit=10)
+    ] == [original.run_id]
+    assert leases.values[0]["next_attempt_at"] == requested

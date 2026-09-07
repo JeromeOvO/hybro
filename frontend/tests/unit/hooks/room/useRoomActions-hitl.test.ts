@@ -6,12 +6,13 @@ import { useMessageStore } from '@/stores/message-store'
 
 const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
+  cancel: vi.fn(),
   hydrate: vi.fn(),
 }))
 
 vi.mock('@/lib/api/hitl', () => ({
   respondToHitlBatch: mocks.submit,
-  cancelHitl: vi.fn(),
+  cancelHitl: mocks.cancel,
 }))
 vi.mock('@/lib/room-sync/hydrate-room', () => ({
   hydrateRoomFromDb: mocks.hydrate,
@@ -52,11 +53,14 @@ function renderActions(
     armCancelTimeout: vi.fn(),
   }
   const hitlRequestIndex = { current: new Map<string, string>() }
+  const setCancelling = vi.fn()
   return {
     reconcile,
+    lifecycle,
+    setCancelling,
     hook: renderHook(() => useRoomActions(
       'room-1', async () => null, lifecycle as never,
-      hitlRequestIndex, reconcile, vi.fn(), true, vi.fn(),
+      hitlRequestIndex, reconcile, setCancelling, true, vi.fn(),
       async () => 'Agent', () => 'local', requestSnapshot,
     )),
     requestSnapshot,
@@ -68,6 +72,11 @@ describe('useRoomActions HITL conflict recovery', () => {
     vi.clearAllMocks()
     seedHitl()
     mocks.submit.mockRejectedValue(new ApiError(409, 'Conflict'))
+    mocks.cancel.mockResolvedValue({
+      status: 'canceled',
+      interaction_id: 'interaction-1',
+      interaction_version: 2,
+    })
     mocks.hydrate.mockResolvedValue(successfulHydration)
   })
 
@@ -137,5 +146,87 @@ describe('useRoomActions HITL conflict recovery', () => {
       'interaction-1', [{ requestId: 'request-1', answer: 'A' }], 'client-1',
     )).rejects.toMatchObject({ status: 409 })
     expect(mocks.submit).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('useRoomActions HITL cancellation convergence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    seedHitl()
+    mocks.cancel.mockResolvedValue({
+      status: 'canceled',
+      interaction_id: 'interaction-1',
+      interaction_version: 2,
+    })
+  })
+
+  it('sets cancelling before the request and leaves terminal cleanup to authority', async () => {
+    const { hook, lifecycle, setCancelling, reconcile, requestSnapshot } = renderActions()
+    mocks.cancel.mockImplementation(async () => {
+      expect(setCancelling).toHaveBeenCalledWith(true)
+      expect(lifecycle.setCancelTimedOut).toHaveBeenCalledWith(false)
+      return {
+        status: 'canceled',
+        interaction_id: 'interaction-1',
+        interaction_version: 2,
+      }
+    })
+
+    await hook.result.current.cancelHitlRequest('request-1', 'interaction-1')
+
+    expect(mocks.cancel).toHaveBeenCalledTimes(1)
+    expect(setCancelling).toHaveBeenCalledTimes(1)
+    expect(reconcile).toHaveBeenCalledWith('room-1')
+    expect(requestSnapshot).toHaveBeenCalledTimes(1)
+    expect(lifecycle.markProcessingResolved).not.toHaveBeenCalled()
+    expect(lifecycle.stopProcessing).not.toHaveBeenCalled()
+    expect(useMessageStore.getState().entities['hitl-1']).toMatchObject({
+      hitlResolved: true,
+      hitlInteractionStatus: 'canceled',
+      taskStatus: 'canceled',
+    })
+  })
+
+  it('clears cancelling after a failed request and conflict reconciliation', async () => {
+    mocks.cancel.mockRejectedValue(new ApiError(409, 'Conflict'))
+    const { hook, setCancelling, reconcile, requestSnapshot } = renderActions()
+
+    await expect(hook.result.current.cancelHitlRequest(
+      'request-1', 'interaction-1',
+    )).rejects.toMatchObject({ status: 409 })
+
+    expect(reconcile).toHaveBeenCalledWith('room-1')
+    expect(setCancelling.mock.calls).toEqual([[true], [false]])
+    expect(requestSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('clears cancelling after a non-conflict request failure', async () => {
+    mocks.cancel.mockRejectedValue(new Error('network unavailable'))
+    const { hook, setCancelling, reconcile } = renderActions()
+
+    await expect(hook.result.current.cancelHitlRequest(
+      'request-1', 'interaction-1',
+    )).rejects.toThrow('network unavailable')
+
+    expect(reconcile).not.toHaveBeenCalled()
+    expect(setCancelling.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('keeps accepted cancellation successful when recovery fails', async () => {
+    const reconcile = vi.fn().mockRejectedValue(new Error('reconcile failed'))
+    const requestSnapshot = vi.fn(() => {
+      throw new Error('snapshot failed')
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { hook, setCancelling } = renderActions(reconcile, requestSnapshot)
+
+    await expect(hook.result.current.cancelHitlRequest(
+      'request-1', 'interaction-1',
+    )).resolves.toBeUndefined()
+
+    expect(setCancelling.mock.calls).toEqual([[true]])
+    expect(requestSnapshot).toHaveBeenCalledTimes(1)
+    expect(consoleError).toHaveBeenCalledTimes(2)
+    consoleError.mockRestore()
   })
 })

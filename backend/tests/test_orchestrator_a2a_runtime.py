@@ -61,6 +61,7 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
     TerminalInteractionFinalizer,
 )
 from execution.orchestrator.models import TextPart, ToolResult, ToolSuspension
+from execution.orchestrator.ports import InvalidParkedInteractionTarget
 
 from ._orchestrator_a2a_helpers import invocation, ledger_record, prepared
 from ._orchestrator_helpers import NOW, NeverCancelled
@@ -1340,19 +1341,162 @@ async def test_runtime_competing_terminal_cas_winner_requires_hitl_finalization(
     assert len(dispatch.commands) == 1
 
 
-async def test_runtime_parked_abandonment_propagates_recoverable_store_failure():
-    class FailingHITL(InMemoryHITLApplicationPort):
-        async def abandon(self, *args, **kwargs):
-            raise RecoverableCheckpointError("HITL store unavailable")
+async def test_runtime_parked_abandonment_terminalizes_exact_ledger_idempotently():
+    runtime, ledger, _, _, _ = await setup()
+    parked = ledger_record(state="input_required").model_copy(
+        update={"pending_interaction_id": "interaction-1"}
+    )
+    assert await ledger.insert(parked) == "accepted"
 
-    runtime, _, _, _, _ = await setup(hitl=FailingHITL())
+    closeout = await runtime.abandon_parked_interaction(
+        call_record_id=parked.call_record_id,
+        interaction_id="interaction-1",
+    )
+    terminal = await ledger.load_by_record_id(parked.call_record_id)
+    assert terminal is not None
+    assert terminal.state == "canceled"
+    assert terminal.cancellation_command_id is not None
+    assert closeout.result == terminal.terminal_result
+    assert closeout.local_cancellation_won is True
 
-    with pytest.raises(RecoverableCheckpointError, match="HITL store unavailable"):
+    replayed_closeout = await runtime.abandon_parked_interaction(
+        call_record_id=parked.call_record_id,
+        interaction_id="interaction-1",
+    )
+    replay = await ledger.load_by_record_id(parked.call_record_id)
+    assert replay == terminal
+    assert replayed_closeout == closeout
+
+
+async def test_runtime_parked_abandonment_returns_concurrent_completed_winner():
+    class ConcurrentCompletedLedger(InMemoryAgentCallLedgerStore):
+        raced = False
+
+        async def cas(self, record, *, expected_state_version):
+            if not self.raced and record.state == "cancel_pending":
+                self.raced = True
+                current = await self.load_by_record_id(record.call_record_id)
+                assert current is not None
+                result = ToolResult(
+                    call_id=current.invocation_id,
+                    tool_name=current.tool_name,
+                    status="completed",
+                    content=[TextPart(text="concurrent completion")],
+                    artifact_refs=[],
+                )
+                resuming = transition_call(current, to_state="resuming", updated_at=NOW)
+                assert (
+                    await super().cas(
+                        resuming, expected_state_version=current.state_version
+                    )
+                    == "accepted"
+                )
+                winner = transition_call(
+                    resuming,
+                    to_state="completed",
+                    updated_at=NOW,
+                    terminal_result=result,
+                    terminal_result_digest=sha256(
+                        result.model_dump_json().encode()
+                    ).hexdigest(),
+                )
+                assert (
+                    await super().cas(
+                        winner, expected_state_version=resuming.state_version
+                    )
+                    == "accepted"
+                )
+                return "conflict"
+            return await super().cas(
+                record, expected_state_version=expected_state_version
+            )
+
+    ledger = ConcurrentCompletedLedger()
+    runtime, ledger, _, _, _ = await setup(ledger=ledger)
+    parked = ledger_record(state="input_required").model_copy(
+        update={"pending_interaction_id": "interaction-1"}
+    )
+    assert await ledger.insert(parked) == "accepted"
+
+    closeout = await runtime.abandon_parked_interaction(
+        call_record_id=parked.call_record_id,
+        interaction_id="interaction-1",
+    )
+
+    assert closeout.result.status == "completed"
+    assert closeout.result.content == [TextPart(text="concurrent completion")]
+    assert closeout.local_cancellation_won is False
+    terminal = await ledger.load_by_record_id(parked.call_record_id)
+    assert terminal is not None
+    assert terminal.state == "completed"
+    assert terminal.terminal_result == closeout.result
+
+
+async def test_runtime_parked_abandonment_rejects_missing_or_cancel_pending_ledger():
+    runtime, ledger, _, _, _ = await setup()
+    with pytest.raises(RecoverableCheckpointError, match="ledger record"):
         await runtime.abandon_parked_interaction(
-            call_record_id="call-record-1",
+            call_record_id="missing",
             interaction_id="interaction-1",
-            terminal_state="failed",
         )
+
+    pending = ledger_record(state="cancel_pending").model_copy(
+        update={"pending_interaction_id": "interaction-1"}
+    )
+    assert await ledger.insert(pending) == "accepted"
+    with pytest.raises(RecoverableCheckpointError, match="no cancellation command"):
+        await runtime.abandon_parked_interaction(
+            call_record_id=pending.call_record_id,
+            interaction_id="interaction-1",
+        )
+
+
+@pytest.mark.parametrize("close_mode", ["conflict", "error", "outage", "ack_loss"])
+async def test_runtime_parked_closeout_replays_after_terminal_cas_and_hitl_failure(
+    close_mode,
+):
+    owner = RuntimeFinalizerFaultHITL(close_mode)
+    runtime, ledger, _, dispatch, _ = await setup(hitl=owner)
+    parked = ledger_record(state="input_required").model_copy(
+        update={
+            "pending_interaction_id": "interaction-1",
+            "interaction_fingerprint": "fingerprint-1",
+            "interaction_revision": 1,
+        }
+    )
+    assert await ledger.insert(parked) == "accepted"
+    await owner.create_or_replay(
+        call=parked,
+        interaction=_interaction("input_required"),
+        interaction_fingerprint="fingerprint-1",
+    )
+    ledger.cas = AsyncMock(wraps=ledger.cas)
+
+    with pytest.raises(RecoverableCheckpointError):
+        await runtime.abandon_parked_interaction(
+            call_record_id=parked.call_record_id,
+            interaction_id="interaction-1",
+        )
+    terminal = await ledger.load_by_record_id(parked.call_record_id)
+    assert terminal.state == "canceled"
+    assert terminal.terminal_result is not None
+    assert terminal.state_version == parked.state_version + 2
+    assert ledger.cas.await_count == 2  # cancel_pending then terminal winner
+    assert owner.is_abandoned_for_test("interaction-1") is (close_mode == "ack_loss")
+
+    closeout = await runtime.abandon_parked_interaction(
+        call_record_id=parked.call_record_id,
+        interaction_id="interaction-1",
+    )
+    assert closeout.result == terminal.terminal_result
+    assert closeout.local_cancellation_won is True
+    assert await ledger.load_by_record_id(parked.call_record_id) == terminal
+    assert ledger.cas.await_count == 2  # replay reads, never transitions again
+    assert owner.abandon_calls == 2
+    assert owner.effects == 1
+    assert owner.is_abandoned_for_test("interaction-1") is True
+    await _assert_closed_and_unanswerable(owner)
+    assert dispatch.commands == []
 
 
 async def test_runtime_terminal_finalizer_programming_defect_surfaces():
@@ -1722,3 +1866,164 @@ async def test_model_reply_redispatch_returns_persisted_outcome_without_resend()
     assert result.content == [TextPart(text="done")]
     # The parent already resolved: no remote message was sent.
     assert len(dispatch.commands) == commands_before
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "ledger",
+        "interaction_owner",
+        "call_state",
+        "hitl",
+        "aggregate",
+        "route_owner",
+        "route_run",
+        "route_invocation",
+        "revision",
+        "route_fingerprint",
+        "fingerprint",
+        "spec_identity",
+    ],
+)
+async def test_runtime_surface_publication_requires_exact_parked_target(
+    monkeypatch, missing
+):
+    runtime, ledger, _, _, _ = await setup()
+    call = ledger_record(state="input_required").model_copy(
+        update={
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    owner = runtime.hitl
+    await owner.create_or_replay(
+        call=call,
+        interaction=_interaction("input_required"),
+        interaction_fingerprint="fp-1",
+    )
+    spec, route, fingerprint = await owner.read_interaction("interaction-1")
+    if missing == "interaction_owner":
+        call = call.model_copy(update={"pending_interaction_id": "other"})
+    elif missing == "call_state":
+        call = call.model_copy(update={"state": "working"})
+    if missing != "ledger":
+        assert await ledger.insert(call) == "accepted"
+    if missing == "hitl":
+        runtime.hitl = None
+    elif missing == "aggregate":
+        monkeypatch.setattr(owner, "read_interaction", AsyncMock(return_value=None))
+    elif missing in {
+        "route_owner",
+        "route_run",
+        "route_invocation",
+        "revision",
+        "route_fingerprint",
+    }:
+        field, value = {
+            "route_owner": ("call_record_id", "other"),
+            "route_run": ("orchestration_run_id", "other"),
+            "route_invocation": ("invocation_id", "other"),
+            "revision": ("interaction_revision", 2),
+            "route_fingerprint": ("interaction_fingerprint", "other"),
+        }[missing]
+        route = route.model_copy(update={field: value})
+    elif missing == "fingerprint":
+        fingerprint = "other"
+    elif missing == "spec_identity":
+        spec = spec.model_copy(update={"interaction_id": "other"})
+    if missing not in {"hitl", "aggregate"}:
+        monkeypatch.setattr(
+            owner,
+            "read_interaction",
+            AsyncMock(return_value=(spec, route, fingerprint)),
+        )
+    publish = AsyncMock(wraps=owner.publish)
+    emit = AsyncMock()
+    monkeypatch.setattr(owner, "publish", publish)
+    monkeypatch.setattr(runtime, "_emit_parked_hitl_events", emit)
+    with pytest.raises(
+        RecoverableCheckpointError
+        if missing == "hitl"
+        else InvalidParkedInteractionTarget
+    ):
+        await runtime.publish_parked_interaction(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+        )
+    publish.assert_not_awaited()
+    emit.assert_not_awaited()
+    assert await owner.get_published_interactions(call.room_id) == []
+
+
+@pytest.mark.parametrize("outcome", ["stale", "conflict", "absent", "error"])
+async def test_runtime_surface_rejected_visibility_write_emits_no_hitl(
+    monkeypatch, outcome
+):
+    runtime, ledger, _, _, _ = await setup()
+    call = ledger_record(state="input_required").model_copy(
+        update={
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(call) == "accepted"
+    await runtime.hitl.create_or_replay(
+        call=call,
+        interaction=_interaction("input_required"),
+        interaction_fingerprint="fp-1",
+    )
+    monkeypatch.setattr(runtime.hitl, "publish", AsyncMock(return_value=outcome))
+    emit = AsyncMock()
+    monkeypatch.setattr(runtime, "_emit_parked_hitl_events", emit)
+    with pytest.raises(
+        RecoverableCheckpointError
+        if outcome == "error"
+        else InvalidParkedInteractionTarget,
+        match="publication was",
+    ):
+        await runtime.publish_parked_interaction(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+        )
+    emit.assert_not_awaited()
+    assert await runtime.hitl.get_published_interactions(call.room_id) == []
+
+
+@pytest.mark.parametrize("state", ["input_required", "auth_required"])
+async def test_runtime_surface_legitimate_visibility_replay_completes_publication(
+    monkeypatch, state
+):
+    runtime, ledger, _, _, _ = await setup()
+    call = ledger_record(state=state).model_copy(
+        update={
+            "pending_interaction_id": "interaction-1",
+            "interaction_revision": 1,
+            "interaction_fingerprint": "fp-1",
+        }
+    )
+    assert await ledger.insert(call) == "accepted"
+    await runtime.hitl.create_or_replay(
+        call=call,
+        interaction=_interaction(state),
+        interaction_fingerprint="fp-1",
+    )
+    publish = AsyncMock(wraps=runtime.hitl.publish)
+    monkeypatch.setattr(runtime.hitl, "publish", publish)
+    emit = AsyncMock(
+        side_effect=[RecoverableCheckpointError("append unavailable"), None]
+    )
+    monkeypatch.setattr(runtime, "_emit_parked_hitl_events", emit)
+    with pytest.raises(RecoverableCheckpointError, match="append unavailable"):
+        await runtime.publish_parked_interaction(
+            call_record_id=call.call_record_id,
+            interaction_id="interaction-1",
+        )
+    await runtime.publish_parked_interaction(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+    )
+    assert publish.await_count == emit.await_count == 2
+    assert len(await runtime.hitl.get_published_interactions(call.room_id)) == 1
+    assert await ledger.load_by_record_id(call.call_record_id) == call

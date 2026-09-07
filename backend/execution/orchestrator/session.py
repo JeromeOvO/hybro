@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Protocol
 
@@ -315,6 +315,14 @@ class RoomAgentSession:
             pass
         await self._reschedule_interrupted_run()
 
+    async def schedule_recovery(self, *, next_attempt_at: datetime) -> None:
+        """Request an early wake without replacing a recovery worker's claim."""
+        if self._run_id is None:
+            return
+        await schedule_run_recovery(
+            self.run_store, self._run_id, next_attempt_at=next_attempt_at
+        )
+
     async def _reschedule_interrupted_run(self) -> None:
         if self._run_id is None:
             return
@@ -441,6 +449,34 @@ class RoomAgentSession:
             ),
             terminal=terminal,
         )
+
+
+async def schedule_run_recovery(
+    run_store: OrchestratorRunStore, run_id: str, *, next_attempt_at: datetime
+) -> None:
+    """Share version-fenced early admission across hosted and run-addressed work."""
+    for _attempt in range(4):
+        run = await run_store.load(run_id)
+        if run is None:
+            raise SessionConflict("active Run is missing")
+        result = await run_store.schedule_recovery(
+            run.run_id,
+            expected_state_version=run.state_version,
+            next_attempt_at=next_attempt_at,
+        )
+        if result.outcome in {"accepted", "replayed"}:
+            return
+        current = result.run
+        if (
+            current is None
+            or current.recovery_claim.owner_id is not None
+            or current.status
+            in {"canceling", "completed", "failed", "canceled", "budget_exhausted"}
+            or current.recovery_claim.quarantined_at is not None
+        ):
+            return
+        await asyncio.sleep(0)
+    raise SessionConflict("recoverable Run could not be scheduled")
 
 
 def _replayed_result(run: OrchestratorRunState) -> KernelRunResult | None:

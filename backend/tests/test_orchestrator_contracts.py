@@ -807,6 +807,7 @@ def test_protocols_are_narrow_and_explicit():
             "request_cancellation",
             "repair_canceling_recovery",
             "claim_recovery",
+            "schedule_recovery",
             "renew_recovery",
             "release_recovery",
             "list_due_runs",

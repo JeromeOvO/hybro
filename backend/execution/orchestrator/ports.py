@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
@@ -19,9 +20,22 @@ from .models import (
     ToolDefinition,
     ToolExecutionOutcome,
     ToolInvocation,
+    ToolResult,
 )
 
 StoreOutcome = Literal["accepted", "replayed", "conflict", "error"]
+
+
+class InvalidParkedInteractionTarget(RuntimeError):
+    """Publication was rejected without accepting a public interaction."""
+
+
+@dataclass(frozen=True, slots=True)
+class ParkedInteractionCloseout:
+    """Durable exact-child winner returned by parked closeout."""
+
+    result: ToolResult
+    local_cancellation_won: bool
 
 
 class RunStoreResult(Protocol):
@@ -86,8 +100,7 @@ class ToolRuntime(Protocol):
         *,
         call_record_id: str,
         interaction_id: str,
-        terminal_state: str,
-    ) -> None: ...
+    ) -> ParkedInteractionCloseout: ...
 
 
 class Clock(Protocol):
@@ -141,6 +154,14 @@ class OrchestratorRunStore(Protocol):
     ) -> RunStoreResult: ...
 
     async def repair_canceling_recovery(self, *, limit: int) -> int: ...
+
+    async def schedule_recovery(
+        self,
+        run_id: str,
+        *,
+        expected_state_version: int,
+        next_attempt_at: datetime,
+    ) -> RunStoreResult: ...
 
     async def claim_recovery(
         self,

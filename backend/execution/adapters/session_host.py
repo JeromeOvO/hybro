@@ -13,11 +13,12 @@ surface used by the composition root and tests.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
 from execution.orchestrator.a2a_runtime.observations import (
     RunAddressedToolObservationSink,
+    await_recoverable,
 )
 from execution.orchestrator.a2a_runtime.ports import RoomEpochStore
 from execution.orchestrator.kernel import (
@@ -135,17 +136,31 @@ class RoomSessionHost:
         *,
         client_request_id: str | None = None,
     ) -> KernelRunResult:
-        return await self._require_session(room_id).prompt(
-            message, client_request_id=client_request_id
+        session = self._require_session(room_id)
+        return await self._await_recoverable(
+            session, session.prompt(message, client_request_id=client_request_id)
         )
 
     async def continue_run(self, room_id: str) -> KernelRunResult:
-        return await self._require_session(room_id).continue_run()
+        session = self._require_session(room_id)
+        return await self._await_recoverable(session, session.continue_run())
 
     async def observe_tool(
         self, room_id: str, observation: ToolObservation
     ) -> KernelRunResult:
-        return await self._require_session(room_id).observe_tool(observation)
+        session = self._require_session(room_id)
+        return await self._await_recoverable(session, session.observe_tool(observation))
+
+    async def _await_recoverable(
+        self, session: RoomAgentSession, work: Awaitable[KernelRunResult]
+    ) -> KernelRunResult:
+        return await await_recoverable(
+            work,
+            schedule_recovery=lambda due: session.schedule_recovery(
+                next_attempt_at=due
+            ),
+            now=self._clock.now,
+        )
 
     async def abort(self, room_id: str) -> None:
         await self._require_session(room_id).abort()
@@ -290,6 +305,7 @@ class RoomSessionHost:
             kernel_factory=kernel_for_run,
             signal_factory=EventCancellationSignal,
             lifecycle_factory=lifecycle_for_run,
+            clock=self._clock,
         )
 
     def _new_lifecycle_emitter(self) -> LifecycleEmitter:

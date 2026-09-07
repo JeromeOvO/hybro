@@ -784,3 +784,263 @@ async def test_router_pending_hitl_uses_public_activity_message_id():
     assert pending[0].source_step_id is None
     assert pending[0].a2a_task_id is None
     assert pending[0].a2a_context_id is None
+
+
+@pytest.mark.asyncio
+async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
+    from common.dto.delivery import RunEventNotification
+    from delivery.snapshot import RoomEventFold
+    from delivery.translator import to_sse_frame
+    from execution.adapters.session_host import RoomSessionHost
+    from execution.orchestrator.a2a_runtime.cancellation import (
+        A2ACancellationCoordinator,
+    )
+    from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
+    from execution.orchestrator.a2a_runtime.models import A2ADispatchReceipt
+    from execution.orchestrator.lifecycle import SessionEvent
+    from execution.orchestrator.models import (
+        FrozenToolCatalogEntry,
+        FrozenToolCatalogSnapshot,
+    )
+    from execution.orchestrator.projection import (
+        ProjectionOutboxWorker,
+        SettlingProjectionDriver,
+    )
+    from execution.orchestrator.public_projection import (
+        PublicProjectionTranslator,
+        canonical_settlement_payload,
+    )
+    from tests._orchestrator_a2a_helpers import invocation
+    from tests._orchestrator_helpers import (
+        NOW,
+        FixedClock,
+        NeverCancelled,
+        make_kernel,
+        make_run,
+        tool_events,
+    )
+    from tests.test_orchestrator_a2a_runtime import setup
+
+    # Real acceptance, parking, publication and cancellation; only transport,
+    # provider and persistence are in-memory substitutes.
+    a2a, ledger, _, dispatch, _ = await setup()
+    resolved = invocation().tool
+    catalog = FrozenToolCatalogSnapshot(
+        catalog_id="catalog-1",
+        entries=[
+            FrozenToolCatalogEntry(
+                definition=resolved.definition,
+                binding=resolved.binding,
+                agent_display_name="Agent",
+            )
+        ],
+        created_at=NOW,
+    )
+    run = make_run().model_copy(update={"tool_catalog": catalog})
+    dispatch.receipt = A2ADispatchReceipt(
+        outcome="interaction",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_observation=NormalizedA2AObservation(
+            observation_id="typed-input",
+            source_kind="direct",
+            source_identity="direct:typed-input",
+            binding_scope="endpoint",
+            event_kind="input_required",
+            observed_at=NOW,
+            task_id="task-1",
+            context_id="context-1",
+            interaction_spec=interaction().model_dump(mode="json"),
+        ),
+    )
+    kernel, store, model, _ = await make_kernel(
+        [
+            tool_events(("call-1", "agent_abc", '{"task":"do work"}')),
+            tool_events(("call-2", "surface_agent_questions", "{}")),
+        ],
+        run=run,
+        tool_runtime=a2a,
+        supervisor_hitl=AsyncMock(),
+    )
+    kernel.tool_catalog = FrozenToolCatalog(catalog)
+    kernel.projection_driver = SettlingProjectionDriver(store)
+    a2a.run_store = store
+    records = []
+    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+
+    async def emit_checked(event):
+        frame = to_sse_frame(event, timestamp=NOW, room_seq=len(records) + 1)
+        records.append(
+            {
+                "room_id": frame["room_id"],
+                "room_seq": len(records) + 1,
+                "kind": frame["type"],
+                "ts": frame["timestamp"],
+                "payload_public": frame["data"],
+            }
+        )
+        return DeliveryEmitStatus.DELIVERED
+
+    async def listener(event):
+        projected = translator.translate(event, catalog=catalog)
+        if projected is not None:
+            await emit_checked(
+                RunEventNotification(
+                    room_id=run.room_id,
+                    event_id=projected.event_id,
+                    run_id=run.run_id,
+                    seq=projected.seq,
+                    run_event_type=projected.kind,
+                    payload=projected.payload,
+                    correlation_id=run.client_request_id,
+                )
+            )
+
+    async def lifecycle(event_type, current, payload):
+        await listener(
+            SessionEvent(
+                event_type=event_type,
+                session_id=current.session_id,
+                run_id=current.run_id,
+                causation_id=current.request.user_message_id,
+                sequence=current.state_version,
+                timestamp=NOW,
+                payload=payload,
+                room_id=current.room_id,
+                user_message_id=current.request.user_message_id,
+                client_request_id=current.client_request_id,
+                lifecycle_family="canonical",
+            )
+        )
+
+    async def control(kind, run_id, interaction_id, request_ids):
+        await emit_checked(
+            RunEventNotification(
+                room_id=run.room_id,
+                event_id=f"public:{run_id}:{kind}:{interaction_id}",
+                run_id=run_id,
+                seq=len(records) + 1,
+                run_event_type=kind,
+                payload={
+                    "interaction_id": interaction_id,
+                    "request_ids": request_ids,
+                    "requested_at": NOW,
+                },
+                correlation_id=run.client_request_id,
+            )
+        )
+
+    a2a.hitl_delivery = SimpleNamespace(emit_checked=emit_checked)
+    a2a.canonical_hitl_control = control
+    kernel.canonical_event_reader = AsyncMock(side_effect=lambda *_: list(records))
+    await lifecycle("run_started", run, {"mode": "ultimate"})
+    waiting = await kernel.run(run.run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+    assert waiting.outcome == "awaiting_user"
+    child = await ledger.load(run.run_id, "call-1")
+    assert child.state == "input_required"
+    assert len(await a2a.hitl.get_published_interactions(run.room_id)) == 1
+    waiting_fold = RoomEventFold()
+    for record in records:
+        assert waiting_fold.apply(record), record
+    assert waiting_fold.state(room_seq=len(records))["turns"][0]["state"] == (
+        "awaiting_input"
+    )
+
+    host = RoomSessionHost(
+        kernel_factory=lambda _: kernel,
+        run_store=store,
+        epoch_store=a2a.room_epochs,
+        listener=listener,
+        clock=FixedClock(),
+    )
+    router = DualRuntimeRouter(
+        runtime=SimpleNamespace(
+            hitl_port=a2a.hitl,
+            hitl_delivery=a2a.hitl_delivery,
+            run_store=store,
+            call_ledger=ledger,
+            continuation=SimpleNamespace(canonical_hitl_control=control),
+            cancellation_coordinator=A2ACancellationCoordinator(
+                ledger=ledger,
+                room_epochs=a2a.room_epochs,
+                dispatch=dispatch,
+                observations=a2a.observations,
+                hitl=a2a.hitl,
+            ),
+            session_host=host,
+        )
+    )
+    assert (
+        await router.cancel_hitl_interaction(
+            room_id=run.room_id, interaction_id="interaction-1", expected_version=1
+        )
+        == 1
+    )
+    terminal = await store.load(run.run_id)
+    assert terminal.status == "canceled"
+    assert (await ledger.load(run.run_id, "call-1")).state == "canceled"
+    assert a2a.hitl.is_abandoned_for_test("interaction-1")
+    assert await a2a.hitl.get_eligible_interactions(run.room_id) == []
+    assert all(
+        entry.state == "terminal" and entry.public_terminal_emitted
+        for batch in terminal.tool_batches
+        for entry in batch.entries
+    )
+
+    async def project_terminal_status(_intent, current):
+        await emit_checked(
+            RunEventNotification(
+                room_id=current.room_id,
+                event_id=f"public:{current.run_id}:run_settled",
+                run_id=current.run_id,
+                seq=current.state_version,
+                run_event_type="run_settled",
+                payload=canonical_settlement_payload(current),
+                correlation_id=current.client_request_id,
+            )
+        )
+        return "accepted"
+
+    worker = ProjectionOutboxWorker(
+        run_store=store,
+        projectors={
+            "append_orchestrator_event": AsyncMock(return_value="accepted"),
+            "project_terminal_run_status": project_terminal_status,
+        },
+    )
+    assert await worker.run_once(due_at=NOW) == 2
+    assert (await store.load(run.run_id)).projection_state == "settled"
+    assert await worker.run_once(due_at=NOW) == 0
+
+    # Fold the actual newly emitted history from scratch, as refresh does.
+    fold = RoomEventFold()
+    for record in records:
+        assert fold.apply(record), record
+    snapshot = fold.state(room_seq=len(records))
+    turn = snapshot["turns"][0]
+    assert turn["state"] == "canceled"
+    assert turn["active_interaction_id"] is None
+    assert turn["hitl_interactions"][0]["state"] == "canceled"
+    assert turn["hitl_interactions"][0]["requests"][0]["status"] == "canceled"
+    assert turn["internal_turns"][0]["status"] == "aborted"
+    assert [item["status"] for item in turn["activity"] if item["kind"] == "tool"] == [
+        "canceled",
+        "canceled",
+    ]
+    assert turn["terminal_code"] == "user_requested"
+    closure = [
+        record["payload_public"].get("type", record["kind"])
+        for record in records
+        if record["kind"] == "hitl_response"
+        or record["payload_public"].get("type")
+        in {"tool_execution_end", "turn_end", "run_settled"}
+    ]
+    assert closure == [
+        "hitl_response",
+        "tool_execution_end",
+        "tool_execution_end",
+        "turn_end",
+        "run_settled",
+    ]
+    assert len(dispatch.commands) == 1
+    assert len(model.requests) == 2

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AnySSEFrame } from '@/lib/types/sse'
+import type { AnySSEFrame, RoomSnapshotTurn } from '@/lib/types/sse'
+import { createProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
+import { useRoomUiStore } from '@/stores/room-ui-store'
 import {
   BOOTSTRAP_SNAPSHOT_MS,
   REORDER_WINDOW_MS,
@@ -9,7 +11,7 @@ import {
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
 import { useTraceStore } from '@/stores/trace-store'
-import { useTurnStore } from '@/stores/turn-store'
+import { selectCanonicalComposerAuthority, useTurnStore } from '@/stores/turn-store'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 import {
   hitlQuestionEntityId,
@@ -48,9 +50,59 @@ function emptySnapshot(roomSeq: number) {
   }
 }
 
+function snapshotTurn(state: RoomSnapshotTurn['state']): RoomSnapshotTurn {
+  const terminal = state !== 'active'
+  return {
+    hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1', client_request_id: 'client-1', state,
+    started_at: '2030-01-01T00:00:00.000Z',
+    settled_at: terminal ? '2030-01-01T00:00:01.000Z' : null,
+    duration_ms: terminal ? 1000 : null,
+    terminal_code: state === 'canceled' ? 'user_requested' : state === 'failed' ? 'internal_error' : null,
+    terminal_summary: state === 'failed' ? 'The run failed.' : null,
+    internal_turns: state === 'completed' ? [{
+      internal_turn_id: 'turn-1', attempt: 1, message_ids: ['assistant-1'],
+      tool_call_ids: [], status: 'completed',
+    }] : [],
+    activity: [], current_assistant: null,
+    final_answer: state === 'completed' ? {
+      message_id: 'assistant-1', internal_turn_id: 'turn-1', text: 'Done',
+      status: 'completed', order: 1,
+    } : null,
+    final_committed: state === 'completed', hitl_interactions: [],
+    active_interaction_id: null, agent_call_message_ids: [],
+  }
+}
+
+function cancellingHitlReducer() {
+  const lifecycle = createProcessingLifecycle((active) => {
+    useRoomUiStore.getState().setProcessing('room-1', active)
+  })
+  lifecycle.startProcessing('user-1', 'client-1')
+  // The real HITL handler retains correlation while clearing the send guard.
+  lifecycle.stopProcessing({ clearMessageId: false })
+  useRoomUiStore.getState().setCancelling('room-1', true)
+  expect(lifecycle.isSendGuardActive()).toBe(false)
+  expect(useRoomUiStore.getState().getRoomFlags('room-1')).toMatchObject({
+    processing: false, cancelling: true,
+  })
+  const timeout = vi.fn()
+  lifecycle.armCancelTimeout(timeout)
+  const placeholderId = lifecycle.placeholderId('room-1')
+  useMessageStore.getState().upsertMessage({
+    id: placeholderId, roomId: 'room-1', messageType: 'agent', content: '',
+    senderName: 'Assistant', timestamp: '2030-01-01T00:00:00.000Z',
+  }, 'sse')
+  const reducer = new RoomReducer({
+    roomId: 'room-1', onDelta: async () => {}, requestSnapshot: vi.fn(),
+    processingLifecycle: lifecycle,
+  })
+  return { reducer, lifecycle, timeout, placeholderId }
+}
+
 describe('RoomReducer', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    useRoomUiStore.getState().resetAll()
     useMessageStore.getState().clearRoom()
     useStreamingStore.getState().clearRoom('room-1')
     useTraceStore.getState().clearRoom()
@@ -61,6 +113,62 @@ describe('RoomReducer', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
+
+  it.each(['canceled', 'failed', 'completed'] as const)(
+    'unlocks a matching %s snapshot after HITL cleared the send guard',
+    async (state) => {
+      const { reducer, lifecycle, timeout, placeholderId } = cancellingHitlReducer()
+      await reducer.handle(frame('connected', { room_seq: 5 }))
+      await reducer.handle(frame('snapshot', {
+        ...emptySnapshot(5), turns: [snapshotTurn(state)],
+      }))
+
+      expect(useTurnStore.getState().rooms['room-1'].turns['run-1'].state).toBe(state)
+      expect(selectCanonicalComposerAuthority(useTurnStore.getState().rooms['room-1']).normalComposerBlocked).toBe(false)
+      expect(useRoomUiStore.getState().getRoomFlags('room-1').cancelling).toBe(false)
+      expect(lifecycle.isProcessingResolved()).toBe(true)
+      expect(lifecycle.isSendGuardActive()).toBe(false)
+      expect(lifecycle.getMessageId()).toBeNull()
+      expect(lifecycle.getClientRequestId()).toBeNull()
+      expect(lifecycle.isPlaceholderDismissed()).toBe(true)
+      expect(useMessageStore.getState().entities[placeholderId]).toBeUndefined()
+      vi.advanceTimersByTime(15001)
+      expect(timeout).not.toHaveBeenCalled()
+      lifecycle.dispose()
+    },
+  )
+
+  it.each(['wrong user', 'wrong request', 'nonterminal', 'invalid', 'stale'])(
+    'does not clean up the current HITL cancellation for a %s snapshot',
+    async (scenario) => {
+      const { reducer, lifecycle, timeout, placeholderId } = cancellingHitlReducer()
+      await reducer.handle(frame('connected', { room_seq: 5 }))
+      await reducer.handle(frame('snapshot', emptySnapshot(5)))
+      const turn = snapshotTurn(scenario === 'nonterminal' ? 'active' : 'canceled')
+      if (scenario === 'wrong user') turn.user_message_id = 'other-user'
+      if (scenario === 'wrong request') turn.client_request_id = 'other-request'
+      if (scenario === 'invalid') turn.active_interaction_id = 'missing-interaction'
+      await reducer.handle(frame('snapshot', {
+        ...emptySnapshot(scenario === 'stale' ? 4 : 6), turns: [turn],
+      }))
+
+      if (['wrong user', 'wrong request', 'nonterminal'].includes(scenario)) {
+        expect(useTurnStore.getState().rooms['room-1'].turns['run-1'].state).toBe(turn.state)
+      } else {
+        expect(useTurnStore.getState().rooms['room-1'].order).toEqual([])
+      }
+      expect(useRoomUiStore.getState().getRoomFlags('room-1').cancelling).toBe(true)
+      expect(lifecycle.getMessageId()).toBe('user-1')
+      expect(lifecycle.getClientRequestId()).toBe('client-1')
+      expect(lifecycle.isSendGuardActive()).toBe(false)
+      expect(lifecycle.isProcessingResolved()).toBe(false)
+      expect(lifecycle.isPlaceholderDismissed()).toBe(false)
+      expect(useMessageStore.getState().entities[placeholderId]).toBeDefined()
+      vi.advanceTimersByTime(15001)
+      expect(timeout).toHaveBeenCalledOnce()
+      lifecycle.dispose()
+    },
+  )
 
   it('preserves the unsequenced legacy fold when the handshake has no room_seq', async () => {
     const deltas: string[] = []
