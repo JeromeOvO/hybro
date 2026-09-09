@@ -35,6 +35,7 @@ def test_deepseek_provider_builds_openai_compatible_client():
     client_factory.assert_called_once_with(
         api_key="deepseek-key",
         base_url="https://api.deepseek.com",
+        max_retries=0,
     )
     assert provider._client is client
 

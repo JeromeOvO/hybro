@@ -77,6 +77,14 @@ class LLMGatewayConfig:
 def resolve_generation_provider(
     settings_obj: Any,
 ) -> Literal["deepseek", "openai"]:
+    # Setup must win before validating irrelevant legacy text routing/keys.
+    # Keep the original two-provider registry contract as a private route hint;
+    # the gateway selects the actual configured adapter for every text call.
+    from llm_gateway.runtime_store import load_optional_setup
+
+    setup = load_optional_setup(settings_obj)
+    if setup is not None:
+        return "deepseek" if setup.config.provider.id == "deepseek" else "openai"
     selected = (
         str(
             getattr(settings_obj, "llm_gateway_generation_provider", "openai")

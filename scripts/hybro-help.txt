@@ -1,9 +1,63 @@
 hybro - lifecycle CLI for the local Hybro stack.
 
 Usage:
+    ./scripts/hybro                         # TUI when attached to a terminal
     ./scripts/hybro <subcommand> [args...]
 
 Subcommands:
+    tui
+        Open the keyboard menu (requires uv). Up/Down selects, Enter confirms,
+        Esc/Ctrl-C exits. Main menu: configure models, start, logs, more operations.
+        Start uses existing images directly. Status/restart/stop/build/recreate/
+        down/help are under more operations. Removal and forced recreation require
+        confirmation, default Cancel; down keeps named volumes. Command output
+        remains visible until Enter returns. Ctrl-C while following logs exits.
+        Small terminals scroll menus. No arguments without a terminal show help;
+        explicit subcommands and non-interactive flags remain available for scripts.
+
+    setup [--non-interactive --provider ID --auth api_key --text-model ID]
+          [--image-model ID|none]
+        Configure gateway text and optional image models (no embedding setup).
+        Requires uv; uses the frozen backend environment. Providers: openai,
+        deepseek, anthropic. OpenAI also supports ChatGPT/Codex browser OAuth:
+            ./scripts/hybro setup --provider openai --auth oauth --text-model gpt-5.5
+        OAuth requires interactive setup on the browser's host, with port 1455
+        available. Open the printed URL manually if the browser cannot launch.
+        Login expires in five minutes. OAuth ignores OPENAI_API_KEY and
+        OPENAI_BASE_URL; the key remains available for legacy embeddings.
+        First shows the saved Provider, authentication method, text/image models,
+        or a missing/invalid configuration notice. This display does not read
+        credentials or check whether the running backend has applied the selection.
+        TUI order: Provider -> authentication -> models -> verification -> save.
+        OAuth completes browser authorization before the text model menu.
+        API keys use a hidden terminal field, never typed option IDs.
+        The Codex catalog includes 10 source-confirmed models (including
+        gpt-5.3-codex, gpt-5.4-mini and gpt-5.5); account access is verified,
+        not assumed. OAuth has no image models, so that menu is skipped.
+        Image model: API-key OpenAI gpt-image-1, or none (default). This does not change
+        bundled Agents, which retain their existing configuration.
+
+        Shell environment overrides root .env. Supply the selected API key there
+        or enter it at the hidden prompt; never put secrets in command arguments.
+        Verification makes one text request (API billing or subscription quota)
+        before saving; a completed nonempty reply suffices, not exact JSON.
+        Failures show safe stage/category and available HTTP status/code, never
+        raw provider errors. No configuration is saved on verification failure.
+        Image access
+        is NOT verified and no image generation/edit request is made by setup.
+        Config/credentials live in HYBRO_HOME (absolute path), default ~/.hybro.
+        The backend alone mounts this directory; it must have mode 0700.
+        In API-key mode, a stored API key and environment key for the same
+        Provider conflict: remove one. This does not apply to OAuth.
+        Setup securely tightens an owned real directory to 0700 without changing
+        contents. Symlinks, non-directories and foreign-owned directories are refused.
+
+        Saving does not restart services. Apply with the same environment:
+            docker compose up -d --build --no-deps --force-recreate backend
+        For host execution, restart the backend with the same HYBRO_HOME.
+        Run setup before the first direct Docker start so the host owns the
+        private config directory; `hybro start` also creates it when absent.
+
     start [--build] [--recreate] [--check-key]
         Bring the stack up in the background (docker compose up -d
         --remove-orphans). Default is fast: no image rebuild, no forced

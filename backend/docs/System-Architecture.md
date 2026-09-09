@@ -393,6 +393,135 @@ transport.
 
 ### `llm_gateway`
 
+`./scripts/hybro` in a terminal (or `hybro tui`) opens a keyboard command menu
+with four actions: configure models, start, logs, and more operations. Advanced
+lifecycle and build/recreate commands live under more operations; all delegate to
+existing commands. Only removal and forced recreation require confirmation with
+Cancel selected by default. Start uses existing images without another menu.
+Command output remains visible until Enter returns to the main menu; Escape/Ctrl-C
+exits. No arguments
+without a terminal still show help; explicit commands remain scriptable. The package
+exports gateway classes on demand, and explicitly configured provider adapters do
+not initialize application Settings. Legacy callers retain settings-backed defaults.
+
+`./scripts/hybro setup` selects Provider/authentication, acquires credentials,
+then selects text and optional image models, verifies one text call, and saves.
+Interactive setup first displays the saved Provider, authentication method, text
+model and optional image model, or a missing/invalid configuration notice. This
+bounded config-only read never opens `auth.json`, verifies credentials, or claims
+the selection has been applied to the running backend.
+OpenAI OAuth browser authorization completes before the model menu; candidate
+credentials are not persisted until verification succeeds. API keys use a hidden
+terminal field. Interactive selection uses Up/Down arrows and Enter on `/dev/tty`,
+not typed IDs or piped stdin. Menus scroll on small terminals and show defaults
+and the text recommendation. Images include explicit None when eligible; otherwise
+that menu is skipped. Only OpenAI offers OAuth. Escape/Ctrl-C cancels menus with
+terminal/cursor restoration; explicit flags and non-interactive behavior remain.
+OpenAI, DeepSeek, and Anthropic text adapters
+are gateway-internal. A validated setup selection overrides legacy text model
+routes and frozen hints at every gateway text entry point, including
+`stream_turn_once`. Setup is validated before irrelevant legacy text-provider/model
+settings; the original registry and no-setup validation remain intact. This does
+not change caller DTOs, request correlation, or
+Execution ownership. Without setup, the legacy routing described below remains
+unchanged. Invalid setup or conflicting stored/environment API keys for the same
+Provider in API-key mode fail explicitly rather than reverting to legacy routing.
+OAuth ignores `OPENAI_API_KEY` at setup, load and refresh without modifying the
+environment, so embedding can retain its independent API key. Embedding interfaces and
+routing are unchanged and are not configured by setup.
+
+The gateway-local `runtime_home` resolver reads `HYBRO_HOME` (absolute path),
+defaulting to `~/.hybro`, independently of application-domain Settings. The
+private directory has mode `0700`; config and stored credentials use `0600`.
+Before prompting/login/verification, setup alone tightens an existing owned real
+directory to `0700` via a no-follow directory FD, device/inode identity comparison,
+`fstat`, and `fchmod`, reporting
+any correction without changing contents or ownership. Symlinks, non-directories
+and other owners are refused with distinct remediation guidance. Preflight does
+not create an absent directory; help, invalid selection and menu cancellation do
+not create a runtime tree. Runtime reads/writes remain strict and never repair
+insecure directory modes automatically.
+`config.yaml` contains selection, while optional `auth.json` contains the stored
+API key or OAuth access/refresh tokens, expiry, and unsigned account-routing
+metadata. Credential-bearing reads and writes share a directory lock. Save rolls back captured I/O
+failures but is not a crash-atomic two-file transaction. Setup checks the selected
+credential and text model with one text request (API billing or subscription quota)
+before saving; it does not automatically restart services. Verification requires
+a completed nonempty text reply, not exact JSON output. Failures expose bounded
+stage/category and available numeric HTTP status/allowlisted provider code and
+parameter. Codex errors accept both `error` and `detail` envelopes (including
+validation locations); known message templates become fixed codes, never echoed
+free text. Error bodies are bounded to 64 KiB. Raw provider bodies, messages and
+exception chains remain private.
+
+OpenAI OAuth uses a five-minute host browser PKCE/state flow with the registered
+`http://localhost:1455/auth/callback` redirect and a listener bound only to
+`127.0.0.1`. The bounded macOS/Linux URL opener falls back to printing a URL for
+manual opening on the same computer. OAuth is interactive; no remote callback
+route or headless device flow is exposed. Account JWT decoding extracts metadata,
+not Hybro authentication. The implementation is adapted from pi-ai under the
+MIT notice in `llm_gateway/oauth_notice.py`.
+
+Every OAuth text attempt re-reads config/auth/account under the shared directory
+lock and refreshes at five minutes remaining. Filesystem/flock work runs off the
+async loop with cancelable nonblocking acquisition. Once refresh starts, the
+bounded refresh-and-save critical section completes before caller cancellation
+propagates, so HTTP cleanup cannot discard a received rotated token. Rotations
+atomically replace only auth; selection/account changes fail closed and require a
+restart. Config revision never includes tokens. Setup can reuse a fresh stored
+OAuth session; near-expiry setup sessions reauthorize through the browser.
+
+The subscription adapter posts raw Responses SSE only to
+`https://chatgpt.com/backend-api/codex/responses`; token exchange/refresh only uses
+`https://auth.openai.com/oauth/token`. Neither accepts `OPENAI_BASE_URL`, redirects,
+or ambient proxy routing. Requests identify as Hybro. OAuth offers the ten
+pi-ai 0.73.1 catalog IDs from GPT-5.1 through GPT-5.5, including Codex, Mini and
+Spark variants; GPT-5.4 is the default. This is not a fetched account-entitlement
+list: the selected model's access is verified once. Per-model reasoning mappings
+prevent unsupported efforts, and local output ceilings remain unchanged.
+Arbitrary public-API model IDs are not eligible. Ordered text/function
+history, exact call IDs, streamed arguments, usage, finish and cancellation use
+existing gateway contracts. Codex user content uses explicit `input_text` arrays,
+matching pi-ai rather than the public API's string shorthand. Assistant history
+uses complete `output_text` items with annotations, completed status and unique
+request-local message IDs; original function call IDs are unchanged. A terminal response closes the HTTP stream immediately; it
+does not wait for EOF or consume trailing events. Completed/done events may omit
+status, matching pi-ai; failed/unknown status or contradictory incomplete events
+never become success. Missing terminal events and invalid tool backfills fail. Truncated function arguments remain partial deltas,
+not executable completed calls; actual usage and `length` finish are preserved.
+Ordinary generation returns truncated text/usage without retrying that completed
+inference. Structured output still requires local JSON/schema validation without
+repair calls. Known streamed error codes retain sanitized authentication, quota,
+context-overflow, rate-limit and server-error classification.
+There is no Codex CLI agent loop, WebSocket/session cache, or second tool owner.
+Original gateway retry policy is unchanged; the adapter performs one attempt.
+
+Codex rejects the wire `max_output_tokens` field. Local requests accept 1..32768,
+cap emitted UTF-8 bytes at four times that bound, and report `length` with actual
+usage when terminal output tokens exceed it. This is not exact incremental token
+counting or a bound on server-side token consumption. Request/SSE byte limits and
+a maximum 600-second attempt deadline bound local resource use. Effective gateway
+timeouts are forwarded privately to Codex, including hinted calls (defaults: 60
+seconds for generation, 120 for streaming). The
+original DTOs do not carry signed reasoning replay or reasoning-token breakdown;
+reasoning summaries are emitted without fabricating signed history.
+
+Only OpenAI API-key setup offers `gpt-image-1`. Gateway-local `generate_image`
+supports generation and reference-image editing with bounded validated image
+bytes and one Provider attempt. Setup validates image selection locally and
+explicitly reports that image API access has not been verified; it makes no
+billable image calls. Bundled Agents are not migrated to this capability.
+
+The CLI reads allowlisted root `.env` values without shell evaluation; shell
+values take precedence. Compose forwards that same credential/endpoint
+precedence to backend and mounts the private host directory only into backend
+at `/var/lib/hybro/runtime`, setting its `HYBRO_HOME` accordingly. The mount is
+writable for the shared snapshot lock. Run setup before a direct first Docker
+start; `hybro start` creates an absent bind source as the host user. Apply using
+`docker compose up -d --build --no-deps --force-recreate backend` with the same
+configuration environment, or restart a host backend with the same `HYBRO_HOME`.
+Frontend, Agents, API contracts, and other business modules are unchanged.
+
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
 adapters under `llm_gateway/providers/` are the only LLM code that imports the
 OpenAI SDK. `DeepSeekProvider` uses DeepSeek's

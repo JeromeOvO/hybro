@@ -77,10 +77,18 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - API_PREFIX=/api/v1
       - HYBRO_FILE_DIR=/var/lib/hybro/files
+      - HYBRO_HOME=/var/lib/hybro/runtime
+      # Match setup's shell-over-root-.env credential/endpoint precedence.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - LOCAL_AGENT_DISCOVERY_ENABLED=true
       - ORCHESTRATOR_RECOVERY_ENABLED=true
     volumes:
       - room_files:/var/lib/hybro/files
+      # Writable for the shared config/auth snapshot lock; backend only.
+      - ${HYBRO_HOME:-${HOME}/.hybro}:/var/lib/hybro/runtime
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

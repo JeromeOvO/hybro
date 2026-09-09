@@ -1,11 +1,11 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI
 
-from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
 from llm_gateway.turn_types import (
     GatewayToolCallPart,
@@ -42,12 +42,21 @@ class OpenAIProvider:
         api_key: str | None = None,
         base_url: str | None = None,
     ) -> None:
-        resolved_base_url = (
-            base_url or getattr(settings, "openai_base_url", None) or None
-        )
-        self._client = client or AsyncOpenAI(
-            api_key=api_key or settings.openai_api_key or "missing",
+        if client:
+            self._client = client
+            return
+        # Explicit setup credentials/endpoints must not load unrelated app .env.
+        # Legacy callers that omit them retain the settings-backed defaults.
+        if not api_key or not base_url:
+            from common.config.settings import settings
+
+            api_key = api_key or settings.openai_api_key or "missing"
+            base_url = base_url or getattr(settings, "openai_base_url", None)
+        resolved_base_url = base_url or None
+        self._client = AsyncOpenAI(
+            api_key=api_key,
             base_url=resolved_base_url,
+            max_retries=0,
         )
 
     async def generate(
@@ -59,7 +68,7 @@ class OpenAIProvider:
         response = await self._client.chat.completions.create(
             model=model,
             messages=messages,
-            **kwargs,
+            **_chat_options(model, kwargs),
         )
         return LLMResponse(
             content=_content_from_chat_response(response),
@@ -97,7 +106,7 @@ class OpenAIProvider:
             model=model,
             messages=messages,
             response_format=response_format,
-            **kwargs,
+            **_chat_options(model, kwargs),
         )
         content = _content_from_chat_response(response)
         return LLMStructuredResponse(
@@ -117,16 +126,23 @@ class OpenAIProvider:
             model=model,
             messages=messages,
             stream=True,
-            **kwargs,
+            **_chat_options(model, kwargs),
         )
-        async for event in stream:
-            choices = getattr(event, "choices", [])
-            if not choices:
-                continue
-            delta = getattr(choices[0], "delta", None)
-            content = getattr(delta, "content", None)
-            if content:
-                yield content
+        try:
+            async for event in stream:
+                choices = getattr(event, "choices", [])
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None)
+                if content:
+                    yield content
+        finally:
+            close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+            if close is not None:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
 
     async def stream_turn_once(
         self,
@@ -137,16 +153,18 @@ class OpenAIProvider:
         if request.provider != "openai":
             raise ValueError("OpenAI adapter received unsupported provider")
         if request.api == "responses":
-            async for event in self._stream_responses_turn_once(
-                request, cancel_event=cancel_event
-            ):
-                yield event
+            async with aclosing(
+                self._stream_responses_turn_once(request, cancel_event=cancel_event)
+            ) as stream:
+                async for event in stream:
+                    yield event
             return
         if request.api == "chat_completions":
-            async for event in self._stream_chat_turn_once(
-                request, cancel_event=cancel_event
-            ):
-                yield event
+            async with aclosing(
+                self._stream_chat_turn_once(request, cancel_event=cancel_event)
+            ) as stream:
+                async for event in stream:
+                    yield event
             return
         raise ValueError("OpenAI adapter received unsupported API")
 
@@ -179,11 +197,17 @@ class OpenAIProvider:
             kwargs["temperature"] = request.temperature
         if request.thinking_level is not None:
             kwargs["reasoning_effort"] = request.thinking_level
-        stream = await self._client.chat.completions.create(**kwargs)
+        if not request.tools:
+            kwargs.pop("tools")
+            kwargs.pop("tool_choice")
+        kwargs["timeout"] = request.timeout_seconds
+        stream = None
+        timed_out = False
         call_state: dict[int, dict[str, Any]] = {}
         pending_finish: str | None = None
         finish_request_id: str | None = None
         try:
+            stream = await self._client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 if cancel_event is not None and cancel_event.is_set():
                     raise asyncio.CancelledError
@@ -294,12 +318,16 @@ class OpenAIProvider:
                 finish_reason=pending_finish,
                 provider_request_id=finish_request_id,
             )
+        except APITimeoutError:
+            timed_out = True
         finally:
             close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
             if close is not None:
                 result = close()
                 if hasattr(result, "__await__"):
                     await result
+        if timed_out:
+            raise TimeoutError("Provider request timed out")
 
     async def _stream_responses_turn_once(
         self,
@@ -328,11 +356,14 @@ class OpenAIProvider:
         if request.thinking_level is not None:
             kwargs["reasoning"] = {"effort": request.thinking_level}
 
-        stream = await self._client.responses.create(**kwargs)
+        kwargs["timeout"] = request.timeout_seconds
+        stream = None
+        timed_out = False
         call_state: dict[int, dict[str, Any]] = {}
         request_id: str | None = None
         terminal = False
         try:
+            stream = await self._client.responses.create(**kwargs)
             async for event in stream:
                 if cancel_event is not None and cancel_event.is_set():
                     raise asyncio.CancelledError
@@ -467,8 +498,10 @@ class OpenAIProvider:
 
                 if event_type in {"response.failed", "error"}:
                     terminal = True
-                    error = getattr(response, "error", None) or getattr(
-                        event, "error", None
+                    error = (
+                        event
+                        if event_type == "error"
+                        else getattr(response, "error", None)
                     )
                     message = str(
                         _response_error_field(error, "message") or error or event_type
@@ -482,12 +515,16 @@ class OpenAIProvider:
                 raise ValueError(
                     "OpenAI Responses stream ended without a terminal event"
                 )
+        except APITimeoutError:
+            timed_out = True
         finally:
             close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
             if close is not None:
                 result = close()
                 if hasattr(result, "__await__"):
                     await result
+        if timed_out:
+            raise TimeoutError("Provider request timed out")
 
     async def embed(self, text: str, model: str) -> list[float]:
         embeddings = await self.embed_batch([text], model=model)
@@ -762,3 +799,14 @@ def _normalize_structured_args(
     if model is None:
         raise TypeError("model is required")
     return model, schema if isinstance(schema, dict) else None
+
+
+def _chat_options(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    # Reasoning models reject the legacy token parameter accepted by this API.
+    if not model.startswith(("gpt-5", "o1", "o3", "o4")):
+        return kwargs
+    options = dict(kwargs)
+    if "max_tokens" in options:
+        options["max_completion_tokens"] = options.pop("max_tokens")
+    options.pop("temperature", None)
+    return options

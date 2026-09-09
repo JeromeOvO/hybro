@@ -17,6 +17,10 @@ class ClassifiedGatewayError:
 
 
 def classify_gateway_error(exc: BaseException) -> ClassifiedGatewayError:
+    from .errors import LLMProviderFailure
+
+    if isinstance(exc, LLMProviderFailure):
+        return exc.classification
     if isinstance(exc, asyncio.CancelledError):
         return ClassifiedGatewayError("aborted", False)
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):

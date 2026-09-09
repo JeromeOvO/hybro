@@ -48,7 +48,7 @@ def test_deepseek_client_uses_only_official_endpoint(monkeypatch):
     monkeypatch.setattr(module, "AsyncOpenAI", constructor)
     module.DeepSeekProvider(api_key="deepseek-key")
     constructor.assert_called_once_with(
-        api_key="deepseek-key", base_url="https://api.deepseek.com"
+        api_key="deepseek-key", base_url="https://api.deepseek.com", max_retries=0
     )
 
 

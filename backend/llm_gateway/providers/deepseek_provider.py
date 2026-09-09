@@ -3,9 +3,8 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI
 
-from common.config.settings import settings
 from common.dto import LLMResponse, LLMStructuredResponse
 from llm_gateway.errors import LLMModelRoutingError
 from llm_gateway.providers.openai_provider import OpenAIProvider, _gateway_messages
@@ -28,11 +27,16 @@ class DeepSeekProvider(OpenAIProvider):
         client: Any | None = None,
         api_key: str | None = None,
     ) -> None:
+        if not client and not api_key:
+            from common.config.settings import settings
+
+            api_key = settings.deepseek_api_key or "missing"
         super().__init__(
             client=client
             or AsyncOpenAI(
-                api_key=api_key or settings.deepseek_api_key or "missing",
+                api_key=api_key,
                 base_url=DEEPSEEK_OFFICIAL_BASE_URL,
+                max_retries=0,
             )
         )
 
@@ -117,11 +121,12 @@ class DeepSeekProvider(OpenAIProvider):
             "messages": messages,
             "response_format": {"type": "json_object"},
             "max_tokens": request.max_output_tokens,
+            "timeout": request.timeout_seconds,
             **_with_selected_thinking(request.thinking_level),
         }
         if request.temperature is not None:
             kwargs["temperature"] = request.temperature
-        response = await self._client.chat.completions.create(**kwargs)
+        response = await self._complete_turn_once(kwargs)
         if cancel_event is not None and cancel_event.is_set():
             raise asyncio.CancelledError
         request_id = str(getattr(response, "id", "") or "") or None
@@ -169,6 +174,14 @@ class DeepSeekProvider(OpenAIProvider):
             provider_request_id=request_id,
         ):
             yield event
+
+    async def _complete_turn_once(self, kwargs: dict[str, Any]) -> Any:
+        try:
+            return await self._client.chat.completions.create(**kwargs)
+        except APITimeoutError:
+            pass
+        # Do not retain SDK request headers in a chained timeout exception.
+        raise TimeoutError("Provider request timed out")
 
     async def embed(self, text: str, model: str) -> list[float]:
         del text, model

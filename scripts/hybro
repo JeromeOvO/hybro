@@ -222,8 +222,55 @@ require_compose() {
 
 compose() {
     require_compose
+    if [ "${1:-}" = up ]; then
+        # Create the private bind source as the host user, not Docker's root user.
+        runtime_dir=${HYBRO_HOME:-$(read_env_var .env HYBRO_HOME)}
+        runtime_dir=${runtime_dir:-$HOME/.hybro}
+        case "$runtime_dir" in
+            /*) mkdir -p -m 700 "$runtime_dir" ;;
+            *) echo 'Error: HYBRO_HOME must be absolute.' >&2; return 1 ;;
+        esac
+    fi
     docker compose "$@"
 }
+
+cmd_setup() (
+    # Never trace credential assignments, even when called with sh -x.
+    set +x
+    if ! command -v uv >/dev/null 2>&1; then
+        echo 'Error: setup requires uv. Install uv, then rerun hybro setup.' >&2
+        exit 1
+    fi
+    # Shell overrides root .env; parse data without sourcing shell commands.
+    for key in HYBRO_HOME OPENAI_API_KEY DEEPSEEK_API_KEY ANTHROPIC_API_KEY OPENAI_BASE_URL; do
+        if ! printenv "$key" >/dev/null 2>&1; then
+            value=$(read_env_var .env "$key")
+            if [ -n "$value" ]; then
+                export "$key=$value"
+            fi
+        fi
+    done
+    # Keep the environment off synced source directories; honor explicit overrides.
+    UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/hybro/venv}
+    export UV_PROJECT_ENVIRONMENT
+    cd "$REPO_ROOT/backend"
+    exec uv run --frozen python -m llm_gateway.setup_cli "$@"
+)
+
+cmd_tui() (
+    if [ "$#" -ne 0 ]; then
+        echo 'hybro tui: use no arguments, or an explicit subcommand for scripts.' >&2
+        exit 2
+    fi
+    if ! command -v uv >/dev/null 2>&1; then
+        echo 'Error: TUI requires uv; explicit lifecycle subcommands remain available.' >&2
+        exit 1
+    fi
+    UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/hybro/venv}
+    export UV_PROJECT_ENVIRONMENT
+    cd "$REPO_ROOT/backend"
+    exec uv run --frozen python -m llm_gateway.cli_tui
+)
 
 print_urls() {
     echo "========================================"
@@ -309,12 +356,15 @@ if [ $# -gt 0 ]; then
 fi
 
 case "$sub" in
+    "")           if [ -t 0 ] && [ -t 1 ]; then cmd_tui; else usage; fi ;;
+    tui)          cmd_tui "$@" ;;
+    setup)        cmd_setup   "$@" ;;
     start|up)     cmd_start   "$@" ;;
     stop)         cmd_stop    "$@" ;;
     down)         cmd_down    "$@" ;;
     status|ps)    cmd_status  "$@" ;;
     logs)         cmd_logs    "$@" ;;
     restart)      cmd_restart "$@" ;;
-    help|-h|--help|"") usage ;;
+    help|-h|--help) usage ;;
     *) echo "hybro: unknown subcommand: $sub" >&2; usage; exit 2 ;;
 esac
