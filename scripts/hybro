@@ -234,13 +234,9 @@ compose() {
     docker compose "$@"
 }
 
-cmd_setup() (
+runtime_cli_environment() {
     # Never trace credential assignments, even when called with sh -x.
     set +x
-    if ! command -v uv >/dev/null 2>&1; then
-        echo 'Error: setup requires uv. Install uv, then rerun hybro setup.' >&2
-        exit 1
-    fi
     # Shell overrides root .env; parse data without sourcing shell commands.
     for key in HYBRO_HOME OPENAI_API_KEY DEEPSEEK_API_KEY ANTHROPIC_API_KEY OPENAI_BASE_URL; do
         if ! printenv "$key" >/dev/null 2>&1; then
@@ -253,6 +249,14 @@ cmd_setup() (
     # Keep the environment off synced source directories; honor explicit overrides.
     UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/hybro/venv}
     export UV_PROJECT_ENVIRONMENT
+}
+
+cmd_setup() (
+    if ! command -v uv >/dev/null 2>&1; then
+        echo 'Error: setup requires uv. Install uv, then rerun hybro setup.' >&2
+        exit 1
+    fi
+    runtime_cli_environment
     cd "$REPO_ROOT/backend"
     exec uv run --frozen python -m llm_gateway.setup_cli "$@"
 )
@@ -266,8 +270,7 @@ cmd_tui() (
         echo 'Error: TUI requires uv; explicit lifecycle subcommands remain available.' >&2
         exit 1
     fi
-    UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/hybro/venv}
-    export UV_PROJECT_ENVIRONMENT
+    runtime_cli_environment
     cd "$REPO_ROOT/backend"
     exec uv run --frozen python -m llm_gateway.cli_tui
 )

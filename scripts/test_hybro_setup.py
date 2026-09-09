@@ -116,12 +116,14 @@ class SetupWiringTests(unittest.TestCase):
             DEEPSEEK_API_KEY="",
             UV_PROJECT_ENVIRONMENT=str(self.root / "venv"),
         )
-        self.assertEqual(self.run_cli("setup", "--help").returncode, 0)
-        self.assertEqual(self.captured("OPENAI_API_KEY"), "fixture-shell")
-        self.assertEqual(self.captured("DEEPSEEK_API_KEY"), "")
-        self.assertEqual(
-            self.captured("UV_PROJECT_ENVIRONMENT"), str(self.root / "venv")
-        )
+        for args in (("setup", "--help"), ("tui",)):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_cli(*args).returncode, 0)
+                self.assertEqual(self.captured("OPENAI_API_KEY"), "fixture-shell")
+                self.assertEqual(self.captured("DEEPSEEK_API_KEY"), "")
+                self.assertEqual(
+                    self.captured("UV_PROJECT_ENVIRONMENT"), str(self.root / "venv")
+                )
 
     def test_no_config_uses_home_default_and_propagates_exit(self):
         self.env["FAKE_EXIT"] = "130"
@@ -150,9 +152,12 @@ class SetupWiringTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.root / "home/.hybro").exists())
 
-    def test_tui_launches_menu_without_loading_credentials_or_running_docker(self):
-        (self.root / ".env").write_text("OPENAI_API_KEY=fixture-not-for-menu\n")
-        result = self.run_cli("tui")
+    def test_tui_uses_setup_environment_without_exposing_keys_or_running_docker(self):
+        runtime = self.root / "selected runtime"
+        (self.root / ".env").write_text(
+            f'HYBRO_HOME="{runtime}"\nOPENAI_API_KEY=fixture-panel-key\n'
+        )
+        result = self.run_cli("tui", trace=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.captured("args").splitlines(),
@@ -165,7 +170,10 @@ class SetupWiringTests(unittest.TestCase):
                 "llm_gateway.cli_tui",
             ],
         )
-        self.assertEqual(self.captured("OPENAI_API_KEY"), "")
+        self.assertEqual(self.captured("OPENAI_API_KEY"), "fixture-panel-key")
+        self.assertEqual(self.captured("HYBRO_HOME"), str(runtime))
+        self.assertNotIn("fixture-panel-key", result.stdout + result.stderr)
+        self.assertFalse(runtime.exists())
         self.assertFalse((self.root / "capture.docker").exists())
         self.assertFalse((self.root / "home/.hybro").exists())
 

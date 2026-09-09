@@ -393,16 +393,32 @@ transport.
 
 ### `llm_gateway`
 
-`./scripts/hybro` in a terminal (or `hybro tui`) opens a keyboard command menu
-with four actions: configure models, start, logs, and more operations. Advanced
-lifecycle and build/recreate commands live under more operations; all delegate to
-existing commands. Only removal and forced recreation require confirmation with
-Cancel selected by default. Start uses existing images without another menu.
-Command output remains visible until Enter returns to the main menu; Escape/Ctrl-C
-exits. No arguments
-without a terminal still show help; explicit commands remain scriptable. The package
-exports gateway classes on demand, and explicitly configured provider adapters do
-not initialize application Settings. Legacy callers retain settings-backed defaults.
+`./scripts/hybro` in a terminal (or `hybro tui`) opens a fixed-screen settings
+panel with Models and Services tabs. The terminal renderer centers a panel capped
+at 72 columns, highlights the selected row using reverse video, and separates
+settings from contextual notices and keyboard hints. Tab destinations appear in
+the tab bar, not as duplicate settings rows; keyboard actions remain unchanged.
+Narrow terminals compact and scroll lists, and resize is reflected on the next
+key press. No TUI dependency or new persistence layer is introduced. Current
+connection and model values are editable rows. Model pickers focus the current
+value and return to the original row; valid stored authentication is reused
+without repeating Provider/auth menus. First connection or a changed Provider
+uses the existing guided acquisition flow; expired OAuth is reacquired before
+model selection or save. The panel keeps only an in-memory draft and delegates
+verification and persistence to `SetupService`. Verify and save sends one text
+request before writing; SIGINT protection ends after each save, not panel exit.
+Saved locally never implies backend activation, and no deployment is automatic.
+Esc closes a picker or returns from Services; exiting the model page with pending
+changes requires discard confirmation. Ctrl-C exits without saving the draft.
+
+Services delegates to existing commands. Only removal and forced recreation
+require Cancel-default confirmation. Command output remains visible until Enter
+or Esc returns; cancellation is not reported as a command failure. The terminal
+screen and input mode are restored on exit. Both TUI and setup receive the same
+allowlisted shell-over-root-`.env` configuration from `scripts/hybro`; Python does
+not read `.env`. No arguments without a terminal still show help; explicit commands
+remain scriptable. Package exports are lazy, and explicitly configured provider
+adapters do not initialize application Settings. Legacy callers retain defaults.
 
 `./scripts/hybro setup` selects Provider/authentication, acquires credentials,
 then selects text and optional image models, verifies one text call, and saves.

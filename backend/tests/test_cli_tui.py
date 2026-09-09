@@ -19,6 +19,8 @@ def console_with(*choices):
             chosen = next(pending)
         except StopIteration:
             raise EOFError from None
+        if isinstance(chosen, type) and issubclass(chosen, BaseException):
+            raise chosen
         assert chosen in {o.value for o in options}, title
         return chosen
 
@@ -27,10 +29,10 @@ def console_with(*choices):
     )
 
 
-@pytest.mark.parametrize("action", ["setup", "status", "logs", "help"])
+@pytest.mark.parametrize("action", ["status", "logs", "help"])
 def test_read_or_setup_action_dispatches_existing_command(action):
     run = Mock(return_value=0)
-    choices = ("more", action) if action in {"status", "help"} else (action,)
+    choices = ("services", action)
     console = console_with(*choices)
     assert cli_tui.main(console=console, run=run) == 130
     run.assert_called_once_with((action,))
@@ -40,7 +42,7 @@ def test_read_or_setup_action_dispatches_existing_command(action):
 @pytest.mark.parametrize("action", ["start", "restart", "stop"])
 def test_ordinary_lifecycle_actions_do_not_repeat_confirmation(action):
     run = Mock(return_value=0)
-    choices = (action,) if action == "start" else ("more", action)
+    choices = ("services", action)
     console = console_with(*choices)
     assert cli_tui.main(console=console, run=run) == 130
     run.assert_called_once_with((action,))
@@ -51,7 +53,7 @@ def test_ordinary_lifecycle_actions_do_not_repeat_confirmation(action):
 @pytest.mark.parametrize("confirmation", ["run", "cancel"])
 def test_container_removal_and_recreation_require_confirmation(action, confirmation):
     run = Mock(return_value=0)
-    console = console_with("more", action, confirmation)
+    console = console_with("services", action, confirmation)
     assert cli_tui.main(console=console, run=run) == 130
     if confirmation == "run":
         expected = (
@@ -67,29 +69,23 @@ def test_container_removal_and_recreation_require_confirmation(action, confirmat
 @pytest.mark.parametrize("mode,flags", list(cli_tui._START_MODES.items()))
 def test_start_modes_preserve_explicit_flags(mode, flags):
     run = Mock(return_value=0)
-    choices = ("more", mode) + (("run",) if mode != "build" else ())
+    choices = ("services", mode) + (("run",) if mode != "build" else ())
     assert cli_tui.main(console=console_with(*choices), run=run) == 130
     run.assert_called_once_with(("start", *flags))
 
 
 def test_failed_command_returns_to_menu_without_automatic_retry():
     run = Mock(side_effect=[1, 0])
-    console = console_with("more", "status", "more", "help")
+    console = console_with("services", "status", "help")
     assert cli_tui.main(console=console, run=run) == 130
     assert [c.args[0] for c in run.call_args_list] == [("status",), ("help",)]
     console.write.assert_any_call("Command failed.")
     assert console.pause.call_count == 2
 
 
-def test_main_menu_is_small_and_more_can_return_without_commands():
-    assert [option.value for option in cli_tui._ACTIONS] == [
-        "setup",
-        "start",
-        "logs",
-        "more",
-    ]
+def test_pages_switch_without_commands():
     run = Mock()
-    assert cli_tui.main(console=console_with("more", "back"), run=run) == 130
+    assert cli_tui.main(console=console_with("services", "models"), run=run) == 130
     run.assert_not_called()
 
 
@@ -102,7 +98,8 @@ def test_real_key_cancellation_has_no_effect(monkeypatch, keys):
         Mock(),
         Mock(),
     )
-    assert cli_tui.main(console=console, run=run, output=output) == 130
+    expected = 0 if keys == b"\x1b" else 130
+    assert cli_tui.main(console=console, run=run, output=output) == expected
     run.assert_not_called()
     restore.assert_called_once()
 
@@ -132,10 +129,8 @@ def test_enter_pause_restores_terminal_without_a_menu(monkeypatch, keys, error):
 
 
 def test_down_default_confirmation_cancels_with_real_arrows(monkeypatch):
-    # More -> down -> default Cancel -> Escape from the main menu.
-    _, restore = mock_keyboard(
-        monkeypatch, b"\x1b[B" * 3 + b"\r" + b"\x1b[B" * 6 + b"\r\r\x1b"
-    )
+    # Tab -> Services -> down -> default Cancel -> Escape -> model page EOF.
+    _, restore = mock_keyboard(monkeypatch, b"\t" + b"\x1b[B" * 8 + b"\r\r\x1b")
     output, run = io.StringIO(), Mock()
     console = SetupConsole(
         lambda title, options: select_option(TerminalReader(), output, title, options),
@@ -144,7 +139,7 @@ def test_down_default_confirmation_cancels_with_real_arrows(monkeypatch):
     )
     assert cli_tui.main(console=console, run=run, output=output) == 130
     run.assert_not_called()
-    assert restore.call_count == 4
+    assert restore.call_count == 5
 
 
 def test_small_terminal_scrolls_model_list_without_wrapping(monkeypatch):

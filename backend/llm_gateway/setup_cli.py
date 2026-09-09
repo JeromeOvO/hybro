@@ -40,7 +40,12 @@ from llm_gateway.setup_service import (
     SetupService,
     _PreparedAuthentication,
 )
-from llm_gateway.setup_terminal import SetupOption, select_option, wait_for_enter
+from llm_gateway.setup_terminal import (
+    SetupOption,
+    SetupScreen,
+    select_option,
+    wait_for_enter,
+)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -77,7 +82,7 @@ def _parser() -> argparse.ArgumentParser:
 
 @dataclass(frozen=True, slots=True)
 class SetupConsole:
-    select: Callable[[str, tuple[SetupOption, ...]], str]
+    select: Callable[[str | SetupScreen, tuple[SetupOption, ...]], str]
     read_secret: Callable[[], SecretStr]
     write: Callable[[str], None]
     # Only the lifecycle menu pauses; injected/headless setup consoles need not.
@@ -85,7 +90,9 @@ class SetupConsole:
 
 
 @contextmanager
-def _terminal_console(output: TextIO) -> Iterator[SetupConsole]:
+def _terminal_console(
+    output: TextIO, *, screen: bool = False
+) -> Iterator[SetupConsole]:
     with ExitStack() as stack:
         try:
             reader = stack.enter_context(open("/dev/tty", encoding="utf-8"))
@@ -108,15 +115,28 @@ def _terminal_console(output: TextIO) -> Iterator[SetupConsole]:
                         "Cannot read a hidden API key from this terminal."
                     ) from None
 
-        yield SetupConsole(
-            lambda title, options: select_option(reader, writer, title, options),
-            read_secret,
-            lambda message: print(message, file=output),
-            lambda: wait_for_enter(reader, writer),
-        )
+        def select(title: str | SetupScreen, options: tuple[SetupOption, ...]) -> str:
+            return select_option(reader, writer, title, options, screen=screen)
+
+        try:
+            if screen:
+                writer.write("\x1b[?1049h")
+                writer.flush()
+            yield SetupConsole(
+                select,
+                read_secret,
+                lambda message: print(
+                    message, file=writer if screen else output, flush=True
+                ),
+                lambda: wait_for_enter(reader, writer, screen=screen),
+            )
+        finally:
+            if screen:
+                writer.write("\x1b[0m\x1b[?25h\x1b[?1049l")
+                writer.flush()
 
 
-def _no_input(title: str, options: tuple[SetupOption, ...]) -> str:
+def _no_input(title: str | SetupScreen, options: tuple[SetupOption, ...]) -> str:
     raise SetupError("Non-interactive setup cannot prompt for input.")
 
 
@@ -129,18 +149,38 @@ def _selection(
     service: SetupService,
     console: SetupConsole,
     environment: Mapping[str, str],
+    initial: RuntimeConfig | None = None,
 ) -> tuple[RuntimeConfig, _PreparedAuthentication]:
     provider_id = args.provider or console.select(
         "Provider",
-        (
-            SetupOption("openai", "OpenAI"),
-            SetupOption("deepseek", "DeepSeek"),
-            SetupOption("anthropic", "Anthropic"),
+        tuple(
+            SetupOption(
+                value,
+                label,
+                current=initial is not None and initial.provider.id == value,
+            )
+            for value, label in (
+                ("openai", "OpenAI"),
+                ("deepseek", "DeepSeek"),
+                ("anthropic", "Anthropic"),
+            )
         ),
     )
-    methods = (SetupOption("api_key", "API key"),)
+    methods = (
+        SetupOption(
+            "api_key",
+            "API key",
+            current=initial is not None and initial.provider.auth == "api_key",
+        ),
+    )
     if provider_id == "openai":
-        methods += (SetupOption("oauth", "ChatGPT/Codex OAuth (browser login)"),)
+        methods += (
+            SetupOption(
+                "oauth",
+                "ChatGPT/Codex OAuth (browser login)",
+                current=initial is not None and initial.provider.auth == "oauth",
+            ),
+        )
     provider = RuntimeProvider.model_validate(
         {
             "id": provider_id,
@@ -165,7 +205,11 @@ def _selection(
         text = console.select(
             "Text model",
             tuple(
-                SetupOption(model, model + (" (recommended)" if index == 0 else ""))
+                SetupOption(
+                    model,
+                    model + (" (recommended)" if index == 0 else ""),
+                    current=initial is not None and initial.models.text == model,
+                )
                 for index, model in enumerate(choices.text)
             ),
         )
@@ -174,8 +218,21 @@ def _selection(
         if not args.non_interactive and choices.image:
             image = console.select(
                 "Image model (optional)",
-                (SetupOption("none", "None - no image generation"),)
-                + tuple(SetupOption(model, model) for model in choices.image),
+                (
+                    SetupOption(
+                        "none",
+                        "None - no image generation",
+                        current=initial is not None and initial.models.image is None,
+                    ),
+                )
+                + tuple(
+                    SetupOption(
+                        model,
+                        model,
+                        current=initial is not None and initial.models.image == model,
+                    )
+                    for model in choices.image
+                ),
             )
         else:
             image = "none"
@@ -185,16 +242,23 @@ def _selection(
     ), prepared
 
 
+def _read_current_config(service: SetupService) -> RuntimeConfig | None:
+    data = service.store._read("config.yaml")
+    if data is None:
+        return None
+    config = parse_config(data)
+    # Only catalog IDs may reach the terminal, not arbitrary file contents.
+    service.choices(config.provider).validate(config)
+    return config
+
+
 def _show_current_config(service: SetupService, console: SetupConsole) -> None:
     """Display config only, never resolve credentials or imply backend activation."""
     try:
-        data = service.store._read("config.yaml")
-        if data is None:
+        config = _read_current_config(service)
+        if config is None:
             console.write("Current configuration: none saved.")
             return
-        config = parse_config(data)
-        # Only catalog IDs may reach the terminal, not arbitrary file contents.
-        service.choices(config.provider).validate(config)
     except (OSError, RuntimeConfigurationError, SetupError):
         console.write("Current configuration: invalid or unreadable; configure below.")
         return
@@ -229,11 +293,20 @@ def _execute(
         "Setup verifies text with one Provider request (API billing or subscription quota); no image calls."
     )
     config, prepared = _selection(args, service, console, environment)
+    _save_selection(config, prepared, service, console, cleanup)
 
+
+def _save_selection(
+    config: RuntimeConfig,
+    prepared: _PreparedAuthentication,
+    service: SetupService,
+    console: SetupConsole,
+    cleanup: ExitStack,
+) -> None:
     def begin_commit() -> None:
         # This is the commit boundary: before it SIGINT cancels without saving;
         # after it SIGINT cannot interrupt the locked write/rollback or reporting.
-        # Restore only as main exits, after its success/error status is determined.
+        # The caller restores this as its save scope exits (also inside a panel).
         previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
         cleanup.callback(signal.signal, signal.SIGINT, previous)
 

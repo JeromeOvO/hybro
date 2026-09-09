@@ -6,14 +6,31 @@ Usage:
 
 Subcommands:
     tui
-        Open the keyboard menu (requires uv). Up/Down selects, Enter confirms,
-        Esc/Ctrl-C exits. Main menu: configure models, start, logs, more operations.
-        Start uses existing images directly. Status/restart/stop/build/recreate/
-        down/help are under more operations. Removal and forced recreation require
-        confirmation, default Cancel; down keeps named volumes. Command output
-        remains visible until Enter returns. Ctrl-C while following logs exits.
-        Small terminals scroll menus. No arguments without a terminal show help;
-        explicit subcommands and non-interactive flags remain available for scripts.
+        Open the settings panel (requires uv). Tab switches Models and Services.
+        A centered, width-limited layout separates tabs, values and footer hints.
+        The selected row is highlighted using your terminal's colors. Notices and
+        help sit below the settings; request-cost hints appear when Save is focused.
+        Up/Down selects a row; Enter edits its current value. Small terminals use
+        compact, scrolling lists; resizing is reflected on the next key press.
+        Screen, styling and input mode are restored on exit. Model pickers focus
+        the current selection. Esc returns to the parent; at the model page,
+        Esc exits (unsaved changes require discard confirmation). Ctrl-C exits.
+
+        Edit a model without repeating Provider/authentication menus. Valid stored
+        authentication is reused; first connection, changed Provider, or expired
+        OAuth requires credential acquisition before choosing a model. Changes
+        stay in memory until Verify and save (one text request; quota/billing).
+        Saving never restarts the backend. The saved status is local, not a claim
+        of credential validity or backend activation. Browsing never opens auth.json.
+        Like setup, the panel uses the allowlisted root .env values with shell
+        precedence; secrets never appear in command arguments or status output.
+
+        Services delegates to existing start/status/logs/restart/stop/build/recreate/
+        down/help commands. Removal and forced recreation require confirmation,
+        default Cancel; down keeps named volumes. Command output remains visible
+        until Enter or Esc returns. Cancellation is not a command failure.
+        Ctrl-C while following logs exits. No arguments without a terminal show
+        help; explicit subcommands and non-interactive flags remain available.
 
     setup [--non-interactive --provider ID --auth api_key --text-model ID]
           [--image-model ID|none]
@@ -28,7 +45,8 @@ Subcommands:
         First shows the saved Provider, authentication method, text/image models,
         or a missing/invalid configuration notice. This display does not read
         credentials or check whether the running backend has applied the selection.
-        TUI order: Provider -> authentication -> models -> verification -> save.
+        This explicit command keeps its guided flow:
+        Provider -> authentication -> models -> verification -> save.
         OAuth completes browser authorization before the text model menu.
         API keys use a hidden terminal field, never typed option IDs.
         The Codex catalog includes 10 source-confirmed models (including

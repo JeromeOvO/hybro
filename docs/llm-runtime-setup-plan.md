@@ -44,12 +44,18 @@ no Agent/frontend mount or credential forwarding changes are authorized.
   Setup compares the credential snapshot after verification and rejects concurrent
   credential changes before save or no-op. Unchanged selection/credentials are a
   semantic no-op.
-- Interactive `hybro` (or `hybro tui`) shows configure models, start, logs and more
-  operations. Advanced lifecycle/build commands are under more operations. Only
-  container removal and forced recreation require Cancel-default confirmation.
-  Start uses existing images directly. Commands delegate to the existing script;
-  Enter returns after output, while Escape/Ctrl-C exits. Without a terminal, no
-  arguments still show help.
+- Interactive `hybro` (or `hybro tui`) uses a fixed-screen settings panel with
+  Models and Services tabs. A centered, width-limited layout uses reverse-video
+  selection and a separate notice/key-hint footer, inheriting terminal colors.
+  Tab switches pages; Enter edits a row, with the current model focused in pickers. Valid stored authentication is reused
+  for model-only changes. First/changed connections use the guided setup flow.
+  Edits remain a local draft until explicit verification/save; exiting via Esc
+  confirms discarding pending changes, while Ctrl-C exits without saving.
+- Esc closes pickers and returns from Services rather than reporting failure.
+  Service commands delegate to the existing script; Enter/Esc returns after output.
+  Only container removal and forced recreation require Cancel-default confirmation.
+  Terminal screen/input mode is restored on exit. Both panel and setup use the same
+  allowlisted environment resolver. Without a terminal, no arguments show help.
 - Interactive setup first shows saved Provider/authentication/text/image selections
   or a missing/invalid configuration notice. This config-only display never reads
   credentials or verifies backend activation; it does not create a runtime directory.
