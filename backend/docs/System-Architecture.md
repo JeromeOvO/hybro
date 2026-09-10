@@ -771,6 +771,16 @@ and HITL answer/continuation delivery stop after observing this durable state.
 The process-local session signal only interrupts matching active work and verifies
 the durable postcondition; it never settles the root.
 
+An in-process driver holds a live execution lease over the Run's recovery claim
+while it executes and renews it every 20 seconds with a 60-second expiry. The
+lease is fenced by owner identity, so recovery cannot re-drive a Run that a live
+driver still owns, and a driver that dies without releasing stays identifiable.
+Graceful shutdown settles the Runs this process owns as `failed` with reason
+`interrupted`; if the process is killed first, the lease lapses and recovery
+applies the same settlement instead of resuming work whose driver is gone.
+Suspended Runs are unaffected: the driver releases the lease on suspension, so
+their scheduled wake and profile-deadline terminalization behave as before.
+
 Generic Run recovery repairs missing or wrong-kind dedicated cancellation rows
 before due selection. Its cancellation branch first terminalizes every local A2A
 call as `canceled`, then closes Tool entries, the active Turn, and the root through

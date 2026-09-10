@@ -655,13 +655,14 @@ async def test_shutdown_cancels_tasks_without_persisting_terminal_state(catalog)
     with pytest.raises(asyncio.CancelledError):
         await prompt_task
 
-    # The Run stays non-terminal so recovery workers can re-enter it.
+    # An interrupted execution is failed, not handed back to recovery.
     run_id = run_store.runs
     assert run_id
     run = next(iter(run_id.values()))
-    assert run.status == "running"
-    assert run.recovery_claim.next_attempt_at is not None
-    assert run.recovery_claim.next_attempt_at < run.budget.deadline_at
+    assert run.status == "failed"
+    assert run.terminal_reason == "interrupted"
+    assert run.recovery_claim.owner_id is None
+    assert run.recovery_claim.lease_expires_at is None
 
 
 @pytest.mark.parametrize("failure", ["recoverable", "bug", "cancellation"])

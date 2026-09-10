@@ -171,6 +171,7 @@ class OrchestratorRunStore(Protocol):
         owner_id: str,
         lease_expires_at: datetime,
         claimed_at: datetime,
+        allow_scheduled: bool = False,
     ) -> RunStoreResult: ...
 
     async def renew_recovery(
