@@ -51,6 +51,44 @@ def test_start_projects_only_json_configuration(monkeypatch, tmp_path):
     assert not (tmp_path / ".env").exists()
 
 
+def test_extra_compose_files_must_exist_inside_the_repository():
+    base = str(cli.ROOT / "docker-compose.yml")
+    assert cli.compose_files() == [base]
+    overlay = cli.ROOT / "docker-compose.ci.yml"
+    assert overlay.is_file()
+    assert cli.compose_files(["docker-compose.ci.yml"]) == [base, str(overlay)]
+    for rejected in ("/etc/passwd", "../outside.yml", "docker-compose.missing.yml"):
+        with pytest.raises(cli.RuntimeConfigurationError):
+            cli.compose_files([rejected])
+
+
+def test_start_forwards_explicit_compose_overlay(monkeypatch, tmp_path):
+    runtime = configured(tmp_path)
+    monkeypatch.setenv("HYBRO_HOME", str(runtime.home))
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    assert (
+        cli.main(["start", "--build", "--compose-file", "docker-compose.ci.yml"]) == 0
+    )
+    # Renderer first, then Compose with the base file and the explicit overlay.
+    assert calls[-1][:8] == [
+        "docker",
+        "compose",
+        "--env-file",
+        "/dev/null",
+        "-f",
+        str(cli.ROOT / "docker-compose.yml"),
+        "-f",
+        str(cli.ROOT / "docker-compose.ci.yml"),
+    ]
+    assert calls[-1][-4:] == ["up", "-d", "--remove-orphans", "--build"]
+
+
 def test_config_set_and_show_do_not_expose_credentials(monkeypatch, tmp_path, capsys):
     runtime = configured(tmp_path)
     monkeypatch.setenv("HYBRO_HOME", str(runtime.home))

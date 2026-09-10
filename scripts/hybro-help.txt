@@ -45,11 +45,14 @@ Configuration:
         remove the old files. Does not delete originals or overwrite config.json.
 
 Services:
-    start [--build] [--recreate]
+    start [--build] [--recreate] [--compose-file <file>]
         Validate setup, generate missing private service tokens, regenerate the
         default-agent Compose region, and start services. No dotenv file needed.
         --build rebuilds images; --recreate recreates existing containers.
         Use both after updating code or frontend build configuration.
+        --compose-file adds an explicit overlay inside the repository, for
+        example docker-compose.ci.yml for the CI mock-LLM stack. It is passed to
+        Compose directly; no ambient Compose discovery is used.
     status | ps
         Show all containers, including stopped containers.
     logs [service...]

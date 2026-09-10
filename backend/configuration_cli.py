@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -113,7 +114,31 @@ def compose_environment(runtime: RuntimeConfigStore, *, start: bool) -> dict[str
     return env
 
 
-def compose(arguments: list[str], *, start: bool = False) -> int:
+def compose_files(extra: Sequence[str] = ()) -> list[str]:
+    """Base file first; extras must be existing files inside the checkout.
+
+    Overlays stay explicit CLI input (for example the CI mock-LLM stack) instead
+    of ambient Compose discovery.
+    """
+    files = [Path("docker-compose.yml")]
+    for value in extra:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = ROOT / candidate
+        resolved = candidate.resolve()
+        if not resolved.is_file() or not resolved.is_relative_to(ROOT):
+            raise RuntimeConfigurationError(
+                "Additional Compose file must be an existing file inside the repository."
+            )
+        files.append(resolved)
+    return [
+        os.fspath(ROOT / name if not name.is_absolute() else name) for name in files
+    ]
+
+
+def compose(
+    arguments: list[str], *, start: bool = False, files: Sequence[str] = ()
+) -> int:
     runtime = store()
     env = compose_environment(runtime, start=start)
     if start:
@@ -125,14 +150,14 @@ def compose(arguments: list[str], *, start: bool = False) -> int:
         )
         if result.returncode:
             return result.returncode
+    compose_arguments = [item for name in compose_files(files) for item in ("-f", name)]
     return subprocess.run(
         [
             "docker",
             "compose",
             "--env-file",
             os.devnull,
-            "-f",
-            str(ROOT / "docker-compose.yml"),
+            *compose_arguments,
             *arguments,
         ],
         cwd=ROOT,
@@ -149,8 +174,7 @@ def service_status() -> list[dict[str, object]]:
             "compose",
             "--env-file",
             os.devnull,
-            "-f",
-            str(ROOT / "docker-compose.yml"),
+            *[item for name in compose_files() for item in ("-f", name)],
             "ps",
             "--all",
             "--orphans=false",
@@ -357,13 +381,19 @@ def _start(arguments: list[str]) -> int:
     parser = Parser(prog="hybro start")
     parser.add_argument("--build", action="store_true")
     parser.add_argument("--recreate", action="store_true")
+    parser.add_argument(
+        "--compose-file",
+        action="append",
+        default=[],
+        help="Additional Compose overlay inside the repository, e.g. the CI stack.",
+    )
     options = parser.parse_args(arguments)
     params = ["up", "-d", "--remove-orphans"]
     if options.build:
         params.append("--build")
     if options.recreate:
         params.append("--force-recreate")
-    return compose(params, start=True)
+    return compose(params, start=True, files=options.compose_file)
 
 
 def _logs(arguments: list[str]) -> int:
