@@ -1,10 +1,6 @@
-"""Offline CLI wiring checks. Only temporary scripts and fake uv/Docker execute.
-
-Run with Python directly; no backend imports or functional-test collection.
-"""
+"""Offline shell entry-point checks; only temporary scripts and fake uv execute."""
 
 import shutil
-import stat
 import subprocess
 import tempfile
 import unittest
@@ -17,38 +13,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SetupWiringTests(unittest.TestCase):
     def setUp(self):
-        self.directory = tempfile.TemporaryDirectory(prefix="hybro-cli-fixture-")
-        self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
-        (self.root / "scripts").mkdir()
-        (self.root / "backend").mkdir()
-        (self.root / "home").mkdir()
-        self.bin = self.root / "bin"
-        self.bin.mkdir()
+        directory = tempfile.TemporaryDirectory(prefix="hybro-cli-fixture-")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        for name in ("scripts", "backend", "home", "bin"):
+            (self.root / name).mkdir()
         for name in ("hybro", "hybro-help.txt"):
             shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
         self.env = {
             "HOME": str(self.root / "home"),
-            "PATH": f"{self.bin}:/usr/bin:/bin",
+            "PATH": f"{self.root / 'bin'}:/usr/bin:/bin",
             "CAPTURE": str(self.root / "capture"),
         }
-        self.stub(
-            "uv",
-            'printf "%s\\n" "$PWD" "$@" > "$CAPTURE.args"\n'
-            "for key in HYBRO_HOME OPENAI_API_KEY DEEPSEEK_API_KEY ANTHROPIC_API_KEY OPENAI_BASE_URL UV_PROJECT_ENVIRONMENT; do\n"
-            '  printenv "$key" > "$CAPTURE.$key" || :\n'
-            'done\nexit "${FAKE_EXIT:-0}"\n',
+        executable = self.root / "bin/uv"
+        executable.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$PWD" "$@" > "$CAPTURE.args"\nfor key in HYBRO_HOME OPENAI_API_KEY UV_PROJECT_ENVIRONMENT; do printenv "$key" > "$CAPTURE.$key" || :; done\nexit "${FAKE_EXIT:-0}"\n'
         )
-        self.stub(
-            "docker",
-            'if [ "$2" = version ]; then echo 2.24.0; else printf "%s\\n" "$@" > "$CAPTURE.docker"; fi\n',
-        )
-        self.stub("python3", "exit 0\n")
-
-    def stub(self, name, body):
-        path = self.bin / name
-        path.write_text("#!/bin/sh\n" + body)
-        path.chmod(0o700)
+        executable.chmod(0o700)
 
     def run_cli(self, *args, trace=False):
         return subprocess.run(
@@ -66,145 +47,92 @@ class SetupWiringTests(unittest.TestCase):
             check=False,
         )
 
-    def captured(self, key):
+    def capture(self, key):
         return (self.root / f"capture.{key}").read_text().strip()
 
-    def test_setup_forwards_args_and_root_values_without_shell_evaluation(self):
-        runtime = self.root / "private config"
-        (self.root / ".env").write_text(
-            f'HYBRO_HOME="{runtime}"\n'
-            'OPENAI_API_KEY="fixture-root-key"\n'
-            "DEEPSEEK_API_KEY='fixture-deepseek'\n"
-            "ANTHROPIC_API_KEY=fixture-anthropic # comment\n"
-            "OPENAI_BASE_URL=https://fixture.invalid/v1\n"
-            "$(touch should-not-execute)\n"
-        )
-        result = self.run_cli(
-            "setup", "--provider", "openai", "--image-model", "none", trace=True
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.captured("HYBRO_HOME"), str(runtime))
-        self.assertEqual(self.captured("OPENAI_API_KEY"), "fixture-root-key")
-        self.assertEqual(self.captured("DEEPSEEK_API_KEY"), "fixture-deepseek")
-        self.assertEqual(self.captured("ANTHROPIC_API_KEY"), "fixture-anthropic")
-        self.assertEqual(self.captured("OPENAI_BASE_URL"), "https://fixture.invalid/v1")
+    def test_ignores_root_dotenv_and_does_not_evaluate_it(self):
+        original = "OPENAI_API_KEY=fixture-root-key\nHYBRO_HOME=/ignored\n$(touch should-not-execute)\n"
+        (self.root / ".env").write_text(original)
+        result = self.run_cli("setup", "--provider", "openai", trace=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.capture("OPENAI_API_KEY"), "")
+        self.assertEqual(self.capture("HYBRO_HOME"), "")
+        self.assertEqual((self.root / ".env").read_text(), original)
+        self.assertFalse((self.root / "should-not-execute").exists())
+        self.assertNotIn("fixture-root-key", result.stdout + result.stderr)
+
+    def test_delegates_to_json_cli_with_uv_dotenv_disabled(self):
+        self.assertEqual(self.run_cli("setup", "--help").returncode, 0)
         self.assertEqual(
-            self.captured("args").splitlines(),
+            self.capture("args").splitlines(),
             [
                 str(self.root / "backend"),
                 "run",
                 "--frozen",
+                "--no-env-file",
                 "python",
                 "-m",
-                "llm_gateway.setup_cli",
-                "--provider",
-                "openai",
-                "--image-model",
-                "none",
+                "common.config.cli",
+                "setup",
+                "--help",
             ],
         )
-        self.assertNotIn("fixture-root-key", result.stdout + result.stderr)
-        self.assertFalse((self.root / "should-not-execute").exists())
-        self.assertFalse((self.root / "capture.docker").exists())
 
-    def test_shell_precedence_including_explicit_empty_and_environment_override(self):
-        (self.root / ".env").write_text(
-            "OPENAI_API_KEY=fixture-root\nDEEPSEEK_API_KEY=fixture-root\n"
-        )
+    def test_preserves_explicit_location_and_automation_input(self):
         self.env.update(
-            OPENAI_API_KEY="fixture-shell",
-            DEEPSEEK_API_KEY="",
+            HYBRO_HOME=str(self.root / "runtime"),
+            OPENAI_API_KEY="fixture-once",
             UV_PROJECT_ENVIRONMENT=str(self.root / "venv"),
         )
-        for args in (("setup", "--help"), ("tui",)):
-            with self.subTest(args=args):
-                self.assertEqual(self.run_cli(*args).returncode, 0)
-                self.assertEqual(self.captured("OPENAI_API_KEY"), "fixture-shell")
-                self.assertEqual(self.captured("DEEPSEEK_API_KEY"), "")
-                self.assertEqual(
-                    self.captured("UV_PROJECT_ENVIRONMENT"), str(self.root / "venv")
-                )
+        result = self.run_cli("setup", trace=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.capture("OPENAI_API_KEY"), "fixture-once")
+        self.assertEqual(self.capture("HYBRO_HOME"), str(self.root / "runtime"))
+        self.assertNotIn("fixture-once", result.stdout + result.stderr)
 
-    def test_no_config_uses_home_default_and_propagates_exit(self):
+    def test_external_environment_default_and_exit_status(self):
         self.env["FAKE_EXIT"] = "130"
         self.assertEqual(self.run_cli("setup").returncode, 130)
-        self.assertEqual(self.captured("HYBRO_HOME"), "")
         self.assertEqual(
-            self.captured("UV_PROJECT_ENVIRONMENT"),
+            self.capture("UV_PROJECT_ENVIRONMENT"),
             str(self.root / "home/.local/share/hybro/venv"),
         )
         self.assertFalse((self.root / ".env").exists())
 
-    def test_start_creates_private_bind_source_without_provider_calls(self):
-        result = self.run_cli("start")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            stat.S_IMODE((self.root / "home/.hybro").stat().st_mode), 0o700
-        )
-        self.assertEqual(
-            self.captured("docker").splitlines(),
-            ["compose", "up", "-d", "--remove-orphans"],
-        )
-        self.assertFalse((self.root / "capture.args").exists())
-
-    def test_status_does_not_create_config_directory(self):
-        result = self.run_cli("status")
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_start_requires_python_preflight_not_shell_degraded_mode(self):
+        self.assertEqual(self.run_cli("start", "--build").returncode, 0)
+        self.assertEqual(self.capture("args").splitlines()[-2:], ["start", "--build"])
         self.assertFalse((self.root / "home/.hybro").exists())
 
-    def test_tui_uses_setup_environment_without_exposing_keys_or_running_docker(self):
-        runtime = self.root / "selected runtime"
-        (self.root / ".env").write_text(
-            f'HYBRO_HOME="{runtime}"\nOPENAI_API_KEY=fixture-panel-key\n'
-        )
-        result = self.run_cli("tui", trace=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            self.captured("args").splitlines(),
-            [
-                str(self.root / "backend"),
-                "run",
-                "--frozen",
-                "python",
-                "-m",
-                "llm_gateway.cli_tui",
-            ],
-        )
-        self.assertEqual(self.captured("OPENAI_API_KEY"), "fixture-panel-key")
-        self.assertEqual(self.captured("HYBRO_HOME"), str(runtime))
-        self.assertNotIn("fixture-panel-key", result.stdout + result.stderr)
-        self.assertFalse(runtime.exists())
-        self.assertFalse((self.root / "capture.docker").exists())
+    def test_status_does_not_create_configuration(self):
+        self.assertEqual(self.run_cli("status").returncode, 0)
         self.assertFalse((self.root / "home/.hybro").exists())
 
-    def test_no_terminal_keeps_help_without_launching_menu(self):
+    def test_no_terminal_prints_help_without_starting_uv(self):
         result = self.run_cli()
         self.assertEqual(result.returncode, 0)
         self.assertIn("Usage:", result.stdout)
         self.assertFalse((self.root / "capture.args").exists())
-        self.assertFalse((self.root / "capture.docker").exists())
 
-    def test_tui_rejects_unexpected_arguments_without_echo(self):
-        result = self.run_cli("tui", "fixture-secret")
-        self.assertEqual(result.returncode, 2)
-        self.assertNotIn("fixture-secret", result.stdout + result.stderr)
-        self.assertFalse((self.root / "capture.args").exists())
+    def test_config_edits_use_the_same_entry_point(self):
+        self.assertEqual(
+            self.run_cli("config", "set", "backend.log_level", '"DEBUG"').returncode, 0
+        )
+        self.assertEqual(
+            self.capture("args").splitlines()[-4:],
+            ["config", "set", "backend.log_level", '"DEBUG"'],
+        )
 
-    def test_only_backend_mounts_runtime_and_forwards_selected_keys(self):
-        compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
-        backend = compose["services"]["backend"]
+    def test_only_backend_mounts_runtime_and_no_service_reads_dotenv(self):
+        services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+        backend = services["backend"]
         self.assertIn(
             "${HYBRO_HOME:-${HOME}/.hybro}:/var/lib/hybro/runtime", backend["volumes"]
         )
-        self.assertIn("HYBRO_HOME=/var/lib/hybro/runtime", backend["environment"])
-        for key in (
-            "OPENAI_API_KEY",
-            "DEEPSEEK_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "OPENAI_BASE_URL",
-        ):
-            self.assertIn(f"{key}=${{{key}:-}}", backend["environment"])
-        for name, service in compose["services"].items():
+        self.assertIn("HYBRO_CONTAINER=1", backend["environment"])
+        self.assertFalse(any("API_KEY=" in value for value in backend["environment"]))
+        for name, service in services.items():
+            self.assertNotIn("env_file", service)
             if name != "backend":
                 self.assertNotIn("/var/lib/hybro/runtime", repr(service))
                 self.assertNotIn("HYBRO_HOME", repr(service))

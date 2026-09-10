@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from jobs.constants import (
     ALL_JOB_NAMES,
     ORCHESTRATOR_PROJECTION,
@@ -88,7 +88,7 @@ async def test_jobs_skip_leader_gate_when_no_leader_bound():
 
 
 def test_mandatory_worker_cadence_defaults_to_thirty_seconds():
-    settings = Settings(_env_file=None)
+    settings = Settings()
     assert settings.orchestrator_worker_interval_seconds == 30
 
 

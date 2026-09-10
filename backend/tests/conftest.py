@@ -23,6 +23,11 @@ from a2a.types import (
     TaskStatus,
 )
 
+# Configuration must be isolated before any application module is imported.
+# isort: split
+from tests.fakes import config_bootstrap as _config_bootstrap  # noqa: F401
+
+# isort: split
 from common.auth import ClerkUser
 from common.dto.hitl import HITLApplicationRoute, HITLEvidenceOrigin, HITLPublicSource
 from models.agent import Agent, AgentStatus
@@ -565,7 +570,7 @@ def mock_room_center():
 @pytest.fixture
 def mock_settings():
     """Create mock settings for tests."""
-    with patch("common.config.settings.settings") as mock:
+    with patch("common.config.loader.settings") as mock:
         mock.clerk_secret_key = "test_secret_key"
         mock.mongodb_uri = "mongodb://localhost:27017"
         mock.mongodb_database = "test_db"

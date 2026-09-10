@@ -1,11 +1,10 @@
 import asyncio
-import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import aclosing
 from typing import Any, Literal, Protocol, TypeVar
 
-from common.config.settings import settings
+from common.config.loader import settings
 from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
 from common.observability import get_logger, safe_exception_metadata
 from common.protocols import LLMProviderAdapter
@@ -19,9 +18,8 @@ from llm_gateway.image_types import GatewayImageRequest, GatewayImageResult
 from llm_gateway.model_registry import ModelRegistryImpl
 from llm_gateway.providers import DeepSeekProvider, OpenAIProvider
 from llm_gateway.runtime_store import (
-    RuntimeConfigStore,
+    current_store,
     load_optional_setup,
-    runtime_home,
 )
 from llm_gateway.turn_types import GatewayTurnEvent, GatewayTurnRequest
 
@@ -85,16 +83,11 @@ class LLMGatewayImpl:
                 credential = initial.authentication.credential
                 if not isinstance(credential, OAuthCredential):
                     raise LLMProviderConfigurationError("OAuth credential missing")
-                environment = dict(os.environ)
-                environment["OPENAI_API_KEY"] = str(
-                    getattr(settings_obj, "openai_api_key", "")
-                    or environment.get("OPENAI_API_KEY", "")
-                )
-                store = RuntimeConfigStore(runtime_home(environment))
+                store = current_store()
 
                 async def oauth_resolve() -> OAuthCredential:
                     return await store.resolve_oauth(
-                        initial.config, credential.account_id, environment, refresh
+                        initial.config, credential.account_id, {}, refresh
                     )
 
             self._text_provider = (

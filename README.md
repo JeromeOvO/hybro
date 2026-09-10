@@ -33,18 +33,19 @@ Hybro AI allows developers and teams to deploy, coordinate, and inspect clusters
 - **Native Agent Interoperability**: Built around the open Agent2Agent (A2A) protocol for standardized inter-agent communication.
 - **Multi-Agent Execution Rooms**: Group specialized agents in dedicated execution rooms to solve multi-step tasks collaboratively.
 - **Real-Time Streaming & Inspection**: Live SSE message streaming, multi-agent turn timelines, and an interactive A2A Agent Inspector for testing agent capabilities.
-- **Zero-Config Developer Mode**: Start the frontend and backend instantly out of the box with zero required external API keys.
+- **CLI-Managed Configuration**: Configure models and authentication once, then start backend, frontend and Agents without maintaining environment files.
 
 
 ## Getting Started
 
 ### Prerequisites
 - Docker with Compose v2.24+ (`docker compose`; the v1 `docker-compose` binary is not supported)
+- [uv](https://docs.astral.sh/uv/) for host-side `hybro setup`
 - Node.js 20.19+ (if running the frontend outside of Docker)
 - Python 3.12+ and MongoDB 4.2+ (if running the backend outside of Docker; Docker Compose uses MongoDB 7.0)
 
 ### Quick Start (Docker)
-The easiest way to get started is using the automated installation script, which will clone the repository, set up the environment, and spin up the Docker containers.
+The installation script clones the repository and opens the CLI when a terminal is available; otherwise it prints setup/start instructions.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh
@@ -55,44 +56,82 @@ Alternatively, you can manually clone and run:
 ```bash
 git clone https://github.com/hybroai/hybro.git
 cd hybro
-./scripts/hybro start
+./scripts/hybro setup
+./scripts/hybro start --build
 ```
 
 - **Hybro App**: http://localhost:3000
 - **API Server**: http://localhost:8000
 
-With no `.env`, `hybro start` runs in zero-config demo mode (mock auth,
-agents error until `OPENAI_API_KEY` is set). See **Configuration** below to
-enable working default agents and LLM calls.
+Existing installations should perform the one-time JSON migration below before
+removing old environment files.
 
 ## Configuration
 
-The repo-root `.env` is the single source of truth for the backend, default
-agents, and the frontend build. To bring it up manually:
+### Configuration contract
 
-```bash
-cp .env.example .env
-# Edit .env; at minimum set OPENAI_API_KEY
-sh backend/scripts/ensure_webhook_signing_key.sh .env
-sh backend/scripts/ensure_registrar_token.sh .env
-sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
+Backend, frontend and bundled-agent user settings belong to one local JSON
+configuration, not repository environment files:
+
+```text
+~/.hybro/
+├── config.json   # User settings; edit through the CLI or directly
+└── auth.json     # Credentials; managed through the CLI
 ```
 
-`./scripts/hybro start` runs the three `ensure_*` steps for you whenever
-`.env` exists, so after the initial `cp .env.example .env` (plus setting
-`OPENAI_API_KEY`) you can just run `./scripts/hybro start --recreate` to
-pick up runtime values. To run the backend's classifier, supervisor, context
-memory, and synthesis generation through DeepSeek instead, set
-`DEEPSEEK_API_KEY` and optionally `DEEPSEEK_MODEL_NAME`. Backend generation
-selects the first configured provider in this order: DeepSeek, OpenAI, Gemini.
-This does not change `default_agents/`, which are separate containers receiving
-only an allow-listed subset of the root `.env` and still require
-`OPENAI_API_KEY`; the optional embedding route also remains OpenAI-backed. If
-you also change frontend-facing `NEXT_PUBLIC_*`
-keys, use `./scripts/hybro start --build --recreate` - those values are
-Docker build args baked into the Next.js bundle, so recreate alone keeps
-the old browser config. `frontend/.env.local` is generated from `.env` -
-do not hand-edit it.
+`HYBRO_HOME` is the sole directory override and must be an absolute path.
+Defaults, types and validation remain in a thin code loader; JSON only needs
+user overrides. `backend/common/config/loader.py` replaces the old `settings.py`
+environment-loading path. Startup validates syntax, known fields, types, ranges and
+required combinations. Missing model setup must direct the user to `hybro setup`;
+invalid configuration must not silently select a legacy Provider.
+
+CLI edits use the same validation before saving. Manual JSON edits are validated
+at the next startup. Settings are a startup snapshot: restart services after
+changes, and rebuild the frontend when build-time public settings change.
+
+`.env`, `.env.example` and `frontend/.env.local` are not required by this contract.
+The CLI supplies only scoped values to containers and frontend builds; transport
+environment variables do not become another user configuration source. Secrets
+must never enter the browser bundle or be forwarded wholesale to Agents.
+
+### Edit configuration
+
+```bash
+./scripts/hybro config show
+./scripts/hybro config check
+./scripts/hybro config set backend.log_level '"DEBUG"'
+./scripts/hybro config set frontend.max_message_length 12000
+./scripts/hybro start --build --recreate
+```
+
+Use `config secret <name>` for hidden service-credential input and `setup` for
+Provider/model changes. Startup generates missing internal tokens in `auth.json`
+without rotating existing values. Backend overrides live under `backend`, public
+frontend overrides under `frontend`, and image output size is `image_size`.
+
+### Existing installations
+
+Before removing old environment files, convert a previous YAML setup explicitly:
+
+```bash
+./scripts/hybro config migrate --from-env .env
+./scripts/hybro config check
+./scripts/hybro start --build --recreate
+```
+
+Omit `--from-env` if no deployment values need importing. Migration preserves
+Provider credentials and imports known deployment settings and service secrets;
+it refuses to overwrite an existing `config.json`. Original environment files,
+`.env.example` and `config.yaml` are not deleted. After successful migration,
+normal setup/start uses JSON only, even if those old files remain.
+
+The already-implemented Agent proxy shares backend's setup-selected gateway.
+Agents retain SDKs, tools, HITL and A2A execution. Image generation requires an
+eligible image model; ChatGPT OAuth alone does not enable it.
+
+See [configuration architecture](docs/Configuration-Architecture.md) for the
+migration boundary and acceptance checks.
 
 ## Running
 
@@ -101,17 +140,16 @@ do not hand-edit it.
 ```bash
 ./scripts/hybro start                    # up -d, no rebuild (fast daily loop)
 ./scripts/hybro start --build            # rebuild images (after code/deps change)
-./scripts/hybro start --recreate         # recreate containers (runtime .env changes)
-./scripts/hybro start --build --recreate # rebuild+recreate (NEXT_PUBLIC_* / image changes)
-./scripts/hybro start --check-key        # validate the OpenAI key used by default agents
+./scripts/hybro start --recreate         # recreate containers (runtime configuration changes)
+./scripts/hybro start --build --recreate # rebuild+recreate (public frontend / image changes)
 ./scripts/hybro logs backend             # stream one service (or all if no arg)
 ./scripts/hybro status                   # docker compose ps --all
 ./scripts/hybro stop                     # stop but keep containers
 ./scripts/hybro down                     # remove containers + default network
 ```
 
-Run `./scripts/hybro --help` for the full subcommand reference. Power users
-can still invoke `docker compose` directly.
+Run `./scripts/hybro --help` for the full subcommand reference. Start through the
+CLI so Compose receives validated scoped projections, not ambient dotenv values.
 
 ## Architecture
 This repository is the source of truth for the product. Its frontend and backend
@@ -124,13 +162,15 @@ The repository is split into these primary components:
 - `default_agents/`: A collection of ready-to-use A2A agents, each running as its own container, plus a one-shot `registrar` that registers them with the backend on startup.
 
 ## API keys
-By default, the backend and default agents share `OPENAI_API_KEY`. If
-`DEEPSEEK_API_KEY` is configured, the backend automatically gives DeepSeek
-priority over OpenAI and Gemini for generation. This does not reconfigure the
-separately deployed default agents: one root `.env` is the source of truth, but
-Compose deliberately forwards only `OPENAI_API_KEY`, `OPENAI_MODEL`, and image
-settings to those containers. Agents register regardless, but their calls fail
-until their provider key is available.
+Use `hybro setup` for OpenAI API Key or ChatGPT OAuth, DeepSeek API Key, or
+Anthropic API Key.
+Agents receive a scoped `HYBRO_AGENT_CONFIG` projection containing the backend
+proxy URL, a separate inference token and image size. They pass these values
+explicitly to their SDKs. The token cannot authenticate as a user or registrar;
+it is required even under mock auth. Agents never receive Provider credentials
+or the setup directory.
+See [gateway architecture](backend/docs/System-Architecture.md#llm_gateway) for
+the supported proxy subset and limits.
 
 ## Contributing
 We welcome contributions from the community! Whether you are fixing a bug, adding a feature, or improving documentation, please feel free to open a pull request.

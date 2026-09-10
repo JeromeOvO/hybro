@@ -355,27 +355,29 @@ concrete runtime singletons.
 
 #### Runtime Configuration
 
-Runtime application code reads environment-backed configuration through
-`common/config/settings.py`. On the host, Settings loads the monorepo-root
-`.env` when that file exists (never together with a leftover `backend/.env`,
-which would otherwise override root values). If the root file is absent,
-Settings falls back to `backend/.env`. Under Docker Compose, process
-environment from the root `.env` `env_file` (plus Compose overrides) is
-authoritative. Default-agent and registrar containers do **not** receive the
-full root env; Compose interpolates only an allowlisted subset
-(`OPENAI_API_KEY`, `OPENAI_MODEL`, `IMAGE_MODEL`, `IMAGE_SIZE` for agents;
-`AGENT_REGISTRAR_TOKEN` for the registrar). The frontend image receives
-`NEXT_PUBLIC_*` values as Docker build args (baked into the client bundle)
-and only `BACKEND_URL` plus server-side Clerk secrets at runtime. Raw `os.getenv()`, `os.environ.get()`, and
-`os.environ[...]` reads are reserved for the canonical settings module; the
-config unification gate in `tests/test_config_unification_gate.py` scans tracked
-production Python files and fails on new raw env reads outside that file.
+`common/config/loader.py` defines typed defaults and loads a cached startup
+snapshot from `HYBRO_HOME/config.json` (default `~/.hybro/config.json`). There is
+no `settings.py`, dotenv discovery or environment-backed application settings.
+JSON overrides live under `backend` and `frontend`, alongside setup's `provider`,
+`models`, `version` and Agent `image_size`. Unknown fields, invalid types/ranges
+and missing setup fail before services start. Credentials stay in `auth.json`;
+its `services` mapping contains scoped service secrets, separately from Provider
+credentials. Setup edits and OAuth rotations preserve unrelated fields.
 
-The gate intentionally excludes `tests/`, `scripts/`, and `docs/`: tests may
-set env vars to verify settings loading, while scripts run outside the app
-runtime. `SERVER_SOFTWARE` is exposed as the live `Settings.is_gunicorn`
-property because it is server-injected runtime metadata, not user application
-configuration.
+`common/config/cli.py` handles `config show/check/set/secret/migrate` and Compose
+startup. It validates configuration, generates missing internal tokens without
+rotation, and launches Compose with `--env-file /dev/null`. Only backend mounts
+the runtime directory. `HYBRO_CONTAINER=1` supplies bundled Mongo/Redis/file-path
+and discovery defaults where JSON has no explicit override. Agents receive a
+scoped `HYBRO_AGENT_CONFIG` projection; frontend receives only validated public
+JSON at build time plus server SDK credentials at runtime. Public frontend
+changes require a rebuild; other changes require restart/recreation.
+
+The raw-env gate allows only configuration/CLI boundaries. Framework metadata
+such as `SERVER_SOFTWARE` is not user configuration. Explicit one-time
+`hybro config migrate --from-env .env` imports old deployment values and YAML
+selection without deleting originals; normal startup never invokes that importer.
+See [configuration architecture](../../docs/Configuration-Architecture.md).
 
 #### A2A Inline File Dispatch Policy
 
@@ -414,11 +416,11 @@ changes requires discard confirmation. Ctrl-C exits without saving the draft.
 Services delegates to existing commands. Only removal and forced recreation
 require Cancel-default confirmation. Command output remains visible until Enter
 or Esc returns; cancellation is not reported as a command failure. The terminal
-screen and input mode are restored on exit. Both TUI and setup receive the same
-allowlisted shell-over-root-`.env` configuration from `scripts/hybro`; Python does
-not read `.env`. No arguments without a terminal still show help; explicit commands
-remain scriptable. Package exports are lazy, and explicitly configured provider
-adapters do not initialize application Settings. Legacy callers retain defaults.
+screen and input mode are restored on exit. Both TUI and setup use the same JSON
+store. Shell API keys are optional one-time automation inputs, saved privately
+after verification; they are not runtime configuration sources. No arguments
+without a terminal still show help. Package exports and configuration schemas
+are lazy and do not start the application when the CLI imports them.
 
 `./scripts/hybro setup` selects Provider/authentication, acquires credentials,
 then selects text and optional image models, verifies one text call, and saves.
@@ -437,14 +439,11 @@ OpenAI, DeepSeek, and Anthropic text adapters
 are gateway-internal. A validated setup selection overrides legacy text model
 routes and frozen hints at every gateway text entry point, including
 `stream_turn_once`. Setup is validated before irrelevant legacy text-provider/model
-settings; the original registry and no-setup validation remain intact. This does
-not change caller DTOs, request correlation, or
-Execution ownership. Without setup, the legacy routing described below remains
-unchanged. Invalid setup or conflicting stored/environment API keys for the same
-Provider in API-key mode fail explicitly rather than reverting to legacy routing.
-OAuth ignores `OPENAI_API_KEY` at setup, load and refresh without modifying the
-environment, so embedding can retain its independent API key. Embedding interfaces and
-routing are unchanged and are not configured by setup.
+settings. This does not change caller DTOs, request correlation or Execution
+ownership. Missing setup now explicitly requires `hybro setup`; invalid setup
+never reverts to legacy routing. Runtime Provider authentication uses stored
+credentials only. Embedding implementation remains outside this configuration
+migration and is not configured or enabled by setup.
 
 The gateway-local `runtime_home` resolver reads `HYBRO_HOME` (absolute path),
 defaulting to `~/.hybro`, independently of application-domain Settings. The
@@ -457,9 +456,9 @@ and other owners are refused with distinct remediation guidance. Preflight does
 not create an absent directory; help, invalid selection and menu cancellation do
 not create a runtime tree. Runtime reads/writes remain strict and never repair
 insecure directory modes automatically.
-`config.yaml` contains selection, while optional `auth.json` contains the stored
-API key or OAuth access/refresh tokens, expiry, and unsigned account-routing
-metadata. Credential-bearing reads and writes share a directory lock. Save rolls back captured I/O
+`config.json` contains model selection and application overrides. `auth.json`
+contains the stored API key or OAuth access/refresh tokens, expiry, unsigned
+account-routing metadata and an optional `services` credential mapping. Credential-bearing reads and writes share a directory lock. Save rolls back captured I/O
 failures but is not a crash-atomic two-file transaction. Setup checks the selected
 credential and text model with one text request (API billing or subscription quota)
 before saving; it does not automatically restart services. Verification requires
@@ -492,7 +491,7 @@ The subscription adapter posts raw Responses SSE only to
 `https://auth.openai.com/oauth/token`. Neither accepts `OPENAI_BASE_URL`, redirects,
 or ambient proxy routing. Requests identify as Hybro. OAuth offers the ten
 pi-ai 0.73.1 catalog IDs from GPT-5.1 through GPT-5.5, including Codex, Mini and
-Spark variants; GPT-5.4 is the default. This is not a fetched account-entitlement
+Spark variants; GPT-5.5 is the default. This is not a fetched account-entitlement
 list: the selected model's access is verified once. Per-model reasoning mappings
 prevent unsupported efforts, and local output ceilings remain unchanged.
 Arbitrary public-API model IDs are not eligible. Ordered text/function
@@ -526,17 +525,57 @@ Only OpenAI API-key setup offers `gpt-image-1`. Gateway-local `generate_image`
 supports generation and reference-image editing with bounded validated image
 bytes and one Provider attempt. Setup validates image selection locally and
 explicitly reports that image API access has not been verified; it makes no
-billable image calls. Bundled Agents are not migrated to this capability.
+billable image calls. The bundled image agent reaches this capability through
+backend's internal image proxy.
 
-The CLI reads allowlisted root `.env` values without shell evaluation; shell
-values take precedence. Compose forwards that same credential/endpoint
-precedence to backend and mounts the private host directory only into backend
-at `/var/lib/hybro/runtime`, setting its `HYBRO_HOME` accordingly. The mount is
-writable for the shared snapshot lock. Run setup before a direct first Docker
-start; `hybro start` creates an absent bind source as the host user. Apply using
-`docker compose up -d --build --no-deps --force-recreate backend` with the same
-configuration environment, or restart a host backend with the same `HYBRO_HOME`.
-Frontend, Agents, API contracts, and other business modules are unchanged.
+The CLI loads JSON and mounts the private host directory only into backend at
+`/var/lib/hybro/runtime`, setting its `HYBRO_HOME` accordingly. The mount is
+writable for the shared snapshot lock. Run `hybro setup` before first start.
+Apply configuration using `hybro start --recreate`, adding `--build` when code or
+public frontend settings change. Host backend processes use the same loader and
+`HYBRO_HOME`; business modules read the shared typed configuration object.
+
+#### Bundled-agent inference proxy
+
+Compose agents keep their OpenAI/LangChain SDKs, local tool loops, task handling,
+HITL and A2A responses. Their SDK base URL is
+`http://backend:8000/api/v1/internal/llm`. The three supported POST endpoints are
+`/chat/completions` (JSON or SSE), `/images/generations` (JSON), and `/images/edits`
+(single multipart reference image). Only the fields used by bundled agents are
+supported: text messages, function calls/results, optional usage, temperature,
+output limits and one image. Unsupported fields fail locally rather than being
+forwarded to a Provider; this is not a general OpenAI API implementation.
+
+`container.py` binds `AgentLLMProxy` to the same `LLMGatewayImpl` used by backend
+callers. Its private `_AgentLLMProxyPort` is the route seam. Text converts wire
+messages into `GatewayTurnRequest` and calls `stream_turn_once`; images call
+`generate_image`. There is no second tool executor, response finalizer, Provider
+client, configuration store or proxy retry loop. A valid setup is required for
+proxy text inference; the configured model overrides SDK model labels. Image
+requests require an eligible configured image model; OAuth alone does not enable
+image generation. Backend startup also requires saved setup.
+
+Agents read a validated `HYBRO_AGENT_CONFIG` snapshot containing the internal
+endpoint, inference token and image size. They pass the token explicitly to SDK
+constructors; no Provider key, OAuth token, full auth file or runtime mount reaches
+an Agent. Backend checks this inference-only Bearer token before parsing bodies,
+even in mock-auth mode. `hybro start` generates missing service credentials in
+`auth.json`, without rotating existing tokens. Registrar credentials remain
+separate. Restrict the internal proxy path to trusted callers at public ingress.
+
+Per worker, at most four calls run concurrently; text has a 120-second deadline
+and images 300 seconds. Body limits are 1 MiB text, 128 KiB image generation and
+10 MiB multipart, with existing gateway image validation and an 8 MiB reference
+limit. Validation and Provider failures never echo raw inputs or credentials.
+SSE failure emits an SDK-recognized error, not a successful `[DONE]`; closing the
+stream closes the gateway attempt. Supplied `client_request_id` or correlation
+headers are carried in `X-Client-Request-ID`; each model call also gets a unique
+turn suffix so an Agent tool loop cannot reuse synthesized call IDs.
+
+Start Compose through `hybro` so validated scoped projections are supplied.
+Saving setup alone never restarts services. Standalone Agent processes must be
+supplied the same scoped projection; they do not discover dotenv or local model
+configuration files.
 
 `llm_gateway` owns all LLM provider SDK access and LLM model routing. Provider
 adapters under `llm_gateway/providers/` are the only LLM code that imports the

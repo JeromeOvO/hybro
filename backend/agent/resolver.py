@@ -21,7 +21,7 @@ from typing import Any, Protocol
 from a2a_adapter.agent_card_health import probe_agent_card_for_health
 from agent.routing_safety import is_routing_agent_eligible
 from agent.service import _agent_info_to_legacy_agent
-from common.config.settings import settings
+from common.config.loader import settings
 from common.dto import AgentRoutingCandidate
 from common.utils.a2a_file_modes import agent_accepts_required_input_modes
 from common.utils.logger import get_logger

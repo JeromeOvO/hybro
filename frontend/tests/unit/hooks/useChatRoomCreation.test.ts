@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, cleanup } from '@testing-library/react'
+import { QueryClient } from '@tanstack/react-query'
 
 const mockPush = vi.fn()
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
+}))
+
+let activeQueryClient: QueryClient
+vi.mock('@/components/providers/query-provider', () => ({
+  getActiveQueryClient: () => activeQueryClient,
 }))
 
 vi.mock('@/lib/api/room', () => ({
@@ -11,7 +17,8 @@ vi.mock('@/lib/api/room', () => ({
   suggestAgents: vi.fn(),
 }))
 
-import type { SuggestAgentsResponse } from '@/lib/api/room'
+import type { RoomHistoryResponse, SuggestAgentsResponse } from '@/lib/api/room'
+import { roomHistoryQueryKey } from '@/lib/room-history-query'
 
 vi.mock('@/lib/api/agent', () => ({
   getAllAgents: vi.fn(),
@@ -48,11 +55,13 @@ describe('useChatRoomCreation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockPush.mockClear()
+    activeQueryClient = new QueryClient()
     useRoomUiStore.getState().resetAll()
   })
 
   afterEach(() => {
     cleanup()
+    activeQueryClient.clear()
   })
 
   describe('initial state', () => {
@@ -511,6 +520,51 @@ describe('useChatRoomCreation', () => {
       expect(mockPush).toHaveBeenCalledWith('/room/room-nav')
       expect(dispatchSpy).not.toHaveBeenCalled()
       dispatchSpy.mockRestore()
+    })
+
+    it('should place a newly created room first in the cached history', async () => {
+      activeQueryClient.setQueryData<RoomHistoryResponse>(roomHistoryQueryKey('user-1'), {
+        items: [{
+          room_id: 'existing-room',
+          title: 'Existing room',
+          last_activity_at: '2099-08-01T00:00:00.000Z',
+          is_pinned: false,
+          pin_order: null,
+          status: 'idle',
+        }],
+      })
+      mockCreateNewRoom.mockResolvedValue({
+        success: true,
+        room: { room_id: 'room-nav' },
+      })
+      const cancelSpy = vi.spyOn(activeQueryClient, 'cancelQueries')
+      const invalidateSpy = vi.spyOn(activeQueryClient, 'invalidateQueries')
+      const { result } = renderHook(() => useChatRoomCreation(defaultProps))
+
+      await act(async () => {
+        await result.current.createAndNavigate('Go!')
+      })
+
+      const history = activeQueryClient.getQueryData<RoomHistoryResponse>(
+        roomHistoryQueryKey('user-1'),
+      )
+      expect(history?.items.map(item => item.room_id)).toEqual([
+        'room-nav',
+        'existing-room',
+      ])
+      expect(history?.items[0]).toMatchObject({
+        title: 'Go!',
+        is_pinned: false,
+        status: 'idle',
+      })
+      expect(Date.parse(history?.items[0].last_activity_at ?? '')).toBeGreaterThan(
+        Date.parse(history?.items[1].last_activity_at ?? ''),
+      )
+      expect(cancelSpy).toHaveBeenCalledWith({
+        queryKey: roomHistoryQueryKey('user-1'),
+        exact: true,
+      })
+      expect(invalidateSpy).not.toHaveBeenCalled()
     })
 
     it('should return false on room creation failure', async () => {

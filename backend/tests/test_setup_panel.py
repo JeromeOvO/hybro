@@ -28,7 +28,7 @@ def configured(tmp_path, console, verifier=None):
 
 def contents(store):
     return {
-        name: (store.home / name).read_bytes() for name in ("config.yaml", "auth.json")
+        name: (store.home / name).read_bytes() for name in ("config.json", "auth.json")
     }
 
 
@@ -162,7 +162,7 @@ def test_view_does_not_read_auth_and_terminal_errors_do_not_retry(
     original = store._read
 
     def config_only(name):
-        assert name == "config.yaml"
+        assert name == "config.json"
         return original(name)
 
     monkeypatch.setattr(store, "_read", config_only)

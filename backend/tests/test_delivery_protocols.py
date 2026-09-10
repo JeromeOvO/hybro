@@ -268,10 +268,10 @@ def test_delivery_config_normalizes_terminal_statuses():
 
 
 def test_common_settings_expose_delivery_config_fields():
-    from common.config.settings import Settings
+    from common.config.loader import Settings
     from delivery.config import DeliveryConfig
 
-    settings = Settings(_env_file=None)
+    settings = Settings()
     values = {
         field: getattr(settings, field) for field in DeliveryConfig.__dataclass_fields__
     }
@@ -279,7 +279,6 @@ def test_common_settings_expose_delivery_config_fields():
     assert DeliveryConfig(**values) == DeliveryConfig()
 
     custom = Settings(
-        _env_file=None,
         terminal_processing_statuses="Done, FAILED",
     )
     assert custom.terminal_processing_statuses == frozenset({"done", "failed"})
@@ -372,12 +371,12 @@ def test_delivery_import_boundary():
                 for alias in node.names:
                     root = alias.name.split(".")[0]
                     assert root not in FORBIDDEN_DELIVERY_ROOTS, path
-                    if alias.name in {"common.config", "common.config.settings"}:
+                    if alias.name in {"common.config", "common.config.loader"}:
                         imported_common_config_aliases.add(alias.asname or alias.name)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 root = node.module.split(".")[0]
                 assert root not in FORBIDDEN_DELIVERY_ROOTS, path
-                if node.module in {"common.config", "common.config.settings"}:
+                if node.module in {"common.config", "common.config.loader"}:
                     imported = {alias.name for alias in node.names}
                     assert "settings" not in imported, path
             elif isinstance(node, ast.Call):
@@ -389,12 +388,12 @@ def test_delivery_import_boundary():
                         assert root not in FORBIDDEN_DELIVERY_ROOTS, path
                         assert target not in {
                             "common.config",
-                            "common.config.settings",
+                            "common.config.loader",
                         }, path
             elif isinstance(node, ast.Attribute) and node.attr == "settings":
                 chain = _attribute_chain(node.value)
                 assert chain not in imported_common_config_aliases, path
-                assert chain not in {"common.config", "common.config.settings"}, path
+                assert chain not in {"common.config", "common.config.loader"}, path
 
 
 def test_business_modules_do_not_import_delivery_concretes():

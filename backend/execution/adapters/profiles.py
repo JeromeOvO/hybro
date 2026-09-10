@@ -248,7 +248,7 @@ class OrchestratorProfileResolver:
         prompt_registry: PromptAssetRegistry | None = None,
         settings_obj: Any | None = None,
     ) -> None:
-        from common.config.settings import settings
+        from common.config.loader import settings
 
         self._model_registry = model_registry
         self._prompt_registry = prompt_registry or PromptAssetRegistry()

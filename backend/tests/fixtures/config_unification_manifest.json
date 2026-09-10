@@ -1,7 +1,11 @@
 {
-    "description": "Config unification gate: only the canonical settings module may use os.getenv/os.environ in runtime code",
+    "description": "JSON configuration: only configuration/CLI boundaries may read process metadata or explicit setup input",
     "allowed_paths": [
-        "common/config/settings.py"
+        "common/config/loader.py",
+        "common/config/cli.py",
+        "llm_gateway/runtime_store.py",
+        "llm_gateway/setup_cli.py",
+        "llm_gateway/cli_tui.py"
     ],
     "excluded_dirs": [
         ".git",

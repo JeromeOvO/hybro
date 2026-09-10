@@ -94,7 +94,7 @@ def test_noninteractive_environment_forwarding_and_noop(
     )
     assert main(arguments(provider), **kwargs) == 0
     runtime = tmp_path / ".hybro"
-    assert not (runtime / "auth.json").exists()
+    assert (runtime / "auth.json").exists()
     call_config, credential, endpoint = verifier.await_args.args
     assert call_config == config(provider)
     assert isinstance(credential, ResolvedCredential)
@@ -103,9 +103,9 @@ def test_noninteractive_environment_forwarding_and_noop(
     assert endpoint == (
         environment["OPENAI_BASE_URL"] if provider == "openai" else None
     )
-    before = (runtime / "config.yaml").stat().st_mtime_ns
+    before = (runtime / "config.json").stat().st_mtime_ns
     assert main(arguments(provider), **kwargs) == 0
-    assert (runtime / "config.yaml").stat().st_mtime_ns == before
+    assert (runtime / "config.json").stat().st_mtime_ns == before
     assert verifier.await_count == 2
     assert "source: environment" in output.getvalue()
     assert "Unchanged" in output.getvalue()
@@ -144,7 +144,7 @@ def test_image_selection_reports_unverified_access(tmp_path: Path) -> None:
     verifier.assert_awaited_once()
     assert verifier.await_args.args[0].models.image == "fixture-image"
     assert "image API access was not verified" in output.getvalue()
-    assert "--no-deps --force-recreate backend" in output.getvalue()
+    assert "hybro start --recreate" in output.getvalue()
 
 
 def test_setup_help_does_not_offer_apply_or_embedding(
@@ -270,8 +270,8 @@ def test_provider_switch_replaces_old_identity(tmp_path: Path, new_source: str) 
     )
     state = store.load(environment)
     assert state.config.provider.id == "deepseek"
-    assert state.authentication.source == new_source
-    assert (store.home / "auth.json").exists() == (new_source == "stored")
+    assert state.authentication.source == "stored"
+    assert (store.home / "auth.json").exists()
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -335,7 +335,7 @@ def test_cancellation_during_verification_does_not_save(
     )
     assert "canceled" in error.getvalue()
     assert not (tmp_path / ".hybro" / "auth.json").exists()
-    assert not (tmp_path / ".hybro" / "config.yaml").exists()
+    assert not (tmp_path / ".hybro" / "config.json").exists()
 
 
 @pytest.mark.parametrize("failure", [KeyboardInterrupt, EOFError])
@@ -395,7 +395,7 @@ def test_invalid_or_unimplemented_request_fails_closed(
     )
     assert "fixture-argv-secret" not in error.getvalue()
     verifier.assert_not_awaited()
-    assert not (tmp_path / ".hybro" / "config.yaml").exists()
+    assert not (tmp_path / ".hybro" / "config.json").exists()
 
 
 @pytest.mark.parametrize("stored", [False, True])
@@ -698,7 +698,7 @@ def test_invalid_endpoint_fails_without_echo_or_verification(
     assert endpoint not in error.getvalue()
     assert "fixture-secret" not in error.getvalue()
     verifier.assert_not_awaited()
-    assert not (tmp_path / ".hybro" / "config.yaml").exists()
+    assert not (tmp_path / ".hybro" / "config.json").exists()
     assert not (tmp_path / ".hybro" / "auth.json").exists()
 
 
@@ -781,12 +781,12 @@ def replace(self, name, data):
     global first_config
     if stage == "commit_before_first_write" and name == "auth.json":
         pause()
-    if stage == "rollback" and name == "config.yaml" and first_config:
+    if stage == "rollback" and name == "config.json" and first_config:
         first_config = False
         pause()
         raise OSError("fixture write failure")
     original(self, name, data)
-    if (stage == "commit_auth" and name == "auth.json") or (stage == "commit_config" and name == "config.yaml"):
+    if (stage == "commit_auth" and name == "auth.json") or (stage == "commit_config" and name == "config.json"):
         pause()
 
 RuntimeConfigStore._replace = replace
@@ -844,7 +844,7 @@ def test_real_sigint_respects_commit_boundary(tmp_path: Path, stage: str) -> Non
             state.authentication.credential.api_key.get_secret_value()
             == "fixture-new-key"
         )
-        assert "Saved config.yaml/auth source." in stdout
+        assert "Saved config.json/auth source." in stdout
         assert "canceled" not in stdout + stderr
     else:
         assert state.config.models.text == "fixture-old"
@@ -852,7 +852,7 @@ def test_real_sigint_respects_commit_boundary(tmp_path: Path, stage: str) -> Non
             state.authentication.credential.api_key.get_secret_value()
             == "fixture-old-key"
         )
-        assert "Saved config.yaml" not in stdout
+        assert "Saved config.json" not in stdout
         if stage == "rollback":
             assert process.returncode == 1, stderr
             assert "previous files restored" in stderr

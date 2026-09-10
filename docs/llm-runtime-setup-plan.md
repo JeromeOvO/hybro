@@ -8,35 +8,37 @@ OpenAI ChatGPT/Codex OAuth is required alongside OpenAI, DeepSeek, and Anthropic
 API-key authentication. API-key implementation alone does not complete delivery.
 
 ```text
-hybro setup -> config.yaml + auth.json
+hybro setup / config -> config.json + auth.json
                           |
-existing backend callers -> llm_gateway -> Provider APIs / Codex Responses
+existing backend callers ---------> llm_gateway -> Provider APIs / Codex Responses
+bundled Agent SDKs -> backend proxy ------^
 ```
 
 Preserve the original `LLMGatewayImpl` constructor, public methods, DTOs, Protocols,
-model registry, no-setup behavior, embedding, request correlation, and Execution's
+model registry interfaces, request correlation, and Execution's
 response/retry/tool ownership. A configured text selection overrides original
 logical labels and frozen provider/model hints privately at every text entrypoint.
-No setup retains the original settings-backed gateway, including its intentional
-zero-key degraded behavior. Invalid configured state fails closed, not back to an
-old text route. Setup validation precedes irrelevant legacy text-provider/model
-validation while the original registry implementation remains unchanged.
-Embeddings always retain their original route.
+Missing setup explicitly requires `hybro setup`; invalid state fails closed rather
+than selecting an old text route. Setup validation precedes irrelevant legacy
+text-provider/model hints. Embedding implementation is outside this configuration
+migration and is not enabled or configured by setup.
 
-This scope does **not** include bundled-Agent migration, internal inference APIs,
-frontend changes, Agent availability or identity policy, embedding removal,
-strict setup-required startup, `HYBRO_HOME_HOST`, installer changes, automatic
-backend recreation, or `setup --apply`. Do not change other business modules.
-The existing backend-only Compose mount and credential forwarding are included;
-no Agent/frontend mount or credential forwarding changes are authorized.
+Bundled Agents use a thin backend inference proxy while retaining their SDKs,
+tools, task execution and A2A ownership. Compose supplies the internal proxy URL
+and a separate inference-only token, never Provider credentials or the runtime
+mount. `hybro start` generates missing tokens in `auth.json.services`. Backend and
+frontend configuration share `config.json`; normal CLI startup ignores dotenv.
+This does not introduce Agent availability/identity policy, embedding removal,
+`HYBRO_HOME_HOST`, automatic backend recreation on save, or `setup --apply`.
 
 ## Configuration and setup
 
 - `HYBRO_HOME` is an absolute host path, default `~/.hybro`. Backend Compose alone
   mounts it at `/var/lib/hybro/runtime`, with that container path as `HYBRO_HOME`.
-- `config.yaml` version 1 contains `provider.id`, `provider.auth`, `models.text`,
-  and optional `models.image`. It contains no secrets. `auth.json` holds one
-  Provider/auth-tagged credential. Unknown fields and duplicate keys fail closed.
+- `config.json` version 1 contains `provider.id`, `provider.auth`, `models.text`,
+  optional `models.image`, application overrides under `backend`/`frontend` and
+  `image_size`. `auth.json` holds the Provider credential and service secrets.
+  Unknown fields, duplicate JSON keys and invalid values fail closed.
 - One private directory (`0700`), regular private files (`0600`), directory flock,
   atomic replacement and caught-error pair rollback protect setup. This is not a
   crash-atomic two-file transaction; missing/mismatched state requires setup again.
@@ -47,7 +49,8 @@ no Agent/frontend mount or credential forwarding changes are authorized.
 - Interactive `hybro` (or `hybro tui`) uses a fixed-screen settings panel with
   Models and Services tabs. A centered, width-limited layout uses reverse-video
   selection and a separate notice/key-hint footer, inheriting terminal colors.
-  Tab switches pages; Enter edits a row, with the current model focused in pickers. Valid stored authentication is reused
+  Tab switches pages; Enter edits a row, with the current model focused in pickers.
+  Valid stored authentication is reused
   for model-only changes. First/changed connections use the guided setup flow.
   Edits remain a local draft until explicit verification/save; exiting via Esc
   confirms discarding pending changes, while Ctrl-C exits without saving.
@@ -55,7 +58,7 @@ no Agent/frontend mount or credential forwarding changes are authorized.
   Service commands delegate to the existing script; Enter/Esc returns after output.
   Only container removal and forced recreation require Cancel-default confirmation.
   Terminal screen/input mode is restored on exit. Both panel and setup use the same
-  allowlisted environment resolver. Without a terminal, no arguments show help.
+  JSON store and explicit setup-input boundary. Without a terminal, no arguments show help.
 - Interactive setup first shows saved Provider/authentication/text/image selections
   or a missing/invalid configuration notice. This config-only display never reads
   credentials or verifies backend activation; it does not create a runtime directory.
@@ -65,7 +68,8 @@ no Agent/frontend mount or credential forwarding changes are authorized.
   Only OpenAI offers OAuth. Image selection includes None when images are eligible;
   otherwise no image menu is shown. No typed option IDs are required. Menus scroll
   to fit small terminals; Escape/Ctrl-C cancels with terminal/cursor restoration.
-  Explicit flags and non-interactive environment-key setup retain their semantics.
+  Explicit flags remain available; non-interactive keys are one-time setup inputs
+  and are persisted after verification, not read from environment at runtime.
 - Before selection/login/verification, setup checks an existing runtime directory.
   It reports and tightens an owned real directory to `0700` using a no-follow
   directory FD, original-versus-opened device/inode comparison, `fstat`, and
@@ -73,17 +77,15 @@ no Agent/frontend mount or credential forwarding changes are authorized.
   Symlinks, non-directories and other owners receive actionable errors. An absent
   directory is not created by preflight, help, invalid selection or menu cancellation.
   Runtime access remains strict and never repairs permissions automatically.
-- API keys come from the selected Provider's environment or a hidden terminal
-  prompt. In API-key mode a stored API key and environment key for the same
-  Provider conflict; require removal of one. OAuth ignores that environment key
-  during setup, runtime load and refresh, without deleting or modifying it. Switching
-  authentication methods does not cause a false same-source conflict. Never pass
-  secrets in command arguments.
-- `scripts/hybro` resolves allowlisted calling-shell/root-`.env` values with shell
-  precedence and invokes the host setup module through the frozen backend uv
-  environment. Setup never imports application startup or reads `.env` itself.
-  Gateway package exports are lazy; explicitly supplied adapter credentials/endpoints
-  avoid application Settings, while omitted legacy defaults remain settings-backed.
+- API keys come from hidden input, a stored credential, or an explicit automation
+  environment input. A differing stored/automation key requires resolution; the
+  same key can be verified again without a false conflict. Runtime and refresh
+  read stored credentials only. Never pass secrets in command arguments.
+- `scripts/hybro` delegates to `common.config.cli` through frozen uv with
+  `--no-env-file`. The CLI loads JSON and projects scoped values to Compose,
+  frontend and Agents; it never sources dotenv during normal startup. Legacy
+  files are inputs only to explicit `config migrate --from-env` conversion.
+  Gateway exports and configuration schemas remain import-safe.
 - Verification makes one real text request when a human runs setup (API billing or
   subscription quota); tests mock it. A completed nonempty text reply verifies
   access; exact JSON formatting is not an authentication requirement. Failures show
@@ -92,7 +94,7 @@ no Agent/frontend mount or credential forwarding changes are authorized.
   known message templates become fixed codes, never raw text or exception chains. Images are selected by eligibility
   only, never probed by a billable image request.
 - Saving never starts/restarts Docker. Print manual backend restart instructions.
-  `hybro start` preserves its existing no-setup path. No automatic apply protocol.
+  `hybro start` validates setup before starting Docker. No automatic apply protocol.
 
 Examples:
 
@@ -200,8 +202,12 @@ gateway timeouts privately across all ordinary entrypoints and hints (defaults:
 Unsupported options fail before network calls rather than silently passing through.
 
 Only OpenAI API-key setup offers optional `gpt-image-1` generation/reference editing.
-Gateway-local bounded image behavior remains implemented; bundled Agents retain
-existing configuration and are not migrated by this work.
+Bundled Agents call `/api/v1/internal/llm/chat/completions`, `/images/generations`
+and `/images/edits` using their existing SDKs. The proxy reuses the same gateway
+instance, requires a saved setup, overrides SDK model labels, and preserves tool
+calls/results and streaming. Image editing accepts one multipart reference image.
+No tools execute in the proxy. Independent Bearer authentication remains required
+in mock mode, and no Provider credential or OAuth token is forwarded to Agents.
 
 ## Acceptance and verification
 
@@ -217,11 +223,13 @@ Required before handoff:
    entrypoints with OAuth selected; prove embedding and API-key paths unaffected.
 5. Run named offline tests through the audited temp-fixture guard, both full backend
    Ruff gates, offline CLI script tests, and `git diff --check`. Never unfiltered
-   pytest or functional collection, real HOME/.env/credentials reads, login/browser
-   launch, Provider HTTP, DB, Docker/start/install, or dependency installation.
+   pytest or functional collection. Automated tests use isolated HOME/config and
+   mocked Provider/network calls; they must not read real credentials or launch
+   the application lifespan. Deployment/live checks are separate, explicitly
+   scoped operations, not side effects of test collection.
 6. Report exact guard/list/log artifact paths, passed/skipped tests and live-service
    validation limitations for independent parent review. Preserve all unrelated
-   work and stage/commit nothing.
+   work; stage or commit only when explicitly requested.
 
 Code and docs must implement the complete OAuth behavior above; source research,
 storage-only OAuth DTOs, disabled CLI options or API-key success do not satisfy it.

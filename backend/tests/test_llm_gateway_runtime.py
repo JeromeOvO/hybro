@@ -11,6 +11,13 @@ from llm_gateway.errors import LLMModelRoutingError, LLMStreamingUnsupportedErro
 from llm_gateway.gateway import LLMGatewayImpl
 
 
+@pytest.fixture(autouse=True)
+def isolate_registry_provider_unit_layer(monkeypatch):
+    # These tests exercise injected registry/provider behavior, not application
+    # startup. Required JSON setup is covered by the configuration boundary tests.
+    monkeypatch.setattr("llm_gateway.gateway.load_optional_setup", lambda _: None)
+
+
 class FakeRegistry:
     def __init__(self) -> None:
         self.models = {

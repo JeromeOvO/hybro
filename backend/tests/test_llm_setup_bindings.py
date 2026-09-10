@@ -100,8 +100,8 @@ def test_setup_verifies_selected_adapter_once_then_saves(
     )
     assert result == (0 if status == 200 else 1)
     assert len(calls) == 1
-    assert (tmp_path / ".hybro/config.yaml").exists() is (status == 200)
-    assert not (tmp_path / ".hybro/auth.json").exists()
+    assert (tmp_path / ".hybro/config.json").exists() is (status == 200)
+    assert (tmp_path / ".hybro/auth.json").exists() is (status == 200)
     assert "private-key" not in error.getvalue()
 
 

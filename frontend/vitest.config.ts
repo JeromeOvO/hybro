@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import publicConfig from './tests/fixtures/public-config.json'
 
 const alias = { '@': path.resolve(__dirname, './src') }
 
@@ -8,6 +9,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: { alias },
   test: {
+    env: { HYBRO_FRONTEND_CONFIG: JSON.stringify(publicConfig) },
     projects: [
       {
         extends: true,

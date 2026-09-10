@@ -179,7 +179,7 @@ def test_explicit_provider_clients_and_keys_do_not_import_app_settings(monkeypat
     original = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
-        if name == "common.config.settings":
+        if name == "common.config.loader":
             pytest.fail("Explicit CLI credentials must not load application settings")
         return original(name, *args, **kwargs)
 
@@ -209,7 +209,7 @@ def test_legacy_provider_defaults_remain_settings_backed(monkeypatch, configured
 
     from llm_gateway.providers import deepseek_provider, openai_provider
 
-    settings_module = importlib.import_module("common.config.settings")
+    settings_module = importlib.import_module("common.config.loader")
     monkeypatch.setattr(
         settings_module,
         "settings",
@@ -247,7 +247,7 @@ def test_package_initializer_defers_application_imports(monkeypatch):
     original = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
-        if name in {"gateway", "model_registry", "common.config.settings"}:
+        if name in {"gateway", "model_registry", "common.config.loader"}:
             pytest.fail("Package initializer must not load application defaults")
         return original(name, *args, **kwargs)
 

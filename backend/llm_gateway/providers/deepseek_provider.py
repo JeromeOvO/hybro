@@ -28,7 +28,7 @@ class DeepSeekProvider(OpenAIProvider):
         api_key: str | None = None,
     ) -> None:
         if not client and not api_key:
-            from common.config.settings import settings
+            from common.config.loader import settings
 
             api_key = settings.deepseek_api_key or "missing"
         super().__init__(

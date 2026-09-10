@@ -1,9 +1,6 @@
 # Shared config for every default agent (see default_agents/agents.yaml).
-# NOTE: no env_file here — the root .env carries backend/frontend secrets
-# (Mongo credentials, WEBHOOK_SIGNING_KEY, CLERK_SECRET_KEY,
-# etc.) that default agents must not receive. Each generated agent service
-# instead pulls the specific keys it needs via ${VAR:-default} interpolation
-# so only agent-relevant values reach the container.
+# Start through hybro: the CLI reads config.json/auth.json and supplies only
+# scoped transport values. No dotenv file is a configuration source.
 x-agent: &agent
   build:
     context: ./default_agents
@@ -69,22 +66,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    env_file:
-      - path: ./.env
-        required: false
     environment:
-      - MONGODB_URL=mongodb://mongo:27017/hybro
-      - REDIS_URL=redis://redis:6379/0
-      - API_PREFIX=/api/v1
-      - HYBRO_FILE_DIR=/var/lib/hybro/files
+      - HYBRO_CONTAINER=1
       - HYBRO_HOME=/var/lib/hybro/runtime
-      # Match setup's shell-over-root-.env credential/endpoint precedence.
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
-      - LOCAL_AGENT_DISCOVERY_ENABLED=true
-      - ORCHESTRATOR_RECOVERY_ENABLED=true
     volumes:
       - room_files:/var/lib/hybro/files
       # Writable for the shared config/auth snapshot lock; backend only.
@@ -108,31 +92,15 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # NEXT_PUBLIC_* values must be provided at BUILD time or Next.js compiles
-      # its code defaults into the browser bundle (routes-manifest.json, client
-      # bundles). We forward them here as build args and also re-inject the
-      # server-only Clerk secrets at runtime below.
+      # Only validated public configuration is embedded into the browser build.
       args:
-        BACKEND_URL: http://backend:8000
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
-        NEXT_PUBLIC_API_PREFIX: ${NEXT_PUBLIC_API_PREFIX:-/api/v1}
-        NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL:-http://localhost:3000}
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
-        NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_URL:-/sign-in}
-        NEXT_PUBLIC_CLERK_SIGN_UP_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_URL:-/sign-up}
-        NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL:-/}
-        NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL:-/}
-        NEXT_PUBLIC_ENABLE_WAITLIST: ${NEXT_PUBLIC_ENABLE_WAITLIST:-true}
-        NEXT_PUBLIC_MAX_MESSAGE_LENGTH: ${NEXT_PUBLIC_MAX_MESSAGE_LENGTH:-10000}
-        NEXT_PUBLIC_INSPECTION_TIMEOUT_MS: ${NEXT_PUBLIC_INSPECTION_TIMEOUT_MS:-300000}
+        HYBRO_BACKEND_URL: http://backend:8000
+        HYBRO_FRONTEND_CONFIG: ${HYBRO_FRONTEND_CONFIG:-}
     ports:
       - "3000:3000"
-    # Intentionally no full env_file: do not inject backend/agent secrets into
-    # Next.js. Runtime only needs BACKEND_URL for the API rewrite and the two
-    # server-side Clerk secrets. NEXT_PUBLIC_* values are already baked into
-    # the image via build args above.
+    # Server SDK credentials only; never passed as build arguments.
     environment:
-      - BACKEND_URL=http://backend:8000
+      - HYBRO_BACKEND_URL=http://backend:8000
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-}
       - CLERK_WEBHOOK_SECRET=${CLERK_WEBHOOK_SECRET:-}
     depends_on:
@@ -152,10 +120,7 @@ services:
     environment:
       - SERVER_PORT=7001
       - SERVER_DOMAIN=weather-agent
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
-      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
+      - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
       - "7001:7001"
 
@@ -169,10 +134,7 @@ services:
     environment:
       - SERVER_PORT=6002
       - SERVER_DOMAIN=image-generator-agent
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
-      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
+      - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
       - "6002:6002"
 
@@ -186,10 +148,7 @@ services:
     environment:
       - SERVER_PORT=7002
       - SERVER_DOMAIN=travel-planner-agent
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
-      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
+      - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
       - "7002:7002"
 
@@ -203,10 +162,7 @@ services:
     environment:
       - SERVER_PORT=7003
       - SERVER_DOMAIN=story-agent
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - IMAGE_MODEL=${IMAGE_MODEL:-gpt-image-1}
-      - IMAGE_SIZE=${IMAGE_SIZE:-1024x1024}
+      - HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}
     ports:
       - "7003:7003"
 
@@ -219,7 +175,7 @@ services:
       dockerfile: Dockerfile.registrar
     environment:
       - BACKEND_URL=http://backend:8000
-      - API_PREFIX=/api/v1
+      - API_PREFIX=${HYBRO_API_PREFIX:-/api/v1}
       - AGENT_REGISTRAR_TOKEN=${AGENT_REGISTRAR_TOKEN:-}
     restart: "no"
     depends_on:

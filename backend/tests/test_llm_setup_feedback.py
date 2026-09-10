@@ -35,7 +35,7 @@ def test_authentication_precedes_model_prompt_and_preserves_old_files(  # noqa: 
     )
     store.save(old.config, old.authentication.credential, {})
     before = {
-        name: (tmp_path / name).read_bytes() for name in ("config.yaml", "auth.json")
+        name: (tmp_path / name).read_bytes() for name in ("config.json", "auth.json")
     }
     events, reports = [], []
     credential = oauth_credential()
@@ -132,8 +132,8 @@ def test_switch_stored_oauth_to_environment_key_without_false_conflict(tmp_path)
         == 0
     )
     verifier.assert_awaited_once()
-    assert store.load(env).authentication.source == "environment"
-    assert not (tmp_path / "auth.json").exists()
+    assert store.load({}).authentication.source == "stored"
+    assert (tmp_path / "auth.json").exists()
     # Runtime identity validation is still strict, even when environment is present.
     with pytest.raises(RuntimeConfigurationError, match="identity differ"):
         resolve_credential(runtime_state().config, oauth_credential(), env)
@@ -261,7 +261,7 @@ def test_authenticated_verification_failures_redacted_no_save(
     store = RuntimeConfigStore(tmp_path)
     old = runtime_state("deepseek", "deepseek-v4-flash")
     store.save(old.config, old.authentication.credential, {})
-    before = {n: (tmp_path / n).read_bytes() for n in ("auth.json", "config.yaml")}
+    before = {n: (tmp_path / n).read_bytes() for n in ("auth.json", "config.json")}
     secret = "private-credential"
     calls = []
 

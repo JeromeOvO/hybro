@@ -48,7 +48,7 @@ class OpenAIProvider:
         # Explicit setup credentials/endpoints must not load unrelated app .env.
         # Legacy callers that omit them retain the settings-backed defaults.
         if not api_key or not base_url:
-            from common.config.settings import settings
+            from common.config.loader import settings
 
             api_key = api_key or settings.openai_api_key or "missing"
             base_url = base_url or getattr(settings, "openai_base_url", None)

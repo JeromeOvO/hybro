@@ -8,9 +8,7 @@ This module creates a weather agent that can be:
 The agent accepts a city name and returns weather information.
 """
 
-import os
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -19,28 +17,7 @@ from langchain_core.tools import tool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableSerializable
 
-try:
-    from load_repo_env import load_repo_env
-except ImportError:  # Host run: helper lives in default_agents/
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    try:
-        from load_repo_env import load_repo_env
-    except ImportError:  # Wheel install: helper is not packaged with the agent.
-        # The monorepo helper only ships with the repo checkout. When the agent
-        # is installed as a standalone wheel (e.g. `pip install weather-agent`),
-        # fall back to the standard python-dotenv discovery so we still honour
-        # any .env python-dotenv finds walking up from cwd (or no-op otherwise).
-        # Docker Compose already injects process env, so this branch matters
-        # only for third-party pip installs.
-        from dotenv import load_dotenv
-
-        def load_repo_env(*, start=None):
-            load_dotenv()
-
-
-load_repo_env(start=Path(__file__))
+from runtime_config import get_config
 
 
 # ============ Real weather provider (Open-Meteo) ============
@@ -332,13 +309,12 @@ _LLM_CACHE: dict[tuple[str, float], Any] = {}
 def _get_llm(model: str, temperature: float):
     key = (model, temperature)
     if key not in _LLM_CACHE:
-        resolved_base_url = (
-            os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or None
-        )
+        config = get_config()
         _LLM_CACHE[key] = ChatOpenAI(
             model=model,
             temperature=temperature,
-            base_url=resolved_base_url,
+            base_url=config.base_url,
+            api_key=config.token,
         ).bind_tools(TOOLS)
     return _LLM_CACHE[key]
 
@@ -468,7 +444,7 @@ def create_weather_agent(
     Returns:
         WeatherAgentChain instance ready to invoke
     """
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = "gpt-4o-mini"  # SDK label only; backend setup owns model selection.
 
     # Create and return the agent chain. The LLM itself is built lazily on the
     # first request (see WeatherAgentChain.llm), so the server can start and

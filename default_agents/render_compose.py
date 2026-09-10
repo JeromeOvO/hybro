@@ -35,17 +35,13 @@ BEGIN_MARKER = (
 END_MARKER = "  # <<< END default agents <<<"
 
 BACKEND_URL = "http://backend:8000"
-API_PREFIX = "/api/v1"
+API_PREFIX = "${HYBRO_API_PREFIX:-/api/v1}"
 
-# Only these keys are forwarded from the host / repo-root .env into default-agent
-# containers. Backend/frontend secrets (Mongo creds, WEBHOOK_SIGNING_KEY,
+# Only these CLI-projected settings are forwarded into default-agent containers. Backend/frontend secrets (Mongo creds, WEBHOOK_SIGNING_KEY,
 # CLERK_SECRET_KEY, etc.) MUST NOT be exposed here — see the
-# comment on the x-agent anchor in docker-compose.yml.
+# comment on the x-agent anchor in docker-compose.yml. Models come from setup.
 AGENT_ENV_INTERPOLATIONS: tuple[tuple[str, str], ...] = (
-    ("OPENAI_API_KEY", ""),
-    ("OPENAI_MODEL", "gpt-4o-mini"),
-    ("IMAGE_MODEL", "gpt-image-1"),
-    ("IMAGE_SIZE", "1024x1024"),
+    ("HYBRO_AGENT_CONFIG", ""),
 )
 
 # The registrar only needs the shared service token; every other value is set
@@ -99,7 +95,7 @@ def render_region(agents: dict[str, dict]) -> str:
             f"      - SERVER_PORT={port}",
             f"      - SERVER_DOMAIN={service}",
         ]
-        # Filtered agent-only interpolations from the shell / repo-root .env.
+        # Filtered agent-only projection from the CLI's JSON configuration.
         lines += [_env_line(key, default) for key, default in AGENT_ENV_INTERPOLATIONS]
         lines += [
             "    ports:",

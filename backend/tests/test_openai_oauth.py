@@ -294,7 +294,7 @@ async def test_refresh_serialized_reread_and_revision_unchanged(tmp_path):
     initial = oauth_credential(expires_at=time.time() - 1)
     config = oauth_config()
     store.save(config, initial, {})
-    config_bytes = (tmp_path / "config.yaml").read_bytes()
+    config_bytes = (tmp_path / "config.json").read_bytes()
     updated = oauth_credential(refresh="rotation")
     calls = []
 
@@ -313,7 +313,7 @@ async def test_refresh_serialized_reread_and_revision_unchanged(tmp_path):
     )
     assert results == [updated] * 5 and calls == [initial]
     assert store.load({}).authentication.credential == updated
-    assert (tmp_path / "config.yaml").read_bytes() == config_bytes
+    assert (tmp_path / "config.json").read_bytes() == config_bytes
     assert store.load({}).config.revision == config.revision
 
 
@@ -409,7 +409,7 @@ async def test_refresh_detects_noncooperating_write_during_network(tmp_path):
 
     async def refresh(value):
         # Deliberately bypass shared flock to test pre-save compare-and-set.
-        (tmp_path / "config.yaml").write_text(
+        (tmp_path / "config.json").write_text(
             "provider: {id: openai, auth: oauth}\nmodels: {text: changed}\n"
         )
         return oauth_credential()
@@ -489,7 +489,7 @@ def test_cli_login_failure_saves_nothing(tmp_path, monkeypatch, failure):
         error_output=error,
     )
     assert result == (130 if failure is asyncio.CancelledError else 1)
-    assert not (tmp_path / ".hybro/config.yaml").exists()
+    assert not (tmp_path / ".hybro/config.json").exists()
 
 
 async def test_async_lock_wait_is_cancelable_and_off_event_loop(tmp_path, monkeypatch):

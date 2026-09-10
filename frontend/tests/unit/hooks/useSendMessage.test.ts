@@ -119,11 +119,57 @@ describe('useSendMessage room-history rollback', () => {
     return sent
   }
 
+  it('cancels an in-flight history fetch and refreshes after a successful send', async () => {
+    const cancelSpy = vi.spyOn(activeQueryClient, 'cancelQueries')
+    const invalidateSpy = vi.spyOn(activeQueryClient, 'invalidateQueries')
+    sendMessageMock.mockResolvedValueOnce({ success: true, message_id: 'message-1' })
+
+    expect(await send()).toBe(true)
+
+    const history = activeQueryClient.getQueryData<RoomHistoryResponse>(
+      roomHistoryQueryKey('user-1'),
+    )
+    expect(history?.items.find(item => item.room_id === 'room-1')).toMatchObject({
+      status: 'processing',
+    })
+    expect(cancelSpy).toHaveBeenCalledWith({
+      queryKey: roomHistoryQueryKey('user-1'),
+      exact: true,
+    })
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: roomHistoryQueryKey('user-1'),
+      exact: true,
+    })
+  })
+
   it('restores history when sending throws', async () => {
     sendMessageMock.mockRejectedValueOnce(new Error('network failure'))
 
     expect(await send()).toBe(false)
     expect(activeQueryClient.getQueryData(roomHistoryQueryKey('user-1'))).toEqual(initialHistory)
+  })
+
+  it('rolls back only activity fields when another room update happens concurrently', async () => {
+    sendMessageMock.mockImplementationOnce(async () => {
+      activeQueryClient.setQueryData<RoomHistoryResponse>(
+        roomHistoryQueryKey('user-1'),
+        history => history ? {
+          items: history.items.map(item => item.room_id === 'room-1'
+            ? { ...item, title: 'Renamed concurrently' }
+            : item),
+        } : history,
+      )
+      throw new Error('network failure')
+    })
+
+    expect(await send()).toBe(false)
+
+    expect(activeQueryClient.getQueryData<RoomHistoryResponse>(
+      roomHistoryQueryKey('user-1'),
+    )?.items.find(item => item.room_id === 'room-1')).toEqual({
+      ...initialHistory.items[0],
+      title: 'Renamed concurrently',
+    })
   })
 
   it('restores history when the response has no message id', async () => {

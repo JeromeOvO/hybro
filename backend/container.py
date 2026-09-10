@@ -16,7 +16,7 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
-from common.config.settings import settings
+from common.config.loader import settings
 from common.dto import AgentMessageFinal, DeliveryEmitStatus
 from common.eventing import (
     BoundedInternalEventBus,
@@ -1096,6 +1096,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 model_registry=model_registry,
                 config=llm_gateway_config,
                 settings_obj=runtime.settings,
+            )
+            from llm_gateway.agent_proxy import AgentLLMProxy
+
+            app.state.agent_llm_proxy = AgentLLMProxy(
+                llm_provider, runtime.settings.default_agent_llm_token
             )
             agent_selection_llm_service = AgentSelectionLLMService(
                 llm_provider=llm_provider
@@ -2962,6 +2967,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         app.state.delivery_facade = None
         app.state.cancellation_runtime = None
         app.state.mongo_dal = None
+        app.state.agent_llm_proxy = None
         raise
 
     # ── Phase 3: Serve + Normal Shutdown ──
@@ -3037,6 +3043,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         app.state.delivery_facade = None
         app.state.cancellation_runtime = None
         app.state.mongo_dal = None
+        app.state.agent_llm_proxy = None
         if cleanup_error is not None and body_error is None:
             raise cleanup_error
 

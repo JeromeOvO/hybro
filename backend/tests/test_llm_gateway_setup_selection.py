@@ -1,11 +1,11 @@
-"""Original composition and public calls with an optional private text selection."""
+"""Original public calls with mandatory JSON setup and stored credentials."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from common.dto import LLMResponse, LLMStructuredResponse
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.gateway import LLMGatewayImpl
@@ -84,7 +84,6 @@ async def test_setup_controls_all_original_text_entrypoints_and_not_embeddings(
         environment,
     )
     settings = Settings(
-        _env_file=None,
         openai_api_key=environment.get("OPENAI_API_KEY", ""),
         deepseek_api_key=environment.get("DEEPSEEK_API_KEY", ""),
     )
@@ -147,7 +146,7 @@ async def test_setup_controls_all_original_text_entrypoints_and_not_embeddings(
     )
 
 
-@pytest.mark.parametrize("fault", ["malformed", "missing_key", "conflict", "oauth"])
+@pytest.mark.parametrize("fault", ["malformed", "missing_key", "oauth"])
 def test_invalid_setup_fails_before_legacy_configuration_can_be_used(
     tmp_path, monkeypatch, fault
 ):
@@ -156,18 +155,14 @@ def test_invalid_setup_fails_before_legacy_configuration_can_be_used(
     monkeypatch.setenv("HYBRO_HOME", str(store.home))
     store.save(state.config, state.authentication.credential, {})
     if fault == "malformed":
-        (store.home / "config.yaml").write_text("not: [valid")
+        (store.home / "config.json").write_text("not: [valid")
     elif fault == "missing_key":
         (store.home / "auth.json").unlink()
     elif fault == "oauth":
-        (store.home / "config.yaml").write_text(
+        (store.home / "config.json").write_text(
             "version: 1\nprovider:\n  id: openai\n  auth: oauth\nmodels:\n  text: gpt-4o-mini\n"
         )
-    settings = Settings(
-        _env_file=None,
-        openai_api_key="conflict" if fault == "conflict" else "",
-        deepseek_api_key="",
-    )
+    settings = Settings(openai_api_key="ignored-legacy-key", deepseek_api_key="")
     with pytest.raises(RuntimeConfigurationError):
         composition(settings, {"openai": Provider()})
 
@@ -180,12 +175,11 @@ def test_runtime_home_has_no_host_mount_alias():
     )
 
 
-async def test_unconfigured_original_registry_custom_models_and_embeddings(
+async def test_missing_setup_rejects_legacy_model_hints_before_calling_provider(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("HYBRO_HOME", str(tmp_path / "absent"))
     settings = Settings(
-        _env_file=None,
         openai_api_key="",
         deepseek_api_key="",
         lead_ai_model="custom-old-model",
@@ -193,17 +187,9 @@ async def test_unconfigured_original_registry_custom_models_and_embeddings(
     provider = Provider()
     provider.embed = AsyncMock(return_value=[3.0])
     provider.embed_batch = AsyncMock(return_value=[[4.0]])
-    gateway = composition(settings, {"openai": provider})
-    assert gateway.config.max_attempts == 2
-    assert (await gateway.generate([])).model == "custom-old-model"
-    assert (
-        await gateway.generate_with_provider(
-            [], model="unregistered", provider="openai"
-        )
-    ).model == "unregistered"
-    assert await gateway.embed("one") == [3.0]
-    assert await gateway.embed_batch(["two"]) == [[4.0]]
-    assert not (tmp_path / "absent").exists()
+    with pytest.raises(RuntimeConfigurationError, match="hybro setup"):
+        composition(settings, {"openai": provider})
+    assert provider.calls == []
 
 
 @pytest.mark.parametrize("selected", MODELS)
@@ -292,9 +278,7 @@ async def test_setup_selected_wire_through_original_gateway(
             **kwargs, transport=httpx.MockTransport(handle)
         ),
     )
-    gateway = composition(
-        Settings(_env_file=None, openai_api_key="", deepseek_api_key=""), None
-    )
+    gateway = composition(Settings(openai_api_key="", deepseek_api_key=""), None)
     request = GatewayTurnRequest(
         provider="openai",
         model_id="original-model",

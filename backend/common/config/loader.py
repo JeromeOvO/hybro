@@ -1,28 +1,23 @@
+"""Typed defaults and JSON startup snapshot. No dotenv or import-time file I/O."""
+
 import math
 import os
+from functools import lru_cache
+from typing import TYPE_CHECKING, Literal
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings
-
-
-def resolve_settings_env_file(base_dir: str) -> str:
-    """Return the single env file path Settings should load.
-
-    Prefer the monorepo-root ``.env`` when both ``docker-compose.yml`` and
-    that file exist. Never load root and ``backend/.env`` together — a stale
-    backend file would override root values. Fall back to ``backend/.env``.
-    """
-    repo_root = os.path.dirname(base_dir)
-    root_env = os.path.join(repo_root, ".env")
-    backend_env = os.path.join(base_dir, ".env")
-    if os.path.isfile(os.path.join(repo_root, "docker-compose.yml")) and os.path.isfile(
-        root_env
-    ):
-        return root_env
-    return backend_env
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
-class Settings(BaseSettings):
+class Settings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
     app_env: str = "development"  # development, staging, production
 
     frontend_origins: str | list[str] = [
@@ -148,10 +143,12 @@ class Settings(BaseSettings):
 
     # Clerk Authentication
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
-    auth_mode: str = "mock"  # "mock" or "clerk"
+    auth_mode: Literal["mock", "clerk"] = "mock"  # "mock" or "clerk"
 
     # Default-agent registrar bootstrap (service identity for one-shot registration)
     default_agent_registrar_token: str = ""
+    # Separate inference-only credential; never grants registrar/user access.
+    default_agent_llm_token: str = Field(default="", repr=False)
     # provider_id assigned to agents registered through the service token.
     default_agent_provider_id: str = "Hybro AI"
 
@@ -293,16 +290,6 @@ class Settings(BaseSettings):
     mongodb_min_pool_size: int = 10
     redis_max_connections: int = 50
 
-    class Config:
-        extra = "ignore"
-        # backend/ when running from the monorepo or /app in the backend image.
-        base_dir = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-        # See resolve_settings_env_file(). Missing files are ignored by
-        # pydantic-settings. Under Docker Compose, process env is primary.
-        env_file = resolve_settings_env_file(base_dir)
-
     @field_validator("frontend_origins", mode="before")
     @classmethod
     def parse_frontend_origins(cls, v):
@@ -427,11 +414,131 @@ class Settings(BaseSettings):
         return os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn")
 
 
-settings = Settings()
+# Credentials and legacy route hints are never user-editable backend JSON fields.
+PRIVATE_FIELDS = frozenset(
+    {
+        "openai_api_key",
+        "deepseek_api_key",
+        "google_api_key",
+        "gemini_api_key",
+        "clerk_secret_key",
+        "mongodb_password",
+        "default_agent_registrar_token",
+        "default_agent_llm_token",
+        "webhook_signing_key",
+    }
+)
+ROUTE_FIELDS = frozenset(
+    {
+        "lead_ai_model",
+        "classifier_ai_model",
+        "supervisor_model",
+        "embedding_model",
+        "deepseek_model_name",
+        "llm_gateway_generation_provider",
+        "llm_gateway_default_generation_model",
+        "llm_gateway_default_embedding_model",
+        "llm_gateway_default_supervisor_model",
+    }
+)
 
 
-__all__ = [
-    "Settings",
-    "resolve_settings_env_file",
-    "settings",
-]
+def validate_backend(values: dict[str, object]) -> Settings:
+    if PRIVATE_FIELDS.intersection(values) or ROUTE_FIELDS.intersection(values):
+        raise ValueError("Use setup for model selection and auth.json for credentials")
+    for key, value in values.items():
+        if key.endswith("_url") and isinstance(value, str) and value:
+            from urllib.parse import urlsplit
+
+            parsed = urlsplit(value)
+            if parsed.username or parsed.password:
+                raise ValueError("URL credentials belong in auth.json")
+        if key == "openai_base_url" and value:
+            from llm_gateway.setup_service import _openai_base_url
+
+            _openai_base_url(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not math.isfinite(value) or value < 0:
+                raise ValueError("Numeric settings must be finite and nonnegative")
+            if key.endswith("_port") and not 1 <= value <= 65535:
+                raise ValueError("Port must be between 1 and 65535")
+    return Settings.model_validate(values)
+
+
+class FrontendSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+    api_base_url: str = "http://localhost:8000"
+    api_prefix: str = "/api/v1"
+    server_url: str = "http://localhost:3000"
+    clerk_publishable_key: str = ""
+    clerk_sign_in_url: str = "/sign-in"
+    clerk_sign_up_url: str = "/sign-up"
+    clerk_sign_in_fallback_redirect_url: str = "/"
+    clerk_sign_up_fallback_redirect_url: str = "/"
+    enable_waitlist: bool = True
+    max_message_length: int = Field(default=10000, gt=0)
+    inspection_timeout_ms: int = Field(default=300000, gt=0)
+
+    @field_validator("api_base_url", "server_url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("Expected an HTTP(S) URL without credentials")
+        return value
+
+    @field_validator("api_prefix")
+    @classmethod
+    def validate_prefix(cls, value: str) -> str:
+        import re
+
+        if not re.fullmatch(r"/[A-Za-z0-9/_-]+", value) or value.endswith("/"):
+            raise ValueError("Expected an absolute API path without a trailing slash")
+        return value
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    from llm_gateway.runtime_store import RuntimeConfigStore, runtime_home
+
+    store = RuntimeConfigStore(runtime_home(os.environ))
+    document = store.load({}).config
+    values = dict(document.backend)
+    services = store.read_service_credentials()
+    if any(key in values and key in services for key in ("mongodb_url", "redis_url")):
+        raise ValueError(
+            "Specify each connection URL in config.json or auth.json, not both"
+        )
+    values.update({k: v for k, v in services.items() if k in Settings.model_fields})
+    # Fixed Docker topology is a deployment context, not another user config source.
+    if os.environ.get("HYBRO_CONTAINER") == "1":
+        for key, value in {
+            "mongodb_url": "mongodb://mongo:27017/hybro",
+            "redis_url": "redis://redis:6379/0",
+            "hybro_file_dir": "/var/lib/hybro/files",
+            "local_agent_discovery_enabled": True,
+        }.items():
+            values.setdefault(key, value)
+    settings = Settings.model_validate(values)
+    if settings.auth_mode == "clerk" and not settings.clerk_secret_key:
+        raise ValueError("Clerk authentication requires auth.json credentials")
+    return settings
+
+
+def __getattr__(name: str) -> object:
+    if name == "settings":
+        return get_settings()
+    raise AttributeError(name)
+
+
+if TYPE_CHECKING:
+    settings: Settings
+
+__all__ = ["Settings", "get_settings", "settings"]

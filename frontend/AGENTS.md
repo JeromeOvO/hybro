@@ -11,6 +11,13 @@ These rules apply to `frontend/` in addition to the repository-root `AGENTS.md`.
 - Prefer feature-local code unless it is genuinely shared.
 - Preserve `client_request_id` correlation in room, SSE, streaming, HITL, processing-status, sending, and agent-response flows.
 
+## Configuration
+
+- Frontend settings originate from the same user `config.json` as backend settings; do not require or regenerate `frontend/.env.local` as a configuration source.
+- Read user-configurable values through the frontend configuration adapter. Framework metadata such as `NODE_ENV` is not a user configuration setting.
+- The CLI/build entry point must pass only explicitly public settings to the browser build. Never import the full user config or `auth.json` into client components or bundle server credentials.
+- Build-time configuration changes require a frontend rebuild. Do not imply that editing JSON hot-updates an already-built browser bundle.
+
 ## Commands
 
 Use Node `20.19` from `.nvmrc`. Run from `frontend/`:

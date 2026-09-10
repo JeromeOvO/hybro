@@ -22,7 +22,7 @@ def contents(home: Path) -> dict[str, bytes]:
 def directory(tmp_path: Path, mode: int) -> Path:
     home = tmp_path / "runtime"
     home.mkdir(mode=0o700)
-    (home / "config.yaml").write_bytes(b"fixture config bytes\n")
+    (home / "config.json").write_bytes(b"fixture config bytes\n")
     (home / "auth.json").write_bytes(b"fixture auth bytes\n")
     home.chmod(mode)
     return home
@@ -152,7 +152,7 @@ def test_path_replacement_cannot_redirect_chmod_through_symlink(
     assert stat.S_IMODE(target.stat().st_mode) == 0o755
     assert list(target.iterdir()) == []
     assert contents(moved) == {
-        "config.yaml": b"fixture config bytes\n",
+        "config.json": b"fixture config bytes\n",
         "auth.json": b"fixture auth bytes\n",
     }
 

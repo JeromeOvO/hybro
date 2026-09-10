@@ -1,134 +1,66 @@
-hybro - lifecycle CLI for the local Hybro stack.
+Hybro — local configuration and service CLI
 
-Usage:
-    ./scripts/hybro                         # TUI when attached to a terminal
-    ./scripts/hybro <subcommand> [args...]
+Usage: ./scripts/hybro [command]
 
-Subcommands:
-    tui
-        Open the settings panel (requires uv). Tab switches Models and Services.
-        A centered, width-limited layout separates tabs, values and footer hints.
-        The selected row is highlighted using your terminal's colors. Notices and
-        help sit below the settings; request-cost hints appear when Save is focused.
-        Up/Down selects a row; Enter edits its current value. Small terminals use
-        compact, scrolling lists; resizing is reflected on the next key press.
-        Screen, styling and input mode are restored on exit. Model pickers focus
-        the current selection. Esc returns to the parent; at the model page,
-        Esc exits (unsaved changes require discard confirmation). Ctrl-C exits.
+No command opens the Models/Services TUI when a terminal is available.
+Non-interactive use without a command prints this help.
 
-        Edit a model without repeating Provider/authentication menus. Valid stored
-        authentication is reused; first connection, changed Provider, or expired
-        OAuth requires credential acquisition before choosing a model. Changes
-        stay in memory until Verify and save (one text request; quota/billing).
-        Saving never restarts the backend. The saved status is local, not a claim
-        of credential validity or backend activation. Browsing never opens auth.json.
-        Like setup, the panel uses the allowlisted root .env values with shell
-        precedence; secrets never appear in command arguments or status output.
+Configuration:
+    setup
+        Select Provider/authentication, authenticate, choose models, verify text,
+        and save config.json/auth.json. Requires uv and an interactive terminal
+        for browser OAuth or hidden API-key input. One text verification request
+        uses API billing or subscription quota; images are never probed.
+        OpenAI supports API Key or ChatGPT OAuth; DeepSeek and Anthropic use keys.
+        OAuth does not enable image generation.
+        Explicit automation flags remain supported; run setup --help for details.
+        Environment API keys are one-time setup inputs and are saved privately;
+        running services do not read Provider keys from environment files.
 
-        Services delegates to existing start/status/logs/restart/stop/build/recreate/
-        down/help commands. Removal and forced recreation require confirmation,
-        default Cancel; down keeps named volumes. Command output remains visible
-        until Enter or Esc returns. Cancellation is not a command failure.
-        Ctrl-C while following logs exits. No arguments without a terminal show
-        help; explicit subcommands and non-interactive flags remain available.
+    config show
+        Show user configuration only, never auth.json credentials.
+    config check
+        Check configuration/credential structure without Provider calls.
+    config set <path> <JSON-value>
+        Validate and save a deployment setting. Example:
+            ./scripts/hybro config set backend.log_level '"DEBUG"'
+            ./scripts/hybro config set frontend.max_message_length 12000
+        Use setup, not config set, for Provider/model changes.
+    config secret <name>
+        Set a service credential using hidden terminal input.
+    config migrate [--from-env <legacy-file>]
+        Explicit one-time conversion of config.yaml to config.json. Optional
+        --from-env imports known deployment settings/credentials before you
+        remove the old files. Does not delete originals or overwrite config.json.
 
-    setup [--non-interactive --provider ID --auth api_key --text-model ID]
-          [--image-model ID|none]
-        Configure gateway text and optional image models (no embedding setup).
-        Requires uv; uses the frozen backend environment. Providers: openai,
-        deepseek, anthropic. OpenAI also supports ChatGPT/Codex browser OAuth:
-            ./scripts/hybro setup --provider openai --auth oauth --text-model gpt-5.5
-        OAuth requires interactive setup on the browser's host, with port 1455
-        available. Open the printed URL manually if the browser cannot launch.
-        Login expires in five minutes. OAuth ignores OPENAI_API_KEY and
-        OPENAI_BASE_URL; the key remains available for legacy embeddings.
-        First shows the saved Provider, authentication method, text/image models,
-        or a missing/invalid configuration notice. This display does not read
-        credentials or check whether the running backend has applied the selection.
-        This explicit command keeps its guided flow:
-        Provider -> authentication -> models -> verification -> save.
-        OAuth completes browser authorization before the text model menu.
-        API keys use a hidden terminal field, never typed option IDs.
-        The Codex catalog includes 10 source-confirmed models (including
-        gpt-5.3-codex, gpt-5.4-mini and gpt-5.5); account access is verified,
-        not assumed. OAuth has no image models, so that menu is skipped.
-        Image model: API-key OpenAI gpt-image-1, or none (default). This does not change
-        bundled Agents, which retain their existing configuration.
-
-        Shell environment overrides root .env. Supply the selected API key there
-        or enter it at the hidden prompt; never put secrets in command arguments.
-        Verification makes one text request (API billing or subscription quota)
-        before saving; a completed nonempty reply suffices, not exact JSON.
-        Failures show safe stage/category and available HTTP status/code, never
-        raw provider errors. No configuration is saved on verification failure.
-        Image access
-        is NOT verified and no image generation/edit request is made by setup.
-        Config/credentials live in HYBRO_HOME (absolute path), default ~/.hybro.
-        The backend alone mounts this directory; it must have mode 0700.
-        In API-key mode, a stored API key and environment key for the same
-        Provider conflict: remove one. This does not apply to OAuth.
-        Setup securely tightens an owned real directory to 0700 without changing
-        contents. Symlinks, non-directories and foreign-owned directories are refused.
-
-        Saving does not restart services. Apply with the same environment:
-            docker compose up -d --build --no-deps --force-recreate backend
-        For host execution, restart the backend with the same HYBRO_HOME.
-        Run setup before the first direct Docker start so the host owns the
-        private config directory; `hybro start` also creates it when absent.
-
-    start [--build] [--recreate] [--check-key]
-        Bring the stack up in the background (docker compose up -d
-        --remove-orphans). Default is fast: no image rebuild, no forced
-        recreation. Runs the ensure_* scripts against ./.env when it exists,
-        regenerates the default-agent services in docker-compose.yml from
-        default_agents/agents.yaml before starting, and removes containers
-        for services dropped from that generated region.
-
-        --build       Rebuild images. Use after code or dependency changes,
-                      and whenever NEXT_PUBLIC_* values change (they are
-                      baked into the frontend image at build time).
-        --recreate    Force container recreation. Use after docker-compose.yml
-                      or runtime environment changes so containers pick them
-                      up. Pair with --build for frontend-facing env changes.
-        --check-key   Fail fast if .env is missing, or OPENAI_API_KEY is
-                      empty / still the placeholder from .env.example.
-
-    stop
-        Stop containers but keep them (docker compose stop). State is
-        preserved; `hybro start` will bring them back quickly.
-
-    down [args...]
-        Stop and remove containers and the default network
-        (docker compose down). Pass `-v` to also remove named volumes.
-
-    status
-        Show container status including stopped ones
-        (docker compose ps --all). Alias: `ps`.
-
+Services:
+    start [--build] [--recreate]
+        Validate setup, generate missing private service tokens, regenerate the
+        default-agent Compose region, and start services. No dotenv file needed.
+        --build rebuilds images; --recreate recreates existing containers.
+        Use both after updating code or frontend build configuration.
+    status | ps
+        Show all containers, including stopped containers.
     logs [service...]
-        Stream logs (docker compose logs -f). With no arguments streams
-        every service; pass one or more service names to focus, e.g.
-        `./scripts/hybro logs backend`.
-
+        Follow logs. Ctrl-C stops following logs.
+    stop
+        Stop containers without deleting them.
     restart [service...]
-        Restart one or all services (docker compose restart).
+        Restart existing containers. Use start --recreate to apply new projections.
+    down [Docker arguments...]
+        Remove containers/network. Named volumes remain unless -v is supplied.
+    help | --help | -h
+        Show this help.
 
-    help, -h, --help
-        Show this message.
+Files:
+    HYBRO_HOME/config.json  — user overrides, shared by backend and frontend.
+    HYBRO_HOME/auth.json    — Provider/OAuth and scoped service credentials.
+    HYBRO_HOME defaults to ~/.hybro and must be absolute when overridden.
+    The directory is private (0700); auth.json requires mode 0600.
+    Missing setup or invalid JSON fails explicitly; no legacy Provider fallback.
+    Edit through the CLI or edit config.json directly. Changes apply after restart;
+    public frontend build changes also require --build. No hot reload.
 
-Zero-config demo:
-    Running `./scripts/hybro start` on a fresh clone (no ./.env) brings the
-    stack up in mock-auth mode. Agents will error until OPENAI_API_KEY is
-    set. To configure, run:
-
-        cp .env.example .env
-        # edit .env; at minimum set OPENAI_API_KEY
-
-    Then re-run `./scripts/hybro start --recreate` so running containers
-    pick up runtime values. Use `--build --recreate` if you also changed
-    NEXT_PUBLIC_* keys. The frontend env file (frontend/.env.local) is
-    generated - do not hand-edit it.
-
-First-time setup:
-    From scratch, run `sh install.sh` (also available via the one-liner in
-    the README). See README.md for details.
+Docker is launched through this CLI so only scoped JSON-derived values reach each
+service. Agents never receive Provider credentials; frontend builds never receive
+server credentials. Existing .env/.env.example files are not deleted automatically.

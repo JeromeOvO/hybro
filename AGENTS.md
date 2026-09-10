@@ -68,7 +68,7 @@ Run commands from the directory that owns the relevant configuration.
 - Frontend changes: follow `frontend/AGENTS.md` and run the affected lint, test, and build checks.
 - Backend changes: follow `backend/AGENTS.md` and run both Ruff gates plus focused Pytest coverage.
 - Default-agent changes: run the renderer check and relevant tests.
-- Cross-service, Compose, container, environment, or end-to-end changes: from the repository root, run `docker compose up -d --build` and exercise the affected flow when the environment is available.
+- Cross-service, Compose, container, configuration, or end-to-end changes: from the repository root, run `./scripts/hybro start --build --recreate` and exercise the affected flow when the environment is available. The CLI supplies validated JSON-derived projections and disables Compose dotenv discovery.
 - If a test file is created or modified, run that test and iterate until it passes.
 - Do not use real provider APIs, keys, paid tokens, or external services unless the user explicitly requests live integration testing.
 - Do not claim a check passed unless it completed successfully. Report skipped checks and why.
@@ -81,8 +81,14 @@ Run commands from the directory that owns the relevant configuration.
 - Use `npm ci` for clean frontend installs and CI parity. Use `npm install` when intentionally updating frontend dependencies or the lockfile.
 - Use `uv sync --frozen --extra dev` for backend CI parity. Use `uv sync --extra dev` when intentionally updating backend dependencies or `uv.lock`.
 - Never commit secrets or print them in logs, fixtures, screenshots, or command output.
-- The repository-root `.env`, created from `.env.example`, is the single source of truth for local runtime configuration.
-- `frontend/.env.local` is generated from the root `.env` by `sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local`; do not hand-edit it.
+- The configuration contract is JSON-based: `~/.hybro/config.json` is the single user configuration source for backend, frontend, and bundled agents. `HYBRO_HOME` is the only configuration-directory override; require an absolute path.
+- Keep secrets in the sibling `auth.json`, not in public frontend configuration. Reuse the existing secure credential store and OAuth refresh ownership; do not create a second credential system.
+- `.env`, `.env.example`, and `frontend/.env.local` are not required configuration sources under this contract. Do not add normal-startup dotenv loading, template-copy steps, or implicit legacy fallback. Only an explicitly invoked one-time `config migrate --from-env` importer may read legacy deployment values. The owner will remove existing environment files manually; do not delete or overwrite them on the owner's behalf.
+- Keep defaults, types, and validation in a thin configuration loader. Do not preserve a separate `settings.py` environment-loading path. Business code consumes the validated configuration object, not ad hoc file or environment reads.
+- CLI changes and manually edited JSON must use the same validation rules. Validate JSON syntax, supported fields, types, ranges, and required combinations at startup; report safe field-level errors. Missing model setup must explicitly direct the user to `hybro setup` instead of selecting a legacy Provider.
+- Load a startup snapshot; changes take effect after restart. Do not add hot reload, project-level overrides, configuration APIs, or a separate configuration-service process without a request.
+- Environment variables may remain framework metadata or allowlisted CLI-to-container/build transport; they are not an independently maintained user configuration source. Frontend builds receive only public settings, and agents receive only their scoped connection configuration and internal credential, never the whole auth store.
+- The JSON-only startup migration must be verified without any `.env` files before claiming deletion is safe. Keep README and architecture documentation explicit about any still-unmigrated runtime paths.
 - Do not broaden environment-variable, secret, workflow-permission, or container exposure without an explicit security reason.
 
 ## Git

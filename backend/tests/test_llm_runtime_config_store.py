@@ -71,8 +71,8 @@ def oauth() -> OAuthCredential:
         (b"[" * 100) + b"0" + (b"]" * 100),
     ],
 )
-def test_invalid_yaml_fails_with_safe_error(document: bytes) -> None:
-    with pytest.raises(RuntimeConfigurationError, match="Invalid config.yaml"):
+def test_legacy_yaml_and_malformed_json_fail_with_safe_error(document: bytes) -> None:
+    with pytest.raises(RuntimeConfigurationError, match="Invalid config.json"):
         parse_config(document)
 
 
@@ -111,7 +111,7 @@ def test_serialization_redacts_secrets() -> None:
 def test_revision_is_canonical_and_excludes_credentials() -> None:
     first = config()
     reordered = parse_config(
-        b"models: {image: null, text: test-text}\nprovider: {auth: api_key, id: openai}\nversion: 1"
+        b'{"models":{"image":null,"text":"test-text"},"provider":{"auth":"api_key","id":"openai"},"version":1}'
     )
     assert first.revision == reordered.revision
     assert first.revision != config("deepseek").revision
@@ -174,22 +174,22 @@ def test_roundtrip_and_noop(tmp_path: Path) -> None:
     assert state.config == config()
     assert state.authentication.credential == key()
     before = {
-        name: (home / name).stat().st_mtime_ns for name in ("config.yaml", "auth.json")
+        name: (home / name).stat().st_mtime_ns for name in ("config.json", "auth.json")
     }
     assert not store.save(config(), key(), {})
     assert before == {name: (home / name).stat().st_mtime_ns for name in before}
-    assert "test-secret" not in (home / "config.yaml").read_text()
-    assert "image" not in (home / "config.yaml").read_text()
+    assert "test-secret" not in (home / "config.json").read_text()
+    assert "image" not in json.loads((home / "config.json").read_text())["models"]
     assert stat.S_IMODE(home.stat().st_mode) == 0o700
-    for name in ("auth.json", "config.yaml", ".runtime.lock"):
+    for name in ("auth.json", "config.json", ".runtime.lock"):
         assert stat.S_IMODE((home / name).stat().st_mode) == 0o600
 
 
-def test_semantic_noop_preserves_user_yaml_formatting(tmp_path: Path) -> None:
+def test_semantic_noop_preserves_user_json_formatting(tmp_path: Path) -> None:
     store = RuntimeConfigStore(tmp_path)
     store.save(config(), key(), {})
-    path = tmp_path / "config.yaml"
-    original = "# user comment\n" + path.read_text()
+    path = tmp_path / "config.json"
+    original = json.dumps(json.loads(path.read_text()), indent=4) + "\n"
     path.write_text(original)
     assert not store.save(config(), key(), {})
     assert path.read_text() == original
@@ -204,11 +204,8 @@ def test_switch_and_credential_only_revision(tmp_path: Path) -> None:
     assert store.save(config("deepseek"), key("deepseek"), {})
     assert store.load({}).config.provider.id == "deepseek"
     assert store.save(config("anthropic"), None, {"ANTHROPIC_API_KEY": "from-env"})
-    assert not (tmp_path / "auth.json").exists()
-    assert (
-        store.load({"ANTHROPIC_API_KEY": "from-env"}).authentication.source
-        == "environment"
-    )
+    assert (tmp_path / "auth.json").exists()
+    assert store.load({}).authentication.source == "stored"
 
 
 def test_oauth_roundtrip_and_noop(tmp_path: Path) -> None:
@@ -253,7 +250,7 @@ def test_config_write_failure_rolls_back_pair(
     if existing:
         assert store.load({}).authentication.credential == key()
     else:
-        assert not (tmp_path / "config.yaml").exists()
+        assert not (tmp_path / "config.json").exists()
         assert not (tmp_path / "auth.json").exists()
 
 
@@ -273,7 +270,7 @@ def test_interrupted_identity_fails_closed_and_can_be_replaced(tmp_path: Path) -
 def test_relative_path_and_missing_config_fail(tmp_path: Path) -> None:
     with pytest.raises(RuntimeConfigurationError, match="absolute"):
         RuntimeConfigStore(Path("relative"))
-    with pytest.raises(RuntimeConfigurationError, match="missing"):
+    with pytest.raises(RuntimeConfigurationError, match="[Mm]issing"):
         RuntimeConfigStore(tmp_path).load({})
 
 
@@ -321,7 +318,7 @@ def _reject_fifo(home: str) -> None:
         RuntimeConfigStore(Path(home)).load({})
 
 
-@pytest.mark.parametrize("name", ["config.yaml", "auth.json", ".runtime.lock"])
+@pytest.mark.parametrize("name", ["config.json", "auth.json", ".runtime.lock"])
 def test_fifo_rejected_without_blocking(tmp_path: Path, name: str) -> None:
     store = RuntimeConfigStore(tmp_path)
     store.save(config(), key(), {})
@@ -347,7 +344,7 @@ def test_setup_reads_credential_independently_of_config(
     store = RuntimeConfigStore(tmp_path)
     assert store.read_stored_credential() is None
     store.save(config(), key(), {})
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "config.json"
     if config_state == "missing":
         path.unlink()
     elif config_state == "mismatched":
@@ -372,7 +369,7 @@ def test_setup_read_credential_rejects_unsafe_auth(
     else:
         path.unlink()
         if auth_state == "symlink":
-            path.symlink_to(tmp_path / "config.yaml")
+            path.symlink_to(tmp_path / "config.json")
         else:
             os.mkfifo(path, mode=0o600)
     with pytest.raises(RuntimeConfigurationError):

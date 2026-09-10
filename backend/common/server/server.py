@@ -73,7 +73,7 @@ class A2AServer:
 
         import uvicorn
 
-        from common.config.settings import settings
+        from common.config.loader import settings
 
         configure_logging(settings)
         uvicorn.run(

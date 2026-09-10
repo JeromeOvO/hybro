@@ -62,7 +62,7 @@ def _parser() -> argparse.ArgumentParser:
             "Verification sends one text request (API billing or subscription quota). "
             "OpenAI OAuth uses ChatGPT/Codex browser login on this computer. "
             "Choose Provider/auth, authenticate, then choose models, verify and save. "
-            "OAuth ignores OPENAI_API_KEY; it remains available for embeddings. "
+            "Provider credentials are saved privately in auth.json. "
             "Image access is not probed; OAuth has no image generation models. "
             "Interactive choices use Up/Down arrows and Enter (Esc/Ctrl-C cancels). "
             "Setup tightens an existing runtime directory owned by you to 0700; "
@@ -243,7 +243,7 @@ def _selection(
 
 
 def _read_current_config(service: SetupService) -> RuntimeConfig | None:
-    data = service.store._read("config.yaml")
+    data = service.store._read("config.json")
     if data is None:
         return None
     config = parse_config(data)
@@ -317,7 +317,7 @@ def _save_selection(
         begin_commit=begin_commit,
     )
     console.write(
-        "Saved config.yaml/auth source."
+        "Saved config.json and auth.json."
         if result.changed
         else "Unchanged; no files rewritten."
     )
@@ -326,10 +326,7 @@ def _save_selection(
             "Image model saved; image API access was not verified (no image calls)."
         )
     console.write("Not applied: restart backend with HYBRO_HOME set to this directory.")
-    console.write(
-        "Docker: run docker compose up -d --build --no-deps --force-recreate backend "
-        "from the repository, using the same HYBRO_HOME and credential environment."
-    )
+    console.write("Apply with hybro start --recreate using the same HYBRO_HOME.")
 
 
 def _run(
@@ -391,8 +388,8 @@ def main(
     with ExitStack() as cleanup:
         try:
             args = _parser().parse_args(argv)
-            # Host-only boundary: the lifecycle caller will resolve shell/root-.env
-            # precedence. Do not import application Settings or read .env here.
+            # Explicit environment keys are one-time automation inputs, never
+            # a runtime configuration source. No dotenv file is read.
             environment = dict(os.environ if environment is None else environment)
             _run(args, environment, catalog, verifier, console, output, cleanup)
         except (KeyboardInterrupt, EOFError, asyncio.CancelledError):

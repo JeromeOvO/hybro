@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+set +x  # Never trace service credentials, even under sh -x.
+umask 077
 
 # Ensure DEFAULT_AGENT_REGISTRAR_TOKEN and AGENT_REGISTRAR_TOKEN are set to the
 # same non-empty value in a single env file (repo-root .env).
@@ -32,8 +34,8 @@ write_var() {
     temp_file="${target}.tmp.$$"
     trap 'rm -f "$temp_file"' 0 1 2 15
 
-    awk -v key="$key" -v value="$value" '
-        BEGIN { updated = 0 }
+    HYBRO_BOOTSTRAP_TOKEN="$value" awk -v key="$key" '
+        BEGIN { updated = 0; value = ENVIRON["HYBRO_BOOTSTRAP_TOKEN"] }
         $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
             if (!updated) {
                 print key "=" value
@@ -55,6 +57,23 @@ write_var() {
     trap - 0 1 2 15
 }
 
+new_token() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    elif [ -r /dev/urandom ]; then
+        od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]'
+    else
+        echo "Error: openssl or /dev/urandom is required to generate a service token" >&2
+        return 1
+    fi
+}
+
+# Inference has its own credential, with no registration/user privileges.
+if [ -z "$(read_var "$env_file" DEFAULT_AGENT_LLM_TOKEN)" ]; then
+    llm_token=$(new_token)
+    write_var "$env_file" DEFAULT_AGENT_LLM_TOKEN "$llm_token"
+fi
+
 backend_token=$(read_var "$env_file" DEFAULT_AGENT_REGISTRAR_TOKEN)
 agents_token=$(read_var "$env_file" AGENT_REGISTRAR_TOKEN)
 
@@ -69,13 +88,8 @@ if [ -n "$backend_token" ]; then
     token=$backend_token
 elif [ -n "$agents_token" ]; then
     token=$agents_token
-elif command -v openssl >/dev/null 2>&1; then
-    token=$(openssl rand -hex 32)
-elif [ -r /dev/urandom ]; then
-    token=$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')
 else
-    echo "Error: openssl or /dev/urandom is required to generate the registrar token" >&2
-    exit 1
+    token=$(new_token)
 fi
 
 write_var "$env_file" DEFAULT_AGENT_REGISTRAR_TOKEN "$token"

@@ -10,6 +10,13 @@ These rules apply to `backend/` in addition to the repository-root `AGENTS.md`.
 - A2A response ingestion and finalization remain owned by `execution/`.
 - Use explicit type hints and async I/O. Follow Ruff's configured 88-character line length and existing naming conventions.
 
+## Configuration
+
+- Follow the root JSON configuration contract: load `config.json` from `HYBRO_HOME` (default `~/.hybro`) through the thin shared loader and reuse its validated startup snapshot.
+- Keep defaults and validation in code, user overrides in JSON, and credentials in the existing secure `auth.json` store. Do not introduce another `settings.py` or dotenv fallback.
+- Reject malformed or unsupported configuration before service initialization, without echoing secrets or raw input values. Missing setup must report the required `hybro setup` action.
+- Keep LLM Provider authentication and OAuth refresh inside the gateway's existing credential boundary; ordinary business modules must not load the full auth file.
+
 ## Commands
 
 Run from `backend/`:

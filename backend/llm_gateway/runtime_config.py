@@ -67,6 +67,33 @@ class RuntimeConfig(_StrictModel):
     version: Literal[1] = 1
     provider: RuntimeProvider
     models: RuntimeModels
+    backend: dict[str, object] = Field(default_factory=dict)
+    frontend: dict[str, object] = Field(default_factory=dict)
+    image_size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "1024x1024"
+
+    @field_validator("backend")
+    @classmethod
+    def validate_backend_settings(cls, value: dict[str, object]) -> dict[str, object]:
+        from common.config.loader import validate_backend
+
+        validate_backend(value)
+        return value
+
+    @field_validator("frontend")
+    @classmethod
+    def validate_frontend_settings(cls, value: dict[str, object]) -> dict[str, object]:
+        from common.config.loader import FrontendSettings
+
+        FrontendSettings.model_validate(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_api_prefixes(self) -> Self:
+        if "api_prefix" in self.frontend and self.frontend[
+            "api_prefix"
+        ] != self.backend.get("api_prefix", "/api/v1"):
+            raise ValueError("Frontend and backend API prefixes must match")
+        return self
 
     @field_validator("version", mode="before")
     @classmethod

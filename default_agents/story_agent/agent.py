@@ -1,33 +1,10 @@
-import json
-import os
-from pathlib import Path
-
 from collections.abc import AsyncGenerator
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-try:
-    from load_repo_env import load_repo_env
-except ImportError:  # Host run: helper lives in default_agents/
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    try:
-        from load_repo_env import load_repo_env
-    except ImportError:  # Wheel install: helper is not packaged with the agent.
-        from dotenv import load_dotenv
-
-        def load_repo_env(*, start=None):
-            load_dotenv()
-
-
-load_repo_env(start=Path(__file__))
-
-# Resolve config.json relative to this file so it is found regardless of the
-# process working directory.
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+from runtime_config import get_config
 
 
 class StoryAgent:
@@ -43,18 +20,11 @@ class StoryAgent:
         if self._model is not None:
             return self._model
 
-        with open(CONFIG_PATH) as f:
-            config = json.load(f)
-
-        api_key_var = config.get("api_key") or "OPENAI_API_KEY"
-        api_key = os.getenv(api_key_var)
-        if not api_key:
-            raise RuntimeError(f"{api_key_var} environment variable not set.")
-
+        config = get_config()
         self._model = ChatOpenAI(
-            model=config.get("model_name") or "gpt-4o",
-            base_url=config.get("base_url") or None,
-            api_key=api_key,
+            model=config.text_model,
+            base_url=config.base_url,
+            api_key=config.token,
             temperature=0.9,
         )
         return self._model

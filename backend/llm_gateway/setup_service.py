@@ -132,6 +132,10 @@ class SetupService:
     ) -> _PreparedAuthentication:
         """Acquire authentication before model input; never persist a candidate."""
         environment = dict(environment)
+        if (self.store.home / "config.json").exists():
+            saved_url = self.store.read_config().backend.get("openai_base_url")
+            if isinstance(saved_url, str) and saved_url:
+                environment.setdefault("OPENAI_BASE_URL", saved_url)
         base_url = (
             _openai_base_url(environment.get("OPENAI_BASE_URL"))
             if provider.id == "openai" and provider.auth == "api_key"
@@ -181,7 +185,7 @@ class SetupService:
             prepared.environment,
             expected_stored=prepared.previous,
         )
-        return SetupResult(changed, config.revision, resolved.source)
+        return SetupResult(changed, self.store.read_config().revision, resolved.source)
 
     async def _verify(
         self, config: RuntimeConfig, resolved: ResolvedCredential, base_url: str | None
@@ -238,7 +242,12 @@ class SetupService:
             selected.id,
             selected.auth,
         )
-        if env_key and same_identity:
+        if (
+            env_key
+            and same_identity
+            and isinstance(previous, ApiKeyCredential)
+            and previous.api_key.get_secret_value() != env_key
+        ):
             raise RuntimeConfigurationError(
                 "Both environment and stored credentials are configured; remove one."
             )

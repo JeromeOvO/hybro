@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import math
 import os
+import secrets
 import stat
 import tempfile
 import time
@@ -20,9 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import yaml
-from yaml.events import AliasEvent
-from yaml.nodes import MappingNode, Node
+from pydantic import ValidationError
 
 from llm_gateway.runtime_config import (
     CREDENTIAL_ADAPTER,
@@ -132,17 +132,14 @@ def prepare_setup_directory(home: Path) -> bool:
         ) from None
 
 
+def current_store() -> RuntimeConfigStore:
+    """Central process-location boundary shared by loaders and OAuth refresh."""
+    return RuntimeConfigStore(runtime_home(os.environ))
+
+
 def load_optional_setup(settings_obj: Any) -> RuntimeState | None:
-    """No setup means the original settings contract, not a migration or fallback."""
-    environment = dict(os.environ)
-    home = runtime_home(environment)
-    if not (home / "config.yaml").exists() and not (home / "config.yaml").is_symlink():
-        return None
-    for provider in ("openai", "deepseek", "anthropic"):
-        value = getattr(settings_obj, f"{provider}_api_key", None)
-        if value is not None:
-            environment[f"{provider.upper()}_API_KEY"] = str(value)
-    state = RuntimeConfigStore(home).load(environment)
+    """Load required setup. Runtime never resolves Provider keys from environment."""
+    state = current_store().load({})
     from llm_gateway.catalog import validate_models
 
     validate_models(state.config)
@@ -153,42 +150,70 @@ class _ExpectedStored(Enum):
     UNSET = "unset"
 
 
-class _ConfigLoader(yaml.SafeLoader):
-    """The small config format needs neither aliases nor merge keys."""
+def _invalid_constant(value: str) -> None:
+    raise ValueError("Non-finite JSON number")
 
-    def __init__(self, stream: str) -> None:
-        super().__init__(stream)
-        self._depth = 0
 
-    def compose_node(self, parent: Node | None, index: object) -> Node:
-        if self.check_event(AliasEvent) or self._depth >= 16:
-            raise ValueError("Unsupported YAML structure")
-        self._depth += 1
-        try:
-            return super().compose_node(parent, index)
-        finally:
-            self._depth -= 1
+def _finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("Non-finite JSON number")
+    return parsed
 
-    def construct_mapping(
-        self, node: MappingNode, deep: bool = False
-    ) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key_node, value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if not isinstance(key, str) or key in result:
-                raise ValueError("Duplicate or invalid mapping key")
-            result[key] = self.construct_object(value_node, deep=deep)
-        return result
+
+def _json_object(data: bytes) -> dict[str, object]:
+    if len(data) > _MAX_FILE_BYTES:
+        raise ValueError("File too large")
+    value = json.loads(
+        data,
+        object_pairs_hook=_unique_json_pairs,
+        parse_constant=_invalid_constant,
+        parse_float=_finite_float,
+    )
+    if not isinstance(value, dict):
+        raise ValueError("Expected a JSON object")
+    return value
 
 
 def parse_config(data: bytes) -> RuntimeConfig:
     try:
-        if len(data) > _MAX_FILE_BYTES:
-            raise ValueError("File too large")
-        value = yaml.load(data.decode("utf-8"), Loader=_ConfigLoader)
-        return RuntimeConfig.model_validate(value)
-    except (ValueError, UnicodeError, yaml.YAMLError, RecursionError):
-        raise RuntimeConfigurationError("Invalid config.yaml; rerun setup.") from None
+        return RuntimeConfig.model_validate(_json_object(data))
+    except ValidationError as exc:
+        from common.config.loader import FrontendSettings, Settings
+
+        known = (
+            set(Settings.model_fields)
+            | set(FrontendSettings.model_fields)
+            | {
+                "version",
+                "provider",
+                "models",
+                "id",
+                "auth",
+                "text",
+                "image",
+                "backend",
+                "frontend",
+                "image_size",
+            }
+        )
+        errors = []
+        for error in exc.errors(include_input=False, include_context=False)[:4]:
+            path = (
+                ".".join(
+                    str(part) if isinstance(part, int) or part in known else "<unknown>"
+                    for part in error["loc"]
+                )
+                or "config"
+            )
+            errors.append(f"{path}: {error['type']}")
+        raise RuntimeConfigurationError(
+            "Invalid config.json: " + "; ".join(errors)
+        ) from None
+    except (ValueError, UnicodeError, RecursionError):
+        raise RuntimeConfigurationError(
+            "Invalid config.json; expected bounded JSON with unique keys and finite values."
+        ) from None
 
 
 def _unique_json_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -200,24 +225,53 @@ def _unique_json_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def parse_credential(data: bytes) -> StoredCredential:
+SERVICE_KEYS = frozenset(
+    {
+        "clerk_secret_key",
+        "clerk_webhook_secret",
+        "mongodb_password",
+        "mongodb_url",
+        "redis_url",
+        "default_agent_registrar_token",
+        "default_agent_llm_token",
+        "webhook_signing_key",
+    }
+)
+
+
+def _auth_object(data: bytes | None) -> dict[str, object]:
+    value = _json_object(data) if data is not None else {}
+    services = value.get("services", {})
+    if not isinstance(services, dict) or any(
+        key not in SERVICE_KEYS or not isinstance(secret, str)
+        for key, secret in services.items()
+    ):
+        raise RuntimeConfigurationError("Invalid auth.json service credentials.")
+    return value
+
+
+def parse_credential(data: bytes) -> StoredCredential | None:
     try:
-        if len(data) > _MAX_FILE_BYTES:
-            raise ValueError("File too large")
-        value = json.loads(data, object_pairs_hook=_unique_json_pairs)
-        return CREDENTIAL_ADAPTER.validate_python(value)
+        value = _auth_object(data)
+        value.pop("services", None)
+        return CREDENTIAL_ADAPTER.validate_python(value) if value else None
     except (ValueError, UnicodeError, RecursionError):
         raise RuntimeConfigurationError("Invalid auth.json; rerun setup.") from None
 
 
-def _credential_bytes(credential: StoredCredential) -> bytes:
-    # Unwrapping secrets is deliberately confined to the private persistence path.
-    data = credential.model_dump(mode="json")
+def _credential_bytes(
+    credential: StoredCredential | None, previous: bytes | None = None
+) -> bytes:
+    # Preserve service secrets when setup or OAuth rotates the Provider identity.
+    services = _auth_object(previous).get("services", {})
+    data = credential.model_dump(mode="json") if credential is not None else {}
     if isinstance(credential, ApiKeyCredential):
         data["api_key"] = credential.api_key.get_secret_value()
-    else:
+    elif isinstance(credential, OAuthCredential):
         data["access_token"] = credential.access_token.get_secret_value()
         data["refresh_token"] = credential.refresh_token.get_secret_value()
+    if services:
+        data["services"] = services
     encoded = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
     if len(encoded) > _MAX_FILE_BYTES:
         raise RuntimeConfigurationError("Credential exceeds the file size limit.")
@@ -320,7 +374,7 @@ class RuntimeConfigStore:
         """
 
         def snapshot() -> tuple[bytes, bytes, OAuthCredential]:
-            config_data, auth_data = self._read("config.yaml"), self._read("auth.json")
+            config_data, auth_data = self._read("config.json"), self._read("auth.json")
             if config_data is None or auth_data is None:
                 raise RuntimeConfigurationError(
                     "OAuth configuration missing; rerun setup."
@@ -362,7 +416,9 @@ class RuntimeConfigStore:
                             raise RuntimeConfigurationError(
                                 "OAuth state changed during refresh; rerun setup."
                             )
-                        self._replace("auth.json", _credential_bytes(updated))
+                        self._replace(
+                            "auth.json", _credential_bytes(updated, current_auth)
+                        )
 
                     await _store_io(save_rotation)
                     return updated
@@ -417,19 +473,78 @@ class RuntimeConfigStore:
         """Load one consistent pair; no Provider/network verification occurs here."""
         try:
             with self._locked():
-                config_data = self._read("config.yaml")
+                config_data = self._read("config.json")
                 if config_data is None:
-                    raise RuntimeConfigurationError("config.yaml missing; run setup.")
+                    raise RuntimeConfigurationError(
+                        "Missing config.json; run hybro setup (or hybro config migrate for an existing config.yaml)."
+                    )
                 config = parse_config(config_data)
                 auth_data = self._read("auth.json")
                 stored = parse_credential(auth_data) if auth_data is not None else None
-                return RuntimeState(
-                    config, resolve_credential(config, stored, environment)
-                )
+                return RuntimeState(config, resolve_credential(config, stored, {}))
         except OSError:
             raise RuntimeConfigurationError(
                 "Cannot read runtime configuration."
             ) from None
+
+    def read_config(self) -> RuntimeConfig:
+        with self._locked():
+            data = self._read("config.json")
+            if data is None:
+                raise RuntimeConfigurationError("Missing config.json; run hybro setup.")
+            return parse_config(data)
+
+    def read_service_credentials(self) -> dict[str, str]:
+        with self._locked():
+            data = self._read("auth.json")
+            parse_credential(data) if data is not None else None
+            return dict(_auth_object(data).get("services", {}))
+
+    def ensure_service_credentials(self) -> dict[str, str]:
+        with self._locked():
+            data = self._read("auth.json")
+            credential = parse_credential(data) if data is not None else None
+            value = _auth_object(data)
+            services = dict(value.get("services", {}))
+            for key in (
+                "default_agent_registrar_token",
+                "default_agent_llm_token",
+                "webhook_signing_key",
+            ):
+                if not services.get(key):
+                    services[key] = secrets.token_hex(32)
+                if len(services[key].encode()) < 32:
+                    raise RuntimeConfigurationError(
+                        "Internal credentials must be at least 32 bytes."
+                    )
+            value["services"] = services
+            updated = _credential_bytes(credential, json.dumps(value).encode())
+            if data != updated:
+                self._replace("auth.json", updated)
+            return services
+
+    def update_config(self, path: list[str], value: object) -> None:
+        if not path or path[0] not in {"backend", "frontend", "image_size"}:
+            raise RuntimeConfigurationError(
+                "Use hybro setup to change Provider/model selection."
+            )
+        with self._locked():
+            previous = self._read("config.json")
+            if previous is None:
+                raise RuntimeConfigurationError("Missing config.json; run hybro setup.")
+            document = _json_object(previous)
+            target = document
+            for part in path[:-1]:
+                child = target.setdefault(part, {})
+                if not isinstance(child, dict):
+                    raise RuntimeConfigurationError(
+                        "Configuration path must refer to an object."
+                    )
+                target = child
+            target[path[-1]] = value
+            encoded = (json.dumps(document, indent=2, allow_nan=False) + "\n").encode()
+            parse_config(encoded)
+            self._replace("config.json", encoded)
 
     def read_stored_credential(self) -> StoredCredential | None:
         """Read setup's credential snapshot without creating an absent directory.
@@ -463,20 +578,16 @@ class RuntimeConfigStore:
         """Persist an already-verified candidate; return False for semantic no-op.
 
         The caller owns Provider/model eligibility and live authentication checks.
-        Passing None selects environment auth and removes any old stored identity.
+        Environment keys are setup inputs only; persist the verified credential.
         Setup supplies expected_stored (including None for an absent credential)
         to reject changes since verification, before either writing or no-op.
         This is not a crash-atomic two-file transaction: load fails closed when a
         crash leaves a missing or identity-mismatched pair; rerun setup to repair.
         """
-        resolve_credential(config, credential, environment)
-        config_data = yaml.safe_dump(
-            config.model_dump(exclude_none=True), sort_keys=False
-        ).encode("utf-8")
-        auth_data = _credential_bytes(credential) if credential is not None else None
+        credential = resolve_credential(config, credential, environment).credential
         try:
             with self._locked():
-                old_config = self._read("config.yaml")
+                old_config = self._read("config.json")
                 old_auth = self._read("auth.json")
                 if expected_stored is not _ExpectedStored.UNSET:
                     current = (
@@ -486,6 +597,36 @@ class RuntimeConfigStore:
                         raise RuntimeConfigurationError(
                             "Stored credential changed during setup; rerun setup."
                         )
+                if old_config is not None:
+                    previous = parse_config(old_config)
+                    config = config.model_copy(
+                        update={
+                            "backend": previous.backend,
+                            "frontend": previous.frontend,
+                            "image_size": previous.image_size,
+                        }
+                    )
+                if (
+                    config.provider.id == "openai"
+                    and config.provider.auth == "api_key"
+                    and environment.get("OPENAI_BASE_URL")
+                ):
+                    config = config.model_copy(
+                        update={
+                            "backend": {
+                                **config.backend,
+                                "openai_base_url": environment["OPENAI_BASE_URL"],
+                            }
+                        }
+                    )
+                config_data = (
+                    json.dumps(
+                        config.model_dump(exclude_none=True), indent=2, allow_nan=False
+                    )
+                    + "\n"
+                ).encode("utf-8")
+                parse_config(config_data)
+                auth_data = _credential_bytes(credential, old_auth)
                 if self._unchanged(config, credential, old_config, old_auth):
                     return False
                 self._save_pair(config_data, auth_data, old_config, old_auth)
@@ -520,11 +661,11 @@ class RuntimeConfigStore:
     ) -> None:
         try:
             self._replace("auth.json", auth)
-            self._replace("config.yaml", config)
+            self._replace("config.json", config)
         except OSError:
             try:
                 self._replace("auth.json", old_auth)
-                self._replace("config.yaml", old_config)
+                self._replace("config.json", old_config)
             except OSError:
                 raise RuntimeConfigurationError(
                     "Configuration write and rollback failed; rerun setup before start."

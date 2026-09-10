@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from common.observability import bind_log_context, get_log_context
 from llm_gateway.errors import LLMModelRoutingError, LLMProviderFailure
 from llm_gateway.gateway import LLMGatewayImpl
@@ -586,7 +586,6 @@ async def test_original_gateway_all_oauth_entrypoints_refresh_and_embedding_isol
     monkeypatch.setattr("llm_gateway.providers.deepseek_provider.AsyncOpenAI", sdk)
     monkeypatch.setenv("OPENAI_API_KEY", api_key)
     settings = Settings(
-        _env_file=None,
         openai_api_key=api_key,
         deepseek_api_key="",
         openai_base_url="https://untrusted.invalid",
@@ -783,7 +782,7 @@ def test_cli_default_oauth_binding_verifies_codex_before_save(
     )
     assert result == (0 if status == 200 else 1)
     assert len(calls) == 1
-    assert (tmp_path / ".hybro/config.yaml").exists() is (status == 200)
+    assert (tmp_path / ".hybro/config.json").exists() is (status == 200)
     assert (tmp_path / ".hybro/auth.json").exists() is (status == 200)
 
 
@@ -806,7 +805,7 @@ async def test_original_gateway_stream_early_close_closes_oauth_client(monkeypat
     )
     gateway = LLMGatewayImpl(
         providers={"openai": adapter},
-        settings_obj=Settings(_env_file=None, openai_api_key="", deepseek_api_key=""),
+        settings_obj=Settings(openai_api_key="", deepseek_api_key=""),
     )
     async with aclosing(gateway.generate_stream([])) as stream:
         assert await anext(stream) == "ok"

@@ -13,10 +13,10 @@ from openai.types.responses.response_output_message_param import (
 )
 from pydantic import TypeAdapter
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from common.observability import bind_log_context
 from llm_gateway.config import LLMGatewayConfig
-from llm_gateway.errors import LLMProviderFailure, UnsupportedConfiguredProvider
+from llm_gateway.errors import LLMProviderFailure
 from llm_gateway.gateway import LLMGatewayImpl
 from llm_gateway.model_registry import ModelRegistryImpl
 from llm_gateway.runtime_config import ResolvedCredential, RuntimeConfigurationError
@@ -41,7 +41,7 @@ def gateway_for(monkeypatch, adapter):
     )
     return LLMGatewayImpl(
         providers={"openai": adapter},
-        settings_obj=Settings(_env_file=None, openai_api_key="", deepseek_api_key=""),
+        settings_obj=Settings(openai_api_key="", deepseek_api_key=""),
     )
 
 
@@ -311,7 +311,6 @@ async def test_setup_precedes_legacy_validation_in_original_composition(
     if configured:
         RuntimeConfigStore(home).save(oauth_config(), oauth_credential(), {})
     settings = Settings(
-        _env_file=None,
         openai_api_key="",
         deepseek_api_key="",
         llm_gateway_generation_provider=legacy,
@@ -321,14 +320,14 @@ async def test_setup_precedes_legacy_validation_in_original_composition(
         supervisor_model="",
     )
     if not configured:
-        with pytest.raises(UnsupportedConfiguredProvider):
+        with pytest.raises(RuntimeConfigurationError, match="hybro setup"):
             LLMGatewayConfig.from_settings(settings)
         return
     config = LLMGatewayConfig.from_settings(settings)
     registry = ModelRegistryImpl(
         settings, generation_provider=config.generation_provider
     )
-    # Registry stays byte-for-byte original. Its stale/empty text hints must
+    # Registry behavior is unchanged. Its stale/empty text hints must
     # not prevent construction or override the gateway's private setup route.
     assert registry.get_model("lead_ai_model").model_id == ""
     assert registry.get_route_configuration("supervisor_model").model_id == ""
@@ -378,7 +377,6 @@ def test_api_key_setup_also_overrides_invalid_legacy_provider(
     for key in ("OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(
-        _env_file=None,
         openai_api_key="",
         deepseek_api_key="",
         llm_gateway_generation_provider="invalid",
@@ -447,8 +445,8 @@ async def test_streamed_failures_keep_code_only_classification(
 
 def test_invalid_setup_does_not_bypass_legacy_validation(tmp_path, monkeypatch):
     monkeypatch.setenv("HYBRO_HOME", str(tmp_path))
-    (tmp_path / "config.yaml").write_text("invalid: config")
+    (tmp_path / "config.json").write_text("invalid: config")
     with pytest.raises(RuntimeConfigurationError):
         LLMGatewayConfig.from_settings(
-            Settings(_env_file=None, llm_gateway_generation_provider="invalid")
+            Settings(llm_gateway_generation_provider="invalid")
         )

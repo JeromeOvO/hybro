@@ -4,7 +4,7 @@ import asyncio
 from typing import Protocol
 
 from a2a_adapter.agent_card_health import probe_agent_card_for_health
-from common.config.settings import settings
+from common.config.loader import settings
 from common.observability import get_logger, traced_create_task
 from common.protocols import LeaderElector
 from common.types import AgentCard as CommonAgentCard

@@ -204,7 +204,7 @@ def test_current_config_summary_is_read_only_and_never_reads_credentials(
             data["models"]["image"] = "gpt-image-1"
         if state == "invalid":
             data["models"]["text"] = "private-marker\u001b[31m"
-        (store.home / "config.yaml").write_text(json.dumps(data))
+        (store.home / "config.json").write_text(json.dumps(data))
     before = (
         {p.name: p.read_bytes() for p in store.home.iterdir()}
         if store.home.exists()
@@ -213,7 +213,7 @@ def test_current_config_summary_is_read_only_and_never_reads_credentials(
     original_read = store._read
 
     def read_config_only(name):
-        assert name == "config.yaml", "Status must not read credentials"
+        assert name == "config.json", "Status must not read credentials"
         return original_read(name)
 
     monkeypatch.setattr(store, "_read", read_config_only)

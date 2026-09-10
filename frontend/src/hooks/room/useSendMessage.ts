@@ -1,7 +1,10 @@
 import { useCallback } from 'react'
 import { SendMessage } from '@/lib/api/room'
 import { getActiveQueryClient } from '@/components/providers/query-provider'
-import { optimisticallyMarkRoomProcessing } from '@/lib/room-history-query'
+import {
+  optimisticallyMarkRoomProcessing,
+  roomHistoryQueryKey,
+} from '@/lib/room-history-query'
 import { banner } from '@/components/ui/banner'
 import type { QuoteData } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
@@ -102,7 +105,7 @@ export function useSendMessage(
     useRoomUiStore.getState().markLocalSend(roomId)
     const queryClient = getActiveQueryClient()
     const rollbackRoomHistory = queryClient
-      ? optimisticallyMarkRoomProcessing(queryClient, userId, roomId, currentTime)
+      ? await optimisticallyMarkRoomProcessing(queryClient, userId, roomId, currentTime)
       : () => undefined
 
     try {
@@ -265,6 +268,13 @@ export function useSendMessage(
       lifecycle.setCancelTimedOut(false)
       lifecycle.clearSseDisconnection()
       lifecycle.disarmCancelTimeout()
+
+      if (queryClient) {
+        void queryClient.invalidateQueries({
+          queryKey: roomHistoryQueryKey(userId),
+          exact: true,
+        })
+      }
 
       return true
 
