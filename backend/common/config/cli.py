@@ -141,6 +141,40 @@ def compose(arguments: list[str], *, start: bool = False) -> int:
     ).returncode
 
 
+def service_status() -> list[dict[str, object]]:
+    """Read only Compose container metadata; never load application credentials."""
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            os.devnull,
+            "-f",
+            str(ROOT / "docker-compose.yml"),
+            "ps",
+            "--all",
+            "--orphans=false",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        env=compose_environment(store(), start=False),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    raw = result.stdout.strip()
+    rows = (
+        json.loads(raw)
+        if raw.startswith("[")
+        else [json.loads(line) for line in raw.splitlines()]
+    )
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("Invalid container status")
+    return rows
+
+
 def _import_environment(config, auth, values):
     backend = dict(config.backend)
     public = dict(config.frontend)
@@ -332,6 +366,19 @@ def _start(arguments: list[str]) -> int:
     return compose(params, start=True)
 
 
+def _logs(arguments: list[str]) -> int:
+    if arguments[:1] != ["--container"]:
+        return compose(["logs", "-f", *arguments])
+    parser = Parser(prog="hybro logs --container")
+    parser.add_argument("name")
+    name = parser.parse_args(arguments[1:]).name
+    return subprocess.run(
+        ["docker", "logs", "--follow", "--tail", "100", "--", name],
+        env=compose_environment(store(), start=False),
+        check=False,
+    ).returncode
+
+
 def main(arguments: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if arguments is None else arguments)
     command = arguments.pop(0) if arguments else "tui"
@@ -346,12 +393,12 @@ def main(arguments: list[str] | None = None) -> int:
             if arguments:
                 raise RuntimeConfigurationError("hybro tui does not accept arguments.")
             return cli_tui.main()
-        if command in {"start", "up"}:
-            return _start(arguments)
+        handler = {"start": _start, "up": _start, "logs": _logs}.get(command)
+        if handler:
+            return handler(arguments)
         commands = {
             "status": ["ps", "--all"],
             "ps": ["ps", "--all"],
-            "logs": ["logs", "-f"],
             "stop": ["stop"],
             "down": ["down"],
             "restart": ["restart"],

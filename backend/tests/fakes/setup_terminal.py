@@ -25,8 +25,14 @@ def mock_keyboard(monkeypatch: pytest.MonkeyPatch, keys: bytes) -> tuple[Mock, M
     def ready(
         readers: list[int], writers: list[int], errors: list[int], timeout: float
     ):
-        assert (readers, writers, errors, timeout) == ([71], [], [], 0.15)
-        return (readers if pending else [], [], [])
+        assert (readers, writers, errors) == ([71], [], [])
+        assert timeout in (0.15, setup_terminal.FRAME_INTERVAL)
+        # EOF is readable during the menu's animation poll; Escape lookahead times out.
+        return (
+            readers if pending or timeout == setup_terminal.FRAME_INTERVAL else [],
+            [],
+            [],
+        )
 
     raw, restore = Mock(), Mock()
     monkeypatch.setattr(

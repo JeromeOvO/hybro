@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import io
 import os
 import select
 import termios
 import textwrap
+import time
 import tty
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TextIO
+
+from llm_gateway.tui_brand import (
+    FRAME_COUNT,
+    FRAME_INTERVAL,
+    LOGO_HEIGHT,
+    LOGO_WIDTH,
+    SELECTED_STYLE,
+    logo_frame,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +40,7 @@ class SetupScreen:
     tab: str = ""
     status: str = ""
     notice: str = ""
+    service_states: tuple[tuple[str, bool], ...] = ()
 
 
 class SelectionCancelled(KeyboardInterrupt):
@@ -77,10 +89,22 @@ def _choose_option(
     options: tuple[SetupOption, ...],
     selected: int,
     draw: Callable[[int], None],
+    *,
+    animate: bool = False,
 ) -> str:
+    paused = False
     while True:
         draw(selected)
+        if (
+            animate
+            and not paused
+            and not select.select([fd], [], [], FRAME_INTERVAL)[0]
+        ):
+            continue
         key = _key(fd)
+        if animate and key == b" ":
+            paused = not paused
+            continue
         shortcut = next(
             (option.value for option in options if option.shortcut == key), None
         )
@@ -90,6 +114,46 @@ def _choose_option(
             return options[selected].value
         step = {b"\x1b[A": -1, b"\x1bOA": -1, b"\x1b[B": 1, b"\x1bOB": 1}.get(key, 0)
         selected = (selected + step) % len(options)
+
+
+def _append_service_status(
+    lines: list[tuple[str, str]],
+    states: tuple[tuple[str, bool], ...],
+    width: int,
+    limit: int,
+    spacer: list[tuple[str, str]],
+) -> list[tuple[int, int, str, str]]:
+    """Pack status items into a row, wrapping only at service boundaries."""
+    highlights: list[tuple[int, int, str, str]] = []
+    if not states:
+        return highlights
+    text = ""
+    for name, active in states:
+        state = "active" if active else "inactive"
+        name = name[: max(0, width - len(state) - 2)]
+        item = f"{name}: {state}" if name else state
+        if text and len(text) + 3 + len(item) > width:
+            lines.append((text, "0"))
+            text = ""
+        if text:
+            text += "   "
+        highlights.append(
+            (
+                len(lines),
+                len(text) + len(item) - len(state),
+                state,
+                "32" if active else "31",
+            )
+        )
+        text += item
+    if text:
+        lines.append((text, "0"))
+    if len(lines) > limit:
+        del lines[limit:]
+        lines[-1] = ("More services: widen terminal", "2")
+        highlights = [span for span in highlights if span[0] < limit - 1]
+    lines.extend(spacer)
+    return highlights
 
 
 def _draw_screen(
@@ -102,8 +166,15 @@ def _draw_screen(
 ) -> None:
     """A bounded, centered terminal panel using the user's terminal palette."""
     page = heading if isinstance(heading, SetupScreen) else SetupScreen(heading)
-    width, height = min(72, max(1, columns - 4)), max(1, rows - 1)
-    compact = height < 14
+    brand = rows >= 24 and columns >= 40
+    logo_height = LOGO_HEIGHT + 1 if brand else 0
+    width, height = min(72, max(1, columns - 4)), max(1, rows - 1 - logo_height)
+    if page.service_states:
+        natural_width = sum(
+            len(name) + (8 if active else 10) for name, active in page.service_states
+        ) + 3 * (len(page.service_states) - 1)
+        width = min(max(width, natural_width), max(1, columns - 4))
+    compact = height < 18
     spacer = [] if compact else [("", "0")]
     # Tab destinations remain keyboard-selectable, but are drawn in the tab bar.
     body = [
@@ -116,6 +187,13 @@ def _draw_screen(
         "Up/Down select  Enter confirm  Tab page  Esc back  Ctrl-C quit"
         if page.tab
         else "Up/Down select  Enter confirm  Esc back  Ctrl-C quit"
+    )
+    help_text = (
+        "Up/Down  Enter  "
+        + ("Tab page  " if page.tab else "")
+        + "Esc back  Ctrl-C quit  Space pause"
+        if brand
+        else help_text
     )
     if width < 60:
         help_text = "Up/Down Enter Tab Esc ^C" if page.tab else "Up/Down Enter Esc ^C"
@@ -138,6 +216,14 @@ def _draw_screen(
     if page.tab:
         lines.append(("Models     Services", "0"))
     lines.extend(spacer)
+    highlights = _append_service_status(
+        lines,
+        page.service_states,
+        width,
+        len(lines)
+        + max(1, height - len(lines) - len(notes) - (4 if not compact else 2)),
+        spacer,
+    )
     gaps = 0 if compact else sum(bool(option.hint) for _, option in body)
     visible = min(
         len(body),
@@ -149,22 +235,29 @@ def _draw_screen(
             lines.extend(spacer)
         current = " [current]" if option.current and not page.tab else ""
         label = ("> " if index == selected else "  ") + option.label + current
-        lines.append((label, "7" if index == selected else "0"))
+        lines.append((label, SELECTED_STYLE if index == selected else "0"))
     lines.extend(spacer)
     lines.extend((note, "2") for note in notes)
     lines.extend(spacer)
     counter = f" {focus + 1}/{len(body)}" if visible < len(body) else ""
     lines.append((help_text[: max(0, width - len(counter))] + counter, "2"))
     if height < 5:
-        lines = [(options[selected].label, "7"), ("Enter Esc ^C", "0")]
+        lines = [(options[selected].label, SELECTED_STYLE), ("Enter Esc ^C", "0")]
+        highlights = []
+    frame = io.StringIO()
     _paint_screen(
-        writer,
+        frame,
         lines[:height],
         width,
         (columns, rows),
         page.tab if height >= 5 else "",
         options[selected].value,
+        highlights,
+        brand=brand,
     )
+    # One write per frame avoids exposing the clear/paint intermediate state.
+    writer.write(frame.getvalue())
+    writer.flush()
 
 
 def _paint_screen(
@@ -174,11 +267,28 @@ def _paint_screen(
     size: tuple[int, int],
     active_tab: str,
     focused_tab: str,
+    highlights: list[tuple[int, int, str, str]] | None = None,
+    *,
+    brand: bool = False,
 ) -> None:
     columns, rows = size
-    panel_height = max(16, len(lines)) if active_tab else len(lines)
-    top, left = max(1, (rows - panel_height) // 3), max(1, (columns - width) // 2 + 1)
+    logo = (
+        logo_frame(int(time.monotonic() / FRAME_INTERVAL) % FRAME_COUNT)
+        if brand
+        else ()
+    )
+    logo_height = len(logo) + 1 if logo else 0
+    panel_height = len(lines) + logo_height
+    top, left = (
+        max(1, (rows - panel_height) // 2 + 1),
+        max(1, (columns - width) // 2 + 1),
+    )
     writer.write("\x1b[2J\x1b[H")
+    for offset, (text, color) in enumerate(logo):
+        writer.write(
+            f"\x1b[{top + offset};{(columns - LOGO_WIDTH) // 2 + 1}H\x1b[{color}m{text}\x1b[0m"
+        )
+    top += logo_height
     for offset, (text, style) in enumerate(lines):
         clipped = (
             text[: width - 3] + "..."
@@ -188,12 +298,21 @@ def _paint_screen(
         writer.write(
             f"\x1b[{top + offset};{left}H\x1b[{style}m{clipped.ljust(width)}\x1b[0m"
         )
+    for row, column, text, color in highlights or ():
+        if row < len(lines) and column + len(text) <= width:
+            writer.write(f"\x1b[{top + row};{left + column}H\x1b[{color}m{text}\x1b[0m")
     if active_tab:
         for tab, label, offset in (
             ("models", "Models", 0),
             ("services", "Services", 11),
         ):
-            style = "7" if focused_tab == tab else "1;4" if active_tab == tab else "2"
+            style = (
+                SELECTED_STYLE
+                if focused_tab == tab
+                else "1;4"
+                if active_tab == tab
+                else "2"
+            )
             if offset + len(label) <= width:
                 writer.write(
                     f"\x1b[{top + 1};{left + offset}H\x1b[{style}m{label}\x1b[0m"
@@ -239,6 +358,7 @@ def select_option(
                 lambda selected: _draw_screen(
                     writer, title, options, selected, *_terminal_size(fd)
                 ),
+                animate=True,
             )
         headings[-1] += " (Up/Down, Enter; Esc/Ctrl-C cancels)"
         for heading in headings:

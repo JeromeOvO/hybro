@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 import termios
@@ -21,23 +22,94 @@ from llm_gateway.setup_service import SetupError, SetupService
 from llm_gateway.setup_terminal import SelectionCancelled, SetupOption, SetupScreen
 
 _SERVICE_ACTIONS = (
-    SetupOption("status", "Show service status"),
-    SetupOption("logs", "Follow logs (Ctrl-C exits)"),
     SetupOption("start", "Start services"),
-    SetupOption("restart", "Restart services"),
-    SetupOption("stop", "Stop services (keep containers)"),
-    SetupOption("build", "Build images and start services"),
-    SetupOption("recreate", "Recreate containers with existing images"),
-    SetupOption("build_recreate", "Build images and recreate containers"),
-    SetupOption("down", "Remove containers and network (keep named volumes)"),
-    SetupOption("help", "Show command help"),
+    SetupOption("stop", "Stop services"),
+    SetupOption(
+        "apply",
+        "Reload configuration",
+        hint="Reload saved configuration: rebuild and recreate. Services will be interrupted.",
+    ),
+    SetupOption("logs", "View logs"),
     SetupOption("models", "Model configuration [Tab]", shortcut=b"\t"),
 )
-_START_MODES = {
-    "build": ("--build",),
-    "recreate": ("--recreate",),
-    "build_recreate": ("--build", "--recreate"),
-}
+
+
+def _read_status() -> list[dict[str, object]]:
+    from common.config.cli import service_status
+
+    return service_status()
+
+
+def _status_snapshot() -> tuple[str, list[dict[str, object]]]:
+    try:
+        rows = _read_status()
+        running = sum(row.get("State") == "running" for row in rows)
+        return f"{running} running" if rows else "No containers", rows
+    except (OSError, ValueError, RuntimeConfigurationError, subprocess.SubprocessError):
+        return "Status unavailable: check Docker", []
+
+
+def _service_states(rows: list[dict[str, object]]) -> tuple[tuple[str, bool], ...]:
+    states: dict[str, bool] = {}
+    for row in rows:
+        name = row.get("Service") or row.get("Name")
+        if not isinstance(name, str) or not re.fullmatch(
+            r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name
+        ):
+            continue
+        if name in {"mongo-setup", "registrar"}:
+            continue
+        states[name] = states.get(name, True) and row.get("State") == "running"
+    return tuple(sorted(states.items()))
+
+
+def _logs_page(console: SetupConsole, run: Callable[[tuple[str, ...]], int]) -> None:
+    while True:
+        status, rows = _status_snapshot()
+        names = sorted(
+            {
+                row["Name"]
+                for row in rows
+                if isinstance(row.get("Name"), str)
+                and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", row["Name"])
+            }
+        )
+        try:
+            choice = console.select(
+                SetupScreen(
+                    "Container logs",
+                    status=status,
+                    notice="Last 100 lines, then follow. While following, Ctrl-C returns here.",
+                ),
+                (
+                    SetupOption("all", "All containers"),
+                    *(SetupOption(name, name) for name in names),
+                    SetupOption("back", "Back"),
+                ),
+            )
+        except SelectionCancelled:
+            return
+        if choice == "back":
+            return
+        arguments = (
+            ("logs", "--tail", "100")
+            if choice == "all"
+            else ("logs", "--container", choice)
+        )
+        try:
+            result = run(arguments)
+        except KeyboardInterrupt:
+            result = 130
+        if result != 130:
+            console.write(
+                "Log stream ended."
+                if result == 0
+                else "Logs unavailable; check Docker and the selected container."
+            )
+            try:
+                console.pause()
+            except SelectionCancelled:
+                pass
 
 
 def _run_command(arguments: tuple[str, ...]) -> int:
@@ -48,13 +120,11 @@ def _run_command(arguments: tuple[str, ...]) -> int:
 def _service_command(
     console: SetupConsole, run: Callable[[tuple[str, ...]], int], action: str
 ) -> str:
-    arguments = (
-        ("start", *_START_MODES[action]) if action in _START_MODES else (action,)
-    )
-    if action in {"recreate", "build_recreate", "down"}:
+    arguments = ("start", "--build", "--recreate") if action == "apply" else (action,)
+    if action == "apply":
         if (
             console.select(
-                "Confirm: hybro " + " ".join(arguments),
+                "Reload saved configuration? Services will be interrupted.",
                 (SetupOption("cancel", "Cancel"), SetupOption("run", "Run command")),
             )
             == "cancel"
@@ -81,11 +151,26 @@ def _services_page(
 ) -> str:
     from dataclasses import replace
 
-    notice = "No service operation runs automatically."
+    notice = ""
     while True:
+        status, rows = _status_snapshot()
         try:
             action = console.select(
-                SetupScreen("Hybro", tab="services", notice=notice),
+                SetupScreen(
+                    "Hybro",
+                    tab="services",
+                    status=status if not rows else "",
+                    service_states=_service_states(rows),
+                    notice="\n".join(
+                        filter(
+                            None,
+                            (
+                                notice,
+                                "More commands: hybro --help. Status refreshes on return.",
+                            ),
+                        )
+                    ),
+                ),
                 tuple(
                     replace(option, current=option.value == focus)
                     for option in _SERVICE_ACTIONS
@@ -97,7 +182,10 @@ def _services_page(
             return focus
         focus = action
         try:
-            notice = _service_command(console, run, action)
+            if action == "logs":
+                _logs_page(console, run)
+            else:
+                notice = _service_command(console, run, action)
         except SelectionCancelled:
             continue
         except (SetupError, OSError, termios.error):
@@ -111,7 +199,7 @@ def _menu(
     environment: Mapping[str, str],
 ) -> int:
     panel = SetupPanel(service, console, environment)
-    service_focus = "status"
+    service_focus = "start"
     while True:
         try:
             action = console.select(panel.title(), panel.options())

@@ -14,6 +14,7 @@ from llm_gateway.setup_cli import SetupConsole, _terminal_console
 from llm_gateway.setup_panel import SetupPanel
 from llm_gateway.setup_service import SetupError, SetupService
 from llm_gateway.setup_terminal import SelectionCancelled, SetupOption, _draw_screen
+from llm_gateway.tui_brand import SELECTED_STYLE
 from tests.fakes.llm_runtime import oauth_config, oauth_credential
 from tests.fakes.setup_terminal import TerminalReader, mock_keyboard
 from tests.test_cli_tui import console_with
@@ -119,12 +120,15 @@ def test_first_connection_authenticates_before_models_and_exit_does_not_save(
     assert not store.home.exists()
 
 
-def test_cancel_is_not_a_failed_command_and_services_keep_model_draft(tmp_path):
+def test_cancel_is_not_a_failed_command_and_services_keep_model_draft(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("llm_gateway.cli_tui._read_status", lambda: [])
     console = console_with(
         "model",
         "gpt-5.5",
         "services",
-        "status",
+        "stop",
         "models",
         SelectionCancelled,
         "discard",
@@ -133,7 +137,7 @@ def test_cancel_is_not_a_failed_command_and_services_keep_model_draft(tmp_path):
     before = contents(store)
     run = Mock(return_value=130)
     assert main(console=console, service=panel.service, environment={}, run=run) == 0
-    run.assert_called_once_with(("status",))
+    run.assert_called_once_with(("stop",))
     assert not any(
         call.args == ("Command failed.",) for call in console.write.call_args_list
     )
@@ -197,7 +201,8 @@ def test_panel_layout_bounds_hierarchy_and_save_hint(tmp_path, size):
                 assert "Quota/billing applies" in painted
             if selected == 3:
                 assert any(
-                    style == "7" and text == "Services" for _, _, style, text in spans
+                    style == SELECTED_STYLE and text == "Services"
+                    for _, _, style, text in spans
                 )
         if columns >= 80:
             assert int(spans[0][0]) > 1 and int(spans[0][1]) > 1
@@ -236,4 +241,4 @@ def test_fixed_screen_redraw_current_value_and_restoration(monkeypatch):
     assert text.count("\x1b[2J\x1b[H") == 3
     assert text.endswith("\x1b[?25h\x1b[?1049l")
     assert "> B [current]" in text
-    assert "\x1b[7m> B [current]" in text
+    assert f"\x1b[{SELECTED_STYLE}m> B [current]" in text

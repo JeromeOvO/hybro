@@ -4,6 +4,17 @@ Usage: ./scripts/hybro [command]
 
 No command opens the Models/Services TUI when a terminal is available.
 Non-interactive use without a command prints this help.
+The TUI is centered and uses the frontend's cyan selection color. Its blue nested
+cubes expand/contract through each other at a fixed angle, without rotation.
+The logo loops while menus wait for input; Space pauses/resumes animation.
+Compact terminals omit the logo to preserve controls. No animation runs during commands.
+The Services page offers Start, Stop, Reload configuration and View logs.
+Above Start services, each long-running service shows green active or red inactive.
+One-time setup jobs are omitted. The row wraps on narrow terminals.
+Status refreshes on entry and after actions; no background polling.
+Reload configuration confirms before rebuilding and recreating containers.
+View logs selects one container or All; Ctrl-C returns to the container picker.
+Advanced lifecycle commands remain available below.
 
 Configuration:
     setup
@@ -43,6 +54,9 @@ Services:
         Show all containers, including stopped containers.
     logs [service...]
         Follow logs. Ctrl-C stops following logs.
+    logs --container <name>
+        Follow one exact container, including a specific replica, from its last
+        100 lines. The TUI also limits All to 100 initial lines per container.
     stop
         Stop containers without deleting them.
     restart [service...]
