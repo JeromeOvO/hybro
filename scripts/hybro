@@ -17,4 +17,4 @@ fi
 UV_PROJECT_ENVIRONMENT=${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/hybro/venv}
 export UV_PROJECT_ENVIRONMENT
 cd "$REPO_ROOT/backend"
-exec uv run --frozen --no-env-file python -m common.config.cli "$@"
+exec uv run --frozen --no-env-file python -m configuration_cli "$@"

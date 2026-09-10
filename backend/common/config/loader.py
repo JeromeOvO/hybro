@@ -4,9 +4,11 @@ import math
 import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     AliasChoices,
+    AnyHttpUrl,
     BaseModel,
     ConfigDict,
     Field,
@@ -443,20 +445,44 @@ ROUTE_FIELDS = frozenset(
 )
 
 
+def validate_openai_base_url(value: str | None) -> str | None:
+    """Validate an OpenAI-compatible base URL; never probe or rewrite it."""
+    if not value:
+        return None
+    try:
+        if "\\" in value:
+            raise ValueError
+        parsed = urlsplit(value)
+        validated = AnyHttpUrl(value)
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or validated.username is not None
+            or validated.password is not None
+            or any(
+                char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
+            )
+        ):
+            raise ValueError
+    except ValueError:
+        raise ValueError(
+            "Invalid OPENAI_BASE_URL; use an HTTP(S) URL with a hostname and no userinfo."
+        ) from None
+    # Preserve the deployment's exact path; no DNS/network probe or URL rewrite.
+    return value
+
+
 def validate_backend(values: dict[str, object]) -> Settings:
     if PRIVATE_FIELDS.intersection(values) or ROUTE_FIELDS.intersection(values):
         raise ValueError("Use setup for model selection and auth.json for credentials")
     for key, value in values.items():
         if key.endswith("_url") and isinstance(value, str) and value:
-            from urllib.parse import urlsplit
-
             parsed = urlsplit(value)
             if parsed.username or parsed.password:
                 raise ValueError("URL credentials belong in auth.json")
         if key == "openai_base_url" and value:
-            from llm_gateway.setup_service import _openai_base_url
-
-            _openai_base_url(value)
+            validate_openai_base_url(value)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if not math.isfinite(value) or value < 0:
                 raise ValueError("Numeric settings must be finite and nonnegative")
@@ -482,8 +508,6 @@ class FrontendSettings(BaseModel):
     @field_validator("api_base_url", "server_url")
     @classmethod
     def validate_url(cls, value: str) -> str:
-        from urllib.parse import urlsplit
-
         parsed = urlsplit(value)
         if (
             parsed.scheme not in {"http", "https"}
@@ -506,7 +530,7 @@ class FrontendSettings(BaseModel):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    from llm_gateway.runtime_store import RuntimeConfigStore, runtime_home
+    from common.config.runtime_store import RuntimeConfigStore, runtime_home
 
     store = RuntimeConfigStore(runtime_home(os.environ))
     document = store.load({}).config

@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from common.config.loader import Settings
+from common.config.runtime_config import RuntimeConfigurationError
+from common.config.runtime_store import RuntimeConfigStore, runtime_home
 from common.dto import LLMResponse, LLMStructuredResponse
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.gateway import LLMGatewayImpl
 from llm_gateway.model_registry import ModelRegistryImpl
-from llm_gateway.runtime_config import RuntimeConfigurationError
-from llm_gateway.runtime_store import RuntimeConfigStore, runtime_home
 from llm_gateway.turn_types import GatewayTurnEvent, GatewayTurnRequest
 from tests.fakes.llm_runtime import runtime_state
 

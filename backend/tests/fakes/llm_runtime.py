@@ -6,7 +6,7 @@ import time
 
 from pydantic import SecretStr
 
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     ApiKeyCredential,
     OAuthCredential,
     ResolvedCredential,
@@ -14,7 +14,7 @@ from llm_gateway.runtime_config import (
     RuntimeModels,
     RuntimeProvider,
 )
-from llm_gateway.runtime_store import RuntimeState
+from common.config.runtime_store import RuntimeState
 
 
 def oauth_credential(

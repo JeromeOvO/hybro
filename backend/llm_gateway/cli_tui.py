@@ -14,8 +14,8 @@ from typing import TextIO
 
 from pydantic import ValidationError
 
-from llm_gateway.runtime_config import RuntimeConfigurationError
-from llm_gateway.runtime_store import RuntimeConfigStore, runtime_home
+from common.config.runtime_config import RuntimeConfigurationError
+from common.config.runtime_store import RuntimeConfigStore, runtime_home
 from llm_gateway.setup_cli import SetupConsole, _terminal_console
 from llm_gateway.setup_panel import SetupPanel
 from llm_gateway.setup_service import SetupError, SetupService
@@ -33,16 +33,22 @@ _SERVICE_ACTIONS = (
     SetupOption("models", "Model configuration [Tab]", shortcut=b"\t"),
 )
 
+# Host capability injected by the CLI entry point; the gateway never imports it.
+StatusReader = Callable[[], list[dict[str, object]]]
+
 
 def _read_status() -> list[dict[str, object]]:
-    from common.config.cli import service_status
+    """Standalone default; the host CLI injects its Compose reader instead."""
+    raise RuntimeConfigurationError(
+        "Compose status is available through the hybro CLI entry point"
+    )
 
-    return service_status()
 
-
-def _status_snapshot() -> tuple[str, list[dict[str, object]]]:
+def _status_snapshot(
+    read: StatusReader | None = None,
+) -> tuple[str, list[dict[str, object]]]:
     try:
-        rows = _read_status()
+        rows = (read or _read_status)()
         running = sum(row.get("State") == "running" for row in rows)
         return f"{running} running" if rows else "No containers", rows
     except (OSError, ValueError, RuntimeConfigurationError, subprocess.SubprocessError):
@@ -63,9 +69,13 @@ def _service_states(rows: list[dict[str, object]]) -> tuple[tuple[str, bool], ..
     return tuple(sorted(states.items()))
 
 
-def _logs_page(console: SetupConsole, run: Callable[[tuple[str, ...]], int]) -> None:
+def _logs_page(
+    console: SetupConsole,
+    run: Callable[[tuple[str, ...]], int],
+    read: StatusReader | None = None,
+) -> None:
     while True:
-        status, rows = _status_snapshot()
+        status, rows = _status_snapshot(read)
         names = sorted(
             {
                 row["Name"]
@@ -147,13 +157,16 @@ def _service_command(
 
 
 def _services_page(
-    console: SetupConsole, run: Callable[[tuple[str, ...]], int], focus: str
+    console: SetupConsole,
+    run: Callable[[tuple[str, ...]], int],
+    focus: str,
+    read: StatusReader | None = None,
 ) -> str:
     from dataclasses import replace
 
     notice = ""
     while True:
-        status, rows = _status_snapshot()
+        status, rows = _status_snapshot(read)
         try:
             action = console.select(
                 SetupScreen(
@@ -183,7 +196,7 @@ def _services_page(
         focus = action
         try:
             if action == "logs":
-                _logs_page(console, run)
+                _logs_page(console, run, read)
             else:
                 notice = _service_command(console, run, action)
         except SelectionCancelled:
@@ -197,6 +210,7 @@ def _menu(
     run: Callable[[tuple[str, ...]], int],
     service: SetupService,
     environment: Mapping[str, str],
+    read: StatusReader | None = None,
 ) -> int:
     panel = SetupPanel(service, console, environment)
     service_focus = "start"
@@ -208,7 +222,7 @@ def _menu(
                 return 0
             continue
         if action == "services":
-            service_focus = _services_page(console, run, service_focus)
+            service_focus = _services_page(console, run, service_focus, read)
             continue
         try:
             panel.edit(action)
@@ -230,6 +244,7 @@ def main(
     output: TextIO | None = None,
     environment: Mapping[str, str] | None = None,
     service: SetupService | None = None,
+    status: StatusReader | None = None,
 ) -> int:
     output = output if output is not None else sys.stdout
     try:
@@ -244,9 +259,9 @@ def main(
                 verify_selection,
             )
         if console is not None:
-            return _menu(console, run, service, environment)
+            return _menu(console, run, service, environment, status)
         with _terminal_console(output, screen=True) as terminal:
-            return _menu(terminal, run, service, environment)
+            return _menu(terminal, run, service, environment, status)
     except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
         print("Hybro closed; unsaved changes discarded.", file=output)
         return 130

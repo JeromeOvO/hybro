@@ -9,6 +9,7 @@ import httpx
 import pytest
 from PIL import Image
 
+from common.config.runtime_config import RuntimeProvider
 from llm_gateway import setup_bindings
 from llm_gateway.catalog import model_choices, validate_models
 from llm_gateway.errors import LLMProviderConfigurationError
@@ -19,7 +20,6 @@ from llm_gateway.image_types import (
     ImageContractError,
 )
 from llm_gateway.providers.openai_images import OpenAIImageProvider
-from llm_gateway.runtime_config import RuntimeProvider
 from tests.fakes.llm_runtime import runtime_state
 
 

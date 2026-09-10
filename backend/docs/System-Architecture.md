@@ -356,7 +356,9 @@ concrete runtime singletons.
 #### Runtime Configuration
 
 `common/config/loader.py` defines typed defaults and loads a cached startup
-snapshot from `HYBRO_HOME/config.json` (default `~/.hybro/config.json`). There is
+snapshot from `HYBRO_HOME/config.json` (default `~/.hybro/config.json`) through
+`common/config/runtime_store.py`, which also owns the private credential store
+and OAuth refresh. There is
 no `settings.py`, dotenv discovery or environment-backed application settings.
 JSON overrides live under `backend` and `frontend`, alongside setup's `provider`,
 `models`, `version` and Agent `image_size`. Unknown fields, invalid types/ranges
@@ -364,8 +366,9 @@ and missing setup fail before services start. Credentials stay in `auth.json`;
 its `services` mapping contains scoped service secrets, separately from Provider
 credentials. Setup edits and OAuth rotations preserve unrelated fields.
 
-`common/config/cli.py` handles `config show/check/set/secret/migrate` and Compose
-startup. It validates configuration, generates missing internal tokens without
+The top-level `configuration_cli.py` module handles `config
+show/check/set/secret/migrate` and Compose startup. It is a host entry point,
+not part of the shared `common` package, so package dependencies stay acyclic. It validates configuration, generates missing internal tokens without
 rotation, and launches Compose with `--env-file /dev/null`. Only backend mounts
 the runtime directory. `HYBRO_CONTAINER=1` supplies bundled Mongo/Redis/file-path
 and discovery defaults where JSON has no explicit override. Agents receive a

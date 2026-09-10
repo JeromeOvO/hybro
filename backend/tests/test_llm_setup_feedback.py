@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from common.config.runtime_config import RuntimeConfigurationError, resolve_credential
+from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway import openai_oauth, setup_bindings
 from llm_gateway.catalog import TEXT_MODELS, model_choices, validate_models
 from llm_gateway.errors import LLMModelRoutingError, LLMProviderFailure
 from llm_gateway.providers.openai_codex import OpenAICodexProvider
-from llm_gateway.runtime_config import RuntimeConfigurationError, resolve_credential
-from llm_gateway.runtime_store import RuntimeConfigStore
 from llm_gateway.setup_cli import SetupConsole, main
 from llm_gateway.setup_service import SetupError, SetupService
 from tests.fakes.llm_runtime import oauth_config, oauth_credential, runtime_state

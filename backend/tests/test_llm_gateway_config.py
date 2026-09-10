@@ -2,15 +2,15 @@ import pytest
 from pydantic import SecretStr
 
 from common.config.loader import Settings
-from llm_gateway.config import LLMGatewayConfig
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     ApiKeyCredential,
     RuntimeConfig,
     RuntimeConfigurationError,
     RuntimeModels,
     RuntimeProvider,
 )
-from llm_gateway.runtime_store import RuntimeConfigStore
+from common.config.runtime_store import RuntimeConfigStore
+from llm_gateway.config import LLMGatewayConfig
 
 
 def _configure(tmp_path, monkeypatch, provider="openai", model="gpt-5-mini"):

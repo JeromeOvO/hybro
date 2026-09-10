@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from common.config import cli
-from llm_gateway.runtime_store import RuntimeConfigStore
+import configuration_cli as cli
+from common.config.runtime_store import RuntimeConfigStore
 from tests.test_json_runtime_config import configured
 
 
@@ -120,6 +120,16 @@ def test_migration_rejects_unsafe_explicit_environment_input(
     assert cli.main(["config", "migrate", "--from-env", str(path)]) == 1
     assert (runtime.home / "auth.json").read_bytes() == before
     assert not (runtime.home / "config.json").exists()
+
+
+def test_tui_entry_point_injects_the_host_service_status_reader(monkeypatch):
+    """The gateway TUI never imports the host CLI; the entry point supplies status."""
+    from llm_gateway import cli_tui
+
+    captured = {}
+    monkeypatch.setattr(cli_tui, "main", lambda **kwargs: captured.update(kwargs) or 0)
+    assert cli.main([]) == 0
+    assert captured == {"status": cli.service_status}
 
 
 def test_status_does_not_create_runtime_or_read_dotenv(monkeypatch, tmp_path):

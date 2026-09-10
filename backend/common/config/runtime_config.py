@@ -128,6 +128,30 @@ class ApiKeyCredential(_StrictModel):
         return value
 
 
+def account_id(token: str) -> str:
+    """Extract unsigned account metadata; reject malformed/header-unsafe claims."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3 or len(token) > 32768:
+            raise ValueError
+        payload = parts[1]
+        decoded = base64.b64decode(
+            payload + "=" * (-len(payload) % 4), altchars=b"-_", validate=True
+        )
+        value = json.loads(decoded)["https://api.openai.com/auth"]["chatgpt_account_id"]
+        if (
+            not isinstance(value, str)
+            or not 1 <= len(value) <= 256
+            or not all(c.isascii() and (c.isalnum() or c in "_-") for c in value)
+        ):
+            raise ValueError
+        return value
+    except (ValueError, KeyError, TypeError, RecursionError):
+        raise RuntimeConfigurationError(
+            "Invalid OAuth account metadata; rerun setup."
+        ) from None
+
+
 class OAuthCredential(_StrictModel):
     """Subscription credentials and unsigned account routing metadata."""
 
@@ -143,8 +167,6 @@ class OAuthCredential(_StrictModel):
 
     @model_validator(mode="after")
     def validate_account(self) -> Self:
-        from llm_gateway.openai_oauth import account_id
-
         if account_id(self.access_token.get_secret_value()) != self.account_id:
             raise ValueError("OAuth account metadata mismatch")
         return self

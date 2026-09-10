@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway.catalog import model_choices
 from llm_gateway.cli_tui import main
-from llm_gateway.runtime_store import RuntimeConfigStore
 from llm_gateway.setup_cli import SetupConsole, _terminal_console
 from llm_gateway.setup_panel import SetupPanel
 from llm_gateway.setup_service import SetupError, SetupService

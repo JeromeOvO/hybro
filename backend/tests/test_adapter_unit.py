@@ -21,7 +21,7 @@ from common.types import MessageRole
 @pytest.fixture(autouse=True)
 def isolate_adapter_configuration(monkeypatch):
     # Injected adapter units do not exercise startup/config-file policy.
-    monkeypatch.setattr("llm_gateway.runtime_store.load_optional_setup", lambda _: None)
+    monkeypatch.setattr("llm_gateway.config.load_optional_setup", lambda _: None)
     monkeypatch.setattr("llm_gateway.gateway.load_optional_setup", lambda _: None)
 
 

@@ -8,7 +8,7 @@ account entitlement is checked by setup's single text verification, not assumed.
 from dataclasses import dataclass
 from typing import Literal
 
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     RuntimeConfig,
     RuntimeConfigurationError,
     RuntimeProvider,

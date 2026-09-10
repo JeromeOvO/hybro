@@ -5,10 +5,11 @@ from contextlib import aclosing
 from typing import Any, Literal, Protocol, TypeVar
 
 from common.config.loader import settings
+from common.config.runtime_store import current_store
 from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
 from common.observability import get_logger, safe_exception_metadata
 from common.protocols import LLMProviderAdapter
-from llm_gateway.config import LLMGatewayConfig
+from llm_gateway.config import LLMGatewayConfig, load_optional_setup
 from llm_gateway.errors import (
     LLMModelRoutingError,
     LLMProviderConfigurationError,
@@ -17,10 +18,6 @@ from llm_gateway.errors import (
 from llm_gateway.image_types import GatewayImageRequest, GatewayImageResult
 from llm_gateway.model_registry import ModelRegistryImpl
 from llm_gateway.providers import DeepSeekProvider, OpenAIProvider
-from llm_gateway.runtime_store import (
-    current_store,
-    load_optional_setup,
-)
 from llm_gateway.turn_types import GatewayTurnEvent, GatewayTurnRequest
 
 ProviderHint = Literal["openai", "deepseek"]
@@ -76,8 +73,8 @@ class LLMGatewayImpl:
 
             oauth_resolve = None
             if self._setup.config.provider.auth == "oauth":
+                from common.config.runtime_config import OAuthCredential
                 from llm_gateway.openai_oauth import refresh
-                from llm_gateway.runtime_config import OAuthCredential
 
                 initial = self._setup
                 credential = initial.authentication.credential

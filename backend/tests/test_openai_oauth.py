@@ -13,10 +13,10 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 
+from common.config.runtime_config import RuntimeConfigurationError
+from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway import openai_oauth as oauth
 from llm_gateway.catalog import model_choices, validate_models
-from llm_gateway.runtime_config import RuntimeConfigurationError
-from llm_gateway.runtime_store import RuntimeConfigStore
 from llm_gateway.setup_cli import SetupConsole, main
 from tests.fakes.llm_runtime import oauth_config, oauth_credential, runtime_state
 
@@ -347,7 +347,7 @@ async def test_refresh_never_overwrites_switched_identity(tmp_path, change):
 
 
 async def test_refresh_cancel_releases_lock_and_does_not_save(tmp_path, monkeypatch):
-    monkeypatch.setattr("llm_gateway.runtime_store._OAUTH_REFRESH_TIMEOUT", 0.03)
+    monkeypatch.setattr("common.config.runtime_store._OAUTH_REFRESH_TIMEOUT", 0.03)
     store, ready = RuntimeConfigStore(tmp_path), asyncio.Event()
     initial, config = oauth_credential(expires_at=1), oauth_config()
     store.save(config, initial, {})

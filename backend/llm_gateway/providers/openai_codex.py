@@ -18,6 +18,7 @@ import httpx
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
+from common.config.runtime_config import OAuthCredential
 from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
 from common.observability import get_log_context
 from llm_gateway._diagnostics import _Diagnostic, _request_diagnostic
@@ -25,7 +26,6 @@ from llm_gateway.error_classification import ClassifiedGatewayError
 from llm_gateway.errors import LLMModelRoutingError, LLMProviderFailure
 from llm_gateway.providers.anthropic_provider import _bounded_bytes, _classification
 from llm_gateway.providers.openai_codex_stream import CodexStream, sse_events
-from llm_gateway.runtime_config import OAuthCredential
 from llm_gateway.structured_generation import (
     with_json_object_instruction,
     with_json_schema_instruction,

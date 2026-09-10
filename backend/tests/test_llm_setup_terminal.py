@@ -190,7 +190,7 @@ def test_current_config_summary_is_read_only_and_never_reads_credentials(
 ):
     import json
 
-    from llm_gateway.runtime_store import RuntimeConfigStore
+    from common.config.runtime_store import RuntimeConfigStore
     from llm_gateway.setup_cli import _show_current_config
     from llm_gateway.setup_service import SetupService
     from tests.fakes.llm_runtime import oauth_config, runtime_state

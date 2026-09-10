@@ -8,7 +8,7 @@ import pytest
 from pydantic import SecretStr
 
 from common.config.loader import get_settings
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     ApiKeyCredential,
     OAuthCredential,
     RuntimeConfig,
@@ -16,7 +16,7 @@ from llm_gateway.runtime_config import (
     RuntimeModels,
     RuntimeProvider,
 )
-from llm_gateway.runtime_store import RuntimeConfigStore, parse_config
+from common.config.runtime_store import RuntimeConfigStore, parse_config
 
 
 def selection():

@@ -72,7 +72,7 @@ class SetupWiringTests(unittest.TestCase):
                 "--no-env-file",
                 "python",
                 "-m",
-                "common.config.cli",
+                "configuration_cli",
                 "setup",
                 "--help",
             ],

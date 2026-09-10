@@ -10,11 +10,11 @@ import httpx
 import pytest
 
 from common.config.loader import Settings
+from common.config.runtime_store import RuntimeConfigStore
 from common.observability import bind_log_context, get_log_context
 from llm_gateway.errors import LLMModelRoutingError, LLMProviderFailure
 from llm_gateway.gateway import LLMGatewayImpl
 from llm_gateway.providers.openai_codex import RESPONSES_URL, OpenAICodexProvider
-from llm_gateway.runtime_store import RuntimeConfigStore
 from llm_gateway.turn_types import GatewayTurnRequest
 from tests.fakes.llm_runtime import oauth_config, oauth_credential
 from tests.test_openai_oauth import Body
@@ -706,9 +706,12 @@ async def test_sse_limits_and_usage_validation(monkeypatch, fault):
 
 
 async def test_oauth_never_selects_api_models_or_images(tmp_path):
+    from common.config.runtime_config import (
+        ResolvedCredential,
+        RuntimeConfigurationError,
+    )
+    from common.config.runtime_store import RuntimeState
     from llm_gateway.image_types import GatewayImageRequest
-    from llm_gateway.runtime_config import ResolvedCredential, RuntimeConfigurationError
-    from llm_gateway.runtime_store import RuntimeState
     from llm_gateway.setup_bindings import create_image_provider, create_provider
 
     state = RuntimeState(
@@ -787,8 +790,8 @@ def test_cli_default_oauth_binding_verifies_codex_before_save(
 
 
 async def test_original_gateway_stream_early_close_closes_oauth_client(monkeypatch):
-    from llm_gateway.runtime_config import ResolvedCredential
-    from llm_gateway.runtime_store import RuntimeState
+    from common.config.runtime_config import ResolvedCredential
+    from common.config.runtime_store import RuntimeState
 
     class Waiting(Body):
         async def __aiter__(self):

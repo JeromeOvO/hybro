@@ -16,13 +16,13 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from pydantic import SecretStr
 
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     ApiKeyCredential,
     ResolvedCredential,
     RuntimeConfig,
     RuntimeProvider,
 )
-from llm_gateway.runtime_store import RuntimeConfigStore
+from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway.setup_cli import SetupConsole, _terminal_console, main
 from llm_gateway.setup_service import ModelChoices, SetupError
 from llm_gateway.setup_terminal import SetupOption
@@ -736,8 +736,8 @@ import sys
 import time
 from pathlib import Path
 from pydantic import SecretStr
-from llm_gateway.runtime_config import ApiKeyCredential, RuntimeConfig
-from llm_gateway.runtime_store import RuntimeConfigStore
+from common.config.runtime_config import ApiKeyCredential, RuntimeConfig
+from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway.setup_cli import SetupConsole, main
 from llm_gateway.setup_service import ModelChoices
 
@@ -844,7 +844,7 @@ def test_real_sigint_respects_commit_boundary(tmp_path: Path, stage: str) -> Non
             state.authentication.credential.api_key.get_secret_value()
             == "fixture-new-key"
         )
-        assert "Saved config.json/auth source." in stdout
+        assert "Saved config.json and auth.json." in stdout
         assert "canceled" not in stdout + stderr
     else:
         assert state.config.models.text == "fixture-old"

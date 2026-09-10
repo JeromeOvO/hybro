@@ -14,11 +14,11 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
-from urllib.parse import urlsplit
 
-from pydantic import AnyHttpUrl, SecretStr
+from pydantic import SecretStr
 
-from llm_gateway.runtime_config import (
+from common.config.loader import validate_openai_base_url
+from common.config.runtime_config import (
     ApiKeyCredential,
     OAuthCredential,
     ResolvedCredential,
@@ -28,7 +28,7 @@ from llm_gateway.runtime_config import (
     StoredCredential,
     resolve_credential,
 )
-from llm_gateway.runtime_store import RuntimeConfigStore
+from common.config.runtime_store import RuntimeConfigStore
 
 
 class SetupError(ValueError):
@@ -73,30 +73,12 @@ class SetupResult:
 
 
 def _openai_base_url(value: str | None) -> str | None:
-    if not value:
-        return None
     try:
-        if "\\" in value:
-            raise ValueError
-        parsed = urlsplit(value)
-        validated = AnyHttpUrl(value)
-        if (
-            not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or validated.username is not None
-            or validated.password is not None
-            or any(
-                char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value
-            )
-        ):
-            raise ValueError
+        return validate_openai_base_url(value)
     except ValueError:
         raise SetupError(
             "Invalid OPENAI_BASE_URL; use an HTTP(S) URL with a hostname and no userinfo."
         ) from None
-    # Preserve the deployment's exact path; no DNS/network probe or URL rewrite.
-    return value
 
 
 class SetupService:

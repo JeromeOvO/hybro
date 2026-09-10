@@ -2,8 +2,8 @@
 
 import pytest
 
-from llm_gateway.runtime_config import RuntimeConfigurationError
-from llm_gateway.runtime_store import runtime_home
+from common.config.runtime_config import RuntimeConfigurationError
+from common.config.runtime_store import runtime_home
 
 
 def test_runtime_home_defaults_to_user_directory(tmp_path):

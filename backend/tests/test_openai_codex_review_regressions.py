@@ -14,13 +14,13 @@ from openai.types.responses.response_output_message_param import (
 from pydantic import TypeAdapter
 
 from common.config.loader import Settings
+from common.config.runtime_config import ResolvedCredential, RuntimeConfigurationError
+from common.config.runtime_store import RuntimeConfigStore, RuntimeState
 from common.observability import bind_log_context
 from llm_gateway.config import LLMGatewayConfig
 from llm_gateway.errors import LLMProviderFailure
 from llm_gateway.gateway import LLMGatewayImpl
 from llm_gateway.model_registry import ModelRegistryImpl
-from llm_gateway.runtime_config import ResolvedCredential, RuntimeConfigurationError
-from llm_gateway.runtime_store import RuntimeConfigStore, RuntimeState
 from tests.fakes.llm_runtime import oauth_config, oauth_credential, runtime_state
 from tests.test_openai_codex_provider import (
     provider,

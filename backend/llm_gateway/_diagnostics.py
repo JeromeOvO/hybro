@@ -46,6 +46,50 @@ _HINTS = {
     "local_validation": "Check local model and runtime capability configuration.",
     "unknown": "Check provider availability and local adapter compatibility.",
 }
+# Provider/transport SDK failures are identified by class identity. This module
+# must not import those SDKs: provider packages stay under llm_gateway/providers.
+_HTTPX_ROOT = frozenset({"httpx"})
+_OPENAI_ROOT = frozenset({"openai"})
+_HTTPX_TIMEOUT_NAMES = frozenset(
+    {
+        "TimeoutException",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+    }
+)
+_HTTPX_TRANSPORT_NAMES = frozenset(
+    {
+        "TransportError",
+        "NetworkError",
+        "ConnectError",
+        "ReadError",
+        "WriteError",
+        "CloseError",
+        "ProtocolError",
+        "LocalProtocolError",
+        "RemoteProtocolError",
+        "ProxyError",
+        "UnsupportedProtocol",
+        "DecodingError",
+        "TooManyRedirects",
+    }
+)
+_OPENAI_TIMEOUT_NAMES = frozenset({"APITimeoutError"})
+_OPENAI_CONNECTION_NAMES = frozenset({"APIConnectionError"})
+
+
+def _matches_sdk_error(
+    exc: BaseException, names: frozenset[str], roots: frozenset[str]
+) -> bool:
+    return any(
+        getattr(cls, "__name__", "") in names
+        and (getattr(cls, "__module__", "") or "").split(".", 1)[0] in roots
+        for cls in type(exc).__mro__
+    )
+
+
 _PARAMETERS = frozenset(
     {
         "input",
@@ -230,7 +274,6 @@ def _message_facts(
 def _exception_diagnostic(exc: Exception) -> _Diagnostic:
     import json
 
-    import httpx
     from jsonschema.exceptions import SchemaError, ValidationError
     from pydantic import ValidationError as ModelValidationError
 
@@ -240,9 +283,11 @@ def _exception_diagnostic(exc: Exception) -> _Diagnostic:
         return exc._diagnostic or _Diagnostic(
             "verification", exc.classification.error_class
         )
-    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+    if isinstance(exc, TimeoutError) or _matches_sdk_error(
+        exc, _HTTPX_TIMEOUT_NAMES, _HTTPX_ROOT
+    ):
         return _Diagnostic("verification", "timeout")
-    if isinstance(exc, httpx.TransportError):
+    if _matches_sdk_error(exc, _HTTPX_TRANSPORT_NAMES, _HTTPX_ROOT):
         return _Diagnostic("verification", "network")
     if isinstance(exc, json.JSONDecodeError):
         return _Diagnostic("verification", "bad_json")
@@ -254,10 +299,8 @@ def _exception_diagnostic(exc: Exception) -> _Diagnostic:
     if type(status) is int and 100 <= status <= 599:
         return _http_diagnostic("verification", status, getattr(exc, "code", None))
     # OpenAI wraps transport failures without exposing a numeric status.
-    from openai import APIConnectionError, APITimeoutError
-
-    if isinstance(exc, APITimeoutError):
+    if _matches_sdk_error(exc, _OPENAI_TIMEOUT_NAMES, _OPENAI_ROOT):
         return _Diagnostic("verification", "timeout")
-    if isinstance(exc, APIConnectionError):
+    if _matches_sdk_error(exc, _OPENAI_CONNECTION_NAMES, _OPENAI_ROOT):
         return _Diagnostic("verification", "network")
     return _Diagnostic("verification", "unknown")

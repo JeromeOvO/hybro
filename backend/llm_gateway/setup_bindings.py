@@ -3,17 +3,17 @@
 import asyncio
 from typing import TYPE_CHECKING
 
-from llm_gateway.catalog import validate_models
-from llm_gateway.providers import AnthropicProvider, DeepSeekProvider, OpenAIProvider
-from llm_gateway.providers.openai_codex import CredentialResolver, OpenAICodexProvider
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     ApiKeyCredential,
     OAuthCredential,
     ResolvedCredential,
     RuntimeConfig,
     RuntimeConfigurationError,
 )
-from llm_gateway.runtime_store import RuntimeState
+from common.config.runtime_store import RuntimeState
+from llm_gateway.catalog import validate_models
+from llm_gateway.providers import AnthropicProvider, DeepSeekProvider, OpenAIProvider
+from llm_gateway.providers.openai_codex import CredentialResolver, OpenAICodexProvider
 from llm_gateway.setup_service import _openai_base_url
 
 if TYPE_CHECKING:

@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from llm_gateway.runtime_config import RuntimeConfigurationError
-from llm_gateway.runtime_store import RuntimeConfigStore, prepare_setup_directory
+from common.config.runtime_config import RuntimeConfigurationError
+from common.config.runtime_store import RuntimeConfigStore, prepare_setup_directory
 from llm_gateway.setup_cli import SetupConsole, main
 from llm_gateway.setup_service import ModelChoices
 

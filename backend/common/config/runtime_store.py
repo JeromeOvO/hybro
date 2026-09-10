@@ -20,11 +20,10 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from pydantic import ValidationError
 
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     CREDENTIAL_ADAPTER,
     ApiKeyCredential,
     OAuthCredential,
@@ -135,15 +134,6 @@ def prepare_setup_directory(home: Path) -> bool:
 def current_store() -> RuntimeConfigStore:
     """Central process-location boundary shared by loaders and OAuth refresh."""
     return RuntimeConfigStore(runtime_home(os.environ))
-
-
-def load_optional_setup(settings_obj: Any) -> RuntimeState | None:
-    """Load required setup. Runtime never resolves Provider keys from environment."""
-    state = current_store().load({})
-    from llm_gateway.catalog import validate_models
-
-    validate_models(state.config)
-    return state
 
 
 class _ExpectedStored(Enum):

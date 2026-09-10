@@ -39,6 +39,14 @@
       "inspection"
     ]
   },
+  "llm_proxy": {
+    "api_key": false,
+    "auth": "internal-token-route-level",
+    "cors": "default",
+    "tags": [
+      "internal_llm"
+    ]
+  },
   "room": {
     "api_key": false,
     "auth": "clerk-route-level",

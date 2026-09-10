@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     ApiKeyCredential,
     OAuthCredential,
     ProviderId,
@@ -18,7 +18,7 @@ from llm_gateway.runtime_config import (
     RuntimeConfigurationError,
     resolve_credential,
 )
-from llm_gateway.runtime_store import (
+from common.config.runtime_store import (
     RuntimeConfigStore,
     parse_config,
     parse_credential,

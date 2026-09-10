@@ -21,13 +21,13 @@ from typing import TextIO
 
 from pydantic import SecretStr, ValidationError
 
-from llm_gateway.runtime_config import (
+from common.config.runtime_config import (
     RuntimeConfig,
     RuntimeConfigurationError,
     RuntimeModels,
     RuntimeProvider,
 )
-from llm_gateway.runtime_store import (
+from common.config.runtime_store import (
     RuntimeConfigStore,
     parse_config,
     prepare_setup_directory,

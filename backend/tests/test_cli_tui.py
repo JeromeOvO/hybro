@@ -255,7 +255,7 @@ def test_small_terminal_scrolls_model_list_without_wrapping(monkeypatch):
     ],
 )
 def test_status_query_is_read_only_bounded_and_ignores_dotenv(monkeypatch, payload):
-    from common.config import cli
+    import configuration_cli as cli
 
     run = Mock(return_value=Mock(stdout=payload))
     monkeypatch.setattr(cli.subprocess, "run", run)
@@ -272,7 +272,7 @@ def test_status_query_is_read_only_bounded_and_ignores_dotenv(monkeypatch, paylo
 
 
 def test_single_container_logs_do_not_include_other_replicas(monkeypatch):
-    from common.config import cli
+    import configuration_cli as cli
 
     run = Mock(return_value=Mock(returncode=130))
     monkeypatch.setattr(cli.subprocess, "run", run)

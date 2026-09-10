@@ -22,8 +22,8 @@ from common.config.loader import (
     FrontendSettings,
     Settings,
 )
-from llm_gateway.runtime_config import RuntimeConfigurationError, resolve_credential
-from llm_gateway.runtime_store import (
+from common.config.runtime_config import RuntimeConfigurationError, resolve_credential
+from common.config.runtime_store import (
     SERVICE_KEYS,
     RuntimeConfigStore,
     _auth_object,
@@ -33,7 +33,7 @@ from llm_gateway.runtime_store import (
     runtime_home,
 )
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class Parser(argparse.ArgumentParser):
@@ -392,7 +392,7 @@ def main(arguments: list[str] | None = None) -> int:
                 return setup_cli.main(arguments)
             if arguments:
                 raise RuntimeConfigurationError("hybro tui does not accept arguments.")
-            return cli_tui.main()
+            return cli_tui.main(status=service_status)
         handler = {"start": _start, "up": _start, "logs": _logs}.get(command)
         if handler:
             return handler(arguments)

@@ -7,9 +7,9 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import replace
 
+from common.config.runtime_config import OAuthCredential, RuntimeConfigurationError
+from common.config.runtime_store import prepare_setup_directory
 from llm_gateway.openai_oauth import REFRESH_MARGIN
-from llm_gateway.runtime_config import OAuthCredential, RuntimeConfigurationError
-from llm_gateway.runtime_store import prepare_setup_directory
 from llm_gateway.setup_cli import (
     SetupConsole,
     _parser,
