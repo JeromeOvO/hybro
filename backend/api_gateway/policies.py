@@ -20,6 +20,9 @@ ROUTE_POLICIES: dict[str, RoutePolicy] = {
     "files": RoutePolicy(auth="clerk-route-level", tags=("files",)),
     "hitl": RoutePolicy(auth="clerk-route-level", tags=("hitl",)),
     "inspection": RoutePolicy(auth="clerk-global", tags=("inspection",)),
+    # Bundled Agents authenticate with the scoped internal inference token, never
+    # a Clerk session or a Provider credential.
+    "llm_proxy": RoutePolicy(auth="internal-token-route-level", tags=("internal_llm",)),
     "room": RoutePolicy(auth="clerk-route-level", tags=("room",)),
     "sse": RoutePolicy(auth="query-token-supported", tags=("sse",)),
     "webhook": RoutePolicy(auth="bearer-token-route-level", tags=("webhooks",)),

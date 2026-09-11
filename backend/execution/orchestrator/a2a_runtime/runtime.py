@@ -1262,6 +1262,27 @@ class A2AAgentToolRuntime:
         await self.terminal_finalizer.finalize(persisted)
         return persisted.terminal_result
 
+    async def _renew_dispatch_claim(
+        self, record: AgentCallLedgerRecord
+    ) -> AgentCallLedgerRecord | None:
+        """Renew the in-flight claim against the current durable revision.
+
+        Mid-stream evidence advances the ledger CAS version for every applied
+        observation, so renewal must target the current revision rather than the
+        version this worker dispatched. Only a changed owner (or a vanished
+        record) means the claim is genuinely lost; a version race between the
+        load and the renew is retried a bounded number of times.
+        """
+        for _attempt in range(3):
+            latest = await self.ledger.load_by_record_id(record.call_record_id)
+            if latest is None or latest.claim_owner != self.worker_id:
+                return None
+            renewed = await self._renew_and_verify_epoch(latest)
+            if renewed is not None:
+                return renewed
+            record = latest
+        return None
+
     async def _renew_and_verify_epoch(
         self, record: AgentCallLedgerRecord
     ) -> AgentCallLedgerRecord | None:
@@ -1302,7 +1323,7 @@ class A2AAgentToolRuntime:
                     pass
                 if stop_heartbeat.is_set():
                     break
-                renewed = await self._renew_and_verify_epoch(current_record[0])
+                renewed = await self._renew_dispatch_claim(current_record[0])
                 if renewed is None:
                     break
                 current_record[0] = renewed

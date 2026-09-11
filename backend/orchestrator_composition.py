@@ -112,7 +112,11 @@ from execution.orchestrator.projection import (
     ProjectionOutboxWorker,
     SettlingProjectionDriver,
 )
-from execution.orchestrator.session import DefaultRunFactory, EventCancellationSignal
+from execution.orchestrator.session import (
+    DefaultRunFactory,
+    EventCancellationSignal,
+    interrupted_run_needs_settlement,
+)
 
 logger = get_logger(__name__)
 
@@ -658,6 +662,30 @@ def create_orchestrator_runtime(  # noqa: C901
                         renew_interval_seconds=recovery_renew_interval,
                     )
                     await session_host.signal_run_cancellation(run, command_id)
+                elif interrupted_run_needs_settlement(
+                    run.status, candidate.recovery_claim.owner_id
+                ):
+                    # The process that owned this Run is gone. Resuming work whose
+                    # driver died was rejected by product policy, so settle it as
+                    # failed and let the normal lifecycle projection publish the
+                    # terminal Turn.
+                    if run.tool_catalog is None:
+                        raise RecoverableAdapterError(
+                            "interrupted Run has no tool catalog"
+                        )
+                    await _run_with_recovery_lease(
+                        run_store=run_store,
+                        run_id=run.run_id,
+                        owner_id=recovery_owner,
+                        work=kernel_for_catalog(run.tool_catalog).terminalize(
+                            run.run_id,
+                            status="failed",
+                            reason="interrupted",
+                            lifecycle=emit,
+                        ),
+                        lease_duration=recovery_lease,
+                        renew_interval_seconds=recovery_renew_interval,
+                    )
                 else:
                     # This deterministic root is safe both before and after its
                     # original append; the publisher reads back the same room row.

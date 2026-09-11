@@ -33,6 +33,7 @@ from execution.orchestrator.a2a_runtime.ingress import (
     RejectExternalIngressAuthenticator,
 )
 from execution.orchestrator.a2a_runtime.ledger import (
+    apply_observation,
     ownership_alias_keys,
     transition_call,
 )
@@ -190,6 +191,226 @@ async def test_sync_dispatch_with_fenced_heartbeat_succeeds_past_lease_ttl():
     assert record.state == "completed"
     # State version must have incremented multiple times (at least 5 renewals during the 0.45s run)
     assert record.state_version >= 5
+
+
+@pytest.mark.asyncio
+async def test_renew_retries_when_evidence_lands_between_load_and_renew():
+    """Regression: a CAS bump inside the load->renew window must not cancel."""
+
+    dispatching_started = asyncio.Event()
+
+    class RacingLedger(InMemoryAgentCallLedgerStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.injected = False
+
+        async def renew(
+            self,
+            call_record_id,
+            *,
+            expected_state_version,
+            owner_id,
+            lease_expires_at,
+            renewed_at,
+        ):
+            record = self._records[call_record_id]
+            if (
+                not self.injected
+                and record is not None
+                and record.state == "dispatching"
+                and dispatching_started.is_set()
+            ):
+                self.injected = True
+                # Evidence lands after the caller loaded the record but before
+                # the CAS renew; the loaded revision is now stale.
+                self._records[call_record_id] = record.model_copy(
+                    update={"state_version": record.state_version + 1}
+                )
+            return await super().renew(
+                call_record_id,
+                expected_state_version=expected_state_version,
+                owner_id=owner_id,
+                lease_expires_at=lease_expires_at,
+                renewed_at=renewed_at,
+            )
+
+    ledger = RacingLedger()
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "creation-1", activated_at=NOW)
+    finalizer = TerminalInteractionFinalizer(InMemoryHITLApplicationPort())
+    prep = prepared()
+    prep_reader = InMemoryPreparedInvocationSnapshotReader()
+    prep_reader.put(prep)
+
+    policy = A2ARuntimePolicy(
+        claim_lease_seconds=0.15,
+        claim_renew_interval_seconds=0.02,
+    )
+
+    class SlowDispatch:
+        async def dispatch(self, command):
+            dispatching_started.set()
+            await asyncio.sleep(0.2)
+            terminal = NormalizedA2AObservation(
+                observation_id="obs-terminal-race",
+                source_kind="direct",
+                source_identity=f"direct:{prep.binding.endpoint_scope_digest}:task-1:terminal:",
+                binding_scope=prep.binding.endpoint_scope_digest,
+                call_record_id=command.call_record_id,
+                event_kind="terminal",
+                observed_at=NOW,
+                task_id="task-1",
+                context_id="ctx-1",
+                agent_id="agent-1",
+                status="completed",
+                content=[{"kind": "text", "text": "generated-output"}],
+                artifact_refs=[],
+            )
+            return A2ADispatchReceipt(
+                outcome="terminal",
+                task_id="task-1",
+                context_id="ctx-1",
+                terminal_observation=terminal,
+            )
+
+    runtime = A2AAgentToolRuntime(
+        ledger=ledger,
+        prepared_reader=prep_reader,
+        checkpoint_reader=SimpleCheckpoints(),
+        authorization=SimpleAuthorization(),
+        room_epochs=epochs,
+        resources=SimpleResources(),
+        dispatch=SlowDispatch(),
+        observations=A2AObservationIngress(
+            inbox=InMemoryObservationInboxStore(),
+            conflicts=InMemoryObservationConflictStore(),
+            ledger=ledger,
+            authenticator=RejectExternalIngressAuthenticator(),
+        ),
+        terminal_finalizer=finalizer,
+        policy=policy,
+    )
+
+    inv = invocation()
+    accepted = await runtime.accept(inv)
+    result = await runtime.execute(inv, accepted, signal=NeverCancelled())
+
+    assert isinstance(result, ToolResult)
+    assert result.content == [TextPart(text="generated-output")]
+    record = await ledger.load(inv.run_id, inv.invocation_id)
+    assert record is not None
+    assert record.state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_midstream_evidence_does_not_cancel_fenced_dispatch():
+    """Applied mid-stream evidence must not break lease renewal.
+
+    Regression: Agents that publish ``working`` updates advance the ledger CAS
+    version. The dispatching worker previously renewed with the version it sent,
+    so the first heartbeat tick looked like a lost lease and cancelled the stream.
+    """
+    ledger = InMemoryAgentCallLedgerStore()
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "creation-1", activated_at=NOW)
+    ingress = A2AObservationIngress(
+        inbox=InMemoryObservationInboxStore(),
+        conflicts=InMemoryObservationConflictStore(),
+        ledger=ledger,
+        authenticator=RejectExternalIngressAuthenticator(),
+    )
+    finalizer = TerminalInteractionFinalizer(InMemoryHITLApplicationPort())
+    prep = prepared()
+    prep_reader = InMemoryPreparedInvocationSnapshotReader()
+    prep_reader.put(prep)
+
+    policy = A2ARuntimePolicy(
+        claim_lease_seconds=0.15,
+        claim_renew_interval_seconds=0.02,
+    )
+    cancelled = asyncio.Event()
+    applied: list[str] = []
+
+    def observation(
+        kind: str, observation_id: str, command
+    ) -> NormalizedA2AObservation:
+        return NormalizedA2AObservation(
+            observation_id=observation_id,
+            source_kind="direct",
+            source_identity=(
+                f"direct:{prep.binding.endpoint_scope_digest}:task-1:{kind}:"
+            ),
+            binding_scope=prep.binding.endpoint_scope_digest,
+            call_record_id=command.call_record_id,
+            event_kind=kind,
+            observed_at=NOW,
+            task_id="task-1",
+            context_id="ctx-1",
+            agent_id="agent-1",
+            status=None if kind == "working" else "completed",
+            content=[] if kind == "working" else [{"kind": "text", "text": "x"}],
+            artifact_refs=[],
+        )
+
+    class WorkingAgentDispatch:
+        async def dispatch(self, command):
+            try:
+                for index in range(2):
+                    # A heartbeat tick lands between these applied updates.
+                    await asyncio.sleep(0.05)
+                    current = await ledger.load_by_record_id(command.call_record_id)
+                    update = apply_observation(
+                        current,
+                        observation("working", f"obs-working-{index}", command),
+                        recent_limit=8,
+                    )
+                    await ledger.cas(
+                        update, expected_state_version=current.state_version
+                    )
+                    applied.append(f"obs-working-{index}")
+                # Several more ticks must renew rather than cancel.
+                await asyncio.sleep(0.2)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            terminal = observation("terminal", "obs-terminal-1", command)
+            return A2ADispatchReceipt(
+                outcome="terminal",
+                task_id="task-1",
+                context_id="ctx-1",
+                terminal_observation=terminal.model_copy(
+                    update={
+                        "status": "completed",
+                        "content": [{"kind": "text", "text": "generated-output"}],
+                    }
+                ),
+            )
+
+    runtime = A2AAgentToolRuntime(
+        ledger=ledger,
+        prepared_reader=prep_reader,
+        checkpoint_reader=SimpleCheckpoints(),
+        authorization=SimpleAuthorization(),
+        room_epochs=epochs,
+        resources=SimpleResources(),
+        dispatch=WorkingAgentDispatch(),
+        observations=ingress,
+        terminal_finalizer=finalizer,
+        policy=policy,
+    )
+
+    inv = invocation()
+    accepted = await runtime.accept(inv)
+    result = await runtime.execute(inv, accepted, signal=NeverCancelled())
+
+    assert not cancelled.is_set()
+    assert isinstance(result, ToolResult)
+    assert result.content == [TextPart(text="generated-output")]
+    record = await ledger.load(inv.run_id, inv.invocation_id)
+    assert record is not None
+    assert record.state == "completed"
+    assert applied == ["obs-working-0", "obs-working-1"]
+    assert set(applied).issubset(set(record.recent_observation_ids))
 
 
 @pytest.mark.asyncio

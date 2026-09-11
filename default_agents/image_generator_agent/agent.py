@@ -7,9 +7,7 @@ maximum reliability - the image generation model is called directly.
 import base64
 import io
 import logging
-import os
 import re
-from pathlib import Path
 
 from uuid import uuid4
 
@@ -17,22 +15,7 @@ from in_memory_cache import InMemoryCache
 from openai import OpenAI
 from pydantic import BaseModel
 
-try:
-    from load_repo_env import load_repo_env
-except ImportError:  # Host run: helper lives in default_agents/
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    try:
-        from load_repo_env import load_repo_env
-    except ImportError:  # Wheel install: helper is not packaged with the agent.
-        from dotenv import load_dotenv
-
-        def load_repo_env(*, start=None):
-            load_dotenv()
-
-
-load_repo_env(start=Path(__file__))
+from runtime_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +30,10 @@ _CURRENT_REQUEST_PATTERN = re.compile(
 
 def _generate_image_bytes(prompt: str, ref_image_bytes: bytes | None) -> bytes:
     """Generate (or edit) an image with the OpenAI Images API and return PNG bytes."""
-    client = OpenAI()  # reads OPENAI_API_KEY from env
-    model = os.getenv("IMAGE_MODEL", "gpt-image-1")
-    size = os.getenv("IMAGE_SIZE", "1024x1024")
+    config = get_config()
+    client = OpenAI(api_key=config.token, base_url=config.base_url)
+    model = config.image_model
+    size = config.image_size
 
     if ref_image_bytes:
         ref = io.BytesIO(ref_image_bytes)

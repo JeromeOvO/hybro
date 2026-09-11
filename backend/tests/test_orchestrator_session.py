@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 
@@ -21,6 +22,7 @@ from execution.orchestrator.session import (
     DefaultRunFactory,
     RoomAgentSession,
     SessionConflict,
+    execution_owner_id,
 )
 from tests._orchestrator_helpers import (
     NOW,
@@ -245,6 +247,25 @@ async def test_shutdown_immediately_reschedules_interrupted_tool_and_hitl_contin
             observation_started.set()
             await asyncio.Event().wait()
 
+        async def terminalize(self, run_id, *, status, reason, lifecycle=None, **kw):
+            del kw
+            run = await store.load(run_id)
+            candidate = run.model_copy(
+                update={
+                    "status": status,
+                    "terminal_reason": reason,
+                    "state_version": run.state_version + 1,
+                }
+            )
+            saved = await store.cas_mutate(
+                candidate,
+                expected_state_version=run.state_version,
+                command_id=f"terminalize:{status}:{run.state_version}",
+            )
+            if lifecycle is not None:
+                await lifecycle("run_failed", saved.run, {"status": status})
+            return KernelRunResult("failed", saved.run)
+
     session = RoomAgentSession(
         config=session_config(),
         kernel=PhaseBlockingKernel(),
@@ -276,10 +297,151 @@ async def test_shutdown_immediately_reschedules_interrupted_tool_and_hitl_contin
     with pytest.raises(asyncio.CancelledError):
         await observation_task
 
+    # Interrupted executions are failed, never handed back to recovery.
     saved = next(iter(store.runs.values()))
-    assert saved.status == phase_status
-    assert saved.recovery_claim.next_attempt_at == NOW
-    assert saved.recovery_claim.next_attempt_at < saved.budget.deadline_at
+    assert saved.status == "failed"
+    assert saved.terminal_reason == "interrupted"
+    assert saved.recovery_claim.owner_id is None
+    assert saved.recovery_claim.next_attempt_at is None
+
+
+async def test_live_execution_publishes_and_releases_a_driver_lease():
+    """A running driver owns the Run's recovery claim so death is detectable."""
+    from execution.orchestrator.session import (
+        _EXECUTION_LEASE_SECONDS,
+        execution_owner_id,
+    )
+
+    store = InMemoryOrchestratorRunStore()
+    started = asyncio.Event()
+    run_id_holder: list[str] = []
+
+    class BlockingKernel:
+        async def run(self, run_id, *, signal, lifecycle=None):
+            del signal, lifecycle
+            run_id_holder.append(run_id)
+            started.set()
+            return await asyncio.Event().wait()
+
+        async def terminalize(self, run_id, *, status, reason, lifecycle=None, **kw):
+            del kw
+            run = await store.load(run_id)
+            candidate = run.model_copy(
+                update={
+                    "status": status,
+                    "terminal_reason": reason,
+                    "state_version": run.state_version + 1,
+                }
+            )
+            saved = await store.cas_mutate(
+                candidate,
+                expected_state_version=run.state_version,
+                command_id=f"terminalize:{status}:{run.state_version}",
+            )
+            return KernelRunResult("failed", saved.run)
+
+    config = session_config()
+    session = RoomAgentSession(
+        config=config,
+        kernel=BlockingKernel(),
+        run_store=store,
+        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        clock=FixedClock(),
+    )
+    prompt_task = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-lease")
+    )
+    await started.wait()
+
+    owner = execution_owner_id(config.session_id)
+    leased = next(iter(store.runs.values()))
+    assert leased.recovery_claim.owner_id == owner
+    assert leased.recovery_claim.lease_expires_at == NOW + timedelta(
+        seconds=_EXECUTION_LEASE_SECONDS
+    )
+
+    await session.shutdown()
+    with pytest.raises(asyncio.CancelledError):
+        await prompt_task
+
+    released = next(iter(store.runs.values()))
+    assert released.status == "failed"
+    assert released.terminal_reason == "interrupted"
+    assert released.recovery_claim.owner_id is None
+    assert released.recovery_claim.lease_expires_at is None
+
+
+def test_interrupted_run_settlement_truth_table():
+    """Only an active Run whose driver lease lapsed is failed as interrupted."""
+    from execution.orchestrator.session import interrupted_run_needs_settlement
+
+    driver = execution_owner_id("room:room-1:epoch:1")
+    assert interrupted_run_needs_settlement("running", driver)
+    assert interrupted_run_needs_settlement("queued", driver)
+    assert interrupted_run_needs_settlement("finalizing", driver)
+    # A released lease is an intentional wake, not an interruption.
+    assert not interrupted_run_needs_settlement("running", None)
+    # Recovery workers own their own leases and must keep re-driving.
+    assert not interrupted_run_needs_settlement("running", "recovery-worker:abc")
+    # Suspended Runs wait for an answer, cancellation, or their deadline.
+    assert not interrupted_run_needs_settlement("waiting_external", driver)
+    assert not interrupted_run_needs_settlement("awaiting_user", driver)
+    assert not interrupted_run_needs_settlement("canceling", driver)
+
+
+async def test_abandoned_driver_lease_is_detectable_as_interrupted():
+    """A driver that dies without releasing leaves an expired, identifiable lease."""
+    from execution.orchestrator.session import interrupted_execution_owner
+
+    store = InMemoryOrchestratorRunStore()
+    started = asyncio.Event()
+
+    class BlockingKernel:
+        async def run(self, run_id, *, signal, lifecycle=None):
+            del run_id, signal, lifecycle
+            started.set()
+            return await asyncio.Event().wait()
+
+    session = RoomAgentSession(
+        config=session_config(),
+        kernel=BlockingKernel(),
+        run_store=store,
+        run_factory=DefaultRunFactory(clock=FixedClock(), id_factory=FixedIDs()),
+        clock=FixedClock(),
+    )
+    prompt_task = asyncio.create_task(
+        session.prompt(user_message(), client_request_id="request-abandoned")
+    )
+    await started.wait()
+    abandoned = next(iter(store.runs.values()))
+    lease = abandoned.recovery_claim.lease_expires_at
+    assert lease is not None
+    assert interrupted_execution_owner(abandoned.recovery_claim.owner_id)
+
+    # While the lease is fresh, recovery may not steal the Run.
+    blocked = await store.claim_recovery(
+        abandoned.run_id,
+        expected_state_version=abandoned.state_version,
+        owner_id="recovery-worker",
+        lease_expires_at=NOW + timedelta(seconds=120),
+        claimed_at=NOW,
+    )
+    assert blocked.outcome == "conflict"
+
+    # Simulate process death: nobody releases, the lease simply lapses.
+    later = lease + timedelta(seconds=1)
+    claimed = await store.claim_recovery(
+        abandoned.run_id,
+        expected_state_version=abandoned.state_version,
+        owner_id="recovery-worker",
+        lease_expires_at=later + timedelta(seconds=60),
+        claimed_at=later,
+    )
+    assert claimed.outcome == "accepted"
+
+    prompt_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await prompt_task
 
 
 async def test_session_events_carry_delivery_correlation_fields():

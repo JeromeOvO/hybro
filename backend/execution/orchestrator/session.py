@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -24,6 +26,44 @@ from .models import (
     UserMessage,
 )
 from .ports import OrchestratorRunStore, ToolCatalog
+
+# Live execution lease. The in-process driver owns the Run's recovery claim while
+# it executes and renews it here, so a driver that dies (deploy, crash, SIGKILL)
+# leaves an expired owner behind: recovery terminalizes that Run as interrupted
+# instead of resuming work the dead process was responsible for.
+SESSION_EXECUTION_OWNER_PREFIX = "session:"
+_EXECUTION_LEASE_SECONDS = 60.0
+_EXECUTION_LEASE_RENEW_SECONDS = 20.0
+_TERMINAL_RUN_STATUSES = frozenset(
+    {"completed", "failed", "canceled", "budget_exhausted"}
+)
+
+
+def execution_owner_id(session_id: str) -> str:
+    """Return the lease owner used by an in-process Run driver."""
+    return f"{SESSION_EXECUTION_OWNER_PREFIX}{session_id}"
+
+
+def interrupted_execution_owner(owner_id: str | None) -> bool:
+    """True when an expired lease was held by an in-process Run driver."""
+    return bool(owner_id) and owner_id.startswith(SESSION_EXECUTION_OWNER_PREFIX)
+
+
+_ACTIVE_EXECUTION_STATUSES = frozenset({"queued", "running", "finalizing"})
+
+
+def interrupted_run_needs_settlement(status: str, owner_id: str | None) -> bool:
+    """True when recovery must fail a Run whose driver died.
+
+    Suspended and canceling Runs keep their existing recovery paths; only an
+    actively executing Run with a lapsed driver lease is interrupted.
+    """
+    return status in _ACTIVE_EXECUTION_STATUSES and interrupted_execution_owner(
+        owner_id
+    )
+
+
+logger = logging.getLogger(__name__)
 
 
 class SessionConflict(RuntimeError):
@@ -165,6 +205,82 @@ class RoomAgentSession:
         self._sequence = 0
         self._idle = asyncio.Event()
         self._idle.set()
+        self._lease_owner: str | None = None
+        self._lease_task: asyncio.Task[None] | None = None
+
+    async def _acquire_execution_lease(self) -> None:
+        """Publish a live driver lease before executing a Run."""
+        if self._run_id is None or self._lease_owner is not None:
+            return
+        run = await self.run_store.load(self._run_id)
+        if run is None or run.status in _TERMINAL_RUN_STATUSES:
+            return
+        now = self.clock.now()
+        owner = execution_owner_id(self.config.session_id)
+        claimed = await self.run_store.claim_recovery(
+            run.run_id,
+            expected_state_version=run.state_version,
+            owner_id=owner,
+            lease_expires_at=now + timedelta(seconds=_EXECUTION_LEASE_SECONDS),
+            claimed_at=now,
+            allow_scheduled=True,
+        )
+        if claimed.outcome not in {"accepted", "replayed"}:
+            # Another driver still holds a live lease; leave its claim alone.
+            return
+        self._lease_owner = owner
+        self._lease_task = asyncio.create_task(self._renew_execution_lease())
+
+    async def _renew_execution_lease(self) -> None:
+        owner = self._lease_owner
+        while owner is not None and self._run_id is not None:
+            await asyncio.sleep(_EXECUTION_LEASE_RENEW_SECONDS)
+            run = await self.run_store.load(self._run_id)
+            if (
+                run is None
+                or run.status in _TERMINAL_RUN_STATUSES
+                or run.recovery_claim.owner_id != owner
+            ):
+                return
+            await self.run_store.renew_recovery(
+                run.run_id,
+                expected_state_version=run.state_version,
+                owner_id=owner,
+                lease_expires_at=self.clock.now()
+                + timedelta(seconds=_EXECUTION_LEASE_SECONDS),
+            )
+
+    async def _release_execution_lease(self) -> None:
+        """Hand the claim back with the next attempt this Run still needs."""
+        task, self._lease_task = self._lease_task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        owner, self._lease_owner = self._lease_owner, None
+        if owner is None or self._run_id is None:
+            return
+        run = await self.run_store.load(self._run_id)
+        if run is None or run.recovery_claim.owner_id != owner:
+            return
+        await self.run_store.release_recovery(
+            run.run_id,
+            expected_state_version=run.state_version,
+            owner_id=owner,
+            next_attempt_at=self._next_recovery_attempt(run),
+        )
+
+    @staticmethod
+    def _next_recovery_attempt(run: OrchestratorRunState) -> datetime | None:
+        """Restore the watchdog this Run needs once the driver stops owning it.
+
+        Terminal Runs need no recovery. Everything else keeps the profile
+        deadline watchdog; a typed recoverable failure moves that boundary
+        earlier afterwards through ``schedule_run_recovery``.
+        """
+        if run.status in _TERMINAL_RUN_STATUSES:
+            return None
+        return run.budget.deadline_at
 
     def owns_run(self, run_id: str) -> bool:
         return self._run_id == run_id
@@ -237,6 +353,7 @@ class RoomAgentSession:
         if self._task is not None and not self._task.done():
             raise SessionConflict("Run is currently executing")
         self._idle.clear()
+        await self._acquire_execution_lease()
         self._task = asyncio.create_task(
             self.kernel.observe_tool(
                 self._run_id,
@@ -299,11 +416,13 @@ class RoomAgentSession:
         await self._idle.wait()
 
     async def shutdown(self) -> None:
-        """Cancel the in-process task without persisting a terminal state.
+        """Fail the in-flight Run; an interrupted execution is never resumed.
 
-        Graceful-shutdown surface: the Run stays non-terminal and is re-entered
-        by recovery workers later. Unlike ``abort``, this never routes through
-        the kernel's terminal settlement.
+        Graceful-shutdown surface: the drivers this process owns are settled as
+        ``failed`` with reason ``interrupted`` so the Room sees a terminal Turn
+        instead of waiting for a recovery worker. If the process is killed
+        before this completes, the execution lease expires and recovery applies
+        the same outcome.
         """
         task = self._task
         if task is None or task.done():
@@ -313,7 +432,27 @@ class RoomAgentSession:
             await task
         except asyncio.CancelledError:
             pass
-        await self._reschedule_interrupted_run()
+        await self._terminalize_interrupted_run()
+
+    async def _terminalize_interrupted_run(self) -> None:
+        if self._run_id is not None:
+            run = await self.run_store.load(self._run_id)
+            if run is not None and run.status not in _TERMINAL_RUN_STATUSES:
+                try:
+                    await self.kernel.terminalize(
+                        self._run_id,
+                        status="failed",
+                        reason="interrupted",
+                        lifecycle=self._emit_kernel_event,
+                    )
+                except Exception:
+                    # The lease release below still hands the Run to recovery,
+                    # which retries the same terminal settlement.
+                    logger.warning(
+                        "interrupted Run settlement failed; recovery will retry",
+                        exc_info=True,
+                    )
+        await self._release_execution_lease()
 
     async def schedule_recovery(self, *, next_attempt_at: datetime) -> None:
         """Request an early wake without replacing a recovery worker's claim."""
@@ -323,37 +462,6 @@ class RoomAgentSession:
             self.run_store, self._run_id, next_attempt_at=next_attempt_at
         )
 
-    async def _reschedule_interrupted_run(self) -> None:
-        if self._run_id is None:
-            return
-        for _attempt in range(4):
-            run = await self.run_store.load(self._run_id)
-            if run is None or run.status in {
-                "completed",
-                "failed",
-                "canceled",
-                "budget_exhausted",
-            }:
-                return
-            candidate = run.model_copy(
-                update={
-                    "recovery_claim": RecoveryClaim(next_attempt_at=self.clock.now()),
-                    "state_version": run.state_version + 1,
-                    "updated_at": self.clock.now(),
-                }
-            )
-            stored = await self.run_store.cas_mutate(
-                candidate,
-                expected_state_version=run.state_version,
-                command_id=(
-                    f"shutdown-reschedule:{self.config.session_id}:{run.state_version}"
-                ),
-            )
-            if stored.outcome in {"accepted", "replayed"}:
-                return
-            await asyncio.sleep(0)
-        raise SessionConflict("interrupted Run could not be rescheduled")
-
     def subscribe(self, listener: SessionEventListener):
         return self.lifecycle.subscribe(listener)
 
@@ -361,6 +469,7 @@ class RoomAgentSession:
         if self._run_id is None:
             raise SessionConflict("no active Run")
         self._idle.clear()
+        await self._acquire_execution_lease()
         self._task = asyncio.create_task(
             self.kernel.run(
                 self._run_id,
@@ -375,26 +484,29 @@ class RoomAgentSession:
         task = self._task
         if task is None:
             raise SessionConflict("no active task")
-        result = await task
-        async with self._settlement_lock:
-            if self._settled_task is not task:
-                terminal_type = {
-                    "final_answer": "run_final_answer_ready",
-                    "waiting_external": "run_waiting_external",
-                    "awaiting_user": "run_awaiting_user",
-                    "budget_exhausted": "run_budget_exhausted",
-                    "aborted": "run_canceled",
-                    "failed": "run_failed",
-                }.get(result.outcome)
-                if terminal_type is not None:
-                    await self._emit(terminal_type, result.run, terminal=True)
-                if self._run_id is not None:
-                    run = await self.run_store.load(self._run_id)
-                    if run is not None:
-                        await self._emit("session_idle", run, terminal=True)
-                self._settled_task = task
-                self._idle.set()
-        return result
+        try:
+            result = await task
+            async with self._settlement_lock:
+                if self._settled_task is not task:
+                    terminal_type = {
+                        "final_answer": "run_final_answer_ready",
+                        "waiting_external": "run_waiting_external",
+                        "awaiting_user": "run_awaiting_user",
+                        "budget_exhausted": "run_budget_exhausted",
+                        "aborted": "run_canceled",
+                        "failed": "run_failed",
+                    }.get(result.outcome)
+                    if terminal_type is not None:
+                        await self._emit(terminal_type, result.run, terminal=True)
+                    if self._run_id is not None:
+                        run = await self.run_store.load(self._run_id)
+                        if run is not None:
+                            await self._emit("session_idle", run, terminal=True)
+                    self._settled_task = task
+                    self._idle.set()
+            return result
+        finally:
+            await self._release_execution_lease()
 
     async def _current_run(self) -> OrchestratorRunState:
         if self._run_id is None:

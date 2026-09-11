@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from common.dto import LLMResponse, LLMStructuredResponse, LLMUsage
 from llm_gateway.errors import LLMModelRoutingError
 from llm_gateway.gateway import LLMGatewayImpl
@@ -35,6 +35,7 @@ def test_deepseek_provider_builds_openai_compatible_client():
     client_factory.assert_called_once_with(
         api_key="deepseek-key",
         base_url="https://api.deepseek.com",
+        max_retries=0,
     )
     assert provider._client is client
 
@@ -206,9 +207,13 @@ async def test_deepseek_provider_rejects_embeddings():
 
 
 @pytest.mark.asyncio
-async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_openai():
+async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_openai(
+    tmp_path, monkeypatch
+):
+    from tests.test_llm_gateway_config import _configure
+
+    _configure(tmp_path, monkeypatch, "deepseek", "deepseek-v4-flash")
     settings = Settings(
-        _env_file=None,
         deepseek_api_key="test-deepseek-key",
         deepseek_model_name="deepseek-v4-pro",
         llm_gateway_generation_provider="deepseek",
@@ -216,11 +221,11 @@ async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_opena
     registry = ModelRegistryImpl(settings)
     deepseek = SimpleNamespace(
         generate=AsyncMock(
-            return_value=LLMResponse(content="ok", model="deepseek-v4-pro")
+            return_value=LLMResponse(content="ok", model="deepseek-v4-flash")
         ),
         generate_structured=AsyncMock(
             return_value=LLMStructuredResponse(
-                data={"ok": True}, model="deepseek-v4-pro"
+                data={"ok": True}, model="deepseek-v4-flash"
             )
         ),
         generate_stream=lambda *_args, **_kwargs: _empty_stream(),
@@ -242,7 +247,7 @@ async def test_gateway_routes_all_generation_to_deepseek_and_embeddings_to_opena
 
     assert deepseek.generate.await_count == 4
     assert all(
-        call.kwargs["model"] == "deepseek-v4-pro"
+        call.kwargs["model"] == "deepseek-v4-flash"
         for call in deepseek.generate.await_args_list
     )
     openai.embed.assert_awaited_once_with("hello", model="text-embedding-3-small")

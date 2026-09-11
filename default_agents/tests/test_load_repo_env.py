@@ -1,19 +1,37 @@
-from __future__ import annotations
+"""Agent configuration is a scoped CLI projection, not dotenv discovery."""
 
-import os
-from pathlib import Path
+import json
 
-from load_repo_env import load_repo_env
+import pytest
+
+from runtime_config import get_config
 
 
-def test_load_repo_env_reads_monorepo_root(tmp_path: Path, monkeypatch) -> None:
-    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=from-root\n")
-    agent_dir = tmp_path / "default_agents" / "demo_agent"
-    agent_dir.mkdir(parents=True)
-    marker = agent_dir / "agent.py"
-    marker.write_text("# placeholder\n")
+@pytest.fixture(autouse=True)
+def clear_config_cache():
+    get_config.cache_clear()
+    yield
+    get_config.cache_clear()
 
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    load_repo_env(start=marker)
-    assert os.environ.get("OPENAI_API_KEY") == "from-root"
+
+def test_dotenv_is_not_a_configuration_source(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=fixture-old\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("HYBRO_AGENT_CONFIG", raising=False)
+    with pytest.raises(RuntimeError, match="start through hybro"):
+        get_config()
+
+
+def test_scoped_projection_is_validated_and_token_not_in_repr(monkeypatch):
+    monkeypatch.setenv("HYBRO_AGENT_CONFIG", json.dumps({"base_url": "http://backend:8000/api/v1/internal/llm", "token": "fixture-secret-" * 4, "image_size": "1024x1024"}))
+    config = get_config()
+    assert config.text_model == "gpt-4o-mini"
+    assert "fixture-secret" not in repr(config)
+    assert get_config() is config
+
+
+def test_full_or_invalid_config_is_rejected_without_echo(monkeypatch):
+    monkeypatch.setenv("HYBRO_AGENT_CONFIG", '{"api_key":"private-value"}')
+    with pytest.raises(RuntimeError) as caught:
+        get_config()
+    assert "private-value" not in str(caught.value)

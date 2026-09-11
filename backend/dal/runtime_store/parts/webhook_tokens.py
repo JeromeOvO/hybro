@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 
-from common.config.settings import settings
+from common.config.loader import settings
 
 
 def get_webhook_signing_key() -> bytes:

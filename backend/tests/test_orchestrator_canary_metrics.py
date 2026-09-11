@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from dal.orchestrator.stores import (
     MongoAgentCallLedgerStore,
@@ -211,7 +211,7 @@ async def test_collect_metrics_reads_through_real_mongo_stores():
 
 
 def test_evaluate_canary_thresholds_reports_breaches():
-    settings = Settings(_env_file=None)
+    settings = Settings()
     now = BASE_TIME
     metrics = {
         "runs_by_status_window": {
@@ -236,7 +236,7 @@ def test_evaluate_canary_thresholds_reports_breaches():
 
 
 def test_evaluate_canary_thresholds_is_quiet_when_healthy():
-    settings = Settings(_env_file=None)
+    settings = Settings()
     now = BASE_TIME
     metrics = {
         "runs_by_status_window": {"completed": 100, "failed": 0},
@@ -251,7 +251,7 @@ def test_evaluate_canary_thresholds_is_quiet_when_healthy():
 
 
 def test_canary_settings_defaults():
-    settings = Settings(_env_file=None)
+    settings = Settings()
 
     assert settings.orchestrator_canary_enabled is False
     assert settings.orchestrator_canary_run_failure_rate_max == 0.01
@@ -281,7 +281,7 @@ class _FakeLeader:
 
 @pytest.mark.asyncio
 async def test_canary_job_logs_warning_on_breach(monkeypatch, caplog):
-    monkeypatch.setattr("jobs.orchestrator_workers.settings", Settings(_env_file=None))
+    monkeypatch.setattr("jobs.orchestrator_workers.settings", Settings())
     leader = _FakeLeader()
 
     async def collect() -> dict:

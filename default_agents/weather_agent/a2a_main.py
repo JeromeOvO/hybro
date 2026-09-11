@@ -21,7 +21,6 @@ Input Examples:
 """
 
 import os
-from pathlib import Path
 
 from a2a_adapter import load_adapter, build_agent_card, serve_agent
 
@@ -30,23 +29,6 @@ try:
     from .weather_agent import create_weather_agent
 except ImportError:
     from weather_agent import create_weather_agent
-
-try:
-    from load_repo_env import load_repo_env
-except ImportError:  # Host run: helper lives in default_agents/
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    try:
-        from load_repo_env import load_repo_env
-    except ImportError:  # Wheel install: helper is not packaged with the agent.
-        from dotenv import load_dotenv
-
-        def load_repo_env(*, start=None):
-            load_dotenv()
-
-
-load_repo_env(start=Path(__file__))
 
 # Configuration from environment
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")

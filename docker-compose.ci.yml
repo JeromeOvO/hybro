@@ -1,5 +1,11 @@
 # Docker Compose overlay for CI and automated regression testing.
-# Starts a mock OpenAI-compatible LLM service and points backend and agents to it.
+# Adds an OpenAI-compatible mock LLM service and makes the backend wait for it.
+#
+# The stack is started through the CLI so backend, frontend and Agents keep
+# receiving only validated JSON-derived projections:
+#   ./scripts/hybro start --build --compose-file docker-compose.ci.yml
+# with HYBRO_HOME pointing at the CI runtime directory whose config.json selects
+# `backend.openai_base_url=http://mock-llm:8080/v1`.
 
 services:
   mock-llm:
@@ -16,54 +22,6 @@ services:
     restart: always
 
   backend:
-    environment:
-      - OPENAI_BASE_URL=http://mock-llm:8080/v1
-      - OPENAI_API_KEY=mock-api-key-ci
-      - SUPERVISOR_MODEL=gpt-4o
-      - LEAD_AI_MODEL=gpt-4o
-      - CLASSIFIER_AI_MODEL=gpt-4o-mini
-      - ORCHESTRATOR_FAST_THINKING_LEVEL=
-      - ORCHESTRATOR_ULTIMATE_THINKING_LEVEL=
-      - DEFAULT_AGENT_REGISTRAR_TOKEN=ci-service-registrar-token
     depends_on:
       mock-llm:
-        condition: service_healthy
-
-  weather-agent:
-    environment:
-      - OPENAI_BASE_URL=http://mock-llm:8080/v1
-      - OPENAI_API_KEY=mock-api-key-ci
-    depends_on:
-      mock-llm:
-        condition: service_healthy
-
-  travel-planner-agent:
-    environment:
-      - OPENAI_BASE_URL=http://mock-llm:8080/v1
-      - OPENAI_API_KEY=mock-api-key-ci
-    depends_on:
-      mock-llm:
-        condition: service_healthy
-
-  image-generator-agent:
-    environment:
-      - OPENAI_BASE_URL=http://mock-llm:8080/v1
-      - OPENAI_API_KEY=mock-api-key-ci
-    depends_on:
-      mock-llm:
-        condition: service_healthy
-
-  story-agent:
-    environment:
-      - OPENAI_BASE_URL=http://mock-llm:8080/v1
-      - OPENAI_API_KEY=mock-api-key-ci
-    depends_on:
-      mock-llm:
-        condition: service_healthy
-
-  registrar:
-    environment:
-      - AGENT_REGISTRAR_TOKEN=ci-service-registrar-token
-    depends_on:
-      backend:
         condition: service_healthy

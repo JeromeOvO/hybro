@@ -8,6 +8,7 @@ from api_gateway.routes import (
     files_routes,
     hitl_routes,
     inspection_routes,
+    llm_proxy_routes,
     room_routes,
     sse_routes,
     webhook_routes,
@@ -30,6 +31,7 @@ def build_api_gateway_router() -> APIRouter:
     gateway_router.include_router(agent_group_routes.router, tags=["agent_group"])
     gateway_router.include_router(files_routes.router, tags=["files"])
     gateway_router.include_router(webhook_routes.router, tags=["webhooks"])
+    gateway_router.include_router(llm_proxy_routes.router, tags=["internal_llm"])
 
     return gateway_router
 

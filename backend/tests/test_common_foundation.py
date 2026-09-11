@@ -1153,18 +1153,18 @@ def test_run_state_contract_matches_persisted_values():
     RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
 
 
-def test_settings_class_loads_from_env(monkeypatch):
+def test_settings_class_uses_explicit_values_not_environment(monkeypatch):
     monkeypatch.setenv("MONGODB_DB_NAME", "common_foundation_test_db")
-    from common.config.settings import Settings
+    from common.config.loader import Settings
 
-    settings = Settings()
-
+    assert Settings().mongodb_db_name == "hybro"
+    settings = Settings(mongodb_db_name="common_foundation_test_db")
     assert settings.mongodb_db_name == "common_foundation_test_db"
 
 
 def test_common_settings_package_exports_settings_singleton():
     from common.config import settings as common_settings
-    from common.config.settings import settings as exported_settings
+    from common.config.loader import settings as exported_settings
 
     assert exported_settings is common_settings
 

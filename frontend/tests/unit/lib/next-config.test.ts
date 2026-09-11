@@ -1,23 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import publicConfig from '../../fixtures/public-config.json'
 
-import nextConfig from '../../../next.config'
+ describe('Next API proxy', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.resetModules() })
 
-const originalApiPrefix = process.env.NEXT_PUBLIC_API_PREFIX
-
-describe('Next API proxy', () => {
-  afterEach(() => {
-    if (originalApiPrefix === undefined) {
-      delete process.env.NEXT_PUBLIC_API_PREFIX
-    } else {
-      process.env.NEXT_PUBLIC_API_PREFIX = originalApiPrefix
-    }
-  })
-
-  it('proxies the configured API prefix used by authenticated file downloads', async () => {
-    process.env.NEXT_PUBLIC_API_PREFIX = '/v1/'
-    const rewrites = await nextConfig.rewrites?.()
-
-    expect(rewrites).toEqual([{
+  it('uses the same validated public JSON prefix as file downloads', async () => {
+    vi.stubEnv('HYBRO_FRONTEND_CONFIG', JSON.stringify({ ...publicConfig, api_prefix: '/v1' }))
+    vi.stubEnv('NEXT_PUBLIC_API_PREFIX', '/ignored-legacy')
+    vi.resetModules()
+    const { default: nextConfig } = await import('../../../next.config')
+    expect(await nextConfig.rewrites?.()).toEqual([{
       source: '/v1/:path*',
       destination: 'http://127.0.0.1:8000/v1/:path*',
     }])

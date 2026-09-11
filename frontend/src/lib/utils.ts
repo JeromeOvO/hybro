@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { extendTailwindMerge } from "tailwind-merge"
+import { config } from './config'
 
 /**
  * Custom color tokens from the design system (globals.css).
@@ -39,13 +40,13 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function getApiUrl(endpoint: string): string {
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-  const apiPrefix = process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1';
+  const baseUrl = config.api_base_url;
+  const apiPrefix = config.api_prefix;
   return `${baseUrl}${apiPrefix}/${endpoint}`;
 }
 
 export function getInspectionTimeoutMs(): number {
-  return parseInt(process.env.NEXT_PUBLIC_INSPECTION_TIMEOUT_MS || '300000');
+  return config.inspection_timeout_ms;
 }
 
 /**

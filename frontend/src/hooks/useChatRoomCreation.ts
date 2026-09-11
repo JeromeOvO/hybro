@@ -2,7 +2,10 @@ import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createNewRoom, suggestAgents, SuggestAgentsResponse } from '@/lib/api/room'
 import { getActiveQueryClient } from '@/components/providers/query-provider'
-import { roomHistoryQueryKey } from '@/lib/room-history-query'
+import {
+  optimisticallyUpsertCreatedRoom,
+  roomHistoryQueryKey,
+} from '@/lib/room-history-query'
 import { getAllAgents } from '@/lib/api/agent'
 import { banner } from "@/components/ui/banner"
 import { useRoomUiStore } from '@/stores/room-ui-store'
@@ -184,6 +187,18 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
           throw new Error('Room created but no room_id returned')
         }
 
+        const queryClient = getActiveQueryClient()
+        if (queryClient) {
+          await optimisticallyUpsertCreatedRoom(queryClient, userId, {
+            room_id: roomId,
+            title: roomName,
+            last_activity_at: response.room.room_created_at ?? new Date().toISOString(),
+            is_pinned: false,
+            pin_order: null,
+            status: 'idle',
+          })
+        }
+
         // Store the initial message and target scope for the room page. Manual
         // agent snapshots use room_default routing; the selector shows the
         // seeded agent/team name via room membership provenance.
@@ -216,17 +231,12 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     const roomId = await createRoomWithMessage(userMessage, options)
     
     if (roomId) {
-      if (userId) {
-        void getActiveQueryClient()?.invalidateQueries({
-          queryKey: roomHistoryQueryKey(userId),
-        })
-      }
       router.push(`/room/${roomId}`)
       return true
     }
     
     return false
-  }, [createRoomWithMessage, router, userId])
+  }, [createRoomWithMessage, router])
 
   // Create room with specific agents and navigate
   const createWithAgentsAndNavigate = useCallback(async (
@@ -290,6 +300,17 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       }
 
       const roomId = response.room.room_id
+      const queryClient = getActiveQueryClient()
+      if (queryClient) {
+        await optimisticallyUpsertCreatedRoom(queryClient, userId, {
+          room_id: roomId,
+          title: template.title,
+          last_activity_at: response.room.room_created_at ?? new Date().toISOString(),
+          is_pinned: false,
+          pin_order: null,
+          status: 'idle',
+        })
+      }
 
       useRoomUiStore.getState().setPendingRoomData(roomId, {
         initialMessage: template.prefillMessage,

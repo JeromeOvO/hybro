@@ -442,6 +442,75 @@
     "streaming_response": null
   },
   {
+    "path": "/api/v1/internal/llm/chat/completions",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat_completions",
+    "module": "api_gateway.routes.llm_proxy_routes",
+    "dependencies": [
+      "get_proxy"
+    ],
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
+    "supporting_protocols": [],
+    "response_model": null,
+    "response_class": null,
+    "status_code": null,
+    "openapi_response_codes": [
+      "200",
+      "default"
+    ]
+  },
+  {
+    "path": "/api/v1/internal/llm/images/edits",
+    "methods": [
+      "POST"
+    ],
+    "name": "image_edits",
+    "module": "api_gateway.routes.llm_proxy_routes",
+    "dependencies": [
+      "get_proxy"
+    ],
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
+    "supporting_protocols": [],
+    "response_model": null,
+    "response_class": null,
+    "status_code": null,
+    "openapi_response_codes": [
+      "200",
+      "default"
+    ]
+  },
+  {
+    "path": "/api/v1/internal/llm/images/generations",
+    "methods": [
+      "POST"
+    ],
+    "name": "image_generations",
+    "module": "api_gateway.routes.llm_proxy_routes",
+    "dependencies": [
+      "get_proxy"
+    ],
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
+    "supporting_protocols": [],
+    "response_model": null,
+    "response_class": null,
+    "status_code": null,
+    "openapi_response_codes": [
+      "200",
+      "default"
+    ]
+  },
+  {
     "auth_dependencies": [
       "get_current_user"
     ],

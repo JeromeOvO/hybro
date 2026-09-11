@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.config.settings import settings
+from common.config.loader import settings
 from common.utils.logger import get_logger
 from models.agent import Agent, AgentStatus
 

@@ -18,6 +18,15 @@ from .persistence import RECOVERY_ELIGIBLE_RUN_STATUSES
 from .settlement import transition_projection_intent, transition_projection_settlement
 
 
+def _claim_is_due(claim: RecoveryClaim, *, due_at: datetime) -> bool:
+    """An unheld claim whose schedule and lease have elapsed."""
+    return (
+        claim.quarantined_at is None
+        and (claim.next_attempt_at is None or claim.next_attempt_at <= due_at)
+        and (claim.lease_expires_at is None or claim.lease_expires_at <= due_at)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class InMemoryRunStoreResult:
     outcome: str
@@ -197,21 +206,21 @@ class InMemoryOrchestratorRunStore:
         owner_id: str,
         lease_expires_at: datetime,
         claimed_at: datetime,
+        allow_scheduled: bool = False,
     ) -> InMemoryRunStoreResult:
         run = self.runs.get(run_id)
+        claim = run.recovery_claim if run is not None else None
+        due = claim is not None and _claim_is_due(claim, due_at=claimed_at)
         if (
             run is None
+            or claim is None
             or run.state_version != expected_state_version
             or lease_expires_at <= claimed_at
-            or run.recovery_claim.quarantined_at is not None
-            or (
-                run.recovery_claim.next_attempt_at is not None
-                and run.recovery_claim.next_attempt_at > claimed_at
-            )
-            or (
-                run.recovery_claim.lease_expires_at is not None
-                and run.recovery_claim.lease_expires_at > claimed_at
-            )
+            # A live owner always holds its lease. ``allow_scheduled`` lets an
+            # in-process driver take an unowned lease before its watchdog is due
+            # so a dead driver stays distinguishable from an intentional wake.
+            or (claim.owner_id is not None and not due)
+            or (not allow_scheduled and not due)
         ):
             return InMemoryRunStoreResult("conflict", run)
         return await self._replace(
@@ -301,15 +310,7 @@ class InMemoryOrchestratorRunStore:
             run
             for run in self.runs.values()
             if run.status in RECOVERY_ELIGIBLE_RUN_STATUSES
-            and run.recovery_claim.quarantined_at is None
-            and (
-                run.recovery_claim.next_attempt_at is None
-                or run.recovery_claim.next_attempt_at <= due_at
-            )
-            and (
-                run.recovery_claim.lease_expires_at is None
-                or run.recovery_claim.lease_expires_at <= due_at
-            )
+            and _claim_is_due(run.recovery_claim, due_at=due_at)
         ]
         due.sort(
             key=lambda run: (

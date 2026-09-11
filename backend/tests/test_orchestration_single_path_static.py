@@ -28,13 +28,17 @@ def repository_text_index() -> dict[Path, str]:
     paths: set[Path] = set()
     for root in PRODUCTION_ROOTS:
         paths.update(root.rglob("*.py"))
+    # Optional legacy surfaces are scanned only when present; normal startup no
+    # longer requires dotenv files and the checkout may not contain one.
     paths.update(
-        {
+        path
+        for path in {
             BACKEND_ROOT / "container.py",
             BACKEND_ROOT / "pyproject.toml",
             REPO_ROOT / ".env.example",
             BACKEND_ROOT / "docs" / "System-Architecture.md",
         }
+        if path.is_file()
     )
 
     frontend_root = REPO_ROOT / "frontend"

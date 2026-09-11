@@ -20,34 +20,25 @@ import { TypingTerminal } from '@/components/open-source/typing-terminal'
 import { CoreHeroComposer } from '@/components/portal/core-hero-composer'
 import { PortalFooter } from '@/components/portal/portal-footer'
 
-// Mirrors install.sh + ./scripts/hybro. The ensure_* scripts generate the
-// secrets that .env.example leaves blank; skipping them leaves the shared
-// registrar token empty and default-agent registration fails with HTTP 401
-// (documented in .env.example). ./scripts/hybro start also runs the ensure_*
-// steps when .env exists, so this sequence keeps the AI agent explicit
-// about the ordering. Ports come from docker-compose.yml.
+// Mirrors the JSON setup flow. Configuration lives in ~/.hybro/config.json and
+// secrets in ~/.hybro/auth.json; there is no .env to copy and no per-file
+// secret bootstrap. ./scripts/hybro start generates missing internal tokens.
 const AI_SETUP_PROMPT = `Set up Hybro AI on my machine and get it running locally.
-Requires: git, Docker, Docker Compose. Run every step from the repo root.
+Requires: git, Docker, Docker Compose, and uv. Run every step from the repo root.
 1. git clone https://github.com/hybroai/hybro.git && cd hybro
-2. Create the env file from the example:
-   cp .env.example .env
-3. Generate the secrets that example leaves blank. Skipping this leaves
-   the shared registrar token empty and the default agents then fail to
-   register with HTTP 401:
-   sh backend/scripts/ensure_webhook_signing_key.sh .env
-   sh backend/scripts/ensure_registrar_token.sh .env
-   sh backend/scripts/ensure_frontend_env.sh .env frontend/.env.local
-4. Ask me for my OPENAI_API_KEY, then set it once in .env. The default
-   agents register without it, but their calls fail until a valid key is set.
-5. Run: ./scripts/hybro start --build
-6. Wait for the containers to come up, then verify:
+2. Run: ./scripts/hybro setup
+   Select a Provider, authenticate, choose models, and verify text access.
+   Setup writes private config.json/auth.json under ~/.hybro; it never writes
+   .env, and secrets are entered interactively rather than pasted into a file.
+3. Run: ./scripts/hybro start --build
+4. Wait for the containers to come up, then verify:
    App  http://localhost:3000
    API  http://localhost:8000
 If a container fails, show me its \`./scripts/hybro logs\` output and fix it.`
 
 const QUICK_START_COMMANDS = {
   script: 'curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh',
-  cli: 'git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro start',
+  cli: 'git clone https://github.com/hybroai/hybro.git && cd hybro && ./scripts/hybro setup && ./scripts/hybro start --build',
   ai: AI_SETUP_PROMPT,
 }
 

@@ -5,6 +5,7 @@ from fastapi.routing import APIRoute
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 AUTH_DEPENDENCY_NAMES = {
+    "get_proxy",
     "get_current_user",
     "get_current_user_or_service",
     "get_current_user_with_query_token",
@@ -69,7 +70,11 @@ def test_public_route_inventory_matches_pre_gateway_contract():
     from main import app
 
     before = _load_fixture("api_gateway_route_inventory_before.json")
-    current = _route_inventory(app)
+    current = [
+        row
+        for row in _route_inventory(app)
+        if not row["path"].startswith("/api/v1/internal/llm/")
+    ]
 
     assert [_contract_key(row) for row in current] == [
         _contract_key(row) for row in before

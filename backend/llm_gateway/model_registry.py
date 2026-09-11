@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from common.config.settings import settings
+from common.config.loader import settings
 from common.dto import ModelInfo
 from llm_gateway.config import resolve_generation_provider
 from llm_gateway.errors import LLMModelRoutingError

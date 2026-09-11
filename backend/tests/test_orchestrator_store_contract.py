@@ -56,6 +56,7 @@ def test_recovery_store_signatures_have_exact_claim_and_release_inventory():
         "owner_id",
         "lease_expires_at",
         "claimed_at",
+        "allow_scheduled",
     }
     expected_release = {
         "self",

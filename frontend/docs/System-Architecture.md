@@ -58,6 +58,22 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 | `components.json` | shadcn/ui generator aliases, Tailwind CSS entry, icon library |
 | `postcss.config.mjs` | Tailwind/PostCSS pipeline |
 
+### User configuration
+
+Frontend settings originate in the `frontend` section of the same
+`~/.hybro/config.json` used by backend (`HYBRO_HOME` overrides the directory).
+`hybro start` validates the document and supplies an allowlisted public JSON
+projection as the `HYBRO_FRONTEND_CONFIG` build argument. `next.config.ts` and
+`src/lib/config-schema.ts` validate that projection; `src/lib/config.ts` exposes
+an immutable build snapshot to business code. API URLs, inspection timeout and
+message-length limits consume this adapter, not individual environment reads.
+SDK-facing `NEXT_PUBLIC_*` constants are derived from the same projection.
+
+Neither dotenv files nor `auth.json` are browser configuration inputs. Server
+credentials are runtime-only and never build arguments. Rebuild and recreate
+frontend after changing public settings; editing JSON does not hot-update an
+existing browser bundle. See [configuration architecture](../../docs/Configuration-Architecture.md).
+
 Available package scripts:
 
 ```bash
@@ -718,8 +734,7 @@ Other library modules:
 - `agent-avatar.ts`, `agent-icon-utils.ts`, `file-icon-utils.ts`: display helpers.
 - `api/files.ts` and `hooks/useRoomFile.ts`: authenticated room-file upload,
   download, and preview blob lifecycle. The authenticated same-origin download
-  path normalizes `NEXT_PUBLIC_API_PREFIX` to the same leading/trailing-slash
-  form used by the Next rewrite.
+  path uses the validated JSON `api_prefix` shared with the Next rewrite.
 - `selection-plain-text.ts`: quote/selection text extraction.
 - `streaming/display.ts`: streaming display helpers.
 
@@ -797,8 +812,14 @@ optimistically and roll back on failure. Active room states (`queued`,
 without active work remain unbadged and the sidebar does not issue per-room
 requests. The query refreshes on focus and
 polls every ten seconds only while an active state is present. Room creation
-invalidates the authenticated user-scoped query under the shared
-`ROOM_HISTORY_QUERY_KEY` prefix; the former global `rooms:refresh` browser event
+cancels any in-flight history read and immediately upserts the new unpinned room
+with an activity value newer than the current cache. Auto-send navigation keeps
+that optimistic order until the first message succeeds; prefill-only creation
+invalidates the authenticated user-scoped query immediately. Sending a message
+similarly cancels an in-flight history read before optimistically advancing that
+room's activity and status, then invalidates the query after a successful
+acknowledgement. These paths share the user-scoped `ROOM_HISTORY_QUERY_KEY`
+prefix. The former global `rooms:refresh` browser event
 is no longer used. Legacy `/manage/agents*` routes
 are redirect-only compatibility paths. `src/lib/routes.ts` is the canonical
 route vocabulary for application links.

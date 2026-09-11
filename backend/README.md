@@ -7,10 +7,13 @@ the backend used by the application, Docker Compose configuration, and CI.
 
 ### Docker Compose
 
-From the repository root:
+Configuration lives in `~/.hybro/config.json` (secrets in `~/.hybro/auth.json`);
+start the stack through the CLI so each service receives validated JSON-derived
+projections:
 
 ```sh
-docker compose up -d --build
+./scripts/hybro setup           # once: Provider, authentication and models
+./scripts/hybro start --build
 ```
 
 The API is available at <http://localhost:8000> and its health endpoint is
@@ -24,14 +27,14 @@ MongoDB aggregation update pipelines; Docker Compose currently provides MongoDB
 
 ```sh
 cd backend
-# From the monorepo root: cp .env.example .env  (if not already created)
 uv sync --extra dev
+# Point HYBRO_HOME at a directory containing config.json/auth.json (hybro setup).
 uv run uvicorn main:app --reload
 ```
 
-Use `AUTH_MODE=mock` for local development without Clerk credentials. Redis is
-optional for a single-process local server; cross-process delivery and locking
-require it.
+Set `backend.auth_mode` to `mock` in `config.json` for local development without
+Clerk credentials. Redis is optional for a single-process local server;
+cross-process delivery and locking require it.
 
 ### Production upgrade note
 

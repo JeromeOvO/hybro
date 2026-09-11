@@ -482,13 +482,21 @@ class MongoOrchestratorRunStore:
         owner_id: str,
         lease_expires_at: datetime,
         claimed_at: datetime,
+        allow_scheduled: bool = False,
     ) -> MongoRunStoreResult:
         run = await self.load(run_id)
+        claim = run.recovery_claim if run is not None else None
+        due = claim is not None and _recovery_claim_is_due(claim, due_at=claimed_at)
         if (
             run is None
+            or claim is None
             or run.state_version != expected_state_version
             or lease_expires_at <= claimed_at
-            or not _recovery_claim_is_due(run.recovery_claim, due_at=claimed_at)
+            # A live owner always holds its lease. ``allow_scheduled`` lets an
+            # in-process driver take an unowned lease before its watchdog is due
+            # so a dead driver stays distinguishable from an intentional wake.
+            or (claim.owner_id is not None and not due)
+            or (not allow_scheduled and not due)
         ):
             return MongoRunStoreResult("conflict", run)
         claim = run.recovery_claim.model_copy(

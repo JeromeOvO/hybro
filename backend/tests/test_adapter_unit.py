@@ -18,6 +18,13 @@ from common.dto import (
 from common.types import MessageRole
 
 
+@pytest.fixture(autouse=True)
+def isolate_adapter_configuration(monkeypatch):
+    # Injected adapter units do not exercise startup/config-file policy.
+    monkeypatch.setattr("llm_gateway.config.load_optional_setup", lambda _: None)
+    monkeypatch.setattr("llm_gateway.gateway.load_optional_setup", lambda _: None)
+
+
 def test_translator_internal_message_to_a2a_preserves_message_fields():
     from a2a_adapter.translators import internal_message_to_a2a
 
@@ -1156,11 +1163,10 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
 
 
 def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
-    from common.config.settings import Settings
+    from common.config.loader import Settings
     from llm_gateway.model_registry import ModelRegistryImpl
 
     settings = Settings(
-        _env_file=None,
         deepseek_api_key="test-deepseek-key",
         deepseek_model_name="deepseek-v4-pro",
         llm_gateway_generation_provider="deepseek",
@@ -1188,12 +1194,11 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
 
 
 def test_model_registry_rejects_gemini_only_configuration():
-    from common.config.settings import Settings
+    from common.config.loader import Settings
     from llm_gateway.errors import UnsupportedConfiguredProvider
     from llm_gateway.model_registry import ModelRegistryImpl
 
     settings = Settings(
-        _env_file=None,
         deepseek_api_key="",
         openai_api_key="",
         google_api_key="google-key",

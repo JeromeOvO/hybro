@@ -1,34 +1,20 @@
-from __future__ import annotations
+"""There is one user directory and no repository dotenv lookup."""
 
-from pathlib import Path
+import pytest
 
-from common.config.settings import resolve_settings_env_file
-
-
-def test_resolve_settings_env_file_prefers_root_when_present(tmp_path: Path) -> None:
-    repo = tmp_path
-    backend = repo / "backend"
-    backend.mkdir()
-    (repo / "docker-compose.yml").write_text("services: {}\n")
-    (repo / ".env").write_text("OPENAI_API_KEY=root\n")
-    (backend / ".env").write_text("OPENAI_API_KEY=backend\n")
-
-    assert resolve_settings_env_file(str(backend)) == str(repo / ".env")
+from common.config.runtime_config import RuntimeConfigurationError
+from common.config.runtime_store import runtime_home
 
 
-def test_resolve_settings_env_file_falls_back_to_backend(tmp_path: Path) -> None:
-    repo = tmp_path
-    backend = repo / "backend"
-    backend.mkdir()
-    (repo / "docker-compose.yml").write_text("services: {}\n")
-    (backend / ".env").write_text("OPENAI_API_KEY=backend\n")
-
-    assert resolve_settings_env_file(str(backend)) == str(backend / ".env")
+def test_runtime_home_defaults_to_user_directory(tmp_path):
+    assert runtime_home({"HOME": str(tmp_path)}) == tmp_path / ".hybro"
 
 
-def test_resolve_settings_env_file_without_compose_uses_backend(tmp_path: Path) -> None:
-    backend = tmp_path / "backend"
-    backend.mkdir()
-    (backend / ".env").write_text("OPENAI_API_KEY=backend\n")
+def test_runtime_home_uses_explicit_absolute_override(tmp_path):
+    target = tmp_path / "custom"
+    assert runtime_home({"HYBRO_HOME": str(target), "HOME": "/unused"}) == target
 
-    assert resolve_settings_env_file(str(backend)) == str(backend / ".env")
+
+def test_runtime_home_rejects_relative_override():
+    with pytest.raises(RuntimeConfigurationError, match="absolute"):
+        runtime_home({"HYBRO_HOME": "relative"})

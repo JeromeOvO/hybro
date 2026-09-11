@@ -38,7 +38,7 @@ from models.memory import (
 
 @pytest.fixture
 def mock_compaction_config():
-    with patch("common.config.settings") as mock:
+    with patch("common.config.loader") as mock:
         mock.compaction_enabled = True
         mock.compaction_max_full_turns = 20
         mock.compaction_max_total_tokens = 80000

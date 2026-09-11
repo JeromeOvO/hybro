@@ -163,12 +163,18 @@ def test_a2a_runtime_service_import_boundary():
 
 
 def test_llm_gateway_import_boundary():
+    # The gateway owns Provider transport, OAuth token exchange and image
+    # validation, so it may use these declared transport/image libraries.
     allowed_roots = set(sys.stdlib_module_names) | {
+        "PIL",
         "__future__",
         "aioboto3",
         "common",
         "dal",
         "google",
+        "httpx",
+        "httpx_sse",
+        "imagesize",
         "jsonschema",
         "llm_gateway",
         "openai",

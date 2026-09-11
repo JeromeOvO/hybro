@@ -63,14 +63,19 @@ class InMemoryOrchestratorContractHarness:
         owner_id: str,
         lease_expires_at: datetime,
         claimed_at: datetime,
+        allow_scheduled: bool = False,
     ) -> HarnessOutcome:
         run = self.runs.get(run_id)
         if run is None or not self._has_active_epoch(run):
             return "gone"
+        held = run.recovery_claim.owner_id is not None and not self._is_recovery_due(
+            run, at=claimed_at
+        )
         if (
             run.state_version != expected_state_version
             or lease_expires_at <= claimed_at
-            or not self._is_recovery_due(run, at=claimed_at)
+            or held
+            or (not allow_scheduled and not self._is_recovery_due(run, at=claimed_at))
         ):
             return "conflict"
         previous_owner = run.recovery_claim.owner_id

@@ -114,11 +114,7 @@ def test_vector_store_extension_has_no_runtime_consumer_or_container_binding():
 
 def test_removed_vector_provider_is_absent_from_runtime_config_and_dependencies():
     provider_name = "pine" + "cone"
-    for path in (
-        Path("pyproject.toml"),
-        Path("uv.lock"),
-        Path("..") / ".env.example",
-    ):
+    for path in (Path("pyproject.toml"), Path("uv.lock")):
         assert provider_name not in path.read_text().casefold()
 
     runtime_roots = [

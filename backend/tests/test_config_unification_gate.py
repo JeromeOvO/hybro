@@ -1,14 +1,12 @@
-"""AST gate: no os.getenv / os.environ reads outside common/config/settings.py.
+"""AST gate: business code reads typed JSON configuration, not process env.
 
-Gate criterion: tracked runtime Python files have no raw env reads except
-common/config/settings.py.
+Only explicit configuration/CLI boundaries may read process metadata or setup input.
 """
 
 from __future__ import annotations
 
 import ast
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -152,21 +150,14 @@ def _collect_production_files() -> list[Path]:
     excluded_dirs = set(manifest.get("excluded_dirs", []))
     allowed_paths = set(manifest.get("allowed_paths", []))
 
-    result = subprocess.run(
-        ["git", "ls-files", "*.py"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
     files: list[Path] = []
-    for rel in result.stdout.splitlines():
+    for path in ROOT.rglob("*.py"):
+        rel = path.relative_to(ROOT).as_posix()
         if _is_excluded(rel, excluded_dirs):
             continue
         if _is_allowed(rel, allowed_paths):
             continue
-        path = ROOT / rel
-        if path.exists():
+        if path.is_file() and not path.is_symlink():
             files.append(path)
 
     return files
@@ -187,8 +178,8 @@ def test_no_raw_env_reads_in_production_code():
         )
         pytest.fail(
             f"Config unification gate FAILED: {len(all_violations)} raw env "
-            f"var read(s) found outside common/config/settings.py:\n{report}\n\n"
-            f"Fix: migrate to a Settings field in common/config/settings.py"
+            f"var read(s) found outside configuration boundaries:\n{report}\n\n"
+            f"Fix: consume the typed configuration loader instead"
         )
 
 

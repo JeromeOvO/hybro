@@ -279,7 +279,7 @@ def test_repeated_ranking_preserves_raw_keyword_scores():
 
 
 def test_memory_search_config_defaults_to_300_character_snippets():
-    from common.config.settings import Settings
+    from common.config.loader import Settings
 
     assert Settings.model_fields["memory_search_max_snippet_chars"].default == 300
     assert Settings.model_fields["memory_search_max_candidates"].default == 1000

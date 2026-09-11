@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Logging must be configured before importing application runtime modules.
 from common.observability.bootstrap import settings as _logging_settings  # noqa: F401
-from common.config.settings import settings
+from common.config.loader import settings
 
 import api_gateway
 from common.auth import bind_auth_config
@@ -132,6 +132,17 @@ def create_app(
         path=f"{settings.api_prefix}/files/upload",
         max_bytes=6 * 1024 * 1024,
     )
+
+    for path, limit in (
+        ("chat/completions", 1024 * 1024),
+        ("images/generations", 128 * 1024),
+        ("images/edits", 10 * 1024 * 1024),
+    ):
+        app.add_middleware(
+            RequestBodyLimitMiddleware,
+            path=f"{settings.api_prefix}/internal/llm/{path}",
+            max_bytes=limit,
+        )
 
     @app.get("/health")
     async def health_check(

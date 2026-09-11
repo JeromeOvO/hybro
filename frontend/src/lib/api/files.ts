@@ -1,9 +1,10 @@
 import { getApiUrl } from '../utils'
+import { config } from '../config'
 
 const API_BASE_URL = getApiUrl('files')
 
 function getAuthenticatedFilePath(): string {
-  const configuredPrefix = process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1'
+  const configuredPrefix = config.api_prefix
   const normalizedPrefix = `/${configuredPrefix.replace(/^\/+|\/+$/g, '')}`
   return `${normalizedPrefix}/files`
 }

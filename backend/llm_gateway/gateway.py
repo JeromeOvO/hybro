@@ -4,16 +4,18 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import aclosing
 from typing import Any, Literal, Protocol, TypeVar
 
-from common.config.settings import settings
+from common.config.loader import settings
+from common.config.runtime_store import current_store
 from common.dto import LLMResponse, LLMStructuredResponse, ModelInfo
 from common.observability import get_logger, safe_exception_metadata
 from common.protocols import LLMProviderAdapter
-from llm_gateway.config import LLMGatewayConfig
+from llm_gateway.config import LLMGatewayConfig, load_optional_setup
 from llm_gateway.errors import (
     LLMModelRoutingError,
     LLMProviderConfigurationError,
     LLMStreamingUnsupportedError,
 )
+from llm_gateway.image_types import GatewayImageRequest, GatewayImageResult
 from llm_gateway.model_registry import ModelRegistryImpl
 from llm_gateway.providers import DeepSeekProvider, OpenAIProvider
 from llm_gateway.turn_types import GatewayTurnEvent, GatewayTurnRequest
@@ -47,6 +49,9 @@ class LLMGatewayImpl:
             generation_provider=self.config.generation_provider,
         )
         self._enforce_provider_credentials = providers is None
+        # Capture setup once per instance. Restart to apply a new selection.
+        self._setup = load_optional_setup(settings_obj)
+        self._image_base_url = getattr(settings_obj, "openai_base_url", None)
         self._provider_credentials = {
             "openai": str(getattr(settings_obj, "openai_api_key", "") or ""),
             "deepseek": str(getattr(settings_obj, "deepseek_api_key", "") or ""),
@@ -62,6 +67,53 @@ class LLMGatewayImpl:
                 ),
             }
         self._providers: dict[str, LLMProviderAdapter] = providers
+        if (
+            self._setup is not None
+            and self._setup.config.provider.id == "openai"
+            and self._setup.config.provider.auth == "api_key"
+            and self._enforce_provider_credentials
+        ):
+            # Embeddings stay on the original OpenAI route and are not part of
+            # text/image setup. Reuse the stored API key so they do not build an
+            # OpenAI client from an empty Settings.openai_api_key under JSON.
+            credential = self._setup.authentication.credential
+            api_key = getattr(credential, "api_key", None)
+            if api_key is not None:
+                self._providers["openai"] = OpenAIProvider(
+                    api_key=api_key.get_secret_value(),
+                    base_url=getattr(settings_obj, "openai_base_url", None) or None,
+                )
+        self._text_provider = None
+        if self._setup is not None:
+            from llm_gateway.setup_bindings import create_provider
+
+            oauth_resolve = None
+            if self._setup.config.provider.auth == "oauth":
+                from common.config.runtime_config import OAuthCredential
+                from llm_gateway.openai_oauth import refresh
+
+                initial = self._setup
+                credential = initial.authentication.credential
+                if not isinstance(credential, OAuthCredential):
+                    raise LLMProviderConfigurationError("OAuth credential missing")
+                store = current_store()
+
+                async def oauth_resolve() -> OAuthCredential:
+                    return await store.resolve_oauth(
+                        initial.config, credential.account_id, {}, refresh
+                    )
+
+            self._text_provider = (
+                create_provider(
+                    self._setup,
+                    getattr(settings_obj, "openai_base_url", None),
+                    oauth_resolve=oauth_resolve,
+                )
+                if self._enforce_provider_credentials
+                else providers.get(self._setup.config.provider.id)
+            )
+            if self._text_provider is None:
+                raise LLMModelRoutingError("Selected text provider is not configured")
 
     async def stream_turn_once(
         self,
@@ -71,6 +123,45 @@ class LLMGatewayImpl:
     ) -> AsyncIterator[GatewayTurnEvent]:
         """Stream exactly one frozen provider attempt with no hidden retry."""
 
+        if self._setup is not None:
+            from llm_gateway.catalog import validate_models
+
+            selected = validate_models(self._setup.config)
+            if selected.provider == "anthropic":
+                # GatewayTurnRequest only models the OpenAI/DeepSeek wire, so an
+                # Anthropic request cannot be normalized into a copy. Its adapter
+                # receives the frozen transcript plus the private model identity
+                # and ignores the OpenAI-only shaping fields (provider/api/
+                # thinking/tool_strategy); temperature and output limits are read
+                # from the original request exactly like the other adapters.
+                stream = self._text_provider.stream_turn_once(
+                    request, model=selected.model_id, cancel_event=cancel_event
+                )
+            else:
+                # Private wire route; never mutate the caller's frozen transcript.
+                wire_request = request.model_copy(
+                    update={
+                        "provider": selected.provider,
+                        "model_id": selected.model_id,
+                        "api": selected.api,
+                        "thinking_level": request.thinking_level
+                        if request.thinking_level in selected.thinking_levels
+                        else None,
+                        "temperature": None
+                        if selected.thinking_levels
+                        else request.temperature,
+                        "tool_strategy": "native"
+                        if selected.provider == "openai"
+                        else "structured_action",
+                    }
+                )
+                stream = self._text_provider.stream_turn_once(
+                    wire_request, cancel_event=cancel_event
+                )
+            async with aclosing(stream):
+                async for event in stream:
+                    yield event
+            return
         if request.provider not in {"openai", "deepseek"}:
             raise LLMModelRoutingError(
                 f"Unsupported turn provider {request.provider!r}"
@@ -117,7 +208,11 @@ class LLMGatewayImpl:
             )
             raise
         return await self._with_retry(
-            lambda: provider.generate(messages, model=model_info.model_id, **kwargs),
+            lambda: provider.generate(
+                messages,
+                model=model_info.model_id,
+                **self._text_options(kwargs, timeout_seconds),
+            ),
             timeout_seconds=timeout_seconds,
             operation_name="generate",
             provider=model_info.provider,
@@ -160,7 +255,7 @@ class LLMGatewayImpl:
                 model=model_info.model_id,
                 schema=schema,
                 json_mode=json_mode,
-                **kwargs,
+                **self._text_options(kwargs, timeout_seconds),
             ),
             timeout_seconds=timeout_seconds,
             operation_name="generate_structured",
@@ -169,11 +264,25 @@ class LLMGatewayImpl:
             started_at=started_at,
         )
 
+    async def generate_image(self, request: GatewayImageRequest) -> GatewayImageResult:
+        """Generate or edit using the optional setup image model, without retries."""
+        from llm_gateway.setup_bindings import create_image_provider
+
+        if self._setup is None or self._setup.config.models.image is None:
+            raise LLMProviderConfigurationError("Image model is not configured")
+        provider = create_image_provider(self._setup, self._image_base_url)
+        try:
+            return await provider.generate_image_once(
+                request, model=self._setup.config.models.image
+            )
+        finally:
+            await provider.aclose()
+
     async def embed(self, text: str, model: str | None = None) -> list[float]:
         started_at = time.perf_counter()
         requested_model = model or self.config.default_embedding_model
         try:
-            model_info, provider = self._resolve_provider(requested_model)
+            model_info, provider = self._resolve_original_provider(requested_model)
             if "embedding" not in model_info.capabilities:
                 raise ValueError(
                     f"Model {model_info.logical_name} does not support embeddings"
@@ -204,7 +313,7 @@ class LLMGatewayImpl:
         started_at = time.perf_counter()
         requested_model = model or self.config.default_embedding_model
         try:
-            model_info, provider = self._resolve_provider(requested_model)
+            model_info, provider = self._resolve_original_provider(requested_model)
             if "embedding" not in model_info.capabilities:
                 raise ValueError(
                     f"Model {model_info.logical_name} does not support embeddings"
@@ -271,7 +380,11 @@ class LLMGatewayImpl:
             raise
         return await self._with_retry(
             lambda: provider_adapter.generate(
-                messages, model=model_info.model_id, **kwargs
+                messages,
+                model=model_info.model_id,
+                **self._text_options(
+                    kwargs, timeout_seconds or self.config.request_timeout_seconds
+                ),
             ),
             timeout_seconds=timeout_seconds or self.config.request_timeout_seconds,
             operation_name="generate",
@@ -338,7 +451,9 @@ class LLMGatewayImpl:
                 model=model_info.model_id,
                 schema=schema,
                 json_mode=json_mode,
-                **kwargs,
+                **self._text_options(
+                    kwargs, timeout_seconds or self.config.request_timeout_seconds
+                ),
             ),
             timeout_seconds=timeout_seconds or self.config.request_timeout_seconds,
             operation_name="generate_structured",
@@ -434,13 +549,16 @@ class LLMGatewayImpl:
                         f"Provider {model_info.provider} does not support streaming"
                     )
                 async with asyncio.timeout(timeout):
-                    async for chunk in stream_method(
-                        messages,
-                        model=model_info.model_id,
-                        **kwargs,
-                    ):
-                        yielded = True
-                        yield chunk
+                    async with aclosing(
+                        stream_method(
+                            messages,
+                            model=model_info.model_id,
+                            **self._text_options(kwargs, timeout),
+                        )
+                    ) as stream:
+                        async for chunk in stream:
+                            yielded = True
+                            yield chunk
             except asyncio.CancelledError as exc:
                 _log_stream_completed(
                     model_info=model_info,
@@ -504,7 +622,31 @@ class LLMGatewayImpl:
                 )
                 return
 
+    def _text_options(self, kwargs: dict[str, Any], timeout: float) -> dict[str, Any]:
+        # Private Codex transport deadline, not a new public adapter/DTO contract.
+        # Other providers retain their original options and timeout behavior.
+        if self._setup is not None and self._setup.config.provider.auth == "oauth":
+            return {**kwargs, "timeout_seconds": timeout}
+        return kwargs
+
     def _resolve_provider(
+        self,
+        model: str,
+        provider_hint: ProviderHint | None = None,
+    ) -> tuple[ModelInfo, LLMProviderAdapter]:
+        # Setup wins over logical labels, aliases and explicit hints for text only.
+        if self._setup is not None:
+            selected = self._setup.config
+            return ModelInfo(
+                logical_name=model,
+                model_id=selected.models.text,
+                provider=selected.provider.id,
+                capabilities=["json_schema", "tool_use"],
+                max_context_tokens=0,
+            ), self._text_provider
+        return self._resolve_original_provider(model, provider_hint)
+
+    def _resolve_original_provider(
         self,
         model: str,
         provider_hint: ProviderHint | None = None,

@@ -382,6 +382,66 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/internal/llm/chat/completions",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat_completions",
+    "endpoint_module": "api_gateway.routes.llm_proxy_routes",
+    "declared_owner": "api_gateway.routes.llm_proxy_routes",
+    "tags": [
+      "internal_llm"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_proxy"
+    ],
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/internal/llm/images/edits",
+    "methods": [
+      "POST"
+    ],
+    "name": "image_edits",
+    "endpoint_module": "api_gateway.routes.llm_proxy_routes",
+    "declared_owner": "api_gateway.routes.llm_proxy_routes",
+    "tags": [
+      "internal_llm"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_proxy"
+    ],
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/internal/llm/images/generations",
+    "methods": [
+      "POST"
+    ],
+    "name": "image_generations",
+    "endpoint_module": "api_gateway.routes.llm_proxy_routes",
+    "declared_owner": "api_gateway.routes.llm_proxy_routes",
+    "tags": [
+      "internal_llm"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_proxy"
+    ],
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/local-agents/discovery",
     "methods": [
       "POST"

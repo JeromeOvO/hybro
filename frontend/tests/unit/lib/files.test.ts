@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fetchRoomFileBlob } from '@/lib/api/files'
+import publicConfig from '../../fixtures/public-config.json'
 
 describe('fetchRoomFileBlob', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-    delete process.env.NEXT_PUBLIC_API_PREFIX
+    vi.unstubAllEnvs()
+    vi.resetModules()
   })
 
   it('fetches only the constructed room-file endpoint with bearer auth', async () => {
@@ -42,8 +44,10 @@ describe('fetchRoomFileBlob', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('normalizes a configured API prefix without a leading slash', async () => {
-    process.env.NEXT_PUBLIC_API_PREFIX = 'v1/'
+  it('uses the configured JSON API prefix', async () => {
+    vi.stubEnv('HYBRO_FRONTEND_CONFIG', JSON.stringify({ ...publicConfig, api_prefix: '/v1' }))
+    vi.resetModules()
+    const { fetchRoomFileBlob } = await import('@/lib/api/files')
     const response = new Response(new Blob(['hello']), { status: 200 })
     const fetchMock = vi.fn().mockResolvedValue(response)
     vi.stubGlobal('fetch', fetchMock)

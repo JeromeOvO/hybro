@@ -4,7 +4,7 @@ from hashlib import sha256
 
 import pytest
 
-from common.config.settings import Settings
+from common.config.loader import Settings
 from execution.adapters.profiles import (
     BASE_ORCHESTRATOR_SYSTEM_PROMPT,
     FAST_ORCHESTRATOR_SYSTEM_PROMPT,
@@ -105,7 +105,6 @@ def test_orchestrator_prompts_treat_prior_answers_as_context_not_execution_proof
 def test_openai_reasoning_routes_use_responses_api_for_native_tools():
     registry = ModelRegistryImpl(
         Settings(
-            _env_file=None,
             lead_ai_model="gpt-5-mini",
             classifier_ai_model="gpt-4o-mini",
             supervisor_model="gpt-5.4-mini",

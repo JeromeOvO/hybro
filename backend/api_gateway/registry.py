@@ -38,6 +38,8 @@ def route_group_for_path(path: str) -> str:
     def matches(prefix: str) -> bool:
         return normalized == prefix or normalized.startswith(f"{prefix}/")
 
+    if matches("/internal/llm"):
+        return "llm_proxy"
     if matches("/local-agents"):
         return "agent"
     if matches("/agentGroups"):

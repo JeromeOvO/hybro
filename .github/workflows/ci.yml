@@ -150,9 +150,38 @@ jobs:
         working-directory: backend
         run: uv sync --frozen --extra dev
 
-      - name: Start Full Hybro Container Stack with Mock LLM
+      # The stack is configured through JSON, so CI writes the CI runtime
+      # directory it owns and starts Compose through the CLI. No dotenv file and
+      # no duplicated per-service projections.
+      - name: Prepare CI Runtime Configuration
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build
+          CI_HOME="$RUNNER_TEMP/hybro-ci"
+          mkdir -p "$CI_HOME"
+          chmod 700 "$CI_HOME"
+          cat > "$CI_HOME/config.json" <<'JSON'
+          {
+            "version": 1,
+            "provider": { "id": "openai", "auth": "api_key" },
+            "models": { "text": "gpt-4o-mini" },
+            "backend": { "openai_base_url": "http://mock-llm:8080/v1" }
+          }
+          JSON
+          cat > "$CI_HOME/auth.json" <<'JSON'
+          {
+            "provider": "openai",
+            "auth": "api_key",
+            "api_key": "mock-api-key-ci"
+          }
+          JSON
+          chmod 600 "$CI_HOME/auth.json"
+          echo "HYBRO_HOME=$CI_HOME" >> "$GITHUB_ENV"
+
+      - name: Start Full Hybro Container Stack with Mock LLM
+        env:
+          # Reuse the environment synced by the step above instead of a new one.
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/backend/.venv
+        run: |
+          ./scripts/hybro start --build --compose-file docker-compose.ci.yml
           echo "Waiting for backend health check..."
           timeout 180s bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
           echo "Backend container is healthy and ready!"

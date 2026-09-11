@@ -1,27 +1,59 @@
-from pathlib import Path
-
 import pytest
+from pydantic import SecretStr
 
-from common.config.settings import Settings
+from common.config.loader import Settings
+from common.config.runtime_config import (
+    ApiKeyCredential,
+    RuntimeConfig,
+    RuntimeConfigurationError,
+    RuntimeModels,
+    RuntimeProvider,
+)
+from common.config.runtime_store import RuntimeConfigStore
 from llm_gateway.config import LLMGatewayConfig
-from llm_gateway.errors import UnsupportedConfiguredProvider
 
 
-def _settings(**overrides):
-    values = {
-        "deepseek_api_key": "",
-        "openai_api_key": "",
-        "google_api_key": "",
-        "gemini_api_key": "",
-    }
-    values.update(overrides)
-    return Settings(_env_file=None, **values)
+def _configure(tmp_path, monkeypatch, provider="openai", model="gpt-5-mini"):
+    home = tmp_path / "runtime"
+    monkeypatch.setenv("HYBRO_HOME", str(home))
+    RuntimeConfigStore(home).save(
+        RuntimeConfig(
+            provider=RuntimeProvider(id=provider, auth="api_key"),
+            models=RuntimeModels(text=model),
+        ),
+        ApiKeyCredential(provider=provider, api_key=SecretStr("fixture-key")),
+        {},
+    )
 
 
-def test_from_settings_wires_gateway_settings_fields():
-    settings = _settings(
-        deepseek_api_key="test-deepseek-key",
-        llm_gateway_generation_provider="deepseek",
+@pytest.mark.asyncio
+async def test_openai_api_key_setup_wires_stored_key_into_embeddings(
+    tmp_path, monkeypatch
+):
+    """Embeddings reuse the stored OpenAI key instead of an empty settings key."""
+    from llm_gateway import gateway as gateway_module
+    from llm_gateway.gateway import LLMGatewayImpl
+
+    _configure(tmp_path, monkeypatch, "openai", "gpt-4o-mini")
+    built = []
+
+    def factory(*args, **kwargs):
+        provider = object()
+        built.append((kwargs, provider))
+        return provider
+
+    monkeypatch.setattr(gateway_module, "OpenAIProvider", factory)
+    gateway = LLMGatewayImpl(settings_obj=Settings(openai_api_key=""))
+    wired = [
+        provider for kwargs, provider in built if kwargs.get("api_key") == "fixture-key"
+    ]
+    assert wired
+    assert gateway._providers["openai"] is wired[-1]
+
+
+def test_from_settings_wires_runtime_policy_and_setup_provider(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch, "deepseek", "deepseek-v4-flash")
+    settings = Settings(
         llm_gateway_max_attempts=4,
         llm_gateway_retry_backoff_seconds=1.25,
         llm_gateway_request_timeout_seconds=31.0,
@@ -33,10 +65,7 @@ def test_from_settings_wires_gateway_settings_fields():
         llm_gateway_default_embedding_model="custom_embedding_route",
         llm_gateway_default_supervisor_model="custom_supervisor_route",
     )
-
-    config = LLMGatewayConfig.from_settings(settings)
-
-    assert config == LLMGatewayConfig(
+    assert LLMGatewayConfig.from_settings(settings) == LLMGatewayConfig(
         generation_provider="deepseek",
         max_attempts=4,
         retry_backoff_seconds=1.25,
@@ -51,120 +80,33 @@ def test_from_settings_wires_gateway_settings_fields():
     )
 
 
-def test_generation_provider_is_explicit_and_stale_gemini_cannot_override_it():
-    all_configured = _settings(
-        deepseek_api_key="deepseek-key",
-        openai_api_key="openai-key",
-        google_api_key="google-key",
+@pytest.mark.parametrize("legacy_route", ["openai", "deepseek", "invalid"])
+def test_setup_is_the_only_provider_source(tmp_path, monkeypatch, legacy_route):
+    _configure(tmp_path, monkeypatch)
+    settings = Settings(
+        llm_gateway_generation_provider=legacy_route,
+        deepseek_api_key="ignored",
+        google_api_key="ignored",
     )
-    without_deepseek = _settings(
-        openai_api_key="openai-key",
-        google_api_key="google-key",
-    )
-    gemini_only = _settings(google_api_key="google-key")
-    gemini_alias_only = _settings(gemini_api_key="gemini-key")
-
-    assert (
-        LLMGatewayConfig.from_settings(all_configured).generation_provider == "openai"
-    )
-    explicit_deepseek = _settings(
-        deepseek_api_key="deepseek-key",
-        openai_api_key="openai-key",
-        google_api_key="google-key",
-        llm_gateway_generation_provider="deepseek",
-    )
-    assert (
-        LLMGatewayConfig.from_settings(explicit_deepseek).generation_provider
-        == "deepseek"
-    )
-    assert (
-        LLMGatewayConfig.from_settings(without_deepseek).generation_provider == "openai"
-    )
-    with pytest.raises(UnsupportedConfiguredProvider):
-        LLMGatewayConfig.from_settings(gemini_only)
-    with pytest.raises(UnsupportedConfiguredProvider):
-        LLMGatewayConfig.from_settings(gemini_alias_only)
+    assert LLMGatewayConfig.from_settings(settings).generation_provider == "openai"
 
 
-def test_generation_provider_keeps_zero_config_openai_degraded_mode():
-    assert LLMGatewayConfig.from_settings(_settings()).generation_provider == "openai"
+@pytest.mark.parametrize("key", ["", "ignored-key"])
+def test_no_setup_fails_even_with_a_legacy_key(tmp_path, monkeypatch, key):
+    monkeypatch.setenv("HYBRO_HOME", str(tmp_path / "missing"))
+    with pytest.raises(RuntimeConfigurationError, match="hybro setup"):
+        LLMGatewayConfig.from_settings(Settings(openai_api_key=key))
 
 
-@pytest.mark.parametrize(
-    "settings",
-    [
-        _settings(deepseek_api_key="deepseek-key"),
-        _settings(
-            openai_api_key="openai-key",
-            llm_gateway_generation_provider="deepseek",
-        ),
-    ],
-)
-def test_generation_provider_rejects_key_for_a_different_selected_provider(settings):
-    with pytest.raises(
-        UnsupportedConfiguredProvider,
-        match="LLM_GATEWAY_GENERATION_PROVIDER selects",
-    ):
-        LLMGatewayConfig.from_settings(settings)
-
-
-def test_env_example_documents_explicit_deepseek_opt_in():
-    text = (Path(__file__).parents[2] / ".env.example").read_text()
-
-    assert "LLM_GATEWAY_GENERATION_PROVIDER=openai" in text
-    assert "DeepSeek-primary deployments must set this value to deepseek" in text
-    assert "first priority" not in text
-    assert "provider priority" not in text
-
-
-def test_generation_provider_rejects_selected_route_without_model():
-    settings = _settings(
-        deepseek_api_key="deepseek-key",
-        deepseek_model_name="",
-        openai_api_key="openai-key",
-        llm_gateway_generation_provider="deepseek",
-    )
-
-    with pytest.raises(UnsupportedConfiguredProvider, match="model route is empty"):
-        LLMGatewayConfig.from_settings(settings)
-
-
-def test_env_example_orchestrator_profiles_resolve_successfully():
-    from dotenv import dotenv_values
-
-    from common.config.settings import Settings
+def test_orchestrator_defaults_resolve_without_env_example(tmp_path, monkeypatch):
+    _configure(tmp_path, monkeypatch)
     from execution.adapters.profiles import OrchestratorProfileResolver
     from llm_gateway.model_registry import ModelRegistryImpl
 
-    env_path = Path(__file__).parents[2] / ".env.example"
-    env_dict = {
-        k.lower(): v for k, v in dotenv_values(env_path).items() if v is not None
-    }
-
-    # Mock required keys that are empty in .env.example
-    env_dict["openai_api_key"] = "fake-key"
-    env_dict["webhook_signing_key"] = "12345678901234567890123456789012"
-
-    settings = Settings(_env_file=None, **env_dict)
-    assert settings.supervisor_model == "gpt-5.4-mini"
-
+    settings = Settings()
     registry = ModelRegistryImpl(settings)
-    route = registry.get_route_configuration("supervisor_model")
-    assert route.model_id == "gpt-5.4-mini"
-    assert "low" in route.supported_thinking_levels
-    assert "high" in route.supported_thinking_levels
-
     resolver = OrchestratorProfileResolver(
         model_registry=registry, settings_obj=settings
     )
-
-    fast = resolver.resolve("fast")
-    ultimate = resolver.resolve("ultimate")
-
-    assert fast.profile_id == "fast"
-    assert fast.model.route == "supervisor_model"
-    assert fast.thinking_level == "low"
-
-    assert ultimate.profile_id == "ultimate"
-    assert ultimate.model.route == "supervisor_model"
-    assert ultimate.thinking_level == "high"
+    assert resolver.resolve("fast").thinking_level == "low"
+    assert resolver.resolve("ultimate").thinking_level == "high"
