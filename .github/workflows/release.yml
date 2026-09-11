@@ -184,8 +184,11 @@ jobs:
         include:
           - platform: darwin-arm64
             runner: macos-14
+          # Intel macOS runners are only published under explicit "-intel"
+          # labels; macos-13 was retired and a job requesting it queues forever
+          # rather than failing. darwin-x64 needs Intel to build its own arch.
           - platform: darwin-x64
-            runner: macos-13
+            runner: macos-15-intel
           - platform: linux-x64
             runner: ubuntu-latest
           - platform: linux-arm64
