@@ -54,12 +54,18 @@ class Settings(BaseModel):
     google_api_key: str = ""
     gemini_api_key: str = ""
 
-    # LLM gateway routing and runtime policy
+    # LLM gateway routing and runtime policy. Timeouts must accommodate the
+    # slowest configured model: a reasoning model at a high thinking level can
+    # spend minutes on one turn, and a timeout shorter than that fails the turn
+    # and burns the retry budget instead of producing an answer.
     llm_gateway_generation_provider: str = "openai"
     llm_gateway_max_attempts: int = 2
     llm_gateway_retry_backoff_seconds: float = 0.2
-    llm_gateway_request_timeout_seconds: float = 60.0
-    llm_gateway_stream_timeout_seconds: float = 120.0
+    llm_gateway_request_timeout_seconds: float = 300.0
+    llm_gateway_stream_timeout_seconds: float = 300.0
+    # Per-route timeout used by the orchestrator kernel. Orchestrator model
+    # calls pass this explicitly, so it overrides the gateway defaults above.
+    llm_gateway_route_timeout_seconds: float = 300.0
     llm_gateway_supervisor_json_timeout_seconds: float = 30.0
     llm_gateway_supervisor_text_timeout_seconds: float = 90.0
     llm_gateway_supervisor_stream_timeout_seconds: float = 90.0

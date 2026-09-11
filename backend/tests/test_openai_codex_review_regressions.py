@@ -290,8 +290,17 @@ async def test_effective_gateway_timeout_reaches_codex_http(
         assert [chunk async for chunk in result] == ['{"ok":true}']
     else:
         await result
+    # An explicit timeout must win; otherwise the gateway's configured default
+    # must reach the HTTP client. Read the default from the gateway so this
+    # asserts propagation rather than pinning the configured number.
     effective = (
-        timeout if timeout is not None else 120.0 if "stream" in operation else 60.0
+        timeout
+        if timeout is not None
+        else (
+            gateway.config.stream_timeout_seconds
+            if "stream" in operation
+            else gateway.config.request_timeout_seconds
+        )
     )
     assert calls[0].extensions["timeout"] == {
         key: effective for key in ("connect", "read", "write", "pool")
