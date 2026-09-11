@@ -8,22 +8,21 @@ name: Release
 # `release: published`. release-please acts with GITHUB_TOKEN, and GitHub does
 # not start workflows for events that token triggers, so a release event would
 # never arrive here; a reusable workflow is invoked directly, so it always runs.
-# `workflow_dispatch` stays for re-publishing after a failure, and names the
-# version so a retry cannot silently publish whatever VERSION happens to say.
+# `workflow_dispatch` stays for re-publishing after a failure, and requires the
+# version so a retry can only publish the release it names.
 on:
   workflow_call:
     inputs:
       version:
-        description: Version to publish; empty uses VERSION on the default branch.
-        required: false
+        description: Released version to publish, without the leading "v".
+        required: true
         type: string
-        default: ""
   workflow_dispatch:
     inputs:
       version:
-        description: Version to publish; empty uses VERSION on the default branch.
-        required: false
-        default: ""
+        description: Released version to publish, without the leading "v".
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -40,18 +39,20 @@ jobs:
       value: ${{ steps.resolve.outputs.value }}
       ref: ${{ steps.ref.outputs.ref }}
     steps:
-      # A caller that names a version publishes exactly that one, and it must be
-      # the version the checked-out tree declares.
-      - name: Resolve the requested version and ref
+      # Publishing always targets a released tag. An empty version used to fall
+      # back to the default branch, which pushed images built from an unreleased
+      # tree and then failed uploading release assets to a tag that may not
+      # exist; refusing here keeps a mis-typed retry from publishing at all.
+      - name: Resolve the release ref
         id: ref
         env:
           REQUESTED: ${{ inputs.version }}
         run: |
-          if [ -n "$REQUESTED" ]; then
-            echo "ref=refs/tags/v$REQUESTED" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.event.repository.default_branch }}" >> "$GITHUB_OUTPUT"
+          if [ -z "$REQUESTED" ]; then
+            echo "No version given; publishing requires the released version." >&2
+            exit 1
           fi
+          echo "ref=refs/tags/v$REQUESTED" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,15 +61,15 @@ jobs:
           ref: ${{ steps.ref.outputs.ref }}
 
       # The released stack file, images, and npm packages must all describe one
-      # version. release-please owns VERSION, so a published version that does
-      # not match it means a release step did not run.
-      - name: Resolve the version to publish
+      # version, so a requested version that disagrees with the tag's tree means
+      # the release is inconsistent and nothing should be published from it.
+      - name: Check the requested version matches the tree
         id: resolve
         env:
           REQUESTED: ${{ inputs.version }}
         run: |
           declared=$(cat VERSION)
-          if [ -n "$REQUESTED" ] && [ "$REQUESTED" != "$declared" ]; then
+          if [ "$REQUESTED" != "$declared" ]; then
             echo "Requested version $REQUESTED does not match VERSION $declared." >&2
             exit 1
           fi
@@ -240,10 +241,20 @@ jobs:
 
       # Platform packages first: @hybroai/cli declares them as optional
       # dependencies, so publishing it first would briefly resolve to nothing.
+      # npm versions are immutable and cannot be overwritten, so a retry after a
+      # partial failure must skip what already landed instead of failing on it.
       - name: Publish the platform package
-        run: npm publish "packaging/npm/cli-${{ matrix.platform }}" --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE: "@hybroai/cli-${{ matrix.platform }}"
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE@$VERSION is already published; skipping."
+          else
+            npm publish "packaging/npm/cli-${{ matrix.platform }}" \
+              --provenance --access public
+          fi
 
   npm-cli:
     name: Publish @hybroai/cli
@@ -264,12 +275,19 @@ jobs:
           node-version: "20.19"
           registry-url: "https://registry.npmjs.org"
 
-      # --provenance uses this job's OIDC identity, so no token is committed here:
-      # NPM_TOKEN is a repository secret the release maintainer sets.
+      # --provenance uses this job's OIDC identity, so no token is committed here.
+      # Like the platform packages, the launcher must be skippable: npm refuses
+      # to overwrite a published version, so a retry has to detect what landed.
       - name: Publish the launcher
-        run: npm publish packaging/npm/cli --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          if npm view "@hybroai/cli@$VERSION" version >/dev/null 2>&1; then
+            echo "@hybroai/cli@$VERSION is already published; skipping."
+          else
+            npm publish packaging/npm/cli --provenance --access public
+          fi
 
   verify:
     name: Verify the published stack resolves

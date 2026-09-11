@@ -104,7 +104,9 @@ invalid configuration must not silently select a legacy Provider.
 
 CLI edits use the same validation before saving. Manual JSON edits are validated
 at the next startup. Settings are a startup snapshot: restart services after
-changes, and rebuild the frontend when build-time public settings change.
+changes with `hybro start --recreate`. Only `api_prefix` needs a rebuild, because
+the frontend image compiles its server-side API rewrite from it; the browser
+reads every other public setting from the running container.
 
 `.env`, `.env.example` and `frontend/.env.local` are not required by this contract.
 The CLI supplies only scoped values to containers and frontend builds; transport
@@ -118,7 +120,7 @@ must never enter the browser bundle or be forwarded wholesale to Agents.
 ./scripts/hybro config check
 ./scripts/hybro config set backend.log_level '"DEBUG"'
 ./scripts/hybro config set frontend.max_message_length 12000
-./scripts/hybro start --build --recreate
+./scripts/hybro start --recreate
 ```
 
 Use `config secret <name>` for hidden service-credential input and `setup` for
@@ -134,7 +136,7 @@ it once (optionally importing known deployment values from the old root `.env`):
 ```bash
 ./scripts/hybro config migrate --from-env .env
 ./scripts/hybro config check
-./scripts/hybro start --build --recreate
+./scripts/hybro start --recreate
 ```
 
 Omit `--from-env` if no deployment values need importing. Migration preserves
@@ -147,7 +149,7 @@ re-run the interactive setup, then start:
 
 ```bash
 ./scripts/hybro setup
-./scripts/hybro start --build --recreate
+./scripts/hybro start --recreate
 ```
 
 After either path, normal setup/start uses JSON only, even if the old files
@@ -167,12 +169,15 @@ eligible image model; ChatGPT OAuth alone does not enable it.
 ./scripts/hybro start                    # up -d, no rebuild (fast daily loop)
 ./scripts/hybro start --build            # rebuild images (after code/deps change)
 ./scripts/hybro start --recreate         # recreate containers (runtime configuration changes)
-./scripts/hybro start --build --recreate # rebuild+recreate (public frontend / image changes)
+./scripts/hybro start --build --recreate # rebuild and recreate (after code/deps change)
 ./scripts/hybro logs backend             # stream one service (or all if no arg)
 ./scripts/hybro status                   # docker compose ps --all
 ./scripts/hybro stop                     # stop but keep containers
 ./scripts/hybro down                     # remove containers + default network
 ```
+
+Only a source checkout can rebuild; a released install changes versions with
+`hybro upgrade`. Configuration never needs a rebuild, except `api_prefix`.
 
 Run `./scripts/hybro --help` for the full subcommand reference. Start through the
 CLI so Compose receives validated scoped projections, not ambient dotenv values.
