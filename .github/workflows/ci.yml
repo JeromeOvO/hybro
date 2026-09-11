@@ -84,6 +84,17 @@ jobs:
       - name: Check docker-compose.yml is in sync with agents.yaml
         run: uv run --with pyyaml python default_agents/render_compose.py --check
 
+      # The released stack, which installed CLIs run, is generated from
+      # docker-compose.yml. Fail if their sources diverged.
+      - name: Check docker-compose.release.yml is in sync
+        run: uv run --with pyyaml python default_agents/render_release.py --check
+
+      # The published frontend image compiles this projection, so it must match
+      # what the backend schema and the CLI produce for a default configuration.
+      - name: Check the published frontend projection is in sync
+        working-directory: backend
+        run: uv run --frozen --no-env-file python ../packaging/frontend/render_public_config.py --check
+
 
   frontend-ci:
     name: Frontend CI (Next.js / React)

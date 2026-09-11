@@ -50,6 +50,14 @@ coverage/
 .playwright-report/
 test-results/
 
+# Packaged CLI build output (packaging/cli/build.sh, packaging/npm/build.sh).
+# The staged bundle is ~35 MB per platform and ships through npm, not git.
+# `dist/` is listed because the Node rule above matches it only by name.
+packaging/cli/build/
+packaging/cli/dist/
+packaging/npm/cli-*/hybro/
+*.tgz
+
 # Log Files
 *.log
 logs/

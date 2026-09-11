@@ -1,0 +1,312 @@
+name: Release
+
+# Publishes every artifact of one released version. release-please creates the
+# GitHub Release (and the v<version> tag) from the lockstep manifest; this
+# workflow turns that release into images, npm packages, and release assets.
+#
+# Triggered by the release rather than by the tag so a version that was never
+# released cannot publish artifacts.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, or "latest" for the newest release tag.
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.resolve.outputs.value }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || github.sha }}
+
+      - name: Resolve the version from VERSION
+        id: resolve
+        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      # The released stack file, images, and npm packages must all describe one
+      # version. release-please owns VERSION; a mismatch means a release step
+      # did not run.
+      - name: Check the release tag matches VERSION
+        if: github.event_name == 'release'
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          if [ "$tag" != "v$(cat VERSION)" ]; then
+            echo "Release tag $tag does not match VERSION $(cat VERSION)." >&2
+            exit 1
+          fi
+
+  images:
+    name: Image ${{ matrix.name }}
+    needs: [version]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            build-args: ""
+          - name: frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            # The image compiles its server-side API rewrite from the projection,
+            # so it is built with one. Browser settings arrive per request from
+            # the container environment, so one image serves every install.
+            build-args: |
+              HYBRO_BACKEND_URL=http://backend:8000
+          - name: registrar
+            context: ./default_agents
+            dockerfile: ./default_agents/Dockerfile.registrar
+            build-args: ""
+          - name: weather-agent
+            context: ./default_agents
+            dockerfile: ./default_agents/Dockerfile
+            build-args: |
+              AGENT_DIR=weather_agent
+          - name: image-generator-agent
+            context: ./default_agents
+            dockerfile: ./default_agents/Dockerfile
+            build-args: |
+              AGENT_DIR=image_generator_agent
+          - name: travel-planner-agent
+            context: ./default_agents
+            dockerfile: ./default_agents/Dockerfile
+            build-args: |
+              AGENT_DIR=travel_planner_agent
+          - name: story-agent
+            context: ./default_agents
+            dockerfile: ./default_agents/Dockerfile
+            build-args: |
+              AGENT_DIR=story_agent
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The image compiles its server-side API rewrite from the projection, so it
+      # must be built with one: an empty value fails the build rather than
+      # shipping an unusable image. Browser settings are served per request from
+      # the container's own HYBRO_FRONTEND_CONFIG, so one image serves every
+      # install. The file is generated from the backend schema and checked by CI.
+      - name: Assemble build args
+        id: args
+        run: |
+          args="${{ matrix.build-args }}"
+          if [ "${{ matrix.name }}" = "frontend" ]; then
+            args="${args}
+          HYBRO_FRONTEND_CONFIG=$(cat packaging/frontend/public-config.json)"
+          fi
+          {
+            echo 'value<<BUILD_ARGS'
+            echo "$args"
+            echo 'BUILD_ARGS'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Image names must match default_agents/render_release.py, which is what an
+      # installed CLI resolves: <namespace>/hybro-<compose service name>:<version>.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ steps.args.outputs.value }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/hybro-${{ matrix.name }}:${{ needs.version.outputs.value }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/hybro-${{ matrix.name }}:latest
+
+  cli:
+    name: CLI ${{ matrix.platform }}
+    needs: [version]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: darwin-x64
+            runner: macos-13
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-suffix: "cli-${{ matrix.platform }}"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build the frozen CLI
+        run: packaging/cli/build.sh
+
+      - name: Stage the npm platform package
+        run: packaging/npm/build.sh ${{ matrix.platform }}
+
+      # The release assets let a user run the CLI without npm, and give the
+      # Homebrew formula a stable download URL with a verifiable checksum.
+      - name: Package the bundle for the release assets
+        run: |
+          version="${{ needs.version.outputs.value }}"
+          tar -czf "hybro-${version}-${{ matrix.platform }}.tar.gz" \
+            -C packaging/cli/dist hybro
+          shasum -a 256 "hybro-${version}-${{ matrix.platform }}.tar.gz" \
+            > "hybro-${version}-${{ matrix.platform }}.tar.gz.sha256"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${{ needs.version.outputs.value }}"
+          gh release upload "v${version}" \
+            "hybro-${version}-${{ matrix.platform }}.tar.gz" \
+            "hybro-${version}-${{ matrix.platform }}.tar.gz.sha256" \
+            --clobber
+
+      # Platform packages first: @hybroai/cli declares them as optional
+      # dependencies, so publishing it first would briefly resolve to nothing.
+      - name: Publish the platform package
+        run: npm publish "packaging/npm/cli-${{ matrix.platform }}" --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  npm-cli:
+    name: Publish @hybroai/cli
+    needs: [version, cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19"
+          registry-url: "https://registry.npmjs.org"
+
+      # --provenance uses this job's OIDC identity, so no token is committed here:
+      # NPM_TOKEN is a repository secret the release maintainer sets.
+      - name: Publish the launcher
+        run: npm publish packaging/npm/cli --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  verify:
+    name: Verify the published stack resolves
+    needs: [version, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fails the release when a published image name does not match what
+      # render_release.py makes an installed CLI ask for.
+      - name: Confirm every stack image exists
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          HYBRO_STACK_TAG="$VERSION" \
+            docker compose --env-file /dev/null -f docker-compose.release.yml \
+            config --format json > /tmp/stack.json
+          python3 - <<'PY' > /tmp/images.txt
+          import json
+          config = json.load(open("/tmp/stack.json"))
+          for image in sorted({s["image"] for s in config["services"].values() if "image" in s}):
+              print(image)
+          PY
+          status=0
+          while read -r image; do
+            case "$image" in
+              mongo:*|redis:*)
+                continue
+                ;;
+            esac
+            ok=0
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+              sleep 15
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "Missing published image: $image" >&2
+              status=1
+            else
+              echo "Found $image"
+            fi
+          done < /tmp/images.txt
+          exit "$status"

@@ -4,7 +4,12 @@ The default-agent service blocks + registrar in docker-compose.yml are generated
 from default_agents/agents.yaml by render_compose.py. This test fails if the two
 have diverged, so a manifest edit that wasn't regenerated is caught in CI.
 
+It also guards docker-compose.release.yml, which render_release.py derives from
+docker-compose.yml. A released install runs that file, so drift there would ship
+a stack that no longer matches the development one.
+
     Fix: python default_agents/render_compose.py
+         python default_agents/render_release.py
 """
 
 from __future__ import annotations
@@ -18,6 +23,12 @@ RENDER_SCRIPT = DEFAULT_AGENTS_DIR / "render_compose.py"
 _spec = importlib.util.spec_from_file_location("render_compose", RENDER_SCRIPT)
 render_compose = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(render_compose)
+
+_release_spec = importlib.util.spec_from_file_location(
+    "render_release", DEFAULT_AGENTS_DIR / "render_release.py"
+)
+render_release = importlib.util.module_from_spec(_release_spec)
+_release_spec.loader.exec_module(render_release)
 
 
 def test_compose_matches_manifest() -> None:
@@ -42,4 +53,65 @@ def test_compose_matches_manifest() -> None:
     assert current == expected, (
         "docker-compose.yml is out of sync with default_agents/agents.yaml. "
         "Run: python default_agents/render_compose.py"
+    )
+
+
+def test_release_stack_matches_development_stack() -> None:
+    """A released install runs the published images of the same services."""
+    import yaml
+
+    source = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    release_path = source.with_name("docker-compose.release.yml")
+    expected = render_release.render(source.read_text(encoding="utf-8"))
+
+    assert release_path.read_text(encoding="utf-8") == expected, (
+        "docker-compose.release.yml is out of sync with docker-compose.yml. "
+        "Run: python default_agents/render_release.py"
+    )
+
+    dev = yaml.safe_load(source.read_text(encoding="utf-8"))
+    release = yaml.safe_load(expected)
+    assert release["name"] == dev["name"] == "hybro"
+    assert set(release["services"]) == set(dev["services"])
+    for name, service in release["services"].items():
+        assert "build" not in service, f"{name} would rebuild in a released stack"
+        if "build" in dev["services"][name]:
+            assert service["image"] == render_release.image_for(name)
+        else:
+            assert service["image"] == dev["services"][name]["image"]
+
+
+def test_release_workflow_publishes_every_stack_image() -> None:
+    """Every image a released stack asks for must be one the release builds.
+
+    A renamed service or a new default agent changes the stack's image names; if
+    the release workflow is not updated with it, `hybro start` fails on a user's
+    machine rather than in CI.
+    """
+    import re
+
+    import yaml
+
+    repo = Path(__file__).resolve().parents[2]
+    release_stack = yaml.safe_load(
+        (repo / "docker-compose.release.yml").read_text(encoding="utf-8")
+    )
+    required = {
+        service["image"]
+        for service in release_stack["services"].values()
+        if "image" in service and "hybroai" in service["image"]
+    }
+
+    workflow = (repo / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    built = {
+        render_release.image_for(name)
+        for name in re.findall(r"- name: ([a-z0-9-]+)\n\s+context:", workflow)
+    }
+
+    assert built == required, (
+        "The release workflow and docker-compose.release.yml disagree on image "
+        f"names. Missing from the workflow: {sorted(required - built)}; "
+        f"not referenced by the stack: {sorted(built - required)}."
     )
