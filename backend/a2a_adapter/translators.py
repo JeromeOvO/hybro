@@ -10,10 +10,9 @@ from common.dto import (
 )
 from common.types import Artifact, Message, Part, Task, TaskState, TaskStatus
 
-from .message_factory import to_internal_part
+from .message_factory import from_sdk_message, to_internal_part
 from .webhook_payloads import (
     task_from_artifact_update,
-    task_from_message_frame,
     task_from_status_update,
     task_from_task_frame,
 )
@@ -302,14 +301,12 @@ def facade_result_to_model(response: dict[str, Any]) -> Message | Task:
     kind = response.get("kind")
     result = response.get("result") or {}
     if kind == "message":
-        message = result.get("message") if isinstance(result, dict) else None
-        if isinstance(message, dict):
-            return task_from_message_frame(message, "")
-        return Message.model_validate(result)
+        # A message frame *is* the message; there is no wrapping key. Callers
+        # expect the internal Message here (they branch on its kind), so the
+        # ProtoJSON body is mapped explicitly rather than re-validated.
+        return from_sdk_message(result)
     if kind == "task":
-        if isinstance(result, dict):
-            return task_from_task_frame(result)
-        return Task.model_validate(result)
+        return task_from_task_frame(result)
     if kind == "status-update":
         return task_from_status_update(result, "")
     if kind == "artifact-update":

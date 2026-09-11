@@ -289,9 +289,16 @@ a top-level `url`; `AgentCardSnapshot.interfaces` exposes them and
 `AgentCard.url` is derived from the first advertised interface. Sending,
 querying, cancelling, and HITL continuation all build the client from the same
 card, so a continuation lands on the binding that accepted the task rather than
-on a re-derived endpoint. Agents that advertise a pre-1.0 interface are reached
-through the SDK's own 0.3 compatibility transport, selected from the advertised
-`protocolVersion` — Hybro keeps no second protocol implementation.
+on a re-derived endpoint.
+
+Two bindings are accepted, in the client's own order: JSON-RPC first, then
+HTTP+JSON. Preference is client-side so an agent offering both keeps using the
+binding Hybro has always used, and an agent that publishes only the REST binding
+is still callable instead of being rejected as having no compatible transport.
+One list drives both directions of the protocol: agents that advertise a pre-1.0
+interface are reached through the SDK's own 0.3 compatibility transport, selected
+from the advertised `protocolVersion` — Hybro keeps no second protocol
+implementation.
 
 `a2a_adapter.client_facade` distinguishes a rejected request from a failed
 transport: protocol errors (`InvalidParamsError`, `TaskNotFoundError`, ...) are

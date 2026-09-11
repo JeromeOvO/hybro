@@ -32,8 +32,8 @@ from .bounded_http import bounded_client, event_bounded_client
 from .card_data import build_agent_card
 from .constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
-    JSONRPC_BINDING,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
+    SUPPORTED_BINDINGS,
 )
 from .docker_host_fallback import (
     stream_with_docker_host_fallback,
@@ -48,8 +48,6 @@ from .task_requests import (
 )
 
 logger = get_logger(__name__)
-
-_SUPPORTED_BINDINGS = [JSONRPC_BINDING]
 
 # JSON-RPC code per SDK error type, taken from the SDK's own mapping so a new
 # protocol error does not require editing this table.
@@ -78,7 +76,12 @@ def _client_config(
     return ClientConfig(
         streaming=streaming,
         httpx_client=client,
-        supported_protocol_bindings=list(_SUPPORTED_BINDINGS),
+        supported_protocol_bindings=list(SUPPORTED_BINDINGS),
+        # Client preference keeps JSON-RPC as the binding of choice and only
+        # falls back to HTTP+JSON for agents that do not publish JSON-RPC.
+        # Server preference would instead let card ordering switch an agent
+        # that offers both onto a binding Hybro has not used before.
+        use_client_preference=True,
         accepted_output_modes=list(accepted_output_modes or []),
         push_notification_config=build_push_notification_config(
             push_notification_config

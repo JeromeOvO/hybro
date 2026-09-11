@@ -37,8 +37,14 @@ def make_agent_card(
     default_output_modes: list[str] | None = None,
     protocol_version: str = PROTOCOL_VERSION_1_0,
     protocol_binding: str = JSONRPC_BINDING,
+    interfaces: list[dict[str, Any]] | None = None,
 ) -> AgentCard:
-    """Build a 1.0 agent card with one advertised JSON-RPC interface."""
+    """Build a 1.0 agent card.
+
+    Advertises one interface by default. Pass ``interfaces`` to control the
+    advertised set and its order, for example to test binding selection when a
+    card offers more than one transport.
+    """
     card = AgentCard(
         name=name,
         description=description,
@@ -47,13 +53,19 @@ def make_agent_card(
         default_input_modes=list(default_input_modes or ["text"]),
         default_output_modes=list(default_output_modes or ["text"]),
     )
-    card.supported_interfaces.append(
-        AgentInterface(
-            url=url,
-            protocol_binding=protocol_binding,
-            protocol_version=protocol_version,
-        )
+    advertised = (
+        interfaces
+        if interfaces is not None
+        else [
+            {
+                "url": url,
+                "protocol_binding": protocol_binding,
+                "protocol_version": protocol_version,
+            }
+        ]
     )
+    for interface in advertised:
+        card.supported_interfaces.append(AgentInterface(**interface))
     for skill in skills or []:
         card.skills.append(AgentSkill(**skill))
     return card

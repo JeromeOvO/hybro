@@ -15,7 +15,8 @@ import pytest
 from a2a.client.errors import A2AClientError
 
 from a2a_adapter import client_facade, remote_task
-from common.types import Task, TaskState
+from a2a_adapter.translators import facade_result_to_model
+from common.types import Message, MessageRole, Task, TaskState
 from tests.fakes.a2a_v1 import make_agent_card, make_legacy_card
 from tests.fakes.a2a_v1_agent import (
     A2A10AgentStub,
@@ -515,3 +516,121 @@ async def test_failed_call_is_logged_with_error_outcome(monkeypatch, caplog):
     assert record.operation == "message_send"
     assert record.outcome == "error"
     assert record.error_type
+
+
+# ---------------------------------------------------------------------------
+# Binding selection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_card_advertising_only_http_json_can_be_called(monkeypatch):
+    """An agent that publishes only the REST binding is still addressable.
+
+    Hybro prefers JSON-RPC but must not refuse an agent because it advertises
+    HTTP+JSON instead; the SDK carries both bindings.
+    """
+    stub = A2A10AgentStub(
+        card=make_agent_card(url="http://agent.test/", protocol_binding="HTTP+JSON")
+    )
+    _agent_client(monkeypatch, stub.app)
+
+    card = await client_facade.fetch_agent_card_with_fallback(
+        "http://agent.test", timeout=1
+    )
+    assert card["supportedInterfaces"][0]["protocolBinding"] == "HTTP+JSON"
+
+    # The failure this guards against surfaced while building the client, before
+    # any request went out.
+    client = client_facade._create_client(
+        client_facade._build_card(card),
+        client_facade._client_config(
+            client=httpx.AsyncClient(transport=httpx.MockTransport(lambda _: None)),
+            streaming=False,
+        ),
+    )
+    assert client is not None
+
+
+@pytest.mark.asyncio
+async def test_jsonrpc_wins_over_card_order_when_both_bindings_are_offered(
+    monkeypatch,
+):
+    """Preference follows Hybro's order, not the card's.
+
+    The HTTP+JSON interface points at a host that cannot serve it, so a send
+    that succeeds proves JSON-RPC was chosen even though the card lists
+    HTTP+JSON first.
+    """
+    stub = A2A10AgentStub(
+        send_result={"task": completed_task_payload()},
+        card=make_agent_card(
+            interfaces=[
+                {
+                    "url": "https://rest.invalid",
+                    "protocol_binding": "HTTP+JSON",
+                    "protocol_version": "1.0",
+                },
+                {
+                    "url": "http://agent.test/",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                },
+            ]
+        ),
+    )
+    _agent_client(monkeypatch, stub.app)
+
+    result = await client_facade.send_message(
+        await client_facade.fetch_agent_card_with_fallback(
+            "http://agent.test", timeout=1
+        ),
+        _user_message(),
+        timeout=1,
+    )
+
+    assert result["kind"] == "task"
+    assert stub.requests[-1]["method"] == "SendMessage"
+
+
+# ---------------------------------------------------------------------------
+# Frame conversion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_message_frame_converts_to_internal_message(monkeypatch):
+    """A message-only response becomes an internal Message.
+
+    This is the response shape of a single-shot agent: send_message yields a
+    ``message`` frame rather than a task. Callers branch on the result's kind,
+    so it has to come back as a Message with internal role and part spellings.
+    """
+    stub = A2A10AgentStub(
+        send_result={
+            "message": {
+                "messageId": "response-1",
+                "role": "ROLE_AGENT",
+                "parts": [
+                    {"text": "here is the answer", "mediaType": "text/plain"},
+                    {"data": {"records": [1, 2]}},
+                ],
+            }
+        }
+    )
+    _agent_client(monkeypatch, stub.app)
+
+    response = await client_facade.send_message(
+        make_agent_card(url="http://agent.test/"), _user_message(), timeout=1
+    )
+    assert response["kind"] == "message"
+
+    model = facade_result_to_model(response)
+
+    assert isinstance(model, Message)
+    assert model.kind == "message"
+    assert model.role is MessageRole.AGENT
+    assert model.message_id == "response-1"
+    assert [part.root.kind for part in model.parts] == ["text", "data"]
+    assert model.parts[0].root.text == "here is the answer"
+    assert model.parts[1].root.data["records"] == [1, 2]

@@ -12,7 +12,7 @@ from common.types import Task
 
 from .bounded_http import bounded_client
 from .card_data import build_agent_card
-from .constants import JSONRPC_BINDING
+from .constants import SUPPORTED_BINDINGS
 from .docker_host_fallback import with_docker_host_fallback
 from .message_factory import to_internal_task
 
@@ -36,7 +36,8 @@ async def fetch_remote_task(
             config = ClientConfig(
                 streaming=False,
                 httpx_client=client,
-                supported_protocol_bindings=[JSONRPC_BINDING],
+                supported_protocol_bindings=list(SUPPORTED_BINDINGS),
+                use_client_preference=True,
             )
             task = await with_docker_host_fallback(
                 card,
