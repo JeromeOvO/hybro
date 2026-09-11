@@ -517,10 +517,13 @@ class AgentCard(BaseModel):
     def _derive_url_from_interfaces(cls, data):
         """Accept 1.0 cards, which carry interfaces instead of a top-level url.
 
-        Consumers keep reading ``card.url`` as the primary callable endpoint, so
-        it is derived from the advertised interfaces when the wire card omits it.
+        ``url`` is the agent's base URL, so it is derived from the advertised
+        interfaces only when the data does not carry one at all. An explicit
+        value always wins — including an empty string, which callers use to
+        blank the field (route masking) and which must not be silently refilled
+        with an interface endpoint.
         """
-        if not isinstance(data, dict) or data.get("url"):
+        if not isinstance(data, dict) or data.get("url") is not None:
             return data
         interfaces = data.get("supportedInterfaces") or data.get("additionalInterfaces")
         if isinstance(interfaces, list):

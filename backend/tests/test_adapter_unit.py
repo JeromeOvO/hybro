@@ -628,6 +628,47 @@ def test_translator_a2a_event_to_stream_event_normalizes_payload_and_terminal_st
     assert event.final is True
 
 
+def test_card_snapshot_url_is_the_discovery_base_not_an_interface_endpoint():
+    """A card's base URL must be where the card is discovered.
+
+    Health probing appends the well-known card path to this URL, and identity
+    and de-duplication key on it. A 1.0 card may advertise interfaces on a
+    subpath, so deriving the base from an interface makes the card unreachable
+    at `<base>/.well-known/agent-card.json`.
+    """
+    from a2a_adapter.card_data import build_agent_card
+    from a2a_adapter.translators import a2a_card_to_snapshot
+    from common.types import AgentCard as internal_agent_card
+
+    card = build_agent_card(
+        {
+            "name": "OpenQFR",
+            "version": "0.1.0",
+            "capabilities": {},
+            "skills": [{"id": "qfr_search", "name": "Search"}],
+            "supportedInterfaces": [
+                {
+                    "url": "https://openqfr.dev/a2a/v1",
+                    "protocolBinding": "HTTP+JSON",
+                    "protocolVersion": "1.0",
+                }
+            ],
+        }
+    )
+
+    snapshot = a2a_card_to_snapshot(card, "https://openqfr.dev")
+
+    assert snapshot.url == "https://openqfr.dev"
+    assert [interface.url for interface in snapshot.interfaces] == [
+        "https://openqfr.dev/a2a/v1"
+    ]
+    # raw_card must carry the base too: consumers rebuild an internal card from
+    # it, and without a `url` they would derive one from the interface again.
+    assert snapshot.raw_card["url"] == "https://openqfr.dev"
+    rebuilt = internal_agent_card.model_validate(snapshot.raw_card)
+    assert rebuilt.url == "https://openqfr.dev"
+
+
 def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
     from a2a_adapter.translators import a2a_card_to_snapshot
 

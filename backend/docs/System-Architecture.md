@@ -285,11 +285,15 @@ adapter:
 
 Interface selection is explicit. A 1.0 card advertises endpoints in
 `supportedInterfaces` (`url` + `protocolBinding` + `protocolVersion`) instead of
-a top-level `url`; `AgentCardSnapshot.interfaces` exposes them and
-`AgentCard.url` is derived from the first advertised interface. Sending,
-querying, cancelling, and HITL continuation all build the client from the same
-card, so a continuation lands on the binding that accepted the task rather than
-on a re-derived endpoint.
+a top-level `url`; `AgentCardSnapshot.interfaces` exposes them, and
+`AgentCardSnapshot.url` is the base the card was discovered at — that base is
+what identity, de-duplication, and the health probe (which appends the
+well-known card path) depend on, so it is never taken from an interface
+endpoint, which may live on a subpath. The resolved base is copied into
+`raw_card` as well, so consumers rebuilding an internal card from it cannot
+silently re-derive a different one. Sending, querying, cancelling, and HITL
+continuation all build the client from the same card, so a continuation lands on
+the binding that accepted the task rather than on a re-derived endpoint.
 
 Two bindings are accepted, in the client's own order: JSON-RPC first, then
 HTTP+JSON. Preference is client-side so an agent offering both keeps using the

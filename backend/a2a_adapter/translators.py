@@ -126,7 +126,15 @@ def a2a_event_to_stream_event(
 
 
 def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
+    base_url = _card_base_url(card, agent_url)
     raw_card = _to_raw_dict(card)
+    # A 1.0 card states only its interfaces, so its ProtoJSON has no `url`. Any
+    # consumer that rebuilds an internal card from `raw_card` would then fall
+    # back to deriving one from an interface — the same wrong-base problem this
+    # function exists to avoid. Carry the resolved base in `raw_card` so every
+    # reader sees it, matching how legacy cards already state their own url.
+    if base_url and not raw_card.get("url"):
+        raw_card["url"] = base_url
     capabilities_data = _read(card, "capabilities") or {}
     input_modes = _read(card, "default_input_modes", "defaultInputModes", "input_modes")
     output_modes = _read(
@@ -142,14 +150,7 @@ def a2a_card_to_snapshot(card: Any, agent_url: str) -> AgentCardSnapshot:
             _read(card, "name"),
             agent_url,
         ),
-        url=_first_non_empty(
-            _read(card, "url"),
-            _interface_url(_read(card, "supported_interfaces", "supportedInterfaces")),
-            _interface_url(
-                _read(card, "additional_interfaces", "additionalInterfaces")
-            ),
-            agent_url,
-        ),
+        url=base_url,
         name=_read(card, "name"),
         description=_read(card, "description"),
         capabilities=_normalize_capabilities(
@@ -169,6 +170,28 @@ def _interface_url(interfaces: Any) -> str | None:
         if url:
             return str(url)
     return None
+
+
+def _card_base_url(card: Any, agent_url: str) -> str:
+    """Resolve the agent's base URL.
+
+    ``AgentCardSnapshot.url`` is Hybro's notion of *where the agent lives*: it is
+    the identity used for de-duplication, the target the health probe appends the
+    well-known card path to, and the fallback call target. It is therefore the
+    base the card was discovered at, not an interface endpoint — a 1.0 card may
+    advertise interfaces on a subpath (``https://host/a2a/v1``), and treating one
+    of those as the base makes the card unreachable at
+    ``<base>/.well-known/agent-card.json``.
+
+    Call endpoints are carried separately in ``interfaces``; a legacy card that
+    states its own ``url`` still wins, since that was the base by definition.
+    """
+    return _first_non_empty(
+        _read(card, "url"),
+        agent_url,
+        _interface_url(_read(card, "supported_interfaces", "supportedInterfaces")),
+        _interface_url(_read(card, "additional_interfaces", "additionalInterfaces")),
+    )
 
 
 def _card_interfaces(card: Any, agent_url: str) -> list[AgentCardInterface]:
