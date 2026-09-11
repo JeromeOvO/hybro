@@ -4,17 +4,26 @@ name: Release
 # GitHub Release (and the v<version> tag) from the lockstep manifest; this
 # workflow turns that release into images, npm packages, and release assets.
 #
-# Triggered by the release rather than by the tag so a version that was never
-# released cannot publish artifacts.
+# Called by the release-please workflow rather than triggered by
+# `release: published`. release-please acts with GITHUB_TOKEN, and GitHub does
+# not start workflows for events that token triggers, so a release event would
+# never arrive here; a reusable workflow is invoked directly, so it always runs.
+# `workflow_dispatch` stays for re-publishing after a failure, and names the
+# version so a retry cannot silently publish whatever VERSION happens to say.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: Version to publish; empty uses VERSION on the default branch.
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       version:
-        description: Version to publish, or "latest" for the newest release tag.
+        description: Version to publish; empty uses VERSION on the default branch.
         required: false
-        default: latest
+        default: ""
 
 permissions:
   contents: read
@@ -29,28 +38,41 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       value: ${{ steps.resolve.outputs.value }}
+      ref: ${{ steps.ref.outputs.ref }}
     steps:
+      # A caller that names a version publishes exactly that one, and it must be
+      # the version the checked-out tree declares.
+      - name: Resolve the requested version and ref
+        id: ref
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            echo "ref=refs/tags/v$REQUESTED" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.event.repository.default_branch }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.release.tag_name || github.sha }}
-
-      - name: Resolve the version from VERSION
-        id: resolve
-        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          ref: ${{ steps.ref.outputs.ref }}
 
       # The released stack file, images, and npm packages must all describe one
-      # version. release-please owns VERSION; a mismatch means a release step
-      # did not run.
-      - name: Check the release tag matches VERSION
-        if: github.event_name == 'release'
+      # version. release-please owns VERSION, so a published version that does
+      # not match it means a release step did not run.
+      - name: Resolve the version to publish
+        id: resolve
+        env:
+          REQUESTED: ${{ inputs.version }}
         run: |
-          tag="${{ github.event.release.tag_name }}"
-          if [ "$tag" != "v$(cat VERSION)" ]; then
-            echo "Release tag $tag does not match VERSION $(cat VERSION)." >&2
+          declared=$(cat VERSION)
+          if [ -n "$REQUESTED" ] && [ "$REQUESTED" != "$declared" ]; then
+            echo "Requested version $REQUESTED does not match VERSION $declared." >&2
             exit 1
           fi
+          echo "value=$declared" >> "$GITHUB_OUTPUT"
 
   images:
     name: Image ${{ matrix.name }}
@@ -103,7 +125,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -171,7 +193,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -234,7 +256,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -260,7 +282,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
