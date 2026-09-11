@@ -1,13 +1,15 @@
 import type { NextConfig } from "next";
 import { parsePublicConfig } from './src/lib/config-schema'
 
+// Server-side rewrites are compiled into the image, so routing needs a
+// projection here. Browser settings are NOT build input: the server serves the
+// deployment's projection per request (src/app/hybro-runtime-config/route.ts)
+// and the layout loads it before application code. Publishing those values
+// through `env` would inline them into every bundle — including the serving
+// route — and pin one image to one deployment's settings.
 const publicConfig = parsePublicConfig(process.env.HYBRO_FRONTEND_CONFIG)
+
 const nextConfig: NextConfig = {
-  env: {
-    HYBRO_FRONTEND_CONFIG: JSON.stringify(publicConfig),
-    // SDK interop only: values come from the same validated public projection.
-    ...Object.fromEntries(Object.entries(publicConfig).map(([key, value]) => [`NEXT_PUBLIC_${key.toUpperCase()}`, String(value)])),
-  },
   experimental: {
     prefetchInlining: true,
   },

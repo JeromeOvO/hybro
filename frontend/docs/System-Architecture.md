@@ -63,16 +63,35 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 Frontend settings originate in the `frontend` section of the same
 `~/.hybro/config.json` used by backend (`HYBRO_HOME` overrides the directory).
 `hybro start` validates the document and supplies an allowlisted public JSON
-projection as the `HYBRO_FRONTEND_CONFIG` build argument. `next.config.ts` and
-`src/lib/config-schema.ts` validate that projection; `src/lib/config.ts` exposes
-an immutable build snapshot to business code. API URLs, inspection timeout and
-message-length limits consume this adapter, not individual environment reads.
-SDK-facing `NEXT_PUBLIC_*` constants are derived from the same projection.
+projection to the frontend container as `HYBRO_FRONTEND_CONFIG`.
+
+The projection is **deployment configuration, not build input**. One published
+frontend image serves every install:
+
+1. `src/app/hybro-runtime-config/route.ts` is a `force-dynamic`, `no-store` route
+   that serves the container's projection as a small script. The container reads
+   its own `HYBRO_FRONTEND_CONFIG` per request.
+2. `src/app/layout.tsx` loads that route with a blocking `<script>` in `<head>`.
+   It must be a real tag in the served HTML: a React-rendered script is created
+   during hydration and never executes, and a deferred one would race the
+   application modules that read the projection while they initialize.
+3. `src/lib/config.ts` resolves it once per page load — the delivered global in
+   the browser, the environment where no document exists (tests, server code) —
+   and `parsePublicConfig` validates it either way, so nothing unvalidated
+   reaches business code.
+
+`next.config.ts` still reads `HYBRO_FRONTEND_CONFIG` at build time, because
+server-side rewrites are compiled into the image and need the `api_prefix`. It
+deliberately does not republish the projection through the `env` key: that inlines
+values into every bundle, including the serving route, which pins one image to one
+deployment. `api_prefix` is for the same reason the one setting a released install
+refuses to change (`config set backend.api_prefix`); everything else applies on
+`hybro start --recreate` without a rebuild.
 
 Neither dotenv files nor `auth.json` are browser configuration inputs. Server
-credentials are runtime-only and never build arguments. Rebuild and recreate
-frontend after changing public settings; editing JSON does not hot-update an
-existing browser bundle. See [configuration architecture](../../docs/Configuration-Architecture.md).
+credentials are runtime-only and never build arguments. A browser gets a new
+projection on its next page load; an already-open tab keeps the one it loaded.
+See [configuration architecture](../../docs/Configuration-Architecture.md).
 
 Available package scripts:
 

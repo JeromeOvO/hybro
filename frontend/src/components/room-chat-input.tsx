@@ -15,7 +15,7 @@ import {
 import type { AgentGroup, MessageDispatchInput, TargetModeDispatchInput } from '@/lib/types/agent-group'
 import { BUILTIN_GROUP_ALL_AGENTS, resolveSelectedGroupDispatch } from '@/lib/types/agent-group'
 import { cn } from '@/lib/utils'
-import { config } from '@/lib/config'
+import { publicConfig } from '@/lib/config'
 import type { QuoteData } from '@/lib/types/quote'
 import type { PendingAttachment } from '@/lib/types/attachments'
 import { FileAttachmentButton, ACCEPTED_MIME_SET, MAX_FILE_SIZE, MAX_ATTACHMENTS } from './file-attachment-button'
@@ -26,7 +26,7 @@ import { AttachmentPreview } from './attachment-preview'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { mentionColor } from '@/lib/mention-color'
 
-export const MAX_MESSAGE_LENGTH = config.max_message_length
+export const MAX_MESSAGE_LENGTH = publicConfig().max_message_length
 const COUNTER_VISIBLE_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.95)
 const WARNING_THRESHOLD = Math.floor(MAX_MESSAGE_LENGTH * 0.99)
 const MENTION_CLIPBOARD_MIME = 'application/x-hybro-mentions'
