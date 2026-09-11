@@ -6,7 +6,8 @@ FROM python:3.12-slim
 ARG AGENT_DIR
 ENV AGENT_DIR=${AGENT_DIR}
 
-RUN pip install --no-cache-dir uv
+# Pinned to match backend/Dockerfile; each agent image resolves from the same uv.
+RUN pip install --no-cache-dir uv==0.7.13
 
 WORKDIR /app/${AGENT_DIR}
 COPY ${AGENT_DIR}/ /app/${AGENT_DIR}/

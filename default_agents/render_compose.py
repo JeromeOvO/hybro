@@ -19,6 +19,7 @@ volumes block) is left untouched.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -56,9 +57,9 @@ def _env_line(key: str, default: str) -> str:
     return f"      - {key}=${{{key}:-{default}}}"
 
 
-def load_enabled_agents() -> dict[str, dict]:
+def load_enabled_agents(manifest_path: Path = MANIFEST_PATH) -> dict[str, dict]:
     """Return enabled agents from the manifest, preserving file order."""
-    data = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     agents = data.get("agents", {}) or {}
     enabled: dict[str, dict] = {}
     for name, spec in agents.items():
@@ -163,29 +164,41 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Exit non-zero if docker-compose.yml is out of sync with agents.yaml.",
     )
+    parser.add_argument(
+        "--manifest",
+        default=os.fspath(MANIFEST_PATH),
+        help="Agent manifest to render from (defaults to the repository's).",
+    )
+    parser.add_argument(
+        "--compose",
+        default=os.fspath(COMPOSE_PATH),
+        help="Compose file to rewrite (defaults to the repository's).",
+    )
     args = parser.parse_args(argv)
 
-    agents = load_enabled_agents()
+    manifest_path = Path(args.manifest)
+    compose_path = Path(args.compose)
+    agents = load_enabled_agents(manifest_path)
     region = render_region(agents)
-    current = COMPOSE_PATH.read_text(encoding="utf-8")
+    current = compose_path.read_text(encoding="utf-8")
     expected = build_expected(current, region)
 
     if args.check:
         if current != expected:
             print(
-                "docker-compose.yml is out of sync with default_agents/agents.yaml.\n"
+                f"{compose_path} is out of sync with {manifest_path}.\n"
                 "Run: python default_agents/render_compose.py",
                 file=sys.stderr,
             )
             return 1
-        print("docker-compose.yml is in sync with agents.yaml.")
+        print(f"{compose_path} is in sync with {manifest_path}.")
         return 0
 
     if current == expected:
-        print("docker-compose.yml already up to date.")
+        print(f"{compose_path} already up to date.")
         return 0
-    COMPOSE_PATH.write_text(expected, encoding="utf-8")
-    print(f"Wrote generated default-agent section to {COMPOSE_PATH}.")
+    compose_path.write_text(expected, encoding="utf-8")
+    print(f"Wrote generated default-agent section to {compose_path}.")
     return 0
 
 

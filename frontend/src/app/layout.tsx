@@ -50,6 +50,14 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
+        {/* The projection is deployment configuration, not build input: the tag
+            is static but this route answers per request, so one image serves
+            every install. It must be a real tag in the served HTML — a React
+            rendered one is created during hydration and never executes — and it
+            must block, because application modules read the projection while
+            they initialize. The response is a few hundred bytes, uncached. */}
+        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+        <script src="/hybro-runtime-config" />
         <Script
           id="json-ld"
           type="application/ld+json"

@@ -462,6 +462,19 @@ transport.
 
 ### `llm_gateway`
 
+The host entry point is `configuration_cli`, whose stack resolution lives in
+`cli_stack`. A source checkout runs `docker-compose.yml` in place, where
+`--build` and regeneration from `default_agents/agents.yaml` are meaningful. Any
+other install has no checkout, so it runs `docker-compose.release.yml`, the
+published stack generated from `docker-compose.yml` by
+`default_agents/render_release.py`, which replaces each `build:` block with an
+`image:` reference. The CLI supplies `HYBRO_STACK_TAG` from its own `VERSION`, so
+a released install always runs the images published for the CLI that started it,
+and both files pin `name: hybro` so container identities do not depend on the
+install location. `render_compose.py` is imported and run in-process, so starting
+a checkout never re-executes the CLI binary; a released stack needs no
+regeneration at all.
+
 `./scripts/hybro` in a terminal (or `hybro tui`) opens a fixed-screen settings
 panel with Models and Services tabs. The terminal renderer centers a panel capped
 at 72 columns, highlights the selected row using reverse video, and separates
@@ -480,17 +493,45 @@ Saved locally never implies backend activation, and no deployment is automatic.
 Esc closes a picker or returns from Services; exiting the model page with pending
 changes requires discard confirmation. Ctrl-C exits without saving the draft.
 
-Services delegates to existing commands. Only removal and forced recreation
-require Cancel-default confirmation. Command output remains visible until Enter
-or Esc returns; cancellation is not reported as a command failure. The terminal
+Services delegates to existing commands through a runner the host CLI injects,
+so the gateway never spawns the lifecycle script and an installed CLI has no
+checkout to reach. The page states the CLI and stack version, which are the same
+value by construction, and offers Upgrade alongside the lifecycle actions. When
+Compose cannot be read, the CLI also injects a Docker
+diagnosis, so a missing binary, a stopped daemon, and a missing Compose plugin
+are reported as themselves instead of one generic notice. Reload configuration
+recreates containers from the saved
+configuration; only a source checkout can rebuild images, so the TUI never
+passes `--build`. Only removal and forced recreation require Cancel-default
+confirmation. Command output remains visible until Enter or Esc returns;
+cancellation is not reported as a command failure. The terminal
 screen and input mode are restored on exit. Both TUI and setup use the same JSON
 store. Shell API keys are optional one-time automation inputs, saved privately
 after verification; they are not runtime configuration sources. No arguments
-without a terminal still show help. Package exports and configuration schemas
+without a terminal still show help, which the CLI entry point prints from its
+bundled help file. Package exports and configuration schemas
 are lazy and do not start the application when the CLI imports them.
 
 `./scripts/hybro setup` selects Provider/authentication, acquires credentials,
 then selects text and optional image models, verifies one text call, and saves.
+`hybro upgrade` moves both the CLI and the stack, because the CLI starts the
+images published for its own version. It detects its channel from the running
+binary: an npm install (`node_modules/@hybroai/cli*`) is replaced with
+`npm install --global @hybroai/cli@latest`; a release-archive install prints the
+download, checksum, and unpack commands for its platform instead of overwriting
+its own directory; a source checkout is refused and pointed at `git pull`. The
+TUI's Services page states the version and offers the same action behind a
+confirmation.
+
+The standalone CLI is built from these modules by `packaging/cli/hybro.spec`
+(PyInstaller onedir, so the bundled Compose file keeps a stable path) with the
+runtime dependencies in `packaging/cli/requirements.txt`, and published through
+the npm packages under `packaging/npm/`. A released install refuses `--build`: it
+has no sources. `config set` otherwise applies at runtime through
+`hybro start --recreate`, including frontend settings, which the published
+frontend image serves per request; only `api_prefix` is refused, because the
+image compiles its server-side API rewrite from it at build time.
+
 Interactive setup first displays the saved Provider, authentication method, text
 model and optional image model, or a missing/invalid configuration notice. This
 bounded config-only read never opens `auth.json`, verifies credentials, or claims

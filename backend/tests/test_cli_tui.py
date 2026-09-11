@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from common.config.runtime_config import RuntimeConfigurationError
 from llm_gateway import cli_tui
 from llm_gateway.setup_cli import SetupConsole
 from llm_gateway.setup_terminal import SetupOption, select_option
@@ -56,11 +57,39 @@ def test_apply_requires_confirmation(confirmation):
     console = console_with("services", "apply", confirmation)
     assert cli_tui.main(console=console, run=run) == 130
     if confirmation == "run":
-        run.assert_called_once_with(("start", "--build", "--recreate"))
+        run.assert_called_once_with(("start", "--recreate"))
         console.pause.assert_called_once_with()
     else:
         run.assert_not_called()
         console.pause.assert_not_called()
+
+
+def test_upgrade_replaces_the_cli_only_after_confirmation():
+    """Upgrading changes the installed CLI, so it asks before reaching npm."""
+    run = Mock(return_value=0)
+    console = console_with("services", "upgrade", "run")
+    assert cli_tui.main(console=console, run=run) == 130
+    run.assert_called_once_with(("upgrade",))
+
+    canceled = Mock(return_value=0)
+    console = console_with("services", "upgrade", "cancel")
+    assert cli_tui.main(console=console, run=canceled) == 130
+    canceled.assert_not_called()
+
+
+def test_services_page_states_the_version_the_stack_is_pinned_to(mock_status):
+    """The CLI version is also the stack version, so the screen says so once."""
+    screens = []
+    console = console_with("start", "models")
+    original = console.select
+
+    def select(title, options):
+        screens.append(title)
+        return original(title, options)
+
+    console = SetupConsole(select, console.read_secret, console.write, console.pause)
+    cli_tui._services_page(console, Mock(return_value=0), "start", None, None, "9.9.9")
+    assert "CLI and stack 9.9.9" in screens[0].notice
 
 
 @pytest.mark.parametrize(
@@ -109,6 +138,7 @@ def test_status_is_inline_refreshes_and_menu_is_minimal(mock_status):
             "stop",
             "apply",
             "logs",
+            "upgrade",
             "models",
         }
         return original(title, options)
@@ -118,6 +148,18 @@ def test_status_is_inline_refreshes_and_menu_is_minimal(mock_status):
     assert screens[0].status == ""
     assert screens[0].service_states == (("backend", True),)
     assert screens[1].status == "No containers"
+
+
+def test_unreachable_compose_reports_the_injected_docker_problem(mock_status):
+    """An installed CLI says why Docker is unusable instead of a generic notice."""
+    mock_status.side_effect = OSError("no docker")
+    assert cli_tui._status_snapshot(
+        problem=lambda: "The Docker daemon is stopped."
+    ) == (
+        "The Docker daemon is stopped.",
+        [],
+    )
+    assert cli_tui._status_snapshot() == ("Status unavailable: check Docker", [])
 
 
 def test_status_summary_only_reports_running(mock_status):
@@ -364,14 +406,10 @@ def test_many_service_states_keep_actions_and_colors_in_bounds(size):
         assert len({row for row, _, style, _ in spans if style in {"31", "32"}}) == 1
 
 
-def test_runner_uses_argv_without_shell_or_credential_arguments(monkeypatch):
-    run = Mock(return_value=Mock(returncode=7))
-    monkeypatch.setattr(cli_tui.subprocess, "run", run)
-    assert cli_tui._run_command(("status",)) == 7
-    args, kwargs = run.call_args
-    assert args[0][-1] == "status"
-    assert args[0][0].endswith("/scripts/hybro")
-    assert kwargs == {"check": False}
+def test_standalone_tui_refuses_service_commands_instead_of_spawning():
+    """An installed TUI has no lifecycle script; the host CLI injects the runner."""
+    with pytest.raises(RuntimeConfigurationError):
+        cli_tui._run_command(("status",))
 
 
 def test_explicit_provider_clients_and_keys_do_not_import_app_settings(monkeypatch):

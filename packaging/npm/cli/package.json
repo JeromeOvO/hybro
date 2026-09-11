@@ -1,0 +1,36 @@
+{
+  "name": "@hybroai/cli",
+  "version": "0.2.15",
+  "description": "Hybro command line: configure models and run the Hybro container stack",
+  "keywords": [
+    "hybro",
+    "agents",
+    "a2a",
+    "cli"
+  ],
+  "homepage": "https://github.com/hybroai/hybro",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hybroai/hybro.git",
+    "directory": "packaging/npm/cli"
+  },
+  "license": "Apache-2.0",
+  "bin": {
+    "hybro": "bin/hybro.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "@hybroai/cli-darwin-arm64": "0.2.15",
+    "@hybroai/cli-darwin-x64": "0.2.15",
+    "@hybroai/cli-linux-arm64": "0.2.15",
+    "@hybroai/cli-linux-x64": "0.2.15"
+  }
+}

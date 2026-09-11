@@ -1,6 +1,11 @@
 Hybro — local configuration and service CLI
 
-Usage: ./scripts/hybro [command]
+Usage: hybro [command]
+       ./scripts/hybro [command]   (from a source checkout)
+
+A released install runs the published images pinned to its own version, so
+`hybro --version` is also the version of the stack it starts. From a checkout,
+--build and --compose-file operate on the local sources instead.
 
 No command opens the Models/Services TUI when a terminal is available.
 Non-interactive use without a command prints this help.
@@ -12,7 +17,7 @@ The Services page offers Start, Stop, Reload configuration and View logs.
 Above Start services, each long-running service shows green active or red inactive.
 One-time setup jobs are omitted. The row wraps on narrow terminals.
 Status refreshes on entry and after actions; no background polling.
-Reload configuration confirms before rebuilding and recreating containers.
+Reload configuration confirms before recreating containers.
 View logs selects one container or All; Ctrl-C returns to the container picker.
 Advanced lifecycle commands remain available below.
 
@@ -47,12 +52,14 @@ Configuration:
 Services:
     start [--build] [--recreate] [--compose-file <file>]
         Validate setup, generate missing private service tokens, regenerate the
-        default-agent Compose region, and start services. No dotenv file needed.
-        --build rebuilds images; --recreate recreates existing containers.
-        Use both after updating code or frontend build configuration.
-        --compose-file adds an explicit overlay inside the repository, for
-        example docker-compose.ci.yml for the CI mock-LLM stack. It is passed to
-        Compose directly; no ambient Compose discovery is used.
+        default-agent Compose region in a checkout, and start services. No dotenv
+        file needed.
+        --build rebuilds images; only a source checkout can build.
+        --recreate recreates existing containers; use it after changing
+        configuration. A released install needs --recreate, never --build.
+        --compose-file adds an explicit overlay beside the stack, for example
+        docker-compose.ci.yml for the CI mock-LLM stack. It is passed to Compose
+        directly; no ambient Compose discovery is used.
     status | ps
         Show all containers, including stopped containers.
     logs [service...]
@@ -68,6 +75,16 @@ Services:
         Remove containers/network. Named volumes remain unless -v is supplied.
     help | --help | -h
         Show this help.
+    --version | -v
+        Print the CLI and stack version.
+    upgrade [--check]
+        Install the newest published release. The container images are pinned to
+        the CLI version, so upgrading the CLI is what moves the stack; finish
+        with hybro start --recreate. An npm install is replaced in place; a
+        release-archive install prints the download and checksum commands
+        instead, because hybro does not overwrite its own directory. --check
+        only reports, and exits non-zero when a newer release exists.
+        A source checkout is updated with git pull, not by this command.
 
 Files:
     HYBRO_HOME/config.json  — user overrides, shared by backend and frontend.

@@ -11,10 +11,39 @@ permissions:
 
 jobs:
   release-please:
+    # Only the canonical repository releases. A fork would create release pull
+    # requests that, once merged, run the publish workflow against the wrong
+    # targets: IMAGE_NAMESPACE resolves to the fork owner while the stack
+    # references ghcr.io/hybroai, and the npm packages are named @hybroai/*,
+    # which a fork cannot publish at all. Skipping is also what keeps a fork's
+    # main green instead of failing on a permission it does not need.
+    if: github.repository == 'hybroai/hybro'
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # release-please acts with GITHUB_TOKEN, and GitHub does not start workflows
+  # for events that token triggers. A `release: published` trigger on the
+  # Release workflow would therefore never fire; calling it as a reusable
+  # workflow runs it directly. The permissions below are what the called
+  # workflow's jobs need, since a call can only use what the caller grants.
+  publish:
+    name: Publish the released version
+    needs: [release-please]
+    if: ${{ needs.release-please.outputs.released == 'true' }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+    secrets: inherit

@@ -1,6 +1,11 @@
 # Shared config for every default agent (see default_agents/agents.yaml).
 # Start through hybro: the CLI reads config.json/auth.json and supplies only
 # scoped transport values. No dotenv file is a configuration source.
+#
+# The project name is pinned so a container keeps its identity no matter where
+# the CLI is installed or which directory it runs from.
+name: hybro
+
 x-agent: &agent
   build:
     context: ./default_agents
@@ -94,7 +99,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # Only validated public configuration is embedded into the browser build.
+      # Server-side rewrites are built into the image, so the build still needs a
+      # projection for routing. Browser settings are delivered at runtime below.
       args:
         HYBRO_BACKEND_URL: http://backend:8000
         HYBRO_FRONTEND_CONFIG: ${HYBRO_FRONTEND_CONFIG:-}
@@ -103,6 +109,10 @@ services:
     # Server SDK credentials only; never passed as build arguments.
     environment:
       - HYBRO_BACKEND_URL=http://backend:8000
+      # The public projection the browser reads. It is the same validated
+      # projection the build used, supplied per deployment so one image serves
+      # every install and settings apply on recreate without a rebuild.
+      - HYBRO_FRONTEND_CONFIG=${HYBRO_FRONTEND_CONFIG:-}
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-}
       - CLERK_WEBHOOK_SECRET=${CLERK_WEBHOOK_SECRET:-}
     depends_on:

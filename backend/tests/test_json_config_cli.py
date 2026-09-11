@@ -1,6 +1,7 @@
 """CLI checks use fake subprocesses and synthetic JSON credentials only."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,41 @@ import pytest
 import configuration_cli as cli
 from common.config.runtime_store import RuntimeConfigStore
 from tests.test_json_runtime_config import configured
+
+
+def test_docker_problem_distinguishes_the_three_failure_modes(monkeypatch):
+    """A missing binary, a stopped daemon, and a missing plugin need different fixes."""
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    assert cli.docker_problem() == "Docker is not installed or not on PATH."
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/docker")
+    replies = {
+        "compose": SimpleNamespace(returncode=1),
+        "info": SimpleNamespace(returncode=0),
+    }
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda arguments, **kwargs: replies[arguments[1]]
+    )
+    assert "Compose plugin" in cli.docker_problem()
+
+    replies["compose"] = SimpleNamespace(returncode=0)
+    replies["info"] = SimpleNamespace(returncode=1)
+    assert "daemon is not running" in cli.docker_problem()
+
+    replies["info"] = SimpleNamespace(returncode=0)
+    assert cli.docker_problem() is None
+
+
+def test_docker_problem_reports_a_non_responding_docker(monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda arguments, **kwargs: (_ for _ in ()).throw(OSError("exec failed")),
+    )
+    assert (
+        cli.docker_problem() == "Docker did not respond; check the Docker installation."
+    )
 
 
 def test_start_without_setup_does_not_invoke_docker(monkeypatch, tmp_path, capsys):
@@ -51,15 +87,84 @@ def test_start_projects_only_json_configuration(monkeypatch, tmp_path):
     assert not (tmp_path / ".env").exists()
 
 
-def test_extra_compose_files_must_exist_inside_the_repository():
-    base = str(cli.ROOT / "docker-compose.yml")
-    assert cli.compose_files() == [base]
-    overlay = cli.ROOT / "docker-compose.ci.yml"
+@pytest.fixture
+def released_install(monkeypatch):
+    """Simulate an installed CLI: bundled data files, no source checkout.
+
+    A real install resolves those from the frozen bundle's sys._MEIPASS; the
+    repository root carries the same files, so pointing there exercises the same
+    code path without a build.
+    """
+    import cli_stack
+
+    repo = Path(cli_stack.__file__).resolve().parents[1]
+    monkeypatch.setattr(cli_stack, "_frozen_root", lambda: repo)
+    monkeypatch.setattr(cli_stack, "checkout_root", lambda: None)
+    return cli_stack
+
+
+def test_released_install_runs_the_published_stack(released_install):
+    """Without a checkout the CLI runs the bundled release stack, not a local build."""
+    stack = released_install.resolve()
+
+    assert stack.checkout is False
+    assert stack.compose.name == released_install.RELEASE_COMPOSE
+    assert stack.compose.is_file()
+    assert (
+        released_install.version()
+        == released_install.data_file(released_install.VERSION)
+        .read_text(encoding="utf-8")
+        .strip()
+    )
+
+
+def test_checkout_install_runs_its_own_stack():
+    """A source checkout keeps running the development stack it can rebuild."""
+    stack = cli.resolve()
+
+    assert stack.checkout is True
+    assert stack.compose.name == "docker-compose.yml"
+
+
+def test_released_install_rejects_build_and_the_baked_routing_prefix(
+    monkeypatch, tmp_path, capsys, released_install
+):
+    """A released install has no sources and a frontend image with baked routing."""
+    runtime = configured(tmp_path)
+    monkeypatch.setenv("HYBRO_HOME", str(runtime.home))
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda *a, **k: pytest.fail("unexpected")
+    )
+
+    assert cli.main(["start", "--build"]) == 1
+    assert "no source checkout" in capsys.readouterr().err
+
+    # The API prefix is the one setting the published image cannot follow.
+    assert cli.main(["config", "set", "backend.api_prefix", '"/v2"']) == 1
+    assert "built into the published frontend image" in capsys.readouterr().err
+    assert runtime.read_config().backend.get("api_prefix") is None
+
+    # Everything else applies on recreate, at runtime, without a rebuild.
+    assert cli.main(["config", "set", "frontend.max_message_length", "1234"]) == 0
+    assert "no rebuild" in capsys.readouterr().out
+    assert cli.main(["config", "set", "backend.log_level", '"DEBUG"']) == 0
+    config = runtime.read_config()
+    assert config.frontend["max_message_length"] == 1234
+    assert config.backend["log_level"] == "DEBUG"
+
+
+def test_extra_compose_files_must_exist_beside_the_stack():
+    stack = cli.resolve()
+    assert cli.compose_files(stack) == [str(stack.compose)]
+    overlay = stack.root / "docker-compose.ci.yml"
     assert overlay.is_file()
-    assert cli.compose_files(["docker-compose.ci.yml"]) == [base, str(overlay)]
+    assert cli.compose_files(stack, ["docker-compose.ci.yml"]) == [
+        str(stack.compose),
+        str(overlay),
+    ]
     for rejected in ("/etc/passwd", "../outside.yml", "docker-compose.missing.yml"):
         with pytest.raises(cli.RuntimeConfigurationError):
-            cli.compose_files([rejected])
+            cli.compose_files(stack, [rejected])
 
 
 def test_start_forwards_explicit_compose_overlay(monkeypatch, tmp_path):
@@ -75,16 +180,17 @@ def test_start_forwards_explicit_compose_overlay(monkeypatch, tmp_path):
     assert (
         cli.main(["start", "--build", "--compose-file", "docker-compose.ci.yml"]) == 0
     )
-    # Renderer first, then Compose with the base file and the explicit overlay.
+    stack = cli.resolve()
+    # The renderer runs in-process; Compose gets the stack file and the overlay.
     assert calls[-1][:8] == [
         "docker",
         "compose",
         "--env-file",
         "/dev/null",
         "-f",
-        str(cli.ROOT / "docker-compose.yml"),
+        str(stack.compose),
         "-f",
-        str(cli.ROOT / "docker-compose.ci.yml"),
+        str(stack.root / "docker-compose.ci.yml"),
     ]
     assert calls[-1][-4:] == ["up", "-d", "--remove-orphans", "--build"]
 
@@ -160,14 +266,33 @@ def test_migration_rejects_unsafe_explicit_environment_input(
     assert not (runtime.home / "config.json").exists()
 
 
-def test_tui_entry_point_injects_the_host_service_status_reader(monkeypatch):
-    """The gateway TUI never imports the host CLI; the entry point supplies status."""
+def test_tui_entry_point_injects_host_service_effects(monkeypatch):
+    """The gateway TUI never imports the host CLI; the entry point supplies effects."""
     from llm_gateway import cli_tui
 
     captured = {}
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
     monkeypatch.setattr(cli_tui, "main", lambda **kwargs: captured.update(kwargs) or 0)
     assert cli.main([]) == 0
-    assert captured == {"status": cli.service_status}
+    assert captured == {
+        "status": cli.service_status,
+        "run": cli.compose,
+        "problem": cli.docker_problem,
+        "version": cli.version(),
+    }
+
+
+def test_tui_without_a_terminal_prints_help_instead_of_opening(monkeypatch, capsys):
+    from llm_gateway import cli_tui
+
+    monkeypatch.setattr(cli, "_interactive", lambda: False)
+    monkeypatch.setattr(
+        cli_tui,
+        "main",
+        lambda **kwargs: pytest.fail("TUI needs an interactive terminal"),
+    )
+    assert cli.main([]) == 0
+    assert "Usage: hybro [command]" in capsys.readouterr().out
 
 
 def test_status_does_not_create_runtime_or_read_dotenv(monkeypatch, tmp_path):

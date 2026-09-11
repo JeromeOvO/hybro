@@ -40,18 +40,34 @@ Hybro AI allows developers and teams to deploy, coordinate, and inspect clusters
 
 ### Prerequisites
 - Docker with Compose v2.24+ (`docker compose`; the v1 `docker-compose` binary is not supported)
-- [uv](https://docs.astral.sh/uv/) for host-side `hybro setup`
+- Node.js 18+ to install the CLI from npm (not needed for release-asset installs)
+- [uv](https://docs.astral.sh/uv/) for host-side `hybro setup` from a checkout
 - Node.js 20.19+ (if running the frontend outside of Docker)
 - Python 3.12+ and MongoDB 4.2+ (if running the backend outside of Docker; Docker Compose uses MongoDB 7.0)
 
 ### Quick Start (Docker)
-The installation script clones the repository and opens the CLI when a terminal is available; otherwise it prints setup/start instructions.
+
+Install the CLI, configure it, and start the released stack:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hybroai/hybro/main/install.sh | sh
+npm install -g @hybroai/cli
+hybro setup          # provider, authentication, models -> ~/.hybro/{config,auth}.json
+hybro start          # pulls the images published for this CLI's version
 ```
 
-Alternatively, you can manually clone and run:
+- **Hybro App**: http://localhost:3000
+- **API Server**: http://localhost:8000
+
+Running `hybro` with no arguments opens the same settings/services interface in
+a terminal. `hybro --version` prints the CLI and stack version.
+
+Alternatively, run the CLI without installing it by unpacking a release asset
+(`hybro-<version>-<platform>.tar.gz` from the GitHub Release) and executing
+`hybro/hybro`.
+
+### Quick Start (from a checkout)
+
+The development channel builds images from source instead of pulling them:
 
 ```bash
 git clone https://github.com/hybroai/hybro.git
@@ -60,8 +76,8 @@ cd hybro
 ./scripts/hybro start --build
 ```
 
-- **Hybro App**: http://localhost:3000
-- **API Server**: http://localhost:8000
+Use this channel to change Hybro itself or to use settings the published images
+cannot carry (see [Development and released stacks](#development-and-released-stacks)).
 
 Existing installations should perform the one-time JSON migration below before
 removing old environment files.
@@ -88,7 +104,9 @@ invalid configuration must not silently select a legacy Provider.
 
 CLI edits use the same validation before saving. Manual JSON edits are validated
 at the next startup. Settings are a startup snapshot: restart services after
-changes, and rebuild the frontend when build-time public settings change.
+changes with `hybro start --recreate`. Only `api_prefix` needs a rebuild, because
+the frontend image compiles its server-side API rewrite from it; the browser
+reads every other public setting from the running container.
 
 `.env`, `.env.example` and `frontend/.env.local` are not required by this contract.
 The CLI supplies only scoped values to containers and frontend builds; transport
@@ -102,7 +120,7 @@ must never enter the browser bundle or be forwarded wholesale to Agents.
 ./scripts/hybro config check
 ./scripts/hybro config set backend.log_level '"DEBUG"'
 ./scripts/hybro config set frontend.max_message_length 12000
-./scripts/hybro start --build --recreate
+./scripts/hybro start --recreate
 ```
 
 Use `config secret <name>` for hidden service-credential input and `setup` for
@@ -118,7 +136,7 @@ it once (optionally importing known deployment values from the old root `.env`):
 ```bash
 ./scripts/hybro config migrate --from-env .env
 ./scripts/hybro config check
-./scripts/hybro start --build --recreate
+./scripts/hybro start --recreate
 ```
 
 Omit `--from-env` if no deployment values need importing. Migration preserves
@@ -131,7 +149,7 @@ re-run the interactive setup, then start:
 
 ```bash
 ./scripts/hybro setup
-./scripts/hybro start --build --recreate
+./scripts/hybro start --recreate
 ```
 
 After either path, normal setup/start uses JSON only, even if the old files
@@ -151,15 +169,104 @@ eligible image model; ChatGPT OAuth alone does not enable it.
 ./scripts/hybro start                    # up -d, no rebuild (fast daily loop)
 ./scripts/hybro start --build            # rebuild images (after code/deps change)
 ./scripts/hybro start --recreate         # recreate containers (runtime configuration changes)
-./scripts/hybro start --build --recreate # rebuild+recreate (public frontend / image changes)
+./scripts/hybro start --build --recreate # rebuild and recreate (after code/deps change)
 ./scripts/hybro logs backend             # stream one service (or all if no arg)
 ./scripts/hybro status                   # docker compose ps --all
 ./scripts/hybro stop                     # stop but keep containers
 ./scripts/hybro down                     # remove containers + default network
 ```
 
+Only a source checkout can rebuild; a released install changes versions with
+`hybro upgrade`. Configuration never needs a rebuild, except `api_prefix`.
+
 Run `./scripts/hybro --help` for the full subcommand reference. Start through the
 CLI so Compose receives validated scoped projections, not ambient dotenv values.
+
+### Development and released stacks
+
+The CLI runs one of two Compose files, both pinned to the `hybro` project name so
+containers keep their identity across install locations:
+
+| | Source checkout | Released install |
+|---|---|---|
+| Stack file | `docker-compose.yml` | `docker-compose.release.yml` |
+| Services come from | local `build:` | published `image:` |
+| Version | the working tree | the CLI's own `VERSION` |
+| Rebuild | `start --build` | not possible; install a newer CLI |
+
+`docker-compose.release.yml` is generated from `docker-compose.yml` by
+`default_agents/render_release.py`, which swaps every `build:` block for an
+`image:` reference. It is checked in and verified by CI, so the two stacks cannot
+drift. The CLI supplies `HYBRO_STACK_TAG` (its own version) and optionally
+`HYBRO_IMAGE_REGISTRY` when it starts a released stack, which means a released
+install always runs the images published for the CLI that started it.
+
+Because a released install has no sources, `--build` is refused with an explicit
+message. Upgrading is how you change versions:
+
+```bash
+hybro upgrade --check       # report; exits non-zero when a newer release exists
+hybro upgrade               # install it
+hybro start --recreate      # move the containers onto its images
+```
+
+The container images are pinned to the CLI version, so upgrading the CLI is what
+moves the stack. `hybro upgrade` replaces an npm install in place; an install
+from a release archive prints the download, checksum, and unpack commands
+instead, because hybro does not overwrite its own directory. A source checkout is
+updated with `git pull` and `hybro start --build`.
+
+Everything else, including frontend settings, applies at runtime:
+
+```bash
+hybro config set frontend.max_message_length 12000
+hybro start --recreate      # no rebuild needed
+```
+
+The one exception is `backend.api_prefix`: the published frontend image compiles
+its server-side API rewrite from the prefix at build time, so changing it needs
+the checkout channel. The browser reads the rest of the projection from a
+per-request route (`/hybro-runtime-config`) that
+`packaging/frontend/public-config.json` supplies at build time only for that
+routing.
+
+### Releasing
+
+`release-please` owns version numbers; everything else is produced from them.
+
+1. Merge the release-please PR. It bumps `VERSION`, `backend/pyproject.toml`,
+   `frontend/package.json`, and the `packaging/npm/*/package.json` manifests
+   together, and creates the `v<version>` GitHub Release.
+2. That same workflow then calls the Release workflow as a reusable workflow,
+   which publishes for that one version: the container images, the four platform
+   CLI bundles plus tarballs and checksums on the Release, and the
+   `@hybroai/cli*` npm packages.
+3. The final job resolves `docker-compose.release.yml` and confirms every image
+   name it references exists, so a stack that points at an unpublished image
+   fails the release rather than a user's `hybro start`.
+
+The Release workflow is called rather than triggered by `release: published`
+because release-please acts with `GITHUB_TOKEN`, and GitHub does not start
+workflows for events that token triggers — a release event would never arrive.
+`workflow_dispatch` remains for re-publishing after a failure; give it the
+version so a retry cannot silently publish whatever `VERSION` happens to say.
+The same rule explains why release-please PRs get no automatic CI: GitHub does
+start those runs, but holds them until someone with write access approves them.
+
+Requirements for the workflow: an `NPM_TOKEN` repository secret with publish
+rights for the `@hybroai` scope, and the scope must already exist on npm.
+Publishing the images also needs the `ghcr.io/hybroai` packages to be public;
+GitHub creates them private, and a private image makes `hybro start` fail with
+an authorization error.
+
+`backend/uv.lock` records the project's own version and release-please does not
+update it, so a release leaves it one version behind. `uv sync --frozen`
+tolerates that, but `uv lock --check` does not.
+
+Build the CLI locally with `packaging/cli/build.sh`, then stage it for npm with
+`packaging/npm/build.sh <darwin-arm64|darwin-x64|linux-arm64|linux-x64>`. Releases
+ship a PyInstaller onedir bundle: a onefile bundle would move the Compose file
+between runs, which Compose reads as a changed project.
 
 ## Architecture
 This repository is the source of truth for the product. Its frontend and backend
