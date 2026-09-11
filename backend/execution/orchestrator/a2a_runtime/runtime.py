@@ -1269,13 +1269,19 @@ class A2AAgentToolRuntime:
 
         Mid-stream evidence advances the ledger CAS version for every applied
         observation, so renewal must target the current revision rather than the
-        version this worker dispatched. Only a changed owner means the claim is
-        genuinely lost.
+        version this worker dispatched. Only a changed owner (or a vanished
+        record) means the claim is genuinely lost; a version race between the
+        load and the renew is retried a bounded number of times.
         """
-        latest = await self.ledger.load_by_record_id(record.call_record_id)
-        if latest is None or latest.claim_owner != self.worker_id:
-            return None
-        return await self._renew_and_verify_epoch(latest)
+        for _attempt in range(3):
+            latest = await self.ledger.load_by_record_id(record.call_record_id)
+            if latest is None or latest.claim_owner != self.worker_id:
+                return None
+            renewed = await self._renew_and_verify_epoch(latest)
+            if renewed is not None:
+                return renewed
+            record = latest
+        return None
 
     async def _renew_and_verify_epoch(
         self, record: AgentCallLedgerRecord

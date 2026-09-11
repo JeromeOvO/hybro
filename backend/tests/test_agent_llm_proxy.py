@@ -57,6 +57,28 @@ def make_app(events):
     return app, gateway, requests, closed
 
 
+def test_turn_request_clamps_output_to_catalog_ceiling():
+    from llm_gateway.agent_proxy import ChatMessage, ChatRequest, turn_request
+
+    body = ChatRequest(
+        model="m",
+        messages=[ChatMessage(role="user", content="hi")],
+        max_tokens=32768,
+    )
+    assert turn_request(body, "c", max_output_tokens=8192).max_output_tokens == 8192
+    body.max_completion_tokens = 4096
+    assert turn_request(body, "c", max_output_tokens=8192).max_output_tokens == 4096
+
+
+def test_proxy_reports_catalog_output_ceiling():
+    gateway = SimpleNamespace(
+        _setup=SimpleNamespace(
+            config=SimpleNamespace(models=SimpleNamespace(text="deepseek-v4-flash"))
+        )
+    )
+    assert AgentLLMProxy(gateway, TOKEN).max_output_tokens() == 8192
+
+
 def tool_events():
     return [
         GatewayTurnEvent(kind="text_delta", delta="Checking."),

@@ -65,6 +65,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
+      # Exposes /api/v1/internal/llm on the host. Front production with an ingress
+      # that denies that path to non-Agent callers (see System-Architecture).
       - "8000:8000"
     environment:
       - HYBRO_CONTAINER=1

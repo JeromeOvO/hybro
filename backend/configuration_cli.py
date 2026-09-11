@@ -234,6 +234,16 @@ def _import_environment(config, auth, values):
     return backend, public, services
 
 
+# Legacy env keys with no JSON equivalent. Importing them silently would discard
+# a user's prior model/route selection, so migrate reports them instead.
+_SKIPPED_LEGACY_ENV_FIELDS = frozenset({"openai_model"})
+
+
+def _skipped_legacy_field(name: str) -> bool:
+    key = name.lower()
+    return key in ROUTE_FIELDS or key in _SKIPPED_LEGACY_ENV_FIELDS
+
+
 def _read_legacy_environment(path: str) -> dict[str, str]:
     from dotenv import dotenv_values
 
@@ -286,6 +296,7 @@ def migrate(runtime: RuntimeConfigStore, env_path: str | None) -> None:
         auth = runtime._read("auth.json")
         credential = parse_credential(auth) if auth is not None else None
         values = _read_legacy_environment(env_path) if env_path else {}
+        skipped = sorted(name for name in values if _skipped_legacy_field(name))
         credential = resolve_credential(
             config, credential, values if credential is None else {}
         ).credential
@@ -303,6 +314,11 @@ def migrate(runtime: RuntimeConfigStore, env_path: str | None) -> None:
             _credential_bytes(credential, json.dumps(auth_document).encode()),
             None,
             auth,
+        )
+    if skipped:
+        print(
+            "Warning: skipped legacy fields with no JSON equivalent (rerun hybro setup "
+            f"to restore model selection): {', '.join(skipped)}"
         )
     print(
         "Migrated config.json/auth.json. Original files were not removed. Restart services to apply."

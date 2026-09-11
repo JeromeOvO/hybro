@@ -93,7 +93,9 @@ class ChatRequest(ProxyInput):
     )
 
 
-def turn_request(body: ChatRequest, correlation: str) -> GatewayTurnRequest:
+def turn_request(
+    body: ChatRequest, correlation: str, *, max_output_tokens: int = 32768
+) -> GatewayTurnRequest:
     system: list[str] = []
     messages: list[GatewayTurnMessage] = []
     call_names: dict[str, str] = {}
@@ -149,7 +151,10 @@ def turn_request(body: ChatRequest, correlation: str) -> GatewayTurnRequest:
         tool_choice=body.tool_choice,
         tool_strategy="native",
         temperature=body.temperature,
-        max_output_tokens=body.max_completion_tokens or body.max_tokens or 32768,
+        max_output_tokens=min(
+            body.max_completion_tokens or body.max_tokens or max_output_tokens,
+            max_output_tokens,
+        ),
         timeout_seconds=120,
         # Agent tool loops can make several model calls for one client request.
         turn_id=f"{correlation}:{uuid4().hex}",
@@ -190,6 +195,8 @@ class _AgentLLMProxyPort(Protocol):
 
     def text_model(self) -> str: ...
 
+    def max_output_tokens(self) -> int: ...
+
     def chat_chunks(
         self, turn: GatewayTurnRequest
     ) -> AsyncIterator[dict[str, JsonValue]]: ...
@@ -208,6 +215,20 @@ class AgentLLMProxy:
         if self.gateway._setup is None:
             raise ValueError("Configure the gateway with hybro setup first")
         return self.gateway._setup.config.models.text
+
+    def max_output_tokens(self) -> int:
+        """The configured text model's output ceiling, not the generic 32768."""
+        from llm_gateway.catalog import TEXT_MODELS
+
+        model = self.text_model()
+        return next(
+            (
+                entry.max_output_tokens
+                for entry in TEXT_MODELS
+                if entry.model_id == model
+            ),
+            32768,
+        )
 
     async def chat_chunks(
         self, turn: GatewayTurnRequest

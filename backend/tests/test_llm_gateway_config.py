@@ -26,6 +26,31 @@ def _configure(tmp_path, monkeypatch, provider="openai", model="gpt-5-mini"):
     )
 
 
+@pytest.mark.asyncio
+async def test_openai_api_key_setup_wires_stored_key_into_embeddings(
+    tmp_path, monkeypatch
+):
+    """Embeddings reuse the stored OpenAI key instead of an empty settings key."""
+    from llm_gateway import gateway as gateway_module
+    from llm_gateway.gateway import LLMGatewayImpl
+
+    _configure(tmp_path, monkeypatch, "openai", "gpt-4o-mini")
+    built = []
+
+    def factory(*args, **kwargs):
+        provider = object()
+        built.append((kwargs, provider))
+        return provider
+
+    monkeypatch.setattr(gateway_module, "OpenAIProvider", factory)
+    gateway = LLMGatewayImpl(settings_obj=Settings(openai_api_key=""))
+    wired = [
+        provider for kwargs, provider in built if kwargs.get("api_key") == "fixture-key"
+    ]
+    assert wired
+    assert gateway._providers["openai"] is wired[-1]
+
+
 def test_from_settings_wires_runtime_policy_and_setup_provider(tmp_path, monkeypatch):
     _configure(tmp_path, monkeypatch, "deepseek", "deepseek-v4-flash")
     settings = Settings(

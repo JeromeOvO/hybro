@@ -564,7 +564,16 @@ constructors; no Provider key, OAuth token, full auth file or runtime mount reac
 an Agent. Backend checks this inference-only Bearer token before parsing bodies,
 even in mock-auth mode. `hybro start` generates missing service credentials in
 `auth.json`, without rotating existing tokens. Registrar credentials remain
-separate. Restrict the internal proxy path to trusted callers at public ingress.
+separate.
+
+`/api/v1/internal/llm` is an operational network boundary, not a user boundary:
+its shared inference token proves a bundled Agent, never a human or registrar.
+The default Compose file publishes the backend on `:8000`, so the endpoint is
+host-reachable by default. Production deployments must deny
+`/api/v1/internal/llm` at the public ingress (reverse proxy, load balancer, or
+service mesh) so only the internal Agent network reaches it. Keep the token out
+of browser-visible configuration and logs; it is long-lived and is not a spend
+budget.
 
 Per worker, at most four calls run concurrently; text has a 120-second deadline
 and images 300 seconds. Body limits are 1 MiB text, 128 KiB image generation and

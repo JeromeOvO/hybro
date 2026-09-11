@@ -67,6 +67,22 @@ class LLMGatewayImpl:
                 ),
             }
         self._providers: dict[str, LLMProviderAdapter] = providers
+        if (
+            self._setup is not None
+            and self._setup.config.provider.id == "openai"
+            and self._setup.config.provider.auth == "api_key"
+            and self._enforce_provider_credentials
+        ):
+            # Embeddings stay on the original OpenAI route and are not part of
+            # text/image setup. Reuse the stored API key so they do not build an
+            # OpenAI client from an empty Settings.openai_api_key under JSON.
+            credential = self._setup.authentication.credential
+            api_key = getattr(credential, "api_key", None)
+            if api_key is not None:
+                self._providers["openai"] = OpenAIProvider(
+                    api_key=api_key.get_secret_value(),
+                    base_url=getattr(settings_obj, "openai_base_url", None) or None,
+                )
         self._text_provider = None
         if self._setup is not None:
             from llm_gateway.setup_bindings import create_provider
@@ -112,6 +128,12 @@ class LLMGatewayImpl:
 
             selected = validate_models(self._setup.config)
             if selected.provider == "anthropic":
+                # GatewayTurnRequest only models the OpenAI/DeepSeek wire, so an
+                # Anthropic request cannot be normalized into a copy. Its adapter
+                # receives the frozen transcript plus the private model identity
+                # and ignores the OpenAI-only shaping fields (provider/api/
+                # thinking/tool_strategy); temperature and output limits are read
+                # from the original request exactly like the other adapters.
                 stream = self._text_provider.stream_turn_once(
                     request, model=selected.model_id, cancel_event=cancel_event
                 )

@@ -151,10 +151,6 @@ async def _sse(chunks: AsyncIterator[dict], include_usage: bool) -> AsyncIterato
 async def chat_completions(body: ChatRequest, request: Request, proxy: ProxyDependency):
     correlation = _correlation(request, body.client_request_id)
     try:
-        turn = turn_request(body, correlation)
-    except (ValueError, TypeError):
-        return _error("Invalid message or tool history.", "invalid_request", 400)
-    try:
         proxy.text_model()
     except ValueError:
         return _error(
@@ -162,6 +158,12 @@ async def chat_completions(body: ChatRequest, request: Request, proxy: ProxyDepe
             "not_configured",
             503,
         )
+    try:
+        turn = turn_request(
+            body, correlation, max_output_tokens=proxy.max_output_tokens()
+        )
+    except (ValueError, TypeError):
+        return _error("Invalid message or tool history.", "invalid_request", 400)
     chunks = proxy.chat_chunks(turn)
     headers = {"X-Client-Request-ID": correlation, "Cache-Control": "no-store"}
     if body.stream:

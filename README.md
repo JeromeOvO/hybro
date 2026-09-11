@@ -112,7 +112,8 @@ frontend overrides under `frontend`, and image output size is `image_size`.
 
 ### Existing installations
 
-Before removing old environment files, convert a previous YAML setup explicitly:
+If you previously ran `hybro setup` and have a `~/.hybro/config.yaml`, convert
+it once (optionally importing known deployment values from the old root `.env`):
 
 ```bash
 ./scripts/hybro config migrate --from-env .env
@@ -123,15 +124,24 @@ Before removing old environment files, convert a previous YAML setup explicitly:
 Omit `--from-env` if no deployment values need importing. Migration preserves
 Provider credentials and imports known deployment settings and service secrets;
 it refuses to overwrite an existing `config.json`. Original environment files,
-`.env.example` and `config.yaml` are not deleted. After successful migration,
-normal setup/start uses JSON only, even if those old files remain.
+`.env.example` and `config.yaml` are not deleted.
+
+Installations that only used the old root `.env` (no YAML setup) must instead
+re-run the interactive setup, then start:
+
+```bash
+./scripts/hybro setup
+./scripts/hybro start --build --recreate
+```
+
+After either path, normal setup/start uses JSON only, even if the old files
+remain. `migrate` warns when it skips legacy route/model fields it cannot map.
 
 The already-implemented Agent proxy shares backend's setup-selected gateway.
 Agents retain SDKs, tools, HITL and A2A execution. Image generation requires an
 eligible image model; ChatGPT OAuth alone does not enable it.
 
-See [configuration architecture](docs/Configuration-Architecture.md) for the
-migration boundary and acceptance checks.
+
 
 ## Running
 

@@ -194,6 +194,115 @@ async def test_sync_dispatch_with_fenced_heartbeat_succeeds_past_lease_ttl():
 
 
 @pytest.mark.asyncio
+async def test_renew_retries_when_evidence_lands_between_load_and_renew():
+    """Regression: a CAS bump inside the load->renew window must not cancel."""
+
+    dispatching_started = asyncio.Event()
+
+    class RacingLedger(InMemoryAgentCallLedgerStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.injected = False
+
+        async def renew(
+            self,
+            call_record_id,
+            *,
+            expected_state_version,
+            owner_id,
+            lease_expires_at,
+            renewed_at,
+        ):
+            record = self._records[call_record_id]
+            if (
+                not self.injected
+                and record is not None
+                and record.state == "dispatching"
+                and dispatching_started.is_set()
+            ):
+                self.injected = True
+                # Evidence lands after the caller loaded the record but before
+                # the CAS renew; the loaded revision is now stale.
+                self._records[call_record_id] = record.model_copy(
+                    update={"state_version": record.state_version + 1}
+                )
+            return await super().renew(
+                call_record_id,
+                expected_state_version=expected_state_version,
+                owner_id=owner_id,
+                lease_expires_at=lease_expires_at,
+                renewed_at=renewed_at,
+            )
+
+    ledger = RacingLedger()
+    epochs = InMemoryRoomEpochStore()
+    await epochs.activate("room-1", "creation-1", activated_at=NOW)
+    finalizer = TerminalInteractionFinalizer(InMemoryHITLApplicationPort())
+    prep = prepared()
+    prep_reader = InMemoryPreparedInvocationSnapshotReader()
+    prep_reader.put(prep)
+
+    policy = A2ARuntimePolicy(
+        claim_lease_seconds=0.15,
+        claim_renew_interval_seconds=0.02,
+    )
+
+    class SlowDispatch:
+        async def dispatch(self, command):
+            dispatching_started.set()
+            await asyncio.sleep(0.2)
+            terminal = NormalizedA2AObservation(
+                observation_id="obs-terminal-race",
+                source_kind="direct",
+                source_identity=f"direct:{prep.binding.endpoint_scope_digest}:task-1:terminal:",
+                binding_scope=prep.binding.endpoint_scope_digest,
+                call_record_id=command.call_record_id,
+                event_kind="terminal",
+                observed_at=NOW,
+                task_id="task-1",
+                context_id="ctx-1",
+                agent_id="agent-1",
+                status="completed",
+                content=[{"kind": "text", "text": "generated-output"}],
+                artifact_refs=[],
+            )
+            return A2ADispatchReceipt(
+                outcome="terminal",
+                task_id="task-1",
+                context_id="ctx-1",
+                terminal_observation=terminal,
+            )
+
+    runtime = A2AAgentToolRuntime(
+        ledger=ledger,
+        prepared_reader=prep_reader,
+        checkpoint_reader=SimpleCheckpoints(),
+        authorization=SimpleAuthorization(),
+        room_epochs=epochs,
+        resources=SimpleResources(),
+        dispatch=SlowDispatch(),
+        observations=A2AObservationIngress(
+            inbox=InMemoryObservationInboxStore(),
+            conflicts=InMemoryObservationConflictStore(),
+            ledger=ledger,
+            authenticator=RejectExternalIngressAuthenticator(),
+        ),
+        terminal_finalizer=finalizer,
+        policy=policy,
+    )
+
+    inv = invocation()
+    accepted = await runtime.accept(inv)
+    result = await runtime.execute(inv, accepted, signal=NeverCancelled())
+
+    assert isinstance(result, ToolResult)
+    assert result.content == [TextPart(text="generated-output")]
+    record = await ledger.load(inv.run_id, inv.invocation_id)
+    assert record is not None
+    assert record.state == "completed"
+
+
+@pytest.mark.asyncio
 async def test_midstream_evidence_does_not_cancel_fenced_dispatch():
     """Applied mid-stream evidence must not break lease renewal.
 
