@@ -263,6 +263,57 @@ Examples:
   it through the adapter-owned `A2ATaskTrackingPort`; `a2a_adapter` does not
   import `execution`, so the package dependency remains one-way.
 
+#### A2A protocol boundary (SDK 1.x / protocol 1.0)
+
+The backend speaks A2A 1.0 through `a2a-sdk>=1.1.2,<2`. That SDK migrated its
+types from Pydantic models to protobuf, so three boundary facts shape the
+adapter:
+
+- `a2a_adapter.message_factory` is the single conversion point between internal
+  models and protobuf. Protocol objects never reach business code: callers pass
+  plain dicts, card data, and internal `common.types` models, and receive the
+  normalized `{"kind", "result", "error"}` envelope.
+- Enum spelling differs by direction. Internal states stay lowercase-hyphenated
+  (`input-required`) and roles stay `user`/`agent`; the wire uses
+  `TASK_STATE_INPUT_REQUIRED` and `ROLE_AGENT`. ProtoJSON renders numbers as
+  doubles, so inbound conversion restores integral floats to `int` to keep
+  structured data and observation digests stable.
+- `FileContent.bytes` remains base64 text internally. The boundary decodes to
+  protobuf `Part.raw` once when sending and encodes once when receiving, so
+  payloads are never base64-ed twice; validation stays with artifact
+  materialization, which owns its failure semantics.
+
+Interface selection is explicit. A 1.0 card advertises endpoints in
+`supportedInterfaces` (`url` + `protocolBinding` + `protocolVersion`) instead of
+a top-level `url`; `AgentCardSnapshot.interfaces` exposes them and
+`AgentCard.url` is derived from the first advertised interface. Sending,
+querying, cancelling, and HITL continuation all build the client from the same
+card, so a continuation lands on the binding that accepted the task rather than
+on a re-derived endpoint. Agents that advertise a pre-1.0 interface are reached
+through the SDK's own 0.3 compatibility transport, selected from the advertised
+`protocolVersion` — Hybro keeps no second protocol implementation.
+
+`a2a_adapter.client_facade` distinguishes a rejected request from a failed
+transport: protocol errors (`InvalidParamsError`, `TaskNotFoundError`, ...) are
+projected onto the error envelope, while transport errors are re-raised so
+Execution keeps its "delivery uncertain" recovery decision instead of treating
+a network failure as a definite rejection.
+
+Stream frames are discriminated structurally. A 1.0 frame carries exactly one of
+`task` / `statusUpdate` / `artifactUpdate` / `message`, with no `kind` field and
+no `final` flag; pre-1.0 frames that still carry `kind` remain accepted for
+agents that have not been migrated. `a2a_adapter.webhook_payloads` parses both
+shapes, and the same parser serves direct streaming and webhook ingestion so
+artifact and HITL semantics cannot diverge between them. A status update keeps
+its message on `status.message` and does not synthesize an artifact from that
+text; only a message-only response becomes a response artifact.
+
+Registering an agent and calling it therefore requires the backend and that
+agent to agree on the protocol: a card advertising only a 1.0 interface cannot
+be parsed by a pre-1.0 backend. Deploy the backend and the bundled agents
+together.
+
+
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
@@ -385,7 +436,9 @@ See [configuration architecture](../../docs/Configuration-Architecture.md).
 #### A2A Inline File Dispatch Policy
 
 Under the active attachment policy, user-uploaded files sent to agents are
-read from the room file store and dispatched as A2A `FileContent.bytes`.
+read from the room file store and dispatched as A2A `FileContent.bytes`
+(base64 text internally; decoded once to protobuf `Part.raw` at the 1.0
+boundary).
 Local filesystem paths and authenticated room-file URLs remain internal to
 Hybro and are never sent to agents.
 

@@ -14,7 +14,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import (
+
+# Sample data uses the internal (SDK-free) A2A models: the domain layer never
+# holds SDK objects, which are confined to ``a2a_adapter``. Cards and tasks
+# arriving from the wire are converted at that boundary.
+from common.types import (
     AgentCapabilities,
     AgentCard,
     AgentSkill,

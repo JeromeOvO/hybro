@@ -109,6 +109,8 @@ def extract_parts(parts: list) -> ExtractedParts:
     """Extract and classify all parts from an A2A parts list.
 
     Handles both direct part objects and discriminated union wrappers (part.root).
+    Non-text parts are projected to dicts carrying a flat ``mime_type`` key so
+    consumers do not have to read both the canonical field and its aliases.
     """
     result = ExtractedParts()
     for part in parts:
@@ -126,13 +128,9 @@ def extract_parts(parts: list) -> ExtractedParts:
             if isinstance(text, str) and text:
                 result.text_parts.append(text)
         elif kind == "file":
-            result.file_parts.append(
-                root.model_dump() if hasattr(root, "model_dump") else vars(root)
-            )
+            result.file_parts.append(_part_dict(root))
         elif kind == "data":
-            result.data_parts.append(
-                root.model_dump() if hasattr(root, "model_dump") else vars(root)
-            )
+            result.data_parts.append(_part_dict(root))
         else:
             text = getattr(root, "text", None)
             if isinstance(text, str) and text:
@@ -140,6 +138,17 @@ def extract_parts(parts: list) -> ExtractedParts:
             else:
                 logger.warning("Unknown part kind=%s, skipping", kind)
     return result
+
+
+def _part_dict(root: Any) -> dict[str, Any]:
+    if hasattr(root, "model_dump"):
+        data = root.model_dump()
+    else:
+        data = dict(vars(root))
+    mime_type = data.get("mime_type") or data.get("mimeType")
+    if mime_type and not data.get("mime_type"):
+        data["mime_type"] = mime_type
+    return data
 
 
 def extract_parts_from_artifacts(artifacts: list) -> ExtractedParts:

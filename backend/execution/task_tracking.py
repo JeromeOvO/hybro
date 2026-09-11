@@ -266,13 +266,14 @@ class A2ATaskTrackingService:
 
         try:
             response = await send_hitl_reply(
-                agent_url,
+                agent_card,
                 _build_hitl_reply_message(
                     task_id=task_id,
                     context_id=context_id,
                     user_input=user_input,
                     message_id=outbound_message_id,
                 ),
+                agent_url=agent_url,
                 agent_id=msg.agent_id,
                 push_notification_config=push_config,
                 blocking=hitl_blocking,

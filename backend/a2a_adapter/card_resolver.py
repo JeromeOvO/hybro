@@ -2,14 +2,11 @@ import logging
 import time
 
 import httpx
-from a2a.types import AgentCard
-from a2a.utils.constants import (
-    AGENT_CARD_WELL_KNOWN_PATH,
-    PREV_AGENT_CARD_WELL_KNOWN_PATH,
-)
 
 from common.dto import AgentCardSnapshot
 
+from .card_data import build_agent_card
+from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
 from .docker_host_fallback import docker_host_fallback_url_for_error
 from .translators import a2a_card_to_snapshot
 
@@ -70,8 +67,7 @@ class AgentCardResolverImpl:
             try:
                 response = await self._client.get(f"{normalized_url}{path}")
                 response.raise_for_status()
-                payload = response.json()
-                card = AgentCard(**payload)
+                card = build_agent_card(response.json())
                 return a2a_card_to_snapshot(card, normalized_url), None
             except httpx.HTTPStatusError as exc:
                 last_error = exc

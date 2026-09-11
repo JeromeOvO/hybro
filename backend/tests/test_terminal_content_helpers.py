@@ -62,7 +62,7 @@ class TestTerminalContentHelpers:
     def test_resolve_terminal_sse_content_prefers_message_text_on_completed(
         self,
     ) -> None:
-        from a2a.types import TaskState
+        from common.types import TaskState
 
         stored = "1. First\n2. Second"
         raw_artifact = "artifact fallback"

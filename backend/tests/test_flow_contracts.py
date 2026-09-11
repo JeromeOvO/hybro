@@ -19,15 +19,15 @@ Tests cover:
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import (
-    AgentCapabilities,
-    AgentCard,
-    AgentSkill,
-)
 
 from common.auth import ClerkUser
 from common.dto import ExecutionAck
 from common.dto.agent import AgentInfo
+from common.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+)
 from models.agent import Agent, AgentStatus
 from models.response import (
     AgentCenterResponse,

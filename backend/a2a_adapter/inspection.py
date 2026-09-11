@@ -5,31 +5,13 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-import httpx
-from a2a.client import A2ACardResolver, A2AClient
-from a2a.client.errors import A2AClientHTTPError
-from a2a.types import (
-    AgentCard as SDKAgentCard,
-)
-from a2a.types import (
-    JSONRPCErrorResponse,
-    Message,
-    MessageSendConfiguration,
-    MessageSendParams,
-    Role,
-    SendMessageRequest,
-    SendStreamingMessageRequest,
-    TextPart,
-)
-
 from common.types import AgentCard
 
-from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
-from .docker_host_fallback import (
-    stream_with_docker_host_fallback,
-    with_docker_host_fallback,
-    with_docker_host_url_fallback,
-)
+from .client_facade import fetch_agent_card_with_fallback, send_message, stream_message
+from .translators import a2a_card_to_snapshot
+
+_STATUS_OK = 200
+_STATUS_PROBE_FAILED = 500
 
 
 async def fetch_agent_card_for_inspection(
@@ -38,9 +20,8 @@ async def fetch_agent_card_for_inspection(
     timeout: float = 30.0,
 ) -> AgentCard:
     """Fetch an agent card for inspection and return the internal card model."""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        sdk_card = await _fetch_sdk_agent_card_with_fallback(client, agent_url)
-    return _to_internal_card(sdk_card)
+    payload = await fetch_agent_card_with_fallback(agent_url, timeout=timeout)
+    return _to_internal_card(payload, agent_url)
 
 
 async def inspect_a2a_connection(
@@ -50,109 +31,67 @@ async def inspect_a2a_connection(
     timeout: float = 600.0,
 ) -> dict[str, Any]:
     """Fetch an agent card, dry-send a probe message, and return SDK-free data."""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        sdk_card = await _fetch_sdk_agent_card_with_fallback(client, agent_url)
-        response = await _dry_send_message(client, sdk_card, probe_text)
+    card_data = await fetch_agent_card_with_fallback(agent_url, timeout=timeout)
+    internal_card = _to_internal_card(card_data, agent_url)
+    message = {
+        "role": "user",
+        "message_id": uuid4().hex,
+        "context_id": uuid4().hex,
+        "parts": [{"kind": "text", "text": str(probe_text)}],
+    }
 
-    internal_card = _to_internal_card(sdk_card)
+    try:
+        response = await _probe(card_data, message, timeout=timeout)
+    except Exception as exc:
+        return {
+            "agent_card": internal_card,
+            "result": [f"Failed to send message: {exc}"],
+            "status_code": _STATUS_PROBE_FAILED,
+        }
+
+    if response is None:
+        return {
+            "agent_card": internal_card,
+            "result": ["Response from agent is missing required 'kind' field."],
+            "status_code": _STATUS_PROBE_FAILED,
+        }
+
+    errors, is_transport_error = validate_response_data(response)
+    failed = is_transport_error or bool(errors)
     return {
         "agent_card": internal_card,
-        "result": response["result"],
-        "status_code": response["status_code"],
+        "result": errors,
+        "status_code": _STATUS_PROBE_FAILED if failed else _STATUS_OK,
     }
 
 
-async def _fetch_sdk_agent_card_with_fallback(
-    client: httpx.AsyncClient,
-    agent_url: str,
-) -> SDKAgentCard:
-    return await with_docker_host_url_fallback(
-        str(agent_url),
-        lambda candidate_url: _fetch_sdk_agent_card_from_url(client, candidate_url),
+async def _probe(
+    card_data: dict[str, Any],
+    message: dict[str, Any],
+    *,
+    timeout: float,
+) -> dict[str, Any] | None:
+    """Send the probe over whichever transport the agent advertises."""
+    accepted_modes = _resolve_accepted_modes(card_data)
+    if _capability(card_data, "streaming"):
+        last_frame: dict[str, Any] | None = None
+        async for frame in stream_message(
+            card_data, message, accepted_output_modes=accepted_modes, timeout=timeout
+        ):
+            last_frame = frame
+        return last_frame
+    return await send_message(
+        card_data,
+        message,
+        accepted_output_modes=accepted_modes,
+        blocking=True,
+        timeout=timeout,
     )
 
 
-async def _fetch_sdk_agent_card_from_url(
-    client: httpx.AsyncClient,
-    agent_url: str,
-) -> SDKAgentCard:
-    resolver = A2ACardResolver(client, str(agent_url), AGENT_CARD_WELL_KNOWN_PATH)
-    try:
-        return await resolver.get_agent_card()
-    except A2AClientHTTPError as exc:
-        if exc.status_code != 404:
-            raise
-    fallback = A2ACardResolver(client, str(agent_url), PREV_AGENT_CARD_WELL_KNOWN_PATH)
-    return await fallback.get_agent_card()
-
-
-async def _dry_send_message(
-    client: httpx.AsyncClient,
-    card: SDKAgentCard,
-    message_text: str,
-) -> dict[str, Any]:
-    message = Message(
-        role=Role.user,
-        parts=[TextPart(text=str(message_text))],
-        message_id=str(uuid4()),
-        context_id=str(uuid4()),
-    )
-    payload = MessageSendParams(
-        message=message,
-        configuration=MessageSendConfiguration(
-            accepted_output_modes=_resolve_accepted_modes(card)
-        ),
-    )
-    try:
-        if getattr(card.capabilities, "streaming", False) is True:
-            request = SendStreamingMessageRequest(
-                id=str(uuid4()),
-                method="message/stream",
-                jsonrpc="2.0",
-                params=payload,
-            )
-            last_result: dict[str, Any] | None = None
-            async for stream_result in stream_with_docker_host_fallback(
-                card,
-                lambda candidate: A2AClient(
-                    client,
-                    agent_card=candidate,
-                ).send_message_streaming(request),
-            ):
-                last_result = _validate_response(stream_result)
-            return last_result or {
-                "result": ["Response from agent is missing required 'kind' field."],
-                "status_code": 500,
-            }
-
-        request = SendMessageRequest(
-            id=str(uuid4()),
-            method="message/send",
-            jsonrpc="2.0",
-            params=payload,
-        )
-        response = await with_docker_host_fallback(
-            card,
-            lambda candidate: A2AClient(client, agent_card=candidate).send_message(
-                request
-            ),
-        )
-        return _validate_response(response)
-    except Exception as exc:
-        return {"result": [f"Failed to send message: {exc}"], "status_code": 500}
-
-
-def _validate_response(result: Any) -> dict[str, Any]:
-    if isinstance(result.root, JSONRPCErrorResponse):
-        error_data = result.root.error.model_dump(exclude_none=True)
-        return {"result": [str(error_data)], "status_code": 500}
-
-    response_data = result.root.result.model_dump(exclude_none=True)
-    validation_errors = validate_message_data(response_data)
-    return {
-        "result": validation_errors,
-        "status_code": 500 if validation_errors else 200,
-    }
+def _to_internal_card(card_data: Any, agent_url: str) -> AgentCard:
+    """Project fetched card data onto the internal card model."""
+    return AgentCard.model_validate(a2a_card_to_snapshot(card_data, agent_url).raw_card)
 
 
 def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:
@@ -168,77 +107,98 @@ def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:
 
 
 def validate_message_data(data: dict[str, Any]) -> list[str]:
-    """Validate an incoming SDK-free A2A message payload by kind."""
-    return _validate_message(data)
-
-
-def _validate_message(data: dict[str, Any]) -> list[str]:
-    if "kind" not in data:
+    """Validate an incoming SDK-free A2A message payload by event kind."""
+    if not isinstance(data, dict) or not data:
         return ["Response from agent is missing required 'kind' field."]
 
-    kind = data.get("kind")
+    kind = _event_kind(data)
+    if kind is None:
+        return ["Response from agent is missing required 'kind' field."]
+
     validators = {
         "task": _validate_task,
         "status-update": _validate_status_update,
         "artifact-update": _validate_artifact_update,
         "message": _validate_agent_message,
     }
-    validator = validators.get(str(kind))
+    validator = validators.get(kind)
     if validator:
         return validator(data)
     return [f"Unknown message kind received: '{kind}'."]
 
 
+def _event_kind(data: dict[str, Any]) -> str | None:
+    """Identify a response payload by its member, or by a legacy ``kind``."""
+    for member, kind in (
+        ("task", "task"),
+        ("statusUpdate", "status-update"),
+        ("artifactUpdate", "artifact-update"),
+        ("message", "message"),
+    ):
+        if member in data:
+            return kind
+    raw_kind = data.get("kind")
+    if isinstance(raw_kind, str) and raw_kind.strip():
+        return raw_kind.strip().replace("_", "-").lower()
+    return None
+
+
 def _validate_task(data: dict[str, Any]) -> list[str]:
+    task = data.get("task") if isinstance(data.get("task"), dict) else data
     errors = []
-    if "id" not in data:
+    if not task.get("id"):
         errors.append("Task object missing required field: 'id'.")
-    if "status" not in data or "state" not in data.get("status", {}):
+    status = task.get("status")
+    if not isinstance(status, dict) or not status.get("state"):
         errors.append("Task object missing required field: 'status.state'.")
     return errors
 
 
 def _validate_status_update(data: dict[str, Any]) -> list[str]:
-    if "status" not in data or "state" not in data.get("status", {}):
+    event = (
+        data.get("statusUpdate") if isinstance(data.get("statusUpdate"), dict) else data
+    )
+    status = event.get("status")
+    if not isinstance(status, dict) or not status.get("state"):
         return ["StatusUpdate object missing required field: 'status.state'."]
     return []
 
 
 def _validate_artifact_update(data: dict[str, Any]) -> list[str]:
-    errors = []
-    if "artifact" not in data:
-        errors.append("ArtifactUpdate object missing required field: 'artifact'.")
-    elif (
-        "parts" not in data.get("artifact", {})
-        or not isinstance(data.get("artifact", {}).get("parts"), list)
-        or not data.get("artifact", {}).get("parts")
-    ):
-        errors.append("Artifact object must have a non-empty 'parts' array.")
-    return errors
+    event = (
+        data.get("artifactUpdate")
+        if isinstance(data.get("artifactUpdate"), dict)
+        else data
+    )
+    artifact = event.get("artifact")
+    if not isinstance(artifact, dict):
+        return ["ArtifactUpdate object missing required field: 'artifact'."]
+    parts = artifact.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return ["Artifact object must have a non-empty 'parts' array."]
+    return []
 
 
 def _validate_agent_message(data: dict[str, Any]) -> list[str]:
+    message = data.get("message") if isinstance(data.get("message"), dict) else data
     errors = []
-    if (
-        "parts" not in data
-        or not isinstance(data.get("parts"), list)
-        or not data.get("parts")
-    ):
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
         errors.append("Message object must have a non-empty 'parts' array.")
-    if "role" not in data or data.get("role") != "agent":
+    role = str(message.get("role") or "").upper().removeprefix("ROLE_")
+    if role != "AGENT":
         errors.append("Message from agent must have 'role' set to 'agent'.")
     return errors
 
 
-def _resolve_accepted_modes(card: SDKAgentCard) -> list[str]:
-    modes = getattr(card, "default_output_modes", None) or getattr(
-        card, "defaultOutputModes", None
-    )
+def _resolve_accepted_modes(card_data: dict[str, Any]) -> list[str]:
+    modes = card_data.get("defaultOutputModes") or card_data.get("default_output_modes")
     return list(modes or ["text/plain"])
 
 
-def _to_internal_card(card: SDKAgentCard) -> AgentCard:
-    return AgentCard.model_validate(card.model_dump(mode="json"))
+def _capability(card_data: dict[str, Any], name: str) -> Any:
+    capabilities = card_data.get("capabilities")
+    return capabilities.get(name) if isinstance(capabilities, dict) else None
 
 
 __all__ = [

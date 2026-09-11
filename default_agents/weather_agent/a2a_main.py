@@ -2,7 +2,10 @@
 A2A Agent Server for Weather Agent
 
 This module exposes the LangChain Weather Agent as an A2A (Agent-to-Agent) Protocol
-compliant agent using the a2a-adapter SDK (v0.2) with the LangChainAdapter.
+compliant agent using the a2a-adapter SDK (v0.2, >=0.2.13) with the
+LangChainAdapter. a2a-adapter >= 0.2.9 depends on a2a-sdk >= 1, so
+build_agent_card() advertises an A2A 1.0 JSON-RPC interface and the server is
+hosted by the a2a-sdk 1.x route factories.
 
 Features:
 - Get current weather for any city
@@ -86,7 +89,7 @@ def main():
     print("=" * 60)
     print(f"Server URL: {agent_url}")
     print(f"Port: {SERVER_PORT}")
-    print(f"Agent Card: {agent_url}/.well-known/agent.json")
+    print(f"Agent Card: {agent_url}/.well-known/agent-card.json")
     print("=" * 60)
     print("\nExample queries:")
     print('  - "What\'s the weather in New York?"')

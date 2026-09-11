@@ -6,7 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
     "langchain>=0.3.0",
     "langchain-openai>=0.2.0",
-    "a2a-adapter[langchain]>=0.1.4",
+    "a2a-adapter[langchain]>=0.2.13",
+    # a2a-adapter 0.2.13 itself requires a2a-sdk[http-server]>=1,<2; pin the
+    # floor so the A2A 1.0 protocol version this server declares stays fixed.
+    "a2a-sdk[http-server]>=1.1.2,<2",
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
 ]

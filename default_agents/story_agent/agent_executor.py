@@ -1,19 +1,18 @@
-import uuid
 from typing import override
 
+from a2a.helpers import (
+    new_task_from_user_message,
+    new_text_artifact_update_event,
+    new_text_status_update_event,
+)
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import (
-    Message,
-    Part,
-    Role,
-    TaskArtifactUpdateEvent,
+    Task,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
-    TextPart,
 )
-from a2a.utils import new_text_artifact
 from agent import StoryAgent
 
 
@@ -33,7 +32,8 @@ class StoryAgentExecutor(AgentExecutor):
         if not context.message:
             raise Exception("No message provided")
 
-        artifact_id = f"{context.task_id}-current-result"
+        task = new_task_from_user_message(context.message)
+
         chunks: list[str] = []
         async for event in self.agent.stream(query):
             chunk = event.get("content") or ""
@@ -49,49 +49,47 @@ class StoryAgentExecutor(AgentExecutor):
                 break
 
         final_text = "".join(chunks)
+
+        # The task must be published before any task-scoped update event.
+        await event_queue.enqueue_event(task)
+
         if final_text:
             await self._emit_text(
-                context,
+                task,
                 event_queue,
-                artifact_id,
                 final_text,
             )
 
-        status_message = None
         if final_text.strip():
-            status_message = Message(
-                messageId=uuid.uuid4().hex,
-                role=Role.agent,
-                parts=[Part(root=TextPart(text=final_text))],
+            status_event = new_text_status_update_event(
+                task_id=task.id,
+                context_id=task.context_id,
+                state=TaskState.TASK_STATE_COMPLETED,
+                text=final_text,
             )
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                contextId=context.context_id,  # type: ignore
-                taskId=context.task_id,  # type: ignore
-                status=TaskStatus(
-                    state=TaskState.completed,
-                    message=status_message,
-                ),
-                final=True,
+        else:
+            status_event = TaskStatusUpdateEvent(
+                task_id=task.id,
+                context_id=task.context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
             )
-        )
+        await event_queue.enqueue_event(status_event)
 
     @staticmethod
     async def _emit_text(
-        context: RequestContext,
+        task: Task,
         event_queue: EventQueue,
-        artifact_id: str,
         content: str,
     ) -> None:
-        artifact = new_text_artifact(name="current_result", text=content)
-        artifact.artifact_id = artifact_id
         await event_queue.enqueue_event(
-            TaskArtifactUpdateEvent(
-                contextId=context.context_id,  # type: ignore
-                taskId=context.task_id,  # type: ignore
-                artifact=artifact,
+            new_text_artifact_update_event(
+                task_id=task.id,
+                context_id=task.context_id,
+                name="current_result",
+                text=content,
                 append=False,
-                lastChunk=True,
+                last_chunk=True,
+                artifact_id=f"{task.id}-current-result",
             )
         )
 

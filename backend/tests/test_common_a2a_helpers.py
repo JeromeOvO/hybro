@@ -11,8 +11,15 @@ Tests cover:
 
 from unittest.mock import MagicMock
 
-from a2a.types import Artifact, Message, Role, Task, TaskState, TaskStatus, TextPart
-
+from common.types import (
+    Artifact,
+    Message,
+    MessageRole,
+    Task,
+    TaskState,
+    TaskStatus,
+    TextPart,
+)
 from common.utils.a2a_helpers import (
     extract_error_message,
     get_message_from_task,
@@ -30,7 +37,7 @@ class TestGetTextFromMessage:
 
     def test_extracts_text_from_parts(self):
         msg = Message(
-            role=Role.agent,
+            role=MessageRole.AGENT,
             message_id="m1",
             parts=[TextPart(text="Hello"), TextPart(text=" world")],
         )
@@ -66,11 +73,11 @@ class TestGetMessageFromTask:
         )
         msg = get_message_from_task(task)
         assert msg is not None
-        assert msg.role == Role.agent
+        assert msg.role == MessageRole.AGENT
 
     def test_extracts_from_status_message(self):
         status_msg = Message(
-            role=Role.agent,
+            role=MessageRole.AGENT,
             message_id="sm1",
             parts=[TextPart(text="status text")],
         )
@@ -84,12 +91,12 @@ class TestGetMessageFromTask:
 
     def test_extracts_from_history_fallback(self):
         agent_msg = Message(
-            role=Role.agent,
+            role=MessageRole.AGENT,
             message_id="hm1",
             parts=[TextPart(text="history text")],
         )
         user_msg = Message(
-            role=Role.user,
+            role=MessageRole.USER,
             message_id="hm2",
             parts=[TextPart(text="user text")],
         )

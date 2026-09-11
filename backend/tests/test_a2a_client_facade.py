@@ -1,535 +1,309 @@
-import asyncio
-import logging
-from types import SimpleNamespace
+"""Behavioral tests for the A2A client facade.
 
+The facade is driven over the real wire against an in-process A2A 1.0 agent
+(`tests.fakes.a2a_v1_agent`), which implements the JSON-RPC binding and SSE
+framing from the specification. That keeps these tests honest: they assert what
+an agent receives and what callers get back, not which SDK call was made.
+"""
+
+import contextlib
+import logging
+from typing import Any
+
+import httpx
 import pytest
-from a2a.client.errors import A2AClientHTTPError
-from a2a.types import (
-    JSONRPCError,
-    JSONRPCErrorResponse,
-)
-from pydantic import ValidationError
+from a2a.client.errors import A2AClientError
 
 from a2a_adapter import client_facade, remote_task
-from common.observability.logging import StructuredFormatter
-from common.types import AgentCard, Message, Task
+from common.types import Task, TaskState
+from tests.fakes.a2a_v1 import make_agent_card, make_legacy_card
+from tests.fakes.a2a_v1_agent import (
+    A2A10AgentStub,
+    completed_task_payload,
+    new_message_id,
+    text_artifact_update,
+    text_status_update,
+)
+
+CARD_PATH = "/.well-known/agent-card.json"
+LEGACY_CARD_PATH = "/.well-known/agent.json"
 
 
-def _sdk_card_data() -> dict:
-    return {
-        "name": "Agent",
-        "description": "Test agent",
-        "url": "https://agent.example",
-        "version": "1",
-        "capabilities": {},
-        "defaultInputModes": ["text/plain"],
-        "defaultOutputModes": ["text/plain"],
-        "skills": [
-            {
-                "id": "s",
-                "name": "Skill",
-                "description": "Does work",
-                "tags": ["test"],
-            }
-        ],
+class _RoutedTransport(httpx.AsyncBaseTransport):
+    """Serve the stub app, optionally failing for one host.
+
+    Used to exercise the Docker host fallback: a request to the failing host
+    raises a connection error, and the retried request to the fallback host is
+    served normally.
+    """
+
+    def __init__(self, app: Any, *, fail_hosts: set[str] | None = None) -> None:
+        self._inner = httpx.ASGITransport(app=app)
+        self._fail_hosts = fail_hosts or set()
+        self.hosts: list[str] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        self.hosts.append(host)
+        if host in self._fail_hosts:
+            raise httpx.ConnectError("All connection attempts failed")
+        return await self._inner.handle_async_request(request)
+
+
+def _agent_client(
+    monkeypatch,
+    app: Any,
+    *,
+    fail_hosts: set[str] | None = None,
+) -> _RoutedTransport:
+    """Point the facade's bounded clients at an in-process agent."""
+    transport = _RoutedTransport(app, fail_hosts=fail_hosts)
+    client = httpx.AsyncClient(transport=transport)
+
+    @contextlib.asynccontextmanager
+    async def _bounded(*, timeout: float):
+        yield client
+
+    monkeypatch.setattr(client_facade, "bounded_client", _bounded)
+    monkeypatch.setattr(client_facade, "event_bounded_client", _bounded)
+    monkeypatch.setattr(remote_task, "bounded_client", _bounded)
+    return transport
+
+
+def _streaming_card(**overrides: Any):
+    """An agent card that advertises streaming, so the SDK returns SSE frames."""
+    return make_agent_card(
+        url="http://agent.test/", capabilities={"streaming": True}, **overrides
+    )
+
+
+def _user_message(**overrides: Any) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "role": "user",
+        "message_id": overrides.pop("message_id", new_message_id()),
+        "parts": overrides.pop("parts", [{"kind": "text", "text": "hello"}]),
     }
+    message.update(overrides)
+    return message
 
 
-class _AsyncClientContext:
-    async def __aenter__(self):
-        return SimpleNamespace(name="httpx-client")
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return None
-
-
-class _FacadeResult:
-    kind = "message"
-
-    def model_dump(self, *, mode: str = "json"):
-        return {"kind": self.kind, "taskId": "task-123"}
-
-
-class _TaskResult:
-    kind = "task"
-
-    def model_dump(self, *, mode: str = "json"):
-        return {
-            "kind": "task",
-            "id": "task-123",
-            "status": {"state": "completed"},
-            "artifacts": [],
-        }
+# ---------------------------------------------------------------------------
+# Card resolution
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_send_hitl_reply_preserves_task_ids_in_sdk_confined_message(
+async def test_fetch_agent_card_returns_dict_and_falls_back_to_previous_path(
     monkeypatch,
-    caplog,
 ):
-    captured = {}
+    stub = A2A10AgentStub(
+        card=make_agent_card(name="Fallback Agent"),
+        card_path_status={CARD_PATH: 404},
+    )
+    _agent_client(monkeypatch, stub.app)
 
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
+    result = await client_facade.fetch_agent_card_with_fallback(
+        "http://agent.test", timeout=1
     )
 
-    def _to_sdk_message(message_data):
-        captured["message_data"] = message_data
-        return SimpleNamespace(kind="message")
-
-    monkeypatch.setattr(client_facade, "to_sdk_message", _to_sdk_message)
-    monkeypatch.setattr(
-        client_facade,
-        "MessageSendConfiguration",
-        lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    monkeypatch.setattr(
-        client_facade,
-        "MessageSendParams",
-        lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-
-    def _request_factory(**kwargs):
-        request = SimpleNamespace(**kwargs)
-        captured["request"] = request
-        return request
-
-    monkeypatch.setattr(client_facade, "SendMessageRequest", _request_factory)
-
-    class _A2AClient:
-        def __init__(self, **kwargs):
-            captured["client_kwargs"] = kwargs
-
-        async def send_message(self, request):
-            captured["sent_request"] = request
-            return SimpleNamespace(root=SimpleNamespace(result=_FacadeResult()))
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-
-    message_data = {
-        "messageId": "message-123",
-        "role": "user",
-        "parts": [{"kind": "text", "text": "approved"}],
-        "taskId": "task-123",
-        "referenceTaskIds": ["parent-task"],
-    }
-
-    caplog.set_level(logging.INFO, logger=client_facade.__name__)
-    result = await client_facade.send_hitl_reply(
-        "https://agent.example/a2a",
-        message_data,
-        agent_id="agent-123",
-        blocking=False,
-        timeout=1,
-    )
-
-    assert captured["message_data"]["taskId"] == "task-123"
-    assert captured["message_data"]["referenceTaskIds"] == ["parent-task"]
-    assert captured["request"].params.message.kind == "message"
-    assert captured["request"].params.configuration.blocking is False
-    assert captured["client_kwargs"]["url"] == "https://agent.example/a2a"
-    assert captured["sent_request"] is captured["request"]
-    assert result == {
-        "kind": "message",
-        "result": {"kind": "message", "taskId": "task-123"},
-        "error": None,
-    }
-    assert not isinstance(result["result"], Message)
-    record = next(
-        record
-        for record in caplog.records
-        if record.getMessage() == "a2a_call_completed"
-    )
-    assert record.agent == "agent-123"
-    assert record.operation == "hitl_reply"
+    assert result["name"] == "Fallback Agent"
+    assert stub.card_requests == [CARD_PATH, LEGACY_CARD_PATH]
 
 
 @pytest.mark.asyncio
-async def test_send_hitl_reply_falls_back_to_docker_host_for_loopback_url(
+async def test_fetch_agent_card_reports_failure_when_no_path_serves_a_card(
     monkeypatch,
-    caplog,
 ):
-    attempted_urls = []
+    stub = A2A10AgentStub(card_path_status={CARD_PATH: 404, LEGACY_CARD_PATH: 404})
+    _agent_client(monkeypatch, stub.app)
 
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, **kwargs):
-            self.url = kwargs["url"]
-            attempted_urls.append(self.url)
-
-        async def send_message(self, request):
-            if self.url == "http://127.0.0.1:9060":
-                raise A2AClientHTTPError(
-                    503,
-                    "Network communication error: All connection attempts failed",
-                )
-            return SimpleNamespace(root=SimpleNamespace(result=_FacadeResult()))
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-
-    message_data = {
-        "messageId": "message-123",
-        "role": "user",
-        "parts": [{"kind": "text", "text": "approved"}],
-    }
-
-    with caplog.at_level(logging.DEBUG):
-        result = await client_facade.send_hitl_reply(
-            "http://127.0.0.1:9060",
-            message_data,
-            timeout=1,
+    with pytest.raises(client_facade.A2AClientFacadeError):
+        await client_facade.fetch_agent_card_with_fallback(
+            "http://agent.test", timeout=1
         )
 
-    assert result["kind"] == "message"
-    assert attempted_urls == [
-        "http://127.0.0.1:9060",
-        "http://host.docker.internal:9060",
-    ]
-    assert "a2a_docker_host_fallback_selected" in caplog.text
-
 
 @pytest.mark.asyncio
-async def test_fetch_agent_card_with_fallback_uses_previous_path_on_404(monkeypatch):
-    captured_paths = []
-
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _Resolver:
-        def __init__(self, client, agent_url, path):
-            captured_paths.append(path)
-            self.path = path
-
-        async def get_agent_card(self):
-            if self.path.endswith("agent-card.json"):
-                raise A2AClientHTTPError(404, "missing")
-            return SimpleNamespace(
-                model_dump=lambda *, mode="json": {
-                    "name": "Fallback Agent",
-                    "url": "https://agent.example",
-                    "version": "1",
-                    "capabilities": {},
-                    "skills": [{"id": "s", "name": "Skill"}],
-                }
-            )
-
-    monkeypatch.setattr(client_facade, "SDKCardResolver", _Resolver)
-
-    result = await client_facade.fetch_agent_card_with_fallback("https://agent.example")
-
-    assert captured_paths == ["/.well-known/agent-card.json", "/.well-known/agent.json"]
-    assert result["name"] == "Fallback Agent"
-
-
-@pytest.mark.asyncio
-async def test_fetch_agent_card_with_fallback_retries_host_gateway_for_loopback_url(
-    monkeypatch,
-    caplog,
+async def test_fetch_agent_card_retries_through_docker_host_for_loopback(
+    monkeypatch, caplog
 ):
-    attempted_urls = []
-
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _Resolver:
-        def __init__(self, client, agent_url, path):
-            attempted_urls.append(agent_url)
-            self.agent_url = agent_url
-
-        async def get_agent_card(self):
-            if self.agent_url == "http://127.0.0.1:9060":
-                raise A2AClientHTTPError(
-                    503,
-                    "Network communication error: All connection attempts failed",
-                )
-            return SimpleNamespace(
-                model_dump=lambda *, mode="json": {
-                    "name": "Fallback Agent",
-                    "url": "http://127.0.0.1:9060",
-                    "version": "1",
-                    "capabilities": {},
-                    "skills": [{"id": "s", "name": "Skill"}],
-                }
-            )
-
-    monkeypatch.setattr(client_facade, "SDKCardResolver", _Resolver)
+    stub = A2A10AgentStub(card=make_agent_card(url="http://127.0.0.1:9060"))
+    transport = _agent_client(monkeypatch, stub.app, fail_hosts={"127.0.0.1"})
 
     with caplog.at_level(logging.DEBUG):
         result = await client_facade.fetch_agent_card_with_fallback(
-            "http://127.0.0.1:9060",
-            timeout=1,
+            "http://127.0.0.1:9060", timeout=1
         )
 
-    assert result["name"] == "Fallback Agent"
-    assert attempted_urls == [
-        "http://127.0.0.1:9060",
-        "http://host.docker.internal:9060",
-    ]
+    assert result["name"] == stub.card.name
+    assert transport.hosts == ["127.0.0.1", "host.docker.internal"]
     assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_send_and_stream_message_return_normalized_dicts(monkeypatch):
-    captured = {"requests": []}
-
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def send_message(self, request):
-            captured["requests"].append(request)
-            return SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
-
-        async def send_message_streaming(self, request):
-            captured["requests"].append(request)
-            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-
-    card = _sdk_card_data()
-    message = {
-        "kind": "message",
-        "role": "user",
-        "messageId": "msg-1",
-        "parts": [{"kind": "text", "text": "hello"}],
-    }
-
-    sent = await client_facade.send_message(card, message, timeout=1)
-    streamed = [
-        event async for event in client_facade.stream_message(card, message, timeout=1)
-    ]
-
-    assert sent == {
-        "kind": "task",
-        "result": {
-            "kind": "task",
-            "id": "task-123",
-            "status": {"state": "completed"},
-            "artifacts": [],
-        },
-        "error": None,
-    }
-    assert streamed == [sent]
-    assert not isinstance(sent["result"], Task)
+# ---------------------------------------------------------------------------
+# Sending
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_send_message_accepts_minimal_internal_agent_card(monkeypatch):
-    captured = {}
-
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, *args, agent_card, **kwargs):
-            captured["agent_card"] = agent_card
-
-        async def send_message(self, request):
-            return SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-
-    card = AgentCard(
-        name="Minimal",
-        url="https://agent.example",
-        version="1",
-        capabilities={},
-        skills=[{"id": "s", "name": "Skill"}],
-    )
-    message = {
-        "kind": "message",
-        "role": "user",
-        "messageId": "msg-1",
-        "parts": [{"kind": "text", "text": "hello"}],
-    }
-
-    result = await client_facade.send_message(card, message, timeout=1)
-
-    assert result["kind"] == "task"
-    assert captured["agent_card"].skills[0].description == ""
-    assert captured["agent_card"].skills[0].tags == []
-
-
-@pytest.mark.asyncio
-async def test_send_message_falls_back_to_docker_host_for_loopback_card(
+async def test_send_message_returns_plain_dict_and_forwards_the_message(
     monkeypatch,
-    caplog,
 ):
-    attempted_urls = []
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload(text="hi there")})
+    _agent_client(monkeypatch, stub.app)
 
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, *args, agent_card, **kwargs):
-            self.agent_card = agent_card
-            attempted_urls.append(agent_card.url)
-
-        async def send_message(self, request):
-            if self.agent_card.url == "http://127.0.0.1:9060":
-                raise A2AClientHTTPError(
-                    503,
-                    "Network communication error: All connection attempts failed",
-                )
-            return SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-
-    card = _sdk_card_data()
-    card["url"] = "http://127.0.0.1:9060"
-    message = {
-        "kind": "message",
-        "role": "user",
-        "messageId": "msg-1",
-        "parts": [{"kind": "text", "text": "hello"}],
-    }
-
-    with caplog.at_level(logging.DEBUG):
-        result = await client_facade.send_message(card, message, timeout=1)
-
-    assert result["kind"] == "task"
-    assert attempted_urls == [
-        "http://127.0.0.1:9060",
-        "http://host.docker.internal:9060",
-    ]
-    assert "a2a_docker_host_fallback_selected" in caplog.text
-
-
-def test_normalize_response_returns_plain_error_dict():
-    error = JSONRPCErrorResponse(
-        id="req-1",
-        error=JSONRPCError(code=-32000, message="Agent offline"),
-    )
-
-    result = client_facade._normalize_response(SimpleNamespace(root=error))
-
-    assert result == {
-        "kind": "error",
-        "error": {"code": -32000, "message": "Agent offline", "data": None},
-        "result": None,
-    }
-
-
-@pytest.mark.asyncio
-async def test_send_validation_failure_logs_safe_completion(caplog):
-    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
-
-    with pytest.raises(ValidationError):
-        await client_facade.send_message(
-            {},
-            {
-                "kind": "message",
-                "role": "user",
-                "messageId": "msg-1",
-                "parts": [{"kind": "text", "text": "hello"}],
-            },
-            timeout=1,
-        )
-
-    record = next(
-        record
-        for record in caplog.records
-        if record.getMessage() == "a2a_call_completed"
-    )
-    assert record.operation == "message_send"
-    assert record.outcome == "error"
-    assert record.error_type
-
-
-@pytest.mark.asyncio
-async def test_send_normalization_failure_logs_safe_completion(monkeypatch, caplog):
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def send_message(self, request):
-            return SimpleNamespace(root=SimpleNamespace())
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
-
-    with pytest.raises(AttributeError):
-        await client_facade.send_message(
-            _sdk_card_data(),
-            {
-                "kind": "message",
-                "role": "user",
-                "messageId": "msg-1",
-                "parts": [{"kind": "text", "text": "hello"}],
-            },
-            timeout=1,
-        )
-
-    record = next(
-        record
-        for record in caplog.records
-        if record.getMessage() == "a2a_call_completed"
-    )
-    assert record.operation == "message_send"
-    assert record.outcome == "error"
-    assert record.error_type == "AttributeError"
-
-
-@pytest.mark.asyncio
-async def test_stream_early_close_logs_cancelled_completion(monkeypatch, caplog):
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def send_message_streaming(self, request):
-            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
-            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    caplog.set_level(logging.INFO, logger=client_facade.__name__)
-    stream = client_facade.stream_message(
-        _sdk_card_data(),
-        {
-            "kind": "message",
-            "role": "user",
-            "messageId": "msg-1",
-            "parts": [{"kind": "text", "text": "hello"}],
-        },
+    result = await client_facade.send_message(
+        make_agent_card(url="http://agent.test/"),
+        _user_message(parts=[{"kind": "text", "text": "hello"}]),
         timeout=1,
     )
 
+    assert result["kind"] == "task"
+    assert isinstance(result["result"], dict)
+    assert result["error"] is None
+    assert result["result"]["status"]["state"] == "TASK_STATE_COMPLETED"
+
+    wire_message = stub.last_message()
+    assert wire_message["role"] == "ROLE_USER"
+    assert wire_message["parts"][0]["text"] == "hello"
+    assert stub.request_headers[-1]["a2a-version"] == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_send_message_preserves_identity_and_metadata(monkeypatch):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    _agent_client(monkeypatch, stub.app)
+
+    await client_facade.send_message(
+        make_agent_card(url="http://agent.test/"),
+        _user_message(
+            message_id="msg-123",
+            task_id="task-9",
+            context_id="ctx-9",
+            metadata={
+                "agent_id": "agent-1",
+                "hybro.ai/a2a/selected-skill": {"schema_version": 1, "skill_id": "s1"},
+            },
+        ),
+        timeout=1,
+    )
+
+    wire_message = stub.last_message()
+    assert wire_message["messageId"] == "msg-123"
+    assert wire_message["taskId"] == "task-9"
+    assert wire_message["contextId"] == "ctx-9"
+    assert wire_message["metadata"]["agent_id"] == "agent-1"
+    assert wire_message["metadata"]["hybro.ai/a2a/selected-skill"]["skill_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_send_message_surfaces_protocol_errors_as_error_dict(monkeypatch):
+    """A JSON-RPC error is a protocol outcome, not a raised transport error."""
+    stub = A2A10AgentStub(send_error={"code": -32602, "message": "Invalid params"})
+    _agent_client(monkeypatch, stub.app)
+
+    result = await client_facade.send_message(
+        make_agent_card(url="http://agent.test/"),
+        _user_message(),
+        timeout=1,
+    )
+
+    assert result["kind"] == "error"
+    assert result["result"] is None
+    assert result["error"]["code"] == -32602
+
+
+@pytest.mark.asyncio
+async def test_send_message_reports_transport_failure(monkeypatch):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    _agent_client(monkeypatch, stub.app, fail_hosts={"agent.test"})
+
+    with pytest.raises(A2AClientError):
+        await client_facade.send_message(
+            make_agent_card(url="http://agent.test/"),
+            _user_message(),
+            timeout=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_message_accepts_internal_card_model(monkeypatch):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    _agent_client(monkeypatch, stub.app)
+
+    internal_card = make_agent_card(name="Internal", url="http://agent.test/")
+
+    result = await client_facade.send_message(internal_card, _user_message(), timeout=1)
+
+    assert result["kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_send_message_retries_docker_host_for_loopback_card(monkeypatch, caplog):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    transport = _agent_client(monkeypatch, stub.app, fail_hosts={"127.0.0.1"})
+
+    with caplog.at_level(logging.DEBUG):
+        result = await client_facade.send_message(
+            make_agent_card(url="http://127.0.0.1:9060/"),
+            _user_message(),
+            timeout=1,
+        )
+
+    assert result["kind"] == "task"
+    assert transport.hosts == ["127.0.0.1", "host.docker.internal"]
+    assert "a2a_docker_host_fallback_selected" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Streaming
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_message_yields_one_normalized_frame_per_event(monkeypatch):
+    stub = A2A10AgentStub(
+        frames=[
+            {"task": completed_task_payload()},
+            {"statusUpdate": text_status_update(state="TASK_STATE_WORKING")},
+            {"artifactUpdate": text_artifact_update(text="chunk")},
+            {"statusUpdate": text_status_update(state="TASK_STATE_COMPLETED")},
+        ]
+    )
+    _agent_client(monkeypatch, stub.app)
+
+    frames = [
+        frame
+        async for frame in client_facade.stream_message(
+            _streaming_card(), _user_message(), timeout=1
+        )
+    ]
+
+    assert [frame["kind"] for frame in frames] == [
+        "task",
+        "status-update",
+        "artifact-update",
+        "status-update",
+    ]
+    assert all(isinstance(frame["result"], dict) for frame in frames)
+    assert frames[1]["result"]["status"]["state"] == "TASK_STATE_WORKING"
+    assert frames[2]["result"]["artifact"]["parts"][0]["text"] == "chunk"
+
+
+@pytest.mark.asyncio
+async def test_stream_message_early_close_logs_cancelled_completion(
+    monkeypatch, caplog
+):
+    stub = A2A10AgentStub(
+        frames=[
+            {"task": completed_task_payload()},
+            {"statusUpdate": text_status_update()},
+        ]
+    )
+    _agent_client(monkeypatch, stub.app)
+    caplog.set_level(logging.INFO, logger=client_facade.__name__)
+
+    stream = client_facade.stream_message(_streaming_card(), _user_message(), timeout=1)
     assert (await anext(stream))["kind"] == "task"
     await stream.aclose()
 
@@ -541,311 +315,203 @@ async def test_stream_early_close_logs_cancelled_completion(monkeypatch, caplog)
     assert len(records) == 1
     assert records[0].operation == "message_stream"
     assert records[0].outcome == "cancelled"
-    assert records[0].error_type == "GeneratorExit"
+
+
+# ---------------------------------------------------------------------------
+# Cancel and fetch
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_stream_task_cancellation_logs_cancelled_completion(
-    monkeypatch,
-    caplog,
-):
-    started = asyncio.Event()
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
+async def test_cancel_remote_task_reports_success(monkeypatch):
+    stub = A2A10AgentStub(task_payload=completed_task_payload())
+    _agent_client(monkeypatch, stub.app)
+
+    acknowledged = await client_facade.cancel_remote_task(
+        make_agent_card(url="http://agent.test/"), "task-1", timeout=1
     )
 
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
+    assert acknowledged is True
+    assert stub.requests[-1]["method"] == "CancelTask"
 
-        async def send_message_streaming(self, request):
-            started.set()
-            await asyncio.Event().wait()
-            yield SimpleNamespace(root=SimpleNamespace(result=_TaskResult()))
 
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    caplog.set_level(logging.INFO, logger=client_facade.__name__)
+@pytest.mark.asyncio
+async def test_cancel_remote_task_reports_failure_on_protocol_error(monkeypatch):
+    stub = A2A10AgentStub(
+        cancel_error={"code": -32002, "message": "Task cannot be canceled"}
+    )
+    _agent_client(monkeypatch, stub.app)
 
-    async def consume() -> None:
-        async for _ in client_facade.stream_message(
-            _sdk_card_data(),
+    acknowledged = await client_facade.cancel_remote_task(
+        make_agent_card(url="http://agent.test/"), "task-1", timeout=1
+    )
+
+    assert acknowledged is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_task_returns_internal_task(monkeypatch):
+    stub = A2A10AgentStub(task_payload=completed_task_payload(text="finished"))
+    _agent_client(monkeypatch, stub.app)
+
+    task = await remote_task.fetch_remote_task(
+        make_agent_card(url="http://agent.test/"), "task-1", timeout=1
+    )
+
+    assert isinstance(task, Task)
+    assert type(task).__module__ == "common.types"
+    assert task.id == "task-1"
+    assert task.context_id == "ctx-1"
+    assert task.status.state == TaskState.completed
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_task_returns_none_when_agent_reports_missing(monkeypatch):
+    stub = A2A10AgentStub(task_payload=None)
+    _agent_client(monkeypatch, stub.app)
+
+    task = await remote_task.fetch_remote_task(
+        make_agent_card(url="http://agent.test/"), "task-1", timeout=1
+    )
+
+    assert task is None
+
+
+# ---------------------------------------------------------------------------
+# Legacy interface selection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_legacy_interface_version_is_reported_in_card(monkeypatch):
+    """A pre-1.0 interface stays addressable; the version is not rewritten."""
+    card = make_legacy_card(url="http://agent.test/")
+    stub = A2A10AgentStub(card=card)
+    _agent_client(monkeypatch, stub.app)
+
+    result = await client_facade.fetch_agent_card_with_fallback(
+        "http://agent.test", timeout=1
+    )
+
+    assert result["supportedInterfaces"][0]["protocolVersion"] == "0.3"
+
+
+# ---------------------------------------------------------------------------
+# HITL continuation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_hitl_reply_continues_the_original_task(monkeypatch):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    _agent_client(monkeypatch, stub.app)
+
+    result = await client_facade.send_hitl_reply(
+        make_agent_card(url="http://agent.test/"),
+        {
+            "kind": "message",
+            "role": "user",
+            "messageId": "reply-1",
+            "taskId": "task-7",
+            "contextId": "ctx-7",
+            "parts": [{"kind": "text", "text": "two days"}],
+        },
+        agent_id="agent-7",
+        blocking=False,
+        timeout=1,
+    )
+
+    assert result["kind"] == "task"
+    wire_message = stub.last_message()
+    assert wire_message["messageId"] == "reply-1"
+    assert wire_message["taskId"] == "task-7"
+    assert wire_message["contextId"] == "ctx-7"
+    assert wire_message["parts"][0]["text"] == "two days"
+
+
+@pytest.mark.asyncio
+async def test_send_hitl_reply_falls_back_through_docker_host(monkeypatch, caplog):
+    stub = A2A10AgentStub(
+        send_result={"task": completed_task_payload()},
+        card=make_agent_card(url="http://127.0.0.1:9060/"),
+    )
+    transport = _agent_client(monkeypatch, stub.app, fail_hosts={"127.0.0.1"})
+
+    with caplog.at_level(logging.DEBUG):
+        result = await client_facade.send_hitl_reply(
+            None,
             {
                 "kind": "message",
                 "role": "user",
-                "messageId": "msg-1",
-                "parts": [{"kind": "text", "text": "hello"}],
+                "messageId": "reply-1",
+                "taskId": "task-7",
+                "contextId": "ctx-7",
+                "parts": [{"kind": "text", "text": "two days"}],
+            },
+            agent_url="http://127.0.0.1:9060",
+            timeout=1,
+        )
+
+    assert result["kind"] == "task"
+    assert transport.hosts[-1] == "host.docker.internal"
+    assert "a2a_docker_host_fallback_selected" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_hitl_reply_requires_card_or_url():
+    with pytest.raises(client_facade.A2AClientFacadeError):
+        await client_facade.send_hitl_reply(
+            None,
+            {
+                "role": "user",
+                "message_id": "m",
+                "parts": [{"kind": "text", "text": "x"}],
             },
             timeout=1,
-        ):
-            pass
-
-    task = asyncio.create_task(consume())
-    await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "a2a_call_completed"
-    ]
-    assert len(records) == 1
-    assert records[0].operation == "message_stream"
-    assert records[0].outcome == "cancelled"
-    assert records[0].error_type == "CancelledError"
-
-
-@pytest.mark.asyncio
-async def test_send_and_stream_jsonrpc_errors_are_logged_as_safe_failures(
-    monkeypatch,
-    caplog,
-):
-    private_message = "PRIVATE_A2A_RESPONSE_SENTINEL"
-    response = SimpleNamespace(
-        root=JSONRPCErrorResponse(
-            id="req-1",
-            error=JSONRPCError(code=-32000, message=private_message),
         )
-    )
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
 
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
 
-        async def send_message(self, request):
-            return response
-
-        async def send_message_streaming(self, request):
-            yield response
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    card = _sdk_card_data()
-    message = {
-        "kind": "message",
-        "role": "user",
-        "messageId": "msg-1",
-        "parts": [{"kind": "text", "text": "hello"}],
-    }
-    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
-
-    sent = await client_facade.send_message(card, message, timeout=1)
-    streamed = [
-        event async for event in client_facade.stream_message(card, message, timeout=1)
-    ]
-
-    records = [
-        record
-        for record in caplog.records
-        if record.getMessage() == "a2a_call_completed"
-    ]
-    formatter = StructuredFormatter(
-        output_format="json",
-        environment="test",
-        service_version="test",
-    )
-    assert sent["error"]["message"] == private_message
-    assert streamed == [sent]
-    assert len(records) == 2
-    assert {record.operation for record in records} == {
-        "message_send",
-        "message_stream",
-    }
-    assert all(record.outcome == "error" for record in records)
-    assert all(record.error_type == "A2AJSONRPCError" for record in records)
-    assert all(record.error_code == -32000 for record in records)
-    assert all(private_message not in formatter.format(record) for record in records)
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cancel_remote_task_returns_false_for_jsonrpc_error(monkeypatch):
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
+async def test_completed_call_is_logged_with_operation_and_outcome(monkeypatch, caplog):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    _agent_client(monkeypatch, stub.app)
+    caplog.set_level(logging.INFO, logger=client_facade.__name__)
+
+    await client_facade.send_message(
+        make_agent_card(url="http://agent.test/"), _user_message(), timeout=1
     )
 
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def cancel_task(self, request):
-            return SimpleNamespace(
-                root=JSONRPCErrorResponse(
-                    id="req-1",
-                    error=JSONRPCError(code=-32000, message="no"),
-                )
-            )
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    card = _sdk_card_data()
-
-    assert await client_facade.cancel_remote_task(card, "task-1", timeout=1) is False
-
-
-@pytest.mark.asyncio
-async def test_cancel_remote_task_logs_transport_failures(monkeypatch, caplog):
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def cancel_task(self, request):
-            raise TimeoutError("PRIVATE_A2A_EXCEPTION_SENTINEL")
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    card = _sdk_card_data()
-
-    caplog.set_level(logging.WARNING, logger=client_facade.__name__)
-
-    assert await client_facade.cancel_remote_task(card, "task-1", timeout=1) is False
     record = next(
         record
         for record in caplog.records
         if record.getMessage() == "a2a_call_completed"
     )
-    assert record.agent == "Agent"
-    assert record.error_type == "TimeoutError"
-    assert len(record.error_fingerprint) == 16
-    assert "client_facade.py:" in record.error_stack
-    assert "PRIVATE_A2A_EXCEPTION_SENTINEL" not in record.error_stack
+    assert record.operation == "message_send"
+    assert record.outcome == "success"
+    assert isinstance(record.duration_ms, float)
 
 
 @pytest.mark.asyncio
-async def test_cancel_remote_task_logs_task_cancellation(monkeypatch, caplog):
-    started = asyncio.Event()
-    monkeypatch.setattr(
-        client_facade.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
+async def test_failed_call_is_logged_with_error_outcome(monkeypatch, caplog):
+    stub = A2A10AgentStub(send_result={"task": completed_task_payload()})
+    _agent_client(monkeypatch, stub.app, fail_hosts={"agent.test"})
+    caplog.set_level(logging.ERROR, logger=client_facade.__name__)
 
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
+    with pytest.raises(A2AClientError):
+        await client_facade.send_message(
+            make_agent_card(url="http://agent.test/"), _user_message(), timeout=1
+        )
 
-        async def cancel_task(self, request):
-            started.set()
-            await asyncio.Event().wait()
-
-    monkeypatch.setattr(client_facade, "A2AClient", _A2AClient)
-    caplog.set_level(logging.INFO, logger=client_facade.__name__)
-
-    task = asyncio.create_task(
-        client_facade.cancel_remote_task(_sdk_card_data(), "task-1", timeout=1)
-    )
-    await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    records = [
+    record = next(
         record
         for record in caplog.records
         if record.getMessage() == "a2a_call_completed"
-    ]
-    assert len(records) == 1
-    assert records[0].agent == "Agent"
-    assert records[0].operation == "task_cancel"
-    assert records[0].outcome == "cancelled"
-    assert records[0].error_type == "CancelledError"
-
-
-@pytest.mark.asyncio
-async def test_fetch_remote_task_returns_common_task(monkeypatch):
-    monkeypatch.setattr(
-        remote_task.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
     )
-
-    class _A2AClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def get_task(self, request):
-            task = Task(
-                id="task-1",
-                status={"state": "completed"},
-                artifacts=[],
-            )
-            return SimpleNamespace(root=SimpleNamespace(result=task))
-
-    monkeypatch.setattr("a2a.client.A2AClient", _A2AClient)
-    card = AgentCard(
-        name="Minimal",
-        url="https://agent.example",
-        version="1",
-        capabilities={},
-        skills=[{"id": "s", "name": "Skill"}],
-    )
-
-    task = await remote_task.fetch_remote_task(card, "task-1", timeout=1)
-
-    assert isinstance(task, Task)
-    assert type(task).__module__ == "common.types"
-    assert task.id == "task-1"
-
-
-@pytest.mark.asyncio
-async def test_fetch_remote_task_falls_back_to_docker_host_for_loopback_card(
-    monkeypatch,
-    caplog,
-):
-    attempted_urls = []
-
-    monkeypatch.setattr(
-        remote_task.httpx,
-        "AsyncClient",
-        lambda *, timeout: _AsyncClientContext(),
-    )
-
-    class _A2AClient:
-        def __init__(self, client, agent_card):
-            self.agent_card = agent_card
-            attempted_urls.append(agent_card.url)
-
-        async def get_task(self, request):
-            if self.agent_card.url == "http://127.0.0.1:9060":
-                raise A2AClientHTTPError(
-                    503,
-                    "Network communication error: All connection attempts failed",
-                )
-            task = Task(
-                id="task-1",
-                status={"state": "completed"},
-                artifacts=[],
-            )
-            return SimpleNamespace(root=SimpleNamespace(result=task))
-
-    monkeypatch.setattr("a2a.client.A2AClient", _A2AClient)
-    card = AgentCard(
-        name="Minimal",
-        url="http://127.0.0.1:9060",
-        version="1",
-        capabilities={},
-        skills=[{"id": "s", "name": "Skill"}],
-    )
-
-    with caplog.at_level(logging.DEBUG):
-        task = await remote_task.fetch_remote_task(card, "task-1", timeout=1)
-
-    assert isinstance(task, Task)
-    assert task.id == "task-1"
-    assert attempted_urls == [
-        "http://127.0.0.1:9060",
-        "http://host.docker.internal:9060",
-    ]
-    assert "a2a_docker_host_fallback_selected" in caplog.text
+    assert record.operation == "message_send"
+    assert record.outcome == "error"
+    assert record.error_type

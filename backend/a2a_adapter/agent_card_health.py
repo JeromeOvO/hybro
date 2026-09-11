@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from a2a.types import AgentCard as SDKAgentCard
 
 from common.types import AgentCard
 
+from .card_data import build_agent_card
 from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
 from .docker_host_fallback import with_docker_host_url_fallback
 
@@ -45,8 +45,10 @@ async def fetch_agent_card_for_health(
         )
 
     try:
-        sdk_card = SDKAgentCard(**response.json())
-        card = AgentCard.model_validate(sdk_card.model_dump(mode="json"))
+        from .translators import a2a_card_to_snapshot
+
+        snapshot = a2a_card_to_snapshot(build_agent_card(response.json()), base_url)
+        card = AgentCard.model_validate(snapshot.raw_card)
     except Exception:
         card = None
 
