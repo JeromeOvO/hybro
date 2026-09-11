@@ -35,6 +35,7 @@ from common.dto.hitl import (
     HITLSingleChoiceAnswer,
     HITLTextAnswer,
 )
+from common.utils.context_utils import split_agent_mentions
 from common.utils.logger import get_logger
 from context_memory.translators import normalize_room_memory
 from execution.hitl.exceptions import (
@@ -168,6 +169,15 @@ class RoomMessageEnvelope:
     # the Run's frozen AuthorizationBasis (membership vs all-active-agents).
     scope_source: str = "explicit_selection"
     group_id: str | None = None
+    # Model-facing projection of ``message_text``. The stored message keeps the
+    # editor's ``<@agent-id|AgentName>`` token so the UI can render a chip, but
+    # that token carries an internal id and a syntax the model cannot interpret,
+    # so it is removed here. ``message_text`` stays the durable record.
+    model_text: str | None = None
+    # Display names the user explicitly addressed, in the order they appeared.
+    # Naming an Agent is a user instruction to use it, so it reaches the model
+    # as a separate, platform-authored note rather than as prose.
+    addressed_agents: tuple[str, ...] = ()
 
 
 class RoomEnvelopeSource(Protocol):
@@ -293,6 +303,16 @@ class RoomMessageEnvelopeResolver:
         attachments = _attachments_from_message(content)
         attachment_texts = await self._resolve_attachment_texts(attachments)
         requesting_subject_id = request.user_id
+        model_text, mentions = split_agent_mentions(message_text)
+        # Only a mention that survived scope resolution names an Agent this Run
+        # can actually call; a mention outside the candidate scope is dropped
+        # with the token but not reported as addressed.
+        in_scope = {str(agent_id) for agent_id in candidate_agent_ids}
+        addressed_agents = tuple(
+            dict.fromkeys(
+                name for agent_id, name in mentions if str(agent_id) in in_scope
+            )
+        )
         return RoomMessageEnvelope(
             message_text=message_text,
             mode=mode,
@@ -302,6 +322,8 @@ class RoomMessageEnvelopeResolver:
             requesting_subject_id=requesting_subject_id,
             scope_source=scope_source,
             group_id=group_id,
+            model_text=model_text,
+            addressed_agents=addressed_agents,
         )
 
     async def _resolve_attachment_texts(
@@ -438,6 +460,16 @@ def _build_candidate_scope(
         agent_ids=list(dict.fromkeys(agent_ids)),
         authorization_basis=basis,
     )
+
+
+def _addressed_agents_note(names: tuple[str, ...]) -> str:
+    """Platform-authored line naming the Agents the user explicitly addressed.
+
+    It is rendered as its own part so the model can tell it apart from the
+    user's prose, and it is the only signal that an explicit mention happened —
+    the stored ``<@agent-id|AgentName>`` token never reaches the model.
+    """
+    return f"[Explicitly addressed by the user: {', '.join(names)}]"
 
 
 def _build_resource_manifest(
@@ -1403,7 +1435,18 @@ class DualRuntimeRouter:
         message = UserMessage(
             message_id=request.room_user_message_id or f"user-{uuid4().hex}",
             content=[
-                TextPart(text=envelope.message_text),
+                *(
+                    [TextPart(text=_addressed_agents_note(envelope.addressed_agents))]
+                    if envelope.addressed_agents
+                    else []
+                ),
+                TextPart(
+                    text=(
+                        envelope.model_text
+                        if envelope.model_text is not None
+                        else envelope.message_text
+                    )
+                ),
                 *[TextPart(text=block) for block in envelope.attachment_texts],
             ],
             created_at=datetime.now(UTC),

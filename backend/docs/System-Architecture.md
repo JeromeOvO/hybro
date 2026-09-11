@@ -2704,7 +2704,11 @@ public targeting fields (`selected_agent_ids`, `candidate_scope_*`,
 `message_target_mode`, `target_group*`, `target_agent_ids`, and
 `mentioned_agent_ids`). Room, all-Agent, and saved-group membership are expanded
 and authorized by Room Services; clients never send expanded group members.
-Mention IDs define the Supervisor candidate scope, not mandatory dispatch targets.
+Mention IDs define the Supervisor candidate scope. Naming an Agent also reaches
+the orchestrator as a platform-authored note on the user turn, because an
+explicit mention is a user instruction to use that Agent rather than only a
+scope restriction; the stored `<@agent-id|AgentName>` token itself is never
+given to the model.
 At A2A call acceptance, `MembershipAuthorizationRefresh` re-checks live agent
 visibility. Per-turn explicit scopes (`mention`, `explicit_selection`,
 `all_active_agents`) do not require the agent to already be in `room_agent_set`;
