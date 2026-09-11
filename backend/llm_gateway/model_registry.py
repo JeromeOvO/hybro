@@ -146,6 +146,12 @@ class ModelRegistryImpl:
         max_provider_retries: int = 1,
         supported_thinking_levels: tuple[str, ...] | None = None,
     ) -> None:
+        # Orchestrator model calls pass this timeout explicitly, so it — not the
+        # gateway's request/stream defaults — decides how long one model turn
+        # may take before it is abandoned and retried.
+        route_timeout = getattr(
+            self._settings, "llm_gateway_route_timeout_seconds", 300.0
+        )
         resolved_thinking_levels = (
             _supported_thinking_levels(provider, model_id)
             if supported_thinking_levels is None
@@ -177,7 +183,7 @@ class ModelRegistryImpl:
                 context_window=max_context_tokens,
                 max_output_tokens=max_output_tokens,
                 default_temperature=None,
-                timeout_seconds=60,
+                timeout_seconds=route_timeout,
                 max_provider_retries=max_provider_retries,
                 supported_thinking_levels=resolved_thinking_levels,
             )

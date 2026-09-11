@@ -1,5 +1,6 @@
 from common.dto.a2a import AgentStreamEvent, AgentTaskResult, InternalAgentMessage
 from common.dto.agent import (
+    AgentCardInterface,
     AgentCardSnapshot,
     AgentInfo,
     AgentMatchResult,
@@ -143,6 +144,7 @@ from common.dto.turn_lifecycle import (
 )
 
 __all__ = [
+    "AgentCardInterface",
     "AgentCardSnapshot",
     "AgentEvent",
     "AgentInfo",

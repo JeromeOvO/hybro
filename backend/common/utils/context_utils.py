@@ -400,6 +400,9 @@ def clean_mention_format(
     return cleaned
 
 
+_AGENT_MENTION_PATTERN = re.compile(r"<@([^|]+)\|([^>]+)>")
+
+
 def extract_mentioned_agent_ids(text: str) -> list[str]:
     """
     Extract agent IDs from mention format in text.
@@ -412,6 +415,35 @@ def extract_mentioned_agent_ids(text: str) -> list[str]:
     """
     pattern = r"<@([^|]+)\|[^>]+>"
     return re.findall(pattern, text)
+
+
+def split_agent_mentions(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split a user message into clean text and its explicit Agent mentions.
+
+    The stored message keeps the editor's ``<@agent-id|AgentName>`` token so the
+    UI can render it as a chip. A consumer presenting the message to a model
+    should not receive that token: it carries an internal id and an editor
+    syntax the model cannot interpret.
+
+    Returns the text with those tokens removed, plus the ``(agent_id,
+    agent_name)`` pairs in the order they appeared. Line breaks are preserved;
+    only the gap the removed token left behind is collapsed.
+    """
+    source = text or ""
+    mentions = [
+        (match.group(1), match.group(2))
+        for match in _AGENT_MENTION_PATTERN.finditer(source)
+    ]
+    if not mentions:
+        return source.strip(), []
+
+    cleaned = _AGENT_MENTION_PATTERN.sub("", source)
+    cleaned = re.sub(r"[^\S\n]{2,}", " ", cleaned)
+    cleaned = "\n".join(line.strip() for line in cleaned.split("\n")).strip()
+    if not cleaned:
+        # A message that is nothing but mentions still needs a turn body.
+        cleaned = " ".join(f"@{name}" for _, name in mentions)
+    return cleaned, mentions
 
 
 def _value(value: Any) -> Any:

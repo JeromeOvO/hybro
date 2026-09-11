@@ -1,21 +1,16 @@
 import asyncio
+import base64
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
+from a2a.helpers import new_artifact, new_task
 from a2a.types import (
-    FilePart,
-    FileWithBytes,
     InternalError,
     Part,
     Task,
-    TextPart,
+    TaskState,
     UnsupportedOperationError,
 )
-from a2a.utils import (
-    completed_task,
-    new_artifact,
-)
-from a2a.utils.errors import ServerError
 from agent import ImageGenerationAgent
 
 
@@ -39,8 +34,8 @@ class ImageGenerationAgentExecutor(AgentExecutor):
             print(f"Generated image key: {image_key}")
         except Exception as e:
             print(f"Error invoking agent: {e}")
-            raise ServerError(
-                error=InternalError(message=f"Error invoking agent: {e}")
+            raise InternalError(
+                message=f"Error invoking agent: {e}"
             ) from e
 
         data = self.agent.get_image_data(
@@ -50,32 +45,29 @@ class ImageGenerationAgentExecutor(AgentExecutor):
         if data and not data.error:
             parts = [
                 Part(
-                    root=FilePart(
-                        file=FileWithBytes(
-                            bytes=data.bytes,
-                            mime_type=data.mime_type,
-                            name=data.id,
-                        )
-                    )
+                    # The agent caches the image base64-encoded; Part.raw is
+                    # raw bytes, which the SDK base64-encodes on the wire.
+                    raw=base64.b64decode(data.bytes),
+                    media_type=data.mime_type or "",
+                    filename=data.id or "",
                 )
             ]
         else:
             error_msg = (data.error if data else None) or "Failed to generate image"
             parts = [
-                Part(
-                    root=TextPart(text=error_msg),
-                )
+                Part(text=error_msg),
             ]
         await event_queue.enqueue_event(
-            completed_task(
+            new_task(
                 context.task_id,
                 context.context_id,
-                [new_artifact(parts, f"image_{context.task_id}")],
-                [context.message],
+                TaskState.TASK_STATE_COMPLETED,
+                artifacts=[new_artifact(parts, f"image_{context.task_id}")],
+                history=[context.message],
             )
         )
 
     async def cancel(
         self, request: RequestContext, event_queue: EventQueue
     ) -> Task | None:
-        raise ServerError(error=UnsupportedOperationError())
+        raise UnsupportedOperationError()

@@ -30,8 +30,6 @@ from hashlib import sha256
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
-from a2a.types import AgentCard
-
 from common.a2a_constants import (
     HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
     HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
@@ -51,9 +49,9 @@ from common.utils.a2a_artifacts import (
 from common.utils.a2a_helpers import extract_parts, get_text_from_message
 from common.utils.time import utcnow
 
-from .card_data import sdk_agent_card_data
+from .card_data import agent_card_dict, build_agent_card
 from .client_facade import A2AClientFacadeError
-from .message_factory import from_sdk_task, to_sdk_message
+from .message_factory import to_sdk_message
 from .translators import facade_result_to_model, message_to_completed_task
 from .webhook_payloads import parse_stream_response_payload
 
@@ -704,7 +702,7 @@ class DirectA2AStream:
             # Ignore malformed stream frames; the caller's deadline still bounds
             # the stream and recovery/inspection can reconcile missing evidence.
             return await self.__anext__()
-        internal_task = from_sdk_task(task)
+        internal_task = task
         try:
             await _materialize_task_artifacts_epoch_fenced(
                 internal_task,
@@ -888,8 +886,8 @@ class OrchestratorDirectA2AClient:
 
         invalid_card = False
         try:
-            normalized = sdk_agent_card_data(raw_card)
-            AgentCard(**normalized)
+            normalized = agent_card_dict(raw_card)
+            build_agent_card(normalized)
         except Exception:
             invalid_card = True
         if invalid_card:

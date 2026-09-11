@@ -1,4 +1,15 @@
-"""High-level SDK facade for A2A client operations."""
+"""High-level SDK facade for A2A client operations.
+
+This module owns the SDK client surface for outbound calls. Internal callers
+pass provider-neutral data (card dicts, internal messages, plain payloads) and
+receive normalized ``{"kind", "result", "error"}`` dicts, so protocol objects
+never leave the adapter.
+
+Binding selection happens before the first send: an agent card advertises one or
+more interfaces, and this facade picks the best supported binding and pins it to
+the URL. Querying, cancelling, and continuation reuse the same resolved address,
+so a card refresh cannot silently move an accepted task onto another interface.
+"""
 
 from __future__ import annotations
 
@@ -7,37 +18,40 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from typing import Any
-from uuid import uuid4
 
 import httpx
 from a2a.client import A2ACardResolver as SDKCardResolver
-from a2a.client import A2AClient
-from a2a.client.errors import A2AClientHTTPError
-from a2a.types import (
-    AgentCard,
-    CancelTaskRequest,
-    JSONRPCErrorResponse,
-    MessageSendConfiguration,
-    MessageSendParams,
-    PushNotificationConfig,
-    SendMessageRequest,
-    SendStreamingMessageRequest,
-    TaskIdParams,
-)
+from a2a.client import Client, ClientConfig, ClientFactory
+from a2a.client.errors import A2AClientError
+from a2a.types import AgentCard, SendMessageRequest
+from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
 
 from common.observability import get_logger, safe_exception_metadata
 
 from .bounded_http import bounded_client, event_bounded_client
-from .card_data import sdk_agent_card_data
-from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
+from .card_data import build_agent_card
+from .constants import (
+    AGENT_CARD_WELL_KNOWN_PATH,
+    PREV_AGENT_CARD_WELL_KNOWN_PATH,
+    SUPPORTED_BINDINGS,
+)
 from .docker_host_fallback import (
     stream_with_docker_host_fallback,
     with_docker_host_fallback,
     with_docker_host_url_fallback,
 )
 from .message_factory import to_sdk_message
+from .task_requests import (
+    build_cancel_task_request,
+    build_push_notification_config,
+    build_send_message_request,
+)
 
 logger = get_logger(__name__)
+
+# JSON-RPC code per SDK error type, taken from the SDK's own mapping so a new
+# protocol error does not require editing this table.
+_ERROR_CODE_BY_TYPE = dict(JSON_RPC_ERROR_CODE_MAP)
 
 
 class A2AClientFacadeError(Exception):
@@ -46,6 +60,38 @@ class A2AClientFacadeError(Exception):
     def __init__(self, message: str, *, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _build_card(agent_card_data: Any) -> AgentCard:
+    return build_agent_card(agent_card_data)
+
+
+def _client_config(
+    *,
+    client: httpx.AsyncClient,
+    streaming: bool,
+    accepted_output_modes: list[str] | None = None,
+    push_notification_config: dict[str, Any] | None = None,
+) -> ClientConfig:
+    return ClientConfig(
+        streaming=streaming,
+        httpx_client=client,
+        supported_protocol_bindings=list(SUPPORTED_BINDINGS),
+        # Client preference keeps JSON-RPC as the binding of choice and only
+        # falls back to HTTP+JSON for agents that do not publish JSON-RPC.
+        # Server preference would instead let card ordering switch an agent
+        # that offers both onto a binding Hybro has not used before.
+        use_client_preference=True,
+        accepted_output_modes=list(accepted_output_modes or []),
+        push_notification_config=build_push_notification_config(
+            push_notification_config
+        ),
+    )
+
+
+def _create_client(card: AgentCard, config: ClientConfig) -> Client:
+    """Create a client bound to the card's best supported interface."""
+    return ClientFactory(config).create(card)
 
 
 async def fetch_agent_card_with_fallback(
@@ -73,35 +119,38 @@ async def send_message(
     started_at = time.perf_counter()
     card: AgentCard | None = None
     try:
-        card = AgentCard(**sdk_agent_card_data(agent_card_data))
-        sdk_message = to_sdk_message(message_data)
-        push_config = (
-            PushNotificationConfig(**push_notification_config)
-            if push_notification_config
-            else None
-        )
-        request = SendMessageRequest(
-            id=str(uuid4()),
-            method="message/send",
-            jsonrpc="2.0",
-            params=MessageSendParams(
-                message=sdk_message,
-                configuration=MessageSendConfiguration(
-                    accepted_output_modes=accepted_output_modes or ["text/plain"],
-                    push_notification_config=push_config,
-                    blocking=blocking,
-                ),
-            ),
+        card = _build_card(agent_card_data)
+        request = build_send_message_request(
+            to_sdk_message(message_data),
+            accepted_output_modes=accepted_output_modes,
+            push_notification_config=push_notification_config,
+            blocking=blocking,
         )
         async with bounded_client(timeout=timeout) as client:
+            config = _client_config(
+                client=client,
+                streaming=False,
+                accepted_output_modes=accepted_output_modes,
+                push_notification_config=push_notification_config,
+            )
             response = await with_docker_host_fallback(
                 card,
-                lambda candidate: A2AClient(
-                    client,
-                    agent_card=candidate,
-                ).send_message(request),
+                lambda candidate: _send_once(
+                    _create_client(candidate, config), request
+                ),
             )
         normalized = _normalize_response(response)
+    except A2AError as exc:
+        if not is_protocol_error(exc):
+            _log_a2a_completed(
+                card=card,
+                operation="message_send",
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
+        normalized = _protocol_error_response(exc)
     except asyncio.CancelledError as exc:
         _log_a2a_completed(
             card=card,
@@ -145,26 +194,24 @@ async def stream_message(
     response_error_type: str | None = None
     response_error_code: Any = None
     try:
-        card = AgentCard(**sdk_agent_card_data(agent_card_data))
-        request = SendStreamingMessageRequest(
-            id=str(uuid4()),
-            method="message/stream",
-            jsonrpc="2.0",
-            params=MessageSendParams(
-                message=to_sdk_message(message_data),
-                configuration=MessageSendConfiguration(
-                    accepted_output_modes=accepted_output_modes or ["text/plain"],
-                ),
-            ),
+        card = _build_card(agent_card_data)
+        request = build_send_message_request(
+            to_sdk_message(message_data),
+            accepted_output_modes=accepted_output_modes,
+            blocking=False,
         )
         async with event_bounded_client(timeout=timeout) as client:
+            config = _client_config(
+                client=client,
+                streaming=True,
+                accepted_output_modes=accepted_output_modes,
+            )
             async with aclosing(
                 stream_with_docker_host_fallback(
                     card,
-                    lambda candidate: A2AClient(
-                        client,
-                        agent_card=candidate,
-                    ).send_message_streaming(request),
+                    lambda candidate: _stream_once(
+                        _create_client(candidate, config), request
+                    ),
                 )
             ) as response_stream:
                 async for response in response_stream:
@@ -179,6 +226,20 @@ async def stream_message(
                         response_error_type = current_error_type
                         response_error_code = current_error_code
                     yield normalized
+    except A2AError as exc:
+        if not is_protocol_error(exc):
+            _log_a2a_completed(
+                card=card,
+                operation="message_stream",
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
+        outcome = "error"
+        response_error_type = type(exc).__name__
+        response_error_code = getattr(exc, "code", None)
+        yield _protocol_error_response(exc)
     except asyncio.CancelledError as exc:
         _log_a2a_completed(
             card=card,
@@ -226,29 +287,22 @@ async def cancel_remote_task(
     started_at = time.perf_counter()
     card: AgentCard | None = None
     try:
-        card = AgentCard(**sdk_agent_card_data(agent_card_data))
+        card = _build_card(agent_card_data)
         async with bounded_client(timeout=timeout) as client:
-            request = CancelTaskRequest(
-                id=str(uuid4()), params=TaskIdParams(id=task_id)
-            )
-            response = await with_docker_host_fallback(
+            config = _client_config(client=client, streaming=False)
+            await with_docker_host_fallback(
                 card,
-                lambda candidate: A2AClient(client, agent_card=candidate).cancel_task(
-                    request
+                lambda candidate: _create_client(candidate, config).cancel_task(
+                    build_cancel_task_request(task_id)
                 ),
             )
-        succeeded = not isinstance(response.root, JSONRPCErrorResponse)
         _log_a2a_completed(
             card=card,
             operation="task_cancel",
             started_at=started_at,
-            outcome="success" if succeeded else "error",
-            error_type=None if succeeded else "A2AJSONRPCError",
-            error_code=(
-                None if succeeded else getattr(response.root.error, "code", None)
-            ),
+            outcome="success",
         )
-        return succeeded
+        return True
     except asyncio.CancelledError as exc:
         _log_a2a_completed(
             card=card,
@@ -270,42 +324,62 @@ async def cancel_remote_task(
 
 
 async def send_hitl_reply(
-    agent_url: str,
+    agent_card_data: Any,
     message_data: Any,
     *,
+    agent_url: str | None = None,
     agent_id: str | None = None,
     push_notification_config: dict[str, Any] | None = None,
     blocking: bool = True,
     timeout: float = 600.0,
 ) -> dict[str, Any]:
+    """Continue an accepted task with a human answer.
+
+    The reply must land on the binding that accepted the task, so the caller
+    passes the agent card (whose interfaces identify the endpoint) instead of a
+    bare URL. When only a URL is known, the card is resolved from that URL and
+    the interface version picked from it, rather than assuming a protocol.
+    """
     started_at = time.perf_counter()
     try:
-        push_config = (
-            PushNotificationConfig(**push_notification_config)
-            if push_notification_config
-            else None
-        )
-        request = SendMessageRequest(
-            id=str(uuid4()),
-            method="message/send",
-            jsonrpc="2.0",
-            params=MessageSendParams(
-                message=to_sdk_message(message_data),
-                configuration=MessageSendConfiguration(
-                    push_notification_config=push_config,
-                    blocking=blocking,
-                ),
-            ),
+        request = build_send_message_request(
+            to_sdk_message(message_data),
+            push_notification_config=push_notification_config,
+            blocking=blocking,
         )
         async with bounded_client(timeout=timeout) as client:
-            response = await with_docker_host_url_fallback(
-                agent_url,
-                lambda candidate_url: A2AClient(
-                    httpx_client=client,
-                    url=candidate_url,
-                ).send_message(request),
+            config = _client_config(
+                client=client,
+                streaming=False,
+                push_notification_config=push_notification_config,
             )
+            if _has_card(agent_card_data):
+                card = _build_card(agent_card_data)
+                response = await with_docker_host_fallback(
+                    card,
+                    lambda candidate: _send_once(
+                        _create_client(candidate, config), request
+                    ),
+                )
+            elif agent_url:
+                response = await _send_hitl_from_url(str(agent_url), config, request)
+            else:
+                raise A2AClientFacadeError(
+                    "A2A reply requires an agent card or agent URL"
+                )
         normalized = _normalize_response(response)
+    except A2AError as exc:
+        if not is_protocol_error(exc):
+            _log_a2a_completed(
+                card=None,
+                agent=agent_id,
+                operation="hitl_reply",
+                started_at=started_at,
+                outcome="error",
+                error=exc,
+            )
+            raise
+        normalized = _protocol_error_response(exc)
     except asyncio.CancelledError as exc:
         _log_a2a_completed(
             card=None,
@@ -339,6 +413,88 @@ async def send_hitl_reply(
     return normalized
 
 
+def _has_card(agent_card_data: Any) -> bool:
+    """True when the caller supplied card data rather than a bare URL."""
+    if agent_card_data is None or isinstance(agent_card_data, str):
+        return False
+    if isinstance(agent_card_data, dict):
+        return bool(agent_card_data)
+    return True
+
+
+async def _create_client_from_url(agent_url: str, config: ClientConfig) -> Client:
+    """Build a client from a URL alone, letting the SDK resolve the card.
+
+    Used only when the caller has no card. Card resolution also determines the
+    interface protocol version, so legacy agents take the SDK's 0.3
+    compatibility transport instead of an assumed 1.0 one.
+    """
+    return await ClientFactory(config).create_from_url(agent_url)
+
+
+async def _send_hitl_from_url(
+    agent_url: str, config: ClientConfig, request: SendMessageRequest
+) -> Any:
+    """Resolve the agent card for a URL-addressed reply, then send to it.
+
+    Resolution already retries through the Docker host gateway. The resolved
+    card may still advertise a loopback URL, so the send is wrapped in the
+    card-based fallback as well; otherwise a containerised backend would fail
+    even though the card was reachable.
+    """
+    card_data = await fetch_agent_card_with_fallback(agent_url)
+    card = _build_card(card_data)
+    return await with_docker_host_fallback(
+        card, lambda candidate: _send_once(_create_client(candidate, config), request)
+    )
+
+
+async def _send_once(client: Client, request: SendMessageRequest) -> Any:
+    """Take the single response payload from a non-streaming send.
+
+    With ``streaming=False`` the SDK yields exactly one ``StreamResponse``
+    wrapping the Task or Message that settles the call.
+    """
+    result: Any = None
+    async for chunk in client.send_message(request):
+        result = chunk
+        break
+    if result is None:
+        raise A2AClientFacadeError("A2A agent returned no response")
+    return result
+
+
+async def _stream_once(client: Client, request: SendMessageRequest):
+    async for chunk in client.send_message(request):
+        yield chunk
+
+
+def is_protocol_error(exc: BaseException) -> bool:
+    """True for a rejected request, false for a transport failure.
+
+    A2A 1.0 raises typed errors for JSON-RPC failures (``InvalidParamsError``,
+    ``TaskNotFoundError``, ...) where 0.3 returned an error envelope. Transport
+    failures raise ``A2AClientError``, which is also an ``A2AError``: those must
+    stay exceptions so Execution can keep treating the send as uncertain rather
+    than as a definite protocol rejection.
+    """
+    return isinstance(exc, A2AError) and not isinstance(exc, A2AClientError)
+
+
+def _protocol_error_response(exc: A2AError) -> dict[str, Any]:
+    """Project a rejected request onto the normalized error envelope.
+
+    Callers branch on ``response["kind"] == "error"``, so a raise is converted
+    back into the envelope shape rather than changing every call site.
+    """
+    error: dict[str, Any] = {
+        "code": _ERROR_CODE_BY_TYPE.get(type(exc), -32603),
+        "message": str(exc),
+        "data": getattr(exc, "data", None),
+    }
+    return {"kind": "error", "error": error, "result": None}
+
+
 async def _fetch_agent_card_from_url(
     client: httpx.AsyncClient,
     agent_url: str,
@@ -347,34 +503,43 @@ async def _fetch_agent_card_from_url(
         resolver = SDKCardResolver(client, str(agent_url), path)
         try:
             card = await resolver.get_agent_card()
-            return card.model_dump(mode="json")
-        except A2AClientHTTPError as exc:
-            if exc.status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
+            return _card_to_dict(card)
+        except A2AError as exc:
+            status_code = getattr(exc, "status_code", None)
+            if status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
                 continue
             raise A2AClientFacadeError(
                 f"Failed to fetch card: {exc}",
-                status_code=exc.status_code,
+                status_code=status_code if isinstance(status_code, int) else None,
             ) from exc
         except Exception as exc:
             raise A2AClientFacadeError(str(exc)) from exc
     raise A2AClientFacadeError("Agent card not found at any known path")
 
 
+def _card_to_dict(card: Any) -> dict[str, Any]:
+    from google.protobuf.json_format import MessageToDict
+
+    return MessageToDict(card, preserving_proto_field_name=False)
+
+
 def _normalize_response(response: Any) -> dict[str, Any]:
+    """Project one 1.0 ``StreamResponse`` frame onto the internal envelope."""
     if not response:
         return {"kind": "error", "error": "No response", "result": None}
-    if isinstance(response.root, JSONRPCErrorResponse):
-        return {
-            "kind": "error",
-            "error": response.root.error.model_dump(mode="json"),
-            "result": None,
-        }
-    result = response.root.result
-    return {
-        "kind": result.kind,
-        "result": result.model_dump(mode="json"),
-        "error": None,
-    }
+
+    from google.protobuf.json_format import MessageToDict
+
+    payload_kind = response.WhichOneof("payload")
+    if payload_kind is None:
+        return {"kind": "error", "error": "Empty A2A response payload", "result": None}
+
+    # ProtoJSON member names are snake_case; the internal envelope uses the
+    # hyphenated event names the rest of the adapter and Execution branch on.
+    kind = payload_kind.replace("_", "-")
+    result = MessageToDict(getattr(response, payload_kind))
+    result["kind"] = kind
+    return {"kind": kind, "result": result, "error": None}
 
 
 def _normalized_response_outcome(
@@ -386,14 +551,6 @@ def _normalized_response_outcome(
     error_code = error.get("code") if isinstance(error, dict) else None
     error_type = "A2AJSONRPCError" if isinstance(error, dict) else "A2AResponseError"
     return "error", error_type, error_code
-
-
-def _model_data(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", by_alias=True)
-    return {}
 
 
 def _log_a2a_completed(
@@ -432,6 +589,7 @@ __all__ = [
     "A2AClientFacadeError",
     "cancel_remote_task",
     "fetch_agent_card_with_fallback",
+    "is_protocol_error",
     "send_hitl_reply",
     "send_message",
     "stream_message",

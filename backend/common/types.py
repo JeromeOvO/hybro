@@ -84,9 +84,20 @@ FilePart = RoomArtifactPart
 
 
 class DataPart(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     kind: Literal["data"] = "data"
     data: dict[str, Any]
     metadata: dict[str, Any] | None = None
+    mimeType: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("mimeType", "mime_type", "media_type"),
+        serialization_alias="mimeType",
+    )
+
+    @property
+    def mime_type(self) -> str | None:
+        return self.mimeType
 
 
 class TaskState(str, Enum):
@@ -124,6 +135,7 @@ class Message(BaseModel):
     kind: str = "message"
     message_id: str | None = Field(default=None, alias="messageId")
     context_id: str | None = Field(default=None, alias="contextId")
+    task_id: str | None = Field(default=None, alias="taskId")
     parts: list[Part]
     metadata: dict[str, Any] | None = None
 
@@ -164,18 +176,6 @@ class Task(BaseModel):
     metadata: dict[str, Any] | None = None
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_from_sdk(cls, data):
-        """Accept SDK Task objects or dicts transparently."""
-        if isinstance(data, dict):
-            return data
-        if type(data).__module__.startswith("common.types"):
-            return data
-        if hasattr(data, "model_dump"):
-            return data.model_dump(mode="json")
-        return data
 
 
 class TaskStatusUpdateEvent(BaseModel):
@@ -426,6 +426,21 @@ class ContentTypeNotSupportedError(JSONRPCError):
     data: None = None
 
 
+class AgentInterface(BaseModel):
+    """SDK-free projection of one callable A2A transport binding.
+
+    Consumers use this to select a callable endpoint (url, binding, protocol
+    version, tenant) without inspecting raw protocol cards or SDK objects.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: str
+    protocol_binding: str | None = Field(default=None, alias="protocolBinding")
+    protocol_version: str | None = Field(default=None, alias="protocolVersion")
+    tenant: str | None = None
+
+
 class AgentProvider(BaseModel):
     organization: str
     url: str | None = None
@@ -489,12 +504,33 @@ class AgentCard(BaseModel):
     protocolVersion: str | None = None
     preferredTransport: str | None = None
     additionalInterfaces: list[dict[str, Any]] | None = None
+    supportedInterfaces: list[AgentInterface] | None = None
     security: list[dict[str, list[str]]] | None = None
     securitySchemes: dict[str, Any] | None = None
     signatures: list[dict[str, Any]] | None = None
     supports_authenticated_extended_card: bool | None = Field(
         default=None, alias="supportsAuthenticatedExtendedCard"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_url_from_interfaces(cls, data):
+        """Accept 1.0 cards, which carry interfaces instead of a top-level url.
+
+        ``url`` is the agent's base URL, so it is derived from the advertised
+        interfaces only when the data does not carry one at all. An explicit
+        value always wins — including an empty string, which callers use to
+        blank the field (route masking) and which must not be silently refilled
+        with an interface endpoint.
+        """
+        if not isinstance(data, dict) or data.get("url") is not None:
+            return data
+        interfaces = data.get("supportedInterfaces") or data.get("additionalInterfaces")
+        if isinstance(interfaces, list):
+            for interface in interfaces:
+                if isinstance(interface, dict) and interface.get("url"):
+                    return {**data, "url": interface["url"]}
+        return data
 
     def model_dump(self, *args, **kwargs):
         kwargs.setdefault("by_alias", True)

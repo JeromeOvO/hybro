@@ -13,7 +13,6 @@ Per design doc §Testing Strategy - Integration Tests.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard
 
 from agent.matcher import (
     MatchedAgent,
@@ -22,6 +21,7 @@ from agent.matcher import (
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
+from common.types import AgentCapabilities, AgentCard
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 from models.room_services_models import ResolvedRoutingScope

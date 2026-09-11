@@ -1,5 +1,3 @@
-from a2a.types import TaskState
-
 from common.a2a_constants import (
     PROCESSING_DONE_STATUSES,
     CommonTaskState,
@@ -11,6 +9,7 @@ from common.a2a_constants import (
     is_terminal_state,
     normalize_task_state_value,
 )
+from common.types import TaskState
 
 
 def test_common_a2a_constants_are_sdk_free_but_accept_enum_like_values():

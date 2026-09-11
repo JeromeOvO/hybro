@@ -9,8 +9,9 @@ class LLMGatewayConfig:
     generation_provider: Literal["deepseek", "openai"] = "openai"
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.2
-    request_timeout_seconds: float = 60.0
-    stream_timeout_seconds: float = 120.0
+    request_timeout_seconds: float = 300.0
+    stream_timeout_seconds: float = 300.0
+    route_timeout_seconds: float = 300.0
     supervisor_json_timeout_seconds: float = 30.0
     supervisor_text_timeout_seconds: float = 90.0
     supervisor_stream_timeout_seconds: float = 90.0
@@ -40,6 +41,11 @@ class LLMGatewayConfig:
                 settings_obj,
                 "llm_gateway_stream_timeout_seconds",
                 defaults.stream_timeout_seconds,
+            ),
+            route_timeout_seconds=_setting(
+                settings_obj,
+                "llm_gateway_route_timeout_seconds",
+                defaults.route_timeout_seconds,
             ),
             supervisor_json_timeout_seconds=_setting(
                 settings_obj,

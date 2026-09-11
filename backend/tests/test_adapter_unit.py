@@ -44,36 +44,12 @@ def test_translator_internal_message_to_a2a_preserves_message_fields():
     }
 
 
-def test_sdk_agent_card_data_normalizes_nested_agent_skill_models():
-    from a2a_adapter.card_data import sdk_agent_card_data
-    from common.types import AgentCard
+def test_agent_card_data_normalizes_nested_agent_skill_models():
+    from google.protobuf.json_format import MessageToDict
 
-    card = AgentCard(
-        name="Minimal",
-        url="https://agent.example",
-        version="1",
-        capabilities={},
-        skills=[{"id": "skill-1", "name": "Skill"}],
-    )
+    from a2a_adapter.card_data import agent_card_dict, build_agent_card
 
-    data = sdk_agent_card_data(card)
-
-    assert data["description"] == ""
-    assert data["defaultInputModes"] == ["text"]
-    assert data["defaultOutputModes"] == ["text"]
-    assert data["skills"] == [
-        {
-            "id": "skill-1",
-            "name": "Skill",
-            "description": "",
-            "tags": [],
-            "examples": None,
-            "inputModes": None,
-            "outputModes": None,
-        }
-    ]
-
-    dict_data = sdk_agent_card_data(
+    data = agent_card_dict(
         {
             "name": "Minimal",
             "url": "https://agent.example",
@@ -82,21 +58,35 @@ def test_sdk_agent_card_data_normalizes_nested_agent_skill_models():
             "skills": [{"id": "skill-1", "name": "Skill"}],
         }
     )
-    assert dict_data["defaultInputModes"] == data["defaultInputModes"]
-    assert dict_data["defaultOutputModes"] == data["defaultOutputModes"]
+
+    # The SDK card parser owns normalization: a legacy top-level ``url`` becomes
+    # one advertised interface, and ProtoJSON omits unset optional skill fields
+    # instead of materializing them as ``None``.
+    card = MessageToDict(build_agent_card(data))
+
+    assert card["supportedInterfaces"] == [
+        {
+            "url": "https://agent.example",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "0.3.0",
+        }
+    ]
+    assert card["skills"] == [{"id": "skill-1", "name": "Skill"}]
+    assert card["capabilities"] == {}
+    assert "defaultInputModes" not in card
+    assert "defaultOutputModes" not in card
 
 
 @pytest.mark.asyncio
-async def test_inspection_fetch_sdk_agent_card_falls_back_after_current_404(
-    monkeypatch,
-):
-    from a2a.client.errors import A2AClientHTTPError
+async def test_fetch_agent_card_falls_back_after_current_404(monkeypatch):
+    from a2a.client.errors import AgentCardResolutionError
 
-    from a2a_adapter import inspection
+    from a2a_adapter import client_facade
     from a2a_adapter.constants import (
         AGENT_CARD_WELL_KNOWN_PATH,
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
     )
+    from tests.fakes.a2a_v1 import make_agent_card
 
     paths = []
 
@@ -107,48 +97,48 @@ async def test_inspection_fetch_sdk_agent_card_falls_back_after_current_404(
 
         async def get_agent_card(self):
             if self.path == AGENT_CARD_WELL_KNOWN_PATH:
-                raise A2AClientHTTPError(404, "missing")
-            return SimpleNamespace(name="Fallback Agent")
+                # A 404 on the current well-known path is the one failure the
+                # facade treats as "try the previous path".
+                raise AgentCardResolutionError("missing", status_code=404)
+            return make_agent_card(name="Fallback Agent")
 
-    monkeypatch.setattr(inspection, "A2ACardResolver", _Resolver)
+    monkeypatch.setattr(client_facade, "SDKCardResolver", _Resolver)
 
-    card = await inspection._fetch_sdk_agent_card_with_fallback(
+    card = await client_facade._fetch_agent_card_from_url(
         SimpleNamespace(),
         "https://agent.example",
     )
 
-    assert card.name == "Fallback Agent"
+    assert card["name"] == "Fallback Agent"
     assert paths == [AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH]
 
 
 def test_inspection_adapter_validates_probe_response_shapes():
     from a2a_adapter.inspection import (
-        _validate_message,
-        _validate_response,
         validate_message_data,
         validate_response_data,
     )
 
-    assert _validate_message({"kind": "task"}) == [
-        "Task object missing required field: 'id'.",
-        "Task object missing required field: 'status.state'.",
-    ]
-    assert _validate_message({"kind": "status-update", "status": {}}) == [
-        "StatusUpdate object missing required field: 'status.state'."
-    ]
-    assert _validate_message({"kind": "artifact-update", "artifact": {}}) == [
-        "Artifact object must have a non-empty 'parts' array."
-    ]
-    assert _validate_message({"kind": "message"}) == [
-        "Message object must have a non-empty 'parts' array.",
-        "Message from agent must have 'role' set to 'agent'.",
-    ]
-    assert _validate_message({"kind": "unexpected"}) == [
-        "Unknown message kind received: 'unexpected'."
-    ]
     assert validate_message_data({"kind": "task"}) == [
         "Task object missing required field: 'id'.",
         "Task object missing required field: 'status.state'.",
+    ]
+    assert validate_message_data({"kind": "status-update", "status": {}}) == [
+        "StatusUpdate object missing required field: 'status.state'."
+    ]
+    assert validate_message_data({"kind": "artifact-update", "artifact": {}}) == [
+        "Artifact object must have a non-empty 'parts' array."
+    ]
+    assert validate_message_data({"kind": "message"}) == [
+        "Message object must have a non-empty 'parts' array.",
+        "Message from agent must have 'role' set to 'agent'.",
+    ]
+    assert validate_message_data({"kind": "unexpected"}) == [
+        "Unknown message kind received: 'unexpected'."
+    ]
+    # 1.0 frames carry the member instead of a ``kind`` discriminator.
+    assert validate_message_data({"statusUpdate": {"status": {}}}) == [
+        "StatusUpdate object missing required field: 'status.state'."
     ]
     assert validate_response_data({"kind": "error", "error": "boom"}) == (
         ["boom"],
@@ -162,21 +152,134 @@ def test_inspection_adapter_validates_probe_response_shapes():
         False,
     )
 
-    response = SimpleNamespace(
-        root=SimpleNamespace(
-            result=SimpleNamespace(
-                model_dump=lambda exclude_none=True: {"kind": "message"}
-            )
-        )
+
+def _probe_card(**overrides):
+    """A card that survives projection onto the internal card model.
+
+    ``common.types.AgentCard`` requires at least one skill, unlike the
+    protobuf card, so probe tests build their card with one.
+    """
+    from tests.fakes.a2a_v1 import make_agent_card
+
+    overrides.setdefault("skills", [{"id": "s", "name": "Skill"}])
+    return make_agent_card(**overrides)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_result", "expected_result", "expected_status"),
+    [
+        # A valid agent message settles the probe.
+        (
+            {
+                "kind": "message",
+                "result": {
+                    "kind": "message",
+                    "role": "agent",
+                    "messageId": "m-1",
+                    "parts": [{"text": "hi"}],
+                },
+            },
+            [],
+            200,
+        ),
+        # A response with no recognizable event member is malformed.
+        ({}, ["Response from agent is missing required 'kind' field."], 500),
+        (
+            {"kind": "message", "result": {"kind": "message"}},
+            [
+                "Message object must have a non-empty 'parts' array.",
+                "Message from agent must have 'role' set to 'agent'.",
+            ],
+            500,
+        ),
+    ],
+)
+async def test_inspection_probe_projects_response_outcome(
+    monkeypatch, probe_result, expected_result, expected_status
+):
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_adapter import inspection
+
+    monkeypatch.setattr(
+        inspection,
+        "fetch_agent_card_with_fallback",
+        AsyncMock(return_value=MessageToDict(_probe_card())),
+    )
+    monkeypatch.setattr(
+        inspection, "send_message", AsyncMock(return_value=probe_result)
     )
 
-    assert _validate_response(response) == {
-        "result": [
-            "Message object must have a non-empty 'parts' array.",
-            "Message from agent must have 'role' set to 'agent'.",
-        ],
-        "status_code": 500,
-    }
+    result = await inspection.inspect_a2a_connection("https://agent.example")
+
+    assert result["result"] == expected_result
+    assert result["status_code"] == expected_status
+
+
+@pytest.mark.asyncio
+async def test_inspection_probe_reports_transport_failure(monkeypatch):
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_adapter import inspection
+
+    monkeypatch.setattr(
+        inspection,
+        "fetch_agent_card_with_fallback",
+        AsyncMock(return_value=MessageToDict(_probe_card())),
+    )
+    monkeypatch.setattr(
+        inspection,
+        "send_message",
+        AsyncMock(side_effect=RuntimeError("connection refused")),
+    )
+
+    result = await inspection.inspect_a2a_connection("https://agent.example")
+
+    assert result["result"] == ["Failed to send message: connection refused"]
+    assert result["status_code"] == 500
+
+
+@pytest.mark.asyncio
+async def test_inspection_probe_streams_when_the_card_advertises_streaming(
+    monkeypatch,
+):
+    from google.protobuf.json_format import MessageToDict
+
+    from a2a_adapter import inspection
+
+    seen: list[dict] = []
+
+    async def _stream(card_data, message, **kwargs):
+        seen.append(card_data)
+        yield {
+            "kind": "message",
+            "result": {
+                "kind": "message",
+                "role": "agent",
+                "messageId": "m-1",
+                "parts": [{"text": "hi"}],
+            },
+        }
+
+    monkeypatch.setattr(
+        inspection,
+        "fetch_agent_card_with_fallback",
+        AsyncMock(
+            return_value=MessageToDict(_probe_card(capabilities={"streaming": True}))
+        ),
+    )
+    monkeypatch.setattr(inspection, "stream_message", _stream)
+    monkeypatch.setattr(
+        inspection,
+        "send_message",
+        AsyncMock(side_effect=AssertionError("non-streaming send used")),
+    )
+
+    result = await inspection.inspect_a2a_connection("https://agent.example")
+
+    assert seen, "the streaming transport was not used"
+    assert result["status_code"] == 200
 
 
 @pytest.mark.asyncio
@@ -258,43 +361,67 @@ def test_get_task_request_helpers_keep_sdk_details_in_adapter():
     request = build_get_task_request("task-1")
 
     assert isinstance(request, GetTaskRequest)
+    # 1.0 folds the former ``params`` wrapper into the request message itself.
     assert request.id == "task-1"
-    assert request.params.id == "task-1"
+    assert [field.name for field in GetTaskRequest.DESCRIPTOR.fields] == [
+        "tenant",
+        "id",
+        "history_length",
+    ]
 
 
-def test_get_task_response_helper_returns_none_for_jsonrpc_errors():
-    from types import SimpleNamespace
+@pytest.mark.asyncio
+async def test_remote_task_returns_none_for_protocol_errors(monkeypatch):
+    from a2a.types import TaskNotFoundError
 
-    from a2a.types import JSONRPCError, JSONRPCErrorResponse
+    from a2a_adapter import remote_task
 
-    from a2a_adapter.task_requests import (
-        extract_get_task_result,
-        is_jsonrpc_error_response,
+    @asynccontextmanager
+    async def _bounded_client(*, timeout: float = 0.0):
+        yield SimpleNamespace()
+
+    class _Client:
+        async def get_task(self, request):
+            assert request.id == "task-1"
+            raise TaskNotFoundError("missing")
+
+    class _Factory:
+        def __init__(self, config):
+            pass
+
+        def create(self, card):
+            return _Client()
+
+    monkeypatch.setattr(remote_task, "bounded_client", _bounded_client)
+    monkeypatch.setattr(remote_task, "ClientFactory", _Factory)
+
+    result = await remote_task.fetch_remote_task(
+        {"name": "Agent", "url": "https://agent.example", "version": "1"},
+        "task-1",
     )
 
-    response = SimpleNamespace(
-        root=JSONRPCErrorResponse(
-            id="task-1",
-            error=JSONRPCError(code=-32001, message="missing"),
-        )
-    )
-
-    assert extract_get_task_result(response) is None
-    assert is_jsonrpc_error_response(response)
+    assert result is None
 
 
 def test_message_factory_builds_sdk_message_from_parts():
-    from a2a_adapter.message_factory import build_message_from_parts
+    from a2a.types import Role
+    from google.protobuf.json_format import MessageToDict
 
-    message = build_message_from_parts(
-        role=MessageRole.AGENT,
-        message_id="msg-1",
-        parts=[{"text": "hello"}],
+    from a2a_adapter.message_factory import to_sdk_message
+
+    # Callers pass the wire role string (``InternalAgentMessage.role``); the
+    # factory maps it onto the 1.0 proto enum.
+    message = to_sdk_message(
+        {
+            "role": "agent",
+            "message_id": "msg-1",
+            "parts": [{"text": "hello"}],
+        }
     )
 
-    assert message.role == "agent"
     assert message.message_id == "msg-1"
-    assert message.parts[0].model_dump(mode="json")["text"] == "hello"
+    assert message.role == Role.ROLE_AGENT
+    assert MessageToDict(message)["parts"] == [{"text": "hello"}]
 
 
 def test_artifact_factory_materializes_non_text_parts_on_task():
@@ -318,6 +445,7 @@ def test_artifact_factory_materializes_non_text_parts_on_task():
         "kind": "data",
         "metadata": None,
         "data": {"value": 1},
+        "mimeType": None,
     }
 
 
@@ -448,13 +576,14 @@ def test_to_sdk_message_preserves_inline_file_bytes():
     )
 
     sdk_message = to_sdk_message(internal_message)
-    dumped = sdk_message.model_dump(mode="json", by_alias=True)
-    file_data = dumped["parts"][0]["file"]
+    part = sdk_message.parts[0]
 
-    assert file_data["bytes"] == "cGRmZGF0YQ=="
-    assert file_data["mimeType"] == "application/pdf"
-    assert file_data["name"] == "report.pdf"
-    assert file_data.get("uri") is None
+    # 1.0 has one unified Part: a file becomes the ``raw`` member, and the
+    # base64 payload is decoded exactly once on the way across the boundary.
+    assert part.WhichOneof("content") == "raw"
+    assert part.raw == b"pdfdata"
+    assert part.media_type == "application/pdf"
+    assert part.filename == "report.pdf"
 
 
 def test_translator_a2a_task_to_result_normalizes_task_status_result_and_error_text():
@@ -497,6 +626,47 @@ def test_translator_a2a_event_to_stream_event_normalizes_payload_and_terminal_st
     assert event.payload["status"] == {"state": "completed"}
     assert event.payload["message"] == {"parts": [{"text": "done"}]}
     assert event.final is True
+
+
+def test_card_snapshot_url_is_the_discovery_base_not_an_interface_endpoint():
+    """A card's base URL must be where the card is discovered.
+
+    Health probing appends the well-known card path to this URL, and identity
+    and de-duplication key on it. A 1.0 card may advertise interfaces on a
+    subpath, so deriving the base from an interface makes the card unreachable
+    at `<base>/.well-known/agent-card.json`.
+    """
+    from a2a_adapter.card_data import build_agent_card
+    from a2a_adapter.translators import a2a_card_to_snapshot
+    from common.types import AgentCard as internal_agent_card
+
+    card = build_agent_card(
+        {
+            "name": "OpenQFR",
+            "version": "0.1.0",
+            "capabilities": {},
+            "skills": [{"id": "qfr_search", "name": "Search"}],
+            "supportedInterfaces": [
+                {
+                    "url": "https://openqfr.dev/a2a/v1",
+                    "protocolBinding": "HTTP+JSON",
+                    "protocolVersion": "1.0",
+                }
+            ],
+        }
+    )
+
+    snapshot = a2a_card_to_snapshot(card, "https://openqfr.dev")
+
+    assert snapshot.url == "https://openqfr.dev"
+    assert [interface.url for interface in snapshot.interfaces] == [
+        "https://openqfr.dev/a2a/v1"
+    ]
+    # raw_card must carry the base too: consumers rebuild an internal card from
+    # it, and without a `url` they would derive one from the interface again.
+    assert snapshot.raw_card["url"] == "https://openqfr.dev"
+    rebuilt = internal_agent_card.model_validate(snapshot.raw_card)
+    assert rebuilt.url == "https://openqfr.dev"
 
 
 def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
@@ -620,7 +790,16 @@ async def test_card_resolver_fetches_translates_and_caches_agent_card():
     assert first == second
     assert first is not None
     assert first.agent_id == "Card Agent"
-    assert first.url == "https://agent.example/a2a"
+    # The snapshot keeps the endpoint the card advertises (not the discovery
+    # base URL it was fetched from) in its raw card and interface projection.
+    assert first.interfaces[0].url == "https://agent.example/a2a"
+    assert first.raw_card["supportedInterfaces"] == [
+        {
+            "url": "https://agent.example/a2a",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "0.3.0",
+        }
+    ]
     assert "streaming" in first.capabilities
     assert "push_notifications" in first.capabilities
     assert client.requested_urls == [
@@ -659,7 +838,7 @@ async def test_card_resolver_falls_back_to_legacy_agent_json_path():
 
 
 @pytest.mark.asyncio
-async def test_card_resolver_retries_host_gateway_for_loopback_url(caplog):
+async def test_card_resolver_retries_host_gateway_for_loopback_url():
     from a2a_adapter.card_resolver import AgentCardResolverImpl
 
     class _LoopbackCardClient:
@@ -686,16 +865,17 @@ async def test_card_resolver_retries_host_gateway_for_loopback_url(caplog):
     client = _LoopbackCardClient()
     resolver = AgentCardResolverImpl(client=client, cache_ttl=300)
 
-    with caplog.at_level(logging.DEBUG):
-        card = await resolver.resolve_card("http://127.0.0.1:9060")
+    card = await resolver.resolve_card("http://127.0.0.1:9060")
 
     assert card is not None
     assert card.name == "Gateway Card Agent"
+    # The retried discovery URL is what proves the gateway fallback ran; the
+    # card itself still advertises the loopback endpoint it was reached through.
+    assert card.raw_card["supportedInterfaces"][0]["url"] == "http://127.0.0.1:9060"
     assert client.requested_urls == [
         "http://127.0.0.1:9060/.well-known/agent-card.json",
         "http://host.docker.internal:9060/.well-known/agent-card.json",
     ]
-    assert "a2a_docker_host_fallback_selected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -831,9 +1011,12 @@ async def test_transport_send_message_posts_a2a_request_and_returns_task_result(
     assert result.agent_id == "agent-1"
     assert result.status == "completed"
     assert client.posts[0]["url"] == "https://agent.example/a2a"
+    # 1.0 negotiates the protocol version out of band and renames the JSON-RPC
+    # method; the message itself is ProtoJSON.
+    assert client.posts[0]["headers"] == {"A2A-Version": "1.0"}
     payload = client.posts[0]["json"]
-    assert payload["method"] == "message/send"
-    assert payload["params"]["message"]["role"] == "user"
+    assert payload["method"] == "SendMessage"
+    assert payload["params"]["message"]["role"] == "ROLE_USER"
     assert payload["params"]["message"]["metadata"]["agent_id"] == "agent-1"
 
 
@@ -894,8 +1077,8 @@ async def test_transport_send_message_retries_host_gateway_for_loopback_url(capl
         def __init__(self):
             self.posts = []
 
-        async def post(self, url, json):
-            self.posts.append({"url": url, "json": json})
+        async def post(self, url, json, headers=None):
+            self.posts.append({"url": url, "json": json, "headers": headers})
             if url == "http://127.0.0.1:9060/a2a":
                 raise httpx.ConnectError("All connection attempts failed")
             return _FakeResponse(
@@ -1486,8 +1669,8 @@ class _FakePostClient:
         self._response_or_error = response_or_error
         self.posts = []
 
-    async def post(self, url, json):
-        self.posts.append({"url": url, "json": json})
+    async def post(self, url, json, headers=None):
+        self.posts.append({"url": url, "json": json, "headers": headers})
         if isinstance(self._response_or_error, Exception):
             raise self._response_or_error
         return _FakeResponse(self._response_or_error)

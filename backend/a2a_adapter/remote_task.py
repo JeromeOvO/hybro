@@ -5,20 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx  # noqa: F401 - compatibility patch point for confined SDK tests
-from a2a.types import AgentCard
+from a2a.client import ClientConfig, ClientFactory
+from a2a.types import GetTaskRequest
 
 from common.types import Task
 
 from .bounded_http import bounded_client
-from .card_data import sdk_agent_card_data
+from .card_data import build_agent_card
+from .constants import SUPPORTED_BINDINGS
 from .docker_host_fallback import with_docker_host_fallback
-from .message_factory import from_sdk_task
-from .task_requests import (
-    build_get_task_request,
-    extract_get_task_result,
-    is_jsonrpc_error_response,
-)
+from .message_factory import to_internal_task
 
 logger = logging.getLogger(__name__)
 
@@ -29,35 +25,29 @@ async def fetch_remote_task(
     *,
     timeout: float = 30.0,
 ) -> Task | None:
-    """Fetch a task from a remote A2A agent and return an internal task."""
+    """Fetch a task from a remote A2A agent and return an internal task.
+
+    Uses the same client construction as outbound sends, so a query lands on
+    the interface bound to the accepted task instead of a re-derived endpoint.
+    """
     try:
-        from a2a.client import A2AClient
-
-        card = AgentCard(**sdk_agent_card_data(agent_card_data))
-        request = build_get_task_request(task_id)
+        card = build_agent_card(agent_card_data)
         async with bounded_client(timeout=timeout) as client:
-            response = await with_docker_host_fallback(
+            config = ClientConfig(
+                streaming=False,
+                httpx_client=client,
+                supported_protocol_bindings=list(SUPPORTED_BINDINGS),
+                use_client_preference=True,
+            )
+            task = await with_docker_host_fallback(
                 card,
-                lambda candidate: A2AClient(
-                    client,
-                    agent_card=candidate,
-                ).get_task(request),
+                lambda candidate: (
+                    ClientFactory(config)
+                    .create(candidate)
+                    .get_task(GetTaskRequest(id=task_id))
+                ),
             )
-
-        if not response or is_jsonrpc_error_response(response):
-            logger.error(
-                "Failed to get task from agent, error: %s",
-                getattr(getattr(response, "root", None), "error", "Unknown error")
-                if response
-                else "No response",
-            )
-            return None
-
-        result = extract_get_task_result(response)
-        if result is None:
-            logger.error("Failed to get task from agent, error: missing result")
-            return None
-        return from_sdk_task(result)
+        return to_internal_task(task)
     except Exception as exc:
         logger.error("Failed to get task from agent: %s", exc, exc_info=True)
         return None

@@ -3,7 +3,6 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import AgentCapabilities, AgentCard
 
 from agent.matcher import MatchedAgent, MatchResult
 from agent.protocols import AgentSuggestion
@@ -12,6 +11,7 @@ from agent.selection_service import (
     AgentSelectionService,
     RoutingStrategy,
 )
+from common.types import AgentCapabilities, AgentCard
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 

@@ -83,6 +83,9 @@ def test_a2a_adapter_import_boundary():
         "aiohttp",
         "common",
         "dal",
+        # A2A 1.0 is protobuf-based, so the adapter boundary legitimately reads
+        # and writes protobuf messages via google.protobuf (json_format, struct_pb2).
+        "google",
         "httpx",
         "httpx_sse",
     }

@@ -258,5 +258,7 @@ def test_a2a_sdk_dependency_is_pinned_to_compatible_major_version():
 
     assert "a2a-sdk" in dependencies
     specifier = dependencies["a2a-sdk"].specifier
-    assert specifier.contains("0.3.25")
-    assert not specifier.contains("1.0.3")
+    # Pinned to one compatible major: the installed 1.x line is admitted and
+    # the next major is not.
+    assert specifier.contains("1.1.2")
+    assert not specifier.contains("2.0.0")

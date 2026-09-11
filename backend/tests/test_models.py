@@ -11,10 +11,8 @@ Tests cover:
 from datetime import datetime
 from uuid import uuid4
 
-from a2a.types import Task, TaskState, TaskStatus
-
 from common.types import Message as InternalMessage
-from common.types import TextPart
+from common.types import Task, TaskState, TaskStatus, TextPart
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
 from models.memory import (
@@ -52,7 +50,7 @@ class TestLegacyTaskRequestModels:
         assert message.metadata == {"room_id": "room-1"}
         assert message.model_dump(mode="json", by_alias=True)["messageId"]
 
-    def test_sdk_task_payloads_serialize_with_runtime_serializer(self):
+    def test_task_payloads_serialize_with_runtime_serializer(self):
         task = Task(
             id="task-1",
             contextId="ctx-1",
@@ -60,11 +58,14 @@ class TestLegacyTaskRequestModels:
         )
 
         content = MessageContent(message_task=task)
-        assert content.model_dump(mode="json")["message_task"]["status"] == {
-            "message": None,
-            "state": "working",
-            "timestamp": None,
-        }
+        status = content.model_dump(mode="json")["message_task"]["status"]
+        assert status["message"] is None
+        assert status["state"] == "working"
+        # The internal status model stamps its own timestamp on construction,
+        # so the serializer always renders an ISO-8601 string here. The SDK
+        # shape this used to pin (a proto Timestamp that serialized to None)
+        # no longer exists.
+        assert isinstance(status["timestamp"], str)
 
     def test_agent_task_request_to_message_builds_internal_message(self):
         message = AgentTaskRequest(

@@ -20,16 +20,16 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from a2a.types import (
+
+from a2a_adapter.runtime_service import A2ARuntimeConfig, A2AService
+from common.types import (
     AgentCapabilities,
     AgentCard,
     AgentSkill,
     Message,
-    Role,
+    MessageRole,
     TextPart,
 )
-
-from a2a_adapter.runtime_service import A2ARuntimeConfig, A2AService
 from execution.task_tracking import A2ATaskTrackingService
 
 # ---------------------------------------------------------------------------
@@ -67,27 +67,10 @@ def _make_agent_card(push_capable: bool = True) -> AgentCard:
 
 def _make_message() -> Message:
     return Message(
-        role=Role.user,
+        role=MessageRole.USER,
         message_id="msg-test-001",
         parts=[TextPart(text="hello")],
     )
-
-
-def _build_mock_response() -> MagicMock:
-    from a2a.types import TaskState, TaskStatus
-
-    mock_result = MagicMock()
-    mock_result.kind = "task"
-    mock_result.id = "task-001"
-    mock_result.status = TaskStatus(state=TaskState.completed)
-    mock_result.artifacts = []
-
-    inner = MagicMock()
-    inner.result = mock_result
-
-    outer = MagicMock()
-    outer.root = inner
-    return outer
 
 
 def _bind_webhook_base_url(service, value: str) -> None:
@@ -475,8 +458,10 @@ class TestReplyToTaskWebhookFallback:
 
         captured_request = {}
 
-        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
-            captured_request["agent_url"] = agent_url
+        async def fake_send_hitl_reply(agent_card, message_data, **kwargs):
+            # 1.0 continues the task on the card's own binding: the card is the
+            # first argument and the URL travels as a keyword.
+            captured_request["agent_card"] = agent_card
             captured_request["message_data"] = message_data
             captured_request.update(kwargs)
             return _task_facade_response()
@@ -545,8 +530,10 @@ class TestReplyToTaskWebhookFallback:
         _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
-        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
-            captured_request["agent_url"] = agent_url
+        async def fake_send_hitl_reply(agent_card, message_data, **kwargs):
+            # 1.0 continues the task on the card's own binding: the card is the
+            # first argument and the URL travels as a keyword.
+            captured_request["agent_card"] = agent_card
             captured_request["message_data"] = message_data
             captured_request.update(kwargs)
             return _task_facade_response()
@@ -591,8 +578,10 @@ class TestReplyToTaskWebhookFallback:
         _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "https://api.example.com")
 
-        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
-            captured_request["agent_url"] = agent_url
+        async def fake_send_hitl_reply(agent_card, message_data, **kwargs):
+            # 1.0 continues the task on the card's own binding: the card is the
+            # first argument and the URL travels as a keyword.
+            captured_request["agent_card"] = agent_card
             captured_request["message_data"] = message_data
             captured_request.update(kwargs)
             return _task_facade_response()
@@ -635,8 +624,10 @@ class TestReplyToTaskWebhookFallback:
         _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "https://api.example.com")
 
-        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
-            captured_request["agent_url"] = agent_url
+        async def fake_send_hitl_reply(agent_card, message_data, **kwargs):
+            # 1.0 continues the task on the card's own binding: the card is the
+            # first argument and the URL travels as a keyword.
+            captured_request["agent_card"] = agent_card
             captured_request["message_data"] = message_data
             captured_request.update(kwargs)
             return _task_facade_response()
@@ -681,8 +672,10 @@ class TestReplyToTaskWebhookFallback:
         _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
-        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
-            captured_request["agent_url"] = agent_url
+        async def fake_send_hitl_reply(agent_card, message_data, **kwargs):
+            # 1.0 continues the task on the card's own binding: the card is the
+            # first argument and the URL travels as a keyword.
+            captured_request["agent_card"] = agent_card
             captured_request["message_data"] = message_data
             captured_request.update(kwargs)
             return _task_facade_response()
@@ -725,7 +718,7 @@ class TestReplyToTaskWebhookFallback:
         _bind_task_tracking(service, mock_db)
         _bind_webhook_base_url(service, "")
 
-        async def fake_send_hitl_reply(agent_url, message_data, **kwargs):
+        async def fake_send_hitl_reply(agent_card, message_data, **kwargs):
             return _terminal_task_with_private_request_history_response(
                 private_sentinel
             )
@@ -758,20 +751,6 @@ class TestReplyToTaskWebhookFallback:
 # ---------------------------------------------------------------------------
 # Tests for persisted flag propagation
 # ---------------------------------------------------------------------------
-
-
-def _build_message_response() -> MagicMock:
-    """Build a mock a2a response where result.kind == 'message'."""
-    mock_result = MagicMock()
-    mock_result.kind = "message"
-    mock_result.parts = [TextPart(text="Hello from agent")]
-
-    inner = MagicMock()
-    inner.result = mock_result
-
-    outer = MagicMock()
-    outer.root = inner
-    return outer
 
 
 class TestSendMessageTrackedAgentPersistedFlag:

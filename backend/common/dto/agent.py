@@ -20,6 +20,15 @@ class AgentInfo(FrozenDTO):
     raw_card: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class AgentCardInterface(FrozenDTO):
+    """Callable transport binding advertised by an agent card."""
+
+    url: str
+    protocol_binding: str | None = None
+    protocol_version: str | None = None
+    tenant: str | None = None
+
+
 class AgentCardSnapshot(FrozenDTO):
     agent_id: str
     url: str
@@ -27,6 +36,7 @@ class AgentCardSnapshot(FrozenDTO):
     description: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     raw_card: dict[str, JsonValue] = Field(default_factory=dict)
+    interfaces: list[AgentCardInterface] = Field(default_factory=list)
 
 
 class AgentMatchResult(FrozenDTO):
@@ -44,6 +54,7 @@ class LocalAgentUpsertResult(FrozenDTO):
 
 
 __all__ = [
+    "AgentCardInterface",
     "AgentCardSnapshot",
     "AgentInfo",
     "AgentMatchResult",

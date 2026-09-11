@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import pytest
+from google.protobuf.json_format import MessageToDict
 
 from a2a_adapter.client_facade import A2AClientFacadeError
 from a2a_adapter.orchestrator_direct_client import (
@@ -345,13 +346,12 @@ async def test_send_rematerialized_data_preserves_payload_metadata():
     )
 
     sent_message = sdk.send_calls[0][1]
+    # 1.0 parts are one unified message; the set member identifies the payload.
     data_part = next(
-        part.root
-        for part in sent_message.parts
-        if getattr(part.root, "kind", None) == "data"
+        part for part in sent_message.parts if part.WhichOneof("content") == "data"
     )
-    assert data_part.data == {"value": 42}
-    assert data_part.metadata == {
+    assert MessageToDict(data_part.data) == {"value": 42.0}
+    assert MessageToDict(data_part.metadata) == {
         "mime_type": "application/vnd.hybro.result+json",
         "schema": "v1",
     }
@@ -406,27 +406,34 @@ async def test_send_tags_instruction_context_and_selected_skill_for_sdk_round_tr
             "skill_id": "skill-review",
         },
     }
-    instruction, context, file_part = [part.root for part in sent_message.parts]
-    assert instruction.metadata == {
+    instruction, context, file_part = list(sent_message.parts)
+    assert instruction.WhichOneof("content") == "text"
+    assert context.WhichOneof("content") == "text"
+    assert MessageToDict(instruction.metadata) == {
         HYBRO_A2A_PART_PROVENANCE_METADATA_KEY: {
             "schema_version": 1,
             "role": HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE,
         }
     }
-    assert context.metadata == {
+    assert MessageToDict(context.metadata) == {
         "owner": "context-memory",
         HYBRO_A2A_PART_PROVENANCE_METADATA_KEY: {
             "schema_version": 1,
             "role": HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
         },
     }
-    assert file_part.metadata == {"authorized": True}
+    assert file_part.WhichOneof("content") == "raw"
+    assert file_part.raw == b"pdf"
+    assert file_part.media_type == "application/pdf"
+    assert file_part.filename == "input.pdf"
+    assert MessageToDict(file_part.metadata) == {"authorized": True}
 
     private_metadata = json.dumps(
         {
-            "message": sent_message.metadata,
+            "message": MessageToDict(sent_message.metadata),
             "parts": [
-                getattr(part.root, "metadata", None) for part in sent_message.parts
+                MessageToDict(part.metadata) if part.HasField("metadata") else None
+                for part in sent_message.parts
             ],
         },
         sort_keys=True,

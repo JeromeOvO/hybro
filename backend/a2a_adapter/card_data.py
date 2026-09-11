@@ -1,29 +1,50 @@
+"""SDK-free card normalization and SDK card construction.
+
+Card data reaches the adapter in several shapes: an internal ``AgentCard``, a
+raw dict from persistence, or a card fetched from the wire. All of them are
+converted to a plain dict here and then parsed by the SDK's own card parser,
+which also maps the pre-1.0 ``url``/``preferredTransport``/``protocolVersion``
+shape onto ``supportedInterfaces``. That keeps legacy and 1.0 agents on one
+code path instead of two hand-written variants.
+"""
+
 from __future__ import annotations
 
 from typing import Any
 
+from a2a.client.card_resolver import parse_agent_card
+from a2a.types import AgentCard
 
-def sdk_agent_card_data(agent_card_data: Any) -> dict[str, Any]:
-    """Return SDK-compatible AgentCard data from dicts or internal models."""
+# A card reached through Hybro always speaks JSON-RPC until the wire says
+# otherwise, so an unspecified binding gets the JSON-RPC default.
+_DEFAULT_BINDING = "JSONRPC"
+
+
+def agent_card_dict(agent_card_data: Any) -> dict[str, Any]:
+    """Return plain camelCase card data from an internal model or dict."""
+    return _model_data(agent_card_data)
+
+
+def build_agent_card(agent_card_data: Any) -> AgentCard:
+    """Build an SDK agent card from internal models, dicts, or wire JSON.
+
+    A card with no callable interface is rejected: every card in Hybro exists to
+    be called, and a card that advertises no endpoint cannot be. This also keeps
+    a truncated or malformed card from being registered as a working agent.
+    """
+    if isinstance(agent_card_data, AgentCard):
+        return agent_card_data
     data = _model_data(agent_card_data)
+    if not data:
+        raise ValueError("agent card data is empty")
+    card = parse_agent_card(data)
+    if not _interface_urls(card):
+        raise ValueError("agent card advertises no callable interface")
+    return card
 
-    if data.get("description") is None:
-        data["description"] = ""
-    if data.get("defaultInputModes") is None:
-        data["defaultInputModes"] = ["text"]
-    if data.get("defaultOutputModes") is None:
-        data["defaultOutputModes"] = ["text"]
 
-    normalized_skills = []
-    for skill in data.get("skills") or []:
-        skill_data = _model_data(skill)
-        if skill_data.get("description") is None:
-            skill_data["description"] = ""
-        if skill_data.get("tags") is None:
-            skill_data["tags"] = []
-        normalized_skills.append(skill_data)
-    data["skills"] = normalized_skills
-    return data
+def _interface_urls(card: AgentCard) -> list[str]:
+    return [interface.url for interface in card.supported_interfaces if interface.url]
 
 
 def _model_data(value: Any) -> dict[str, Any]:
@@ -34,4 +55,4 @@ def _model_data(value: Any) -> dict[str, Any]:
     return {}
 
 
-__all__ = ["sdk_agent_card_data"]
+__all__ = ["agent_card_dict", "build_agent_card"]

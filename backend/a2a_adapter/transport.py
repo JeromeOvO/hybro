@@ -1,20 +1,22 @@
+"""Raw HTTP/SSE transport for agents addressed by URL.
+
+Unlike ``client_facade`` (which drives the SDK client), this module speaks the
+JSON-RPC binding directly: it is used when a caller already holds an agent URL
+and a pre-built message payload, and needs a plain result or an SSE event
+stream without card discovery.
+
+1.0 specifics handled here: the JSON-RPC method names are ``SendMessage`` /
+``SendStreamingMessage``, the negotiated version is sent in the ``A2A-Version``
+header (a missing header is treated as 0.3), and stream frames are single-member
+objects discriminated by their member name rather than a ``kind`` field.
+"""
+
 import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
-from uuid import uuid4
 
 import httpx
-from a2a.types import (
-    DataPart,
-    Message,
-    MessageSendConfiguration,
-    MessageSendParams,
-    Part,
-    Role,
-    SendMessageRequest,
-    SendStreamingMessageRequest,
-    TextPart,
-)
+from a2a.types import Message as SDKMessage
 from httpx_sse import aconnect_sse
 
 from common.dto import AgentStreamEvent, AgentTaskResult, InternalAgentMessage
@@ -23,11 +25,13 @@ from .docker_host_fallback import (
     stream_with_docker_host_url_fallback,
     with_docker_host_url_fallback,
 )
-from .translators import (
-    a2a_event_to_stream_event,
-    a2a_task_to_result,
-    internal_message_to_a2a,
-)
+from .message_factory import to_sdk_message
+from .translators import a2a_event_to_stream_event, a2a_task_to_result
+
+_SEND_METHOD = "SendMessage"
+_STREAM_METHOD = "SendStreamingMessage"
+_VERSION_HEADER = "A2A-Version"
+_PROTOCOL_VERSION = "1.0"
 
 
 class AgentTransportImpl:
@@ -62,6 +66,7 @@ class AgentTransportImpl:
                 response = await self._client.post(
                     candidate_url,
                     json=request_payload,
+                    headers={_VERSION_HEADER: _PROTOCOL_VERSION},
                 )
                 response.raise_for_status()
                 return response
@@ -105,6 +110,7 @@ class AgentTransportImpl:
                     "POST",
                     candidate_url,
                     json=request_payload,
+                    headers={_VERSION_HEADER: _PROTOCOL_VERSION},
                 ) as event_source:
                     async for sse in event_source.aiter_sse():
                         event_data = json.loads(sse.data)
@@ -132,50 +138,51 @@ def _build_send_request(
     streaming: bool,
     accepted_output_modes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    payload = internal_message_to_a2a(message)
-    sdk_message = Message(
-        message_id=str(uuid4()),
-        role=Role(payload["role"]),
-        parts=[_to_part(part) for part in payload["parts"]],
-        metadata=payload["metadata"],
+    sdk_message = to_sdk_message(
+        {
+            "role": message.role,
+            "parts": message.parts,
+            "metadata": {"agent_id": message.agent_id, **message.metadata},
+        }
     )
-    configuration = None
+    params: dict[str, Any] = {"message": _message_to_wire(sdk_message)}
     if accepted_output_modes:
-        configuration = MessageSendConfiguration(
-            accepted_output_modes=list(accepted_output_modes)
-        )
-    params = MessageSendParams(message=sdk_message, configuration=configuration)
-    request_cls = SendStreamingMessageRequest if streaming else SendMessageRequest
-    request = request_cls(id=str(uuid4()), params=params)
-    return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+        params["configuration"] = {"acceptedOutputModes": list(accepted_output_modes)}
+    return {
+        "jsonrpc": "2.0",
+        "id": _new_id(),
+        "method": _STREAM_METHOD if streaming else _SEND_METHOD,
+        "params": params,
+    }
 
 
-def _to_part(part: dict[str, Any]) -> Part:
-    if "root" in part:
-        return Part(**part)
+def _message_to_wire(message: SDKMessage) -> dict[str, Any]:
+    from google.protobuf.json_format import MessageToDict
 
-    kind = part.get("kind") or part.get("type")
-    metadata = part.get("metadata")
-    if kind == "data" or "data" in part:
-        return Part(root=DataPart(data=part.get("data", {}), metadata=metadata))
-    if kind == "text" or "text" in part:
-        return Part(root=TextPart(text=str(part.get("text", "")), metadata=metadata))
-    return Part(root=TextPart(text=json.dumps(part, sort_keys=True)))
+    return MessageToDict(message)
+
+
+def _new_id() -> str:
+    from uuid import uuid4
+
+    return str(uuid4())
 
 
 def _stream_event_payload(event_data: dict[str, Any]) -> dict[str, Any]:
-    result = event_data.get("result")
-    if "jsonrpc" in event_data and isinstance(result, dict):
-        return event_data
-    if "jsonrpc" in event_data and event_data.get("error") is not None:
-        return event_data
-    if isinstance(result, dict):
-        return result
+    """Return the frame that carries the event.
 
+    JSON-RPC SSE responses wrap the event under ``result``; a transport-level
+    error is surfaced as an error event instead.
+    """
+    if "jsonrpc" in event_data:
+        if event_data.get("error") is not None:
+            return event_data
+        result = event_data.get("result")
+        if isinstance(result, dict):
+            return event_data
     error = event_data.get("error")
     if error is not None:
         return {"type": "error", "error": error, "final": True}
-
     return event_data
 
 

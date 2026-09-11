@@ -1,21 +1,34 @@
+"""Parse A2A stream frames into internal tasks.
+
+Used by webhook ingestion and the direct stream wrapper. A2A 1.0 removed the
+``kind`` discriminator and the ``final`` flag: a frame is now exactly one of
+``task`` / ``statusUpdate`` / ``artifactUpdate`` / ``message``, so the member
+that is present identifies the event. Pre-1.0 frames that still carry ``kind``
+are accepted as well, because agents already registered keep calling back until
+they are migrated.
+
+Conversion to internal models happens through the shared boundary converters,
+so this module never constructs SDK types and never guesses at protobuf shape
+beyond the JSON member names the protocol defines.
+"""
+
 from __future__ import annotations
 
-import re
-import uuid
 from typing import Any
+from uuid import uuid4
 
-from a2a.types import (
+from common.types import (
     Artifact,
     Message,
-    Part,
+    MessageRole,
     Task,
-    TaskArtifactUpdateEvent,
     TaskState,
     TaskStatus,
-    TaskStatusUpdateEvent,
-    TextPart,
 )
 
+from .message_factory import to_internal_part, to_internal_status
+
+# 1.0 ProtoJSON state names -> internal spelling.
 _PROTO_STATE_MAP: dict[str, str] = {
     "TASK_STATE_SUBMITTED": "submitted",
     "TASK_STATE_WORKING": "working",
@@ -26,283 +39,248 @@ _PROTO_STATE_MAP: dict[str, str] = {
     "TASK_STATE_CANCELED": "canceled",
     "TASK_STATE_REJECTED": "rejected",
 }
-
-
-def _normalize_proto_payload(data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize protobuf camelCase payloads for SDK Pydantic models."""
-
-    def _to_snake(name: str) -> str:
-        s1 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
-        return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
-
-    def _convert(obj: Any, *, parent_key: str = "") -> Any:
-        if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                new_key = _to_snake(k)
-                new_val = _convert(v, parent_key=new_key)
-                if (
-                    new_key == "state"
-                    and isinstance(new_val, str)
-                    and new_val in _PROTO_STATE_MAP
-                ):
-                    new_val = _PROTO_STATE_MAP[new_val]
-                result[new_key] = new_val
-            if "text" in result and "kind" not in result and parent_key == "parts":
-                result["kind"] = "text"
-            elif "file" in result and "kind" not in result and parent_key == "parts":
-                result["kind"] = "file"
-            elif "data" in result and "kind" not in result and parent_key == "parts":
-                result["kind"] = "data"
-            return result
-        if isinstance(obj, list):
-            return [_convert(item, parent_key=parent_key) for item in obj]
-        return obj
-
-    return _convert(data)
-
-
-def _is_proto_format(data: dict[str, Any]) -> bool:
-    """Detect protobuf-style camelCase A2A payloads."""
-    if "contextId" in data or "artifactId" in data:
-        return True
-    status = data.get("status", {})
-    if isinstance(status, dict):
-        state_val = status.get("state", "")
-        if isinstance(state_val, str) and state_val.startswith("TASK_STATE_"):
-            return True
-    return False
-
-
-def _extract_text_from_message_dict(message: Any) -> str:
-    """Best-effort text extraction from a (possibly proto-shaped) message dict.
-
-    Handles both v0.x (``parts``) and v1.x proto (``content``) part lists and
-    ignores role/kind discriminator differences.
-    """
-    if not isinstance(message, dict):
-        return ""
-    parts = message.get("parts") or message.get("content") or []
-    if not isinstance(parts, list):
-        return ""
-    texts: list[str] = []
-    for part in parts:
-        if isinstance(part, dict):
-            text = part.get("text")
-            if isinstance(text, str) and text:
-                texts.append(text)
-    return "".join(texts)
-
-
-def _rebuild_status_message(
-    raw_message: Any, *, fallback_message_id: str
-) -> Message | None:
-    """Best-effort Message rebuild that keeps interaction metadata.
-
-    Strict ``TaskStatusUpdateEvent`` validation often fails when agents omit
-    ``messageId`` or use proto role/content shapes. Dropping the message
-    entirely also drops ``hybro.ai/a2a/interaction`` and turns typed HITL into
-    an untyped completed tool result.
-    """
-    if not isinstance(raw_message, dict):
-        return None
-    text = _extract_text_from_message_dict(raw_message)
-    metadata = raw_message.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = None
-    message_id = (
-        raw_message.get("messageId")
-        or raw_message.get("message_id")
-        or fallback_message_id
-    )
-    role = raw_message.get("role") or "agent"
-    if isinstance(role, str) and role.upper().startswith("ROLE_"):
-        role = role.split("_", 1)[-1].lower()
-    if role not in {"agent", "user"}:
-        role = "agent"
-    if not text and metadata is None:
-        return None
-    try:
-        return Message(
-            message_id=str(message_id),
-            role=role,
-            parts=[Part(root=TextPart(text=text or ""))],
-            metadata=metadata,
-        )
-    except (TypeError, ValueError):
-        return None
-
-
-def _task_from_status_update_dict(raw: dict[str, Any], message_id: str) -> Task:
-    """Build a Task from a status-update payload that failed strict validation.
-
-    v1.x (proto/gRPC) agents send push notifications whose ``statusUpdate``
-    envelope (notably an embedded agent ``message``) does not validate against
-    the v0.x Pydantic ``TaskStatusUpdateEvent`` model. Extract the state and
-    any response text defensively so the terminal ``completed`` signal is not
-    lost (which would otherwise stall the task until the stale-task poller).
-    Preserve status.message metadata when present so typed HITL specs survive.
-    """
-    raw = raw if isinstance(raw, dict) else {}
-    status = raw.get("status") if isinstance(raw.get("status"), dict) else {}
-
-    state_value = status.get("state") or "working"
-    if isinstance(state_value, str):
-        state_value = _PROTO_STATE_MAP.get(state_value, state_value)
-    try:
-        state = TaskState(state_value)
-    except ValueError:
-        state = TaskState.working
-
-    task_id = raw.get("task_id") or raw.get("taskId") or message_id
-    context_id = raw.get("context_id") or raw.get("contextId") or ""
-
-    text = _extract_text_from_message_dict(status.get("message"))
-    artifacts = None
-    if text:
-        artifacts = [
-            Artifact(
-                artifact_id=str(uuid.uuid4()),
-                name="response",
-                parts=[Part(root=TextPart(text=text))],
-            )
-        ]
-
-    status_message = _rebuild_status_message(
-        status.get("message"),
-        fallback_message_id=f"{task_id}-status",
-    )
-
-    return Task(
-        id=task_id,
-        context_id=context_id,
-        status=TaskStatus(state=state, message=status_message),
-        artifacts=artifacts,
-    )
-
-
-def _stream_kind(payload: dict[str, Any]) -> str | None:
-    """Normalize StreamResponse ``kind`` (hyphen or underscore) when present."""
-    kind = payload.get("kind")
-    if not isinstance(kind, str) or not kind.strip():
-        return None
-    return kind.strip().replace("_", "-").lower()
-
-
-def _status_update_raw(
-    payload: dict[str, Any], *, kind: str | None
-) -> dict[str, Any] | None:
-    """Resolve a status-update event from kind-based or wrapped envelopes."""
-    if kind == "status-update":
-        return payload
-    if "statusUpdate" in payload or "status_update" in payload:
-        raw = payload.get("statusUpdate") or payload.get("status_update")
-        return raw if isinstance(raw, dict) else None
-    return None
-
-
-def _artifact_update_raw(
-    payload: dict[str, Any], *, kind: str | None
-) -> dict[str, Any] | None:
-    """Resolve an artifact-update event from kind-based or wrapped envelopes."""
-    if kind == "artifact-update":
-        return payload
-    if "artifactUpdate" in payload or "artifact_update" in payload:
-        raw = payload.get("artifactUpdate") or payload.get("artifact_update")
-        return raw if isinstance(raw, dict) else None
-    return None
-
-
-def _task_from_status_update_raw(raw: dict[str, Any], message_id: str) -> Task:
-    if _is_proto_format(raw):
-        raw = _normalize_proto_payload(raw)
-    try:
-        status_event = TaskStatusUpdateEvent.model_validate(raw)
-    except ValueError:
-        # pydantic ValidationError subclasses ValueError. v1.x (proto/gRPC)
-        # agents emit status updates whose embedded agent ``message``
-        # (``ROLE_AGENT`` role, ``content`` parts, no ``kind`` discriminator)
-        # does not validate against the current Pydantic model. Current JSON-RPC
-        # SSE frames also omit ``messageId`` on embedded status messages.
-        # Rebuild from the fields we need so terminal ``completed`` is not lost.
-        return _task_from_status_update_dict(raw, message_id)
-    return Task(
-        id=status_event.task_id,
-        context_id=status_event.context_id,
-        status=status_event.status,
-    )
-
-
-def _task_from_artifact_update_raw(raw: dict[str, Any]) -> Task:
-    if isinstance(raw, dict) and ("artifactId" in raw or "contextId" in raw):
-        raw = _normalize_proto_payload(raw)
-    artifact_event = TaskArtifactUpdateEvent.model_validate(raw)
-    return Task(
-        id=artifact_event.task_id,
-        context_id=artifact_event.context_id,
-        status=TaskStatus(state=TaskState.working),
-        artifacts=[artifact_event.artifact],
-    )
+_STREAM_MEMBERS = ("task", "statusUpdate", "artifactUpdate", "message")
 
 
 def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> Task:
-    """Parse A2A StreamResponse variants into an SDK Task.
+    """Parse one A2A stream frame into an internal task.
 
-    Accepts both legacy wrapped envelopes (``statusUpdate`` / ``artifactUpdate``)
-    and current JSON-RPC SSE frames where ``result`` is the event itself with
-    ``kind`` of ``task``, ``status-update``, ``artifact-update``, or ``message``.
+    ``message_id`` only supplies a fallback identity when the frame omits one;
+    agent-supplied ids always win.
     """
-    result = payload.get("result")
-    if isinstance(result, dict):
-        payload = result
+    frame = _unwrap_result(payload)
+    member, event = _resolve_event(frame)
 
-    kind = _stream_kind(payload)
-
-    if "task" in payload and kind != "task":
-        task_data = payload["task"]
-        if _is_proto_format(task_data):
-            task_data = _normalize_proto_payload(task_data)
-        return Task.model_validate(task_data)
-
-    status_raw = _status_update_raw(payload, kind=kind)
-    if status_raw is not None:
-        return _task_from_status_update_raw(status_raw, message_id)
-
-    if kind == "message" or "message" in payload:
-        msg_data = payload if kind == "message" else payload["message"]
-        if isinstance(msg_data, dict) and "contextId" in msg_data:
-            msg_data = _normalize_proto_payload(msg_data)
-        message = Message.model_validate(msg_data)
-        return Task(
-            id=str(uuid.uuid4()),
-            context_id=message.context_id or "",
-            status=TaskStatus(state=TaskState.completed),
-            artifacts=[
-                Artifact(
-                    artifact_id=str(uuid.uuid4()),
-                    name="response",
-                    parts=message.parts,
-                )
-            ],
-        )
-
-    artifact_raw = _artifact_update_raw(payload, kind=kind)
-    if artifact_raw is not None:
-        return _task_from_artifact_update_raw(artifact_raw)
-
-    if kind == "task" or ("id" in payload and "status" in payload):
-        if _is_proto_format(payload):
-            payload = _normalize_proto_payload(payload)
-        return Task.model_validate(payload)
-
+    if member == "task":
+        return task_from_task_frame(event)
+    if member == "statusUpdate":
+        return task_from_status_update(event, message_id)
+    if member == "artifactUpdate":
+        return task_from_artifact_update(event)
+    if member == "message":
+        return task_from_message_frame(event, message_id)
     raise ValueError(
-        "Invalid StreamResponse: expected 'task', 'statusUpdate', 'message', "
-        "or 'artifactUpdate' key (or kind-based status-update/artifact-update)"
+        "Invalid StreamResponse: expected one of 'task', 'statusUpdate', "
+        "'artifactUpdate', or 'message'"
     )
 
 
+# ---------------------------------------------------------------------------
+# Frame shape
+# ---------------------------------------------------------------------------
+
+
+def _unwrap_result(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid StreamResponse: expected an object")
+    result = payload.get("result")
+    if isinstance(result, dict):
+        return result
+    if "error" in payload and payload.get("error") is not None:
+        raise ValueError(f"A2A stream frame is an error: {payload.get('error')}")
+    return payload
+
+
+def _resolve_event(frame: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """Identify the event and return the object that carries it.
+
+    A 1.0 frame wraps the event under the member that is present
+    (``{"statusUpdate": {...}}``). Pre-1.0 frames put the event inline and tag
+    it with ``kind`` instead; both are supported because agents registered
+    before the upgrade keep calling back until they are migrated.
+    """
+    for member in _STREAM_MEMBERS:
+        value = frame.get(member)
+        if isinstance(value, dict):
+            return member, value
+
+    kind = _string(frame.get("kind"))
+    if kind:
+        normalized = kind.replace("_", "-").lower()
+        if normalized == "status-update":
+            return "statusUpdate", frame
+        if normalized == "artifact-update":
+            return "artifactUpdate", frame
+        if normalized in {"task", "message"}:
+            return normalized, frame
+    if "statusUpdate" in frame or "status_update" in frame:
+        return "statusUpdate", _member(frame, "statusUpdate")
+    if "artifactUpdate" in frame or "artifact_update" in frame:
+        return "artifactUpdate", _member(frame, "artifactUpdate")
+    return None, frame
+
+
+def _member(frame: dict[str, Any], member: str) -> dict[str, Any]:
+    value = frame.get(member)
+    if value is None:
+        value = frame.get(_to_snake(member))
+    return value if isinstance(value, dict) else {}
+
+
+def _to_snake(name: str) -> str:
+    out = []
+    for index, char in enumerate(name):
+        if char.isupper() and index:
+            out.append("_")
+        out.append(char.lower())
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Event -> internal Task
+# ---------------------------------------------------------------------------
+
+
+def task_from_task_frame(raw: dict[str, Any]) -> Task:
+    return Task(
+        id=_string(raw.get("id")) or "",
+        context_id=_string(raw.get("contextId") or raw.get("context_id")),
+        status=to_internal_status(raw.get("status") or {}),
+        artifacts=_artifacts(raw.get("artifacts")),
+        history=_history(raw.get("history")),
+        metadata=_metadata(raw),
+    )
+
+
+def task_from_status_update(raw: dict[str, Any], message_id: str) -> Task:
+    """Build a task carrying a status update.
+
+    The status message stays where the protocol puts it: on ``status.message``.
+    Synthesizing a response artifact from that text would double it in the
+    observation (once from the status message, once from the artifact) and would
+    misreport a status event as produced output.
+    """
+    status = to_internal_status(raw.get("status") or {})
+    task_id = _string(raw.get("taskId") or raw.get("task_id")) or message_id
+    return Task(
+        id=task_id,
+        context_id=_string(raw.get("contextId") or raw.get("context_id")),
+        status=status,
+        metadata=_metadata(raw),
+    )
+
+
+def task_from_artifact_update(raw: dict[str, Any]) -> Task:
+    artifact_data = raw.get("artifact")
+    if not isinstance(artifact_data, dict):
+        raise ValueError("Invalid StreamResponse: artifactUpdate requires 'artifact'")
+
+    append = raw.get("append")
+    last_chunk = raw.get("lastChunk", raw.get("last_chunk"))
+    artifact = Artifact(
+        artifact_id=_string(
+            artifact_data.get("artifactId") or artifact_data.get("artifact_id")
+        ),
+        name=_string(artifact_data.get("name")),
+        description=_string(artifact_data.get("description")),
+        parts=[to_internal_part(part) for part in artifact_data.get("parts") or []],
+        metadata=_metadata(artifact_data),
+        append=None if append is None else bool(append),
+        lastChunk=None if last_chunk is None else bool(last_chunk),
+    )
+    return Task(
+        id=_string(raw.get("taskId") or raw.get("task_id")) or "",
+        context_id=_string(raw.get("contextId") or raw.get("context_id")),
+        status=TaskStatus(state=TaskState.working),
+        artifacts=[artifact],
+        metadata=_metadata(raw),
+    )
+
+
+def task_from_message_frame(raw: dict[str, Any], message_id: str) -> Task:
+    """Build a completed task from a message-only response."""
+    message = _message(raw)
+    return Task(
+        id=str(uuid4()),
+        context_id=message.context_id or message_id,
+        status=TaskStatus(state=TaskState.completed),
+        artifacts=[
+            Artifact(
+                artifact_id=str(uuid4()),
+                name="response",
+                parts=message.parts,
+            )
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Field readers
+# ---------------------------------------------------------------------------
+
+
+def _message(raw: Any) -> Message:
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid StreamResponse: message must be an object")
+    role = _string(raw.get("role"))
+    return Message(
+        message_id=_string(raw.get("messageId") or raw.get("message_id")),
+        role=(
+            MessageRole.USER
+            if (role or "").upper() in {"ROLE_USER", "USER"}
+            else MessageRole.AGENT
+        ),
+        context_id=_string(raw.get("contextId") or raw.get("context_id")),
+        task_id=_string(raw.get("taskId") or raw.get("task_id")),
+        parts=[to_internal_part(part) for part in raw.get("parts") or []],
+        metadata=_metadata(raw),
+    )
+
+
+def _artifacts(raw: Any) -> list[Artifact] | None:
+    if not isinstance(raw, list):
+        return None
+    artifacts = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        artifacts.append(
+            Artifact(
+                artifact_id=_string(item.get("artifactId") or item.get("artifact_id")),
+                name=_string(item.get("name")),
+                description=_string(item.get("description")),
+                parts=[to_internal_part(part) for part in item.get("parts") or []],
+                metadata=_metadata(item),
+            )
+        )
+    return artifacts or None
+
+
+def _history(raw: Any) -> list[Message] | None:
+    if not isinstance(raw, list):
+        return None
+    messages = [_message(item) for item in raw if isinstance(item, dict)]
+    return messages or None
+
+
+def _message_text(message: Message | None) -> str:
+    if message is None:
+        return ""
+    return "".join(
+        part.root.text
+        for part in message.parts or []
+        if getattr(part.root, "kind", None) == "text"
+    )
+
+
+def _metadata(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    metadata = value.get("metadata")
+    return dict(metadata) if isinstance(metadata, dict) and metadata else None
+
+
+def _string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text or None
+
+
 __all__ = [
-    "_is_proto_format",
-    "_normalize_proto_payload",
     "parse_stream_response_payload",
+    "task_from_artifact_update",
+    "task_from_message_frame",
+    "task_from_status_update",
+    "task_from_task_frame",
 ]

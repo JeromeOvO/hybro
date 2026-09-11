@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-from a2a.types import AgentCapabilities, AgentCard, AgentSkill
+from a2a.types import (
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
+    AgentSkill,
+)
 
 AGENT_NAME = "Travel Planner Agent"
 AGENT_VERSION = "1.0.0"
+AGENT_PROTOCOL_BINDING = "JSONRPC"
+AGENT_PROTOCOL_VERSION = "1.0"
 
 TRAVEL_PLANNER_EXAMPLES = (
     "Generate a travel plan",
@@ -44,10 +51,16 @@ def build_travel_planner_agent_card(url: str) -> AgentCard:
             "request to generate, refine, or continue a travel plan — "
             "including when destination or dates are still missing."
         ),
-        url=url,
         version=AGENT_VERSION,
-        defaultInputModes=["text"],
-        defaultOutputModes=["text"],
+        supported_interfaces=[
+            AgentInterface(
+                url=url,
+                protocol_binding=AGENT_PROTOCOL_BINDING,
+                protocol_version=AGENT_PROTOCOL_VERSION,
+            )
+        ],
+        default_input_modes=["text"],
+        default_output_modes=["text"],
         capabilities=AgentCapabilities(streaming=True),
         skills=[build_travel_planner_skill()],
     )

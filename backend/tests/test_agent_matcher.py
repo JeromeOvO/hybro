@@ -1,5 +1,4 @@
 import pytest
-from a2a.types import AgentCapabilities, AgentCard, AgentProvider
 
 from agent.matcher import AgentMatcher
 from agent.matching import (
@@ -10,6 +9,7 @@ from agent.matching import (
     rank_agent_docs,
 )
 from common.dto.agent import AgentInfo
+from common.types import AgentCapabilities, AgentCard, AgentProvider
 from models.agent import Agent, AgentStatus
 
 
