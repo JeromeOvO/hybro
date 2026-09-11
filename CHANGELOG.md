@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.16](https://github.com/hybroai/hybro/compare/v0.2.15...v0.2.16) (2026-09-11)
+
+
+### Features
+
+* **cli:** add compact model settings and services panels ([3b91658](https://github.com/hybroai/hybro/commit/3b91658e5e755dfc0c4af74845a96125add279c3))
+* **cli:** run a published stack and upgrade without a checkout ([50441a8](https://github.com/hybroai/hybro/commit/50441a8017938f58a7f943435f7458c049902af4))
+* **frontend:** deliver public configuration at runtime ([c60ede0](https://github.com/hybroai/hybro/commit/c60ede0c3917b33d1e588edf565774ec272aaa28))
+* **llm:** add configurable gateway and compact CLI setup ([ad1fd59](https://github.com/hybroai/hybro/commit/ad1fd59372cfb130469d3beff7c88ff2ed18f603))
+* migrate A2A integration to protocol 1.0 ([5ff6eda](https://github.com/hybroai/hybro/commit/5ff6eda2be32df344494ae464d61083e86605b55))
+* migrate A2A to protocol 1.0 and dispatch explicitly mentioned agents ([b25b671](https://github.com/hybroai/hybro/commit/b25b67195dcf65c039c8c7e9d9690dd713c7f08d))
+* publish the Hybro CLI and stack as versioned artifacts ([39230b7](https://github.com/hybroai/hybro/commit/39230b735f60617d4766fa1eb6d472a183162b69))
+* treat an explicit [@mention](https://github.com/mention) as an instruction to call that Agent ([b5fd1b3](https://github.com/hybroai/hybro/commit/b5fd1b3e5ce9acf26bf99cf4a45f1af53b586579))
+
+
+### Bug Fixes
+
+* accept HTTP+JSON agents and convert message-frame responses ([ffbbea1](https://github.com/hybroai/hybro/commit/ffbbea1a142814d7bc601d3530a2e4a469b0220b))
+* address review blockers for JSON config migration ([bd7efaa](https://github.com/hybroai/hybro/commit/bd7efaae035362d5ace7935561fa0352681914f7))
+* align agent tool use with user intent ([034e621](https://github.com/hybroai/hybro/commit/034e62184ae60aee52baa6b3ad52c29e58308b29))
+* keep agent streams alive and restore backend CI gates ([04a3435](https://github.com/hybroai/hybro/commit/04a34350e5138fe9bdac260e8d919fc568b30333))
+* keep an agent's base URL out of its interface endpoints ([c7594dc](https://github.com/hybroai/hybro/commit/c7594dc1b741585a0cdbce76b45ebc096a6bebbd))
+* make canonical tool and HITL lifecycle recovery durable ([af47007](https://github.com/hybroai/hybro/commit/af470074d8e1a73ea74d82309133439ea4ff85cf))
+* make canonical tool and HITL lifecycle recovery durable ([a5a7ef0](https://github.com/hybroai/hybro/commit/a5a7ef06f9e5e2af2dfd6084e156f27315aaef3d))
+* make run cancellation durable ([74965a0](https://github.com/hybroai/hybro/commit/74965a04f9fddee5d973b3719f365f5ee26a80d2))
+* make run cancellation durable and improve cancellation feedback ([1ec3992](https://github.com/hybroai/hybro/commit/1ec3992f417ddf037a963f60b7b9414c026a18c8))
+* **orchestrator:** fail interrupted runs instead of resuming them ([5a597f0](https://github.com/hybroai/hybro/commit/5a597f0a26d714b0278605d3f6482bed2f6183b5))
+* persist room mode before message acknowledgement ([fa3b0cf](https://github.com/hybroai/hybro/commit/fa3b0cf41ef09fafa0d5e0eefb2eb95634507f0b))
+* prevent late HITL acknowledgements from restarting finished runs ([4052a7b](https://github.com/hybroai/hybro/commit/4052a7b36f4bf1a4b4fa56ac549d2a8b9a2e8884))
+* raise LLM timeouts so slow model turns are not abandoned ([8db0415](https://github.com/hybroai/hybro/commit/8db0415b533fc14c96b375036c596051e174119a))
+* **release:** call the publish workflow instead of waiting for an event ([99a8dac](https://github.com/hybroai/hybro/commit/99a8daccbac1b8020d6b214e12ea3082c1b3625c))
+* **release:** make a retry safe and refuse to publish an unreleased tree ([6d9e6c5](https://github.com/hybroai/hybro/commit/6d9e6c53f54aa101e401e6594388ff8d48e11520))
+* remove obsolete run index ([b61f041](https://github.com/hybroai/hybro/commit/b61f041f4dff897fa6c5a78157e1fbdb9f39f8c8))
+* remove some unused APIs ([1d1e2b8](https://github.com/hybroai/hybro/commit/1d1e2b8d4bd6e3ea60416804691270df264cfa05))
+* restore room multi-turn context ([9a5e44f](https://github.com/hybroai/hybro/commit/9a5e44f3a5950bc9ac856dab1897aedf8e7d2c9f))
+* settle canceled runs locally ([23423a3](https://github.com/hybroai/hybro/commit/23423a3eda33000b1a1097e73b18354c8d9eca11))
+* show pointer across agent cards ([2d31ee2](https://github.com/hybroai/hybro/commit/2d31ee2094ba31759e243dd7ed1d9d4998b5c533))
+* surface parked interactions in the CI mock LLM ([b5ebb0d](https://github.com/hybroai/hybro/commit/b5ebb0df1bed0c8183b5f03f2fbd8ff6fdff96b1))
+* **ui:** restore agent avatar profile links ([564b936](https://github.com/hybroai/hybro/commit/564b9366f0a34648c0af58483cd78b6ae211d89a))
+* **ui:** restore agent avatar profile links ([0fd2ddc](https://github.com/hybroai/hybro/commit/0fd2ddc7c65d02394c3fd7edf235552fda3d2914))
+* **ui:** subscribe to agent catalog updates ([59488eb](https://github.com/hybroai/hybro/commit/59488eb1db5e09104dcb4a8c86a9dd428fd4168e))
+
 ## [0.2.15](https://github.com/hybroai/hybro/compare/v0.2.14...v0.2.15) (2026-09-01)
 
 
