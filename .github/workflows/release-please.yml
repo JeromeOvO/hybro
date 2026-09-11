@@ -11,6 +11,13 @@ permissions:
 
 jobs:
   release-please:
+    # Only the canonical repository releases. A fork would create release pull
+    # requests that, once merged, run the publish workflow against the wrong
+    # targets: IMAGE_NAMESPACE resolves to the fork owner while the stack
+    # references ghcr.io/hybroai, and the npm packages are named @hybroai/*,
+    # which a fork cannot publish at all. Skipping is also what keeps a fork's
+    # main green instead of failing on a permission it does not need.
+    if: github.repository == 'hybroai/hybro'
     runs-on: ubuntu-latest
     outputs:
       released: ${{ steps.release.outputs.release_created }}
