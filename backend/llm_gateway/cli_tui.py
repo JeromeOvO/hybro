@@ -1,4 +1,4 @@
-"""Settings and services pages; effects remain in setup and scripts/hybro."""
+"""Settings and services pages; effects remain in setup and the host CLI."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import subprocess
 import sys
 import termios
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import TextIO
 
 from pydantic import ValidationError
@@ -27,14 +26,30 @@ _SERVICE_ACTIONS = (
     SetupOption(
         "apply",
         "Reload configuration",
-        hint="Reload saved configuration: rebuild and recreate. Services will be interrupted.",
+        hint="Reload saved configuration: recreate containers. Services will be interrupted.",
     ),
     SetupOption("logs", "View logs"),
+    SetupOption(
+        "upgrade",
+        "Upgrade hybro",
+        hint="Install the newest release. The stack version moves with the CLI.",
+    ),
     SetupOption("models", "Model configuration [Tab]", shortcut=b"\t"),
 )
 
+# Actions that change something outside the running stack ask before acting.
+# Keyed by action; the value is the confirmation prompt.
+_CONFIRMATIONS: dict[str, str] = {
+    "apply": "Reload saved configuration? Services will be interrupted.",
+    "upgrade": "Install the newest hybro release? This replaces the installed CLI.",
+}
+
+# Actions whose CLI arguments differ from the action name.
+_ACTION_ARGUMENTS: dict[str, tuple[str, ...]] = {"apply": ("start", "--recreate")}
+
 # Host capability injected by the CLI entry point; the gateway never imports it.
 StatusReader = Callable[[], list[dict[str, object]]]
+ProblemReader = Callable[[], str | None]
 
 
 def _read_status() -> list[dict[str, object]]:
@@ -44,15 +59,21 @@ def _read_status() -> list[dict[str, object]]:
     )
 
 
+def _read_problem() -> str | None:
+    """Standalone default; the host CLI injects its Docker diagnosis instead."""
+    return None
+
+
 def _status_snapshot(
     read: StatusReader | None = None,
+    problem: ProblemReader | None = None,
 ) -> tuple[str, list[dict[str, object]]]:
     try:
         rows = (read or _read_status)()
         running = sum(row.get("State") == "running" for row in rows)
         return f"{running} running" if rows else "No containers", rows
     except (OSError, ValueError, RuntimeConfigurationError, subprocess.SubprocessError):
-        return "Status unavailable: check Docker", []
+        return (problem or _read_problem)() or "Status unavailable: check Docker", []
 
 
 def _service_states(rows: list[dict[str, object]]) -> tuple[tuple[str, bool], ...]:
@@ -73,9 +94,10 @@ def _logs_page(
     console: SetupConsole,
     run: Callable[[tuple[str, ...]], int],
     read: StatusReader | None = None,
+    problem: ProblemReader | None = None,
 ) -> None:
     while True:
-        status, rows = _status_snapshot(read)
+        status, rows = _status_snapshot(read, problem)
         names = sorted(
             {
                 row["Name"]
@@ -123,23 +145,25 @@ def _logs_page(
 
 
 def _run_command(arguments: tuple[str, ...]) -> int:
-    script = Path(__file__).resolve().parents[2] / "scripts" / "hybro"
-    return subprocess.run([os.fspath(script), *arguments], check=False).returncode
+    """Standalone default; the host CLI injects its Compose runner instead."""
+    raise RuntimeConfigurationError(
+        "Service commands are available through the hybro CLI entry point"
+    )
 
 
 def _service_command(
     console: SetupConsole, run: Callable[[tuple[str, ...]], int], action: str
 ) -> str:
-    arguments = ("start", "--build", "--recreate") if action == "apply" else (action,)
-    if action == "apply":
-        if (
-            console.select(
-                "Reload saved configuration? Services will be interrupted.",
-                (SetupOption("cancel", "Cancel"), SetupOption("run", "Run command")),
-            )
-            == "cancel"
-        ):
-            return "Canceled; services unchanged."
+    arguments = _ACTION_ARGUMENTS.get(action, (action,))
+    prompt = _CONFIRMATIONS.get(action)
+    if prompt is not None and (
+        console.select(
+            prompt,
+            (SetupOption("cancel", "Cancel"), SetupOption("run", "Run command")),
+        )
+        == "cancel"
+    ):
+        return "Canceled; nothing changed."
     result = run(arguments)
     notice = (
         "Command canceled."
@@ -161,12 +185,17 @@ def _services_page(
     run: Callable[[tuple[str, ...]], int],
     focus: str,
     read: StatusReader | None = None,
+    problem: ProblemReader | None = None,
+    version: str | None = None,
 ) -> str:
     from dataclasses import replace
 
+    # The CLI runs the images published for its own version, so one line states
+    # both: this is the stack version too.
+    version_line = f"CLI and stack {version}" if version else ""
     notice = ""
     while True:
-        status, rows = _status_snapshot(read)
+        status, rows = _status_snapshot(read, problem)
         try:
             action = console.select(
                 SetupScreen(
@@ -178,6 +207,7 @@ def _services_page(
                         filter(
                             None,
                             (
+                                version_line,
                                 notice,
                                 "More commands: hybro --help. Status refreshes on return.",
                             ),
@@ -196,7 +226,7 @@ def _services_page(
         focus = action
         try:
             if action == "logs":
-                _logs_page(console, run, read)
+                _logs_page(console, run, read, problem)
             else:
                 notice = _service_command(console, run, action)
         except SelectionCancelled:
@@ -211,6 +241,8 @@ def _menu(
     service: SetupService,
     environment: Mapping[str, str],
     read: StatusReader | None = None,
+    problem: ProblemReader | None = None,
+    version: str | None = None,
 ) -> int:
     panel = SetupPanel(service, console, environment)
     service_focus = "start"
@@ -222,7 +254,9 @@ def _menu(
                 return 0
             continue
         if action == "services":
-            service_focus = _services_page(console, run, service_focus, read)
+            service_focus = _services_page(
+                console, run, service_focus, read, problem, version
+            )
             continue
         try:
             panel.edit(action)
@@ -245,6 +279,8 @@ def main(
     environment: Mapping[str, str] | None = None,
     service: SetupService | None = None,
     status: StatusReader | None = None,
+    problem: ProblemReader | None = None,
+    version: str | None = None,
 ) -> int:
     output = output if output is not None else sys.stdout
     try:
@@ -259,9 +295,9 @@ def main(
                 verify_selection,
             )
         if console is not None:
-            return _menu(console, run, service, environment, status)
+            return _menu(console, run, service, environment, status, problem, version)
         with _terminal_console(output, screen=True) as terminal:
-            return _menu(terminal, run, service, environment, status)
+            return _menu(terminal, run, service, environment, status, problem, version)
     except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
         print("Hybro closed; unsaved changes discarded.", file=output)
         return 130

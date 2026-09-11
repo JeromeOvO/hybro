@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
+from cli_stack import HELP, MANIFEST, RENDERER, Stack, data_file, resolve, version
 from common.config.loader import (
     PRIVATE_FIELDS,
     ROUTE_FIELDS,
@@ -34,7 +37,8 @@ from common.config.runtime_store import (
     runtime_home,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
+# Docker's own startup can be slow on a cold daemon; local probes stay bounded.
+_DOCKER_TIMEOUT = 10
 
 
 class Parser(argparse.ArgumentParser):
@@ -60,6 +64,8 @@ def compose_environment(runtime: RuntimeConfigStore, *, start: bool) -> dict[str
         "AGENT_REGISTRAR_TOKEN",
         "DEFAULT_AGENT_LLM_TOKEN",
         "HYBRO_AGENT_CONFIG",
+        "HYBRO_IMAGE_REGISTRY",
+        "HYBRO_STACK_TAG",
         "IMAGE_SIZE",
         "OPENAI_MODEL",
         "IMAGE_MODEL",
@@ -69,6 +75,8 @@ def compose_environment(runtime: RuntimeConfigStore, *, start: bool) -> dict[str
     ):
         env.pop(key, None)
     env["HYBRO_HOME"] = str(runtime.home)
+    # The released stack file pins every published image to this CLI's version.
+    env["HYBRO_STACK_TAG"] = version()
     env["COMPOSE_DISABLE_ENV_FILE"] = "1"
     if not start:
         return env
@@ -114,26 +122,44 @@ def compose_environment(runtime: RuntimeConfigStore, *, start: bool) -> dict[str
     return env
 
 
-def compose_files(extra: Sequence[str] = ()) -> list[str]:
-    """Base file first; extras must be existing files inside the checkout.
+def compose_files(stack: Stack, extra: Sequence[str] = ()) -> list[str]:
+    """Stack file first; extras must be existing files beside it.
 
     Overlays stay explicit CLI input (for example the CI mock-LLM stack) instead
     of ambient Compose discovery.
     """
-    files = [Path("docker-compose.yml")]
+    files = [stack.compose]
     for value in extra:
         candidate = Path(value)
-        if not candidate.is_absolute():
-            candidate = ROOT / candidate
-        resolved = candidate.resolve()
-        if not resolved.is_file() or not resolved.is_relative_to(ROOT):
+        resolved = (
+            candidate.resolve()
+            if candidate.is_absolute()
+            else (stack.root / candidate).resolve()
+        )
+        if not resolved.is_file() or not resolved.is_relative_to(stack.root):
             raise RuntimeConfigurationError(
-                "Additional Compose file must be an existing file inside the repository."
+                "Additional Compose file must be an existing file beside the stack."
             )
         files.append(resolved)
-    return [
-        os.fspath(ROOT / name if not name.is_absolute() else name) for name in files
-    ]
+    return [os.fspath(name) for name in files]
+
+
+def render_agents(stack: Stack) -> int:
+    """Regenerate a checkout's Compose file before starting it.
+
+    A released stack has no manifest or renderer; its file is published already
+    rendered, so there is nothing to regenerate.
+    """
+    if not stack.checkout:
+        return 0
+    spec = importlib.util.spec_from_file_location(
+        "hybro_render_compose", data_file(RENDERER)
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeConfigurationError("Cannot load the Compose renderer.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.main(["--manifest", os.fspath(data_file(MANIFEST))])
 
 
 def compose(
@@ -141,16 +167,14 @@ def compose(
 ) -> int:
     runtime = store()
     env = compose_environment(runtime, start=start)
+    stack = resolve()
     if start:
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "default_agents/render_compose.py")],
-            cwd=ROOT,
-            env=env,
-            check=False,
-        )
-        if result.returncode:
-            return result.returncode
-    compose_arguments = [item for name in compose_files(files) for item in ("-f", name)]
+        result = render_agents(stack)
+        if result:
+            return result
+    compose_arguments = [
+        item for name in compose_files(stack, files) for item in ("-f", name)
+    ]
     return subprocess.run(
         [
             "docker",
@@ -160,7 +184,7 @@ def compose(
             *compose_arguments,
             *arguments,
         ],
-        cwd=ROOT,
+        cwd=stack.root,
         env=env,
         check=False,
     ).returncode
@@ -168,21 +192,23 @@ def compose(
 
 def service_status() -> list[dict[str, object]]:
     """Read only Compose container metadata; never load application credentials."""
+    runtime = store()
+    stack = resolve()
     result = subprocess.run(
         [
             "docker",
             "compose",
             "--env-file",
             os.devnull,
-            *[item for name in compose_files() for item in ("-f", name)],
+            *[item for name in compose_files(stack) for item in ("-f", name)],
             "ps",
             "--all",
             "--orphans=false",
             "--format",
             "json",
         ],
-        cwd=ROOT,
-        env=compose_environment(store(), start=False),
+        cwd=stack.root,
+        env=compose_environment(runtime, start=False),
         check=True,
         capture_output=True,
         text=True,
@@ -325,6 +351,97 @@ def migrate(runtime: RuntimeConfigStore, env_path: str | None) -> None:
     )
 
 
+def docker_problem() -> str | None:
+    """Why Docker cannot run the stack, or ``None`` when it can.
+
+    A missing binary, a stopped daemon, and a missing Compose plugin need
+    different fixes, so an installed CLI reports which one it found instead of
+    one generic message.
+    """
+    if shutil.which("docker") is None:
+        return "Docker is not installed or not on PATH."
+    try:
+        compose = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=_DOCKER_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "Docker did not respond; check the Docker installation."
+    if compose.returncode:
+        return "The Docker Compose plugin is unavailable; update Docker."
+    try:
+        daemon = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=_DOCKER_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "Docker did not respond; check the Docker installation."
+    if daemon.returncode:
+        return "Docker is installed but its daemon is not running; start Docker."
+    return None
+
+
+def _help(arguments: list[str]) -> int:
+    sys.stdout.write(data_file(HELP).read_text(encoding="utf-8"))
+    return 0
+
+
+def _version(arguments: list[str]) -> int:
+    print(version())
+    return 0
+
+
+def _setup(arguments: list[str]) -> int:
+    from llm_gateway import setup_cli
+
+    return setup_cli.main(arguments)
+
+
+def _upgrade(arguments: list[str]) -> int:
+    from cli_upgrade import run
+
+    parser = Parser(prog="hybro upgrade")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether a newer release exists; exit non-zero if it does.",
+    )
+    return run(check=parser.parse_args(arguments).check)
+
+
+def _interactive() -> bool:
+    """Whether a TUI can drive this terminal."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _tui(arguments: list[str]) -> int:
+    """Open the TUI, or print help when there is no terminal to drive it."""
+    if arguments:
+        raise RuntimeConfigurationError("hybro tui does not accept arguments.")
+    if not _interactive():
+        return _help(arguments)
+    from llm_gateway import cli_tui
+
+    return cli_tui.main(
+        status=service_status, run=compose, problem=docker_problem, version=version()
+    )
+
+
+def _passthrough(*prefix: str) -> Callable[[list[str]], int]:
+    """A command that forwards its arguments to Compose after a fixed prefix."""
+
+    def run(arguments: list[str]) -> int:
+        return compose([*prefix, *arguments])
+
+    return run
+
+
 def config_command(arguments: list[str]) -> int:
     parser = Parser(prog="hybro config")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -344,9 +461,23 @@ def config_command(arguments: list[str]) -> int:
     if args.command == "migrate":
         migrate(runtime, args.from_env)
     elif args.command == "set":
-        runtime.update_config(args.path.split("."), json.loads(args.value))
+        path = args.path.split(".")
+        # The published frontend serves browser settings at runtime, but its
+        # server-side API rewrite is built into the image with the projection
+        # prefix. Changing the prefix would leave that route behind, so a
+        # released install refuses it instead of breaking API calls silently.
+        if path in (["backend", "api_prefix"], ["frontend", "api_prefix"]) and (
+            not resolve().checkout
+        ):
+            raise RuntimeConfigurationError(
+                "The API prefix is built into the published frontend image, so it "
+                "cannot change on this install. Use a source checkout and "
+                "hybro start --build to change it."
+            )
+        runtime.update_config(path, json.loads(args.value))
         print(
-            "Configuration saved. Restart services; rebuild frontend if public build settings changed."
+            "Configuration saved. Apply it with hybro start --recreate; no rebuild "
+            "is needed."
         )
     elif args.command == "secret":
         if not sys.stdin.isatty():
@@ -401,9 +532,13 @@ def _start(arguments: list[str]) -> int:
         "--compose-file",
         action="append",
         default=[],
-        help="Additional Compose overlay inside the repository, e.g. the CI stack.",
+        help="Additional Compose overlay beside the stack, e.g. the CI stack.",
     )
     options = parser.parse_args(arguments)
+    if options.build and not resolve().checkout:
+        raise RuntimeConfigurationError(
+            "This install has no source checkout; run hybro upgrade to change versions."
+        )
     params = ["up", "-d", "--remove-orphans"]
     if options.build:
         params.append("--build")
@@ -425,33 +560,38 @@ def _logs(arguments: list[str]) -> int:
     ).returncode
 
 
+# Direct commands, then plain Compose pass-throughs. Anything else is an
+# explicit Compose subcommand. Help stays available without a terminal.
+_HANDLERS: dict[str, Callable[[list[str]], int]] = {
+    "help": _help,
+    "--help": _help,
+    "-h": _help,
+    "--version": _version,
+    "-v": _version,
+    "config": config_command,
+    "setup": _setup,
+    "tui": _tui,
+    "upgrade": _upgrade,
+    "start": _start,
+    "up": _start,
+    "logs": _logs,
+    "status": _passthrough("ps", "--all"),
+    "ps": _passthrough("ps", "--all"),
+    "stop": _passthrough("stop"),
+    "down": _passthrough("down"),
+    "restart": _passthrough("restart"),
+}
+
+
 def main(arguments: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if arguments is None else arguments)
     command = arguments.pop(0) if arguments else "tui"
+    handler = _HANDLERS.get(command)
+    if handler is None:
+        print("Unknown command; run hybro --help.", file=sys.stderr)
+        return 1
     try:
-        if command == "config":
-            return config_command(arguments)
-        if command in {"setup", "tui"}:
-            from llm_gateway import cli_tui, setup_cli
-
-            if command == "setup":
-                return setup_cli.main(arguments)
-            if arguments:
-                raise RuntimeConfigurationError("hybro tui does not accept arguments.")
-            return cli_tui.main(status=service_status)
-        handler = {"start": _start, "up": _start, "logs": _logs}.get(command)
-        if handler:
-            return handler(arguments)
-        commands = {
-            "status": ["ps", "--all"],
-            "ps": ["ps", "--all"],
-            "stop": ["stop"],
-            "down": ["down"],
-            "restart": ["restart"],
-        }
-        if command not in commands:
-            raise RuntimeConfigurationError("Unknown command; run hybro --help.")
-        return compose([*commands[command], *arguments])
+        return handler(arguments)
     except (RuntimeConfigurationError, ValidationError) as exc:
         print(
             str(exc)
