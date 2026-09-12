@@ -223,17 +223,27 @@ jobs:
         run: packaging/npm/build.sh ${{ matrix.platform }}
 
       # The release assets let a user run the CLI without npm, and give a
-      # Homebrew formula a stable download URL with a verifiable checksum. The
-      # archive holds the directory so extraction yields a `hybro/` folder.
+      # Homebrew formula a stable download URL with a verifiable checksum.
+      # The executable sits inside `hybro/` so extraction yields the documented
+      # `hybro/hybro` path, and so it cannot drop a bare `hybro` file into
+      # whatever directory the user happens to be in.
       - name: Package the executable for the release assets
         run: |
+          set -eu
           version="${{ needs.version.outputs.value }}"
-          mkdir -p packaging/cli/dist/hybro-dir
-          cp packaging/cli/dist/hybro packaging/cli/dist/hybro-dir/hybro
-          tar -czf "hybro-${version}-${{ matrix.platform }}.tar.gz" \
-            -C packaging/cli/dist/hybro-dir hybro
-          shasum -a 256 "hybro-${version}-${{ matrix.platform }}.tar.gz" \
-            > "hybro-${version}-${{ matrix.platform }}.tar.gz.sha256"
+          asset="hybro-${version}-${{ matrix.platform }}.tar.gz"
+          staging=packaging/cli/dist/asset
+          rm -rf "$staging"
+          mkdir -p "$staging/hybro"
+          cp packaging/cli/dist/hybro "$staging/hybro/hybro"
+          tar -czf "$asset" -C "$staging" hybro
+          # The archive's shape is part of the documented install path; a flat
+          # archive changes where the executable lands without failing anything.
+          tar -tzf "$asset" | grep -qx "hybro/hybro" || {
+            echo "$asset does not contain hybro/hybro" >&2
+            exit 1
+          }
+          shasum -a 256 "$asset" > "$asset.sha256"
 
       - name: Upload release assets
         env:
