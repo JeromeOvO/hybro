@@ -605,7 +605,7 @@ wheels = [
 
 [[package]]
 name = "hybro-backend"
-version = "0.2.15"
+version = "0.2.16"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
