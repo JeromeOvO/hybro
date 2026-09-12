@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.17](https://github.com/hybroai/hybro/compare/v0.2.16...v0.2.17) (2026-09-12)
+
+
+### Bug Fixes
+
+* **cli:** ship a single-file executable so npm can deliver it ([0cbae43](https://github.com/hybroai/hybro/commit/0cbae43f3fcaba0625dac97e2296df3592a039b6))
+* **cli:** ship a single-file executable so npm can deliver it ([ab649e7](https://github.com/hybroai/hybro/commit/ab649e7b8c8805d289a8f594836ca074ab61e3c2))
+* **release:** build darwin-x64 on a runner that still exists ([ab15aef](https://github.com/hybroai/hybro/commit/ab15aefd80582167399f785edc1c5f35b7f5ec06))
+* **release:** build darwin-x64 on a runner that still exists ([8e41f99](https://github.com/hybroai/hybro/commit/8e41f99b47c085609de0d3b9a3a767c65f7ee6bb))
+* **release:** keep the release archive extracting to hybro/hybro ([933adc6](https://github.com/hybroai/hybro/commit/933adc629c15596b202d44d1a842f1c3fb60bd34))
+
 ## [0.2.16](https://github.com/hybroai/hybro/compare/v0.2.15...v0.2.16) (2026-09-11)
 
 
