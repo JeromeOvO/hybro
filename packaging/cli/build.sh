@@ -1,9 +1,9 @@
 #!/bin/sh
 # Build the standalone hybro CLI for the host platform.
 #
-# Output: packaging/cli/dist/hybro/ (a PyInstaller onedir bundle). The npm
-# platform packages ship exactly that directory, so this is the only build step
-# between the Python sources and a published CLI.
+# Output: packaging/cli/dist/hybro, a single executable (PyInstaller onefile).
+# The npm platform packages and the release assets both ship exactly that file,
+# so this is the only build step between the Python sources and a published CLI.
 set -eu
 
 cd "$(dirname "$0")/../.."

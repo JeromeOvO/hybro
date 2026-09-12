@@ -1,10 +1,18 @@
 # PyInstaller spec for the standalone hybro CLI.
 #
 # Build through packaging/cli/build.sh, which supplies this list's dependencies.
-# `_frozen_root()` in backend/cli_stack.py reads sys._MEIPASS, so the four data
-# files below must land at these relative paths and the bundle must be a
-# directory (PyInstaller onedir): a self-deleting onefile bundle would move the
-# Compose file between runs and make Compose recreate every container.
+#
+# Onefile, not onedir. npm's packer drops symbolic links entirely (verified with
+# a minimal package), and a macOS PyInstaller onedir bundle depends on four of
+# them -- `_internal/Python` plus three inside `Python.framework` -- so the npm
+# channel shipped a CLI that could not start its own interpreter. Onefile emits
+# a single executable with no links and unpacks itself at run time.
+#
+# Onefile normally risks Compose treating each run as a changed project, because
+# it extracts to a fresh temporary directory. That does not apply here: both
+# Compose files pin `name: hybro`, so the project identity is fixed regardless of
+# where the stack file lands. `_frozen_root()` in backend/cli_stack.py reads
+# sys._MEIPASS, which is that extraction directory.
 #
 # The static analysis follows the lazy imports inside functions, including
 # `llm_gateway.cli_tui`, `llm_gateway.setup_cli`, and the providers they reach.
@@ -54,8 +62,9 @@ pyz = PYZ(analysis.pure)
 exe = EXE(
     pyz,
     analysis.scripts,
+    analysis.binaries,
+    analysis.datas,
     [],
-    exclude_binaries=True,
     name="hybro",
     debug=False,
     bootloader_ignore_signals=False,
@@ -67,13 +76,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-collect = COLLECT(
-    exe,
-    analysis.binaries,
-    analysis.datas,
-    strip=False,
-    upx=False,
-    name="hybro",
 )

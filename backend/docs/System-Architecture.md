@@ -524,9 +524,10 @@ TUI's Services page states the version and offers the same action behind a
 confirmation.
 
 The standalone CLI is built from these modules by `packaging/cli/hybro.spec`
-(PyInstaller onedir, so the bundled Compose file keeps a stable path) with the
-runtime dependencies in `packaging/cli/requirements.txt`, and published through
-the npm packages under `packaging/npm/`. A released install refuses `--build`: it
+(PyInstaller onefile: one binary, no symbolic links, because npm's packer drops
+links and a macOS onedir bundle needs four of them) with the runtime
+dependencies in `packaging/cli/requirements.txt`, and published through the npm
+packages under `packaging/npm/`. A released install refuses `--build`: it
 has no sources. `config set` otherwise applies at runtime through
 `hybro start --recreate`, including frontend settings, which the published
 frontend image serves per request; only `api_prefix` is refused, because the

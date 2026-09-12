@@ -4,12 +4,8 @@ A source checkout runs ``docker-compose.yml`` in place, where ``--build`` and
 regeneration from ``default_agents/agents.yaml`` are meaningful. Any other
 install (frozen binary or npm package) has no checkout, so it runs the published
 Compose file bundled beside the CLI. Both files pin the same Compose project
-name, so container identities do not depend on where the CLI is installed.
-
-Packaged builds must extract to a directory that survives between runs (for
-example a PyInstaller onedir bundle). A self-deleting single-file bundle would
-move the Compose file on every run, which Compose reads as a changed project and
-answers by recreating containers.
+name, so container identities do not depend on where the CLI is installed --
+which is what lets a single-file bundle extract somewhere new on every run.
 """
 
 from __future__ import annotations

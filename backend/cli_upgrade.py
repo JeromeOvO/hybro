@@ -127,13 +127,15 @@ def _print_archive_steps(newest: str) -> None:
     base = f"https://github.com/{REPOSITORY}/releases/download/v{newest}"
     print(
         "This install came from a release archive, which hybro will not replace\n"
-        "in place. To upgrade, download the newer build, verify it, and unpack it\n"
-        "over the current directory:\n\n"
+        "in place. To upgrade, download the newer build, verify it, unpack it,\n"
+        "and run the unpacked executable:\n\n"
         f"  curl -fsSLO {base}/{asset}\n"
         f"  curl -fsSLO {base}/{asset}.sha256\n"
         f"  shasum -a 256 --check {asset}.sha256\n"
-        f"  tar -xzf {asset}\n\n"
-        "The archive carries the Compose stack that matches its version."
+        f"  tar -xzf {asset}\n"
+        f"  ./hybro/hybro --version\n\n"
+        "The archive carries the Compose stack that matches its version, so\n"
+        "replace the directory this CLI was installed into with `hybro/`."
     )
 
 
