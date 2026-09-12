@@ -1124,6 +1124,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 host=runtime.settings.local_agent_discovery_host,
                 port_start=runtime.settings.local_agent_discovery_port_start,
                 port_end=runtime.settings.local_agent_discovery_port_end,
+                excluded_ports=runtime.settings.local_agent_discovery_excluded_ports,
                 interval_seconds=(
                     runtime.settings.local_agent_discovery_interval_seconds
                 ),
@@ -1148,6 +1149,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     connect_timeout_seconds=(
                         local_agent_config.connect_timeout_seconds
                     ),
+                    excluded_ports=local_agent_config.excluded_ports,
                 ),
                 card_probe=LocalAgentCardProbe(
                     host=local_agent_config.host,

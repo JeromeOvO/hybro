@@ -33,9 +33,10 @@ _release_spec.loader.exec_module(render_release)
 
 def test_compose_matches_manifest() -> None:
     agents = render_compose.load_enabled_agents()
-    region = render_compose.render_region(agents)
     current = render_compose.COMPOSE_PATH.read_text(encoding="utf-8")
-    expected = render_compose.build_expected(current, region)
+    expected = render_compose.build_expected(
+        current, render_compose.render_regions(agents)
+    )
     import yaml
 
     services = yaml.safe_load(current)["services"]
@@ -44,7 +45,14 @@ def test_compose_matches_manifest() -> None:
         assert "HYBRO_AGENT_CONFIG=${HYBRO_AGENT_CONFIG:-}" in environment
         assert not any("OPENAI_API_KEY" in value for value in environment)
         assert not any("REGISTRAR_TOKEN" in value for value in environment)
-    assert "HYBRO_CONTAINER=1" in services["backend"]["environment"]
+    backend_environment = services["backend"]["environment"]
+    assert "HYBRO_CONTAINER=1" in backend_environment
+    # Discovery would otherwise re-register each agent under its host URL.
+    published_ports = ",".join(str(spec["port"]) for spec in agents.values())
+    assert (
+        f"LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS={published_ports}"
+        in backend_environment
+    )
     assert "env_file" not in services["backend"]
     assert not any(
         "DEFAULT_AGENT_LLM_TOKEN" in value
@@ -73,6 +81,11 @@ def test_release_stack_matches_development_stack() -> None:
     release = yaml.safe_load(expected)
     assert release["name"] == dev["name"] == "hybro"
     assert set(release["services"]) == set(dev["services"])
+    # The released stack is what users run, so it must carry the exclusion too.
+    assert any(
+        value.startswith("LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS=")
+        for value in release["services"]["backend"]["environment"]
+    )
     for name, service in release["services"].items():
         assert "build" not in service, f"{name} would rebuild in a released stack"
         if "build" in dev["services"][name]:

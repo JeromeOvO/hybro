@@ -348,8 +348,13 @@ execution. When enabled, its in-process service scans the configured
 `host.docker.internal` port range at startup and every 120 seconds, probes Agent
 Cards through the SDK-confined `a2a_adapter` resolver, and reconciles results
 through the Agent registry writer. Discovered records use `source=local`, remain
-public and directly callable. Scheduled discovery marks them inactive after
-three successful cycles in which they are absent; the authenticated
+public and directly callable. The scan skips the host ports the stack publishes
+for its own agents: the default-agent service blocks are generated from
+`default_agents/agents.yaml`, so the Compose backend receives the matching
+`LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS` list and never rediscovers an agent the
+one-shot registrar already registered under its Compose service name. Scheduled
+discovery marks them inactive after three successful cycles in which they are
+absent; the authenticated
 `POST /api/v1/local-agents/discovery` manual refresh immediately reconciles
 missing agents and upgrades any in-flight cycle to a manual refresh. This first
 phase targets the single-process Docker Compose backend; discovery coordination
@@ -435,8 +440,11 @@ rotation, and launches Compose with `--env-file /dev/null`. Only backend mounts
 the runtime directory. `HYBRO_CONTAINER=1` supplies bundled Mongo/Redis/file-path
 and discovery defaults where JSON has no explicit override. Agents receive a
 scoped `HYBRO_AGENT_CONFIG` projection; frontend receives only validated public
-JSON at build time plus server SDK credentials at runtime. Public frontend
-changes require a rebuild; other changes require restart/recreation.
+JSON, served at runtime by the frontend container's own projection so one
+published image serves every install, plus server SDK credentials at runtime.
+`api_prefix` is the one public setting compiled into the image, because the
+frontend's server-side rewrite is built from it; every other public change
+applies on restart/recreation without a rebuild.
 
 The raw-env gate allows only configuration/CLI boundaries. Framework metadata
 such as `SERVER_SOFTWARE` is not user configuration. Explicit one-time

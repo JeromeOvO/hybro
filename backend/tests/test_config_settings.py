@@ -41,6 +41,7 @@ def test_removed_public_gateway_settings_are_not_exposed():
         "local_agent_discovery_interval_seconds",
         "local_agent_discovery_connect_timeout_seconds",
         "local_agent_discovery_probe_timeout_seconds",
+        "local_agent_discovery_excluded_ports",
     }.issubset(Settings.model_fields)
 
 
@@ -50,6 +51,17 @@ def test_canonical_lifecycle_has_no_runtime_admission_or_worker_switches():
     assert not hasattr(settings, "feature_canonical_turn_lifecycle")
     assert not hasattr(settings, "orchestrator_projection_enabled")
     assert not hasattr(settings, "orchestrator_recovery_enabled")
+
+
+def test_local_agent_discovery_excluded_ports_parses_compose_projection():
+    """Compose projects the stack's own agent ports as one comma-separated value."""
+    settings = Settings.model_validate(
+        {"local_agent_discovery_excluded_ports": "7001,6002,7002,7003"}
+    )
+    assert settings.local_agent_discovery_excluded_ports == frozenset(
+        {7001, 6002, 7002, 7003}
+    )
+    assert Settings().local_agent_discovery_excluded_ports == frozenset()
 
 
 def test_feature_run_event_sse_defaults_on(monkeypatch):

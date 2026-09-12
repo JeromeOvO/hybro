@@ -117,6 +117,32 @@ async def test_host_port_scanner_finds_a_listening_port():
 
 
 @pytest.mark.asyncio
+async def test_host_port_scanner_skips_excluded_ports():
+    """A stack must not rediscover the agents it publishes on the host itself.
+
+    The port is genuinely listening, so without the exclusion the scan returns
+    it -- which is exactly the duplicate-registration bug this guards: the
+    stack publishes its own agents on the host and then discovers them there.
+    """
+    server = await asyncio.start_server(
+        lambda _reader, writer: writer.close(), "127.0.0.1", 0
+    )
+    port = server.sockets[0].getsockname()[1]
+    scanner = HostPortScanner(
+        host="127.0.0.1",
+        port_start=port,
+        port_end=port,
+        connect_timeout_seconds=5.0,
+        excluded_ports=frozenset({port}),
+    )
+    try:
+        assert await scanner.scan_open_ports() == []
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_discovery_adds_then_deactivates_after_three_successful_misses():
     scanner = Scanner([9001])
     probe = Probe()
