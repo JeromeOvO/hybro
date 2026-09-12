@@ -265,8 +265,10 @@ tolerates that, but `uv lock --check` does not.
 
 Build the CLI locally with `packaging/cli/build.sh`, then stage it for npm with
 `packaging/npm/build.sh <darwin-arm64|darwin-x64|linux-arm64|linux-x64>`. Releases
-ship a PyInstaller onedir bundle: a onefile bundle would move the Compose file
-between runs, which Compose reads as a changed project.
+ship a PyInstaller **onefile** executable: a single binary with no symbolic
+links, because npm's packer drops links and a macOS onedir bundle depends on
+four of them. The bundle extracts to a new temporary directory per run, which is
+why both Compose files pin `name: hybro`.
 
 ## Architecture
 This repository is the source of truth for the product. Its frontend and backend
