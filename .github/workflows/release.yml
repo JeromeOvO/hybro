@@ -307,7 +307,9 @@ jobs:
 
   verify:
     name: Verify the published stack resolves
-    needs: [version, images]
+    # Waits for every publisher: a missing npm package or a failed platform
+    # build must fail the release rather than pass an images-only check.
+    needs: [version, images, cli, npm-cli]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -365,4 +367,55 @@ jobs:
               echo "Found $image"
             fi
           done < /tmp/images.txt
+          exit "$status"
+
+      # An npm publish can exit 0, sign a provenance statement, and still never
+      # reach the registry: v0.2.18's cli-darwin-x64 job reported success and
+      # printed "Publishing to https://registry.npmjs.org/", yet the version was
+      # absent from the registry afterwards. Nothing else here would notice,
+      # because the launcher and the three other platforms published fine.
+      #
+      # Check the published launcher's own optionalDependencies. That is exactly
+      # what `npm i -g @hybroai/cli` resolves next, and npm skips a missing
+      # optional dependency silently, so the user only sees the wrapper's
+      # "is not installed" message.
+      - name: Confirm every platform package resolves
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          status=0
+          deps=""
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if deps=$(npm view "@hybroai/cli@$VERSION" optionalDependencies --json 2>/dev/null); then
+              break
+            fi
+            deps=""
+            sleep 15
+          done
+          if [ -z "$deps" ]; then
+            echo "@hybroai/cli@$VERSION does not resolve on the registry" >&2
+            exit 1
+          fi
+          echo "$deps" > /tmp/platforms.json
+          python3 - <<'PY' > /tmp/packages.txt
+          import json
+          for name, version in sorted(json.load(open("/tmp/platforms.json")).items()):
+              print(f"{name}@{version}")
+          PY
+          while read -r package; do
+            ok=0
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if npm view "$package" version >/dev/null 2>&1; then
+                ok=1
+                break
+              fi
+              sleep 15
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "Missing published npm package: $package" >&2
+              status=1
+            else
+              echo "Found $package"
+            fi
+          done < /tmp/packages.txt
           exit "$status"

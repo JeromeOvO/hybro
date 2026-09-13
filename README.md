@@ -243,7 +243,11 @@ routing.
    `@hybroai/cli*` npm packages.
 3. The final job resolves `docker-compose.release.yml` and confirms every image
    name it references exists, so a stack that points at an unpublished image
-   fails the release rather than a user's `hybro start`.
+   fails the release rather than a user's `hybro start`. It then resolves the
+   published `@hybroai/cli` and confirms every platform package its
+   `optionalDependencies` name is on the registry. npm skips a missing optional
+   dependency silently, so nothing else would catch it: the launcher installs,
+   and the wrapper only fails at run time with an "is not installed" message.
 
 The Release workflow is called rather than triggered by `release: published`
 because release-please acts with `GITHUB_TOKEN`, and GitHub does not start
