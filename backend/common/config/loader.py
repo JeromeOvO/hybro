@@ -143,6 +143,10 @@ class Settings(BaseModel):
     local_agent_discovery_interval_seconds: int = Field(default=120, gt=0)
     local_agent_discovery_connect_timeout_seconds: float = Field(default=0.05, gt=0)
     local_agent_discovery_probe_timeout_seconds: float = Field(default=3.0, gt=0)
+    # Host ports this deployment publishes for its own agents. The Compose stack
+    # generates this from the agent manifest; discovery skips them so the stack
+    # does not register its own agents a second time over the host URL.
+    local_agent_discovery_excluded_ports: frozenset[int] = frozenset()
 
     # Compaction
     compaction_concurrency: int = 5
@@ -345,6 +349,21 @@ class Settings(BaseModel):
         if v is None:
             return frozenset()
         return frozenset(str(status).strip().lower() for status in v)
+
+    @field_validator("local_agent_discovery_excluded_ports", mode="before")
+    @classmethod
+    def parse_local_agent_discovery_excluded_ports(cls, value):
+        if value is None:
+            return frozenset()
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+        try:
+            ports = frozenset(int(port) for port in value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Excluded discovery ports must be whole numbers") from exc
+        if any(not 1 <= port <= 65535 for port in ports):
+            raise ValueError("Excluded discovery ports must be within 1..65535")
+        return ports
 
     @field_validator("compaction_concurrency", mode="before")
     @classmethod
@@ -554,6 +573,11 @@ def get_settings() -> Settings:
             "redis_url": "redis://redis:6379/0",
             "hybro_file_dir": "/var/lib/hybro/files",
             "local_agent_discovery_enabled": True,
+            # Generated into the stack file from the agent manifest, so the
+            # container learns its own published agent ports from Compose.
+            "local_agent_discovery_excluded_ports": os.environ.get(
+                "LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS", ""
+            ),
         }.items():
             values.setdefault(key, value)
     settings = Settings.model_validate(values)

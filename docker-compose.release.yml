@@ -52,6 +52,7 @@ services:
     environment:
     - HYBRO_CONTAINER=1
     - HYBRO_HOME=/var/lib/hybro/runtime
+    - LOCAL_AGENT_DISCOVERY_EXCLUDED_PORTS=7001,6002,7002,7003
     volumes:
     - room_files:/var/lib/hybro/files
     - ${HYBRO_HOME:-${HOME}/.hybro}:/var/lib/hybro/runtime
