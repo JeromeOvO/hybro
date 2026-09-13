@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.18](https://github.com/hybroai/hybro/compare/v0.2.17...v0.2.18) (2026-09-13)
+
+
+### Bug Fixes
+
+* **agents:** keep the stack's own agents out of local discovery ([f17dcf3](https://github.com/hybroai/hybro/commit/f17dcf3faa6f1a28a55b05b19be155b7b740c829))
+* **agents:** keep the stack's own agents out of local discovery ([80f7839](https://github.com/hybroai/hybro/commit/80f7839b98149b2b68749d2d59c59c1ee0dc81f4))
+
 ## [0.2.17](https://github.com/hybroai/hybro/compare/v0.2.16...v0.2.17) (2026-09-12)
 
 
