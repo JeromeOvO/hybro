@@ -28,6 +28,14 @@ class AgentMongoRepository:
             limit=limit,
         )
 
+    async def list_active_agents(
+        self, agent_ids: list[str] | None = None
+    ) -> list[dict]:
+        query: dict = {"agent_status": "active"}
+        if agent_ids is not None:
+            query["agent_id"] = {"$in": agent_ids}
+        return await self._agents.find(query, exhaust=True)
+
     async def find_by_normalized_url(
         self, normalized_url: str, provider_id: str | None = None
     ) -> dict | None:

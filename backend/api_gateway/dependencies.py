@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
+from agent.network import AgentNetworkService
 from agent.protocols import (
     AgentCapabilityIssueStore,
     AgentCenterCompatibility,
     AgentGroupStoreCompatibility,
     AgentInspection,
     AgentLivenessChecker,
+    AgentNetworkAccess,
     AgentSuggestionService,
 )
 from common.protocols import (
@@ -25,6 +27,8 @@ from common.protocols import (
     SSERouteTransport,
     SSEStateReader,
 )
+from execution.direct_agent import DirectAgentExecution
+from execution.ports import DirectAgentMessenger
 from local_agents.protocols import LocalAgentDiscovery
 from room.protocols import RoomCenterCompatibility
 
@@ -179,3 +183,23 @@ def get_sse_transport(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> SSERouteTransport:
     return deps.sse_transport
+
+
+def get_agent_network(
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> AgentNetworkAccess:
+    return AgentNetworkService(deps.agent_service, deps.agent_group_store)
+
+
+AgentNetworkDependency = Annotated[AgentNetworkAccess, Depends(get_agent_network)]
+
+
+def get_direct_agent_execution(
+    network: AgentNetworkDependency,
+) -> DirectAgentMessenger:
+    return DirectAgentExecution(network)
+
+
+DirectAgentExecutionDependency = Annotated[
+    DirectAgentMessenger, Depends(get_direct_agent_execution)
+]

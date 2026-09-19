@@ -37,6 +37,14 @@ class Repository:
         self.text_rows = text_rows or []
         self.text_search_calls: list[list[str]] = []
 
+    async def list_active_agents(self, agent_ids=None):
+        return [
+            doc
+            for doc in self.docs.values()
+            if doc["agent_status"] == "active"
+            and (agent_ids is None or doc["agent_id"] in agent_ids)
+        ]
+
     async def list_visible(
         self,
         *,

@@ -692,6 +692,7 @@ def test_route_owner_protocols_match_handler_calls():
         AgentGroupStoreCompatibility,
         AgentInspection,
         AgentLivenessChecker,
+        AgentNetworkAccess,
     )
     from common.protocols import (
         AgentRegistry,
@@ -700,6 +701,7 @@ def test_route_owner_protocols_match_handler_calls():
         SSEStateReader,
         WebhookReceiver,
     )
+    from execution.ports import DirectAgentMessenger
 
     expected_by_protocol = {
         AgentCapabilityIssueStore: {
@@ -734,6 +736,8 @@ def test_route_owner_protocols_match_handler_calls():
             "get_agent_groups_by_owner",
             "update_agent_group",
         },
+        AgentNetworkAccess: {"discover", "resolve_target"},
+        DirectAgentMessenger: {"send"},
         RoomRouteReader: {"get_room_by_room_id"},
         SSEStateReader: {
             "get_room_by_room_id",

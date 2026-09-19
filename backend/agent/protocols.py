@@ -3,11 +3,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from common.dto import AgentInfo
 from common.protocols.json_types import JsonValue
 from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.agent_group import AgentGroup
+from models.agent_network import AgentDiscoveryResponse
 from models.request import InspectionCenterRequest
 from models.response import AgentCenterResponse, InspectionCenterResponse
+
+
+@runtime_checkable
+class AgentNetworkAccess(Protocol):
+    async def discover(self, group_id: str | None = None) -> AgentDiscoveryResponse: ...
+    async def resolve_target(
+        self, agent_id: str, group_id: str | None = None
+    ) -> AgentInfo: ...
 
 
 @runtime_checkable
@@ -136,6 +146,7 @@ __all__ = [
     "AgentGroupStoreCompatibility",
     "AgentInspection",
     "AgentLivenessChecker",
+    "AgentNetworkAccess",
     "AgentSuggestion",
     "AgentSuggestionResult",
     "AgentSuggestionService",

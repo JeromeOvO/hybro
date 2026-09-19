@@ -12,6 +12,7 @@ from common.utils.cancellation import CancellationToken
 from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from models.agent import Agent
 from models.agent_group import AgentGroup
+from models.agent_network import AgentMessageRequest, AgentMessageResponse
 from models.memory import RoomMemory
 from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
@@ -26,6 +27,10 @@ from models.room import (
 from models.run import RunState
 
 ProcessingStatusLike = str | Enum
+
+
+class DirectAgentMessenger(Protocol):
+    async def send(self, request: AgentMessageRequest) -> AgentMessageResponse: ...
 
 
 class TaskFactory(Protocol):

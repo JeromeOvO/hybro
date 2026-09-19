@@ -373,6 +373,8 @@ Important route groups:
 - `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
 - `agent_routes.py`: agent registration, lookup, update, visibility, and the
   authenticated local-agent discovery trigger.
+- `agent_network_routes.py`: anonymous stored-card discovery and one-shot direct
+  A2A messaging for trusted-network clients, separate from room execution.
 - `agent_group_routes.py`: saved agent groups.
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
@@ -390,6 +392,124 @@ Frontend-facing routes use Clerk auth when `AUTH_MODE=clerk`. In the default
 self-hosted `AUTH_MODE=mock` mode, `main.py` overrides every user-auth dependency,
 including the dual user/service dependency used by agent registration, with the
 stable local developer identity.
+
+#### Anonymous agent-network API
+
+`GET /api/v1/agents/discovery` and `POST /api/v1/agents/messages` are
+instance-scoped, anonymous endpoints. They intentionally include **private active
+agents**, do not filter by agent/group owner, and do not establish caller identity.
+Keep both routes behind a trusted-network boundary; public exposure permits
+unauthenticated discovery and invocation of private agents. Removing legacy Card
+credentials does not make the remaining Card metadata or agent capabilities safe
+for public access. Existing agent registration, group management, room, file, and
+SSE route authentication and authorization remain unchanged. No frontend changes
+or room-chat integration are part of this API.
+
+Discovery reads the complete stored active inventory, not a ranked or limited
+search result. It neither probes endpoints nor refreshes Cards:
+
+| `group_id` | Discovery scope |
+| --- | --- |
+| Omitted or `all_agents` | Every registered agent with stored status `active`, including private agents. |
+| Saved group ID | Active agents whose IDs occur in the existing saved group's membership. These are the same saved groups/Teams managed by the frontend. |
+| Saved group with no active members | `{"agents":[]}`; no fallback to the full inventory. |
+| Unknown group ID | HTTP `404`. |
+| `room_team` | HTTP `422`; room membership requires a room and is not a network scope. |
+
+Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card is
+the stored raw Card with legacy `authentication.credentials` removed; there is
+no user-specific Card projection. Activity is stored registry state, not proof
+of current reachability.
+
+Sending accepts an `agent_id` in the JSON body, a `message`, and optional
+`group_id` and `client_request_id`. Before sending, the service reloads the
+target and checks active status and selected-group membership; discovery is not
+an authorization or liveness lease. A missing `client_request_id` is generated.
+The message uses Hybro's common A2A request model: `role` defaults to `user`
+(the only accepted caller role), `messageId` is generated when omitted, and
+`parts` must be nonempty, for example `[{"kind":"text","text":"Hello"}]`.
+`contextId`, `taskId`, metadata, and supported text/data/file parts are passed
+through the adapter. A room-only file ID is not a wire file payload.
+
+The response is `{"agent_id":"...","client_request_id":"...","result":{...}}`.
+`result` preserves the adapter's SDK ProtoJSON Message or Task plus its top-level
+`kind` discriminator. It is not the room/public-task projection: returned history,
+status messages, artifacts, metadata, and continuation IDs are not flattened or
+reconstructed. A2A 1.0 result enums use `ROLE_AGENT` and
+`TASK_STATE_COMPLETED`, and text parts use `{"text":"..."}` without legacy
+`kind:"text"`. Thus request and result shapes deliberately differ. A valid
+nonterminal or failed Task is still an HTTP `200` response; clients must inspect
+`result.status.state` rather than treating HTTP success as task completion.
+See the [backend README examples](../README.md#anonymous-agent-network-api).
+
+| HTTP status | Meaning |
+| --- | --- |
+| `404` | Selected group or target agent does not exist. |
+| `409` | Target agent is inactive or outside the selected saved group. |
+| `422` | Invalid request/message, or unsupported `room_team` scope. |
+| `502` | Upstream transport/protocol failure or an invalid A2A Message/Task response. |
+| `504` | The send deadline or upstream timeout expired. |
+
+Domain errors use `{"detail":{"code":"...","message":"...",...}}`; send
+errors include `agent_id` and `client_request_id`. Request-schema failures use
+FastAPI's validation-detail format.
+
+Each call has a 600-second deadline covering target resolution and the single
+blocking A2A send. There are no automatic retries, including Docker-host fallback,
+and no persistence/idempotency contract: `client_request_id` is correlation only.
+Repeating the same IDs may repeat remote effects. Timeout or client cancellation
+ends the local wait but does not send a remote A2A cancellation, so remote work may
+continue after HTTP `504` or disconnection.
+
+For continuation, callers retain the remote `contextId` and, when continuing a
+Task, its `id` as the next request's `message.taskId`, and send a new user message
+to the same agent with a new `messageId`. Omit `taskId` when starting a new task
+within a reusable context. The remote agent decides which task/context
+continuations are valid; Hybro does not bind these IDs to an anonymous caller,
+maintain conversation history, or implement HITL orchestration for this surface.
+There are no network-API polling, cancel, webhook subscription, or SSE endpoints,
+and no Room, Run, memory, or LLM orchestration is created by this send.
+
+Ownership is deliberately narrow:
+
+```text
+agent_network_routes
+  -> get_agent_network -> agent.protocols.AgentNetworkAccess
+     -> agent.network.AgentNetworkService -> registry + saved-group store
+  -> get_direct_agent_execution -> execution.ports.DirectAgentMessenger
+     -> execution.direct_agent.DirectAgentExecution
+        -> AgentNetworkAccess.resolve_target
+        -> a2a_adapter.client_facade.send_message -> remote agent
+```
+
+The providers in `api_gateway.dependencies` construct these small services over
+the container-bound registry/group dependencies. The routes own HTTP translation,
+Agent owns inventory and scope checks, Execution owns the bounded one-shot send,
+and `a2a_adapter` remains the sole SDK/protocol conversion boundary. This path
+does not invoke the room `ExecutionFacade` or `AgentMessageProcessor`.
+
+#### Local MCP adapter
+
+The repository-root `MCP/server.py` is a standalone API client, not another
+backend execution owner. It serves Streamable HTTP at
+`http://127.0.0.1:8001/mcp` and forwards its two tools, `discover_agents` and
+`send_agent_message`, to the existing `http://127.0.0.1:8000/api/v1/agents/*`
+endpoints. Its Python dependencies and lockfile live under `MCP/`.
+
+The adapter keeps one async HTTP client for its process lifetime, uses stateless
+MCP transport with JSON responses, and does not import the backend runtime or
+access persistence. The API remains responsible for message validation,
+inventory, group scope, visibility, and A2A execution. Agent Cards, Task states,
+artifacts, and continuation IDs remain in the complete API response, delivered
+as MCP structured content and JSON text. HTTP/transport failures and explicitly
+failed/rejected/canceled/expired Tasks become MCP tool errors without discarding
+the returned Task. Other task states are not promoted to completion.
+
+This adapter is local-only, with fixed loopback addresses and no authentication,
+user isolation, separate configuration store, retry loop, or orchestration.
+Its 610-second local deadline allows the backend's 600-second response to arrive.
+Client cancellation does not imply remote A2A cancellation. See the
+[local MCP startup instructions](../README.md#local-mcp-access).
 
 ### `common`
 
@@ -758,7 +878,9 @@ compatibility facades.
 - Maintain the weighted Mongo text index for searchable agent fields.
 - Match agents with Mongo text search plus an application fallback for Latin
   words and CJK ideographs.
-- Respect visibility rules for public/private agents.
+- Respect visibility rules for user-facing public/private agent access; the
+  anonymous network inventory deliberately uses the separate unfiltered active
+  listing described above.
 - Allow registered Remote agents to be removed while keeping discovered Local
   agent lifecycle under the local discovery service.
 
@@ -1932,6 +2054,8 @@ module boundary.
   adapter may retry `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` URLs through
   `host.docker.internal` for connection-style failures, but that rewrite is
   request-local and must not be persisted back to agent registration state.
+  The anonymous agent-network send explicitly disables this fallback to preserve
+  its one-attempt contract.
 
 Owner services, jobs, execution transports, and room runtime code use
 `common.types`, plain DTO dictionaries, and adapter facades instead of importing
@@ -2696,7 +2820,7 @@ The normal terminal states seen by clients are:
 API route handlers remain thin adapters: they parse HTTP input, resolve injected
 dependencies, call route-facing protocols, and format compatible responses.
 Route owner contracts are declared in `common.protocols`, `agent.protocols`,
-`room.protocols`, and `context_memory.protocols`. API Gateway route modules do
+`room.protocols`, `context_memory.protocols`, and `execution.ports`. API Gateway route modules do
 not import runtime implementation packages; they receive owner protocols through
 `APIGatewayDeps`.
 
@@ -2710,6 +2834,15 @@ Route modules must not own mutable dependency globals or `bind_*` startup
 functions, and route-level scalar configuration such as discovery defaults is
 passed through the same runtime dependency context rather than imported from
 global settings.
+
+The agent-network protocol inventory is:
+
+| Protocol / method | Owner and implementation | Contract |
+| --- | --- | --- |
+| `AgentRegistry.list_active_agents(agent_ids=None)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Returns `list[AgentInfo]` for the full active inventory or the active intersection with explicit IDs, without owner/visibility filtering. |
+| `AgentRepository.list_active_agents(agent_ids=None)` | `common.protocols.repository_protocols`; `agent.repository.mongo.AgentMongoRepository` | Queries `agent_status="active"` with an optional `agent_id` membership filter and exhausts the cursor rather than imposing a discovery cap. `[]` selects no agents; `None` selects all active agents. |
+| `AgentNetworkAccess.discover` / `resolve_target` | Module-local `agent.protocols`; `agent.network.AgentNetworkService` | Stored-card discovery and fresh target/saved-group validation; injected through `get_agent_network`. |
+| `DirectAgentMessenger.send` | Module-local `execution.ports`; `execution.direct_agent.DirectAgentExecution` | One bounded A2A send returning the network response DTO; injected through `get_direct_agent_execution`. |
 
 ## Testing and Verification
 

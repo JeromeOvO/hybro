@@ -32,7 +32,7 @@ class FakeCollection:
     async def find(self, query: dict, **kwargs) -> list[dict]:
         self.find_calls.append((deepcopy(query), deepcopy(kwargs)))
         matches = [deepcopy(doc) for doc in self.docs if _matches(doc, query)]
-        limit = kwargs.get("limit")
+        limit = kwargs.get("limit", None if kwargs.get("exhaust") else 1000)
         return matches[:limit] if limit else matches
 
     async def find_one_and_update(

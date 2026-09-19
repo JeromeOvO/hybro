@@ -44,7 +44,7 @@ def route_group_for_path(path: str) -> str:
         return "agent"
     if matches("/agentGroups"):
         return "agent_group"
-    if matches("/agent"):
+    if matches("/agent") or matches("/agents"):
         return "agent"
     if matches("/files"):
         return "files"

@@ -49,10 +49,20 @@ def _interface_urls(card: AgentCard) -> list[str]:
 
 def _model_data(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        return dict(value)
+        # The SDK's compatibility parser mutates nested skill/security mappings.
+        # Copy containers so frozen DTOs work without altering registered cards.
+        return _mutable_json(value)
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", by_alias=True)
     return {}
+
+
+def _mutable_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _mutable_json(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_mutable_json(item) for item in value]
+    return value
 
 
 __all__ = ["agent_card_dict", "build_agent_card"]
