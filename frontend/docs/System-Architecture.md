@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-Hybro Frontend is a Next.js App Router application for the Hybro multi-agent platform. A single unified portal provides chat, agent inventory and registration, room timelines, HITL replies, file attachments, pricing, and public information pages.
+Hybro Frontend is a Next.js App Router application for the Hybro multi-agent platform. A single unified portal provides chat, agent inventory and registration, saved Networks, room timelines, HITL replies, file attachments, pricing, and public information pages.
 
 The app talks to the backend through REST APIs and room-scoped Server-Sent Events (SSE). The room UI uses normalized message state, transient streaming buffers, selector-driven view models, and a conversation renderer built around turns rather than raw message rows.
 
@@ -41,6 +41,7 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 | Real-time transport | SSE over `fetch()` streaming |
 | Markdown/rendering | Streamdown + rehype-highlight |
 | Agent protocol | `@a2a-js/sdk` |
+| Network visualization | `d3-force` with one two-dimensional SVG graph simulation |
 | Testing | Vitest, Testing Library, MSW, Playwright |
 
 ## 4. Root Config And Tooling
@@ -110,7 +111,7 @@ npm run test:e2e:headed
 npm run test:all
 ```
 
-`npm run lint` currently invokes `next lint`; with the current Next.js CLI this may fail before linting by treating `lint` as a project directory. Build and tests are the practical validation gates until the lint script is updated.
+`npm run lint` invokes ESLint using `eslint.config.mjs`.
 
 ## 5. App Routing
 
@@ -136,6 +137,7 @@ src/app/
     |-- agents/page.tsx
     |-- agents/[id]/page.tsx
     |-- agents/new/page.tsx
+    |-- networks/page.tsx
     |-- chat/page.tsx
     |-- pricing/page.tsx
     |-- room/[id]/page.tsx
@@ -151,6 +153,7 @@ src/app/
 The application exposes one unprefixed route tree. Agent inventory, details,
 and registration live at `/agents`, `/agents/[id]`, and `/agents/new`; chat
 routes live at `/chat` and `/room/[id]`. There is no host-based route rewrite.
+Saved AgentGroups are managed as Networks at `/networks`.
 Legacy `/manage` and `/manage/agents*` paths redirect to their canonical
 `/agents*` equivalents.
 
@@ -172,6 +175,9 @@ cycle, and then invalidates both agent inventory queries. Directly discovered
 The portal layout adds `BannerHost`, `SidebarProvider`,
 `SettingsDialogProvider`, `PortalSidebar`, and `PortalHeader`.
 
+On `/networks`, the page owns its full-height workspace and mobile sidebar
+trigger, so `PortalHeader` is omitted. Other portal pages keep the existing header.
+
 ## 6. Component Organization
 
 ```text
@@ -180,6 +186,7 @@ src/components/
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
 |-- portal/                   # unified sidebar/header/footer, Core page, Manage navigation
+|-- networks/                 # saved Network list, graph, details, editor, and Agent picker
 |-- open-source/              # Core page terminal animation
 |-- providers/                # React Query provider
 |-- settings/                 # settings dialog sections and helpers
@@ -234,6 +241,7 @@ src/hooks/
 |-- useTurnViewModels.ts       # turn view model builder
 |-- useChatRoomCreation.ts     # room creation and navigation
 |-- useGroupManagement.ts      # saved groups and room group selection
+|-- useNetworks.ts             # owner-scoped Network queries and confirmed CRUD writes
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- usePrimaryStreamScroll.ts
 |-- useStreamBuffer.ts
@@ -749,6 +757,8 @@ Other library modules:
 - `routes.ts`: canonical public and management route vocabulary.
 - `utils.ts`: `cn`, `getApiUrl`, and formatting helpers.
 - `consumer-nav.ts`, `nav-items.ts`: top-level navigation configuration.
+- `agent-inventory.ts`: shared registered/discovered inventory merge and visibility
+  policy for the Agents page and Network graph.
 - `system-agents.ts`: system/supervisor agent classification.
 - `agent-avatar.ts`, `agent-icon-utils.ts`, `file-icon-utils.ts`: display helpers.
 - `api/files.ts` and `hooks/useRoomFile.ts`: authenticated room-file upload,
@@ -793,6 +803,7 @@ segment.
 - `/agents/[id]`: unified AgentCard detail with Share, Chat, and Remote-only
   Unregister actions.
 - `/agents/new`: Remote agent registration.
+- `/networks`: saved AgentGroup membership management with a force-directed canvas.
 - `/about`, `/pricing`: public pages.
 
 Remote agents use the persisted backend `agent_status` without frontend health
@@ -819,8 +830,8 @@ selects the saved Team in the group selector and prefills the composer; room cre
 navigation do not occur until the user sends the message. Failed creates perform
 one catalog refresh as a compatibility fallback.
 
-The shared shell is implemented by `src/components/portal/` and exposes only New
-Chat and Agents as primary navigation before chat history. Chat history uses the
+The shared shell is implemented by `src/components/portal/` and exposes New
+Chat, Agents, and Networks as primary navigation before chat history. Chat history uses the
 lightweight authenticated `GET /roomCenter/history` resource through TanStack Query.
 Pinned rooms render above Recent rooms; desktop drag handles persist pinned order
 through the reorder mutation while Recent is derived from descending
@@ -842,6 +853,79 @@ prefix. The former global `rooms:refresh` browser event
 is no longer used. Legacy `/manage/agents*` routes
 are redirect-only compatibility paths. `src/lib/routes.ts` is the canonical
 route vocabulary for application links.
+
+### Networks workspace
+
+`src/app/(portal)/networks/page.tsx` coordinates `NetworkSidebar`, `NetworkCanvas`,
+`NetworkDetailsPanel`, `NetworkFormDialog`, and `AgentPicker` under
+`src/components/networks/`. The existing Agents inventory and its actions remain
+separate. Network details show the name and description, copyable Network ID,
+members, and edit/delete actions; there is no MCP connection panel.
+The workspace's built-in text is English. Its sidebar has a Create action and
+saved Network list, without a separate heading. Hub colors use the theme primary.
+
+`useNetworks` reads the existing `agent-group` API plus `getAllAgents` and
+`getAgentsByProviderId`. Its queries and mutation scope include the authenticated
+owner. Registered records take precedence when both Agent sources contain the
+same ID. Both this overview and the Agents page use `mergeAgents` from
+`src/lib/agent-inventory.ts`, including its visibility policy: deleted entries
+are excluded, Local entries must be active, and Hub entries must be active and
+online. Registered Remote entries may remain visible while inactive. This avoids
+counting inactive discovery records as additional current Agents.
+
+Every Agent in that valid inventory appears in the graph even without a Network.
+The two catalog reads are independent; a failed source leaves the other source
+and cached data usable with an explicit error. Inventory reads refresh on entry
+and window focus. Missing saved member IDs remain separately marked unavailable
+or unverified reference nodes, rather than silently pruning the saved membership.
+
+Built-in groups are excluded; saved presets remain ordinary Networks. Creation
+supports searchable multiple-Agent selection or an empty member list. Metadata
+updates send only the name and description; member edits retain unresolved IDs
+unless explicitly removed.
+
+Loading, failed reads, and successful empty lists are distinct states. Failed
+writes retain the current inventory and open draft or confirmation. Successful
+writes apply the server's canonical result; in-flight reads are canceled so
+older responses cannot overwrite it. These operations do not change Room,
+Execution, or backend API contracts.
+
+React owns SVG identity; `network-canvas-controller.ts` owns one two-dimensional
+`d3-force` simulation and its renderer. The graph has exactly one node per Agent
+ID and one per Network ID, with separate internal key namespaces. Each unique
+membership contributes one Network-to-Agent edge. A shared Agent connects all of
+its Networks through the same node; ungrouped Agents remain isolated nodes.
+There is no global overview node, spherical projection, or per-Network Agent copy.
+Connectivity here expresses shared membership, not subnet merging, direct
+Agent-to-Agent communication, or authorization.
+
+Agent names remain visible without hover or selection. Network names appear on
+hover, keyboard focus, or selection. Viewport fitting includes measured label
+widths so names are not clipped in narrow overview layouts.
+
+`forceLink` supplies membership springs, `forceManyBody` supplies repulsion, and
+`forceX`/`forceY` keep disconnected components within the layout. Simulations
+mutate owned node/link records, never the backend DTOs. Metadata refresh preserves
+existing positions; structural updates reconcile node and edge identities.
+
+Selection identifies an Agent or Network independently. It highlights related
+nodes and edges without filtering the graph. Agent details work with zero, one,
+or many memberships; removing a membership names its Network explicitly and does
+not delete a still-valid Agent node. Network details retain the existing CRUD
+actions. Pan, zoom, viewport focus, and layout reset remain available.
+
+Dragging an Agent or Network fixes only that subject's `fx/fy` and keeps `alphaTarget(0.3)` until
+release. Release or cancellation clears those coordinates, sets the target to
+zero, and lets the simulation cool. Reduced motion uses bounded settling;
+visibility changes and unmount stop unnecessary work. Per-frame geometry stays
+outside React state. Coordinates are transient, not persisted. `networks.css`
+is scoped to this workspace; backend APIs and persistence schemas are unchanged.
+
+The workspace has a viewport-sized flex basis and maximum height. The Network
+list scrolls independently instead of increasing the canvas or document height.
+`tests/e2e/networks.spec.ts` covers the long-list viewport invariant, subject-only
+dragging, globally shared Agent identity, Network/Agent ID collisions, explicit
+membership removal, and valid isolated Agents when no Networks exist.
 
 ## 14. Testing Layout
 

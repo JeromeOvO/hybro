@@ -9,6 +9,7 @@ export const routes = {
   chat: '/chat',
   room: (id: string) => withId('/room', id),
   agents: '/agents',
+  networks: '/networks',
   agent: (id: string) => withId('/agents', id),
   registerAgent: '/agents/new',
   manage: {

@@ -10,6 +10,7 @@ test.describe('Unified portal routing', () => {
       '/chat',
       '/agents',
       '/agents/new',
+      '/networks',
     ]) {
       const response = await request.get(path)
       expect(response.status(), `${path} should resolve`).toBe(200)
