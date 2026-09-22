@@ -621,6 +621,7 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.AgentMatcher: {"match_agents"},
         protocols.AgentMessageMatcher: {"match_for_message"},
+        protocols.AgentNetworkTargetResolver: {"resolve_target"},
         protocols.AgentExclusionReader: {"get_excluded_agent_ids"},
         protocols.AgentManagement: {
             "register_agent",

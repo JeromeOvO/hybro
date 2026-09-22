@@ -9,16 +9,16 @@ from a2a_adapter.client_facade import (
     is_timeout_error,
     send_message,
 )
-from agent.protocols import AgentNetworkAccess
 from common.errors import AppError, UpstreamError, ValidationError
 from common.observability import bind_log_context
+from common.protocols import AgentNetworkTargetResolver
 from models.agent_network import AgentMessageRequest, AgentMessageResponse
 
 _SEND_TIMEOUT_SECONDS = 600.0
 
 
 class DirectAgentExecution:
-    def __init__(self, network: AgentNetworkAccess) -> None:
+    def __init__(self, network: AgentNetworkTargetResolver) -> None:
         self._network = network
 
     async def send(self, request: AgentMessageRequest) -> AgentMessageResponse:

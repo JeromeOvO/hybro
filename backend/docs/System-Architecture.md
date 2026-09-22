@@ -478,7 +478,7 @@ agent_network_routes
      -> agent.network.AgentNetworkService -> registry + saved-group store
   -> get_direct_agent_execution -> execution.ports.DirectAgentMessenger
      -> execution.direct_agent.DirectAgentExecution
-        -> AgentNetworkAccess.resolve_target
+        -> common.protocols.AgentNetworkTargetResolver.resolve_target
         -> a2a_adapter.client_facade.send_message -> remote agent
 ```
 
@@ -487,6 +487,10 @@ the container-bound registry/group dependencies. The routes own HTTP translation
 Agent owns inventory and scope checks, Execution owns the bounded one-shot send,
 and `a2a_adapter` remains the sole SDK/protocol conversion boundary. This path
 does not invoke the room `ExecutionFacade` or `AgentMessageProcessor`.
+
+`AgentNetworkAccess` extends the shared `AgentNetworkTargetResolver` contract.
+Execution depends only on target resolution, not on the Agent package or its
+discovery response model; the shared contract returns `common.dto.AgentInfo`.
 
 #### Local MCP adapter
 
@@ -2841,7 +2845,8 @@ The agent-network protocol inventory is:
 | --- | --- | --- |
 | `AgentRegistry.list_active_agents(agent_ids=None)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Returns `list[AgentInfo]` for the full active inventory or the active intersection with explicit IDs, without owner/visibility filtering. |
 | `AgentRepository.list_active_agents(agent_ids=None)` | `common.protocols.repository_protocols`; `agent.repository.mongo.AgentMongoRepository` | Queries `agent_status="active"` with an optional `agent_id` membership filter and exhausts the cursor rather than imposing a discovery cap. `[]` selects no agents; `None` selects all active agents. |
-| `AgentNetworkAccess.discover` / `resolve_target` | Module-local `agent.protocols`; `agent.network.AgentNetworkService` | Stored-card discovery and fresh target/saved-group validation; injected through `get_agent_network`. |
+| `AgentNetworkTargetResolver.resolve_target(agent_id, group_id=None)` | `common.protocols.agent_protocols`; `agent.network.AgentNetworkService` | Fresh target/saved-group validation returning `AgentInfo`; the narrow dependency used by direct Execution. |
+| `AgentNetworkAccess.discover` / inherited `resolve_target` | Module-local `agent.protocols`; `agent.network.AgentNetworkService` | Extends `AgentNetworkTargetResolver` with stored-card discovery; injected through `get_agent_network`. |
 | `DirectAgentMessenger.send` | Module-local `execution.ports`; `execution.direct_agent.DirectAgentExecution` | One bounded A2A send returning the network response DTO; injected through `get_direct_agent_execution`. |
 
 ## Testing and Verification

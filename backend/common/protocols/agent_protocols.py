@@ -24,6 +24,13 @@ class AgentRegistry(Protocol):
 
 
 @runtime_checkable
+class AgentNetworkTargetResolver(Protocol):
+    async def resolve_target(
+        self, agent_id: str, group_id: str | None = None
+    ) -> AgentInfo: ...
+
+
+@runtime_checkable
 class AgentMatcher(Protocol):
     async def match_agents(
         self,
@@ -90,6 +97,7 @@ __all__ = [
     "AgentExclusionReader",
     "AgentMatcher",
     "AgentMessageMatcher",
+    "AgentNetworkTargetResolver",
     "AgentRegistry",
     "AgentRegistryWriter",
 ]
