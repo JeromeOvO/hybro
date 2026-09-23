@@ -83,7 +83,7 @@ class AgentMongoRepository:
 
         final_query = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
-        kwargs = {"limit": limit} if limit else {}
+        kwargs = {"limit": limit} if limit else {"exhaust": True}
         return await self._agents.find(final_query, **kwargs)
 
     async def text_search(

@@ -11,6 +11,7 @@ from common.config.loader import settings
 
 import api_gateway
 from common.auth import bind_auth_config
+from common.middleware.request_concurrency import RequestConcurrencyLimitMiddleware
 from common.middleware.request_logging import RequestLoggingMiddleware
 from common.middleware.request_size import RequestBodyLimitMiddleware
 from container import (
@@ -27,6 +28,9 @@ bind_auth_config(
     service_registrar_token_value=settings.default_agent_registrar_token,
     service_provider_id_value=settings.default_agent_provider_id,
 )
+
+AGENT_MESSAGE_MAX_BYTES = 6 * 1024 * 1024
+AGENT_MESSAGE_MAX_CONCURRENT = 4
 
 
 class _RequestLoggingFastAPI(FastAPI):
@@ -143,6 +147,19 @@ def create_app(
             path=f"{settings.api_prefix}/internal/llm/{path}",
             max_bytes=limit,
         )
+
+    app.add_middleware(
+        RequestBodyLimitMiddleware,
+        path=f"{settings.api_prefix}/agents/messages",
+        method="POST",
+        max_bytes=AGENT_MESSAGE_MAX_BYTES,
+    )
+    # Added last so admission also bounds requests still receiving their body.
+    app.add_middleware(
+        RequestConcurrencyLimitMiddleware,
+        path=f"{settings.api_prefix}/agents/messages",
+        max_concurrent=AGENT_MESSAGE_MAX_CONCURRENT,
+    )
 
     @app.get("/health")
     async def health_check(

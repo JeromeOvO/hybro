@@ -17,6 +17,7 @@ from agent.protocols import (
     AgentNetworkAccess,
     AgentSuggestionService,
 )
+from common.auth import ClerkUser, get_current_user
 from common.protocols import (
     AgentRegistry,
     ExecutionEngine,
@@ -186,9 +187,14 @@ def get_sse_transport(
 
 
 def get_agent_network(
+    user: Annotated[ClerkUser, Depends(get_current_user)],
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> AgentNetworkAccess:
-    return AgentNetworkService(deps.agent_service, deps.agent_group_store)
+    return AgentNetworkService(
+        deps.agent_service,
+        deps.agent_group_store,
+        requesting_user_id=user.user_id,
+    )
 
 
 AgentNetworkDependency = Annotated[AgentNetworkAccess, Depends(get_agent_network)]

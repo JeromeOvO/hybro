@@ -616,6 +616,7 @@ def test_protocol_methods_match_design_doc():
             "get_agent_by_url",
             "get_agents_by_ids",
             "list_active_agents",
+            "list_visible_agents",
             "is_agent_healthy",
             "is_directly_callable",
         },

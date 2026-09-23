@@ -8,6 +8,7 @@ from common.dto import (
     AgentMatchResult,
     LocalAgentUpsertResult,
 )
+from common.protocols.json_types import JsonValue
 
 
 @runtime_checkable
@@ -17,6 +18,14 @@ class AgentRegistry(Protocol):
     async def get_agents_by_ids(self, agent_ids: list[str]) -> list[AgentInfo]: ...
     async def list_active_agents(
         self, agent_ids: list[str] | None = None
+    ) -> list[AgentInfo]: ...
+    async def list_visible_agents(
+        self,
+        *,
+        user_id: str | None = None,
+        active_only: bool = False,
+        query: dict[str, JsonValue] | None = None,
+        limit: int = 0,
     ) -> list[AgentInfo]: ...
     async def get_agent_by_url(self, url: str) -> AgentInfo | None: ...
     async def is_agent_healthy(self, agent_id: str) -> bool: ...

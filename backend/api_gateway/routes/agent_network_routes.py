@@ -1,8 +1,4 @@
-"""Anonymous instance-wide discovery and direct A2A messaging.
-
-These endpoints intentionally do not apply owner/private visibility filtering.
-They must only be exposed on a trusted network until authentication is added.
-"""
+"""Authenticated, caller-visible discovery and direct A2A messaging."""
 
 from typing import Annotated
 
@@ -26,6 +22,7 @@ from models.agent_network import (
 router = APIRouter()
 
 _ERROR_STATUS = {
+    "FORBIDDEN": 403,
     "NOT_FOUND": 404,
     "CONFLICT": 409,
     "VALIDATION": 422,
@@ -51,7 +48,10 @@ def _http_error(
 
 @router.get(
     "/agents/discovery",
-    responses={status: {"model": AgentNetworkErrorResponse} for status in (404, 422)},
+    responses={
+        401: {"description": "Authentication required"},
+        **{status: {"model": AgentNetworkErrorResponse} for status in (403, 404, 422)},
+    },
 )
 async def discover_agents(
     network: AgentNetworkDependency,
@@ -59,9 +59,9 @@ async def discover_agents(
 ) -> AgentDiscoveryResponse:
     """Return stored cards for active agents, optionally scoped to a saved team.
 
-    Anonymous access includes private agents. No network scan or card refresh is
-    performed. `all_agents` selects all; `room_team` requires room context and
-    is not supported by this endpoint.
+    Only public agents and the caller's own private agents are visible. Saved
+    groups must belong to the caller. No network scan or card refresh is performed.
+    `all_agents` selects all visible agents; `room_team` is not supported.
     """
     try:
         return await network.discover(group_id)
@@ -72,8 +72,13 @@ async def discover_agents(
 @router.post(
     "/agents/messages",
     responses={
-        status: {"model": AgentNetworkErrorResponse}
-        for status in (404, 409, 422, 502, 504)
+        401: {"description": "Authentication required"},
+        413: {"description": "Request body exceeds 6 MiB"},
+        429: {"description": "Direct-send concurrency limit reached"},
+        **{
+            status: {"model": AgentNetworkErrorResponse}
+            for status in (403, 404, 409, 422, 502, 504)
+        },
     },
 )
 async def send_agent_message(
@@ -85,7 +90,9 @@ async def send_agent_message(
     `result` preserves the remote A2A Message or Task, including nonterminal and
     failed task states. The call waits at most 600 seconds. A timeout does not
     cancel remote work; requests are not automatically resent. Request IDs
-    provide correlation, not idempotency. Anonymous access has no owner isolation.
+    provide correlation, not idempotency. Targets must be public or caller-owned;
+    saved groups must belong to the caller. Request bodies are capped at 6 MiB,
+    with at most four admitted sends per backend worker and no waiting queue.
     """
     try:
         return await execution.send(request)

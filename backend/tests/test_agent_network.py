@@ -6,13 +6,18 @@ import pytest
 from agent.facade import AgentFacade
 from agent.network import AgentNetworkService
 from agent.protocols import AgentGroupStoreCompatibility
-from common.errors import ConflictError, NotFoundError, ValidationError
+from common.errors import AppError, ConflictError, NotFoundError, ValidationError
 from models.agent_group import AgentGroup
 from tests.test_agent_facade import Resolver, _doc
 from tests.test_agent_repository import _repo
 
 
-def _network(docs: list[dict], groups: list[AgentGroup] | None = None):
+def _network(
+    docs: list[dict],
+    groups: list[AgentGroup] | None = None,
+    *,
+    requesting_user_id: str = "owner",
+):
     repository, _ = _repo(docs)
     registry = AgentFacade(
         repository=repository,
@@ -23,20 +28,23 @@ def _network(docs: list[dict], groups: list[AgentGroup] | None = None):
     groups_by_id = {group.group_id: group for group in groups or []}
     group_store = AsyncMock(spec=AgentGroupStoreCompatibility)
     group_store.get_agent_group_by_id.side_effect = groups_by_id.get
-    return AgentNetworkService(registry, group_store)
+    return AgentNetworkService(
+        registry, group_store, requesting_user_id=requesting_user_id
+    )
 
 
 @pytest.mark.asyncio
-async def test_discovery_includes_all_active_private_agents_without_truncation():
+async def test_discovery_includes_all_visible_active_agents_without_truncation():
     docs = [_doc(f"private-{index}", "Private", public=False) for index in range(1001)]
     docs.extend(
         [
             _doc("public", "Public"),
             _doc("inactive", "Inactive", active=False),
+            _doc("foreign", "Foreign private", public=False, provider_id="other"),
         ]
     )
     network = _network(docs)
-    expected_ids = {doc["agent_id"] for doc in docs if doc["agent_status"] == "active"}
+    expected_ids = {f"private-{index}" for index in range(1001)} | {"public"}
 
     discovered = await network.discover()
     all_agents = await network.discover("all_agents")
@@ -52,16 +60,17 @@ async def test_saved_group_scopes_active_members_and_empty_group_never_expands()
             _doc("member", "Private member", public=False),
             _doc("inactive", "Inactive member", active=False),
             _doc("outside", "Outside"),
+            _doc("foreign", "Foreign private", public=False, provider_id="other"),
         ],
         [
             AgentGroup(
                 group_id="saved",
                 name="Saved",
                 type="user",
-                owner_id="another-owner",
-                agents=["member", "inactive", "removed"],
+                owner_id="owner",
+                agents=["member", "inactive", "removed", "foreign"],
             ),
-            AgentGroup(group_id="empty", name="Empty", type="user"),
+            AgentGroup(group_id="empty", name="Empty", type="user", owner_id="owner"),
         ],
     )
 
@@ -93,6 +102,42 @@ async def test_target_resolution_distinguishes_missing_and_inactive_agents():
     assert missing.value.details["entity_id"] == "missing"
     with pytest.raises(ConflictError):
         await network.resolve_target("inactive")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [True, False])
+async def test_foreign_private_target_is_indistinguishable_from_missing(active):
+    network = _network(
+        [_doc("foreign", "Secret", provider_id="other", public=False, active=active)]
+    )
+
+    assert (await network.discover()).agents == []
+    with pytest.raises(NotFoundError) as denied:
+        await network.resolve_target("foreign")
+    assert denied.value.details == {"entity_type": "Agent", "entity_id": "foreign"}
+
+
+@pytest.mark.asyncio
+async def test_foreign_group_is_forbidden_even_with_a_public_member():
+    network = _network(
+        [_doc("public", "Public")],
+        [
+            AgentGroup(
+                group_id="foreign",
+                name="Foreign team",
+                type="user",
+                owner_id="other",
+                agents=["public"],
+            )
+        ],
+    )
+
+    with pytest.raises(AppError) as discovery:
+        await network.discover("foreign")
+    assert discovery.value.code == "FORBIDDEN"
+    with pytest.raises(AppError) as send:
+        await network.resolve_target("public", "foreign")
+    assert send.value.code == "FORBIDDEN"
 
 
 @pytest.mark.asyncio

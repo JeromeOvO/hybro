@@ -376,6 +376,182 @@
         }
       }
     },
+    "/api/v1/agents/discovery": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Discover Agents",
+        "description": "Return stored cards for active agents, optionally scoped to a saved team.\n\nOnly public agents and the caller's own private agents are visible. Saved\ngroups must belong to the caller. No network scan or card refresh is performed.\n`all_agents` selects all visible agents; `room_team` is not supported.",
+        "operationId": "discover_agents_api_v1_agents_discovery_get",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDiscoveryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/messages": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Send Agent Message",
+        "description": "Send one A2A message to a registered active agent without creating a room.\n\n`result` preserves the remote A2A Message or Task, including nonterminal and\nfailed task states. The call waits at most 600 seconds. A timeout does not\ncancel remote work; requests are not automatically resent. Request IDs\nprovide correlation, not idempotency. Targets must be public or caller-owned;\nsaved groups must belong to the caller. Request bodies are capped at 6 MiB,\nwith at most four admitted sends per backend worker and no waiting queue.",
+        "operationId": "send_agent_message_api_v1_agents_messages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentMessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "413": {
+            "description": "Request body exceeds 6 MiB"
+          },
+          "429": {
+            "description": "Direct-send concurrency limit reached"
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bad Gateway",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/inspectionCenter/inspectAgentCard": {
       "post": {
         "tags": [
@@ -459,7 +635,7 @@
           "room"
         ],
         "summary": "Inquiry Active Runs",
-        "description": "List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting.",
+        "description": "List non-terminal orchestration runs for a room \u2014 same auth as inquiryRoomSetting.",
         "operationId": "inquiry_active_runs_api_v1_roomCenter_inquiryActiveRuns_post",
         "responses": {
           "200": {
@@ -925,7 +1101,7 @@
           "sse"
         ],
         "summary": "Stream Room Messages",
-        "description": "create SSE message stream for specified room\n\nThe stream is snapshot-driven (Room Stream Snapshot plan §4): the\n``connected`` handshake carries the room's latest contiguous ``room_seq``\nand a ``snapshot`` frame follows as the first frame. ``?snapshot=1``\nforces a fresh fold from the authoritative room event log (gap recovery).\nWithout a bound snapshot service the stream degrades to the legacy\nnotification-driven behavior with an unchanged envelope.\n\nArgs:\n    room_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    StreamingResponse: SSE stream response",
+        "description": "create SSE message stream for specified room\n\nThe stream is snapshot-driven (Room Stream Snapshot plan \u00a74): the\n``connected`` handshake carries the room's latest contiguous ``room_seq``\nand a ``snapshot`` frame follows as the first frame. ``?snapshot=1``\nforces a fresh fold from the authoritative room event log (gap recovery).\nWithout a bound snapshot service the stream degrades to the legacy\nnotification-driven behavior with an unchanged envelope.\n\nArgs:\n    room_id: room ID\n    user: Authenticated user (from header or query param token)\n\nReturns:\n    StreamingResponse: SSE stream response",
         "operationId": "stream_room_messages_api_v1_sse_room__room_id__stream_get",
         "parameters": [
           {
@@ -1027,7 +1203,7 @@
           "sse"
         ],
         "summary": "Get Room Events",
-        "description": "Replay persisted public room events (Room Stream Snapshot plan §5).\n\nThis is a fallback read path, not a delivery channel: the primary\nlive-recovery path remains re-requesting a snapshot over the stream.\nCold hydration (no ``after`` yet) is ``after=0``. Auth is identical to\nthe SSE stream route.",
+        "description": "Replay persisted public room events (Room Stream Snapshot plan \u00a75).\n\nThis is a fallback read path, not a delivery channel: the primary\nlive-recovery path remains re-requesting a snapshot over the stream.\nCold hydration (no ``after`` yet) is ``after=0``. Auth is identical to\nthe SSE stream route.",
         "operationId": "get_room_events_api_v1_sse_room__room_id__events_get",
         "parameters": [
           {
@@ -1573,154 +1749,232 @@
           }
         ]
       }
-    },
-    "/api/v1/agents/discovery": {
-      "get": {
-        "tags": [
-          "agent"
-        ],
-        "summary": "Discover Agents",
-        "description": "Return stored cards for active agents, optionally scoped to a saved team.\n\nAnonymous access includes private agents. No network scan or card refresh is\nperformed. `all_agents` selects all; `room_team` requires room context and\nis not supported by this endpoint.",
-        "operationId": "discover_agents_api_v1_agents_discovery_get",
-        "parameters": [
-          {
-            "name": "group_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Group Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentDiscoveryResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/agents/messages": {
-      "post": {
-        "tags": [
-          "agent"
-        ],
-        "summary": "Send Agent Message",
-        "description": "Send one A2A message to a registered active agent without creating a room.\n\n`result` preserves the remote A2A Message or Task, including nonterminal and\nfailed task states. The call waits at most 600 seconds. A timeout does not\ncancel remote work; requests are not automatically resent. Request IDs\nprovide correlation, not idempotency. Anonymous access has no owner isolation.",
-        "operationId": "send_agent_message_api_v1_agents_messages_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentMessageRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentMessageResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "Bad Gateway",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            }
-          },
-          "504": {
-            "description": "Gateway Timeout",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
     "schemas": {
+      "AgentDiscoveryResponse": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredAgent"
+            },
+            "type": "array",
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agents"
+        ],
+        "title": "AgentDiscoveryResponse"
+      },
+      "AgentMessageRequest": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Agent Id"
+          },
+          "message": {
+            "$ref": "#/components/schemas/AgentNetworkMessage"
+          },
+          "client_request_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Client Request Id"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "agent_id",
+          "message"
+        ],
+        "title": "AgentMessageRequest"
+      },
+      "AgentMessageResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "client_request_id": {
+            "type": "string",
+            "title": "Client Request Id"
+          },
+          "result": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Result"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "client_request_id",
+          "result"
+        ],
+        "title": "AgentMessageResponse"
+      },
+      "AgentNetworkErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "AgentNetworkErrorDetail"
+      },
+      "AgentNetworkErrorResponse": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentNetworkErrorDetail"
+              },
+              {
+                "items": {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "AgentNetworkErrorResponse"
+      },
+      "AgentNetworkMessage": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "const": "user",
+            "title": "Role",
+            "default": "user"
+          },
+          "kind": {
+            "type": "string",
+            "const": "message",
+            "title": "Kind",
+            "default": "message"
+          },
+          "messageId": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Messageid"
+          },
+          "contextId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextid"
+          },
+          "taskId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taskid"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/Part-Input"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Parts"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "parts"
+        ],
+        "title": "AgentNetworkMessage",
+        "description": "A caller-authored A2A message, not a persisted room projection."
+      },
       "Artifact": {
         "properties": {
           "artifactId": {
@@ -1758,7 +2012,7 @@
           },
           "parts": {
             "items": {
-              "$ref": "#/components/schemas/Part"
+              "$ref": "#/components/schemas/Part-Output"
             },
             "type": "array",
             "title": "Parts"
@@ -2095,6 +2349,27 @@
         ],
         "title": "DataPart"
       },
+      "DiscoveredAgent": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "agent_card": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object",
+            "title": "Agent Card"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "agent_card"
+        ],
+        "title": "DiscoveredAgent"
+      },
       "DiscoveryTrigger": {
         "type": "string",
         "enum": [
@@ -2400,6 +2675,7 @@
         ],
         "title": "ImageGeneration"
       },
+      "JsonValue": {},
       "LocalAgentDiscoveryResult": {
         "properties": {
           "trigger": {
@@ -2479,9 +2755,20 @@
             ],
             "title": "Contextid"
           },
+          "taskId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taskid"
+          },
           "parts": {
             "items": {
-              "$ref": "#/components/schemas/Part"
+              "$ref": "#/components/schemas/Part-Output"
             },
             "type": "array",
             "title": "Parts"
@@ -2567,7 +2854,30 @@
         ],
         "title": "MessageRole"
       },
-      "Part": {
+      "Part-Input": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TextPart"
+          },
+          {
+            "$ref": "#/components/schemas/RoomArtifactPart"
+          },
+          {
+            "$ref": "#/components/schemas/DataPart"
+          }
+        ],
+        "title": "Part",
+        "description": "Wrapper that preserves .root access pattern used throughout the codebase.",
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "data": "#/components/schemas/DataPart",
+            "file": "#/components/schemas/RoomArtifactPart",
+            "text": "#/components/schemas/TextPart"
+          }
+        }
+      },
+      "Part-Output": {
         "oneOf": [
           {
             "$ref": "#/components/schemas/TextPart"
@@ -3469,273 +3779,6 @@
           "type"
         ],
         "title": "ValidationError"
-      },
-      "AgentDiscoveryResponse": {
-        "properties": {
-          "agents": {
-            "items": {
-              "$ref": "#/components/schemas/DiscoveredAgent"
-            },
-            "type": "array",
-            "title": "Agents"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agents"
-        ],
-        "title": "AgentDiscoveryResponse"
-      },
-      "AgentMessageRequest": {
-        "properties": {
-          "agent_id": {
-            "type": "string",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Agent Id"
-          },
-          "message": {
-            "$ref": "#/components/schemas/AgentNetworkMessage"
-          },
-          "client_request_id": {
-            "type": "string",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Client Request Id"
-          },
-          "group_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 256,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Group Id"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "agent_id",
-          "message"
-        ],
-        "title": "AgentMessageRequest"
-      },
-      "AgentMessageResponse": {
-        "properties": {
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "client_request_id": {
-            "type": "string",
-            "title": "Client Request Id"
-          },
-          "result": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "type": "object",
-            "title": "Result"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_id",
-          "client_request_id",
-          "result"
-        ],
-        "title": "AgentMessageResponse"
-      },
-      "AgentNetworkErrorDetail": {
-        "properties": {
-          "code": {
-            "type": "string",
-            "title": "Code"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent Id"
-          },
-          "client_request_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client Request Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "code",
-          "message"
-        ],
-        "title": "AgentNetworkErrorDetail"
-      },
-      "AgentNetworkErrorResponse": {
-        "properties": {
-          "detail": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AgentNetworkErrorDetail"
-              },
-              {
-                "items": {
-                  "additionalProperties": {
-                    "$ref": "#/components/schemas/JsonValue"
-                  },
-                  "type": "object"
-                },
-                "type": "array"
-              }
-            ],
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "required": [
-          "detail"
-        ],
-        "title": "AgentNetworkErrorResponse"
-      },
-      "AgentNetworkMessage": {
-        "properties": {
-          "role": {
-            "type": "string",
-            "const": "user",
-            "title": "Role",
-            "default": "user"
-          },
-          "kind": {
-            "type": "string",
-            "const": "message",
-            "title": "Kind",
-            "default": "message"
-          },
-          "messageId": {
-            "type": "string",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Messageid"
-          },
-          "contextId": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 256,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Contextid"
-          },
-          "taskId": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 256,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Taskid"
-          },
-          "parts": {
-            "items": {
-              "$ref": "#/components/schemas/Part-Input"
-            },
-            "type": "array",
-            "minItems": 1,
-            "title": "Parts"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "parts"
-        ],
-        "title": "AgentNetworkMessage",
-        "description": "A caller-authored A2A message, not a persisted room projection."
-      },
-      "DiscoveredAgent": {
-        "properties": {
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "agent_card": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "type": "object",
-            "title": "Agent Card"
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_id",
-          "agent_card"
-        ],
-        "title": "DiscoveredAgent"
-      },
-      "JsonValue": {},
-      "Part-Input": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/TextPart"
-          },
-          {
-            "$ref": "#/components/schemas/RoomArtifactPart"
-          },
-          {
-            "$ref": "#/components/schemas/DataPart"
-          }
-        ],
-        "title": "Part",
-        "description": "Wrapper that preserves .root access pattern used throughout the codebase.",
-        "discriminator": {
-          "propertyName": "kind",
-          "mapping": {
-            "data": "#/components/schemas/DataPart",
-            "file": "#/components/schemas/RoomArtifactPart",
-            "text": "#/components/schemas/TextPart"
-          }
-        }
       }
     },
     "securitySchemes": {

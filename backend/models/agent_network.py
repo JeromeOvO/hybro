@@ -1,4 +1,4 @@
-"""Public payloads for anonymous, instance-scoped agent network access."""
+"""Public payloads for authenticated, caller-visible agent network access."""
 
 from typing import Annotated, Literal, Self
 from uuid import uuid4

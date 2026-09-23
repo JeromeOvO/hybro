@@ -1,18 +1,20 @@
-"""Exercise anonymous HTTP access through Execution and the real A2A adapter."""
+"""Exercise authenticated HTTP access through Execution and the real A2A adapter."""
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 import pytest
-from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict
 
 from a2a_adapter import client_facade
+from agent.facade import AgentFacade
 from api_gateway.dependencies import get_api_gateway_deps
-from api_gateway.routes.agent_network_routes import router
-from common.dto.agent import AgentInfo
+from common import auth
+from common.auth import get_current_user
 from models.agent_group import AgentGroup
 from tests.fakes.a2a_v1 import make_agent_card
 from tests.fakes.a2a_v1_agent import (
@@ -20,10 +22,12 @@ from tests.fakes.a2a_v1_agent import (
     completed_task_payload,
     input_required_task_payload,
 )
+from tests.test_agent_facade import Resolver, _doc
+from tests.test_agent_repository import _repo
 
 
 @pytest.fixture
-async def network_api(monkeypatch):
+async def network_api(monkeypatch, app):
     card = MessageToDict(
         make_agent_card(
             url="http://agent.test/",
@@ -37,20 +41,27 @@ async def network_api(monkeypatch):
             ],
         )
     )
-    agent = AgentInfo(agent_id="reviewer", raw_card=card, is_public=False)
-    registry = SimpleNamespace(
-        list_active_agents=AsyncMock(return_value=[agent]),
-        get_agent=AsyncMock(return_value=agent),
+    doc = _doc("reviewer", "Reviewer", public=False, provider_id="user_local_developer")
+    doc["agent_card"] = card
+    repository, collection = _repo([doc])
+    registry = AgentFacade(
+        repository=repository,
+        card_resolver=Resolver(),
+        id_factory=lambda: "unused",
+        now=lambda: datetime.now(UTC),
     )
     groups = SimpleNamespace(
         get_agent_group_by_id=AsyncMock(
             return_value=AgentGroup(
-                group_id="team", name="Review team", type="user", agents=["reviewer"]
+                group_id="team",
+                name="Review team",
+                type="user",
+                owner_id="user_local_developer",
+                agents=["reviewer"],
             )
         )
     )
-    app = FastAPI()
-    app.include_router(router, prefix="/api/v1")
+    monkeypatch.setattr(app, "dependency_overrides", app.dependency_overrides.copy())
     app.dependency_overrides[get_api_gateway_deps] = lambda: SimpleNamespace(
         agent_service=registry, agent_group_store=groups
     )
@@ -69,7 +80,7 @@ async def network_api(monkeypatch):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://hybro.test"
     ) as client:
-        yield client, remote, registry, groups
+        yield client, remote, collection, groups
 
 
 def message_body(**overrides):
@@ -82,7 +93,7 @@ def message_body(**overrides):
     }
 
 
-async def test_anonymous_discovery_send_and_continue_preserve_a2a_results(network_api):
+async def test_mock_auth_discovery_send_and_continue_preserve_a2a_results(network_api):
     client, remote, _, _ = network_api
     discovery = await client.get(
         "/api/v1/agents/discovery", params={"group_id": "team"}
@@ -129,9 +140,9 @@ async def test_anonymous_discovery_send_and_continue_preserve_a2a_results(networ
 async def test_send_rechecks_state_after_discovery_and_preserves_error_correlation(
     network_api,
 ):
-    client, remote, registry, _ = network_api
+    client, remote, collection, _ = network_api
     assert (await client.get("/api/v1/agents/discovery")).status_code == 200
-    registry.get_agent.return_value = AgentInfo(agent_id="reviewer", status="inactive")
+    collection.docs[0]["agent_status"] = "inactive"
     response = await client.post("/api/v1/agents/messages", json=message_body())
     assert response.status_code == 409
     detail = response.json()["detail"]
@@ -179,3 +190,112 @@ async def test_group_errors_do_not_expand_discovery_scope(network_api):
     )
     assert room.status_code == 422
     assert remote.requests == []
+
+
+def clerk_session(monkeypatch, app, *, user_id: str | None):
+    """Exercise real auth dependencies, replacing only Clerk's remote boundary."""
+    monkeypatch.delitem(app.dependency_overrides, get_current_user)
+    monkeypatch.setattr(
+        auth,
+        "authenticate_request",
+        lambda request, options: SimpleNamespace(
+            is_signed_in=user_id is not None,
+            payload={"sub": user_id, "sid": "test-session"} if user_id else None,
+        ),
+    )
+
+
+async def test_clerk_anonymous_requests_fail_before_store_or_remote_access(
+    network_api, monkeypatch, app
+):
+    client, remote, collection, groups = network_api
+    clerk_session(monkeypatch, app, user_id=None)
+
+    discovery = await client.get(
+        "/api/v1/agents/discovery", params={"group_id": "team"}
+    )
+    send = await client.post("/api/v1/agents/messages", json=message_body())
+
+    assert discovery.status_code == send.status_code == 401
+    assert discovery.headers["www-authenticate"] == "Bearer"
+    assert send.headers["www-authenticate"] == "Bearer"
+    assert collection.find_calls == collection.find_one_calls == []
+    groups.get_agent_group_by_id.assert_not_awaited()
+    assert remote.requests == []
+
+
+@pytest.mark.parametrize("status", ["active", "inactive"])
+async def test_clerk_cannot_discover_or_invoke_foreign_private_agent(
+    network_api, monkeypatch, app, status
+):
+    client, remote, collection, _ = network_api
+    clerk_session(monkeypatch, app, user_id="another-user")
+    collection.docs[0]["agent_status"] = status
+
+    discovery = await client.get("/api/v1/agents/discovery")
+    assert discovery.status_code == 200
+    assert discovery.json() == {"agents": []}
+    denied = await client.post(
+        "/api/v1/agents/messages", json=message_body(group_id="all_agents")
+    )
+    missing = await client.post(
+        "/api/v1/agents/messages",
+        json=message_body(agent_id="missing", group_id="all_agents"),
+    )
+    assert denied.status_code == missing.status_code == 404
+    detail = denied.json()["detail"]
+    assert detail["code"] == missing.json()["detail"]["code"] == "NOT_FOUND"
+    assert detail["agent_id"] == "reviewer"
+    assert detail["client_request_id"] == "pi-turn-1"
+    assert "status" not in detail
+    assert "agent_card" not in detail
+    assert remote.requests == []
+
+
+async def test_clerk_cannot_use_guessed_foreign_group_even_for_public_agent(
+    network_api, monkeypatch, app
+):
+    client, remote, collection, groups = network_api
+    clerk_session(monkeypatch, app, user_id="another-user")
+    collection.docs[0]["is_public"] = True
+    group = groups.get_agent_group_by_id.return_value
+    group.group_id = uuid5(
+        NAMESPACE_URL, f"hybro-agent-group:{group.owner_id}:review"
+    ).hex
+
+    discovery = await client.get(
+        "/api/v1/agents/discovery", params={"group_id": group.group_id}
+    )
+    send = await client.post(
+        "/api/v1/agents/messages", json=message_body(group_id=group.group_id)
+    )
+
+    assert discovery.status_code == send.status_code == 403
+    assert discovery.json()["detail"]["code"] == "FORBIDDEN"
+    detail = send.json()["detail"]
+    assert detail["code"] == "FORBIDDEN"
+    assert detail["client_request_id"] == "pi-turn-1"
+    assert detail["agent_id"] == "reviewer"
+    assert collection.find_calls == collection.find_one_calls == []
+    assert remote.requests == []
+
+
+@pytest.mark.parametrize("public", [True, False])
+async def test_clerk_can_discover_and_invoke_public_or_owned_agent(
+    network_api, monkeypatch, app, public
+):
+    client, remote, collection, groups = network_api
+    user_id = "another-user" if public else "user_local_developer"
+    clerk_session(monkeypatch, app, user_id=user_id)
+    collection.docs[0]["is_public"] = public
+    groups.get_agent_group_by_id.return_value.owner_id = user_id
+
+    discovery = await client.get(
+        "/api/v1/agents/discovery", params={"group_id": "team"}
+    )
+    assert discovery.status_code == 200
+    assert [agent["agent_id"] for agent in discovery.json()["agents"]] == ["reviewer"]
+    response = await client.post("/api/v1/agents/messages", json=message_body())
+    assert response.status_code == 200
+    assert response.json()["result"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    assert remote.last_message()["parts"][0]["text"] == "Review this code"

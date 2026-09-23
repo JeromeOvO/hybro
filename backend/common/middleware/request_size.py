@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from starlette._utils import get_route_path
+from starlette.exceptions import HTTPException
+
 
 class RequestBodyLimitMiddleware:
     """Bound selected request bodies before framework-level parsing."""
@@ -13,13 +16,19 @@ class RequestBodyLimitMiddleware:
         *,
         path: str,
         max_bytes: int,
+        method: str | None = None,
     ) -> None:
         self.app = app
-        self.path = path
+        self.path = path.rstrip("/")
         self.max_bytes = max_bytes
+        self.method = method
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] != "http" or scope.get("path") != self.path:
+        if (
+            scope["type"] != "http"
+            or (self.method is not None and scope.get("method") != self.method)
+            or get_route_path(scope).rstrip("/") != self.path
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -35,23 +44,19 @@ class RequestBodyLimitMiddleware:
                 return
 
         received = 0
-        rejected = False
 
         async def bounded_receive() -> dict[str, Any]:
-            nonlocal received, rejected
+            nonlocal received
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > self.max_bytes:
-                    rejected = True
                     raise _RequestBodyTooLarge
             return message
 
         try:
             await self.app(scope, bounded_receive, send)
         except _RequestBodyTooLarge:
-            if not rejected:
-                raise
             await self._reject(send)
 
     @staticmethod
@@ -72,5 +77,8 @@ class RequestBodyLimitMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
-class _RequestBodyTooLarge(Exception):
-    pass
+class _RequestBodyTooLarge(HTTPException):
+    # FastAPI preserves HTTPException during body parsing; ordinary exceptions
+    # are converted to 400 before they can reach this middleware.
+    def __init__(self) -> None:
+        super().__init__(status_code=413, detail="Payload too large")
