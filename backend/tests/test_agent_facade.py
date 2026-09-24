@@ -53,8 +53,9 @@ class Repository:
         agent_ids=None,
         query=None,
         limit=0,
+        exhaust=False,
     ):
-        del query, limit
+        del query, limit, exhaust
         docs = list(self.docs.values())
         if active_only:
             docs = [doc for doc in docs if doc["agent_status"] == "active"]

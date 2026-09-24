@@ -209,12 +209,25 @@ async def test_list_visible_combines_query_with_visibility_filters():
 
 
 @pytest.mark.asyncio
+async def test_list_visible_exhaustion_is_opt_in():
+    docs = [{"agent_id": f"public-{index}", "is_public": True} for index in range(1001)]
+    repo, _ = _repo(docs)
+
+    bounded = await repo.list_visible()
+    complete = await repo.list_visible(exhaust=True)
+
+    assert len(bounded) == 1000
+    assert {doc["agent_id"] for doc in bounded} <= {doc["agent_id"] for doc in docs}
+    assert {doc["agent_id"] for doc in complete} == {doc["agent_id"] for doc in docs}
+
+
+@pytest.mark.asyncio
 async def test_list_visible_honors_explicit_finite_limit():
     repo, _ = _repo(
         [{"agent_id": f"public-{index}", "is_public": True} for index in range(3)]
     )
 
-    result = await repo.list_visible(limit=2)
+    result = await repo.list_visible(limit=2, exhaust=True)
 
     assert [doc["agent_id"] for doc in result] == ["public-0", "public-1"]
 

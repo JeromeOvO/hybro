@@ -339,12 +339,14 @@ class AgentFacade:
         active_only: bool = False,
         query: dict[str, Any] | None = None,
         limit: int = 0,
+        exhaust: bool = False,
     ) -> list[AgentInfo]:
         docs = await self._repository.list_visible(
             user_id=user_id,
             active_only=active_only,
             query=query,
             limit=limit,
+            exhaust=exhaust,
         )
         return [agent_info_from_doc(doc) for doc in docs]
 

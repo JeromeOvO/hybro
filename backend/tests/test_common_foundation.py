@@ -1092,6 +1092,14 @@ def test_protocol_methods_match_design_doc():
     ):
         assert not hasattr(protocols, removed_name)
     _assert_params(
+        protocols.AgentRegistry.list_visible_agents,
+        ["self", "user_id", "active_only", "query", "limit", "exhaust"],
+    )
+    _assert_params(
+        protocols.AgentRepository.list_visible,
+        ["self", "user_id", "active_only", "agent_ids", "query", "limit", "exhaust"],
+    )
+    _assert_params(
         protocols.AgentMatcher.match_agents,
         [
             "self",

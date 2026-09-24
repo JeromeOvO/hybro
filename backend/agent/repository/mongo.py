@@ -67,6 +67,7 @@ class AgentMongoRepository:
         agent_ids: list[str] | None = None,
         query: dict | None = None,
         limit: int = 0,
+        exhaust: bool = False,
     ) -> list[dict]:
         visibility = [{"is_public": True}, {"is_public": {"$exists": False}}]
         if user_id is not None:
@@ -83,7 +84,7 @@ class AgentMongoRepository:
 
         final_query = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
-        kwargs = {"limit": limit} if limit else {"exhaust": True}
+        kwargs = {"limit": limit} if limit else {"exhaust": exhaust}
         return await self._agents.find(final_query, **kwargs)
 
     async def text_search(

@@ -34,6 +34,7 @@ class AgentRepository(Protocol):
         agent_ids: list[str] | None = None,
         query: dict | None = None,
         limit: int = 0,
+        exhaust: bool = False,
     ) -> list[dict]: ...
     async def text_search(
         self, agent_ids: list[str], query: str, limit: int

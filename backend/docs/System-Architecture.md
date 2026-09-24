@@ -407,8 +407,10 @@ Mock-auth deployments still require a trusted-network boundary. Card credential
 stripping does not sanitize arbitrary metadata secrets. Existing room-chat
 authentication and execution remain unchanged.
 
-Discovery reads the complete caller-visible stored active inventory, not a ranked
-or limited search result. It neither probes endpoints nor refreshes Cards:
+Discovery explicitly opts into complete caller-visible active inventory reads with
+`exhaust=True`; it neither probes endpoints nor refreshes Cards. Other visible
+inventory callers retain the DAL's default 1000-row cap unless they opt in.
+An explicit positive `limit` remains bounded even with `exhaust=True`.
 
 | `group_id` | Discovery scope |
 | --- | --- |
@@ -2866,7 +2868,8 @@ The agent-network protocol inventory is:
 | --- | --- | --- |
 | `AgentRegistry.list_active_agents(agent_ids=None)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Returns `list[AgentInfo]` for the full active inventory or the active intersection with explicit IDs, without owner/visibility filtering. |
 | `AgentRepository.list_active_agents(agent_ids=None)` | `common.protocols.repository_protocols`; `agent.repository.mongo.AgentMongoRepository` | Queries `agent_status="active"` with an optional `agent_id` membership filter and exhausts the cursor rather than imposing a discovery cap. `[]` selects no agents; `None` selects all active agents. |
-| `AgentRegistry.list_visible_agents(user_id=None, active_only=False, query=None, limit=0)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Uses the existing public-or-owner visibility query. Zero limit exhausts the cursor; positive limits remain bounded. Network access always supplies its authenticated user ID. |
+| `AgentRegistry.list_visible_agents(user_id=None, active_only=False, query=None, limit=0, exhaust=False)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Uses the existing public-or-owner visibility query. Defaults retain the DAL's 1000-row cap; network discovery explicitly requests exhaustion. Positive limits take precedence over exhaustion. Network access always supplies its authenticated user ID. |
+| `AgentRepository.list_visible(..., limit=0, exhaust=False)` | `common.protocols.repository_protocols`; `agent.repository.mongo.AgentMongoRepository` | Applies visibility and scope before reading. With no positive limit, only explicit `exhaust=True` removes the DAL default cap; all other callers remain bounded. |
 | `AgentNetworkTargetResolver.resolve_target(agent_id, group_id=None)` | `common.protocols.agent_protocols`; `agent.network.AgentNetworkService` | Fresh caller-visible target and owned-group validation returning `AgentInfo`; the narrow dependency used by direct Execution. |
 | `AgentNetworkAccess.discover` / inherited `resolve_target` | Module-local `agent.protocols`; `agent.network.AgentNetworkService` | Extends `AgentNetworkTargetResolver` with caller-visible stored-card discovery; `get_agent_network` binds the authenticated user. |
 | `DirectAgentMessenger.send` | Module-local `execution.ports`; `execution.direct_agent.DirectAgentExecution` | One bounded A2A send returning the network response DTO; injected through `get_direct_agent_execution`. |
