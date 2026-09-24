@@ -22,9 +22,10 @@ from typing import Any
 import httpx
 from a2a.client import A2ACardResolver as SDKCardResolver
 from a2a.client import Client, ClientConfig, ClientFactory
-from a2a.client.errors import A2AClientError
+from a2a.client.errors import A2AClientError, A2AClientTimeoutError
 from a2a.types import AgentCard, SendMessageRequest
 from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
+from google.protobuf.json_format import ParseError
 
 from common.observability import get_logger, safe_exception_metadata
 
@@ -60,6 +61,10 @@ class A2AClientFacadeError(Exception):
     def __init__(self, message: str, *, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+class A2AMessageValidationError(ValueError):
+    """Raised when caller message data cannot be represented by the SDK."""
 
 
 def _build_card(agent_card_data: Any) -> AgentCard:
@@ -115,13 +120,21 @@ async def send_message(
     push_notification_config: dict[str, Any] | None = None,
     blocking: bool = True,
     timeout: float = 600.0,
+    allow_docker_host_fallback: bool = True,
 ) -> dict[str, Any]:
+    """Send once, optionally retaining the legacy Docker-host retry behavior."""
     started_at = time.perf_counter()
     card: AgentCard | None = None
     try:
         card = _build_card(agent_card_data)
+        try:
+            message = to_sdk_message(message_data)
+        except (ValueError, TypeError, ParseError) as exc:
+            raise A2AMessageValidationError(
+                "Message cannot be represented as an A2A message"
+            ) from exc
         request = build_send_message_request(
-            to_sdk_message(message_data),
+            message,
             accepted_output_modes=accepted_output_modes,
             push_notification_config=push_notification_config,
             blocking=blocking,
@@ -133,12 +146,15 @@ async def send_message(
                 accepted_output_modes=accepted_output_modes,
                 push_notification_config=push_notification_config,
             )
-            response = await with_docker_host_fallback(
-                card,
-                lambda candidate: _send_once(
-                    _create_client(candidate, config), request
-                ),
-            )
+            if allow_docker_host_fallback:
+                response = await with_docker_host_fallback(
+                    card,
+                    lambda candidate: _send_once(
+                        _create_client(candidate, config), request
+                    ),
+                )
+            else:
+                response = await _send_once(_create_client(card, config), request)
         normalized = _normalize_response(response)
     except A2AError as exc:
         if not is_protocol_error(exc):
@@ -481,6 +497,13 @@ def is_protocol_error(exc: BaseException) -> bool:
     return isinstance(exc, A2AError) and not isinstance(exc, A2AClientError)
 
 
+def is_timeout_error(exc: BaseException) -> bool:
+    """Recognize HTTP timeouts both before and after SDK transport wrapping."""
+    return isinstance(
+        exc, (TimeoutError, httpx.TimeoutException, A2AClientTimeoutError)
+    )
+
+
 def _protocol_error_response(exc: A2AError) -> dict[str, Any]:
     """Project a rejected request onto the normalized error envelope.
 
@@ -587,9 +610,11 @@ def _log_a2a_completed(
 
 __all__ = [
     "A2AClientFacadeError",
+    "A2AMessageValidationError",
     "cancel_remote_task",
     "fetch_agent_card_with_fallback",
     "is_protocol_error",
+    "is_timeout_error",
     "send_hitl_reply",
     "send_message",
     "stream_message",

@@ -3,7 +3,6 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-
 from runtime_config import get_config
 
 
@@ -31,13 +30,12 @@ class StoryAgent:
 
     async def stream(self, query: str) -> AsyncGenerator[dict[str, Any], None]:
         """Stream the response of the large model back to the client."""
-        try:
-            model = self._ensure_model()
+        model = self._ensure_model()
 
-            # Initialize the conversation history (system messages can be added)
-            messages = [
-                SystemMessage(
-                    content="""
+        # Initialize the conversation history (system messages can be added)
+        messages = [
+            SystemMessage(
+                content="""
                 You are a creative storytelling and writing expert with a passion for crafting engaging narratives 
                 and helping others develop their writing skills. Your goal is to inspire creativity, provide 
                 constructive feedback, and guide writers through the storytelling process.
@@ -65,22 +63,15 @@ class StoryAgent:
                 Always maintain an encouraging, supportive tone and celebrate creativity while providing 
                 helpful guidance. Ask clarifying questions about genre preferences, target audience, or specific goals.
                 """
-                )
-            ]
+            )
+        ]
 
-            # Add the user message to the history.
-            messages.append(HumanMessage(content=query))
+        # Add the user message to the history.
+        messages.append(HumanMessage(content=query))
 
-            # Invoke the model in streaming mode to generate a response.
-            async for chunk in model.astream(messages):
-                # Return the text content block.
-                if hasattr(chunk, "content") and chunk.content:
-                    yield {"content": chunk.content, "done": False}
-            yield {"content": "", "done": True}
-
-        except Exception as e:
-            print(f"error: {e!s}")
-            yield {
-                "content": "Sorry, an error occurred while processing your request.",
-                "done": True,
-            }
+        # Invoke the model in streaming mode to generate a response.
+        async for chunk in model.astream(messages):
+            # Return the text content block.
+            if hasattr(chunk, "content") and chunk.content:
+                yield {"content": chunk.content, "done": False}
+        yield {"content": "", "done": True}

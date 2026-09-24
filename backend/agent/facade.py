@@ -97,6 +97,12 @@ class AgentFacade:
         enriched = list(ordered_docs)
         return [agent_info_from_doc(doc) for doc in enriched]
 
+    async def list_active_agents(
+        self, agent_ids: list[str] | None = None
+    ) -> list[AgentInfo]:
+        docs = await self._repository.list_active_agents(agent_ids)
+        return [agent_info_from_doc(doc) for doc in docs]
+
     async def is_agent_healthy(self, agent_id: str) -> bool:
         doc = await self._repository.get_by_id(agent_id)
         return (
@@ -333,12 +339,14 @@ class AgentFacade:
         active_only: bool = False,
         query: dict[str, Any] | None = None,
         limit: int = 0,
+        exhaust: bool = False,
     ) -> list[AgentInfo]:
         docs = await self._repository.list_visible(
             user_id=user_id,
             active_only=active_only,
             query=query,
             limit=limit,
+            exhaust=exhaust,
         )
         return [agent_info_from_doc(doc) for doc in docs]
 

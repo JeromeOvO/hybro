@@ -2,10 +2,23 @@
 
 A Hybro default agent that tells and writes engaging stories. Give it a prompt
 like "tell me a story about a cat" and it streams back a creative, well-structured
-narrative, powered by OpenAI (via LangChain) over the A2A (Agent2Agent) protocol.
+narrative over A2A (Agent2Agent). LangChain calls Hybro's internal LLM gateway;
+the backend's configured Provider and model handle generation.
 
 This agent ships with Hybro and is built and registered with the backend
-automatically when you run `install.sh` — no manual setup required.
+automatically when you run `./scripts/hybro start --build` after `hybro setup`.
+
+## Task outcomes
+
+Successful generation returns a `TASK_STATE_COMPLETED` task with the story
+artifact. Model initialization or generation errors return `TASK_STATE_FAILED`
+with a safe status message and no story artifact, including when generation
+failed after producing partial text. Raw provider errors are not returned or
+printed by this agent.
+
+An HTTP `200` response means the A2A exchange succeeded, not that the story was
+generated. Callers must inspect the task state. Provider connectivity is owned
+by the backend gateway; changing the story prompt does not repair network errors.
 
 ## License
 

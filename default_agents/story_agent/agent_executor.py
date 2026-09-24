@@ -33,25 +33,36 @@ class StoryAgentExecutor(AgentExecutor):
             raise Exception("No message provided")
 
         task = new_task_from_user_message(context.message)
-
-        chunks: list[str] = []
-        async for event in self.agent.stream(query):
-            chunk = event.get("content") or ""
-            if not isinstance(chunk, str):
-                chunk = (
-                    "".join(str(part) for part in chunk)
-                    if isinstance(chunk, list)
-                    else str(chunk)
-                )
-            if chunk:
-                chunks.append(chunk)
-            if event.get("done"):
-                break
-
-        final_text = "".join(chunks)
-
         # The task must be published before any task-scoped update event.
         await event_queue.enqueue_event(task)
+
+        chunks: list[str] = []
+        try:
+            async for event in self.agent.stream(query):
+                chunk = event.get("content") or ""
+                if not isinstance(chunk, str):
+                    chunk = (
+                        "".join(str(part) for part in chunk)
+                        if isinstance(chunk, list)
+                        else str(chunk)
+                    )
+                if chunk:
+                    chunks.append(chunk)
+                if event.get("done"):
+                    break
+        except Exception:
+            # Discard partial output; exception details can contain credentials.
+            await event_queue.enqueue_event(
+                new_text_status_update_event(
+                    task_id=task.id,
+                    context_id=task.context_id,
+                    state=TaskState.TASK_STATE_FAILED,
+                    text="Story generation failed. Please try again later.",
+                )
+            )
+            return
+
+        final_text = "".join(chunks)
 
         if final_text:
             await self._emit_text(

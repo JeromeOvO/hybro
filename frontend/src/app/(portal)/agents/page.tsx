@@ -11,37 +11,9 @@ import { banner } from '@/components/ui/banner'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/lib/auth'
 import { discoverLocalAgents, getAgentsByProviderId, getAllAgents } from '@/lib/api/agent'
+import { mergeAgents } from '@/lib/agent-inventory'
 import { routes } from '@/lib/routes'
-import type { Agent, AgentCenterResponse } from '@/lib/types'
-
-function isVisibleAgent(agent: Agent): boolean {
-  if (agent.agent_status === 'deleted') return false
-
-  if (agent.source === 'hub') {
-    return agent.agent_status === 'active' && agent.is_hub_online === true
-  }
-  if (agent.source === 'local') {
-    return agent.agent_status === 'active'
-  }
-
-  return true
-}
-
-function mergeAgents(discovered: Agent[], registered: Agent[]): Agent[] {
-  const agentsById = new Map<string, Agent>()
-
-  for (const agent of discovered) {
-    agentsById.set(agent.agent_id, agent)
-  }
-
-  // The registered response contains Remote agents that may be inactive and
-  // therefore absent from public discovery. It is the authoritative copy.
-  for (const agent of registered) {
-    agentsById.set(agent.agent_id, agent)
-  }
-
-  return [...agentsById.values()].filter(isVisibleAgent)
-}
+import type { AgentCenterResponse } from '@/lib/types'
 
 export default function AgentsPage() {
   const router = useRouter()

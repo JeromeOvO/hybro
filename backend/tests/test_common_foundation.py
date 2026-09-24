@@ -615,11 +615,14 @@ def test_protocol_methods_match_design_doc():
             "get_agent_card",
             "get_agent_by_url",
             "get_agents_by_ids",
+            "list_active_agents",
+            "list_visible_agents",
             "is_agent_healthy",
             "is_directly_callable",
         },
         protocols.AgentMatcher: {"match_agents"},
         protocols.AgentMessageMatcher: {"match_for_message"},
+        protocols.AgentNetworkTargetResolver: {"resolve_target"},
         protocols.AgentExclusionReader: {"get_excluded_agent_ids"},
         protocols.AgentManagement: {
             "register_agent",
@@ -946,6 +949,7 @@ def test_protocol_methods_match_design_doc():
             "get_by_provider",
             "get_by_source",
             "get_public",
+            "list_active_agents",
             "upsert",
             "delete",
             "update_health",
@@ -1087,6 +1091,14 @@ def test_protocol_methods_match_design_doc():
         "RateLimiter",
     ):
         assert not hasattr(protocols, removed_name)
+    _assert_params(
+        protocols.AgentRegistry.list_visible_agents,
+        ["self", "user_id", "active_only", "query", "limit", "exhaust"],
+    )
+    _assert_params(
+        protocols.AgentRepository.list_visible,
+        ["self", "user_id", "active_only", "agent_ids", "query", "limit", "exhaust"],
+    )
     _assert_params(
         protocols.AgentMatcher.match_agents,
         [

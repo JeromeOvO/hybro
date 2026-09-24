@@ -373,6 +373,8 @@ Important route groups:
 - `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
 - `agent_routes.py`: agent registration, lookup, update, visibility, and the
   authenticated local-agent discovery trigger.
+- `agent_network_routes.py`: authenticated, caller-visible stored-card discovery
+  and one-shot direct A2A messaging, separate from room execution.
 - `agent_group_routes.py`: saved agent groups.
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
@@ -386,10 +388,156 @@ unique Mongo index on `agent_groups.group_id` makes this idempotency guarantee
 atomic across processes and browser tabs; ordinary Team creation without a
 preset key keeps random IDs.
 
-Frontend-facing routes use Clerk auth when `AUTH_MODE=clerk`. In the default
-self-hosted `AUTH_MODE=mock` mode, `main.py` overrides every user-auth dependency,
+Frontend-facing and agent-network routes use Clerk auth when
+`backend.auth_mode="clerk"`. In local `backend.auth_mode="mock"`, `main.py`
+overrides every user-auth dependency,
 including the dual user/service dependency used by agent registration, with the
 stable local developer identity.
+
+#### Agent-network API
+
+`GET /api/v1/agents/discovery` and `POST /api/v1/agents/messages` are
+authenticated endpoints. Their shared `get_agent_network` dependency resolves
+`get_current_user` and constructs a network service bound to that user's ID.
+Clerk-mode requests without a valid session receive `401`; mock mode uses the
+existing `user_local_developer` override. Discovery and sends use the registry's
+public-or-owner visibility query, and saved groups require matching ownership.
+Private foreign targets return `404` without exposing their active status or Card.
+Mock-auth deployments still require a trusted-network boundary. Card credential
+stripping does not sanitize arbitrary metadata secrets. Existing room-chat
+authentication and execution remain unchanged.
+
+Discovery explicitly opts into complete caller-visible active inventory reads with
+`exhaust=True`; it neither probes endpoints nor refreshes Cards. Other visible
+inventory callers retain the DAL's default 1000-row cap unless they opt in.
+An explicit positive `limit` remains bounded even with `exhaust=True`.
+
+| `group_id` | Discovery scope |
+| --- | --- |
+| Omitted or `all_agents` | All active public agents and the caller's own active private agents. |
+| Saved group ID | Active, visible agents in a saved group owned by the caller. These are the same saved groups/Teams managed by the frontend. |
+| Saved group with no active members | `{"agents":[]}`; no fallback to the full inventory. |
+| Unknown group ID | HTTP `404`. |
+| Another owner's group ID | HTTP `403`, before inspecting its membership. |
+| `room_team` | HTTP `422`; room membership requires a room and is not a network scope. |
+
+Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card is
+the stored raw Card with legacy `authentication.credentials` removed; there is
+no user-specific Card projection. Activity is stored registry state, not proof
+of current reachability.
+
+Sending accepts an `agent_id` in the JSON body, a `message`, and optional
+`group_id` and `client_request_id`. Before sending, the service reloads the
+target through the visibility query and checks active status, saved-group ownership,
+and selected-group membership. Discovery is not an authorization or liveness lease.
+A missing `client_request_id` is generated.
+The message uses Hybro's common A2A request model: `role` defaults to `user`
+(the only accepted caller role), `messageId` is generated when omitted, and
+`parts` must be nonempty, for example `[{"kind":"text","text":"Hello"}]`.
+`contextId`, `taskId`, metadata, and supported text/data/file parts are passed
+through the adapter. A room-only file ID is not a wire file payload.
+
+The response is `{"agent_id":"...","client_request_id":"...","result":{...}}`.
+`result` preserves the adapter's SDK ProtoJSON Message or Task plus its top-level
+`kind` discriminator. It is not the room/public-task projection: returned history,
+status messages, artifacts, metadata, and continuation IDs are not flattened or
+reconstructed. A2A 1.0 result enums use `ROLE_AGENT` and
+`TASK_STATE_COMPLETED`, and text parts use `{"text":"..."}` without legacy
+`kind:"text"`. Thus request and result shapes deliberately differ. A valid
+nonterminal or failed Task is still an HTTP `200` response; clients must inspect
+`result.status.state` rather than treating HTTP success as task completion.
+See the [backend README examples](../README.md#agent-network-api).
+
+| HTTP status | Meaning |
+| --- | --- |
+| `401` | Missing or invalid authentication in Clerk mode. |
+| `403` | Selected saved group belongs to another user. |
+| `404` | Selected group does not exist, or target agent is missing/not visible. |
+| `409` | Visible target agent is inactive or outside the selected saved group. |
+| `413` | Total request body exceeds 6 MiB. |
+| `422` | Invalid request/message, or unsupported `room_team` scope. |
+| `429` | Four direct-send requests are already admitted on this backend worker. |
+| `502` | Upstream transport/protocol failure or an invalid A2A Message/Task response. |
+| `504` | The send deadline or upstream timeout expired. |
+
+Domain errors use `{"detail":{"code":"...","message":"...",...}}`; send
+domain errors include `agent_id` and `client_request_id`. Authentication and
+middleware errors use a string `detail`; request-schema failures use FastAPI's
+validation-detail format.
+
+Each call has a 600-second deadline covering target resolution and the single
+blocking A2A send. There are no automatic retries, including Docker-host fallback,
+and no persistence/idempotency contract: `client_request_id` is correlation only.
+Repeating the same IDs may repeat remote effects. Timeout or client cancellation
+ends the local wait but does not send a remote A2A cancellation, so remote work may
+continue after HTTP `504` or disconnection.
+
+Application middleware caps the total direct-send body at 6 MiB before parsing,
+including streamed bodies without a trustworthy `Content-Length`. A per-app,
+per-worker admission counter permits four concurrent requests, including body
+reception, and rejects overflow immediately with `429` rather than queuing.
+Admission is released on ASGI exit through `finally`, including errors and
+cancellation; a disconnected request still executing holds its slot until exit.
+This is not a cross-worker quota or a remote-task cancellation mechanism.
+
+For continuation, callers retain the remote `contextId` and, when continuing a
+Task, its `id` as the next request's `message.taskId`, and send a new user message
+to the same agent with a new `messageId`. Omit `taskId` when starting a new task
+within a reusable context. The remote agent decides which task/context
+continuations are valid; Hybro does not bind these IDs to a caller,
+maintain conversation history, or implement HITL orchestration for this surface.
+There are no network-API polling, cancel, webhook subscription, or SSE endpoints,
+and no Room, Run, memory, or LLM orchestration is created by this send.
+
+Ownership is deliberately narrow:
+
+```text
+agent_network_routes
+  -> get_agent_network -> get_current_user + agent.protocols.AgentNetworkAccess
+     -> caller-bound agent.network.AgentNetworkService -> registry + saved-group store
+  -> get_direct_agent_execution -> execution.ports.DirectAgentMessenger
+     -> execution.direct_agent.DirectAgentExecution
+        -> common.protocols.AgentNetworkTargetResolver.resolve_target
+        -> a2a_adapter.client_facade.send_message -> remote agent
+```
+
+The providers in `api_gateway.dependencies` construct these small services over
+the container-bound registry/group dependencies. The routes own HTTP translation,
+Agent owns inventory and scope checks, Execution owns the bounded one-shot send,
+and `a2a_adapter` remains the sole SDK/protocol conversion boundary. This path
+does not invoke the room `ExecutionFacade` or `AgentMessageProcessor`.
+
+`AgentNetworkAccess` extends the shared `AgentNetworkTargetResolver` contract.
+Execution depends only on target resolution, not on the Agent package or its
+discovery response model; the shared contract returns `common.dto.AgentInfo`.
+
+#### Local MCP adapter
+
+The repository-root `MCP/server.py` is a standalone API client, not another
+backend execution owner. It serves Streamable HTTP at
+`http://127.0.0.1:8001/mcp` and forwards its two tools, `discover_agents` and
+`send_agent_message`, to the existing `http://127.0.0.1:8000/api/v1/agents/*`
+endpoints. Its Python dependencies and lockfile live under `MCP/`.
+
+The adapter keeps one async HTTP client for its process lifetime, uses stateless
+MCP transport with JSON responses, and does not import the backend runtime or
+access persistence. The API remains responsible for message validation,
+inventory, group scope, visibility, and A2A execution. Agent Cards, Task states,
+artifacts, and continuation IDs remain in the complete API response, delivered
+as MCP structured content and JSON text. HTTP/transport failures and explicitly
+failed/rejected/canceled/expired Tasks become MCP tool errors without discarding
+the returned Task. Other task states are not promoted to completion.
+
+This adapter is local-only, with fixed loopback addresses and no MCP authentication,
+user isolation, separate credential store, retry loop, or orchestration. Its launcher
+relies on a trusted backend's existing mock-auth identity and caller-scoped access;
+it supplies no Clerk credentials, so Clerk-mode requests return `401` tool errors.
+Its 610-second local deadline allows the backend's 600-second response to arrive.
+Client cancellation does not imply remote A2A cancellation. See the
+[local MCP startup instructions](../README.md#local-mcp-access).
+
+The independent `MCP CI (local adapter)` job installs its frozen project dependencies
+and runs `uv run --project MCP --frozen --no-env-file pytest MCP/tests` from the root.
 
 ### `common`
 
@@ -758,7 +906,8 @@ compatibility facades.
 - Maintain the weighted Mongo text index for searchable agent fields.
 - Match agents with Mongo text search plus an application fallback for Latin
   words and CJK ideographs.
-- Respect visibility rules for public/private agents.
+- Apply public-or-owner visibility rules to user-facing agent access, including
+  network discovery and direct-send target resolution.
 - Allow registered Remote agents to be removed while keeping discovered Local
   agent lifecycle under the local discovery service.
 
@@ -1932,6 +2081,8 @@ module boundary.
   adapter may retry `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` URLs through
   `host.docker.internal` for connection-style failures, but that rewrite is
   request-local and must not be persisted back to agent registration state.
+  The direct agent-network send explicitly disables this fallback to preserve
+  its one-attempt contract.
 
 Owner services, jobs, execution transports, and room runtime code use
 `common.types`, plain DTO dictionaries, and adapter facades instead of importing
@@ -2696,7 +2847,7 @@ The normal terminal states seen by clients are:
 API route handlers remain thin adapters: they parse HTTP input, resolve injected
 dependencies, call route-facing protocols, and format compatible responses.
 Route owner contracts are declared in `common.protocols`, `agent.protocols`,
-`room.protocols`, and `context_memory.protocols`. API Gateway route modules do
+`room.protocols`, `context_memory.protocols`, and `execution.ports`. API Gateway route modules do
 not import runtime implementation packages; they receive owner protocols through
 `APIGatewayDeps`.
 
@@ -2710,6 +2861,18 @@ Route modules must not own mutable dependency globals or `bind_*` startup
 functions, and route-level scalar configuration such as discovery defaults is
 passed through the same runtime dependency context rather than imported from
 global settings.
+
+The agent-network protocol inventory is:
+
+| Protocol / method | Owner and implementation | Contract |
+| --- | --- | --- |
+| `AgentRegistry.list_active_agents(agent_ids=None)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Returns `list[AgentInfo]` for the full active inventory or the active intersection with explicit IDs, without owner/visibility filtering. |
+| `AgentRepository.list_active_agents(agent_ids=None)` | `common.protocols.repository_protocols`; `agent.repository.mongo.AgentMongoRepository` | Queries `agent_status="active"` with an optional `agent_id` membership filter and exhausts the cursor rather than imposing a discovery cap. `[]` selects no agents; `None` selects all active agents. |
+| `AgentRegistry.list_visible_agents(user_id=None, active_only=False, query=None, limit=0, exhaust=False)` | `common.protocols.agent_protocols`; `agent.AgentFacade` | Uses the existing public-or-owner visibility query. Defaults retain the DAL's 1000-row cap; network discovery explicitly requests exhaustion. Positive limits take precedence over exhaustion. Network access always supplies its authenticated user ID. |
+| `AgentRepository.list_visible(..., limit=0, exhaust=False)` | `common.protocols.repository_protocols`; `agent.repository.mongo.AgentMongoRepository` | Applies visibility and scope before reading. With no positive limit, only explicit `exhaust=True` removes the DAL default cap; all other callers remain bounded. |
+| `AgentNetworkTargetResolver.resolve_target(agent_id, group_id=None)` | `common.protocols.agent_protocols`; `agent.network.AgentNetworkService` | Fresh caller-visible target and owned-group validation returning `AgentInfo`; the narrow dependency used by direct Execution. |
+| `AgentNetworkAccess.discover` / inherited `resolve_target` | Module-local `agent.protocols`; `agent.network.AgentNetworkService` | Extends `AgentNetworkTargetResolver` with caller-visible stored-card discovery; `get_agent_network` binds the authenticated user. |
+| `DirectAgentMessenger.send` | Module-local `execution.ports`; `execution.direct_agent.DirectAgentExecution` | One bounded A2A send returning the network response DTO; injected through `get_direct_agent_execution`. |
 
 ## Testing and Verification
 

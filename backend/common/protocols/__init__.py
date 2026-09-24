@@ -12,6 +12,7 @@ from common.protocols.agent_protocols import (
     AgentManagement,
     AgentMatcher,
     AgentMessageMatcher,
+    AgentNetworkTargetResolver,
     AgentRegistry,
     AgentRegistryWriter,
 )
@@ -105,6 +106,7 @@ __all__ = [
     "AgentManagement",
     "AgentMatcher",
     "AgentMessageMatcher",
+    "AgentNetworkTargetResolver",
     "AgentRegistry",
     "AgentRegistryWriter",
     "AgentRepository",

@@ -344,6 +344,59 @@
     "streaming_response": null
   },
   {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_agent_network"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.agent_network_routes",
+    "name": "discover_agents",
+    "openapi_response_codes": [
+      "200",
+      "401",
+      "403",
+      "404",
+      "422"
+    ],
+    "owning_protocol": "agent.protocols.AgentNetworkAccess",
+    "path": "/api/v1/agents/discovery",
+    "response_class": null,
+    "response_model": "AgentDiscoveryResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_direct_agent_execution"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.agent_network_routes",
+    "name": "send_agent_message",
+    "openapi_response_codes": [
+      "200",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "422",
+      "429",
+      "502",
+      "504"
+    ],
+    "owning_protocol": "execution.ports.DirectAgentMessenger",
+    "path": "/api/v1/agents/messages",
+    "response_class": null,
+    "response_model": "AgentMessageResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
     "auth_dependencies": [
       "get_current_user"
     ],
@@ -442,73 +495,73 @@
     "streaming_response": null
   },
   {
-    "path": "/api/v1/internal/llm/chat/completions",
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "dependencies": [
+      "get_proxy"
+    ],
     "methods": [
       "POST"
     ],
+    "module": "api_gateway.routes.llm_proxy_routes",
     "name": "chat_completions",
-    "module": "api_gateway.routes.llm_proxy_routes",
-    "dependencies": [
-      "get_proxy"
-    ],
-    "auth_dependencies": [
-      "get_proxy"
-    ],
-    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
-    "supporting_protocols": [],
-    "response_model": null,
-    "response_class": null,
-    "status_code": null,
     "openapi_response_codes": [
       "200",
       "default"
-    ]
+    ],
+    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
+    "path": "/api/v1/internal/llm/chat/completions",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "supporting_protocols": []
   },
   {
-    "path": "/api/v1/internal/llm/images/edits",
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "dependencies": [
+      "get_proxy"
+    ],
     "methods": [
       "POST"
     ],
+    "module": "api_gateway.routes.llm_proxy_routes",
     "name": "image_edits",
-    "module": "api_gateway.routes.llm_proxy_routes",
-    "dependencies": [
-      "get_proxy"
-    ],
-    "auth_dependencies": [
-      "get_proxy"
-    ],
-    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
-    "supporting_protocols": [],
-    "response_model": null,
-    "response_class": null,
-    "status_code": null,
     "openapi_response_codes": [
       "200",
       "default"
-    ]
+    ],
+    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
+    "path": "/api/v1/internal/llm/images/edits",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "supporting_protocols": []
   },
   {
-    "path": "/api/v1/internal/llm/images/generations",
+    "auth_dependencies": [
+      "get_proxy"
+    ],
+    "dependencies": [
+      "get_proxy"
+    ],
     "methods": [
       "POST"
     ],
-    "name": "image_generations",
     "module": "api_gateway.routes.llm_proxy_routes",
-    "dependencies": [
-      "get_proxy"
-    ],
-    "auth_dependencies": [
-      "get_proxy"
-    ],
-    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
-    "supporting_protocols": [],
-    "response_model": null,
-    "response_class": null,
-    "status_code": null,
+    "name": "image_generations",
     "openapi_response_codes": [
       "200",
       "default"
-    ]
+    ],
+    "owning_protocol": "llm_gateway.agent_proxy._AgentLLMProxyPort",
+    "path": "/api/v1/internal/llm/images/generations",
+    "response_class": null,
+    "response_model": null,
+    "status_code": null,
+    "supporting_protocols": []
   },
   {
     "auth_dependencies": [

@@ -64,6 +64,244 @@ repositories.
 See [`docs/System-Architecture.md`](docs/System-Architecture.md) for the current
 runtime architecture.
 
+## Agent-network API
+
+These backend-only endpoints let an authenticated client discover visible registered
+agents and send one A2A message without creating a room. No frontend changes are
+required or included; existing room chat continues to use its authenticated
+REST/SSE workflow.
+
+**Security boundary:** both routes use the existing `get_current_user` dependency.
+With `backend.auth_mode="clerk"`, callers need a valid Clerk session; add
+`-H "Authorization: Bearer <Clerk session JWT>"` to the curl examples below.
+With local `backend.auth_mode="mock"`, the existing override supplies
+`user_local_developer`; this mode must remain on a trusted network.
+Discovery and sending are limited to public agents and the caller's own private
+agents. Saved groups must belong to that caller. Discovery removes legacy
+`authentication.credentials`, not arbitrary secrets embedded in Card metadata.
+
+### Discover stored active agents
+
+```sh
+curl --fail-with-body --silent --show-error \
+  'http://localhost:8000/api/v1/agents/discovery'
+
+# Optional scope: use an existing saved group/Team ID from the frontend.
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'group_id=my-saved-team-id' \
+  'http://localhost:8000/api/v1/agents/discovery'
+```
+
+The response shape is `{"agents":[{"agent_id":"...","agent_card":{...}}]}`.
+Each `agent_card` is the stored raw Card, except that legacy
+`authentication.credentials` is stripped. There is no live scan, Card refresh,
+health probe, search ranking, or fixed inventory cap.
+
+- Omit `group_id`, or use `all_agents`, for all visible stored active agents:
+  public agents plus the caller's own private agents.
+- A saved group/Team must belong to the caller and returns only its currently
+  active, visible registered members. An empty group or one with no visible
+  active members returns `{"agents":[]}`.
+- Another owner's group returns HTTP `403`.
+- An unknown group returns HTTP `404`.
+- `room_team` returns HTTP `422`: this built-in selection requires room context
+  and is not supported here.
+
+### Send one message
+
+Replace `registered-agent-id` with an `agent_id` from discovery; the ID belongs
+in the request body, not in the URL. This example assumes an agent that can
+multiply two numbers:
+
+```sh
+curl --fail-with-body --silent --show-error \
+  'http://localhost:8000/api/v1/agents/messages' \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "agent_id": "registered-agent-id",
+    "client_request_id": "multiply-17-23-1",
+    "message": {
+      "role": "user",
+      "messageId": "multiply-message-1",
+      "parts": [{"kind": "text", "text": "Multiply 17 by 23."}]
+    }
+  }'
+```
+
+Add `"group_id":"my-saved-team-id"` to the outer object to enforce saved-group
+membership and ownership at send time. Without it (or with `all_agents`), any
+visible registered active agent may be targeted. The service reloads visibility,
+status, and group ownership rather than trusting an earlier discovery response.
+
+`client_request_id` and `message.messageId` are generated when omitted; the
+message role defaults to `user`, the only accepted caller role. `parts` must be
+nonempty. Request text parts use the existing common A2A shape with `kind:"text"`;
+supported data and file parts use their corresponding common-model shapes.
+Room file IDs alone are not accepted as file content.
+
+An illustrative Task response is:
+
+```json
+{
+  "agent_id": "registered-agent-id",
+  "client_request_id": "multiply-17-23-1",
+  "result": {
+    "kind": "task",
+    "id": "remote-task-1",
+    "contextId": "remote-context-1",
+    "status": {
+      "state": "TASK_STATE_COMPLETED",
+      "message": {
+        "messageId": "remote-reply-1",
+        "role": "ROLE_AGENT",
+        "parts": [{"text": "PRODUCT=391"}]
+      }
+    }
+  }
+}
+```
+
+The remote agent can instead return a Message, for example:
+
+```json
+{
+  "agent_id": "registered-agent-id",
+  "client_request_id": "multiply-17-23-1",
+  "result": {
+    "kind": "message",
+    "messageId": "remote-reply-1",
+    "role": "ROLE_AGENT",
+    "parts": [{"text": "PRODUCT=391"}]
+  }
+}
+```
+
+These are shape examples, not a promise about any agent's output. `result`
+preserves the SDK's A2A 1.0 ProtoJSON fields plus the adapter's top-level `kind`
+discriminator: enums are `ROLE_AGENT` / `TASK_STATE_COMPLETED`, and result text
+parts have `text` **without** legacy `kind:"text"`. Do not deserialize results
+as the legacy request model or expect a flattened text answer. Task history,
+artifacts, metadata, status messages, and continuation IDs remain in the result.
+A nonterminal or failed Task also returns HTTP `200`; inspect its state.
+
+### Continuation and failure semantics
+
+To continue an agent conversation, keep its returned `contextId`. To continue a
+specific Task, also put its returned `id` into the next `message.taskId`. Send a
+new user message to the same agent with a new `messageId`, for example:
+
+```json
+{
+  "agent_id": "registered-agent-id",
+  "client_request_id": "follow-up-2",
+  "message": {
+    "messageId": "follow-up-message-2",
+    "contextId": "remote-context-1",
+    "taskId": "remote-task-awaiting-input",
+    "parts": [{"kind": "text", "text": "Use whole numbers."}]
+  }
+}
+```
+
+Use IDs actually returned by that agent. Omit `taskId` for a new task in a reusable
+context; do not assume a completed Task can be reopened. The remote agent owns
+continuation validity. This API does not bind task/context IDs to a
+caller, store conversation history, or provide room/HITL/LLM orchestration.
+
+The call has a **600-second deadline** and performs one blocking send, without
+automatic retries or Docker-host fallback. A timeout stops the local wait,
+**not the remote task**: no A2A cancellation is sent, and the agent may continue
+working after HTTP `504` or client disconnection. `client_request_id` is only a
+correlation ID, not an idempotency key; resubmitting the same request can repeat
+remote effects. There are no polling, cancellation, or SSE endpoints for this
+network API.
+
+`POST /agents/messages` accepts at most **6 MiB** of total request-body bytes,
+including JSON and base64 file content. The limit also applies without
+`Content-Length`. Each backend worker admits at most **four concurrent requests**,
+including requests still receiving their body. Additional requests receive HTTP
+`429` immediately; there is no waiting queue. Slots are released when the request
+exits, including errors and cancellation. These limits are per worker, not a
+distributed quota; remote work may still outlive a timed-out request.
+
+Errors use HTTP `401` for missing/invalid authentication, `403` for another owner's
+group, `404` for a missing group or missing/invisible agent, `409` for an inactive
+or out-of-group visible agent, `413` for an oversized body, `422` for invalid input
+or `room_team`, `429` for exhausted concurrent admission, `502` for upstream
+transport/protocol or invalid-result failures, and `504` for timeout.
+Domain errors have `detail.code` and `detail.message`; domain send errors also
+include `detail.agent_id` and `detail.client_request_id`. Authentication and
+middleware errors use a string `detail`; schema validation errors use FastAPI's
+validation-detail array.
+
+Implementation ownership and protocol inventory are documented in
+[`System Architecture`](docs/System-Architecture.md#agent-network-api).
+
+## Local MCP access
+
+The repository-root [`MCP/`](../MCP/) directory contains a separate Python
+Streamable HTTP adapter for these two APIs. It does not import the backend
+runtime, access the database, create rooms, or change Agent visibility rules.
+
+With a trusted local backend already running at `http://127.0.0.1:8000` in
+`backend.auth_mode="mock"`, start the adapter from the repository root:
+
+```sh
+uv run --project MCP --frozen --no-env-file python MCP/server.py
+```
+
+Add a **Streamable HTTP** server to your MCP client using:
+
+```text
+http://127.0.0.1:8001/mcp
+```
+
+The adapter has its own locked environment and exposes exactly two tools:
+
+- `discover_agents(group_id?)`: returns the active Agent inventory/Card response
+  visible to the local developer identity, optionally scoped to an owned Team.
+- `send_agent_message(agent_id, message, group_id?, client_request_id?)`: accepts
+  the same message object as the REST API, including text/data/file parts and
+  `contextId`/`taskId`. Message validation remains owned by the API.
+
+For example, after discovery, call `send_agent_message` with:
+
+```json
+{
+  "agent_id": "<an ID returned by discovery>",
+  "message": {
+    "parts": [{"kind": "text", "text": "Write a short story about a robot seeing the sea."}]
+  }
+}
+```
+
+Results include the complete API JSON as both MCP structured content and text.
+HTTP/transport errors and failed, rejected, canceled, or expired Tasks set
+`isError`; the original Task is retained. Input-required and other nonterminal
+Tasks remain nonterminal. A missing `client_request_id` is generated before
+sending so local transport failures can also be correlated.
+
+The adapter allows 610 seconds for the backend's 600-second deadline and response
+delivery. Configure the MCP client's tool timeout to exceed 610 seconds if it
+supports that setting. There are no automatic retries, remote cancellation,
+polling, or additional MCP tools.
+
+This local adapter uses fixed loopback endpoints (`127.0.0.1:8001/mcp` and
+`127.0.0.1:8000/api/v1/`); it does not load a second configuration or auth store.
+It has **no MCP authentication or user isolation**. It does not supply Clerk
+credentials: a Clerk-mode backend rejects its unauthenticated requests with `401`,
+which is returned as a tool error. Use an authenticated REST client for Clerk-mode
+access; do not disable production authentication to use this local adapter.
+Do not expose the adapter publicly.
+
+To run the isolated regression tests from the repository root:
+
+```sh
+uv run --project MCP --frozen --no-env-file pytest MCP/tests
+```
+
+The `MCP CI (local adapter)` job runs this same frozen, dotenv-disabled test command.
+
 ## Validation
 
 Run from `backend/`:

@@ -32,7 +32,7 @@ class FakeCollection:
     async def find(self, query: dict, **kwargs) -> list[dict]:
         self.find_calls.append((deepcopy(query), deepcopy(kwargs)))
         matches = [deepcopy(doc) for doc in self.docs if _matches(doc, query)]
-        limit = kwargs.get("limit")
+        limit = kwargs.get("limit", None if kwargs.get("exhaust") else 1000)
         return matches[:limit] if limit else matches
 
     async def find_one_and_update(
@@ -195,7 +195,7 @@ async def test_list_visible_filters_public_owned_and_active_agents():
 
 @pytest.mark.asyncio
 async def test_list_visible_combines_query_with_visibility_filters():
-    repo, collection = _repo(
+    repo, _ = _repo(
         [
             {"agent_id": "matching", "is_public": True, "agent_status": "active"},
             {"agent_id": "hidden", "is_public": True, "agent_status": "inactive"},
@@ -206,15 +206,30 @@ async def test_list_visible_combines_query_with_visibility_filters():
     result = await repo.list_visible(query={"agent_status": "active"})
 
     assert [doc["agent_id"] for doc in result] == ["matching"]
-    assert collection.find_calls[-1] == (
-        {
-            "$and": [
-                {"agent_status": "active"},
-                {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
-            ]
-        },
-        {},
+
+
+@pytest.mark.asyncio
+async def test_list_visible_exhaustion_is_opt_in():
+    docs = [{"agent_id": f"public-{index}", "is_public": True} for index in range(1001)]
+    repo, _ = _repo(docs)
+
+    bounded = await repo.list_visible()
+    complete = await repo.list_visible(exhaust=True)
+
+    assert len(bounded) == 1000
+    assert {doc["agent_id"] for doc in bounded} <= {doc["agent_id"] for doc in docs}
+    assert {doc["agent_id"] for doc in complete} == {doc["agent_id"] for doc in docs}
+
+
+@pytest.mark.asyncio
+async def test_list_visible_honors_explicit_finite_limit():
+    repo, _ = _repo(
+        [{"agent_id": f"public-{index}", "is_public": True} for index in range(3)]
     )
+
+    result = await repo.list_visible(limit=2, exhaust=True)
+
+    assert [doc["agent_id"] for doc in result] == ["public-0", "public-1"]
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from api_gateway.routes import (
     agent_group_routes,
+    agent_network_routes,
     agent_routes,
     files_routes,
     hitl_routes,
@@ -20,6 +21,7 @@ def build_api_gateway_router() -> APIRouter:
     gateway_router = APIRouter()
 
     gateway_router.include_router(agent_routes.router, tags=["agent"])
+    gateway_router.include_router(agent_network_routes.router, tags=["agent"])
     gateway_router.include_router(
         inspection_routes.router,
         tags=["inspection"],
