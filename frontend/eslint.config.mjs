@@ -2,8 +2,6 @@ import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
 export default [
-  // Standalone demos compile shared UI into generated assets; lint their sources.
-  { ignores: ["demos/dist/**", "demos/vendor/**"] },
   ...nextVitals,
   ...nextTs,
   {
