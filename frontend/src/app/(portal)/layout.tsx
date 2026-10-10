@@ -4,8 +4,8 @@ import '@/app/globals.css'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { PortalHeader } from '@/components/portal/portal-header'
-import { BannerHost } from '@/components/ui/banner'
 import { SettingsDialogProvider } from '@/components/settings/settings-dialog-provider'
+import { BannerHost } from '@/components/ui/banner'
 
 export const metadata: Metadata = {
   title: 'HYBRO AI – Your Local & Remote Hybrid Agent Platform',
@@ -27,7 +27,7 @@ export default function PortalLayout({
           <SidebarInset>
             <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
             <PortalHeader />
-            <main className="flex min-w-0 flex-1 flex-col">{children}</main>
+            <div className="flex min-w-0 flex-1 flex-col">{children}</div>
           </SidebarInset>
         </SettingsDialogProvider>
       </SidebarProvider>

@@ -38,6 +38,8 @@ export interface NetworkCanvasController extends NetworkCanvasHandle {
   update: (props: NetworkCanvasProps) => void
   destroy: () => void
 }
+const INITIAL_ZOOM = 1.41
+
 
 export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGElement): NetworkCanvasController {
   const stage = graph.parentElement
@@ -52,7 +54,8 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
   let props: NetworkCanvasProps | undefined
   let details: HTMLElement | null = null
   let focusedKey: string | null = null
-  let view: View = { x: 0, y: 0, k: 1 }
+  let preferredScale: number | null = INITIAL_ZOOM
+  let view: View = { x: 0, y: 0, k: INITIAL_ZOOM }
   let minimumZoom = 0.05
   let animation: { started: number; from: View; to: View } | null = null
   let frame = 0
@@ -188,7 +191,6 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
     nodesByKey = nextNodes
     linksByKey = nextLinks
     if (changed) {
-      const wasEmpty = nodes.length === 0
       nodes = Array.from(nodesByKey.values())
       links = Array.from(linksByKey.values())
       simulation.stop()
@@ -196,7 +198,8 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
       simulation.nodes(nodes)
       linkForce.links(links)
       simulation.alpha(1).alphaTarget(0)
-      if (wasEmpty) simulation.tick(120)
+      // Fit the settled topology, not an intermediate layout that can drift offscreen.
+      simulation.tick(300)
       runSimulation()
     }
     return changed
@@ -204,10 +207,11 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
   function targetView(key: string | null): View {
     const rect = stage!.getBoundingClientRect()
     let width = rect.width
-    let height = Math.max(1, rect.height - 68)
+    const topInset = 96
+    let height = Math.max(1, rect.height - topInset - 68)
     if (details && props?.selection) {
       const panel = details.getBoundingClientRect()
-      if (window.innerWidth <= 720) height = Math.min(height, panel.top - rect.top - 20)
+      if (window.innerWidth <= 900) height = Math.min(height, panel.top - rect.top - topInset - 20)
       else width = Math.min(width, panel.left - rect.left - 20)
     }
     width = Math.max(80, width)
@@ -230,10 +234,10 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
       top = Math.min(top, node.y - 45)
       bottom = Math.max(bottom, node.y + 45)
     }
-    if (!Number.isFinite(left)) return { x: width / 2, y: height / 2, k: 1 }
-    const k = Math.max(0.001, Math.min((width - 48) / (right - left), (height - 48) / (bottom - top), 1.2))
+    if (!Number.isFinite(left)) return { x: width / 2, y: topInset + height / 2, k: preferredScale ?? 1 }
+    const k = preferredScale ?? Math.max(0.001, Math.min((width - 48) / (right - left), (height - 48) / (bottom - top), 1.2))
     minimumZoom = Math.min(minimumZoom, k)
-    return { k, x: width / 2 - ((left + right) / 2) * k, y: height / 2 - ((top + bottom) / 2) * k }
+    return { k, x: width / 2 - ((left + right) / 2) * k, y: topInset + height / 2 - ((top + bottom) / 2) * k }
   }
   function transitionTo(key: string | null, immediate = false) {
     cancelDrag()
@@ -289,6 +293,7 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
     if (pinch && pointers.size === 2) {
       const d = pointerDistance()
       const k = Math.max(minimumZoom, Math.min(3, (pinch.k * d.distance) / Math.max(1, pinch.distance)))
+      preferredScale = k
       view = { k, x: d.x - pinch.wx * k, y: d.y - pinch.wy * k }
       notifyZoom()
       requestPaint()
@@ -348,6 +353,7 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
     animation = null
     cancelDrag()
     const k = Math.max(minimumZoom, Math.min(3, view.k * factor))
+    preferredScale = k
     view = { k, x: x - ((x - view.x) / view.k) * k, y: y - ((y - view.y) / view.k) * k }
     notifyZoom()
     requestPaint()
@@ -360,6 +366,7 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
     }
     if (event.key === 'Escape' || event.key === '0') {
       event.preventDefault()
+      preferredScale = null
       props?.onSelect(null)
       transitionTo(null)
       graph.focus({ preventScroll: true })
@@ -461,15 +468,22 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
       const selectionChanged =
         previousSelection?.type !== next.selection?.type || previousSelection?.id !== next.selection?.id
       if (!initialized || changed) transitionTo(null, !initialized)
-      else if (selectionChanged) transitionTo(next.selection ? `${next.selection.type}:${next.selection.id}` : null)
+      else if (selectionChanged) transitionTo(null)
       initialized = true
       notifyZoom()
       paint()
     },
-    fitAll: () => transitionTo(null),
-    focusNetwork: (id) => transitionTo(`network:${id}`),
+    fitAll: () => {
+      preferredScale = null
+      transitionTo(null)
+    },
+    focusNetwork: (id) => {
+      preferredScale = null
+      transitionTo(`network:${id}`)
+    },
     zoom: (factor) => zoom(factor),
     resetLayout() {
+      preferredScale = null
       cancelDrag()
       for (const node of nodes) {
         node.x = node.y = NaN

@@ -155,7 +155,8 @@ async def stream_room_messages(  # noqa: C901
         event_generator(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            # Compression proxies must not buffer the handshake or snapshot.
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "Content-Type": "text/event-stream",
             "X-Accel-Buffering": "no",

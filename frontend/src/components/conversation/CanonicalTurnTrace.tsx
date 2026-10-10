@@ -180,8 +180,9 @@ export function CanonicalTurnTrace({ turn }: { turn: TurnProjection }) {
         }}
       >
         <Marker asChild className="conversation-trace-header">
-          <CollapsibleTrigger aria-label={`${label}, ${duration}`}>
+          <CollapsibleTrigger aria-label={`Work Logs, ${label}, ${duration}`}>
             <MarkerContent className="conversation-trace-header-content">
+              <span className="conversation-processing-log-title">Work Logs</span>
               <span className="conversation-trace-run-state" data-status={label.toLowerCase().replaceAll(' ', '-')}>
                 {label}
               </span>

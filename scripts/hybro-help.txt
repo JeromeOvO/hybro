@@ -101,7 +101,7 @@ Services:
 
 MCP connection:
     URL: http://127.0.0.1:8001/mcp — Streamable HTTP, same-host clients only.
-    In the app, Networks > Connect MCP shows status and copies the URL or Claude
+    In the app, Access > MCP shows status and copies the URL or Claude
     Code configuration. Checks run on open/refresh, not by background polling.
     Add the server manually; there is no automatic client discovery/registration.
     A remote client's loopback is its own machine, not the Hybro host.

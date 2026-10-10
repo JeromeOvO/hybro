@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils"
 
 import {
   SidebarMenu,
+  SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
@@ -170,8 +171,8 @@ export function NavUser() {
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
-              className={`flex h-10 w-full items-center gap-2 px-2 hover:bg-black/10 dark:hover:bg-white/15 hover:text-sidebar-accent-foreground rounded-md transition-all duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-sidebar-ring ${SIDEBAR_ICON_BUTTON}`}
+            <SidebarMenuButton
+              className={`h-10 px-2 ${SIDEBAR_ICON_BUTTON}`}
               title={userEmail ? `${userName} (${userEmail})` : userName}
             >
               <div className={`shrink-0 ${SIDEBAR_ICON_CENTER}`}>
@@ -186,7 +187,7 @@ export function NavUser() {
                 <span className="truncate font-medium">{userName}</span>
                 <span className="truncate text-xs text-muted-foreground">{userEmail}</span>
               </div>
-            </button>
+            </SidebarMenuButton>
           </DropdownMenuTrigger>
           <UserDropdownContent>
             <DropdownMenuLabel className="px-2 py-1.5">

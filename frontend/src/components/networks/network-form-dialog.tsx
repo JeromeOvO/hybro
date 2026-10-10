@@ -1,6 +1,7 @@
 'use client'
 
 import { useId, useRef, useState, type FormEvent } from 'react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -11,7 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Field, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
 import { AgentPicker } from './agent-picker'
 import type { NetworkFormDialogProps } from './types'
 
@@ -25,17 +26,21 @@ export function NetworkFormDialog({
   onOpenChange,
   onRetryAgents,
   onSave,
+  onDelete,
 }: NetworkFormDialogProps) {
   const id = useId()
   const [name, setName] = useState(network?.name ?? '')
   const [description, setDescription] = useState(network?.description ?? '')
-  const [agentIds, setAgentIds] = useState<string[]>([])
+  const [agentIds, setAgentIds] = useState<string[]>(network?.agents ?? [])
   const [nameError, setNameError] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const submitting = useRef(false)
   const nameInput = useRef<HTMLInputElement>(null)
   const busy = pending || saving
+  const membersChanged = !network || agentIds.length !== network.agents.length ||
+    agentIds.some(agentId => !network.agents.includes(agentId))
+  const membersBlocked = membersChanged && (agentsLoading || Boolean(agentsError))
 
   function changeOpen(next: boolean) {
     if (pending || submitting.current) return
@@ -44,7 +49,7 @@ export function NetworkFormDialog({
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (pending || submitting.current || (!network && (agentsLoading || agentsError))) return
+    if (pending || submitting.current || membersBlocked) return
     const trimmedName = name.trim()
     if (!trimmedName) {
       setNameError(true)
@@ -58,7 +63,7 @@ export function NetworkFormDialog({
       await onSave({
         name: trimmedName,
         description: description.trim(),
-        agentIds: network ? network.agents : agentIds,
+        agentIds,
       })
     } catch (error) {
       setSaveError(error instanceof Error && error.message ? error.message : 'Unable to save the network. Please try again.')
@@ -77,46 +82,48 @@ export function NetworkFormDialog({
         onInteractOutside={event => { if (pending || submitting.current) event.preventDefault() }}
       >
         <DialogHeader>
-          <DialogTitle>{network ? 'Edit network' : 'Create network'}</DialogTitle>
+          <DialogTitle>{network ? 'Manage subnet' : 'New subnet'}</DialogTitle>
           <DialogDescription>
-            {network ? 'Update this network’s name and description without changing its members.' : 'Name your network and choose agents, or start with an empty network.'}
+            Membership changes only affect this discovery scope. Agents can belong to more than one subnet.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={save} className="flex flex-col gap-5" aria-busy={busy} noValidate>
-          <fieldset className="flex min-w-0 flex-col gap-5" disabled={busy}>
-            <legend className="sr-only">Network details</legend>
-            <div className="flex flex-col gap-2" data-invalid={nameError || undefined}>
-              <Label htmlFor={`${id}-name`}>Name</Label>
-              <Input
-                ref={nameInput}
-                id={`${id}-name`}
-                required
-                value={name}
-                onChange={event => {
-                  setName(event.target.value)
-                  setNameError(false)
-                }}
-                placeholder="e.g. Content creation"
-                aria-invalid={nameError}
-                aria-describedby={nameError ? `${id}-name-error` : undefined}
-              />
-              {nameError ? (
-                <p id={`${id}-name-error`} role="alert" className="text-sm text-destructive">Enter a network name.</p>
-              ) : null}
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor={`${id}-description`}>Description (optional)</Label>
-              <Input
-                id={`${id}-description`}
-                value={description}
-                onChange={event => setDescription(event.target.value)}
-                placeholder="What can this network help you do?"
-              />
-            </div>
-          </fieldset>
-          {!network ? (
-            <fieldset className="flex min-w-0 flex-col gap-3" disabled={busy}>
-              <legend className="mb-3 text-sm font-medium">Agents (optional)</legend>
+          <FieldGroup>
+            <FieldSet className="min-w-0" disabled={busy}>
+              <FieldLegend className="sr-only">Network details</FieldLegend>
+              <Field data-invalid={nameError || undefined} data-disabled={busy}>
+                <FieldLabel htmlFor={`${id}-name`}>Name</FieldLabel>
+                <Input
+                  ref={nameInput}
+                  id={`${id}-name`}
+                  required
+                  disabled={busy}
+                  value={name}
+                  onChange={event => {
+                    setName(event.target.value)
+                    setNameError(false)
+                  }}
+                  placeholder="e.g. Content creation"
+                  aria-invalid={nameError}
+                  aria-describedby={nameError ? `${id}-name-error` : undefined}
+                />
+                {nameError ? (
+                  <FieldError id={`${id}-name-error`}>Enter a network name.</FieldError>
+                ) : null}
+              </Field>
+              <Field data-disabled={busy}>
+                <FieldLabel htmlFor={`${id}-description`}>Description (optional)</FieldLabel>
+                <Input
+                  id={`${id}-description`}
+                  disabled={busy}
+                  value={description}
+                  onChange={event => setDescription(event.target.value)}
+                  placeholder="What can this network help you do?"
+                />
+              </Field>
+            </FieldSet>
+            <FieldSet className="min-w-0 gap-3" disabled={busy}>
+              <FieldLegend variant="label">Members</FieldLegend>
               <AgentPicker
                 agents={agents}
                 value={agentIds}
@@ -126,13 +133,18 @@ export function NetworkFormDialog({
                 disabled={busy}
                 onRetry={onRetryAgents}
               />
-            </fieldset>
-          ) : null}
-          {saveError ? <p role="alert" className="text-sm text-destructive wrap-anywhere">{saveError}</p> : null}
+            </FieldSet>
+          </FieldGroup>
+          {saveError ? <Alert variant="destructive"><AlertDescription className="wrap-anywhere">{saveError}</AlertDescription></Alert> : null}
           <DialogFooter>
+            {onDelete ? (
+              <Button type="button" variant="ghost" className="sm:mr-auto" disabled={busy} onClick={onDelete}>
+                Delete subnet
+              </Button>
+            ) : null}
             <Button type="button" variant="outline" onClick={() => changeOpen(false)} disabled={busy}>Cancel</Button>
-            <Button type="submit" disabled={busy || (!network && (agentsLoading || Boolean(agentsError)))}>
-              {busy ? 'Saving…' : network ? 'Save changes' : 'Create network'}
+            <Button type="submit" disabled={busy || membersBlocked}>
+              {busy ? 'Saving…' : network ? 'Save changes' : 'Create subnet'}
             </Button>
           </DialogFooter>
         </form>

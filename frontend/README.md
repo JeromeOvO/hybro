@@ -20,6 +20,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Subnet canvas
+
+The `/networks` canvas opens at 141% zoom. Use the zoom controls to change the scale,
+or **Show all connections** (keyboard `0`) to fit every node and label in the available space.
+**New subnet** uses the shared shadcn Button and opens the subnet management dialog.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

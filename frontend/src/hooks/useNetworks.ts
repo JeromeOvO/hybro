@@ -208,11 +208,11 @@ export function useNetworks() {
   )
 
   const update = useCallback(
-    async (id: string, fields: { name: string; description: string }): Promise<AgentGroup> =>
+    async (id: string, fields: { name: string; description: string; agents?: string[] }): Promise<AgentGroup> =>
       save({
         ownerId: requireOwner(),
         kind: 'update',
-        request: { group_id: id, name: fields.name, description: fields.description }
+        request: { group_id: id, ...fields }
       }),
     [requireOwner, save]
   )

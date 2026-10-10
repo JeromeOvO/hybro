@@ -67,10 +67,10 @@ class TestStreamRoomMessages:
         assert response.media_type == "text/event-stream"
 
     @pytest.mark.asyncio
-    async def test_sets_correct_headers(
+    async def test_prevents_intermediaries_from_transforming_the_stream(
         self, mock_user, mock_sse_transport, mock_db_service, sample_room
     ):
-        """Should set correct SSE headers."""
+        """Compression must not withhold frames until an open stream ends."""
         mock_connection = MagicMock()
         mock_connection.connection_id = "conn-123"
         mock_connection.is_active = False
@@ -86,8 +86,12 @@ class TestStreamRoomMessages:
             db=mock_db_service,
         )
 
-        assert response.headers["Cache-Control"] == "no-cache"
-        assert response.headers["Connection"] == "keep-alive"
+        directives = {
+            directive.strip()
+            for directive in response.headers["Cache-Control"].split(",")
+        }
+        assert {"no-cache", "no-transform"} <= directives
+        assert response.headers["X-Accel-Buffering"] == "no"
 
     @pytest.mark.asyncio
     async def test_raises_403_when_stream_user_does_not_own_room(

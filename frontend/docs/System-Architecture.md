@@ -59,6 +59,10 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 | `components.json` | shadcn/ui generator aliases, Tailwind CSS entry, icon library |
 | `postcss.config.mjs` | Tailwind/PostCSS pipeline |
 
+The PostCSS configuration uses the canonical plugin object
+`plugins: { "@tailwindcss/postcss": {} }`, shared by Next.js and Vitest's CSS
+module processing.
+
 ### User configuration
 
 Frontend settings originate in the `frontend` section of the same
@@ -139,6 +143,8 @@ src/app/
     |-- agents/[id]/page.tsx
     |-- agents/new/page.tsx
     |-- networks/page.tsx
+    |-- access/mcp/page.tsx
+    |-- access/api/page.tsx
     |-- chat/page.tsx
     |-- pricing/page.tsx
     |-- room/[id]/page.tsx
@@ -154,7 +160,8 @@ src/app/
 The application exposes one unprefixed route tree. Agent inventory, details,
 and registration live at `/agents`, `/agents/[id]`, and `/agents/new`; chat
 routes live at `/chat` and `/room/[id]`. There is no host-based route rewrite.
-Saved AgentGroups are managed as Networks at `/networks`.
+Saved AgentGroups are presented as Subnets at `/networks`. Independent connection
+pages live at `/access/mcp` and `/access/api`.
 Legacy `/manage` and `/manage/agents*` paths redirect to their canonical
 `/agents*` equivalents.
 
@@ -173,11 +180,15 @@ cycle, and then invalidates both agent inventory queries. Directly discovered
 3. `Toaster`
 4. `CookieBanner`
 
-The portal layout adds `BannerHost`, `SidebarProvider`,
-`SettingsDialogProvider`, `PortalSidebar`, and `PortalHeader`.
+The portal layout composes `BannerHost`, `SidebarProvider`, and
+`SettingsDialogProvider` directly. Every portal route shares `PortalSidebar`
+and `SidebarInset`; the inset contains `PortalHeader` and the route content.
+There is no separate workspace shell or route-classified navigation renderer.
 
-On `/networks`, the page owns its full-height workspace and mobile sidebar
-trigger, so `PortalHeader` is omitted. Other portal pages keep the existing header.
+The original authentication behavior is retained: signed-out marketing pages
+use their public header; signed-in pages share the side menu. Desktop pages have
+no additional header, while mobile pages use the existing header and sidebar
+trigger. Individual pages own their sizing, scrolling, and business content.
 
 ## 6. Component Organization
 
@@ -186,8 +197,9 @@ src/components/
 |-- ui/                       # shadcn/ui primitives
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
-|-- portal/                   # unified sidebar/header/footer, Core page, Manage navigation
-|-- networks/                 # saved Network list, graph, details, editor, and Agent picker
+|-- portal/                   # shared sidebar, header, ChatHistory, Core page
+|-- networks/                 # Subnets SVG graph, read-only summaries, management dialog, Agent picker
+|-- access/                   # shared MCP/API page, copyable access materials, bundled MCP status
 |-- open-source/              # Core page terminal animation
 |-- providers/                # React Query provider
 |-- settings/                 # settings dialog sections and helpers
@@ -390,6 +402,15 @@ is a per-User-request mutual-exclusion boundary:
 exact `run_started`/snapshot root binding selects the canonical renderer;
 otherwise the legacy renderer remains in use.
 
+The backend room stream sends `Cache-Control: no-cache, no-transform` and
+`X-Accel-Buffering: no`. These headers must survive the frontend API rewrite:
+compression middleware can otherwise buffer an open SSE response, withholding
+`connected`, the initial snapshot, and live deltas. Ordinary message history
+contains user messages and final answers, not the complete canonical execution
+projection; a buffered snapshot can therefore hide Agent Cards and Work Logs
+even when that history request succeeds. Stream-specific transformation is
+disabled without disabling compression for normal frontend assets or JSON APIs.
+
 ### Canonical Turn projection and Trace
 
 `src/lib/turn-lifecycle/` defines the strict wire contract, snapshot mapping,
@@ -407,10 +428,10 @@ Agent-name, card-status, or recency inference participates.
 DOM order. The Trace uses the owned shadcn `Marker` source plus shadcn
 `Collapsible` and presents only concise tool, Agent-call, retry, ask-user, and
 preparation actions; it never repeats Assistant prose or exposes input/output.
-Its trigger has no visible “Turn Trace” label or divider: the left-aligned status
-is `Running`, `Waiting for input`, or green `Finished`, followed immediately by
-the whole-Turn duration. Failed and canceled terminal Runs also display
-`Finished`; child action rows retain their truthful failure/cancellation state.
+Its **Work Logs** trigger includes the left-aligned status `Running`,
+`Waiting for input`, or green `Finished`, followed by the whole-Turn duration.
+Failed and canceled terminal Runs also display `Finished`; child action rows
+retain their truthful failure/cancellation state.
 The current Assistant safely renders through `MarkdownContent` in the final slot;
 `message_end(final)` remains provisional until the exact durable response commits
 it. Canonical terminal duration is server-authoritative; live canonical and legacy
@@ -426,6 +447,11 @@ Only active content is live-announced, and motion has reduced-motion fallbacks.
 HYBRO AI summary/presenter entities still own final-answer data but no
 longer render an Agent Card; only actual delegated Agent executions appear as
 Agent Cards.
+
+Legacy turns retain their progress entries through `ProcessingStatusLog`, including
+logs restored from stream snapshots. The compact log remains readable without
+expanding it. When public tool events also exist, their trace remains available
+alongside the logs; a progress-only turn does not render an empty trace header.
 
 Trace and Agent Cards are separate UI projections of the same canonical
 `TurnProjection.activity` Tool row selected by `(run_id, tool_call_id)`;
@@ -452,12 +478,12 @@ identity. Any `task_*`, partial-agent, raw artifact, or compatibility processing
 frame is excluded from canonical lifecycle state only when it matches an exact
 canonical User/client root; canonical capability elsewhere in the same room does
 not suppress unrelated legacy activity. Malformed duplicate status owners
-trigger snapshot recovery. Before `run_started`, the latest optimistic
-User root renders a preparation-only live Trace shell from local send state so
-HTTP/preflight latency never leaves a blank conversation body. It owns no cards,
-final content, or server lifecycle and is atomically replaced when the exact
-canonical root arrives. Other message-derived turns remain User-only. Memoized
-Turn boundaries and card-ID-scoped selectors keep
+trigger snapshot recovery. Before `run_started`, the latest optimistic User root
+renders a preparation or Work Logs surface while no Agent responses are available.
+Received legacy Agent responses remain visible even while that User message is
+optimistic. An exact canonical root atomically takes ownership of the matching
+turn, so legacy cards do not duplicate canonical cards. Memoized Turn boundaries
+and card-ID-scoped selectors keep
 active deltas from rerendering historical Turns. Canonical cards without a
 real Agent profile ID render a non-link label (never a fabricated
 `/agents/orchestrator…` route), and clickable cards contain no nested interactive
@@ -823,7 +849,8 @@ segment.
 - `/agents/[id]`: unified AgentCard detail with Share, Chat, and Remote-only
   Unregister actions.
 - `/agents/new`: Remote agent registration.
-- `/networks`: saved AgentGroup membership management with a force-directed canvas.
+- `/networks`: Subnets relationship overview and saved AgentGroup management.
+- `/access/mcp`, `/access/api`: independent connection/setup material pages.
 - `/about`, `/pricing`: public pages.
 
 Remote agents use the persisted backend `agent_status` without frontend health
@@ -850,13 +877,45 @@ selects the saved Team in the group selector and prefills the composer; room cre
 navigation do not occur until the user sends the message. Failed creates perform
 one catalog refresh as a compatibility fallback.
 
-The shared shell is implemented by `src/components/portal/` and exposes New
-Chat, Agents, and Networks as primary navigation before chat history. Chat history uses the
-lightweight authenticated `GET /roomCenter/history` resource through TanStack Query.
+The shared side menu is the original `PortalSidebar`, using the standard 16rem
+Sidebar and its icon-only collapsed state. `NavAgent` renders `CONSUMER_NAV`:
+
+- **Chat** opens `/chat` and remains the active destination on Room routes.
+- **Network** expands **Agents** and **Subnets** inline.
+- **Access** expands **MCP** and **API** inline.
+
+The same primary menu is used on `/core`, the other existing portal pages, and
+the new feature pages. Chat and Room routes add a separate 16rem History column
+immediately to its right on desktop. That column has no collapse control and
+stays visible when the primary sidebar collapses. It starts with an outline
+**New chat** action button that opens `/chat`; it is a page action rather than a
+navigation item, so it never mirrors the primary menu's active styling.
+Network and Access do not add a second column. The Logo, primary collapse control,
+Documentation, Discord/community, and full user panel retain their original
+shared components.
+
+`NavAgentItem` supports destination links or groups of destination links.
+Groups use `Collapsible` and `SidebarMenuSub`, with the same `SidebarMenuButton`
+for both levels. Clicking a parent does not navigate. Clicking a group in
+icon-only mode expands the sidebar and opens that group. Child selection closes
+the mobile Sheet. The existing mobile header and Sidebar-owned Sheet are shared
+across routes rather than replaced by a workspace-specific drawer.
+
+Opening an Agent response detail collapses only the primary sidebar; the History
+column remains visible. Closing the detail restores the primary sidebar state.
+On mobile, History is shown inside the existing navigation Sheet to avoid a
+two-column drawer, with the same list folding. Agent details retain
+the existing bottom Sheet. Original page content, Room workflows, and
+`client_request_id` correlation are independent of the navigation structure.
+
+Chat history uses the lightweight authenticated `GET /roomCenter/history`
+resource through TanStack Query.
 Pinned rooms render above Recent rooms; desktop drag handles persist pinned order
 through the reorder mutation while Recent is derived from descending
-`last_activity_at`. The section header can collapse or expand the history list.
-Rename, pin/unpin, reorder, and delete mutations update the query cache
+`last_activity_at`. The History header folds and unfolds the conversation list
+only; the column and its heading stay in place, so folding never hides the
+secondary navigation. Rename, pin/unpin, reorder, and delete mutations update
+the query cache
 optimistically and roll back on failure. Active room states (`queued`,
 `processing`, and `awaiting_input`) are returned in the list payload, so rooms
 without active work remain unbadged and the sidebar does not issue per-room
@@ -876,30 +935,28 @@ route vocabulary for application links.
 
 ### Networks workspace
 
-`src/app/(portal)/networks/page.tsx` coordinates `NetworkSidebar`, `NetworkCanvas`,
-`NetworkDetailsPanel`, `NetworkFormDialog`, and `AgentPicker` under
-`src/components/networks/`. The existing Agents inventory and its actions remain
-separate. Network details show the name and description, copyable Network ID,
-members, and edit/delete actions.
-The workspace's built-in text is English. Its sidebar has a Create action,
-saved Network list, and **Connect MCP** action, without a separate heading.
-Hub colors use the theme primary.
+`src/app/(portal)/networks/page.tsx` coordinates `NetworkCanvas`,
+`NetworkDetailsPanel`, and `NetworkFormDialog`, with `AgentPicker` inside the
+dialog, under `src/components/networks/`. The English-language Subnets workspace
+is a read-only SVG relationship overview, not a membership editor on the canvas.
+Its own stylesheet sets the canvas viewport height, accounting for the shared
+mobile header and visible banners, without changing other pages. **New subnet** is
+centered at the top, 32px below the canvas edge; there is no local subnet-list
+sidebar, scope picker, or view-tab bar.
 
-`McpConnectionDialog` uses the shared Dialog primitive and shows status and
-`http://127.0.0.1:8001/mcp`. Copy actions supply the URL or Claude Code
-`mcpServers` JSON with `type: "http"`; a collapsible **Configuration** block
-supports manual copying when the clipboard is unavailable.
-Status is fetched from `/hybro-mcp` only on dialog open or explicit refresh,
-with checking, ready, unavailable, unsupported-Clerk, and request-error states;
-there is no polling. Lifecycle actions remain in the CLI/TUI, and closing the
-dialog does not stop MCP.
+Selecting a subnet opens a right-side summary with name, description, copyable
+ID, members and their skills/status, and **Manage subnet**. Selecting an Agent
+shows only its compact description/status and relationship to the selected
+scope, not inline Agent editing or membership-removal controls. The management
+dialog edits metadata and members together. Deletion starts inside Manage and
+requires a separate confirmation; it removes the subnet and its memberships,
+not Agents, other subnets, or existing rooms.
 
-MCP runs by default with `hybro start` and the TUI's **Start services**. The URL
-is for clients on the machine running Hybro: a remote client resolves loopback
-to its own machine, not the Hybro host. The adapter has no MCP authentication or
-user isolation and supports a trusted local mock-auth backend, not Clerk.
-Connection setup is manual; the dialog does not discover/register MCP clients
-or expose tool execution controls.
+The summary and canvas control surfaces use the existing `Card` family. Management
+forms compose `FieldSet`, `FieldGroup`, `Field`, and the shared `Input`/`Checkbox`
+controls, with associated labels and descriptions. `Alert`, `FieldError`, and
+`Empty` provide failure and empty-state presentation. Canvas CSS owns graph
+drawing and spatial layout; component surfaces retain the shared Hybro styles.
 
 `useNetworks` reads the existing `agent-group` API plus `getAllAgents` and
 `getAgentsByProviderId`. Its queries and mutation scope include the authenticated
@@ -916,10 +973,12 @@ and cached data usable with an explicit error. Inventory reads refresh on entry
 and window focus. Missing saved member IDs remain separately marked unavailable
 or unverified reference nodes, rather than silently pruning the saved membership.
 
-Built-in groups are excluded; saved presets remain ordinary Networks. Creation
-supports searchable multiple-Agent selection or an empty member list. Metadata
-updates send only the name and description; member edits retain unresolved IDs
-unless explicitly removed.
+Built-in groups are excluded; saved presets remain ordinary subnets. Creation
+supports searchable multiple-Agent selection or an empty member list, already
+accepted by the existing backend. When membership changes, Save sends metadata
+and members in the same update request. Metadata-only edits omit `agents` to
+preserve concurrent membership changes. Unresolved saved member references are
+retained unless explicitly removed in the management dialog.
 
 Loading, failed reads, and successful empty lists are distinct states. Failed
 writes retain the current inventory and open draft or confirmation. Successful
@@ -936,20 +995,21 @@ There is no global overview node, spherical projection, or per-Network Agent cop
 Connectivity here expresses shared membership, not subnet merging, direct
 Agent-to-Agent communication, or authorization.
 
-Agent names remain visible without hover or selection. Network names appear on
-hover, keyboard focus, or selection. Viewport fitting includes measured label
-widths so names are not clipped in narrow overview layouts.
+Both Agent and subnet names remain visible without hover or selection. The canvas
+retains its existing dark background and theme-accent subnet nodes. Initial topology
+is settled and centered at 141% zoom. **Show all connections** fits the measured
+node and label bounds to the available space, including narrow viewports.
 
 `forceLink` supplies membership springs, `forceManyBody` supplies repulsion, and
 `forceX`/`forceY` keep disconnected components within the layout. Simulations
 mutate owned node/link records, never the backend DTOs. Metadata refresh preserves
 existing positions; structural updates reconcile node and edge identities.
 
-Selection identifies an Agent or Network independently. It highlights related
-nodes and edges without filtering the graph. Agent details work with zero, one,
-or many memberships; removing a membership names its Network explicitly and does
-not delete a still-valid Agent node. Network details retain the existing CRUD
-actions. Pan, zoom, viewport focus, and layout reset remain available.
+The selected subnet scope highlights related nodes and edges without filtering
+the graph. Inspecting an Agent does not replace that scope; the compact summary
+indicates whether it belongs to the selected subnet. **Show all connections**
+clears selection and scope and fits the full graph. Pan, zoom, viewport focus,
+and layout reset remain available; none changes saved membership.
 
 Dragging an Agent or Network fixes only that subject's `fx/fy` and keeps `alphaTarget(0.3)` until
 release. Release or cancellation clears those coordinates, sets the target to
@@ -958,11 +1018,60 @@ visibility changes and unmount stop unnecessary work. Per-frame geometry stays
 outside React state. Coordinates are transient, not persisted. `networks.css`
 is scoped to this workspace; backend APIs and persistence schemas are unchanged.
 
-The workspace has a viewport-sized flex basis and maximum height. The Network
-list scrolls independently instead of increasing the canvas or document height.
-`tests/e2e/networks.spec.ts` covers the long-list viewport invariant, subject-only
-dragging, globally shared Agent identity, Network/Agent ID collisions, explicit
-membership removal, and valid isolated Agents when no Networks exist.
+The graph stays within the parent workspace; long summary member lists scroll
+inside the details panel rather than expanding the document. Canvas selection,
+node positions, and subnet scope are transient page state, not room execution
+defaults or persisted navigation configuration.
+
+### Access workspace
+
+`/access/mcp` and `/access/api` render the shared `AccessPage` with independent
+MCP/API content. `access-material.ts` builds copyable configuration/request
+examples and AI setup prompts; the page does not execute discovery, register
+clients, send messages, or invoke a model/provider. Existing backend API
+contracts and the runtime public configuration source are unchanged.
+
+The default Access view contains the page title, configuration/prompt tabs,
+copy actions, and the generated code block. There are no separate URL fields
+or discovery-scope controls. MCP also shows a compact bundled-adapter status
+row. Discovery-call examples and authentication guidance remain in the initially
+collapsed **Connection details** disclosure and the generated AI setup prompt.
+
+Access uses shadcn `Tabs`, `Button`, `Collapsible`, and `Alert` with existing Hybro
+tokens and typography; it has no feature-specific stylesheet. It does not fetch
+AgentGroups or agent inventory. Examples discover all visible active agents,
+without `group_id`; backend authentication and visibility rules are unchanged.
+
+Generated service addresses come from the validated public runtime `api_base_url`
+and the bundled `MCP_URL`, not page state. **Connection configuration** (MCP) or
+**Request example** (API) and **AI setup prompt** are keyboard-accessible tabs
+with ArrowLeft/ArrowRight and Home/End navigation. Copy failures expose manual-copy
+instructions and select the generated text when possible. Copied text never
+includes a real session token, and copying is not proof of a successful connection.
+
+MCP uses the existing `http://127.0.0.1:8001/mcp` HTTP endpoint and
+`mcpServers` configuration contract. Examples call `discover_agents({})`.
+Optional `group_id` filtering remains a backend/tool-call capability, not a
+connection setting or Access-page control. The bundled adapter has no MCP
+authentication or user isolation; it supports trusted local use with the
+mock-auth backend, not Clerk. Loopback refers to the client machine, so a remote
+client must use the appropriate Hybro host address. Service lifecycle remains
+in the CLI/TUI.
+
+`McpStatusControl` reads `/hybro-mcp` on mount and explicit refresh, without
+polling. Its checking, ready, unavailable, unsupported-Clerk, and request-error
+states are explicitly labeled **Bundled local adapter**. This is the existing
+read-only health probe, never a connection or tool-execution proxy.
+
+API addresses come from the existing public runtime `api_base_url` and
+`api_prefix`. The example uses `GET {api_base_url}{api_prefix}/agents/discovery`,
+without a `group_id` parameter. The response is an `agents`
+array containing `agent_id` and `agent_card`. The displayed and copied cURL
+example targets Local Developer Mode (`backend.auth_mode="mock"`) and contains
+no Authorization header or access-token placeholder. The AI prompt uses the same
+token-free example. Collapsed guidance and the prompt explain that only
+`backend.auth_mode="clerk"` deployments require a valid Clerk session JWT in a
+Bearer header; backend authentication enforcement is unchanged.
 
 ## 14. Testing Layout
 

@@ -51,12 +51,8 @@ import {
   SidebarMenu,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -374,23 +370,19 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <SidebarGroup
-        className={cn(
-          'min-h-0 overflow-hidden px-2 pt-0',
-          open ? 'flex-1' : 'flex-none',
-        )}
+        className={cn('min-h-0 overflow-hidden px-2 pt-0', open ? 'flex-1' : 'flex-none')}
+        role="region"
+        aria-label="History"
       >
         <CollapsibleTrigger asChild>
           <button
             type="button"
             className="flex h-9 w-full shrink-0 items-center gap-2 rounded-md px-2 text-left text-sm font-medium outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           >
-            <span>Chat History</span>
+            <span>History</span>
             <span className="ml-auto flex items-center gap-1.5">
               {query.isFetching ? (
-                <RefreshCw
-                  className="h-3.5 w-3.5 animate-spin text-muted-foreground"
-                  aria-label="Refreshing history"
-                />
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-label="Refreshing history" />
               ) : null}
               <ChevronRight
                 className={cn(
@@ -401,7 +393,6 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
             </span>
           </button>
         </CollapsibleTrigger>
-
         <CollapsibleContent className="min-h-0 flex-1 overflow-hidden">
           <div className="h-full overflow-y-auto pb-2">
         {query.isPending ? (
@@ -442,7 +433,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
           </div>
         </CollapsibleContent>
 
-      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(next) => { if (!next) setDeleteTarget(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
@@ -472,7 +463,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
-        </AlertDialog>
+      </AlertDialog>
       </SidebarGroup>
     </Collapsible>
   )

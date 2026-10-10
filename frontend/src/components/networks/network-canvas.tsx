@@ -74,7 +74,7 @@ export const NetworkCanvas = forwardRef<NetworkCanvasHandle, NetworkCanvasProps>
       className="network-graph"
       role="group"
       tabIndex={0}
-      aria-label="Network graph. Blue nodes are Networks; grey nodes are Agents. Lines show memberships. Drag a node to move it or the background to pan. Tab to a node and press Enter to select. Arrow keys pan; plus and minus zoom; Escape clears selection; zero fits all nodes."
+      aria-label="Read-only subnet graph. Accent-colored nodes are subnets; grey nodes are agents. Lines show memberships. Drag to adjust the layout without changing memberships. Tab to a node and press Enter for a summary. Arrow keys pan; plus and minus zoom; Escape closes details; zero fits all nodes."
     >
       <g ref={sceneRef} className="network-scene">
         <g className="network-edges" aria-hidden="true">
@@ -85,7 +85,8 @@ export const NetworkCanvas = forwardRef<NetworkCanvasHandle, NetworkCanvasProps>
                 'network-edge network-member-edge',
                 ((selection?.type === 'network' && selection.id === edge.networkId) ||
                   (selection?.type === 'agent' && selection.id === edge.agentId)) &&
-                  'selected'
+                  'selected',
+                selection?.type === 'network' && selection.id !== edge.networkId && 'dimmed'
               )}
               data-network-id={edge.networkId}
               data-agent-id={edge.agentId}
@@ -107,7 +108,8 @@ export const NetworkCanvas = forwardRef<NetworkCanvasHandle, NetworkCanvasProps>
                 'network-agent',
                 agent.status !== 'active' && 'inactive',
                 selected && 'selected',
-                related.agentIds.has(agent.id) && 'related'
+                related.agentIds.has(agent.id) && 'related',
+                selection?.type === 'network' && !related.agentIds.has(agent.id) && 'dimmed'
               )}
               data-node-key={`agent:${agent.id}`}
               data-agent-id={agent.id}
@@ -122,7 +124,7 @@ export const NetworkCanvas = forwardRef<NetworkCanvasHandle, NetworkCanvasProps>
                 {agent.description ? ` — ${agent.description}` : ''}
                 {stateDescription ? ` — ${stateDescription}` : ''}
               </title>
-              <circle className="network-node-hit" r={18} />
+              <circle className="network-node-hit" r={24} />
               <circle className="network-agent-dot" r={5} />
               <text className="network-agent-label" y={23}>
                 {shortenLabel(agent.name || agent.id, 32)}
@@ -139,7 +141,8 @@ export const NetworkCanvas = forwardRef<NetworkCanvasHandle, NetworkCanvasProps>
               className={cn(
                 'network-hub',
                 selected && 'selected',
-                related.networkIds.has(network.group_id) && 'related'
+                related.networkIds.has(network.group_id) && 'related',
+                selection?.type === 'network' && selection.id !== network.group_id && 'dimmed'
               )}
               data-node-key={`network:${network.group_id}`}
               data-network-id={network.group_id}
@@ -151,10 +154,13 @@ export const NetworkCanvas = forwardRef<NetworkCanvasHandle, NetworkCanvasProps>
               <title>
                 {network.name} — {count} {count === 1 ? 'Agent' : 'Agents'}
               </title>
-              <circle className="network-node-hit" r={20} />
+              <circle className="network-node-hit" r={24} />
               <circle className="network-hub-dot" r={7} />
               <text className="network-hub-label" y={-19}>
                 {shortenLabel(network.name, 28)}
+              </text>
+              <text className="network-count-label" y={29}>
+                {count} {count === 1 ? 'Agent' : 'Agents'}
               </text>
             </g>
           )

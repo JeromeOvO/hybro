@@ -5,12 +5,19 @@ import {
   MessageCirclePlus,
 } from "lucide-react"
 
-export type NavAgentItem = {
+export type NavAgentLink = {
   name: string
   url: string
   icon: typeof MessageCirclePlus
   colorClass: string
+  activePaths?: string[]
 }
+
+export type NavAgentGroup = Omit<NavAgentLink, 'url'> & {
+  items: NavAgentLink[]
+}
+
+export type NavAgentItem = NavAgentLink | NavAgentGroup
 
 export const NAV_AGENTS: NavAgentItem[] = [
   {

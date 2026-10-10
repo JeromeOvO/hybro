@@ -31,17 +31,6 @@ export interface NetworkCanvasProps {
   onZoomChange: (percent: number) => void
 }
 
-export interface NetworkSidebarProps {
-  networks: AgentGroup[]
-  selectedId: string | null
-  loading: boolean
-  refreshing: boolean
-  error: string | null
-  disabled: boolean
-  onSelect: (id: string) => void
-  onCreate: () => void
-  onRetry: () => void
-}
 
 export interface AgentPickerProps {
   agents: NetworkAgent[]
@@ -64,18 +53,14 @@ export interface NetworkFormDialogProps {
   onOpenChange: (open: boolean) => void
   onRetryAgents: () => void
   onSave: (values: NetworkFormValues) => Promise<void>
+  onDelete?: () => void
 }
 
 export interface NetworkDetailsPanelProps {
   selection: { type: 'network'; network: AgentGroup } | { type: 'agent'; agent: NetworkAgent }
-  networks: AgentGroup[]
+  scope?: AgentGroup
   agents: NetworkAgent[]
   pending: boolean
   onClose: () => void
-  onEdit: () => void
-  onAddAgents: () => void
-  onDelete: () => void
-  onRemoveAgent: (networkId: string, agentId: string) => void
-  onSelectNetwork: (id: string) => void
-  onSelectAgent: (id: string) => void
+  onManage: () => void
 }

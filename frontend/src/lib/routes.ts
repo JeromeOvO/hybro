@@ -10,6 +10,8 @@ export const routes = {
   room: (id: string) => withId('/room', id),
   agents: '/agents',
   networks: '/networks',
+  accessMcp: '/access/mcp',
+  accessApi: '/access/api',
   agent: (id: string) => withId('/agents', id),
   registerAgent: '/agents/new',
   manage: {

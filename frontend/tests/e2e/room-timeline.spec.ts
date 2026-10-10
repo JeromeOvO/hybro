@@ -198,10 +198,10 @@ test.describe('Room Timeline', () => {
     await activityToggle.click()
 
     await expect(
-      completedTurn.getByRole('link', { name: 'Agent One' })
+      completedTurn.getByRole('link', { name: 'Agent One', exact: true })
     ).toBeVisible()
     await expect(
-      completedTurn.getByRole('link', { name: 'Agent Two' })
+      completedTurn.getByRole('link', { name: 'Agent Two', exact: true })
     ).toBeVisible()
   })
 
@@ -222,7 +222,7 @@ test.describe('Room Timeline', () => {
       .locator('.conversation-turn')
       .filter({ hasText: 'Seeded multi-agent request' })
     const activityToggle = completedTurn.locator('.agent-index button').first()
-    const agentOne = completedTurn.getByRole('link', { name: 'Agent One' })
+    const agentOne = completedTurn.getByRole('link', { name: 'Agent One', exact: true })
 
     await expect(activityToggle).toHaveAttribute('aria-expanded', 'false')
     await expect(agentOne).toBeHidden()
@@ -234,5 +234,26 @@ test.describe('Room Timeline', () => {
     await activityToggle.click()
     await expect(activityToggle).toHaveAttribute('aria-expanded', 'false')
     await expect(agentOne).toBeHidden()
+  })
+
+  test('opens agent details while keeping the separate history column visible', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`/room/room-timeline-${testInfo.workerIndex}-${testInfo.retry}`)
+    const history = page.getByRole('region', { name: 'History', exact: true })
+    await expect(history).toBeVisible()
+    const card = page.locator('.conversation-agent-card').filter({ hasText: 'Agent One' })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Open Agent One response', exact: true }).click()
+    const detail = page.getByRole('complementary', { name: 'Agent response detail' })
+    await expect(detail.getByText('Agent One response', { exact: true })).toBeVisible()
+    await expect(history).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Expand sidebar', exact: true })).toBeVisible()
+    await expect(card).toBeVisible()
+    await page.getByRole('button', { name: 'Close agent response', exact: true }).click()
+    await expect(detail).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Collapse sidebar', exact: true })).toBeVisible()
+    await expect(history).toBeVisible()
+    await expect(card).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   })
 })

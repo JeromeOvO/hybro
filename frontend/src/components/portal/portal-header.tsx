@@ -7,7 +7,6 @@ import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Logo } from '@/components/logo';
 import { useUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
-import { routes } from '@/lib/routes';
 
 const MARKETING_PAGES = ['/', '/about', '/core', '/pricing', '/agents']
 
@@ -24,8 +23,6 @@ export const PortalHeader = () => {
   const isMarketingPage = MARKETING_PAGES.includes(pathname);
   const isUnauthenticated = mounted && isLoaded && !isSignedIn && isMarketingPage;
 
-  // Networks provides its mobile sidebar trigger within the page's own list.
-  if (pathname === routes.networks) return null;
 
   if (!mounted) {
     return (

@@ -151,17 +151,19 @@ describe('ChatHistory', () => {
     )
   })
 
-  it('collapses and expands the history list from its section header', async () => {
+
+  it('folds the conversation list without hiding the history region', async () => {
     const user = userEvent.setup()
     renderHistory()
 
     await screen.findByText('Pinned one')
-    const trigger = screen.getByRole('button', { name: /chat history/i })
+    const trigger = screen.getByRole('button', { name: /history/i })
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
 
     await user.click(trigger)
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('Pinned one')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'History' })).toBeInTheDocument()
 
     await user.click(trigger)
     expect(await screen.findByText('Pinned one')).toBeInTheDocument()

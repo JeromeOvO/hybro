@@ -88,9 +88,9 @@ export default function AgentsPage() {
   return (
     <div className="page-container">
       <div className="page-content space-y-5">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <h1 className="text-2xl font-bold">Agents</h1>
-          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <div className="flex max-w-full shrink-0 flex-wrap justify-end gap-2 max-sm:[&>button]:min-h-11">
             <Button
               className="bg-[hsl(var(--color-hybro-hy))] text-white shadow-sm hover:bg-[hsl(var(--color-hybro-hy-strong))] dark:text-slate-950"
               disabled={discoveryMutation.isPending}

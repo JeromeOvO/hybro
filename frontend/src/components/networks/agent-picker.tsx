@@ -2,10 +2,13 @@
 
 import { useId, useMemo, useState } from 'react'
 import { RotateCw } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Empty, EmptyDescription } from '@/components/ui/empty'
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { AgentPickerProps, NetworkAgent } from './types'
 
@@ -57,20 +60,22 @@ export function AgentPicker({
   }
 
   return (
-    <fieldset className="flex min-w-0 flex-col gap-3" disabled={disabled}>
-      <legend className="sr-only">Select agents</legend>
-      <div className="flex items-center justify-between gap-3">
-        <Label htmlFor={searchId}>Search agents</Label>
-        <Badge variant="secondary" aria-live="polite">{chosenCount} selected</Badge>
-      </div>
-      <Input
-        id={searchId}
-        type="search"
-        placeholder="Search agent names or skills"
-        value={query}
-        onChange={event => setQuery(event.target.value)}
-        disabled={disabled || loading}
-      />
+    <FieldSet className="min-w-0 gap-3" disabled={disabled}>
+      <FieldLegend className="sr-only">Select agents</FieldLegend>
+      <Field data-disabled={disabled || loading}>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel htmlFor={searchId}>Search agents</FieldLabel>
+          <Badge variant="secondary" aria-live="polite">{chosenCount} selected</Badge>
+        </div>
+        <Input
+          id={searchId}
+          type="search"
+          placeholder="Search agent names or skills"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          disabled={disabled || loading}
+        />
+      </Field>
       {loading ? (
         <div className="flex flex-col gap-2" role="status" aria-label="Loading agents">
           <Skeleton className="h-16 w-full" />
@@ -79,57 +84,60 @@ export function AgentPicker({
         </div>
       ) : null}
       {error ? (
-        <div className="flex flex-col items-start gap-2">
-          <p role="alert" className="text-sm text-destructive wrap-anywhere">{error}</p>
-          <Button type="button" variant="outline" size="sm" onClick={onRetry} disabled={disabled || loading}>
-            <RotateCw data-icon="inline-start" aria-hidden="true" />
-            {loading ? 'Retrying…' : 'Reload agents'}
-          </Button>
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription className="gap-2 wrap-anywhere">
+            <p>{error}</p>
+            <Button type="button" variant="outline" size="sm" onClick={onRetry} disabled={disabled || loading}>
+              <RotateCw data-icon="inline-start" aria-hidden="true" />
+              {loading ? 'Retrying…' : 'Reload agents'}
+            </Button>
+          </AlertDescription>
+        </Alert>
       ) : null}
-      <div className="flex max-h-[32dvh] flex-col gap-2 overflow-y-auto" aria-busy={loading}>
-        {visible.map(agent => {
+      <FieldGroup data-slot="checkbox-group" className="max-h-[32dvh] overflow-y-auto p-1" aria-busy={loading}>
+        {visible.map((agent, index) => {
           const added = existing.has(agent.id)
           const unavailable = agent.status !== 'active' && agent.status !== 'inactive'
+          const checkboxId = `${searchId}-agent-${index}`
+          const choiceDisabled = disabled || loading || Boolean(error) || added || (unavailable && !selected.has(agent.id))
           return (
-            <label key={agent.id} className="flex items-start gap-3 rounded-md border p-3">
-              <input
-                type="checkbox"
-                className="mt-0.5 size-4 shrink-0 accent-primary"
+            <Field key={agent.id} orientation="horizontal" data-disabled={choiceDisabled}>
+              <Checkbox
+                id={checkboxId}
                 checked={added || selected.has(agent.id)}
-                disabled={disabled || loading || Boolean(error) || added || (unavailable && !selected.has(agent.id))}
-                onChange={event => toggle(agent, event.target.checked)}
+                disabled={choiceDisabled}
+                onCheckedChange={checked => toggle(agent, checked === true)}
                 aria-label={`${added ? 'Already added:' : 'Select'} ${agent.name}`}
+                aria-describedby={agent.description || unavailable ? `${checkboxId}-description` : undefined}
               />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium wrap-anywhere">{agent.name}</span>
-                {agent.description ? (
-                  <span className="mt-1 block text-xs text-muted-foreground wrap-anywhere">{agent.description}</span>
+              <FieldContent className="min-w-0">
+                <FieldLabel htmlFor={checkboxId} className="wrap-anywhere">{agent.name}</FieldLabel>
+                {agent.description || unavailable ? (
+                  <FieldDescription id={`${checkboxId}-description`} className="wrap-anywhere">
+                    {agent.description}
+                    {agent.description && unavailable ? ' ' : null}
+                    {unavailable ? `${agent.status === 'unknown' ? 'This agent’s details could not be verified.' : 'This agent is currently unavailable.'} Its membership is preserved.` : null}
+                  </FieldDescription>
                 ) : null}
-                {unavailable ? (
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {agent.status === 'unknown' ? 'This agent’s details could not be verified.' : 'This agent is currently unavailable.'} Its membership is preserved.
-                  </span>
-                ) : null}
-                <span className="mt-2 flex flex-wrap gap-1">
+                <div className="flex flex-wrap gap-1">
                   {added ? <Badge variant="secondary">Added</Badge> : null}
                   <Badge variant={agent.status === 'active' ? 'outline' : 'inactive'}>
                     {statusLabels[agent.status]}
                   </Badge>
-                </span>
-              </span>
-            </label>
+                </div>
+              </FieldContent>
+            </Field>
           )
         })}
         {!loading && !error && visible.length === 0 ? (
-          <p className="py-4 text-sm text-muted-foreground">
-            {normalizedQuery ? 'No matching agents.' : 'No agents available to add.'}
-          </p>
+          <Empty className="py-4 md:p-4">
+            <EmptyDescription>{normalizedQuery ? 'No matching agents.' : 'No agents available to add.'}</EmptyDescription>
+          </Empty>
         ) : null}
-      </div>
+      </FieldGroup>
       {!loading && !error && !normalizedQuery && choices.length > 0 && !hasNewChoices ? (
-        <p className="text-xs text-muted-foreground">No more agents available to add.</p>
+        <FieldDescription>No more agents available to add.</FieldDescription>
       ) : null}
-    </fieldset>
+    </FieldSet>
   )
 }
