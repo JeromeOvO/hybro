@@ -215,8 +215,9 @@ hybro mcp stop
 ```
 
 Exiting the TUI leaves services running. Stopping MCP is not a persistent opt-out:
-the next global start includes it again. The app checks status only when the
-MCP page opens or you refresh; it cannot start/stop services or relay tool calls.
+the next global start includes it again. The app checks MCP status only from the
+Overview **Gateway** tile, when Overview loads; it does not poll in the background,
+and it cannot start/stop services or relay tool calls.
 See [MCP tools, health, and native startup](backend/README.md#local-mcp-access).
 
 ### Development and released stacks
