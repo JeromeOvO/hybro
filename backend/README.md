@@ -262,10 +262,11 @@ http://127.0.0.1:8001/mcp
 ```
 
 This URL is for clients on the machine running Hybro, not a remote browser's
-machine. **Connect** (`/connect/mcp`) in the app shows status and copies the URL or Claude
-Code `mcpServers` configuration (`type: "http"`); the displayed examples can also
-be selected and copied manually. It checks status on page open/refresh and does
-not control services, relay tool calls, or automatically discover/register clients.
+machine. **Connect** (`/connect/mcp`) in the app copies the URL and per-assistant
+setup snippets, such as the Claude Code `mcpServers` configuration
+(`type: "http"`); the snippets can also be selected and copied manually. It does
+not check status, control services, relay tool calls, or automatically
+discover/register clients. The Overview **Gateway** tile shows MCP status.
 
 Native manual startup remains supported from the repository root, with a backend
 already running at `http://127.0.0.1:8000/api/v1/`:

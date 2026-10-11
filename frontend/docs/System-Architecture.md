@@ -1025,8 +1025,8 @@ without changing `scope`. Below 900px the scope list becomes a select, rows
 stack, and the details panel becomes a bottom sheet.
 
 Details panel: a subnet shows name, description, copyable ID (monospace),
-members with status indicators, and **Manage members**, **Connect with this
-scope** (opens `/connect/mcp?scope=<id>`), and **Delete subnet** (danger,
+members with status indicators, and **Manage members**, **Connect** (opens
+`/connect/mcp`), and **Delete subnet** (danger,
 confirmed in `SubnetDeleteDialog`). An agent shows avatar, name, version and
 provider, description, status, source, room calls, skills, subnet chips, **Open
 details**, and the **Add to subnet** menu (`add-to-subnet-menu.tsx`): each
@@ -1076,9 +1076,8 @@ The API tab shows the public runtime `api_base_url` with a copy button, the two
 request examples built by `access-material.ts` (discovery via
 `GET {api_prefix}/agents/discovery` and sending a message via
 `POST {api_prefix}/agents/messages`, each with a copy button), and the same
-Features section phrased for HTTP. `buildAccessMaterial` still accepts an
-optional scope for callers that want `group_id` examples; the page ignores the
-`?scope=` query that the Network details panel links with.
+Features section phrased for HTTP. The page reads no query parameters, and its
+examples carry no `group_id`.
 
 Neither tab executes discovery, registers clients, sends messages, or invokes
 a model. Copy failures expose manual-copy instructions and select the text;
