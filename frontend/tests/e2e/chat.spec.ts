@@ -70,11 +70,8 @@ test.describe('Page Content', () => {
   test('should render about page with main content area', async ({ page }) => {
     await page.goto('/about')
 
-    // The portal layout renders two <main> elements:
-    //   1. SidebarInset: <main data-slot="sidebar-inset">
-    //   2. Layout content: <main class="flex flex-1 flex-col min-w-0"> (no side padding — pages own their own padding)
-    // Target the inner content main via :not([data-slot]).
-    const contentMain = page.locator('main:not([data-slot])')
+    // The portal layout renders a single <main>: SidebarInset.
+    const contentMain = page.locator('main[data-slot="sidebar-inset"]')
     await expect(contentMain).toBeVisible()
   })
 })

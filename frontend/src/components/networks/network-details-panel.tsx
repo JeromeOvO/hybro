@@ -166,7 +166,7 @@ export function NetworkDetailsPanel({
               <Pencil data-icon="inline-start" aria-hidden="true" />Manage members
             </Button>
             <Button variant="secondary" size="sm" asChild>
-              <Link href={`${routes.connectMcp}?scope=${encodeURIComponent(selection.network.group_id)}`}><Plug data-icon="inline-start" aria-hidden="true" />Connect with this scope</Link>
+              <Link href={routes.connectMcp}><Plug data-icon="inline-start" aria-hidden="true" />Connect</Link>
             </Button>
             <Button variant="danger" size="sm" onClick={onDelete} disabled={pending}>
               <Trash2 data-icon="inline-start" aria-hidden="true" />Delete subnet

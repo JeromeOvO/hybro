@@ -79,7 +79,7 @@ export function OverviewPage() {
           <Alert variant="destructive">
             <AlertDescription className="flex flex-wrap items-center gap-2">
               <span>{failed}</span>
-              <Button variant="secondary" size="sm" onClick={() => { void data.refresh() }}><RefreshCw data-icon="inline-start" aria-hidden="true" />Retry</Button>
+              <Button variant="secondary" size="sm" onClick={() => { void data.refresh(); void history.refetch() }}><RefreshCw data-icon="inline-start" aria-hidden="true" />Retry</Button>
             </AlertDescription>
           </Alert>
         ) : null}

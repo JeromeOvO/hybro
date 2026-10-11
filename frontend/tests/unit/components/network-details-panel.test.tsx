@@ -24,7 +24,7 @@ describe('NetworkDetailsPanel', () => {
 
   it('shows subnet actions including scoped Connect and Delete', () => {
     render(<NetworkDetailsPanel selection={{ type: 'network', network: research }} networks={[research]} agents={[agent]} {...handlers} />)
-    expect(screen.getByRole('link', { name: 'Connect with this scope' })).toHaveAttribute('href', '/connect/mcp?scope=R')
+    expect(screen.getByRole('link', { name: 'Connect' })).toHaveAttribute('href', '/connect/mcp')
     expect(screen.getByRole('button', { name: 'Manage members' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Delete subnet' })).toBeInTheDocument()
   })

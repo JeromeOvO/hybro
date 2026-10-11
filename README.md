@@ -186,7 +186,7 @@ CLI so Compose receives validated scoped projections, not ambient dotenv values.
 ### Connect an MCP client
 
 `hybro start` and the TUI's **Start services** include MCP by default. In the
-app, open **Access > MCP** to check status and copy the URL or Claude
+app, open **Connect** (`/connect/mcp`) to check status and copy the URL or Claude
 Code configuration. Add the server manually to your client; Hybro does not
 automatically discover or register MCP clients.
 

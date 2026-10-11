@@ -22,8 +22,8 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 ## Subnet canvas
 
-The `/networks` canvas opens at 141% zoom. Use the zoom controls to change the scale,
-or **Show all connections** (keyboard `0`) to fit every node and label in the available space.
+The `/network` canvas opens at 141% zoom. Use the zoom controls to change the scale,
+or **Fit all** (keyboard `0`) to fit every node and label in the available space.
 **New subnet** uses the shared shadcn Button and opens the subnet management dialog.
 
 ## Learn More

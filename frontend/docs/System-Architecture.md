@@ -174,8 +174,7 @@ The application exposes one unprefixed route tree with four destinations:
 - `/network/agents/[id]` and `/network/agents/new`: agent detail and remote
   agent registration.
 - `/chat` and `/room/[id]`: Room Chat (unchanged chat home and room workspace).
-- `/connect/mcp` and `/connect/api`: Connect pages with an optional
-  `?scope=<group_id>` query.
+- `/connect/mcp` and `/connect/api`: Connect pages (MCP and API tabs).
 
 There is no host-based route rewrite. Legacy `/agents*`, `/networks`,
 `/access/*`, and `/manage*` paths are page-level `redirect()` routes to their
