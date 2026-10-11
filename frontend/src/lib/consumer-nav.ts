@@ -3,8 +3,8 @@ import type { NavAgentItem } from '@/lib/nav-items'
 import { routes } from '@/lib/routes'
 
 export const CONSUMER_NAV: NavAgentItem[] = [
-  { name: 'Overview', url: routes.overview, icon: LayoutDashboard, colorClass: '', exact: true },
-  { name: 'Network', url: routes.network, icon: Waypoints, colorClass: '' },
-  { name: 'Room Chat', url: routes.chat, activePaths: ['/room'], icon: MessagesSquare, colorClass: '' },
-  { name: 'Connect', url: routes.connectMcp, activePaths: ['/connect'], icon: Plug, colorClass: '' },
+  { name: 'Overview', url: routes.overview, icon: LayoutDashboard, colorClass: 'text-icon-architecture', exact: true },
+  { name: 'Network', url: routes.network, icon: Waypoints, colorClass: 'text-icon-network' },
+  { name: 'Room Chat', url: routes.chat, activePaths: ['/room'], icon: MessagesSquare, colorClass: 'text-icon-create' },
+  { name: 'Connect', url: routes.connectMcp, activePaths: ['/connect'], icon: Plug, colorClass: 'text-icon-workflow' },
 ]

@@ -45,7 +45,7 @@ function MenuLink({ item, pathname, badge }: { item: NavAgentLink; pathname: str
         onClick={() => setOpenMobile(false)}
         className="relative"
       >
-        <item.icon className={cn('transition-colors', isActive ? 'text-primary' : 'text-sidebar-foreground/70', SIDEBAR_ICON_CENTER)} />
+        <item.icon className={cn('transition-colors', item.colorClass || (isActive ? 'text-primary' : 'text-sidebar-foreground/70'), SIDEBAR_ICON_CENTER)} />
         <span className={`leading-7 ${SIDEBAR_ICON_HIDDEN}`}>{item.name}</span>
         {badge ? (
           <>
