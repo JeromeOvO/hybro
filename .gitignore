@@ -65,3 +65,4 @@ logs/
 # Local AI agent tool directories
 /.agents/
 /.claude/
+/skills-lock.json
