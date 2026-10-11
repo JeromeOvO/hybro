@@ -207,7 +207,7 @@ export function createNetworkCanvasController(graph: SVGSVGElement, scene: SVGGE
   function targetView(key: string | null): View {
     const rect = stage!.getBoundingClientRect()
     let width = rect.width
-    const topInset = 96
+    const topInset = 24
     let height = Math.max(1, rect.height - topInset - 68)
     if (details && props?.selection) {
       const panel = details.getBoundingClientRect()

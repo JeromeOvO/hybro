@@ -33,14 +33,14 @@ test.describe('Public Pages', () => {
     await expect(page.getByRole('heading', { name: /Simple, Transparent Pricing Plans/i })).toBeVisible()
   })
 
-  test('should load the agents page', async ({ page }) => {
-    await page.goto('/agents')
-    await expect(page.getByRole('heading', { name: 'Agents' })).toBeVisible()
+  test('should load the network page', async ({ page }) => {
+    await page.goto('/network')
+    await expect(page.getByRole('heading', { name: 'Network' })).toBeVisible()
   })
 })
 
 test.describe('Navigation', () => {
-  test('should navigate to agents page via sidebar', async ({ page }) => {
+  test('should navigate to the network page via sidebar', async ({ page }) => {
     // The sidebar only exists on /* routes — the root is a marketing landing page.
     await page.goto('/chat')
 
@@ -54,13 +54,13 @@ test.describe('Navigation', () => {
       { timeout: 15000 },
     )
 
-    // Match the canonical Agents entry in the sidebar.
+    // Match the canonical Network entry in the sidebar.
     const sidebar = page.locator('[data-slot="sidebar"]')
-    const agentsLink = sidebar.getByRole('link', { name: 'Agents', exact: true })
+    const networkLink = sidebar.getByRole('link', { name: /^Network/ })
     await expect(sidebar.getByRole('button', { name: 'Manage' })).toHaveCount(0)
-    await expect(agentsLink).toBeVisible({ timeout: 5000 })
-    await agentsLink.click()
-    await expect(page).toHaveURL(/agents/)
+    await expect(networkLink).toBeVisible({ timeout: 5000 })
+    await networkLink.click()
+    await expect(page).toHaveURL(/\/network$/)
   })
 })
 
@@ -75,7 +75,7 @@ test.describe('Sidebar local identity', () => {
 
 test.describe('Agent registration', () => {
   test('register page loads under the local identity', async ({ page }) => {
-    await page.goto('/agents/new')
+    await page.goto('/network/agents/new')
 
     await page.waitForFunction(
       () => !document.querySelector('.animate-spin'),
@@ -83,7 +83,7 @@ test.describe('Agent registration', () => {
     )
 
     // The page heading should be visible — confirms the page loaded correctly.
-    await expect(page.getByRole('heading', { name: /register agent/i })).toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('heading', { name: /register an agent/i })).toBeVisible({ timeout: 5000 })
 
     // The register button is only shown after a successful agent inspection.
     const registerBtn = page.getByRole('button', { name: /^register agent$/i })

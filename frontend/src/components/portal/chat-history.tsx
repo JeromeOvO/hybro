@@ -21,7 +21,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronRight,
   CircleEllipsis,
@@ -37,12 +37,14 @@ import { toast } from 'sonner'
 
 import {
   deleteRoomHistoryItem,
-  listRoomHistory,
   reorderPinnedRooms,
   type RoomHistoryItem,
   type RoomHistoryResponse,
   updateRoomHistoryItem,
 } from '@/lib/api/room'
+import { useRoomHistory } from '@/hooks/useRoomHistory'
+import { StatusIndicator } from '@/components/status-indicator'
+import { roomStatusView } from '@/lib/status'
 import { roomHistoryQueryKey } from '@/lib/room-history-query'
 import { routes } from '@/lib/routes'
 import { cn } from '@/lib/utils'
@@ -75,38 +77,19 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-const ACTIVE_STATUSES = new Set(['queued', 'processing', 'awaiting_input'])
-
-function statusLabel(status: RoomHistoryItem['status']) {
-  switch (status) {
-    case 'queued': return 'Queued'
-    case 'processing': return 'Working'
-    case 'awaiting_input': return 'Needs input'
-    default: return null
-  }
-}
-
 function RoomStatus({ status }: { status: RoomHistoryItem['status'] }) {
-  const label = statusLabel(status)
-  if (!label) return null
+  const view = roomStatusView(status)
+  if (!view) return null
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className="inline-flex h-6 w-5 shrink-0 items-center justify-center"
-          aria-label={label}
-        >
-          {status === 'awaiting_input' ? (
-            <span className="h-2 w-2 rounded-full bg-amber-400 ring-2 ring-amber-400/15" />
-          ) : status === 'processing' ? (
-            <span className="h-2 w-2 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
-          ) : (
-            <span className="h-2 w-2 rounded-full bg-muted-foreground" />
-          )}
+        <span className="inline-flex h-6 w-5 shrink-0 items-center justify-center" aria-label={view.label}>
+          {/* The indicator carries its own sr-only label; hide it so the row is announced once. */}
+          <span aria-hidden="true"><StatusIndicator view={view} hideLabel /></span>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
+      <TooltipContent side="right">{view.label}</TooltipContent>
     </Tooltip>
   )
 }
@@ -263,17 +246,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
-  const query = useQuery({
-    queryKey,
-    queryFn: ({ signal }) => listRoomHistory(undefined, signal),
-    enabled,
-    staleTime: 10_000,
-    refetchOnWindowFocus: true,
-    refetchInterval: (currentQuery) => {
-      const data = currentQuery.state.data as RoomHistoryResponse | undefined
-      return data?.items.some((item) => ACTIVE_STATUSES.has(item.status)) ? 10_000 : false
-    },
-  })
+  const query = useRoomHistory({ userId, enabled })
 
   const useOptimisticMutation = <TVariables,>(
     mutationFn: (variables: TVariables) => Promise<unknown>,
@@ -444,7 +417,7 @@ export function ChatHistory({ enabled, userId }: { enabled: boolean; userId: str
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-none"
               disabled={deleteMutation.isPending}
               onClick={() => {
                 if (!deleteTarget) return

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { MessageCirclePlus, PanelLeftIcon } from 'lucide-react'
 import { useUser } from '@/lib/auth'
+import { useRoomHistory } from '@/hooks/useRoomHistory'
 import { NavAgent } from '@/components/nav-agent'
 import { ChatHistory } from '@/components/portal/chat-history'
 import { NavUser } from '@/components/nav-user'
@@ -18,13 +19,16 @@ import { SIDEBAR_ICON_HIDDEN } from '@/lib/sidebar-styles'
 import { Button } from '@/components/ui/button'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, useSidebar } from '@/components/ui/sidebar'
 
-const MARKETING_PAGES: string[] = [routes.home, routes.core, routes.about, routes.pricing, routes.agents]
+const MARKETING_PAGES: string[] = [routes.core, routes.about, routes.pricing]
 
 export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
   const { state, toggleSidebar, isMobile } = useSidebar()
   const pathname = usePathname()
   const isChatPage = pathname === routes.chat || pathname.startsWith('/room/')
+
+  const roomHistory = useRoomHistory({ userId: user?.id ?? '', enabled: Boolean(isLoaded && isSignedIn && user?.id) })
+  const needsInput = roomHistory.data?.items.filter(item => item.status === 'awaiting_input').length ?? 0
 
   const hideSidebar = MARKETING_PAGES.includes(pathname) && (!isLoaded || !isSignedIn)
   if (hideSidebar) return null
@@ -58,7 +62,7 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <NavAgent key={user?.id ?? ''} navAgents={CONSUMER_NAV} />
+          <NavAgent key={user?.id ?? ''} navAgents={CONSUMER_NAV} badges={needsInput ? { [routes.chat]: needsInput } : undefined} />
           {isMobile && isChatPage ? history : null}
         </SidebarContent>
         <SidebarFooter>
@@ -77,7 +81,7 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
         >
           <SidebarContent className="gap-1 pt-4">
             <div className="px-2 pb-1">
-              <Button asChild variant="outline" className="w-full justify-start">
+              <Button asChild variant="secondary" className="w-full justify-start">
                 <Link href={routes.chat}>
                   <MessageCirclePlus data-icon="inline-start" />
                   New chat

@@ -6,6 +6,7 @@ import type { AgentDisplayProps, AgentTheme } from '@/lib/selectors/conversation
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { cn } from '@/lib/utils'
+import { routes } from '@/lib/routes'
 import type { ReactNode } from 'react'
 import type { Agent } from '@/lib/types/agent'
 
@@ -133,7 +134,7 @@ export function AgentCard({
       <div className={cn('flex items-center gap-2.5', compact && 'gap-2')}>
         {profileAgentId ? (
           <Link
-            href={`/agents/${encodeURIComponent(profileAgentId)}`}
+            href={routes.networkAgent(profileAgentId)}
             aria-label={`View ${agentName} profile`}
             className="pointer-events-auto block shrink-0 rounded-[var(--chat-input-radius)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/35"
           >
@@ -144,7 +145,7 @@ export function AgentCard({
         )}
         {profileAgentId ? (
           <Link
-            href={`/agents/${encodeURIComponent(profileAgentId)}`}
+            href={routes.networkAgent(profileAgentId)}
             className="pointer-events-auto text-[13px] font-medium hover:underline focus-visible:outline-none"
             style={{ color: 'var(--conversation-text-primary)' }}
           >

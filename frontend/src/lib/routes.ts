@@ -1,23 +1,17 @@
 const withId = (base: string, id: string) => `${base}/${encodeURIComponent(id)}`
 
 export const routes = {
-  home: '/',
+  overview: '/',
   about: '/about',
   core: '/core',
   pricing: '/pricing',
   privacy: '/privacy',
   chat: '/chat',
   room: (id: string) => withId('/room', id),
-  agents: '/agents',
-  networks: '/networks',
-  accessMcp: '/access/mcp',
-  accessApi: '/access/api',
-  agent: (id: string) => withId('/agents', id),
-  registerAgent: '/agents/new',
-  manage: {
-    root: '/manage',
-    agents: '/manage/agents',
-    agent: (id: string) => withId('/manage/agents', id),
-    register: '/manage/agents/new',
-  },
+  network: '/network',
+  networkWith: (query: string) => (query ? `/network?${query}` : '/network'),
+  networkAgent: (id: string) => withId('/network/agents', id),
+  registerAgent: '/network/agents/new',
+  connectMcp: '/connect/mcp',
+  connectApi: '/connect/api',
 } as const

@@ -267,10 +267,10 @@ export function isBuiltinGroup(groupId: string): boolean {
 
 export function getGroupDisplayName(group: AgentGroup, agentCount?: number): string {
   if (group.group_id === BUILTIN_GROUP_ALL_AGENTS) {
-    return "All Agents"
+    return "All agents"
   }
   if (group.group_id === BUILTIN_GROUP_ROOM_TEAM) {
-    return agentCount !== undefined ? `Room Team (${agentCount})` : "Room Team"
+    return agentCount !== undefined ? `Room agents (${agentCount})` : "Room agents"
   }
   return group.name
 }

@@ -1,5 +1,6 @@
-import { AccessPage } from '@/components/access/access-page'
+import { redirect } from 'next/navigation'
+import { routes } from '@/lib/routes'
 
-export default function McpAccessPage() {
-  return <AccessPage key="mcp" kind="mcp" />
+export default function LegacyMcpAccessPage() {
+  redirect(routes.connectMcp)
 }

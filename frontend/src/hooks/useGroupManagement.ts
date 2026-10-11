@@ -139,9 +139,9 @@ export function useGroupManagement(
 
   const selectedGroupName = catalogDisplayName
     ?? (isOverride && !isBuiltinSelection(selectedGroup)
-      ? overrideGroupName ?? 'Selected Team'
+      ? overrideGroupName ?? 'Selected subnet'
       : selectedGroup === BUILTIN_GROUP_ROOM_TEAM
-        ? defaultGroupName ?? 'Room Team'
+        ? defaultGroupName ?? 'Room agents'
         : selectedGroup === validatedDefaultGroup || selectedGroup === defaultGroup
           ? defaultGroupName
           : undefined)
@@ -149,7 +149,7 @@ export function useGroupManagement(
   const roomMembershipLabel =
     defaultTargetMode?.message_target_mode === 'room_default'
     && validatedDefaultGroup === BUILTIN_GROUP_ROOM_TEAM
-      ? (defaultGroupName ?? 'Room Team')
+      ? (defaultGroupName ?? 'Room agents')
       : undefined
 
   const clearOverrideState = useCallback(() => {
@@ -320,7 +320,7 @@ export function useGroupManagement(
     }
 
     if (groupId === BUILTIN_GROUP_ROOM_TEAM) {
-      persistOverride(BUILTIN_GROUP_ROOM_TEAM, groupName ?? defaultGroupName ?? 'Room Team')
+      persistOverride(BUILTIN_GROUP_ROOM_TEAM, groupName ?? defaultGroupName ?? 'Room agents')
       return
     }
 

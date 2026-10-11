@@ -1,10 +1,13 @@
 .networks-page {
-  --network-background: #1b1b1f;
-  --network-accent: hsl(var(--color-primary));
-  --network-node: #d6d7d1;
-  --network-label: #c7c9c7;
-  --network-edge: #707176;
+  --network-background: hsl(var(--color-background));
+  --network-accent: hsl(var(--graph-highlight));
+  --network-subnet: hsl(var(--graph-subnet));
+  --network-node: hsl(var(--graph-agent));
+  --network-node-offline: hsl(var(--graph-agent-offline));
+  --network-label: hsl(var(--graph-label));
+  --network-edge: hsl(var(--graph-edge));
   display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
   height: calc(100dvh - var(--banner-offset, 0px) - var(--cookie-banner-height, 0px));
   width: 100%;
@@ -13,21 +16,23 @@
   overflow: hidden;
 }
 
+.networks-page .network-topology {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 32px;
+  flex: 1;
+  min-height: 0;
+  padding: 0 24px 24px;
+}
 
 .networks-page .network-stage {
   position: relative;
-  flex: 1;
   min-width: 0;
   min-height: 320px;
   overflow: hidden;
+  border: 1px solid hsl(var(--color-border));
+  border-radius: 12px;
   background: var(--network-background);
-}
-
-.networks-page .network-create {
-  position: absolute;
-  top: 32px;
-  left: 50%;
-  transform: translateX(-50%);
 }
 
 .networks-page .network-graph {
@@ -61,6 +66,11 @@
   stroke-width: 4;
   stroke-linejoin: round;
   pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+.networks-page .label-hidden {
+  opacity: 0;
 }
 
 .networks-page .network-hub,
@@ -75,7 +85,7 @@
 }
 
 .networks-page .network-hub-dot {
-  fill: var(--network-accent);
+  fill: var(--network-subnet);
   stroke: none;
 }
 
@@ -83,24 +93,19 @@
 .networks-page .network-hub.related .network-hub-dot,
 .networks-page .network-hub:hover .network-hub-dot,
 .networks-page .network-hub:focus-visible .network-hub-dot {
-  stroke: var(--network-node);
-  stroke-width: 1.5;
+  stroke: var(--network-accent);
+  stroke-width: 2;
 }
 
 .networks-page .network-hub-label {
   fill: var(--network-label);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.networks-page .network-count-label {
-  fill: var(--network-label);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .networks-page .network-edge {
   stroke: var(--network-edge);
-  stroke-opacity: 0.55;
+  stroke-opacity: 0.9;
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
@@ -108,7 +113,7 @@
 
 .networks-page .network-edge.selected {
   stroke: var(--network-accent);
-  stroke-opacity: 0.9;
+  stroke-opacity: 1;
   stroke-width: 1.5;
 }
 
@@ -118,34 +123,37 @@
 }
 
 .networks-page .network-agent.inactive .network-agent-dot {
-  fill: #a5a69f;
+  fill: none;
+  stroke: var(--network-node-offline);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
 }
 
 .networks-page .network-agent.selected .network-agent-dot,
 .networks-page .network-agent.related .network-agent-dot,
 .networks-page .network-agent:hover .network-agent-dot,
 .networks-page .network-agent:focus-visible .network-agent-dot {
-  fill: #fff;
   stroke: var(--network-accent);
-  stroke-width: 1.5;
+  stroke-width: 2;
+  stroke-dasharray: none;
 }
 
 .networks-page .network-agent-label {
   fill: var(--network-label);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 400;
   stroke-width: 3;
 }
 
 .networks-page .network-agent:focus-visible .network-agent-label,
 .networks-page .network-agent.selected .network-agent-label {
-  fill: #fff;
+  fill: var(--network-label);
   font-weight: 600;
 }
 
-.networks-page .network-edge.dimmed,
+.networks-page .network-edge.dimmed { opacity: 0.2; }
 .networks-page .dimmed .network-hub-dot,
-.networks-page .dimmed .network-agent-dot { opacity: 0.55; }
+.networks-page .dimmed .network-agent-dot { opacity: 0.25; }
 .networks-page .dimmed:is(:focus-visible, :hover) circle { opacity: 1; }
 
 .networks-page .network-controls {
@@ -161,14 +169,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* One panel for both views: a sticky 320px column beside the canvas or the table. */
 .networks-page .network-details {
-  position: absolute;
-  top: 96px;
-  right: 24px;
+  position: sticky;
+  top: 0;
   display: flex;
   flex-direction: column;
-  width: 300px;
-  max-height: calc(100% - 176px);
+  width: 320px;
+  max-height: calc(100dvh - 160px);
   min-height: 0;
   overflow: hidden;
 }
@@ -184,46 +192,67 @@
 .networks-page .network-member-list { display: flex; flex-direction: column; }
 .networks-page .network-member-row {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding-block: 12px;
-}
-
-.networks-page .network-state {
-  position: absolute;
-  inset: 100px 0 90px;
-  display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  padding: 24px;
-  pointer-events: none;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 4px;
+  border-radius: 8px;
 }
 
-.networks-page .network-state > * {
-  max-width: min(100%, 420px);
-  pointer-events: auto;
+/* ── Structure view ── */
+
+.structure-view {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr) auto;
+  column-gap: 32px;
+  row-gap: 24px;
+  flex: 1;
+  min-height: 0;
+  padding: 0 24px 24px;
+  overflow-y: auto;
+}
+.structure-scope { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.structure-scope-select { display: none; }
+.structure-main { min-width: 0; overflow-x: auto; }
+
+/* With the details panel open on a narrower desktop, keep the table readable:
+   drop the Subnets and Source columns instead of squeezing every column. */
+@media (min-width: 901px) and (max-width: 1280px) {
+  /* Give the table room: collapse the scope list into its select on a full-width row. */
+  .structure-view:has(> .network-details) { grid-template-columns: minmax(0, 1fr) auto; }
+  .structure-view:has(> .network-details) .structure-scope { grid-column: 1 / -1; }
+  .structure-view:has(> .network-details) .structure-scope > :not(.structure-scope-select) { display: none; }
+  .structure-view:has(> .network-details) .structure-scope-select { display: block; max-width: 24rem; }
+  .structure-view:has(> .network-details) .structure-scope-select select { width: 100%; height: 36px; border: 1px solid hsl(var(--color-input)); border-radius: 8px; background: hsl(var(--surface-raised)); padding: 0 12px; }
 }
 
-.networks-page .network-feedback {
-  position: absolute;
-  top: 90px;
-  left: 16px;
-  width: min(300px, calc(100% - 32px));
+@media (min-width: 901px) and (max-width: 1440px) {
+  .structure-view:has(> .network-details) :is(.structure-head, .structure-row) {
+    grid-template-columns: minmax(0, 1fr) 6rem 5rem;
+  }
+  .structure-view:has(> .network-details) :is(.structure-head, .structure-row) > :nth-child(3),
+  .structure-view:has(> .network-details) :is(.structure-head, .structure-row) > :nth-child(4) {
+    display: none;
+  }
 }
-
 
 @media (max-width: 900px) {
   .networks-page .network-controls { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); }
+  .networks-page .network-topology { grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; }
   .networks-page .network-details {
-    top: auto;
-    right: 12px;
-    bottom: max(72px, calc(env(safe-area-inset-bottom) + 60px));
-    left: 12px;
+    position: fixed;
+    inset: auto 12px max(12px, env(safe-area-inset-bottom)) 12px;
     width: auto;
-    max-height: min(50%, 380px);
+    max-height: min(60%, 420px);
+    z-index: 30;
   }
+  .structure-view { grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; }
+  .structure-scope > :not(.structure-scope-select) { display: none; }
+  .structure-scope-select { display: block; }
+  .structure-scope-select select { width: 100%; height: 44px; border: 1px solid hsl(var(--color-input)); border-radius: 8px; background: hsl(var(--surface-raised)); padding: 0 12px; }
+  .structure-head { display: none; }
+  .structure-row { grid-template-columns: minmax(0, 1fr) auto; min-height: 44px; }
+  .structure-row > :nth-child(n + 3) { display: none; }
 }
 
 @media (max-width: 767px) {
