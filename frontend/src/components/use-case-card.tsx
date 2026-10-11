@@ -38,9 +38,7 @@ export function UseCaseCard({ template, catalog, onClick, disabled }: UseCaseCar
         "border border-slate-200/80 dark:border-transparent",
         "transition-all duration-250 ease-out",
         "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none",
-        "hover:-translate-y-[3px]",
-        "shadow-sm hover:shadow-lg dark:shadow-none",
-        "hover:shadow-slate-300/50 dark:hover:shadow-[0_8px_50px_-10px_rgba(72,209,163,0.2)]",
+        "shadow-sm hover:bg-muted/40 dark:shadow-none",
       )}
     >
       {/* Glassmorphism border — dark mode only */}
@@ -48,7 +46,7 @@ export function UseCaseCard({ template, catalog, onClick, disabled }: UseCaseCar
         className="pointer-events-none absolute inset-0 rounded-[18px] p-px hidden dark:block"
         style={{
           background:
-            "linear-gradient(160deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.02) 40%, rgba(0,255,255,0.08) 100%)",
+            "linear-gradient(160deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.02) 40%, rgba(255,255,255,0.06) 100%)",
           WebkitMask:
             "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",
           WebkitMaskComposite: "xor",
@@ -102,7 +100,7 @@ export function UseCaseCard({ template, catalog, onClick, disabled }: UseCaseCar
 
       {/* "New" corner tag */}
       {tag === "new" && (
-        <span className="absolute -top-px -right-px z-10 rounded-bl-[10px] rounded-tr-[17px] border-b border-l border-teal-500/20 dark:border-cyan-500/15 bg-gradient-to-br from-teal-500/15 to-teal-500/8 dark:from-cyan-400/18 dark:to-cyan-500/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-teal-600 dark:text-cyan-400">
+        <span className="absolute -top-px -right-px z-10 rounded-bl-[10px] rounded-tr-[17px] border-b border-l border-primary/20 bg-primary/10 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-primary">
           New
         </span>
       )}

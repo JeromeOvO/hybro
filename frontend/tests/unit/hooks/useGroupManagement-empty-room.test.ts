@@ -309,7 +309,7 @@ describe('useGroupManagement – default team behavior', () => {
       result.current.handleGroupChange('team-legacy')
     })
 
-    expect(result.current.selectedGroupName).toBe('Selected Team')
+    expect(result.current.selectedGroupName).toBe('Selected subnet')
     expect(result.current.resolvedTargetMode).toEqual({
       message_target_mode: 'saved_group',
       target_group_id: 'team-legacy',

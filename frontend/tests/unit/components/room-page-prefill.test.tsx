@@ -84,8 +84,8 @@ vi.mock("@/components/room-page-shell", () => ({
 vi.mock("@/components/require-auth", () => ({
   RequireAuth: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
-vi.mock("@/components/group-management-modal", () => ({
-  GroupManagementModal: () => null,
+vi.mock("@/components/subnets/subnet-dialog-host", () => ({
+  SubnetDialogHost: () => null,
 }))
 
 let RoomChatPage: React.ComponentType

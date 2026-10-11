@@ -91,13 +91,13 @@ describe('GroupSelector', () => {
 
     await user.click(screen.getByRole('button', { name: /weather agent/i }))
     expect(await screen.findByText('Agents in this room')).toBeInTheDocument()
-    expect(screen.getByText('All Agents')).toBeInTheDocument()
+    expect(screen.getByText('All agents')).toBeInTheDocument()
 
-    await user.click(screen.getByText('All Agents'))
+    await user.click(screen.getByText('All agents'))
     expect(onGroupChange).toHaveBeenCalledWith('all_agents')
   })
 
-  it('uses team terminology for saved agent collections', async () => {
+  it('uses subnet terminology for saved agent collections', async () => {
     const user = userEvent.setup()
     render(
       <GroupSelector
@@ -121,7 +121,8 @@ describe('GroupSelector', () => {
     await user.click(screen.getByRole('button', { name: /all agents/i }))
 
     expect(await screen.findByText('Research Team')).toBeInTheDocument()
-    expect(screen.getByText('Create Team')).toBeInTheDocument()
+    expect(screen.getByText('Create subnet')).toBeInTheDocument()
+    expect(screen.queryByText('Create Team')).not.toBeInTheDocument()
     expect(screen.queryByText('Saved Teams')).not.toBeInTheDocument()
     expect(screen.queryByText('Saved Groups')).not.toBeInTheDocument()
     expect(screen.queryByText('Create Group')).not.toBeInTheDocument()
@@ -163,7 +164,7 @@ describe('GroupSelector', () => {
     )
 
     expect(screen.getByRole('button', { name: /research team/i })).toBeInTheDocument()
-    expect(screen.queryByText('Loading teams...')).not.toBeInTheDocument()
+    expect(screen.queryByText('Loading subnets…')).not.toBeInTheDocument()
   })
 
   it('falls back to All Agents when the selected team no longer exists', () => {

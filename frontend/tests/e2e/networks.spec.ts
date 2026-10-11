@@ -71,7 +71,7 @@ test('pins only the dragged Agent while linked nodes react and releases it on po
       agents: ['spring-a', 'spring-b', 'spring-c', 'spring-d']
     }
   ])
-  await page.goto('/networks')
+  await page.goto('/network')
   await page.locator('.network-hub[data-network-id="spring-network"]').click()
   await expect(page.getByRole('heading', { name: 'Spring fixture', exact: true })).toBeVisible()
   await page.emulateMedia({ reducedMotion: 'no-preference' })
@@ -128,12 +128,15 @@ test('renders one shared Agent node and preserves it when one membership is remo
     ],
     [catalogAgent('shared', 'Registered shared'), catalogAgent('orphan', 'Registered orphan', 'cloud', 'inactive')]
   )
-  await page.goto('/networks')
+  await page.goto('/network')
   await expect(page.locator('.network-agent')).toHaveCount(5)
   await expect(page.locator('.network-hub')).toHaveCount(2)
   await expect(page.locator('.network-member-edge')).toHaveCount(4)
   await expect(page.getByLabel('Current zoom', { exact: true })).toHaveText('141%')
-  await page.getByRole('button', { name: 'Show all connections', exact: true }).click()
+  await page.getByRole('button', { name: 'Display options', exact: true }).click()
+  await page.getByRole('menuitemcheckbox', { name: 'Always show agent labels' }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Fit all', exact: true }).click()
   await page.mouse.move(0, 0)
   const stage = await page.locator('.network-stage').boundingBox()
   for (const label of await page.locator('.network-agent-label').all()) {
@@ -153,7 +156,7 @@ test('renders one shared Agent node and preserves it when one membership is remo
   await expect(page.getByRole('heading', { name: 'Registered orphan', exact: true })).toBeVisible()
   await expect(page.locator('.network-member-edge[data-agent-id="orphan"]')).toHaveCount(0)
   await page.locator('.network-hub[data-network-id="shared"]').dispatchEvent('click')
-  await page.getByRole('button', { name: 'Manage subnet', exact: true }).click()
+  await page.getByRole('button', { name: 'Manage members', exact: true }).click()
   await page.getByRole('checkbox', { name: 'Select Registered shared', exact: true }).uncheck()
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Updated subnet')
   await expect(page.locator('.network-member-edge[data-agent-id="shared"]')).toHaveCount(2)
@@ -179,13 +182,15 @@ test('shows registered and discovered isolated Agents even without any Networks'
     ],
     [catalogAgent('registered-only', 'Registered standalone', 'cloud', 'inactive')]
   )
-  await page.goto('/networks')
+  await page.goto('/network')
   await expect(page.locator('.network-agent')).toHaveCount(2)
   await expect(page.locator('.network-agent[data-agent-id="registered-only"]')).toHaveCount(1)
   await expect(page.locator('.network-hub')).toHaveCount(0)
   await expect(page.locator('.network-member-edge')).toHaveCount(0)
-  await expect(page.locator('.network-state')).toHaveCount(0)
-  await page.getByRole('button', { name: 'Show all connections', exact: true }).click()
+  await page.getByRole('button', { name: 'Display options', exact: true }).click()
+  await page.getByRole('menuitemcheckbox', { name: 'Always show agent labels' }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Fit all', exact: true }).click()
   await expect.poll(() => page.locator('.network-stage').evaluate(stage => {
     const bounds = stage.getBoundingClientRect()
     return [...stage.querySelectorAll('.network-agent-label')].every(label => {
@@ -195,4 +200,22 @@ test('shows registered and discovered isolated Agents even without any Networks'
   })).toBe(true)
   await page.locator('.network-agent[data-agent-id="local-only"]').dispatchEvent('click')
   await expect(page.getByRole('heading', { name: 'Discovered standalone', exact: true })).toBeVisible()
+})
+
+test('preserves search, scope, and selection across views and reloads', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await installInventory(
+    page,
+    [{ group_id: 'shared', name: 'Network A', owner_id: 'fixture', type: 'user', agents: ['writer-a'] }],
+    [catalogAgent('writer-a', 'Copy writer', 'local'), catalogAgent('other', 'Other agent', 'local')]
+  )
+  await page.goto('/network?view=structure&scope=subnet%3Ashared&q=writer')
+  await page.getByRole('button', { name: /Copy writer/ }).first().click()
+  await expect(page).toHaveURL(/select=agent%3A/)
+  await expect(page).toHaveURL(/scope=subnet%3Ashared/)
+  await page.getByRole('radio', { name: 'Topology' }).click()
+  await expect(page).toHaveURL(/q=writer/)
+  await expect(page.getByRole('region', { name: 'Agent summary' })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('searchbox', { name: 'Search the network' })).toHaveValue('writer')
 })

@@ -8,6 +8,10 @@ test.describe('Unified portal routing', () => {
       '/about',
       '/pricing',
       '/chat',
+      '/network',
+      '/network/agents/new',
+      '/connect/mcp',
+      '/connect/api',
       '/agents',
       '/agents/new',
       '/networks',
@@ -16,14 +20,32 @@ test.describe('Unified portal routing', () => {
       expect(response.status(), `${path} should resolve`).toBe(200)
     }
 
-    await page.goto('/')
-    await expect(page).toHaveURL(/\/core$/)
-
     await page.goto('/manage')
-    await expect(page).toHaveURL(/\/agents$/)
+    await expect(page).toHaveURL(/\/network$/)
+  })
 
-    await page.goto('/manage/agents/new')
-    await expect(page).toHaveURL(/\/agents\/new$/)
+  for (const [from, to] of [
+    ['/agents', /\/network$/],
+    ['/agents/new', /\/network\/agents\/new$/],
+    ['/networks', /\/network$/],
+    ['/manage/agents/new', /\/network\/agents\/new$/],
+    ['/access/api', /\/connect\/api$/],
+  ] as const) {
+    test(`redirects ${from}`, async ({ page }) => {
+      await page.goto(from)
+      await expect(page).toHaveURL(to)
+    })
+  }
+
+  test('opens the Overview at the root', async ({ page }) => {
+    await page.route('**/agent/getAllAgents**', route => route.fulfill({ json: { success: true, agents: [] } }))
+    await page.route('**/agent/getAgent/me', route => route.fulfill({ json: { success: true, agents: [] } }))
+    await page.route('**/agentGroups**', route => route.fulfill({ json: { success: true, groups: [] } }))
+    await page.route('**/roomCenter/history**', route => route.fulfill({ json: { items: [] } }))
+    await page.goto('/')
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeAttached()
+    await expect(page.getByRole('heading', { name: 'Needs attention' })).toBeVisible()
   })
 
   test('does not retain retired routes', async ({ request }) => {
@@ -64,30 +86,23 @@ test.describe('Unified portal routing', () => {
       await openNavigation()
       await expect(page.locator('[data-sidebar="sidebar"]')).toHaveCount(1)
       await expect(page.getByRole('region', { name: 'History', exact: true })).toHaveCount(0)
-      const networkMenu = modules.getByRole('button', { name: 'Network', exact: true })
-      await networkMenu.click()
-      await expect(modules.getByRole('link', { name: 'Agents', exact: true })).toBeVisible()
-      await expect(page).toHaveURL(/\/core$/)
-      await networkMenu.click()
-      await expect(modules.getByRole('link', { name: 'Agents', exact: true })).toBeHidden()
+      for (const name of ['Overview', 'Network', 'Room Chat', 'Connect']) {
+        await expect(modules.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(1)
+      }
       if (width >= 768) {
         await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
       }
-      await networkMenu.click()
-      await expect(modules.getByRole('link', { name: 'Agents', exact: true })).toBeVisible()
-      await modules.getByRole('link', { name: 'Agents', exact: true }).click()
-      await expect(page).toHaveURL(/\/agents$/)
+      await modules.getByRole('link', { name: /^Network/ }).click()
+      await expect(page).toHaveURL(/\/network$/)
       if (width < 768) await expect(page.getByRole('dialog')).toHaveCount(0)
 
       await openNavigation()
-      const accessMenu = modules.getByRole('button', { name: 'Access', exact: true })
-      if (await accessMenu.getAttribute('aria-expanded') !== 'true') await accessMenu.click()
-      await modules.getByRole('link', { name: 'API', exact: true }).click()
-      await expect(page).toHaveURL(/\/access\/api$/)
+      await modules.getByRole('link', { name: /^Connect/ }).click()
+      await expect(page).toHaveURL(/\/connect\/mcp$/)
       await openNavigation()
       await expect(page.locator('[data-sidebar="sidebar"]')).toHaveCount(1)
       await expect(page.getByRole('region', { name: 'History', exact: true })).toHaveCount(0)
-      await modules.getByRole('link', { name: 'Chat', exact: true }).click()
+      await modules.getByRole('link', { name: /^Room Chat/ }).click()
       await expect(page).toHaveURL(/\/chat$/)
       await openNavigation()
       const history = page.getByRole('region', { name: 'History', exact: true })
@@ -96,6 +111,9 @@ test.describe('Unified portal routing', () => {
         const primary = await page.locator('[data-sidebar="sidebar"]').boundingBox()
         const secondary = await page.getByRole('complementary', { name: 'Chat history', exact: true }).boundingBox()
         expect(secondary!.x).toBeGreaterThanOrEqual(primary!.x + primary!.width)
+        // The primary sidebar is still collapsed from above; neither state hides the History column.
+        await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click()
+        await expect(history).toBeVisible()
         await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
         await expect(history).toBeVisible()
       }

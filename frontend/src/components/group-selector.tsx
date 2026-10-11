@@ -109,15 +109,15 @@ export function GroupSelector({
     if (selectedGroup === BUILTIN_GROUP_ROOM_TEAM) {
       return {
         icon: <Users className="h-3.5 w-3.5" />,
-        label: selectedGroupName ?? roomMembershipLabel ?? 'Room Team',
+        label: selectedGroupName ?? roomMembershipLabel ?? 'Room agents',
         description: 'Agents in this room',
       }
     }
 
     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
       return {
-        icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
-        label: 'All Agents',
+        icon: <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
+        label: 'All agents',
         description: 'All currently available agents',
       }
     }
@@ -137,13 +137,13 @@ export function GroupSelector({
       return {
         icon: <Users className="h-3.5 w-3.5" />,
         label: selectedGroupName,
-        description: 'Room source team',
+        description: 'Room source subnet',
       }
     }
 
     return {
-      icon: <Globe className="h-3.5 w-3.5 text-blue-500" />,
-      label: 'All Agents',
+      icon: <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
+      label: 'All agents',
       description: 'All currently available agents',
     }
   }
@@ -157,7 +157,7 @@ export function GroupSelector({
     return (
       <div className={cn("flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground", className)}>
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        <span>Loading teams...</span>
+        <span>Loading subnets…</span>
       </div>
     )
   }
@@ -275,9 +275,9 @@ export function GroupSelector({
                       readOnly && 'cursor-default',
                     )}
                   >
-                    <Globe className="h-4 w-4 mt-0.5 text-blue-500" />
+                    <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
                     <div className="flex-1">
-                      <div className="font-medium">All Agents</div>
+                      <div className="font-medium">All agents</div>
                     </div>
                   </DropdownMenuItem>
                 </TooltipTrigger>
@@ -336,7 +336,7 @@ export function GroupSelector({
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-7 w-7 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                  className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
                                   title={`Delete ${group.name}`}
                                   onClick={(e) => {
                                     e.preventDefault()
@@ -360,7 +360,7 @@ export function GroupSelector({
                         className="max-w-xs w-fit whitespace-normal wrap-break-word"
                       >
                         {group.agents.length === 0 ? (
-                          <div className="text-xs text-muted-foreground">No agents in this team</div>
+                          <div className="text-xs text-muted-foreground">No agents in this subnet</div>
                         ) : (
                           <div className="space-y-0.5 max-h-40 overflow-y-auto">
                             {group.agents.map(agentId => (
@@ -389,7 +389,7 @@ export function GroupSelector({
                   className="text-foreground font-medium gap-2 py-2.5 px-3"
                 >
                   <Plus className="h-4 w-4" />
-                  Create Team
+                  Create subnet
                 </DropdownMenuItem>
               </>
             )}

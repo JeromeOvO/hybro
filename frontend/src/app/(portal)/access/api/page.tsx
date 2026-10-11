@@ -1,5 +1,6 @@
-import { AccessPage } from '@/components/access/access-page'
+import { redirect } from 'next/navigation'
+import { routes } from '@/lib/routes'
 
-export default function ApiAccessPage() {
-  return <AccessPage key="api" kind="api" />
+export default function LegacyApiAccessPage() {
+  redirect(routes.connectApi)
 }

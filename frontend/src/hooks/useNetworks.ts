@@ -14,7 +14,8 @@ import type {
   AgentGroupUpdateRequest
 } from '@/lib/types/agent-group'
 import type { Agent } from '@/lib/types/response'
-import type { NetworkAgent, NetworkFormValues } from '@/components/networks/types'
+import { placeholderAgent, projectAgent } from '@/lib/network-agent'
+import type { NetworkFormValues } from '@/components/networks/types'
 
 const EMPTY_NETWORKS: AgentGroup[] = []
 const EMPTY_AGENTS: Agent[] = []
@@ -42,19 +43,6 @@ function confirmedGroup(response: AgentGroupResponse): AgentGroup {
     throw new Error(response.error || 'The server did not confirm the network changes.')
   }
   return response.group
-}
-
-function projectAgent(agent: Agent): NetworkAgent {
-  return {
-    id: agent.agent_id,
-    name: agent.agent_card.name || agent.agent_id,
-    description: agent.agent_card.description ?? '',
-    skills: (agent.agent_card.skills ?? []).map((skill) => skill.name),
-    status:
-      agent.agent_status === 'active' && agent.source === 'hub' && agent.is_hub_online === false
-        ? 'unavailable'
-        : (agent.agent_status ?? 'unknown')
-  }
 }
 
 type SaveRequest =
@@ -174,15 +162,15 @@ export function useNetworks() {
       for (const id of network.agents) {
         if (knownIds.has(id)) continue
         knownIds.add(id)
-        projected.push({
-          id,
-          name: id,
-          description: catalogConfirmed
-            ? 'This agent is not in the currently visible directory.'
-            : 'This agent’s details could not be verified.',
-          skills: [],
-          status: catalogConfirmed ? 'unavailable' : 'unknown'
-        })
+        projected.push(
+          placeholderAgent(
+            id,
+            catalogConfirmed
+              ? 'This agent is not in the currently visible directory.'
+              : 'This agent’s details could not be verified.',
+            catalogConfirmed ? 'unavailable' : 'unknown'
+          )
+        )
       }
     }
     return projected

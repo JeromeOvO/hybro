@@ -11,6 +11,7 @@ import { filterDuplicateTextArtifacts } from '@/lib/artifacts/filter-display-art
 import { AgentSourceBadge } from '@/components/agent-source-badge'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { cn } from '@/lib/utils'
+import { routes } from '@/lib/routes'
 import type { AgentDisplayProps, AgentResponseDetail } from '@/lib/selectors/conversation-types'
 import type { Agent } from '@/lib/types/agent'
 import { useDetailPaneScroll } from '@/hooks/useDetailPaneScroll'
@@ -143,7 +144,7 @@ function AgentResponseDetailHeader({
     >
       {profileAgentId ? (
         <Link
-          href={`/agents/${encodeURIComponent(profileAgentId)}`}
+          href={routes.networkAgent(profileAgentId)}
           aria-label={`View ${detail.agentName} profile`}
           className="block shrink-0 rounded-[var(--chat-input-radius)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/35"
         >
@@ -157,7 +158,7 @@ function AgentResponseDetailHeader({
         <div className="conversation-detail-agent-name">
           {profileAgentId ? (
             <Link
-              href={`/agents/${encodeURIComponent(profileAgentId)}`}
+              href={routes.networkAgent(profileAgentId)}
               className="hover:underline focus-visible:outline-none truncate"
             >
               {detail.agentName}
