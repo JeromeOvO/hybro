@@ -198,8 +198,13 @@ cycle, and then refreshes the agent inventory. Directly discovered
 3. `Toaster`
 4. `CookieBanner`
 
-The portal layout composes `BannerHost`, `SidebarProvider`, and
-`SettingsDialogProvider` directly. Every portal route shares `PortalSidebar`
+The portal layout composes `SidebarProvider` and `SettingsDialogProvider`
+directly.
+
+Notifications: transient feedback, including platform and backend errors, uses
+Sonner `toast` from the root `Toaster`. Errors that must stay visible inside a
+page or dialog use the `Alert` primitive. Agent task failures and rejections are
+not toasted; they render in the conversation as part of the agent's turn. Every portal route shares `PortalSidebar`
 and `SidebarInset`; the inset contains `PortalHeader` and the route content.
 There is no separate workspace shell or route-classified navigation renderer.
 
@@ -1032,7 +1037,7 @@ provider, description, status, source, room calls, skills, subnet chips, **Open
 details**, and the **Add to subnet** menu (`add-to-subnet-menu.tsx`): each
 subnet is a checkbox item that adds or removes the agent with a membership-only
 `setMembers` write computed from the latest cached members, disabled while a
-write is pending, with a banner on success and a Retry item on failure; the last
+write is pending, with a toast on success and a Retry item on failure; the last
 item **Create subnet…** opens the shared dialog with the agent preselected.
 
 Subnet dialog: `src/components/subnets/subnet-dialog.tsx` is the one create and

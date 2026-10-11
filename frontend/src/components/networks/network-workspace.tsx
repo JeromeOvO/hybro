@@ -14,7 +14,7 @@ import { PageHeader } from '@/components/page-header'
 import { SubnetDialog } from '@/components/subnets/subnet-dialog'
 import { SubnetDeleteDialog } from '@/components/subnets/subnet-delete-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -53,9 +53,9 @@ export function NetworkWorkspace() {
     onSuccess: async result => {
       await queryClient.invalidateQueries({ queryKey: ['networks'] })
       await data.refreshAgents()
-      banner.success(result.agents_found === 1 ? 'Found 1 local agent' : `Found ${result.agents_found} local agents`)
+      toast.success(result.agents_found === 1 ? 'Found 1 local agent' : `Found ${result.agents_found} local agents`)
     },
-    onError: error => banner.error("Couldn't discover local agents", { description: error instanceof Error ? error.message : undefined }),
+    onError: error => toast.error("Couldn't discover local agents", { description: error instanceof Error ? error.message : undefined }),
   })
 
   const selected = state.select
@@ -89,7 +89,7 @@ export function NetworkWorkspace() {
       await data.remove(deleting.group_id)
       setState({ select: null, ...(state.scope.kind === 'subnet' && state.scope.id === deleting.group_id ? { scope: { kind: 'all' } } : {}) })
       setDeleting(null)
-      banner.success('Subnet deleted. Agents and rooms are kept.')
+      toast.success('Subnet deleted. Agents and rooms are kept.')
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : "Couldn't delete this subnet. Try again.")
     }
@@ -198,7 +198,7 @@ export function NetworkWorkspace() {
               : await data.create(values)
             setEditor(null)
             setState({ select: { type: 'subnet', id: saved.group_id } })
-            banner.success(network ? 'Subnet updated' : 'Subnet created')
+            toast.success(network ? 'Subnet updated' : 'Subnet created')
           }}
         />
       ) : null}

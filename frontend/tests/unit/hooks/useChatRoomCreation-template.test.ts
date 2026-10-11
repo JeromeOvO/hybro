@@ -16,8 +16,8 @@ vi.mock("@/lib/api/room", () => ({
   createNewRoom: (...args: unknown[]) => mockCreateNewRoom(...args),
 }))
 
-vi.mock("@/components/ui/banner", () => ({
-  banner: { error: vi.fn(), success: vi.fn() },
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
 }))
 
 function makeAgent(id: string, name: string): Agent {
@@ -127,7 +127,7 @@ describe("useChatRoomCreation.createFromTemplate", () => {
   })
 
   it("returns false and shows an error when agent resolution fails", async () => {
-    const { banner } = await import("@/components/ui/banner")
+    const { toast } = await import("sonner")
     const badTemplate: UseCaseTemplate = {
       ...template,
       agents: [{ agentId: "nonexistent", agentName: "Nonexistent Agent" }],
@@ -149,6 +149,6 @@ describe("useChatRoomCreation.createFromTemplate", () => {
 
     expect(success).toBe(false)
     expect(mockCreateNewRoom).not.toHaveBeenCalled()
-    expect(banner.error).toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalled()
   })
 })

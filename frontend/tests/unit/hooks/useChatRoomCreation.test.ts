@@ -24,13 +24,13 @@ vi.mock('@/lib/api/agent', () => ({
   getAllAgents: vi.fn(),
 }))
 
-vi.mock('@/components/ui/banner', () => ({
-  banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
 import { createNewRoom, suggestAgents } from '@/lib/api/room'
 import { getAllAgents } from '@/lib/api/agent'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import { useChatRoomCreation } from '@/hooks/useChatRoomCreation'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
@@ -104,7 +104,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(agents!).toEqual([])
-      expect(banner.error).toHaveBeenCalledWith('Failed to load agents')
+      expect(toast.error).toHaveBeenCalledWith('Failed to load agents')
     })
   })
 
@@ -153,7 +153,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(roomId!).toBeNull()
-      expect(banner.error).toHaveBeenCalledWith('User information not available')
+      expect(toast.error).toHaveBeenCalledWith('User information not available')
     })
 
     it('should fail when message is empty', async () => {
@@ -165,7 +165,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(roomId!).toBeNull()
-      expect(banner.error).toHaveBeenCalledWith('Message cannot be empty')
+      expect(toast.error).toHaveBeenCalledWith('Message cannot be empty')
     })
 
     it('should create room with correct payload', async () => {
@@ -267,7 +267,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(roomId!).toBeNull()
-      expect(banner.error).toHaveBeenCalledWith('Server down')
+      expect(toast.error).toHaveBeenCalledWith('Server down')
     })
 
     it('should derive membership_seed_input: saved_group when targetGroup is a saved group', async () => {
@@ -451,7 +451,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(roomId!).toBeNull()
-      expect(banner.error).toHaveBeenCalledWith('Rate limited')
+      expect(toast.error).toHaveBeenCalledWith('Rate limited')
     })
 
     it('should return null when room_id is missing (line 130)', async () => {
@@ -468,7 +468,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(roomId!).toBeNull()
-      expect(banner.error).toHaveBeenCalledWith('Room created but no room_id returned')
+      expect(toast.error).toHaveBeenCalledWith('Room created but no room_id returned')
     })
 
     it('should return null when room object is null (line 142)', async () => {
@@ -485,7 +485,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(roomId!).toBeNull()
-      expect(banner.error).toHaveBeenCalledWith('Failed to create room')
+      expect(toast.error).toHaveBeenCalledWith('Failed to create room')
     })
 
     it('should display generic error for non-Error exceptions', async () => {
@@ -497,7 +497,7 @@ describe('useChatRoomCreation', () => {
         await result.current.createRoomWithMessage('Hello')
       })
 
-      expect(banner.error).toHaveBeenCalledWith('Failed to create room')
+      expect(toast.error).toHaveBeenCalledWith('Failed to create room')
     })
   })
 
@@ -592,7 +592,7 @@ describe('useChatRoomCreation', () => {
       })
 
       expect(success!).toBe(false)
-      expect(banner.error).toHaveBeenCalledWith('Please select at least one agent')
+      expect(toast.error).toHaveBeenCalledWith('Please select at least one agent')
     })
 
     it('should create and navigate with agents', async () => {

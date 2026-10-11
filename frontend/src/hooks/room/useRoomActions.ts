@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import type { MutableRefObject } from 'react'
 import { cancelMessage } from '@/lib/api/sse'
 import { ApiError } from '@/lib/api-client'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useMessageStore } from '@/stores/message-store'
 import { useTurnStore } from '@/stores/turn-store'
@@ -34,7 +34,7 @@ export function useRoomActions(
   const cancelProcessing = useCallback(async () => {
     const messageId = lifecycle.getMessageId()
     if (!messageId) {
-      banner.warning('Unable to cancel — no active task found')
+      toast.warning('Unable to cancel — no active task found')
       return false
     }
 
@@ -60,7 +60,7 @@ export function useRoomActions(
           const cancelling = useRoomUiStore.getState().getRoomFlags(roomId).cancelling
           if (cancelling) {
             lifecycle.setCancelTimedOut(true)
-            banner.warning('Cancellation is taking longer than expected — the agent may still be stopping')
+            toast.warning('Cancellation is taking longer than expected — the agent may still be stopping')
           }
         })
         try {
@@ -92,7 +92,7 @@ export function useRoomActions(
     } catch (error) {
       console.error('Error cancelling message:', error)
       setCancelling(false)
-      banner.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      toast.error(`Failed to stop processing: ${error instanceof Error ? error.message : 'Unknown error'}`)
       return false
     }
   }, [

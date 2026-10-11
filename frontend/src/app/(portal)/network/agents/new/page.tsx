@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { PageHeader } from "@/components/page-header"
 import { Separator } from "@/components/ui/separator"
-import { banner } from "@/components/ui/banner"
+import { toast } from "sonner"
 import { getAgentCardFromUrl, registerAgent } from "@/lib/api/agent"
 import { inspectA2AConnection, inspectAgentCard } from "@/lib/api/inspection"
 import { ApiError } from "@/lib/api-client"
@@ -135,12 +135,12 @@ export default function RegisterAgentPage() {
         shouldAutoInspect.current = true
         setAgentData(response)
       } else {
-        banner.error("Failed to load agent", {
+        toast.error("Failed to load agent", {
           description: "No agent card found at the provided URL"
         })
       }
     } catch (error) {
-      banner.error("Failed to load agent", {
+      toast.error("Failed to load agent", {
         description: error instanceof Error ? error.message : "Network error occurred"
       })
     } finally {
@@ -151,7 +151,7 @@ export default function RegisterAgentPage() {
   // Inspect Agent Card
   const inspectCard = async () => {
     if (!url || !validateUrl(url)) {
-      banner.error("Please enter a valid URL")
+      toast.error("Please enter a valid URL")
       return
     }
 
@@ -163,12 +163,12 @@ export default function RegisterAgentPage() {
       setCardInspectionData(response)
 
       if (response.status_code === 200) {
-        banner.success("Agent card inspection completed successfully!")
+        toast.success("Agent card inspection completed successfully!")
       } else {
-        banner.warning("Agent card inspection found issues")
+        toast.warning("Agent card inspection found issues")
       }
     } catch (error) {
-      banner.error("Failed to inspect agent card", {
+      toast.error("Failed to inspect agent card", {
         description: error instanceof Error ? error.message : "Network error occurred"
       })
     } finally {
@@ -179,7 +179,7 @@ export default function RegisterAgentPage() {
   // Inspect A2A Connection
   const inspectConnection = async () => {
     if (!url || !validateUrl(url)) {
-      banner.error("Please enter a valid URL")
+      toast.error("Please enter a valid URL")
       return
     }
 
@@ -191,13 +191,13 @@ export default function RegisterAgentPage() {
       setInspectionData(response)
 
       if (response.status_code === 200) {
-        banner.success("Connection inspection completed successfully!")
+        toast.success("Connection inspection completed successfully!")
       } else {
         // Remove the warning banner - just show success that inspection completed
-        banner.success("Connection inspection completed!")
+        toast.success("Connection inspection completed!")
       }
     } catch (error) {
-      banner.error("Failed to inspect connection", {
+      toast.error("Failed to inspect connection", {
         description: error instanceof Error ? error.message : "Network error occurred"
       })
     } finally {
@@ -208,12 +208,12 @@ export default function RegisterAgentPage() {
   // Register Agent
   const registerAgentHandler = async () => {
     if (!agentData?.agent_card) {
-      banner.error("Please load agent information first")
+      toast.error("Please load agent information first")
       return
     }
 
     if (!inspectionData || inspectionData.status_code !== 200) {
-      banner.error("Please complete connection inspection first")
+      toast.error("Please complete connection inspection first")
       return
     }
 
@@ -241,7 +241,7 @@ export default function RegisterAgentPage() {
       const response = await registerAgent(registerRequest)
 
       if (response.success) {
-        banner.success("Agent registered successfully!", {
+        toast.success("Agent registered successfully!", {
           description: "Redirecting to the network…"
         })
 
@@ -252,19 +252,19 @@ export default function RegisterAgentPage() {
           router.push(routes.network)
         }, 1500)
       } else {
-        banner.error("Registration failed", {
+        toast.error("Registration failed", {
           description: response.error || "The agent URL is already registered or invalid."
         })
       }
     } catch (error) {
       if (error instanceof ApiError && error.isClientError) {
-        banner.warning("Registration failed", {
+        toast.warning("Registration failed", {
           description: error.status === 400
             ? "The agent URL is already registered or invalid."
             : error.message
         })
       } else {
-        banner.error("Registration failed", {
+        toast.error("Registration failed", {
           description: error instanceof Error ? error.message : "An unexpected error occurred. Please try again."
         })
       }

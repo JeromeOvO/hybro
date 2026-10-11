@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { ChevronDown, Plus, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -34,7 +34,7 @@ export function AddToSubnetMenu({ agentId, networks, pending, onSetMembers, onCr
     setFailed(null)
     try {
       await onSetMembers(networkId, next)
-      banner.success(add ? `Added to ${network.name}` : `Removed from ${network.name}`)
+      toast.success(add ? `Added to ${network.name}` : `Removed from ${network.name}`)
     } catch {
       setFailed({ networkId, add })
     }

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   inquiryRoomSetting,
 } from '@/lib/api/room'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import type { Agent } from '@/lib/types/agent'
 import type { Room, ActiveRunRefWire } from '@/lib/types/response'
 import { roomUsesSupervisorByDefault } from '@/lib/types/chat-mode'
@@ -74,7 +74,7 @@ export function useRoomData(
   useEffect(() => {
     if (roomQuery.isError) {
       const message = roomQuery.error instanceof Error ? roomQuery.error.message : 'Failed to load room'
-      banner.error(message)
+      toast.error(message)
     }
   }, [roomQuery.isError, roomQuery.error])
 

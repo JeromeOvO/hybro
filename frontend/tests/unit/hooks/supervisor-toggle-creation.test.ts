@@ -21,8 +21,8 @@ vi.mock('@/lib/api/agent', () => ({
   getAllAgents: vi.fn(),
 }))
 
-vi.mock('@/components/ui/banner', () => ({
-  banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
 import { createNewRoom } from '@/lib/api/room'

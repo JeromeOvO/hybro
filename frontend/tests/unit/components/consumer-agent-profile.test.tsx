@@ -44,8 +44,8 @@ vi.mock('@/lib/api/agent', () => ({
   deleteAgent: mockDeleteAgent,
 }))
 
-vi.mock('@/components/ui/banner', () => ({
-  banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
 vi.mock('@/hooks/useNetworks', () => ({

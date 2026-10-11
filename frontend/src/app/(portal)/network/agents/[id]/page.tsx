@@ -67,7 +67,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { banner } from "@/components/ui/banner"
+import { toast } from "sonner"
 import { deleteAgent, getAgent } from "@/lib/api/agent"
 import { cn } from "@/lib/utils"
 import type { AgentCenterResponse, AgentCapabilities } from "@/lib/types"
@@ -156,9 +156,9 @@ export default function ConsumerAgentProfilePage() {
   const handleCopyLink = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(window.location.href)
-      banner.success("Link copied to clipboard")
+      toast.success("Link copied to clipboard")
     } catch {
-      banner.error("Failed to copy link")
+      toast.error("Failed to copy link")
     }
   }, [])
 
@@ -171,7 +171,7 @@ export default function ConsumerAgentProfilePage() {
       })
     } catch (e) {
       if (e instanceof Error && e.name !== "AbortError") {
-        banner.error("Failed to share")
+        toast.error("Failed to share")
       }
     }
   }, [])
@@ -186,17 +186,17 @@ export default function ConsumerAgentProfilePage() {
       const response = await deleteAgent({ agent_id: agentId }, getToken)
 
       if (!response.success) {
-        banner.error("Failed to unregister agent", {
+        toast.error("Failed to unregister agent", {
           description: response.error || "An unexpected error occurred",
         })
         return
       }
 
       await queryClient.invalidateQueries({ queryKey: ["agents"] })
-      banner.success("Agent unregistered")
+      toast.success("Agent unregistered")
       router.push(routes.network)
     } catch (error) {
-      banner.error("Failed to unregister agent", {
+      toast.error("Failed to unregister agent", {
         description: error instanceof Error ? error.message : "An unexpected error occurred",
       })
     } finally {
@@ -619,7 +619,7 @@ export default function ConsumerAgentProfilePage() {
             pending={subnets.pending}
             onOpenChange={open => { if (!open) setCreatingSubnet(false) }}
             onRetryAgents={() => { void subnets.refreshAgents() }}
-            onSave={async values => { await subnets.create(values); setCreatingSubnet(false); banner.success('Subnet created') }}
+            onSave={async values => { await subnets.create(values); setCreatingSubnet(false); toast.success('Subnet created') }}
           />
         ) : null}
 

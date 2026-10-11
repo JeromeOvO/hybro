@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from "react"
 import { useUser, useAuth } from "@/lib/auth"
 import { RoomChatInput } from "@/components/room-chat-input"
 import { SubnetDialogHost } from "@/components/subnets/subnet-dialog-host"
-import { banner } from "@/components/ui/banner"
+import { toast } from "sonner"
 import {
     Loader2,
     AlertCircle,
@@ -105,7 +105,7 @@ function ChatPageContent() {
 
     const handleSubmit = async (value: string, dispatch: MessageDispatchInput, _quote?: QuoteData | null, attachments?: PendingAttachment[]) => {
         if (!value.trim() && (!attachments || attachments.length === 0)) {
-            banner.error("Please enter a message")
+            toast.error("Please enter a message")
             return
         }
         if (!user?.id) {
@@ -140,7 +140,7 @@ function ChatPageContent() {
         } catch (error) {
             console.error('Error creating room:', error)
             setHasError(true)
-            banner.error('Failed to start chat')
+            toast.error('Failed to start chat')
 
             // Revoke orphaned blob URLs — the input component already cleared
             // its attachment state so these URLs are unreachable by its cleanup.
@@ -180,7 +180,7 @@ function ChatPageContent() {
         setPromptPrefill(template.prefillMessage)
       } catch (error) {
         console.error('Failed to prepare use case:', error)
-        banner.error(error instanceof Error ? error.message : 'Failed to prepare use case')
+        toast.error(error instanceof Error ? error.message : 'Failed to prepare use case')
       } finally {
         setSettingUpTemplate(null)
       }
