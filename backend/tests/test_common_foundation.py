@@ -211,6 +211,46 @@ def test_agent_card_ignores_unknown_fields():
     assert not card.model_extra or "versoin" not in card.model_extra
 
 
+def test_agent_card_defaults_missing_skills_to_empty_list():
+    """ProtoJSON omits an empty ``skills`` list from stored agent cards."""
+    from common.types import AgentCard
+
+    card = AgentCard.model_validate(
+        {
+            "name": "agent",
+            "url": "https://agent.example",
+            "version": "1.0.0",
+            "capabilities": {},
+        }
+    )
+
+    assert card.skills == []
+
+
+def test_agent_model_loads_stored_card_without_skills():
+    from models.agent import Agent, AgentStatus
+
+    agent = Agent.model_validate(
+        {
+            "agent_id": "agent-without-skills",
+            "agent_card": {
+                "name": "agent",
+                "description": "desc",
+                "url": "https://agent.example",
+                "version": "1.0.0",
+                "capabilities": {"streaming": True},
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+            },
+            "agent_status": "active",
+            "is_public": True,
+        }
+    )
+
+    assert agent.agent_card.skills == []
+    assert agent.agent_status is AgentStatus.active
+
+
 def test_agent_card_preserves_known_sdk_extension_fields_with_aliases():
     from common.types import AgentCapabilities, AgentCard, AgentSkill
 
