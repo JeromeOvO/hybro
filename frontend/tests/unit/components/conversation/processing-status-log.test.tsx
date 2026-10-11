@@ -25,7 +25,7 @@ describe('ProcessingStatusLog', () => {
   it('renders the default Thinking update when there are no entries', () => {
     render(<ProcessingStatusLog entries={[]} />)
 
-    expect(screen.getByRole('button', { name: /work logs/i })).toHaveTextContent('Work Logs')
+    expect(screen.getByRole('button', { name: /work logs/i })).not.toHaveTextContent('Work Logs')
     expect(within(screen.getByRole('log')).getByText('Thinking...')).toBeInTheDocument()
   })
 
@@ -33,7 +33,7 @@ describe('ProcessingStatusLog', () => {
     const { container } = render(<ProcessingStatusLog entries={entries} />)
 
     const button = screen.getByRole('button', { name: /work logs/i })
-    expect(button).toHaveTextContent('Work Logs')
+    expect(button).not.toHaveTextContent('Work Logs')
     expect(screen.queryByText('Processing updates')).not.toBeInTheDocument()
     expect(within(button).queryByText('Collecting results')).not.toBeInTheDocument()
     const log = screen.getByRole('log')
@@ -72,7 +72,7 @@ describe('ProcessingStatusLog', () => {
     const { container } = render(<ProcessingStatusLog entries={entries} isRunning />)
 
     expect(container.querySelector('.conversation-processing-log')).toHaveClass('conversation-processing-log-running')
-    expect(screen.getByText('Work Logs')).not.toHaveClass('conversation-processing-log-message-active')
+    expect(screen.getByRole('button', { name: /work logs/i })).not.toHaveClass('conversation-processing-log-message-active')
     expect(screen.getByText('Dispatching agents')).not.toHaveClass('conversation-processing-log-message-active')
     expect(screen.getByText('Collecting results')).toHaveClass('conversation-processing-log-message-active')
   })

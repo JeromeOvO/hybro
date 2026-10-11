@@ -1,18 +1,32 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { ArrowRight, Check, Copy, Minus, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { useMemo, useState, type ReactNode } from 'react'
+import Link from 'next/link'
+import { Check, Copy, ExternalLink, Pencil, Plug, Trash2, X } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
-import type { NetworkAgent, NetworkDetailsPanelProps } from './types'
+import { Card } from '@/components/ui/card'
+import { StatusIndicator } from '@/components/status-indicator'
+import { agentStatusView } from '@/lib/status'
+import { getAgentAvatarUri } from '@/lib/agent-avatar'
+import { routes } from '@/lib/routes'
+import { cn } from '@/lib/utils'
+import { AddToSubnetMenu } from './add-to-subnet-menu'
+import type { NetworkDetailsPanelProps } from './types'
 
-const statusLabels: Record<NetworkAgent['status'], string> = {
-  active: 'Active',
-  inactive: 'Inactive',
-  deleted: 'Deleted',
-  unavailable: 'Unavailable',
-  unknown: 'Unverified'
+const SOURCE_LABEL = { cloud: 'Remote', local: 'Local', hub: 'Hub' } as const
+const initials = (name: string) =>
+  name.split(/[\s_-]+/).filter(Boolean).slice(0, 2).map(part => part[0]!.toUpperCase()).join('')
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-xs font-semibold text-muted-foreground">{title}</h3>
+      {children}
+    </section>
+  )
 }
 
 export function NetworkDetailsPanel({
@@ -20,21 +34,22 @@ export function NetworkDetailsPanel({
   networks,
   agents,
   pending,
+  className,
   onClose,
-  onEdit,
-  onAddAgents,
+  onManage,
   onDelete,
-  onRemoveAgent,
-  onSelectNetwork,
-  onSelectAgent
+  onSetMembers,
+  onCreateWithAgent,
 }: NetworkDetailsPanelProps) {
-  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents])
-  const subject = selection.type === 'agent' ? selection.agent : selection.network
-  const memberships =
-    selection.type === 'agent' ? networks.filter((network) => network.agents.includes(selection.agent.id)) : []
+  const agentsById = useMemo(() => new Map(agents.map(agent => [agent.id, agent])), [agents])
   const [copyResult, setCopyResult] = useState<{ id: string; copied: boolean } | null>(null)
-  const copied = selection.type === 'network' && copyResult?.id === selection.network.group_id && copyResult.copied
-  const copyFailed = selection.type === 'network' && copyResult?.id === selection.network.group_id && !copyResult.copied
+  const isAgent = selection.type === 'agent'
+  const title = isAgent ? selection.agent.name : selection.network.name
+  const description = isAgent ? selection.agent.description : selection.network.description
+  const memberOf = isAgent ? networks.filter(network => network.agents.includes(selection.agent.id)) : []
+  const meta = isAgent
+    ? [selection.agent.version ? `v${selection.agent.version}` : null, selection.agent.provider].filter(Boolean).join(' · ')
+    : `${selection.network.agents.length} ${selection.network.agents.length === 1 ? 'agent' : 'agents'}`
 
   async function copyId(id: string) {
     try {
@@ -46,157 +61,119 @@ export function NetworkDetailsPanel({
   }
 
   return (
-    <section className="network-details flex flex-col" aria-label="Selection details">
-      <div className="flex items-start justify-between gap-3 p-4">
+    <Card
+      className={cn('network-details gap-0 py-0', className)}
+      role="region"
+      aria-label={isAgent ? 'Agent summary' : 'Subnet details'}
+      onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}
+    >
+      <div className="flex items-start gap-3 border-b px-4 py-4">
+        <Avatar className="size-10 rounded-md">
+          {isAgent ? <AvatarImage src={selection.agent.iconUrl || getAgentAvatarUri(selection.agent.id)} alt="" /> : null}
+          <AvatarFallback className={cn('rounded-md text-xs font-medium', isAgent ? 'bg-muted' : 'bg-primary/10 text-primary')}>{initials(title)}</AvatarFallback>
+        </Avatar>
         <div className="min-w-0 flex-1">
-          <h2 className="text-base font-semibold wrap-anywhere">{subject.name}</h2>
-          <p className="mt-2 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground wrap-anywhere">
-            {subject.description || 'No description yet'}
-          </p>
+          <h2 className="truncate text-sm font-semibold" title={title}>{title}</h2>
+          <p className="truncate text-xs text-muted-foreground">{meta}</p>
         </div>
-        <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close details">
-          <X aria-hidden="true" />
-        </Button>
+        <Button variant="ghost" size="iconSm" onClick={onClose} aria-label="Close details"><X aria-hidden="true" /></Button>
       </div>
-      <Separator />
-      <div className="network-details-body flex min-h-0 flex-1 flex-col overflow-y-auto">
-        {selection.type === 'agent' ? (
-          <div className="flex flex-col gap-4 p-4">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-xs font-medium">Registration status</h3>
-              <Badge variant={selection.agent.status === 'active' ? 'outline' : 'inactive'}>
-                {statusLabels[selection.agent.status]}
-              </Badge>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {selection.agent.status === 'unknown'
-                ? 'This agent’s details could not be verified.'
-                : selection.agent.status === 'deleted' || selection.agent.status === 'unavailable'
-                  ? 'This agent is currently unavailable.'
-                  : 'Registration status does not indicate live connectivity.'}
-            </p>
-            <div className="flex flex-col gap-2">
-              <h3 className="text-xs font-medium">Agent ID</h3>
-              <code className="break-all text-xs text-muted-foreground">{selection.agent.id}</code>
-            </div>
-            <h3 className="text-xs font-medium">Networks · {memberships.length}</h3>
-            {memberships.map((network) => (
-              <div key={network.group_id} className="flex items-center gap-1">
-                <Button
-                  variant="outline"
-                  className="min-w-0 flex-1 justify-between"
-                  onClick={() => onSelectNetwork(network.group_id)}
-                  title={network.name}
-                >
-                  <span className="min-w-0 truncate">{network.name}</span>
-                  <ArrowRight data-icon="inline-end" aria-hidden="true" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={pending}
-                  onClick={() => onRemoveAgent(network.group_id, selection.agent.id)}
-                  aria-label={`Remove from ${network.name}`}
-                >
-                  <Minus aria-hidden="true" />
-                </Button>
+
+      <div className="network-details-body flex flex-col gap-4 px-4 py-4">
+        <p className="text-sm text-muted-foreground whitespace-pre-wrap wrap-anywhere">{description || 'No description yet'}</p>
+
+        {isAgent ? (
+          <>
+            <Section title="Status">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+                <StatusIndicator view={agentStatusView(selection.agent.status)} />
+                {selection.agent.source ? <span>{SOURCE_LABEL[selection.agent.source]}</span> : null}
+                <span>{selection.agent.roomCalls} room calls</span>
               </div>
-            ))}
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {memberships.length
-                ? 'One agent node is shared by all of these networks.'
-                : 'This agent is not in any network.'}
-            </p>
-          </div>
+            </Section>
+            {selection.agent.skills.length ? (
+              <Section title="Skills">
+                <div className="flex flex-wrap gap-1.5">
+                  {selection.agent.skills.map(skill => <Badge key={skill} variant="badgeMuted" className="max-w-full shrink truncate" title={skill}>{skill}</Badge>)}
+                </div>
+              </Section>
+            ) : null}
+            <Section title="Subnets">
+              {memberOf.length
+                ? <div className="flex flex-wrap gap-1.5">{memberOf.map(network => <Badge key={network.group_id} variant="badgeMuted" className="max-w-full shrink truncate" title={network.name}>{network.name}</Badge>)}</div>
+                : <p className="text-xs text-muted-foreground">Not in any subnet</p>}
+            </Section>
+          </>
         ) : (
           <>
-            <div className="flex flex-col gap-2 p-4">
-              <h3 className="text-xs font-medium">Network ID</h3>
+            <Section title="Subnet ID">
               <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 select-text break-all text-xs text-muted-foreground">
-                  {selection.network.group_id}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => copyId(selection.network.group_id)}
-                  aria-label="Copy network ID"
-                >
-                  {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+                <code className="min-w-0 flex-1 select-text break-all font-mono text-xs">{selection.network.group_id}</code>
+                <Button variant="ghost" size="iconSm" onClick={() => copyId(selection.network.group_id)} aria-label="Copy subnet ID">
+                  {copyResult?.id === selection.network.group_id && copyResult.copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
                 </Button>
               </div>
-              {copied ? (
-                <p role="status" className="text-xs text-muted-foreground">
-                  Network ID copied
-                </p>
-              ) : null}
-              {copyFailed ? (
-                <p role="alert" className="text-xs text-destructive">
-                  Unable to copy. Select and copy the network ID manually.
-                </p>
-              ) : null}
-            </div>
-            <Separator />
-            <div className="flex flex-col gap-2 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-medium">Agents · {selection.network.agents.length}</h3>
-                <Button variant="ghost" size="icon" onClick={onAddAgents} disabled={pending} aria-label="Add agents">
-                  <Plus aria-hidden="true" />
-                </Button>
-              </div>
-              {selection.network.agents.map((id) => {
-                const member = agentsById.get(id)
-                const name = member?.name ?? id
-                const status = member?.status ?? 'unknown'
-                return (
-                  <div key={id} className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      className="h-auto min-h-9 min-w-0 flex-1 justify-start py-2"
-                      onClick={() => onSelectAgent(id)}
-                      title={name}
-                    >
-                      <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground" aria-hidden="true" />
-                      <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
-                        <span className="w-full truncate text-left">{name}</span>
-                        {status !== 'active' ? <Badge variant="inactive">{statusLabels[status]}</Badge> : null}
-                      </span>
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => onRemoveAgent(selection.network.group_id, id)}
-                      disabled={pending}
-                      aria-label={`Remove ${name}`}
-                    >
-                      <Minus aria-hidden="true" />
-                    </Button>
-                  </div>
+              {copyResult?.id === selection.network.group_id ? (
+                copyResult.copied ? <p role="status" className="text-xs text-muted-foreground">Subnet ID copied</p> : (
+                  <Alert variant="destructive">
+                    <AlertDescription>Unable to copy. Select the ID above and copy it manually.</AlertDescription>
+                  </Alert>
                 )
-              })}
-              {selection.network.agents.length === 0 ? (
-                <p className="py-2 text-xs leading-relaxed text-muted-foreground">
-                  No members yet. Use + to add your first agent.
-                </p>
               ) : null}
-            </div>
+            </Section>
+            <Section title="Members">
+              {selection.network.agents.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No members yet. Add agents through Manage members.</p>
+              ) : (
+                <ul className="network-member-list -mx-1">
+                  {selection.network.agents.map(id => {
+                    const agent = agentsById.get(id)
+                    return (
+                      <li key={id} className="network-member-row">
+                        <Avatar className="size-7 rounded-md">
+                          <AvatarImage src={agent?.iconUrl || getAgentAvatarUri(id)} alt="" />
+                          <AvatarFallback className="rounded-md bg-muted text-[11px]">{initials(agent?.name ?? id)}</AvatarFallback>
+                        </Avatar>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={agent?.name ?? id}>{agent?.name ?? id}</span>
+                        <StatusIndicator view={agentStatusView(agent?.status ?? 'unknown')} />
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </Section>
           </>
         )}
       </div>
-      {selection.type === 'network' ? (
-        <>
-          <Separator />
-          <div className="network-details-footer flex items-center justify-between gap-2 p-4">
-            <Button variant="outline" size="sm" onClick={onEdit} disabled={pending}>
-              <Pencil data-icon="inline-start" aria-hidden="true" />
-              Edit
+
+      <div className="network-details-footer flex flex-wrap gap-2 border-t px-4 py-3">
+        {isAgent ? (
+          <>
+            <Button variant="secondary" size="sm" asChild>
+              <Link href={routes.networkAgent(selection.agent.id)}><ExternalLink data-icon="inline-start" aria-hidden="true" />Open details</Link>
             </Button>
-            <Button variant="ghost" size="icon" onClick={onDelete} disabled={pending} aria-label="Delete network">
-              <Trash2 aria-hidden="true" />
+            <AddToSubnetMenu
+              agentId={selection.agent.id}
+              networks={networks}
+              pending={pending}
+              onSetMembers={onSetMembers}
+              onCreateWithAgent={() => onCreateWithAgent(selection.agent.id)}
+            />
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" size="sm" onClick={onManage} disabled={pending}>
+              <Pencil data-icon="inline-start" aria-hidden="true" />Manage members
             </Button>
-          </div>
-        </>
-      ) : null}
-    </section>
+            <Button variant="secondary" size="sm" asChild>
+              <Link href={routes.connectMcp}><Plug data-icon="inline-start" aria-hidden="true" />Connect</Link>
+            </Button>
+            <Button variant="danger" size="sm" onClick={onDelete} disabled={pending}>
+              <Trash2 data-icon="inline-start" aria-hidden="true" />Delete subnet
+            </Button>
+          </>
+        )}
+      </div>
+    </Card>
   )
 }

@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import type { ProcessingStatusLogEntry } from '@/stores/message-store/types'
 import type { TraceNode } from '@/stores/trace-store'
 import { useTurnDurationLabel } from './turn-trace-time'
+import { ProcessingStatusLog } from './ProcessingStatusLog'
 
 interface TurnTracePanelProps {
   nodes: TraceNode[]
@@ -162,47 +163,56 @@ export function TurnTracePanel({
     scroll.scrollTop = scroll.scrollHeight
   }, [visibleNodes.length, isExpanded, isRunning])
 
+  const workLogs = statusEntries.length > 0
+    ? <ProcessingStatusLog entries={statusEntries} isRunning={isRunning || isWaiting} />
+    : null
+
   return (
-    <Collapsible
-      open={isExpanded}
-      onOpenChange={setIsExpanded}
-      className="conversation-trace"
-      data-status={label.toLowerCase().replaceAll(' ', '-')}
-    >
-      <Marker asChild className="conversation-trace-header">
-        <CollapsibleTrigger aria-label={`${label}, ${duration}`}>
-          <MarkerContent className="conversation-trace-header-content">
-            <span className="conversation-trace-run-state" data-status={label.toLowerCase().replaceAll(' ', '-')}>
-              {label}
-            </span>
-            <span className="conversation-trace-duration">{duration}</span>
-          </MarkerContent>
-          <ChevronRight className={cn('conversation-trace-chevron', isExpanded && 'rotate-90')} />
-        </CollapsibleTrigger>
-      </Marker>
-      <CollapsibleContent>
-        <div
-          ref={scrollRef}
-          className="conversation-trace-log"
-          role={isRunning ? 'log' : undefined}
-          aria-live={isRunning ? 'polite' : undefined}
+    <>
+      {workLogs}
+      {visibleNodes.length > 0 || !workLogs ? (
+        <Collapsible
+          open={isExpanded}
+          onOpenChange={setIsExpanded}
+          className="conversation-trace"
+          data-status={label.toLowerCase().replaceAll(' ', '-')}
         >
-          {showPreparing ? (
-            <Marker data-kind="preparing" className="conversation-trace-action">
-              <MarkerIcon><LoaderCircle className="animate-spin motion-reduce:animate-none" /></MarkerIcon>
-              <MarkerContent>
-                <span className="conversation-trace-action-label">Preparing a response</span>
-                <span className="conversation-trace-action-status">Running</span>
+          <Marker asChild className="conversation-trace-header">
+            <CollapsibleTrigger aria-label={`${label}, ${duration}`}>
+              <MarkerContent className="conversation-trace-header-content">
+                <span className="conversation-trace-run-state" data-status={label.toLowerCase().replaceAll(' ', '-')}>
+                  {label}
+                </span>
+                <span className="conversation-trace-duration">{duration}</span>
               </MarkerContent>
-            </Marker>
-          ) : null}
-          {visibleNodes.map((node) => {
-            if (node.kind === 'decision') return <DecisionMarkers key={node.id} node={node} />
-            if (node.kind === 'retry') return <RetryMarker key={node.id} />
-            return <ToolMarker key={node.id} node={node} turnTerminal={turnTerminal} isWaiting={isWaiting} />
-          })}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+              <ChevronRight className={cn('conversation-trace-chevron', isExpanded && 'rotate-90')} />
+            </CollapsibleTrigger>
+          </Marker>
+          <CollapsibleContent>
+            <div
+              ref={scrollRef}
+              className="conversation-trace-log"
+              role={isRunning ? 'log' : undefined}
+              aria-live={isRunning ? 'polite' : undefined}
+            >
+              {showPreparing ? (
+                <Marker data-kind="preparing" className="conversation-trace-action">
+                  <MarkerIcon><LoaderCircle className="animate-spin motion-reduce:animate-none" /></MarkerIcon>
+                  <MarkerContent>
+                    <span className="conversation-trace-action-label">Preparing a response</span>
+                    <span className="conversation-trace-action-status">Running</span>
+                  </MarkerContent>
+                </Marker>
+              ) : null}
+              {visibleNodes.map((node) => {
+                if (node.kind === 'decision') return <DecisionMarkers key={node.id} node={node} />
+                if (node.kind === 'retry') return <RetryMarker key={node.id} />
+                return <ToolMarker key={node.id} node={node} turnTerminal={turnTerminal} isWaiting={isWaiting} />
+              })}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+    </>
   )
 }

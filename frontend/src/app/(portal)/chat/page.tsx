@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react"
 import { useUser, useAuth } from "@/lib/auth"
 import { RoomChatInput } from "@/components/room-chat-input"
-import { GroupManagementModal } from "@/components/group-management-modal"
+import { SubnetDialogHost } from "@/components/subnets/subnet-dialog-host"
 import { banner } from "@/components/ui/banner"
 import {
     Loader2,
@@ -79,7 +79,7 @@ function ChatPageContent() {
     const seedLabel = seedAgents.length === 1
       ? seedAgents[0].agent_card.name
       : seedAgents.length > 1
-        ? `Room Team (${seedAgents.length})`
+        ? `Room agents (${seedAgents.length})`
         : undefined
 
     const gm = useGroupManagement({
@@ -277,7 +277,7 @@ function ChatPageContent() {
                             <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 rounded-lg border border-primary/20">
                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
                                 <span className="text-sm">
-                                    {settingUpTemplate ? 'Preparing your preset team...' : 'Finding the best agents for you...'}
+                                    {settingUpTemplate ? 'Preparing your preset subnet...' : 'Finding the best agents for you...'}
                                 </span>
                             </div>
                         </div>
@@ -347,23 +347,19 @@ function ChatPageContent() {
                 </div>
             </div>
 
-            {/* Group Management Modal */}
-            <GroupManagementModal
+            {/* Subnet dialog (create, edit, delete) */}
+            <SubnetDialogHost
                 open={gm.groupManagementOpen}
-                onOpenChange={(open) => {
-                    gm.setGroupManagementOpen(open)
-                    if (!open) {
-                        gm.setGroupAction(null)
-                    }
-                }}
-                groups={gm.groups}
-                onGroupsChange={gm.handleGroupsChange}
-                onGroupCreated={gm.handleGroupCreated}
+                onOpenChange={open => { gm.setGroupManagementOpen(open); if (!open) gm.setGroupAction(null) }}
+                action={gm.groupAction}
                 availableAgents={gm.availableAgents}
                 loadingAgents={gm.loadingAgents}
+                agentsError={gm.agentsError}
+                loadAgents={gm.loadAvailableAgents}
                 userId={user?.id || ''}
                 getToken={getToken}
-                initialAction={gm.groupAction || undefined}
+                onSaved={(group, kind) => { void gm.handleGroupsChange(); if (kind === 'create') gm.handleGroupCreated(group) }}
+                onDeleted={() => { void gm.handleGroupsChange() }}
             />
         </div>
     )

@@ -66,10 +66,10 @@ runtime architecture.
 
 ## Agent-network API
 
-These backend-only endpoints let an authenticated client discover visible registered
-agents and send one A2A message without creating a room. No frontend changes are
-required or included; existing room chat continues to use its authenticated
-REST/SSE workflow.
+These endpoints let an authenticated client discover visible registered agents
+and send one A2A message without creating a room. The frontend's **Connect > API**
+(`/connect/api`) page provides copyable request examples; existing room chat continues to use its
+authenticated REST/SSE workflow.
 
 **Security boundary:** both routes use the existing `get_current_user` dependency.
 With `backend.auth_mode="clerk"`, callers need a valid Clerk session; add
@@ -262,10 +262,11 @@ http://127.0.0.1:8001/mcp
 ```
 
 This URL is for clients on the machine running Hybro, not a remote browser's
-machine. **Networks > Connect MCP** in the app shows status and copies the URL
-or Claude Code `mcpServers` configuration (`type: "http"`), with a collapsible
-manual-copy fallback. It checks status only on open/refresh and does not control
-services, relay tool calls, or automatically discover/register clients.
+machine. **Connect** (`/connect/mcp`) in the app copies the URL and per-assistant
+setup snippets, such as the Claude Code `mcpServers` configuration
+(`type: "http"`); the snippets can also be selected and copied manually. It does
+not check status, control services, relay tool calls, or automatically
+discover/register clients. The Overview **Gateway** tile shows MCP status.
 
 Native manual startup remains supported from the repository root, with a backend
 already running at `http://127.0.0.1:8000/api/v1/`:

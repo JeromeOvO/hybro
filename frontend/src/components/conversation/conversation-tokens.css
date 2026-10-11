@@ -45,7 +45,7 @@
   --conversation-agent-status-font-size: 12px;
   --conversation-content-font-size: 1rem;
   --conversation-content-line-height: 1.75;
-  --conversation-content-font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --conversation-content-font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
   --conversation-content-font-weight: 400;
   --conversation-content-heading-weight: 600;
   --conversation-content-emphasis-weight: 600;

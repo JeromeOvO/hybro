@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '../../utils/test-utils'
+import { render, screen, cleanup, waitFor, within } from '../../utils/test-utils'
 import userEvent from '@testing-library/user-event'
 import React from 'react'
 import type { AgentCenterResponse, Agent, AgentCard, AgentSkill, AgentCapabilities } from '@/lib/types'
@@ -46,6 +46,14 @@ vi.mock('@/lib/api/agent', () => ({
 
 vi.mock('@/components/ui/banner', () => ({
   banner: { info: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+}))
+
+vi.mock('@/hooks/useNetworks', () => ({
+  useNetworks: () => ({
+    networks: [{ group_id: 'R', name: 'Research', agents: ['agent-test-1'], type: 'user', owner_id: 'u' }],
+    agents: [], pending: false, agentsLoading: false, agentsError: null,
+    setMembers: vi.fn(), create: vi.fn(), refreshAgents: vi.fn(),
+  }),
 }))
 
 vi.mock('@/lib/agent-icon-utils', () => ({
@@ -127,7 +135,7 @@ beforeEach(async () => {
   useRoomUiStore.setState({ pendingChatHandoff: null })
   mockDeleteAgent.mockResolvedValue({ success: true })
   mockParamId.mockReturnValue('agent-test-1')
-  const mod = await import('@/app/(portal)/agents/[id]/page')
+  const mod = await import('@/app/(portal)/network/agents/[id]/page')
   ConsumerAgentProfilePage = mod.default
 })
 
@@ -148,7 +156,7 @@ describe('ConsumerAgentProfilePage', () => {
         expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
       })
       expect(screen.getByText('A helpful test agent.')).toBeInTheDocument()
-      expect(screen.getByText('Active')).toBeInTheDocument()
+      expect(screen.getByText('Online')).toBeInTheDocument()
       expect(screen.getByText(/v1\.0\.0/)).toBeInTheDocument()
       expect(screen.getByText(/Acme Corp/)).toBeInTheDocument()
     })
@@ -241,9 +249,9 @@ describe('ConsumerAgentProfilePage', () => {
 
       render(<ConsumerAgentProfilePage />)
 
-      const trigger = await screen.findByRole('button', { name: 'Unregister Agent' })
+      const trigger = await screen.findByRole('button', { name: 'Unregister agent' })
       await userEvent.click(trigger)
-      const actions = screen.getAllByRole('button', { name: 'Unregister Agent' })
+      const actions = screen.getAllByRole('button', { name: 'Unregister agent' })
       await userEvent.click(actions.at(-1)!)
 
       await waitFor(() => {
@@ -252,7 +260,7 @@ describe('ConsumerAgentProfilePage', () => {
           mockGetToken,
         )
       })
-      expect(mockPush).toHaveBeenCalledWith('/agents')
+      expect(mockPush).toHaveBeenCalledWith('/network')
     })
 
     it('hides unregister controls for a Remote agent owned by someone else', async () => {
@@ -264,7 +272,7 @@ describe('ConsumerAgentProfilePage', () => {
       render(<ConsumerAgentProfilePage />)
 
       expect(await screen.findByText('Remote')).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Unregister agent/i })).not.toBeInTheDocument()
     })
 
     it('shows Local agents as discovery-managed without unregister controls', async () => {
@@ -277,7 +285,7 @@ describe('ConsumerAgentProfilePage', () => {
 
       expect(await screen.findByText('Local')).toBeInTheDocument()
       expect(screen.getByText(/managed by automatic discovery/i)).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Unregister agent/i })).not.toBeInTheDocument()
     })
 
     it('shows directly discovered Local agents without Hub liveness', async () => {
@@ -289,7 +297,7 @@ describe('ConsumerAgentProfilePage', () => {
 
       expect(await screen.findByText('Local')).toBeInTheDocument()
       expect(screen.getByText(/managed by automatic discovery/i)).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /Unregister Agent/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Unregister agent/i })).not.toBeInTheDocument()
     })
 
     it('does not show stale Local agent details', async () => {
@@ -306,17 +314,17 @@ describe('ConsumerAgentProfilePage', () => {
   })
 
   describe('documentation URL', () => {
-    it('shows View Documentation when URL is present', async () => {
+    it('shows Documentation when URL is present', async () => {
       mockGetAgent.mockResolvedValue(buildAgentResponse())
 
       render(<ConsumerAgentProfilePage />)
 
       await waitFor(() => {
-        expect(screen.getByText('View Documentation')).toBeInTheDocument()
+        expect(screen.getByText('Documentation')).toBeInTheDocument()
       })
     })
 
-    it('hides View Documentation when URL is absent', async () => {
+    it('hides Documentation when URL is absent', async () => {
       mockGetAgent.mockResolvedValue(
         buildAgentResponse({ card: { documentationUrl: undefined } }),
       )
@@ -326,7 +334,7 @@ describe('ConsumerAgentProfilePage', () => {
       await waitFor(() => {
         expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument()
       })
-      expect(screen.queryByText('View Documentation')).not.toBeInTheDocument()
+      expect(screen.queryByText('Documentation')).not.toBeInTheDocument()
     })
   })
 
@@ -424,6 +432,27 @@ describe('ConsumerAgentProfilePage', () => {
       expect(handoff?.seedAgents).toHaveLength(1)
       expect(handoff?.seedAgents?.[0].agent_id).toBe('agent-test-1')
       expect(handoff?.seedAgents?.[0].agent_card.name).toBe('Test Agent')
+    })
+  })
+
+  describe('subnets', () => {
+    it('lists the subnets the agent belongs to with links into the workspace', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse())
+
+      render(<ConsumerAgentProfilePage />)
+
+      const section = await screen.findByRole('region', { name: 'Subnets' })
+      expect(within(section).getByRole('link', { name: /Research/ })).toHaveAttribute('href', '/network?select=subnet%3AR')
+      expect(within(section).getByRole('button', { name: 'Add to subnet' })).toBeInTheDocument()
+    })
+
+    it('uses Network in the breadcrumb and labels room calls', async () => {
+      mockGetAgent.mockResolvedValue(buildAgentResponse())
+
+      render(<ConsumerAgentProfilePage />)
+
+      expect(await screen.findByRole('link', { name: 'Network' })).toHaveAttribute('href', '/network')
+      expect(screen.queryByText(/^\d+ calls$/)).toBeNull()
     })
   })
 

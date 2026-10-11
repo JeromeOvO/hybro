@@ -70,9 +70,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }))
 
-// Mock GroupManagementModal to avoid rendering complexity
-vi.mock("@/components/group-management-modal", () => ({
-  GroupManagementModal: () => null,
+// Mock the subnet dialog host to avoid rendering complexity
+vi.mock("@/components/subnets/subnet-dialog-host", () => ({
+  SubnetDialogHost: () => null,
 }))
 
 // Dynamic import of the page component (after mocks are set up)

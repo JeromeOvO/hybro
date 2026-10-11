@@ -82,7 +82,8 @@ const history: RoomHistoryResponse = {
 
 let currentHistory: RoomHistoryResponse
 
-function renderHistory() {
+function renderHistory(items?: RoomHistoryResponse['items']) {
+  if (items) currentHistory = { items }
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -143,7 +144,7 @@ describe('ChatHistory', () => {
     ])
     expect(screen.getByLabelText('Needs input')).toBeInTheDocument()
     expect(screen.getByLabelText('Queued')).toBeInTheDocument()
-    expect(screen.getByLabelText('Working')).toBeInTheDocument()
+    expect(screen.getByLabelText('Running')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /new chat/i })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Recent new' })).toHaveAttribute(
       'aria-current',
@@ -151,17 +152,34 @@ describe('ChatHistory', () => {
     )
   })
 
-  it('collapses and expands the history list from its section header', async () => {
+
+  it.each([
+    ['processing', 'Running'],
+    ['queued', 'Queued'],
+    ['awaiting_input', 'Needs input'],
+  ] as const)('labels %s rooms as %s', async (status, label) => {
+    renderHistory([{ ...history.items[0], status }])
+    expect(await screen.findByLabelText(label)).toBeInTheDocument()
+  })
+
+  it('shows no indicator for idle rooms', async () => {
+    renderHistory([{ ...history.items[0], status: 'idle' }])
+    await screen.findByText(history.items[0].title)
+    expect(screen.queryByLabelText(/Running|Queued|Needs input/)).toBeNull()
+  })
+
+  it('folds the conversation list without hiding the history region', async () => {
     const user = userEvent.setup()
     renderHistory()
 
     await screen.findByText('Pinned one')
-    const trigger = screen.getByRole('button', { name: /chat history/i })
+    const trigger = screen.getByRole('button', { name: /history/i })
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
 
     await user.click(trigger)
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('Pinned one')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'History' })).toBeInTheDocument()
 
     await user.click(trigger)
     expect(await screen.findByText('Pinned one')).toBeInTheDocument()

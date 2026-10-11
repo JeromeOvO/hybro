@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest'
-
 import { routes } from '@/lib/routes'
 
 describe('canonical portal routes', () => {
-  it('defines the unified public and management paths', () => {
-    expect(routes.home).toBe('/')
-    expect(routes.core).toBe('/core')
-    expect(routes.chat).toBe('/chat')
+  it('encodes room and agent identifiers as single path segments', () => {
     expect(routes.room('room/id')).toBe('/room/room%2Fid')
-    expect(routes.agents).toBe('/agents')
-    expect(routes.agent('agent/id')).toBe('/agents/agent%2Fid')
-    expect(routes.registerAgent).toBe('/agents/new')
-    expect(routes.manage.agents).toBe('/manage/agents')
-    expect(routes.manage.register).toBe('/manage/agents/new')
+    expect(routes.networkAgent('agent/id')).toBe('/network/agents/agent%2Fid')
+  })
+
+  it('exposes the new information architecture', () => {
+    expect(routes.overview).toBe('/')
+    expect(routes.network).toBe('/network')
+    expect(routes.registerAgent).toBe('/network/agents/new')
+    expect(routes.connectMcp).toBe('/connect/mcp')
+    expect(routes.connectApi).toBe('/connect/api')
+  })
+
+  it('builds workspace links with and without a query', () => {
+    expect(routes.networkWith('')).toBe('/network')
+    expect(routes.networkWith('select=agent%3Aa')).toBe('/network?select=agent%3Aa')
   })
 })

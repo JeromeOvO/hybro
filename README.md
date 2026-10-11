@@ -186,8 +186,8 @@ CLI so Compose receives validated scoped projections, not ambient dotenv values.
 ### Connect an MCP client
 
 `hybro start` and the TUI's **Start services** include MCP by default. In the
-app, open **Networks > Connect MCP** to check status and copy the URL or Claude
-Code configuration. Add the server manually to your client; Hybro does not
+app, open **Connect** (`/connect/mcp`) to copy the URL or a setup snippet for your
+assistant. The Overview **Gateway** tile shows whether MCP is reachable. Add the server manually to your client; Hybro does not
 automatically discover or register MCP clients.
 
 ```json
@@ -215,8 +215,9 @@ hybro mcp stop
 ```
 
 Exiting the TUI leaves services running. Stopping MCP is not a persistent opt-out:
-the next global start includes it again. The app checks status only when the
-dialog opens or you refresh; it cannot start/stop services or relay tool calls.
+the next global start includes it again. The app checks MCP status only from the
+Overview **Gateway** tile, when Overview loads; it does not poll in the background,
+and it cannot start/stop services or relay tool calls.
 See [MCP tools, health, and native startup](backend/README.md#local-mcp-access).
 
 ### Development and released stacks

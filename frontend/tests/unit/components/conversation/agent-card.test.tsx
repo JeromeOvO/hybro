@@ -78,7 +78,7 @@ describe('AgentCard', () => {
 
     const avatarLink = container.querySelector('a[aria-label="View Planner profile"]')
     expect(avatarLink).not.toBeNull()
-    expect(avatarLink).toHaveAttribute('href', '/agents/agent-abc')
+    expect(avatarLink).toHaveAttribute('href', '/network/agents/agent-abc')
     avatarLink!.addEventListener('click', event => event.preventDefault())
 
     await userEvent.click(avatarLink!)
@@ -108,7 +108,7 @@ describe('AgentCard', () => {
 
     await waitFor(() => {
       expect(container.querySelector('a[aria-label="View Planner profile"]'))
-        .toHaveAttribute('href', '/agents/agent-late')
+        .toHaveAttribute('href', '/network/agents/agent-late')
     })
   })
 
@@ -164,7 +164,7 @@ describe('AgentCard', () => {
       />
     )
 
-    const links = Array.from(container.querySelectorAll('a[href="/agents/agent-abc"]'))
+    const links = Array.from(container.querySelectorAll('a[href="/network/agents/agent-abc"]'))
     expect(links).toHaveLength(2)
     expect(links.some(link => link.textContent === 'Planner')).toBe(true)
   })

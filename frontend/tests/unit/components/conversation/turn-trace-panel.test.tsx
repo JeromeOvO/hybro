@@ -65,4 +65,32 @@ it('uses every durable node timestamp for terminal Turn duration without renderi
   expect(tool).toHaveClass('conversation-trace-action-success')
   expect(tool?.querySelector('[data-slot="marker-icon"] svg')).toHaveClass('lucide-bot')
 })
+it('keeps progress logs available as tool activity arrives and the turn settles', () => {
+  const statusEntries = [{
+    id: 'log-1',
+    message: 'Collecting source material',
+    timestamp: '2030-01-01T00:00:00.000Z',
+  }]
+  const { rerender } = render(
+    <TurnTracePanel nodes={[]} statusEntries={statusEntries} isRunning />,
+  )
+  const workLogs = screen.getByRole('button', { name: /work logs/i })
+  expect(screen.getByText('Collecting source material')).toBeVisible()
+  fireEvent.click(workLogs)
+  expect(workLogs).toHaveAttribute('aria-expanded', 'true')
+
+  const node: TraceNode = {
+    id: 'run-1:tool:call-1', kind: 'tool_call', runId: 'run-1',
+    clientRequestId: 'request-1', receivedAt: 1, status: 'completed',
+    callId: 'call-1', toolName: 'Research Agent', exitCode: 0,
+  }
+  rerender(<TurnTracePanel nodes={[node]} statusEntries={statusEntries} turnTerminal />)
+  expect(screen.getByText('Collecting source material')).toBeVisible()
+  expect(screen.getByRole('button', { name: /work logs/i })).toHaveAttribute('aria-expanded', 'true')
+  fireEvent.click(screen.getByRole('button', { name: /finished,/i }))
+  expect(screen.getByText('Collecting source material')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: /finished,/i }))
+  expect(screen.getByText('Called Research Agent')).toBeVisible()
+  expect(screen.getByText('Collecting source material')).toBeVisible()
+})
 })

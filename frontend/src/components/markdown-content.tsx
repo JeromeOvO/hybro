@@ -6,6 +6,7 @@ import type { PluggableList } from 'unified'
 import rehypeHighlight from 'rehype-highlight'
 import { AlertCircle, Check, ChevronRight, Code2, Copy } from 'lucide-react'
 import { cn, formatIfJson } from '@/lib/utils'
+import { routes } from '@/lib/routes'
 import { getPlainTextFromRange } from '@/lib/selection-plain-text'
 import { preprocessConversationMarkdown } from '@/lib/markdown/normalize-conversation'
 import { conversationRemarkPlugins } from '@/lib/markdown/conversation-remark-plugins'
@@ -120,7 +121,7 @@ function CollapsibleCodeBlock({
 function processMentions(content: string): string {
   return content.replace(
     /<@([^|]+)\|([^>]+)>/g,
-    '[@$2](/agents/$1)'
+    '[@$2](/network/agents/$1)'
   )
 }
 
@@ -131,7 +132,7 @@ function stripLiteralFourSpacesPrefix(content: string): string {
 
 /** Check if a link href points to an agent profile (i.e. was an @mention). */
 function isAgentMentionHref(href: string | undefined): boolean {
-  return !!href && href.startsWith('/agents/')
+  return !!href && href.startsWith('/network/agents/')
 }
 
 export function copySelectionWithMentions(
@@ -546,7 +547,7 @@ export function LinkifiedContent({ content }: { content: string }) {
       parts.push(
         <a
           key={`link-${keyIndex++}`}
-          href={`/agents/${agentId}`}
+          href={routes.networkAgent(agentId)}
           target="_blank"
           rel="noopener noreferrer"
           className="room-mention mx-1 select-text hover:underline underline-offset-2 transition-opacity hover:opacity-80"

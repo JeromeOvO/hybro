@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { useUser, useAuth } from '@/lib/auth'
 import { RequireAuth } from '@/components/require-auth'
-import { GroupManagementModal } from '@/components/group-management-modal'
+import { SubnetDialogHost } from '@/components/subnets/subnet-dialog-host'
 import { RoomPageShell, type TimelineAdapter } from '@/components/room-page-shell'
 import { useRoomWebhook } from '@/hooks/useRoomWebhook'
 import { useGroupManagement } from '@/hooks/useGroupManagement'
@@ -85,7 +85,7 @@ export default function RoomChatPage() {
   const manualRoomLabel = !roomDefaultTeamId && hasRoomAgents
     ? (roomAgentEntries.length === 1
       ? roomAgentEntries[0][1]
-      : `Room Team (${roomAgentEntries.length})`)
+      : `Room agents (${roomAgentEntries.length})`)
     : undefined
 
   // Group management (extracted hook)
@@ -252,24 +252,18 @@ export default function RoomChatPage() {
         </div>
       </div>
 
-      <GroupManagementModal
+      <SubnetDialogHost
         open={gm.groupManagementOpen}
-        onOpenChange={(open) => {
-          gm.setGroupManagementOpen(open)
-          if (!open) {
-            gm.setGroupAction(null)
-          }
-        }}
-        groups={gm.groups}
-        onGroupsChange={gm.handleGroupsChange}
-        onGroupCreated={gm.handleGroupCreated}
+        onOpenChange={open => { gm.setGroupManagementOpen(open); if (!open) gm.setGroupAction(null) }}
+        action={gm.groupAction}
         availableAgents={gm.availableAgents}
         loadingAgents={gm.loadingAgents}
+        agentsError={gm.agentsError}
+        loadAgents={gm.loadAvailableAgents}
         userId={user?.id || ''}
         getToken={getToken}
-        loadAgents={gm.loadAvailableAgents}
-        agentsError={gm.agentsError}
-        initialAction={gm.groupAction || undefined}
+        onSaved={(group, kind) => { void gm.handleGroupsChange(); if (kind === 'create') gm.handleGroupCreated(group) }}
+        onDeleted={() => { void gm.handleGroupsChange() }}
       />
     </div>
     </RequireAuth>

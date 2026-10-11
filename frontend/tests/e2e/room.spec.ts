@@ -34,8 +34,8 @@ test.describe('Room with local identity', () => {
 })
 
 test.describe('Agent Selection', () => {
-  test('should display agents page with title', async ({ page }) => {
-    await page.goto('/agents')
+  test('should display the network page with title', async ({ page }) => {
+    await page.goto('/network')
     await expect(page).toHaveTitle(/Hybro/i)
     await expect(page.locator('body')).toBeVisible()
   })

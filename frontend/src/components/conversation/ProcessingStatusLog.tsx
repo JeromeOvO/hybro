@@ -54,7 +54,6 @@ export function ProcessingStatusLog({ entries, isRunning = false }: ProcessingSt
           )}
           aria-hidden="true"
         />
-        <span className="conversation-processing-log-title">Work Logs</span>
       </button>
       <div
         ref={scrollRef}

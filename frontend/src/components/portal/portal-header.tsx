@@ -7,9 +7,8 @@ import { SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { Logo } from '@/components/logo';
 import { useUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
-import { routes } from '@/lib/routes';
 
-const MARKETING_PAGES = ['/', '/about', '/core', '/pricing', '/agents']
+const MARKETING_PAGES = ['/core', '/about', '/pricing']
 
 export const PortalHeader = () => {
   const [mounted, setMounted] = React.useState(false);
@@ -24,8 +23,6 @@ export const PortalHeader = () => {
   const isMarketingPage = MARKETING_PAGES.includes(pathname);
   const isUnauthenticated = mounted && isLoaded && !isSignedIn && isMarketingPage;
 
-  // Networks provides its mobile sidebar trigger within the page's own list.
-  if (pathname === routes.networks) return null;
 
   if (!mounted) {
     return (
@@ -50,7 +47,7 @@ export const PortalHeader = () => {
             <nav className="hidden sm:flex items-center gap-1 ml-4">
               {[
                 { href: '/core', label: 'Core' },
-                { href: '/agents', label: 'Explore' },
+                { href: '/network', label: 'Explore' },
                 { href: '/about', label: 'About' },
               ].map(link => (
                 <Link

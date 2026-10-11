@@ -76,9 +76,8 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
     const canonicalByUser = new Map(canonicalTurns.map((turn) => [turn.userMessageId, turn]))
     const included = new Set<string>()
     const ordered: ConversationTurn[] = []
-    // Message-derived turns are used only to keep the optimistic User bubble
-    // visible before its canonical run_started root arrives. They never own
-    // Trace, Agent Cards, final content, or lifecycle status.
+    // Canonical roots own their turns. Before a root arrives, keep the pending
+    // user shell only while there are no legacy responses to display.
     for (const pending of legacyTurns) {
       if (!pending.userMessageId) {
         // HITL prompts belong exclusively to the composer questionnaire. A
@@ -96,7 +95,7 @@ export function ConversationMessageList({ roomId, selectedAgentMessageId, enable
         }
       } else {
         const entity = useMessageStore.getState().entities[pending.userMessageId]
-        if (entity?.source === 'optimistic' && processing) {
+        if (entity?.source === 'optimistic' && processing && pending.agentResults.length === 0) {
           ordered.push({
             kind: 'pending-user',
             id: `pending:${pending.userMessageId}`,

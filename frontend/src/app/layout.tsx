@@ -1,6 +1,6 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Plus_Jakarta_Sans, Space_Grotesk } from "next/font/google"
+import { Space_Grotesk } from "next/font/google"
 import Script from "next/script"
 import "./globals.css"
 import "streamdown/styles.css"
@@ -15,11 +15,6 @@ declare global {
   }
 }
 
-const plusJakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  variable: '--font-plus-jakarta',
-  weight: ['400', '500', '600', '700'],
-})
 const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["700"], variable: "--font-space-grotesk" })
 
 export const metadata: Metadata = {
@@ -100,7 +95,7 @@ export default function RootLayout({
           `}
         </Script>
       </head>
-      <body className={`${plusJakarta.className} ${plusJakarta.variable} ${spaceGrotesk.variable}`}>
+      <body className={`font-sans ${spaceGrotesk.variable}`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <QueryProvider>
             {children}

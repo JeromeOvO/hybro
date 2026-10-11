@@ -409,7 +409,7 @@ describe('canonical Turn renderer', () => {
     useTurnPresentationStore.getState().ensure(value, true)
     const { container } = render(<TurnRenderer canonicalTurn={value} isLastTurn />)
 
-    const trigger = screen.getByRole('button', { name: 'Finished, 1.2s' })
+    const trigger = screen.getByRole('button', { name: /finished, 1\.2s/i })
     fireEvent.click(trigger)
     const traceCall = container.querySelector('[data-kind="agent-call"]')
     const card = container.querySelector('.conversation-agent-card')

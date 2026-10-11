@@ -1,7 +1,11 @@
 export const MCP_URL = 'http://127.0.0.1:8001/mcp'
-export const MCP_CONFIG = JSON.stringify({
-  mcpServers: { hybro: { type: 'http', url: MCP_URL } }
-}, null, 2)
+export function buildMcpConfig(url: string): string {
+  return JSON.stringify({
+    mcpServers: { hybro: { type: 'http', url } }
+  }, null, 2)
+}
+
+export const MCP_CONFIG = buildMcpConfig(MCP_URL)
 
 export type McpStatus = 'ready' | 'unavailable' | 'unsupported_auth'
 

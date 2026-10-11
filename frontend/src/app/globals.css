@@ -51,6 +51,15 @@
   --color-hybro-bro: hsl(var(--color-hybro-bro));
   --color-hybro-bro-strong: hsl(var(--color-hybro-bro-strong));
 
+  /* Surfaces and status */
+  --color-surface-raised: hsl(var(--surface-raised));
+  --color-status-online: hsl(var(--color-status-online));
+  --color-status-offline: hsl(var(--color-status-offline));
+  --color-status-unverified: hsl(var(--color-status-unverified));
+  --color-status-warning: hsl(var(--color-status-warning));
+  --color-status-error: hsl(var(--color-status-error));
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
   /* Semantic icon colors */
   --color-icon-success: hsl(var(--color-icon-success));
   --color-icon-warning: hsl(var(--color-icon-warning));
@@ -72,14 +81,14 @@
   --color-icon-contact: hsl(var(--color-icon-contact));
 
   /* Radius */
-  --radius: 0.875rem;
+  --radius: 0.5rem;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: 12px;
 
   /* Font families */
-  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-spaceGrotesk: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -94,38 +103,34 @@
   --agent-color-6: 145 32% 40%;
   --agent-color-7: 195 38% 43%;
 
-  /* Comfortable Light Mode - Warm neutral, low glare */
-  --color-background: 220 10% 93%;
-  --color-foreground: 220 15% 18%;
-  --color-card: 220 10% 95%;
-  --color-card-foreground: 220 15% 18%;
-  --color-popover: 220 10% 95%;
-  --color-popover-foreground: 220 15% 18%;
+  /* Neutral light scale (spec section 7) */
+  --color-background: 220 14% 97%;
+  --color-foreground: 220 15% 13%;
+  --color-card: 0 0% 100%;
+  --color-card-foreground: 220 15% 13%;
+  --color-popover: 0 0% 100%;
+  --color-popover-foreground: 220 15% 13%;
 
-  /* Refined teal primary - easier on eyes */
+  /* Teal primary: the single accent */
   --color-primary: 192 85% 35%;
   --color-primary-foreground: 0 0% 100%;
 
-  /* Soft secondary */
-  --color-secondary: 220 8% 89%;
-  --color-secondary-foreground: 220 15% 22%;
+  --color-secondary: 220 13% 93%;
+  --color-secondary-foreground: 220 15% 18%;
 
-  /* Comfortable muted tones */
-  --color-muted: 220 8% 89%;
-  --color-muted-foreground: 220 10% 42%;
+  --color-muted: 220 13% 93%;
+  --color-muted-foreground: 220 9% 38%;
 
-  /* Softer accent */
-  --color-accent: 270 25% 91%;
-  --color-accent-foreground: 270 20% 25%;
+  --color-accent: 220 13% 93%;
+  --color-accent-foreground: 220 15% 18%;
 
   /* Destructive - clear danger signal */
   --color-destructive: 0 72% 51%;
   --color-destructive-foreground: 0 0% 100%;
 
-  /* Softer borders */
-  --color-border: 220 8% 82%;
-  --color-input: 220 8% 87%;
-  --color-ring: 192 70% 45%;
+  --color-border: 220 13% 88%;
+  --color-input: 220 12% 82%;
+  --color-ring: 192 85% 35%;
 
   /* Balanced chart colors */
   --color-chart-1: 192 75% 45%;
@@ -134,16 +139,29 @@
   --color-chart-4: 42 80% 52%;
   --color-chart-5: 320 60% 58%;
 
-  /* Comfortable sidebar */
-  --color-sidebar-background: 220 10% 94%;
+  /* Sidebar */
+  --color-sidebar-background: 220 14% 95%;
   --color-sidebar-foreground: 220 12% 25%;
-  --color-sidebar-primary: 192 85% 38%;
+  --color-sidebar-primary: 192 85% 35%;
   --color-sidebar-primary-foreground: 0 0% 100%;
-  /* Distinct cyan-tinted accent for visible hover/active states */
-  --color-sidebar-accent: 192 35% 89%;
-  --color-sidebar-accent-foreground: 192 70% 30%;
-  --color-sidebar-border: 220 8% 88%;
-  --color-sidebar-ring: 192 70% 45%;
+  --color-sidebar-accent: 220 13% 90%;
+  --color-sidebar-accent-foreground: 220 15% 13%;
+  --color-sidebar-border: 220 13% 88%;
+  --color-sidebar-ring: 192 85% 35%;
+
+  /* Raised surface, status, and graph tokens */
+  --surface-raised: 0 0% 100%;
+  --color-status-online: 152 60% 32%;
+  --color-status-offline: 220 8% 52%;
+  --color-status-unverified: 220 8% 62%;
+  --color-status-warning: 38 85% 38%;
+  --color-status-error: 4 70% 46%;
+  --graph-subnet: 192 85% 35%;
+  --graph-agent: 220 14% 52%;
+  --graph-agent-offline: 220 10% 62%;
+  --graph-edge: 220 10% 78%;
+  --graph-highlight: 192 85% 35%;
+  --graph-label: 220 15% 22%;
 
   /* Brand colors for HYBRO */
   --color-hybro-hy: 192 85% 38%;
@@ -183,44 +201,54 @@
   --agent-color-6: 145 22% 74%;
   --agent-color-7: 195 28% 75%;
 
-  /* Futuristic Dark Mode - Deep space theme with neon accents */
-  --color-background: 230 25% 8%;
-  --color-foreground: 210 30% 88%;
-  --color-card: 230 20% 10%;
-  --color-card-foreground: 210 30% 88%;
-  --color-popover: 230 20% 10%;
-  --color-popover-foreground: 210 30% 88%;
+  /* Neutral dark scale (spec section 7) */
+  --color-background: 216 15% 6%;
+  --color-foreground: 218 17% 91%;
+  --color-card: 223 14% 10%;
+  --color-card-foreground: 218 17% 91%;
+  --color-popover: 220 14% 12%;
+  --color-popover-foreground: 218 17% 91%;
 
-  /* Bright neon cyan primary */
-  --color-primary: 180 100% 60%;
-  --color-primary-foreground: 230 25% 8%;
+  /* Calmer teal primary */
+  --color-primary: 186 62% 52%;
+  --color-primary-foreground: 216 15% 6%;
 
-  /* Deep purple secondary */
-  --color-secondary: 240 15% 18%;
-  --color-secondary-foreground: 210 30% 88%;
+  --color-secondary: 220 14% 12%;
+  --color-secondary-foreground: 218 17% 91%;
 
-  /* Dark muted with blue tints */
-  --color-muted: 235 20% 15%;
-  --color-muted-foreground: 215 25% 65%;
+  --color-muted: 220 14% 12%;
+  --color-muted-foreground: 218 12% 69%;
 
-  /* Subtle purple accent */
-  --color-accent: 270 30% 22%;
-  --color-accent-foreground: 210 30% 88%;
+  --color-accent: 220 14% 12%;
+  --color-accent-foreground: 218 17% 91%;
 
   /* Destructive - vivid red on dark */
   --color-destructive: 0 72% 51%;
   --color-destructive-foreground: 0 0% 100%;
 
-  /* Glowing borders */
-  --color-border: 240 25% 20%;
-  --color-input: 240 25% 18%;
-  --color-ring: 180 100% 60%;
+  --color-border: 222 12% 16%;
+  --color-input: 220 12% 20%;
+  --color-ring: 186 62% 52%;
 
   /* Brand colors for HYBRO - Dark mode */
-  --color-hybro-hy: 180 100% 60%;
-  --color-hybro-hy-strong: 180 100% 50%;
+  --color-hybro-hy: 186 62% 52%;
+  --color-hybro-hy-strong: 186 62% 45%;
   --color-hybro-bro: 270 80% 70%;
   --color-hybro-bro-strong: 270 80% 62%;
+
+  /* Raised surface, status, and graph tokens */
+  --surface-raised: 220 14% 12%;
+  --color-status-online: 152 50% 52%;
+  --color-status-offline: 217 9% 54%;
+  --color-status-unverified: 217 9% 46%;
+  --color-status-warning: 38 85% 60%;
+  --color-status-error: 4 75% 64%;
+  --graph-subnet: 186 62% 52%;
+  --graph-agent: 215 16% 62%;
+  --graph-agent-offline: 215 12% 45%;
+  --graph-edge: 215 14% 26%;
+  --graph-highlight: 186 62% 52%;
+  --graph-label: 210 25% 86%;
 
   /* Semantic icon colors - Dark mode */
   --color-icon-success: 142 76% 60%;
@@ -242,23 +270,22 @@
   --color-icon-architecture: 240 60% 75%;
   --color-icon-contact: 210 30% 75%;
 
-  /* Neon chart colors */
-  --color-chart-1: 180 100% 60%;
-  --color-chart-2: 120 100% 50%;
-  --color-chart-3: 300 100% 70%;
-  --color-chart-4: 60 100% 60%;
-  --color-chart-5: 330 100% 65%;
+  /* Chart colors - Dark mode */
+  --color-chart-1: 186 62% 52%;
+  --color-chart-2: 152 50% 52%;
+  --color-chart-3: 270 40% 70%;
+  --color-chart-4: 38 85% 60%;
+  --color-chart-5: 330 45% 68%;
 
-  /* Dark sidebar with blur effect and neon accents */
-  --color-sidebar-background: 235 25% 10%;
-  --color-sidebar-foreground: 210 30% 85%;
-  --color-sidebar-primary: 180 100% 60%;
-  --color-sidebar-primary-foreground: 230 25% 8%;
-  /* High contrast accent - 30% lightness vs 10% background = 3x brighter */
-  --color-sidebar-accent: 215 25% 30%;
-  --color-sidebar-accent-foreground: 0 0% 98%;
-  --color-sidebar-border: 240 20% 16%;
-  --color-sidebar-ring: 180 100% 60%;
+  /* Sidebar - Dark mode */
+  --color-sidebar-background: 220 15% 8%;
+  --color-sidebar-foreground: 218 12% 69%;
+  --color-sidebar-primary: 186 62% 52%;
+  --color-sidebar-primary-foreground: 216 15% 6%;
+  --color-sidebar-accent: 220 14% 12%;
+  --color-sidebar-accent-foreground: 218 17% 91%;
+  --color-sidebar-border: 222 12% 16%;
+  --color-sidebar-ring: 186 62% 52%;
 }
 
 /* Keyframes remain the same */
