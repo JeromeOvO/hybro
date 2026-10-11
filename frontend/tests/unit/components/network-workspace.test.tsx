@@ -35,8 +35,8 @@ describe('NetworkWorkspace', () => {
     render(<NetworkWorkspace />)
     expect(screen.getByRole('button', { name: 'Create subnet' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Add agent' }))
-    expect(screen.getByRole('menuitem', { name: /Register by URL/ })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('menuitem', { name: /Discover local agents/ }))
+    expect(screen.getByRole('menuitem', { name: /Add Remote Agent/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: /Scan Local Agent/ }))
     await waitFor(() => expect(discoverLocalAgents).toHaveBeenCalled())
   })
 

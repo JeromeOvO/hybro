@@ -183,8 +183,8 @@ canonical equivalents. `src/lib/routes.ts` is the canonical route vocabulary
 `registerAgent`, `connectMcp`, `connectApi`, `chat`, `room(id)`).
 
 The Network workspace merges visible registered agents with locally available
-agents through `useNetworks`. Its **Add agent** menu offers **Register by URL**
-and **Discover local agents**; discovery calls the authenticated
+agents through `useNetworks`. Its **Add agent** menu offers **Add Remote Agent**
+and **Scan Local Agent**; discovery calls the authenticated
 `POST /api/v1/local-agents/discovery` endpoint, waits for the backend discovery
 cycle, and then refreshes the agent inventory. Directly discovered
 `source=local` agents are displayed while active.
@@ -973,8 +973,8 @@ the canonical route vocabulary for application links.
 (`src/components/networks/network-workspace.tsx`) under a `Suspense` boundary
 because the workspace reads `useSearchParams`. The workspace composes a
 `PageHeader`, `NetworkToolbar` (Topology / Structure `SegmentedControl`, search
-input, **Add agent** menu with **Register by URL** and **Discover local
-agents**, and the single primary **Create subnet** button), and either the
+input, **Add agent** menu with **Add Remote Agent** and **Scan Local
+Agent**, and the single primary **Create subnet** button), and either the
 topology stage (`NetworkCanvas` plus canvas controls and `GraphDisplayMenu`) or
 `StructureView`. The shared `NetworkDetailsPanel` renders in both views while
 `select` is set. `useNetworks` is the only data source; no backend API changed.
