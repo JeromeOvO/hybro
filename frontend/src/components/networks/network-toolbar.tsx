@@ -64,7 +64,7 @@ export function NetworkToolbar({ view, q, discovering, onViewChange, onSearch, o
             <DropdownMenuItem disabled={discovering} onSelect={onDiscover}>
               <Radar aria-hidden="true" />
               <span className="flex flex-col">
-                <span>{discovering ? 'Scanning Local Agents…' : 'Scan Local Agent'}</span>
+                <span>{discovering ? 'Scanning Local Agent…' : 'Scan Local Agent'}</span>
                 <span className="text-xs text-muted-foreground">Scan this machine for running agents.</span>
               </span>
             </DropdownMenuItem>

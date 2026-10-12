@@ -204,8 +204,9 @@ directly.
 Notifications: transient feedback, including platform and backend errors, uses
 Sonner `toast` from the root `Toaster`. Errors that must stay visible inside a
 page or dialog use the `Alert` primitive. Agent task failures and rejections are
-not toasted; they render in the conversation as part of the agent's turn. Every portal route shares `PortalSidebar`
-and `SidebarInset`; the inset contains `PortalHeader` and the route content.
+not toasted; they render in the conversation as part of the agent's turn.
+
+Every portal route shares `PortalSidebar` and `SidebarInset`; the inset contains `PortalHeader` and the route content.
 There is no separate workspace shell or route-classified navigation renderer.
 
 The original authentication behavior is retained: signed-out marketing pages
