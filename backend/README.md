@@ -354,7 +354,8 @@ The summary is:
 
 `state` is the A2A task state in lowercase without the `TASK_STATE_` prefix;
 a direct Message reply is `completed`. `reply_text` joins text from the status
-message or Message and from artifacts; `data` and `files` collect the other
+message or Message and from artifacts, skipping status text that an artifact
+already contains; `data` and `files` collect the other
 parts, and inline file bytes are omitted. To continue, pass `conversation` back
 unchanged. It carries `task_id` only while the Task is `submitted`, `working`,
 `input_required`, or `auth_required`, so a finished Task is never reopened.

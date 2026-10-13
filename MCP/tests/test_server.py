@@ -176,6 +176,21 @@ async def test_send_collects_artifacts_and_direct_messages():
     }
 
 
+async def test_reply_text_skips_status_text_repeated_in_artifacts():
+    answer = "Sunny, 24C in Tokyo tomorrow."
+    payload = task_payload(
+        "TASK_STATE_COMPLETED",
+        artifacts=[{"artifactId": "a1", "parts": [{"text": answer}]}],
+    )
+    payload["result"]["status"]["message"]["parts"] = [{"text": f"{answer}\n"}]
+    result = await call_with_transport(
+        lambda _: httpx.Response(200, json=payload),
+        "send_message",
+        {"agent_id": "story", "text": "Weather?"},
+    )
+    assert result.structured_content["reply_text"] == answer
+
+
 async def test_file_input_requires_exactly_one_source():
     sent = []
     result = await call_with_transport(

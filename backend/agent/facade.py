@@ -389,11 +389,12 @@ class AgentFacade:
         # respect_visibility=False widens matching to public agents across users;
         # private agents remain hidden unless scoped to the requesting owner.
         user_id = requesting_user_id if respect_visibility else None
+        # Rank the complete visible set; the DAL's default cap is unsorted.
         candidates = await self._repository.list_visible(
             user_id=user_id,
             active_only=True,
             agent_ids=filter_ids,
-            limit=0,
+            exhaust=True,
         )
         if not candidates:
             return []

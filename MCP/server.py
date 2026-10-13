@@ -246,30 +246,33 @@ def task_state(value: JsonValue) -> str:
 
 def summarize(agent_id: str, request_id: str, result: dict[str, JsonValue]) -> dict:
     """Reduce an A2A Message or Task to what a consumer agent acts on."""
-    parts: list[JsonValue] = []
+    status_parts: list[JsonValue] = []
+    artifact_parts: list[JsonValue] = []
     if result.get("kind") == "message":
         state = "completed"
-        parts.extend(_list(result.get("parts")))
+        status_parts.extend(_list(result.get("parts")))
     else:
         status = result.get("status")
         status = status if isinstance(status, dict) else {}
         state = task_state(status.get("state"))
         message = status.get("message")
         if isinstance(message, dict):
-            parts.extend(_list(message.get("parts")))
+            status_parts.extend(_list(message.get("parts")))
         for artifact in _list(result.get("artifacts")):
             if isinstance(artifact, dict):
-                parts.extend(_list(artifact.get("parts")))
+                artifact_parts.extend(_list(artifact.get("parts")))
 
-    texts: list[str] = []
+    artifact_text = "\n".join(_texts(artifact_parts))
+    # Agents often repeat the final artifact text in the status message.
+    texts = [
+        text for text in _texts(status_parts) if text.strip() not in artifact_text
+    ] + _texts(artifact_parts)
     data: list[dict[str, JsonValue]] = []
     files: list[dict[str, JsonValue]] = []
-    for part in parts:
-        if not isinstance(part, dict):
+    for part in status_parts + artifact_parts:
+        if not isinstance(part, dict) or isinstance(part.get("text"), str):
             continue
-        if isinstance(part.get("text"), str):
-            texts.append(part["text"])
-        elif isinstance(part.get("data"), dict):
+        if isinstance(part.get("data"), dict):
             data.append(part["data"])
         elif reply_file := _file(part):
             files.append(reply_file)
@@ -280,7 +283,7 @@ def summarize(agent_id: str, request_id: str, result: dict[str, JsonValue]) -> d
         "client_request_id": request_id,
         "state": state,
         "needs_input": state in INPUT_STATES,
-        "reply_text": "\n\n".join(text for text in texts if text),
+        "reply_text": "\n\n".join(texts),
         "data": data,
         "files": files,
         "conversation": {"context_id": result.get("contextId"), "task_id": task_id},
@@ -290,6 +293,14 @@ def summarize(agent_id: str, request_id: str, result: dict[str, JsonValue]) -> d
 
 def _list(value: JsonValue) -> list[JsonValue]:
     return value if isinstance(value, list) else []
+
+
+def _texts(parts: list[JsonValue]) -> list[str]:
+    return [
+        part["text"]
+        for part in parts
+        if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"]
+    ]
 
 
 def _file(part: dict[str, JsonValue]) -> dict[str, JsonValue] | None:

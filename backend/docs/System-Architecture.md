@@ -437,7 +437,9 @@ Card:
 - `GET /agents/search?query=&group_id=&limit=` delegates ranking to the existing
   `AgentMatcher.match_agents` with visibility enforced and the selected group's
   members as `filter_ids`. Group scope rules match discovery, including
-  `[]` for an empty group. Ranking is lexical (Mongo text score with the
+  `[]` for an empty group. Matching ranks the complete visible active
+  candidate set, not the DAL's default 1000-row cap, so it serves room routing
+  and network search alike. Ranking is lexical (Mongo text score with the
   application fallback) and excludes agents on the matcher's exclusion list.
   `query` is 1-500 characters and `limit` is 1-20, default 5.
 - `GET /agents/{agent_id}/profile` returns a consumer profile for any visible
@@ -566,7 +568,9 @@ inventory, group scope, visibility, ranking, and A2A execution.
 base64 bytes), and a `conversation` handle, and builds the A2A user message. It
 returns a summary rather than the raw A2A result: lowercase `state` (a direct
 Message reply is `completed`), `needs_input`, `reply_text` from the status
-message or Message and artifact text parts, `data` and `files` from other parts
+message or Message and artifact text parts (status text already contained in an
+artifact is skipped, since agents often repeat the final answer there), `data`
+and `files` from other parts
 with inline bytes omitted, a `conversation` of `context_id` and `task_id`, and a
 `next_action` hint. `task_id` is kept only for submitted, working,
 input-required, or auth-required Tasks, so passing the handle back never reopens
