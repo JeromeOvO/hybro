@@ -1,4 +1,3 @@
-import { banner } from '@/components/ui/banner'
 import type { RoomSSEFrameMap, TaskState } from '@/lib/types/sse'
 import { isTerminalState, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
@@ -159,14 +158,6 @@ export async function handleTaskUpdate(
           label: `${senderName} failed`,
           body: sseMessage.data.error ?? undefined,
         })
-      }
-
-      if (!ctx.lifecycle.hasCancelTimedOut()) {
-        if (status === TASK_STATE.FAILED) {
-          banner.error(sseMessage.data.error || 'Task failed')
-        } else if (status === TASK_STATE.REJECTED) {
-          banner.error(sseMessage.data.error || 'Task was rejected')
-        }
       }
 
       const stamped = stampLiveTurnTerminalIfInferable(ctx.roomId, ctx.lifecycle, {

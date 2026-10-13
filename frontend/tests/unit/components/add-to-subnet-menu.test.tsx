@@ -5,7 +5,7 @@ import type { ComponentProps } from 'react'
 import { AddToSubnetMenu } from '@/components/networks/add-to-subnet-menu'
 import type { AgentGroup } from '@/lib/types/agent-group'
 
-vi.mock('@/components/ui/banner', () => ({ banner: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 afterEach(cleanup)
 

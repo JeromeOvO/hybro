@@ -27,8 +27,8 @@ vi.mock('@/lib/api/room', async importOriginal => {
   }
 })
 
-vi.mock('@/components/ui/banner', () => ({
-  banner: { error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn() },
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 
 vi.mock('@/hooks/room/sse-handlers/pending-turn-buffer', () => ({

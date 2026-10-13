@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/api/sse', () => ({ cancelMessage: mocks.cancelMessage }))
-vi.mock('@/components/ui/banner', () => ({
-  banner: { warning: mocks.warning, error: vi.fn() },
+vi.mock('sonner', () => ({
+  toast: { warning: mocks.warning, error: vi.fn() },
 }))
 
 function createLifecycle(): ProcessingLifecycle {

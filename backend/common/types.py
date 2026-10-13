@@ -500,7 +500,9 @@ class AgentCard(BaseModel):
     authentication: AgentAuthentication | None = None
     defaultInputModes: list[str] = ["text"]
     defaultOutputModes: list[str] = ["text"]
-    skills: list[AgentSkill]
+    # A2A cards are protobuf messages; ProtoJSON omits an empty repeated
+    # ``skills`` field, so a missing key means no skills.
+    skills: list[AgentSkill] = Field(default_factory=list)
     protocolVersion: str | None = None
     preferredTransport: str | None = None
     additionalInterfaces: list[dict[str, Any]] | None = None

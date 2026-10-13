@@ -5,7 +5,7 @@ import {
   optimisticallyMarkRoomProcessing,
   roomHistoryQueryKey,
 } from '@/lib/room-history-query'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import type { QuoteData } from '@/lib/types/quote'
 import { MAX_QUOTE_TEXT_LENGTH } from '@/lib/types/quote'
 import type { AgentScopeInput, ExecutionMode } from '@/lib/types/request'
@@ -135,7 +135,7 @@ export function useSendMessage(
       }
 
       if (quoteData?.content && quoteData.content.length > MAX_QUOTE_TEXT_LENGTH) {
-        banner.error(`Quote is too long (max ${MAX_QUOTE_TEXT_LENGTH} characters).`)
+        toast.error(`Quote is too long (max ${MAX_QUOTE_TEXT_LENGTH} characters).`)
         lifecycle.stopProcessing()
         useRoomUiStore.getState().setPendingTurnSkeleton(roomId)
         const msgStoreTooLong = useMessageStore.getState()
@@ -190,7 +190,7 @@ export function useSendMessage(
         msgStoreNoId.removeMessage(lifecycle.placeholderId(roomId))
         rollbackRoomHistory()
 
-        banner.error('Message sent but server returned no ID. Please try again.')
+        toast.error('Message sent but server returned no ID. Please try again.')
 
         // Revoke orphaned blob URLs since attachments have already been cleared
         // from the input component and are unreachable by its cleanup.
@@ -287,7 +287,7 @@ export function useSendMessage(
       msgStoreErr.removeMessage(lifecycle.placeholderId(roomId))
       rollbackRoomHistory()
 
-      banner.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      toast.error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`)
 
       // Revoke orphaned blob URLs since attachments have already been cleared
       // from the input component and are unreachable by its cleanup.

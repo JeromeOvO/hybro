@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import { handleTaskUpdate } from '../handlers/task-update'
 import { createProcessingLifecycle } from '../../processing-lifecycle'
 import { TASK_STATE } from '@/lib/types/sse'
@@ -6,8 +7,8 @@ import { useMessageStore } from '@/stores/message-store'
 import type { RoomSSEFrameMap } from '@/lib/types/sse'
 import type { SSEHandlerDeps } from '../types'
 
-vi.mock('@/components/ui/banner', () => ({
-  banner: {
+vi.mock('sonner', () => ({
+  toast: {
     error: vi.fn(),
   },
 }))
@@ -57,6 +58,7 @@ function makeTaskUpdate(
 
 describe('handleTaskUpdate', () => {
   beforeEach(() => {
+    vi.mocked(toast.error).mockClear()
     useMessageStore.getState().clearRoom()
     useMessageStore.getState().setRoom('room-1')
   })
@@ -141,4 +143,20 @@ describe('handleTaskUpdate', () => {
     expect(entity.taskStatusMessage).toBe('Working on request')
     expect(entity.taskUpdatedAt).toBe('2026-02-17T10:00:00.000Z')
   })
+
+  it.each([TASK_STATE.FAILED, TASK_STATE.REJECTED])(
+    'keeps agent %s errors in the conversation instead of a toast',
+    async (status) => {
+      await handleTaskUpdate(
+        makeDeps(),
+        makeTaskUpdate({ status, error: 'Agent could not finish' }),
+        'req-1',
+      )
+
+      const entity = useMessageStore.getState().entities['agent-message-1']
+      expect(entity.taskStatus).toBe(status)
+      expect(entity.taskError).toBe('Agent could not finish')
+      expect(toast.error).not.toHaveBeenCalled()
+    },
+  )
 })

@@ -1,4 +1,4 @@
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import type { ErrorData, RoomSSEFrameMap } from '@/lib/types/sse'
 import type { ProcessingLifecycle } from '../../processing-lifecycle'
 import type { SSEHandlerDeps } from '../types'
@@ -18,7 +18,7 @@ export function handleError(_ctx: SSEHandlerDeps, sseMessage: RoomSSEFrameMap['e
   const errorData = isErrorDataObject(sseMessage.data) ? sseMessage.data : undefined
   if (!errorData) {
     console.debug('Ignoring malformed error SSE data:', sseMessage.data)
-    banner.error('Unknown error')
+    toast.error('Unknown error')
     return
   }
 
@@ -39,12 +39,12 @@ export function handleError(_ctx: SSEHandlerDeps, sseMessage: RoomSSEFrameMap['e
         ? `System requests: ${errorData.system_requests_used}/${errorData.system_requests_limit}.`
         : undefined,
     ].filter(Boolean).join(' ')
-    banner.error(
+    toast.error(
       errorData.error || `Rate limit exceeded. Please try again in ${retryMinutes} minutes.`,
       { duration: 15000, description: quotaDetails || undefined },
     )
   } else {
-    banner.error(errorData?.error || 'Unknown error')
+    toast.error(errorData?.error || 'Unknown error')
   }
 }
 

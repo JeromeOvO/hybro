@@ -1,4 +1,4 @@
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import type { ProcessingStatus, ProcessingStatusData, RoomSSEFrameMap } from '@/lib/types/sse'
 import { PROCESSING_STATUS, isProcessingDone, TASK_STATE } from '@/lib/types/sse'
 import { useMessageStore } from '@/stores/message-store'
@@ -244,7 +244,7 @@ export function handleProcessingStatus(
     }
     if (!lifecycle.hasCancelTimedOut()) {
       if (status === PROCESSING_STATUS.CANCELED) {
-        banner.info('Processing stopped by user')
+        toast.info('Processing stopped by user')
         store.upsertMessage({
           id: `cancel-confirm-${Date.now()}`,
           roomId,
@@ -258,7 +258,7 @@ export function handleProcessingStatus(
         }, 'optimistic')
         store.cancelAllNonTerminal(roomId)
       } else if (status === PROCESSING_STATUS.FAILED) {
-        banner.error(`Processing failed: ${processingDetailsToLogMessage(sseMessage.data.details) ?? 'Unknown error'}`)
+        toast.error(`Processing failed: ${processingDetailsToLogMessage(sseMessage.data.details) ?? 'Unknown error'}`)
       } else if (status === PROCESSING_STATUS.RATE_LIMITED) {
         // rate limit terminal — banner handled elsewhere if needed
       }

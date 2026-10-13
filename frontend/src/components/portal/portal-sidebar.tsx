@@ -77,7 +77,7 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
           collapsible="none"
           role="complementary"
           aria-label="Chat history"
-          className="sticky top-[var(--banner-offset,0px)] hidden h-[calc(100dvh-var(--banner-offset,0px))] shrink-0 md:flex"
+          className="sticky top-0 hidden h-dvh shrink-0 md:flex"
         >
           <SidebarContent className="gap-1 pt-4">
             <div className="px-2 pb-1">

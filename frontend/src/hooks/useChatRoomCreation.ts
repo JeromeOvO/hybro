@@ -7,7 +7,7 @@ import {
   roomHistoryQueryKey,
 } from '@/lib/room-history-query'
 import { getAllAgents } from '@/lib/api/agent'
-import { banner } from "@/components/ui/banner"
+import { toast } from "sonner"
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
 import type { PendingAttachment } from '@/lib/types/attachments'
@@ -63,7 +63,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       }
     } catch (error) {
       console.error('Failed to load agents:', error)
-      banner.error('Failed to load agents')
+      toast.error('Failed to load agents')
       return []
     } finally {
       setLoadingAgents(false)
@@ -100,12 +100,12 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     } = options
 
     if (!userId || !userName) {
-      banner.error('User information not available')
+      toast.error('User information not available')
       return null
     }
 
     if (!userMessage.trim() && !options.attachments?.length) {
-      banner.error('Message cannot be empty')
+      toast.error('Message cannot be empty')
       return null
     }
 
@@ -216,7 +216,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       }
     } catch (error) {
       console.error('Failed to create room:', error)
-      banner.error(error instanceof Error ? error.message : 'Failed to create room')
+      toast.error(error instanceof Error ? error.message : 'Failed to create room')
       return null
     } finally {
       setCreating(false)
@@ -245,7 +245,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     options: Omit<CreateRoomOptions, 'selectedAgents'> = {}
   ) => {
     if (selectedAgents.length === 0) {
-      banner.error('Please select at least one agent')
+      toast.error('Please select at least one agent')
       return false
     }
 
@@ -269,7 +269,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     try {
       resolvedAgents = resolveTemplateAgents(template.agents, availableAgents)
     } catch {
-      banner.error('Some agents in this template are unavailable')
+      toast.error('Some agents in this template are unavailable')
       return false
     }
 
@@ -295,7 +295,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       )
 
       if (!response.success || !response.room?.room_id) {
-        banner.error('Failed to create room')
+        toast.error('Failed to create room')
         return false
       }
 
@@ -327,7 +327,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
       return true
     } catch (error) {
       console.error('Failed to create room from template:', error)
-      banner.error('Failed to create room')
+      toast.error('Failed to create room')
       return false
     } finally {
       setCreating(false)

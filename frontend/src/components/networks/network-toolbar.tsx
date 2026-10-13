@@ -52,19 +52,19 @@ export function NetworkToolbar({ view, q, discovering, onViewChange, onSearch, o
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuItem asChild className="items-start">
+            <DropdownMenuItem asChild>
               <Link href={routes.registerAgent}>
                 <Link2 aria-hidden="true" />
                 <span className="flex flex-col">
-                  <span>Register by URL</span>
+                  <span>Add Remote Agent</span>
                   <span className="text-xs text-muted-foreground">Add a remote A2A agent by its card URL.</span>
                 </span>
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem disabled={discovering} onSelect={onDiscover} className="items-start">
+            <DropdownMenuItem disabled={discovering} onSelect={onDiscover}>
               <Radar aria-hidden="true" />
               <span className="flex flex-col">
-                <span>{discovering ? 'Discovering local agents…' : 'Discover local agents'}</span>
+                <span>{discovering ? 'Scanning Local Agent…' : 'Scan Local Agent'}</span>
                 <span className="text-xs text-muted-foreground">Scan this machine for running agents.</span>
               </span>
             </DropdownMenuItem>

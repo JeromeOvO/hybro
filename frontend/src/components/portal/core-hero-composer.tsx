@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useUser, useAuth } from '@/lib/auth'
 import { RoomChatInput } from '@/components/room-chat-input'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import { getAllAgents } from '@/lib/api/agent'
 import { useChatRoomCreation } from '@/hooks/useChatRoomCreation'
 import {
@@ -105,7 +105,7 @@ export function CoreHeroComposer() {
         await createFromTemplate(template, availableAgents)
       } catch (error) {
         console.error('Failed to create room from template:', error)
-        banner.error('Failed to start chat')
+        toast.error('Failed to start chat')
       }
     },
     [createFromTemplate, availableAgents],
@@ -123,7 +123,7 @@ export function CoreHeroComposer() {
           await sendFromTemplate(currentTemplate)
           return
         }
-        banner.error('Please enter a message')
+        toast.error('Please enter a message')
         return
       }
       if (demoActive) {
@@ -138,7 +138,7 @@ export function CoreHeroComposer() {
           attachments,
         })
       } catch {
-        banner.error('Some agents in this template are unavailable')
+        toast.error('Some agents in this template are unavailable')
       }
     },
     [

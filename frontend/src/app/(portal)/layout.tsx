@@ -5,7 +5,6 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { PortalSidebar } from '@/components/portal/portal-sidebar'
 import { PortalHeader } from '@/components/portal/portal-header'
 import { SettingsDialogProvider } from '@/components/settings/settings-dialog-provider'
-import { BannerHost } from '@/components/ui/banner'
 
 export const metadata: Metadata = {
   title: 'HYBRO AI – Your Local & Remote Hybrid Agent Platform',
@@ -20,7 +19,6 @@ export default function PortalLayout({
 }) {
   return (
     <div className="min-h-screen bg-background">
-      <BannerHost />
       <SidebarProvider>
         <SettingsDialogProvider>
           <PortalSidebar />

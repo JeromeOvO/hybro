@@ -12,7 +12,7 @@ vi.mock('@/lib/api/agent-group', () => ({
   updateAgentGroup: (...a: unknown[]) => updateAgentGroup(...a),
   deleteAgentGroup: (...a: unknown[]) => deleteAgentGroup(...a),
 }))
-vi.mock('@/components/ui/banner', () => ({ banner: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 import { SubnetDialogHost } from '@/components/subnets/subnet-dialog-host'
 

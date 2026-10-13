@@ -183,8 +183,8 @@ canonical equivalents. `src/lib/routes.ts` is the canonical route vocabulary
 `registerAgent`, `connectMcp`, `connectApi`, `chat`, `room(id)`).
 
 The Network workspace merges visible registered agents with locally available
-agents through `useNetworks`. Its **Add agent** menu offers **Register by URL**
-and **Discover local agents**; discovery calls the authenticated
+agents through `useNetworks`. Its **Add agent** menu offers **Add Remote Agent**
+and **Scan Local Agent**; discovery calls the authenticated
 `POST /api/v1/local-agents/discovery` endpoint, waits for the backend discovery
 cycle, and then refreshes the agent inventory. Directly discovered
 `source=local` agents are displayed while active.
@@ -198,9 +198,15 @@ cycle, and then refreshes the agent inventory. Directly discovered
 3. `Toaster`
 4. `CookieBanner`
 
-The portal layout composes `BannerHost`, `SidebarProvider`, and
-`SettingsDialogProvider` directly. Every portal route shares `PortalSidebar`
-and `SidebarInset`; the inset contains `PortalHeader` and the route content.
+The portal layout composes `SidebarProvider` and `SettingsDialogProvider`
+directly.
+
+Notifications: transient feedback, including platform and backend errors, uses
+Sonner `toast` from the root `Toaster`. Errors that must stay visible inside a
+page or dialog use the `Alert` primitive. Agent task failures and rejections are
+not toasted; they render in the conversation as part of the agent's turn.
+
+Every portal route shares `PortalSidebar` and `SidebarInset`; the inset contains `PortalHeader` and the route content.
 There is no separate workspace shell or route-classified navigation renderer.
 
 The original authentication behavior is retained: signed-out marketing pages
@@ -973,8 +979,8 @@ the canonical route vocabulary for application links.
 (`src/components/networks/network-workspace.tsx`) under a `Suspense` boundary
 because the workspace reads `useSearchParams`. The workspace composes a
 `PageHeader`, `NetworkToolbar` (Topology / Structure `SegmentedControl`, search
-input, **Add agent** menu with **Register by URL** and **Discover local
-agents**, and the single primary **Create subnet** button), and either the
+input, **Add agent** menu with **Add Remote Agent** and **Scan Local
+Agent**, and the single primary **Create subnet** button), and either the
 topology stage (`NetworkCanvas` plus canvas controls and `GraphDisplayMenu`) or
 `StructureView`. The shared `NetworkDetailsPanel` renders in both views while
 `select` is set. `useNetworks` is the only data source; no backend API changed.
@@ -1032,7 +1038,7 @@ provider, description, status, source, room calls, skills, subnet chips, **Open
 details**, and the **Add to subnet** menu (`add-to-subnet-menu.tsx`): each
 subnet is a checkbox item that adds or removes the agent with a membership-only
 `setMembers` write computed from the latest cached members, disabled while a
-write is pending, with a banner on success and a Retry item on failure; the last
+write is pending, with a toast on success and a Retry item on failure; the last
 item **Create subnet…** opens the shared dialog with the agent preselected.
 
 Subnet dialog: `src/components/subnets/subnet-dialog.tsx` is the one create and

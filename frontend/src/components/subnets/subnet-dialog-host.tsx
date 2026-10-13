@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { banner } from '@/components/ui/banner'
+import { toast } from 'sonner'
 import { createAgentGroup, deleteAgentGroup, updateAgentGroup } from '@/lib/api/agent-group'
 import { projectAgent } from '@/lib/network-agent'
 import type { Agent } from '@/lib/types/agent'
@@ -57,7 +57,7 @@ export function SubnetDialogHost(props: SubnetDialogHostProps) {
             if (!response.success) throw new Error(response.error || "The server didn't confirm the subnet was deleted.")
             await invalidate()
             onDeleted(subnet)
-            banner.success('Subnet deleted')
+            toast.success('Subnet deleted')
             onOpenChange(false)
           } catch (error) {
             setDeleteError(error instanceof Error ? error.message : "Couldn't delete this subnet. Try again.")
@@ -91,7 +91,7 @@ export function SubnetDialogHost(props: SubnetDialogHostProps) {
             : await createAgentGroup({ owner_id: userId, name: values.name, description: values.description, agents: values.agentIds }, getToken))
           await invalidate()
           onSaved(saved, network ? 'edit' : 'create')
-          banner.success(network ? 'Subnet updated' : 'Subnet created')
+          toast.success(network ? 'Subnet updated' : 'Subnet created')
           onOpenChange(false)
         } finally {
           setPending(false)
