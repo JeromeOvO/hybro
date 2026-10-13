@@ -30,6 +30,10 @@ describe('Connect page', () => {
     expect(screen.getByRole('tab', { name: 'Claude Code' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByLabelText('Claude Code command')).toHaveTextContent(`claude mcp add --transport http hybro ${MCP_URL}`)
     expect(screen.getByRole('heading', { name: 'Features' })).toBeInTheDocument()
+    for (const tool of ['find_agents', 'list_subnets', 'get_agent', 'send_message']) {
+      expect(screen.getByText(tool)).toBeInTheDocument()
+    }
+    expect(screen.queryByText(/send_agent_message/)).toBeNull()
     expect(screen.queryByText(/Open a terminal|Try asking|group_id|scope/i)).toBeNull()
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -69,6 +73,11 @@ describe('Connect page', () => {
     await screen.findByText('Discovery request copied')
     expect(lastCopied()).toContain('https://hybro.example/api/v1/agents/discovery')
     expect(lastCopied()).not.toMatch(/authorization|bearer|access_token|group_id/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy search request' }))
+    await screen.findByText('Search request copied')
+    expect(lastCopied()).toContain('https://hybro.example/api/v1/agents/search')
+    expect(lastCopied()).not.toMatch(/authorization|bearer|access_token|group_id/i)
+    expect(screen.getByText('GET /api/v1/agents/groups')).toBeInTheDocument()
     expect(screen.getByLabelText('Message request')).toHaveTextContent('/api/v1/agents/messages')
     expect(screen.getByRole('heading', { name: 'Features' })).toBeInTheDocument()
     expect(fetch).not.toHaveBeenCalled()

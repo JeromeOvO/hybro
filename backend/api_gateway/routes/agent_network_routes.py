@@ -12,10 +12,13 @@ from api_gateway.registry import mark_declared_owner
 from common.errors import AppError
 from models.agent_network import (
     AgentDiscoveryResponse,
+    AgentGroupListResponse,
     AgentMessageRequest,
     AgentMessageResponse,
     AgentNetworkErrorDetail,
     AgentNetworkErrorResponse,
+    AgentProfile,
+    AgentSearchResponse,
     NetworkIdentifier,
 )
 
@@ -65,6 +68,63 @@ async def discover_agents(
     """
     try:
         return await network.discover(group_id)
+    except AppError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get(
+    "/agents/groups",
+    responses={401: {"description": "Authentication required"}},
+)
+async def list_network_groups(
+    network: AgentNetworkDependency,
+) -> AgentGroupListResponse:
+    """List the caller's saved groups (subnets) with active visible member counts.
+
+    Built-in selections such as `all_agents` and `room_team` are not included.
+    """
+    return await network.list_groups()
+
+
+@router.get(
+    "/agents/search",
+    responses={
+        401: {"description": "Authentication required"},
+        **{status: {"model": AgentNetworkErrorResponse} for status in (403, 404, 422)},
+    },
+)
+async def search_agents(
+    network: AgentNetworkDependency,
+    query: Annotated[str, Query(min_length=1, max_length=500)],
+    group_id: Annotated[NetworkIdentifier | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+) -> AgentSearchResponse:
+    """Rank visible active agents for a capability query, optionally in a group.
+
+    Results are compact consumer views with the caller's groups for each agent.
+    Ranking is lexical over Card names, descriptions, skills, and tags; an
+    empty list means no agent matched the query terms.
+    """
+    try:
+        return await network.search(query, group_id, limit)
+    except AppError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get(
+    "/agents/{agent_id}/profile",
+    responses={
+        401: {"description": "Authentication required"},
+        404: {"model": AgentNetworkErrorResponse},
+    },
+)
+async def get_agent_profile(
+    network: AgentNetworkDependency,
+    agent_id: NetworkIdentifier,
+) -> AgentProfile:
+    """Return a visible agent's consumer profile without transport or security data."""
+    try:
+        return await network.get_profile(agent_id)
     except AppError as exc:
         raise _http_error(exc) from exc
 

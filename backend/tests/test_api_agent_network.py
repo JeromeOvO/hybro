@@ -50,20 +50,22 @@ async def network_api(monkeypatch, app):
         id_factory=lambda: "unused",
         now=lambda: datetime.now(UTC),
     )
+    team = AgentGroup(
+        group_id="team",
+        name="Review team",
+        type="user",
+        owner_id="user_local_developer",
+        agents=["reviewer"],
+    )
     groups = SimpleNamespace(
-        get_agent_group_by_id=AsyncMock(
-            return_value=AgentGroup(
-                group_id="team",
-                name="Review team",
-                type="user",
-                owner_id="user_local_developer",
-                agents=["reviewer"],
-            )
-        )
+        get_agent_group_by_id=AsyncMock(return_value=team),
+        get_agent_groups_by_owner=AsyncMock(
+            side_effect=lambda owner_id: [team] if owner_id == team.owner_id else []
+        ),
     )
     monkeypatch.setattr(app, "dependency_overrides", app.dependency_overrides.copy())
     app.dependency_overrides[get_api_gateway_deps] = lambda: SimpleNamespace(
-        agent_service=registry, agent_group_store=groups
+        agent_service=registry, agent_matcher=registry, agent_group_store=groups
     )
     remote = A2A10AgentStub(
         send_result={"task": input_required_task_payload(question="Which runtime?")}
@@ -189,6 +191,60 @@ async def test_group_errors_do_not_expand_discovery_scope(network_api):
         "/api/v1/agents/discovery", params={"group_id": "room_team"}
     )
     assert room.status_code == 422
+    assert remote.requests == []
+
+
+async def test_groups_search_and_profile_help_choose_an_agent(network_api):
+    client, remote, _, _ = network_api
+
+    groups = await client.get("/api/v1/agents/groups")
+    assert groups.status_code == 200
+    assert groups.json() == {
+        "groups": [
+            {
+                "group_id": "team",
+                "name": "Review team",
+                "description": None,
+                "agent_count": 1,
+            }
+        ]
+    }
+
+    search = await client.get(
+        "/api/v1/agents/search",
+        params={"query": "code review", "group_id": "team", "limit": 3},
+    )
+    assert search.status_code == 200
+    [match] = search.json()["agents"]
+    assert match["agent_id"] == "reviewer"
+    assert match["skills"][0]["name"] == "Code review"
+    assert match["groups"] == [{"group_id": "team", "name": "Review team"}]
+    assert "supportedInterfaces" not in match
+
+    profile = await client.get("/api/v1/agents/reviewer/profile")
+    assert profile.status_code == 200
+    body = profile.json()
+    assert body["agent_id"] == "reviewer"
+    assert body["skills"][0]["id"] == "review"
+    assert "http://agent.test/" not in profile.text
+    assert remote.requests == []
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "status"),
+    [
+        ("/api/v1/agents/search", {}, 422),
+        ("/api/v1/agents/search", {"query": "review", "limit": 21}, 422),
+        ("/api/v1/agents/search", {"query": "review", "group_id": "room_team"}, 422),
+        ("/api/v1/agents/missing/profile", {}, 404),
+    ],
+)
+async def test_search_and_profile_reject_invalid_requests(
+    network_api, path, params, status
+):
+    client, remote, _, _ = network_api
+    response = await client.get(path, params=params)
+    assert response.status_code == status
     assert remote.requests == []
 
 

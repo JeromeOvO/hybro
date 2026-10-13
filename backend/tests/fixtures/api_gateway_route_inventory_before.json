@@ -313,6 +313,24 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/agents/groups",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_network_groups",
+    "endpoint_module": "api_gateway.routes.agent_network_routes",
+    "declared_owner": "api_gateway.routes.agent_network_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_network"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/agents/messages",
     "methods": [
       "POST"
@@ -326,6 +344,42 @@
     "status_code": null,
     "dependencies": [
       "get_direct_agent_execution"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents/search",
+    "methods": [
+      "GET"
+    ],
+    "name": "search_agents",
+    "endpoint_module": "api_gateway.routes.agent_network_routes",
+    "declared_owner": "api_gateway.routes.agent_network_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_network"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/agents/{agent_id}/profile",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_profile",
+    "endpoint_module": "api_gateway.routes.agent_network_routes",
+    "declared_owner": "api_gateway.routes.agent_network_routes",
+    "tags": [
+      "agent"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_agent_network"
     ],
     "auth_dependencies": [],
     "include_in_schema": true

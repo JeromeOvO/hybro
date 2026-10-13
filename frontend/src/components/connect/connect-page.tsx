@@ -67,7 +67,7 @@ function useCopy() {
   return { button, state, block }
 }
 
-function Features({ items }: { items: { title: string; detail: string }[] }) {
+function Features({ items }: { items: { title: string; detail: string; tool?: string }[] }) {
   return (
     <section aria-labelledby="features-heading" className="flex flex-col gap-3">
       <h2 id="features-heading" className="text-[15px] font-semibold">Features</h2>
@@ -75,6 +75,7 @@ function Features({ items }: { items: { title: string; detail: string }[] }) {
         {items.map(item => (
           <li key={item.title} className="rounded-xl border bg-card p-4">
             <p className="text-sm font-medium">{item.title}</p>
+            {item.tool ? <code className="mt-1 inline-block font-mono text-xs text-muted-foreground">{item.tool}</code> : null}
             <p className="mt-1 text-sm text-muted-foreground">{item.detail}</p>
           </li>
         ))}
@@ -123,8 +124,10 @@ function McpPanel() {
         </Tabs>
       </section>
       <Features items={[
-        { title: 'Discover agents', detail: 'Your assistant sees the agents in this network and what each one is good at.' },
-        { title: 'Send tasks', detail: 'Your assistant hands a task to an agent and brings the answer back into the conversation.' },
+        { title: 'Find the right agent', tool: 'find_agents', detail: 'Your assistant describes the task and gets the best matching agents, ranked by their skills.' },
+        { title: 'Browse subnets', tool: 'list_subnets', detail: 'Your assistant sees your subnets and can search within one team of agents.' },
+        { title: 'Check an agent', tool: 'get_agent', detail: 'Your assistant reads an agent’s skills, examples, and accepted inputs before choosing.' },
+        { title: 'Send tasks and follow up', tool: 'send_message', detail: 'Your assistant hands a task to an agent, brings the reply back, and answers follow-up questions in the same conversation.' },
       ]} />
     </div>
   )
@@ -139,6 +142,14 @@ function ApiPanel() {
       <AddressCard label="API base URL" url={config.api_base_url} copy={copy} />
       <section aria-labelledby="requests-heading" className="flex flex-col gap-3">
         <h2 id="requests-heading" className="text-[15px] font-semibold">Requests</h2>
+        <div className="flex flex-col gap-2 rounded-xl border bg-card p-5">
+          <p className="text-xs font-medium text-muted-foreground">Find agents for a task</p>
+          {copy.block('search', 'Search request', material.searchRequest)}
+          <div className="flex flex-wrap items-center gap-2">
+            {copy.button('search', material.searchRequest, 'Copy search request')}
+            {copy.state('search', 'Search request')}
+          </div>
+        </div>
         <div className="flex flex-col gap-2 rounded-xl border bg-card p-5">
           <p className="text-xs font-medium text-muted-foreground">Discover agents</p>
           {copy.block('discover', 'Discovery request', material.configuration)}
@@ -157,8 +168,11 @@ function ApiPanel() {
         </div>
       </section>
       <Features items={[
-        { title: 'Discover agents', detail: `GET ${config.api_prefix}/agents/discovery returns every agent visible to you with its Agent Card.` },
-        { title: 'Send messages', detail: `POST ${config.api_prefix}/agents/messages sends a task to one agent and returns its reply.` },
+        { title: 'Find agents', tool: `GET ${config.api_prefix}/agents/search`, detail: 'Ranks agents for a capability query, optionally within one subnet.' },
+        { title: 'List subnets', tool: `GET ${config.api_prefix}/agents/groups`, detail: 'Lists your subnets with their number of active agents.' },
+        { title: 'Agent profiles', tool: `GET ${config.api_prefix}/agents/{agent_id}/profile`, detail: 'Shows an agent’s skills, examples, and accepted inputs.' },
+        { title: 'Discover agents', tool: `GET ${config.api_prefix}/agents/discovery`, detail: 'Returns every agent visible to you with its full Agent Card.' },
+        { title: 'Send messages', tool: `POST ${config.api_prefix}/agents/messages`, detail: 'Sends a task to one agent and returns its reply.' },
       ]} />
     </div>
   )

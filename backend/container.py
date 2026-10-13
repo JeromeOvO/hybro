@@ -2219,6 +2219,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             APIGatewayDeps(
                 agent_center=route_agent_center,
                 agent_service=_agent_deps.agent_registry,
+                agent_matcher=_agent_deps.agent_matcher,
                 capability_issue_service=agent_capability_issue_service,
                 agent_liveness_checker=agent_liveness_checker,
                 agent_group_store=agent_room_store,

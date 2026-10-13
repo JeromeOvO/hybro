@@ -736,7 +736,13 @@ def test_route_owner_protocols_match_handler_calls():
             "get_agent_groups_by_owner",
             "update_agent_group",
         },
-        AgentNetworkAccess: {"discover", "resolve_target"},
+        AgentNetworkAccess: {
+            "discover",
+            "get_profile",
+            "list_groups",
+            "resolve_target",
+            "search",
+        },
         DirectAgentMessenger: {"send"},
         RoomRouteReader: {"get_room_by_room_id"},
         SSEStateReader: {
