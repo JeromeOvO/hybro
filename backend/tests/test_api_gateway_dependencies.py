@@ -14,6 +14,7 @@ def _deps(**overrides):
     values = {
         "agent_center": MagicMock(),
         "agent_service": MagicMock(),
+        "agent_matcher": MagicMock(),
         "capability_issue_service": MagicMock(),
         "agent_liveness_checker": AsyncMock(),
         "agent_group_store": MagicMock(),

@@ -107,6 +107,43 @@ health probe, search ranking, or fixed inventory cap.
 - `room_team` returns HTTP `422`: this built-in selection requires room context
   and is not supported here.
 
+### Choose an agent
+
+Three read-only routes help a caller pick an agent without loading every Card.
+They use the same authentication, visibility, and saved-group ownership rules
+as discovery.
+
+```sh
+# Saved groups (subnets) owned by the caller, with active visible member counts.
+curl --fail-with-body --silent --show-error \
+  'http://localhost:8000/api/v1/agents/groups'
+
+# Rank agents for a capability query, optionally within one saved group.
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'query=weather forecast' \
+  --data-urlencode 'group_id=my-saved-team-id' \
+  --data-urlencode 'limit=5' \
+  'http://localhost:8000/api/v1/agents/search'
+
+# One agent's consumer profile.
+curl --fail-with-body --silent --show-error \
+  'http://localhost:8000/api/v1/agents/registered-agent-id/profile'
+```
+
+- `GET /agents/groups` returns `{"groups":[{"group_id","name","description","agent_count"}]}`.
+  Built-in `all_agents` and `room_team` selections are not listed.
+- `GET /agents/search` requires `query` (1-500 characters) and accepts
+  `limit` (1-20, default 5) and `group_id` with the same scope rules as
+  discovery. Ranking is lexical over Card names, descriptions, skill names,
+  tags, and descriptions, so short capability keywords work best. Each match
+  has `agent_id`, `name`, `description`, compact `skills`, `input_modes`,
+  `output_modes`, the caller's `groups` containing the agent, and `score`.
+  An empty list means no agent matched the query terms.
+- `GET /agents/{agent_id}/profile` returns `status`, `name`, `description`,
+  `version`, `provider`, `streaming`, modes, skills with examples and modes,
+  and `groups`. It leaves out URLs, transport interfaces, and security
+  details because Hybro makes the call. Missing or invisible agents return `404`.
+
 ### Send one message
 
 Replace `registered-agent-id` with an `agent_id` from discovery; the ID belongs
@@ -275,35 +312,68 @@ already running at `http://127.0.0.1:8000/api/v1/`:
 uv run --project MCP --frozen --no-env-file python MCP/server.py
 ```
 
-The adapter has its own locked environment and exposes exactly two tools:
+The adapter has its own locked environment and exposes five tools. Backend
+saved groups appear as **subnets** (`subnet_id`) in tool arguments and results.
 
-- `discover_agents(group_id?)`: returns the active Agent inventory/Card response
-  visible to the local developer identity, optionally scoped to an owned Team.
-- `send_agent_message(agent_id, message, group_id?, client_request_id?)`: accepts
-  the same message object as the REST API, including text/data/file parts and
-  `contextId`/`taskId`. Message validation remains owned by the API.
+- `list_subnets()`: the caller's subnets with active member counts, from
+  `GET /agents/groups`.
+- `find_agents(query, subnet_id?, limit?)`: ranked compact matches from
+  `GET /agents/search`, each listing its subnets.
+- `get_agent(agent_id)`: one agent's consumer profile from
+  `GET /agents/{agent_id}/profile`.
+- `discover_agents(subnet_id?)`: every active agent with its raw Card, from
+  `GET /agents/discovery`. Output is large; prefer `find_agents` to choose.
+- `send_message(agent_id, text, conversation?, data?, files?, subnet_id?,
+  client_request_id?, include_raw?)`: builds the A2A message, sends it through
+  `POST /agents/messages`, and returns a summary.
 
-For example, after discovery, call `send_agent_message` with:
+For example, after `find_agents`, call `send_message` with:
 
 ```json
 {
-  "agent_id": "<an ID returned by discovery>",
-  "message": {
-    "parts": [{"kind": "text", "text": "Write a short story about a robot seeing the sea."}]
-  }
+  "agent_id": "<an ID returned by find_agents>",
+  "text": "Write a short story about a robot seeing the sea."
 }
 ```
 
-Results include the complete API JSON as both MCP structured content and text.
-HTTP/transport errors and failed, rejected, canceled, or expired Tasks set
-`isError`; the original Task is retained. Input-required and other nonterminal
-Tasks remain nonterminal. A missing `client_request_id` is generated before
-sending so local transport failures can also be correlated.
+The summary is:
+
+```json
+{
+  "agent_id": "...",
+  "client_request_id": "...",
+  "state": "input_required",
+  "needs_input": true,
+  "reply_text": "How long should it be?",
+  "data": [],
+  "files": [],
+  "conversation": {"context_id": "remote-context-1", "task_id": "remote-task-1"},
+  "next_action": "Answer the agent's question, ..."
+}
+```
+
+`state` is the A2A task state in lowercase without the `TASK_STATE_` prefix;
+a direct Message reply is `completed`. `reply_text` joins text from the status
+message or Message and from artifacts, skipping status text that an artifact
+already contains; `data` and `files` collect the other
+parts, and inline file bytes are omitted. To continue, pass `conversation` back
+unchanged. It carries `task_id` only while the Task is `submitted`, `working`,
+`input_required`, or `auth_required`, so a finished Task is never reopened.
+`include_raw: true` adds the complete A2A result as `raw`. Files accept `uri`
+(preferred) or small base64 `bytes`.
+
+Every tool publishes an output schema. Results are sent as both MCP structured
+content and JSON text. Failed, rejected, canceled, or expired Tasks and all
+HTTP/transport errors set `isError`. Errors keep the backend `detail` and add a
+`next_action` hint, for example that `429` was not accepted and can be retried
+shortly, while `504` may still be running and must not be resent. A missing
+`client_request_id` is generated before sending so local transport failures can
+also be correlated.
 
 The adapter allows 610 seconds for the backend's 600-second deadline and response
 delivery. Configure the MCP client's tool timeout to exceed 610 seconds if it
-supports that setting. There are no automatic retries, remote cancellation,
-polling, or additional MCP tools.
+supports that setting. There are no automatic retries, remote cancellation, or
+polling.
 
 Native mode uses fixed loopback endpoints and the `/api/v1` prefix. Container
 mode (`--container`) requires the CLI's validated `HYBRO_MCP_CONFIG` projection,
@@ -322,8 +392,8 @@ only this sanitized status, not backend data or credentials.
 The adapter has **no MCP authentication or user isolation** and supplies no
 Clerk credentials: Clerk-mode tool requests fail rather than bypassing auth.
 Use an authenticated REST client for Clerk-mode access; do not disable production
-authentication to use this adapter. Do not expose the adapter publicly. Backend
-API endpoints, OpenAPI, and Execution ownership are unchanged.
+authentication to use this adapter. Do not expose the adapter publicly. The
+adapter only calls the public agent-network API; Execution ownership is unchanged.
 
 To run the isolated regression tests from the repository root:
 

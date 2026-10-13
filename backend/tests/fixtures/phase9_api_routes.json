@@ -370,6 +370,27 @@
   {
     "auth_dependencies": [],
     "dependencies": [
+      "get_agent_network"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.agent_network_routes",
+    "name": "list_network_groups",
+    "openapi_response_codes": [
+      "200",
+      "401"
+    ],
+    "owning_protocol": "agent.protocols.AgentNetworkAccess",
+    "path": "/api/v1/agents/groups",
+    "response_class": null,
+    "response_model": "AgentGroupListResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
       "get_direct_agent_execution"
     ],
     "methods": [
@@ -393,6 +414,53 @@
     "path": "/api/v1/agents/messages",
     "response_class": null,
     "response_model": "AgentMessageResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_agent_network"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.agent_network_routes",
+    "name": "search_agents",
+    "openapi_response_codes": [
+      "200",
+      "401",
+      "403",
+      "404",
+      "422"
+    ],
+    "owning_protocol": "agent.protocols.AgentNetworkAccess",
+    "path": "/api/v1/agents/search",
+    "response_class": null,
+    "response_model": "AgentSearchResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_agent_network"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.agent_network_routes",
+    "name": "get_agent_profile",
+    "openapi_response_codes": [
+      "200",
+      "401",
+      "404",
+      "422"
+    ],
+    "owning_protocol": "agent.protocols.AgentNetworkAccess",
+    "path": "/api/v1/agents/{agent_id}/profile",
+    "response_class": null,
+    "response_model": "AgentProfile",
     "status_code": null,
     "streaming_response": null
   },

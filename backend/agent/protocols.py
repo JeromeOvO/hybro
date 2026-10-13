@@ -7,7 +7,12 @@ from common.protocols import AgentNetworkTargetResolver
 from common.protocols.json_types import JsonValue
 from models.agent import Agent, AgentCapabilityIssue, IssueStatus
 from models.agent_group import AgentGroup
-from models.agent_network import AgentDiscoveryResponse
+from models.agent_network import (
+    AgentDiscoveryResponse,
+    AgentGroupListResponse,
+    AgentProfile,
+    AgentSearchResponse,
+)
 from models.request import InspectionCenterRequest
 from models.response import AgentCenterResponse, InspectionCenterResponse
 
@@ -15,6 +20,11 @@ from models.response import AgentCenterResponse, InspectionCenterResponse
 @runtime_checkable
 class AgentNetworkAccess(AgentNetworkTargetResolver, Protocol):
     async def discover(self, group_id: str | None = None) -> AgentDiscoveryResponse: ...
+    async def list_groups(self) -> AgentGroupListResponse: ...
+    async def search(
+        self, query: str, group_id: str | None = None, limit: int = 5
+    ) -> AgentSearchResponse: ...
+    async def get_profile(self, agent_id: str) -> AgentProfile: ...
 
 
 @runtime_checkable

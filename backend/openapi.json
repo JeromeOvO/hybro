@@ -451,6 +451,187 @@
         }
       }
     },
+    "/api/v1/agents/groups": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "List Network Groups",
+        "description": "List the caller's saved groups (subnets) with active visible member counts.\n\nBuilt-in selections such as `all_agents` and `room_team` are not included.",
+        "operationId": "list_network_groups_api_v1_agents_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentGroupListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/search": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Search Agents",
+        "description": "Rank visible active agents for a capability query, optionally in a group.\n\nResults are compact consumer views with the caller's groups for each agent.\nRanking is lexical over Card names, descriptions, skills, and tags; an\nempty list means no agent matched the query terms.",
+        "operationId": "search_agents_api_v1_agents_search_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "title": "Query"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{agent_id}/profile": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent Profile",
+        "description": "Return a visible agent's consumer profile without transport or security data.",
+        "operationId": "get_agent_profile_api_v1_agents__agent_id__profile_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNetworkErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agents/messages": {
       "post": {
         "tags": [
@@ -1769,6 +1950,74 @@
         ],
         "title": "AgentDiscoveryResponse"
       },
+      "AgentGroupListResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/AgentGroupSummary"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groups"
+        ],
+        "title": "AgentGroupListResponse"
+      },
+      "AgentGroupRef": {
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "title": "Group Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_id",
+          "name"
+        ],
+        "title": "AgentGroupRef"
+      },
+      "AgentGroupSummary": {
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "title": "Group Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "agent_count": {
+            "type": "integer",
+            "title": "Agent Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_id",
+          "name",
+          "agent_count"
+        ],
+        "title": "AgentGroupSummary"
+      },
       "AgentMessageRequest": {
         "properties": {
           "agent_id": {
@@ -1974,6 +2223,308 @@
         ],
         "title": "AgentNetworkMessage",
         "description": "A caller-authored A2A message, not a persisted room projection."
+      },
+      "AgentProfile": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "streaming": {
+            "type": "boolean",
+            "title": "Streaming",
+            "default": false
+          },
+          "input_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Modes"
+          },
+          "output_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Modes"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSkillProfile"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/AgentGroupRef"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "status",
+          "input_modes",
+          "output_modes",
+          "skills",
+          "groups"
+        ],
+        "title": "AgentProfile",
+        "description": "Consumer view of a Card, without transport or security details."
+      },
+      "AgentSearchMatch": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSkillSummary"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "input_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Modes"
+          },
+          "output_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Modes"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/AgentGroupRef"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "skills",
+          "input_modes",
+          "output_modes",
+          "groups",
+          "score"
+        ],
+        "title": "AgentSearchMatch",
+        "description": "Compact consumer view used to choose an agent."
+      },
+      "AgentSearchResponse": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSearchMatch"
+            },
+            "type": "array",
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agents"
+        ],
+        "title": "AgentSearchResponse"
+      },
+      "AgentSkillProfile": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Examples"
+          },
+          "input_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Input Modes"
+          },
+          "output_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Modes"
+          }
+        },
+        "type": "object",
+        "title": "AgentSkillProfile"
+      },
+      "AgentSkillSummary": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "title": "AgentSkillSummary"
       },
       "Artifact": {
         "properties": {

@@ -373,8 +373,9 @@ Important route groups:
 - `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
 - `agent_routes.py`: agent registration, lookup, update, visibility, and the
   authenticated local-agent discovery trigger.
-- `agent_network_routes.py`: authenticated, caller-visible stored-card discovery
-  and one-shot direct A2A messaging, separate from room execution.
+- `agent_network_routes.py`: authenticated, caller-visible stored-card discovery,
+  group listing, agent search and profiles, and one-shot direct A2A messaging,
+  separate from room execution.
 - `agent_group_routes.py`: saved agent groups.
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
@@ -396,8 +397,9 @@ stable local developer identity.
 
 #### Agent-network API
 
-`GET /api/v1/agents/discovery` and `POST /api/v1/agents/messages` are
-authenticated endpoints. Their shared `get_agent_network` dependency resolves
+`GET /api/v1/agents/discovery`, `GET /api/v1/agents/groups`,
+`GET /api/v1/agents/search`, `GET /api/v1/agents/{agent_id}/profile`, and
+`POST /api/v1/agents/messages` are authenticated endpoints. Their shared `get_agent_network` dependency resolves
 `get_current_user` and constructs a network service bound to that user's ID.
 Clerk-mode requests without a valid session receive `401`; mock mode uses the
 existing `user_local_developer` override. Discovery and sends use the registry's
@@ -425,6 +427,31 @@ Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card is
 the stored raw Card with legacy `authentication.credentials` removed; there is
 no user-specific Card projection. Activity is stored registry state, not proof
 of current reachability.
+
+Three read-only routes help consumers choose an agent without loading every
+Card:
+
+- `GET /agents/groups` lists the caller's saved groups (shown as subnets in the
+  UI and MCP) with `agent_count`, the number of active, visible members.
+  Built-in selections are not listed.
+- `GET /agents/search?query=&group_id=&limit=` delegates ranking to the existing
+  `AgentMatcher.match_agents` with visibility enforced and the selected group's
+  members as `filter_ids`. Group scope rules match discovery, including
+  `[]` for an empty group. Matching ranks the complete visible active
+  candidate set, not the DAL's default 1000-row cap, so it serves room routing
+  and network search alike. Ranking is lexical (Mongo text score with the
+  application fallback) and excludes agents on the matcher's exclusion list.
+  `query` is 1-500 characters and `limit` is 1-20, default 5.
+- `GET /agents/{agent_id}/profile` returns a consumer profile for any visible
+  agent, including inactive ones with their `status`; missing or invisible
+  agents return `404`.
+
+Search matches and profiles are projections of the stored Card: name,
+description, skills, default input/output modes, and the caller's groups
+containing the agent; profiles add version, provider organization, streaming,
+and skill examples and modes. They omit URLs, transport interfaces, security
+schemes, and credentials. Card fields are read defensively because Cards come
+from remote agents. None of these routes probes agents or refreshes Cards.
 
 Sending accepts an `agent_id` in the JSON body, a `message`, and optional
 `group_id` and `client_request_id`. Before sending, the service reloads the
@@ -494,7 +521,8 @@ Ownership is deliberately narrow:
 ```text
 agent_network_routes
   -> get_agent_network -> get_current_user + agent.protocols.AgentNetworkAccess
-     -> caller-bound agent.network.AgentNetworkService -> registry + saved-group store
+     -> caller-bound agent.network.AgentNetworkService
+        -> registry + matcher + saved-group store
   -> get_direct_agent_execution -> execution.ports.DirectAgentMessenger
      -> execution.direct_agent.DirectAgentExecution
         -> common.protocols.AgentNetworkTargetResolver.resolve_target
@@ -515,9 +543,11 @@ discovery response model; the shared contract returns `common.dto.AgentInfo`.
 
 The repository-root `MCP/server.py` is a standalone API client, not another
 backend execution owner. It serves Streamable HTTP at
-`http://127.0.0.1:8001/mcp` and forwards exactly two tools, `discover_agents` and
-`send_agent_message`, to the existing backend `agents/discovery` and
-`agents/messages` endpoints. Backend routes and OpenAPI are unchanged. Its
+`http://127.0.0.1:8001/mcp` and exposes five tools over the agent-network API:
+`list_subnets` (`agents/groups`), `find_agents` (`agents/search`), `get_agent`
+(`agents/{agent_id}/profile`), `discover_agents` (`agents/discovery`), and
+`send_message` (`agents/messages`). Tool arguments and results call saved groups
+subnets (`subnet_id`) and translate to backend `group_id`. Its
 Python dependencies, lockfile, and Dockerfile live under `MCP/`; releases publish
 the version-pinned `hybro-mcp` image alongside the other stack images.
 
@@ -532,11 +562,24 @@ Host/Origin DNS-rebinding checks remain enabled in both modes.
 The adapter keeps one async HTTP client for its process lifetime, uses stateless
 MCP transport with JSON responses, and does not import the backend runtime or
 access persistence. The API remains responsible for message validation,
-inventory, group scope, visibility, and A2A execution. Agent Cards, Task states,
-artifacts, and continuation IDs remain in the complete API response, delivered
-as MCP structured content and JSON text. HTTP/transport failures and explicitly
-failed/rejected/canceled/expired Tasks become MCP tool errors without discarding
-the returned Task. Other task states are not promoted to completion.
+inventory, group scope, visibility, ranking, and A2A execution.
+
+`send_message` takes plain `text` plus optional `data`, `files` (URI or small
+base64 bytes), and a `conversation` handle, and builds the A2A user message. It
+returns a summary rather than the raw A2A result: lowercase `state` (a direct
+Message reply is `completed`), `needs_input`, `reply_text` from the status
+message or Message and artifact text parts (status text already contained in an
+artifact is skipped, since agents often repeat the final answer there), `data`
+and `files` from other parts
+with inline bytes omitted, a `conversation` of `context_id` and `task_id`, and a
+`next_action` hint. `task_id` is kept only for submitted, working,
+input-required, or auth-required Tasks, so passing the handle back never reopens
+a finished Task. `include_raw` adds the complete A2A result. Every tool
+publishes an output schema; results are MCP structured content and JSON text.
+HTTP/transport failures and failed/rejected/canceled/expired Tasks become MCP
+tool errors. Error results keep the backend body and add `next_action`, for
+example that `429` was not accepted while `504` may still be running. Other
+task states are not promoted to completion.
 
 This adapter is for same-host clients, with no MCP authentication, user isolation,
 auth-store access, retry loop, or orchestration. It relies on a trusted backend's

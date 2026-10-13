@@ -26,17 +26,20 @@ describe('access materials', () => {
   it('scopes the MCP prompt and tool calls per call', () => {
     const material = buildAccessMaterial('mcp', 'http://127.0.0.1:8001/mcp', '/api/v1', scope)
     expect(material.prompt).toContain('Research')
-    expect(material.prompt).toContain('group_id "g1"')
-    expect(material.prompt).toContain('every discover_agents and send_agent_message call')
-    expect(material.prompt).toContain('within a subnet')
-    expect(material.toolCalls).toContain('discover_agents({"group_id": "g1"})')
-    expect(material.toolCalls).toContain('"group_id": "g1"')
+    expect(material.prompt).toContain('subnet_id "g1"')
+    expect(material.prompt).toContain('every find_agents, discover_agents and send_message call')
+    expect(material.prompt).toContain('within a conversation')
+    expect(material.toolCalls).toContain('find_agents({"query": "<capability keywords>", "subnet_id": "g1"})')
+    expect(material.toolCalls).toContain('send_message({')
+    expect(material.toolCalls).toContain('"subnet_id": "g1"')
+    expect(material.toolCalls).not.toContain('group_id')
   })
 
   it('keeps the whole-network MCP prompt unscoped', () => {
     const material = buildAccessMaterial('mcp', 'http://127.0.0.1:8001/mcp', '/api/v1')
-    expect(material.prompt).toContain('discover_agents({})')
-    expect(material.toolCalls).not.toContain('group_id')
+    expect(material.prompt).toContain('list_subnets({})')
+    expect(material.prompt).toContain('find_agents({"query": "<capability keywords>"})')
+    expect(material.toolCalls).not.toContain('subnet_id')
   })
 
   it('scopes API discovery and the message body', () => {
@@ -45,5 +48,12 @@ describe('access materials', () => {
     expect(material.toolCalls).toContain('/api/v1/agents/messages')
     expect(material.toolCalls).toContain('"group_id": "g1"')
     expect(material.prompt).toContain('group_id=g1')
+  })
+
+  it('builds an API search request with optional subnet scope', () => {
+    const plain = buildAccessMaterial('api', 'https://hybro.example', '/api/v1')
+    expect(plain.searchRequest).toBe("curl --get \\\n  --data-urlencode 'query=<capability keywords>' \\\n  'https://hybro.example/api/v1/agents/search'")
+    const scoped = buildAccessMaterial('api', 'https://hybro.example', '/api/v1', scope)
+    expect(scoped.searchRequest).toContain("--data-urlencode 'group_id=g1'")
   })
 })

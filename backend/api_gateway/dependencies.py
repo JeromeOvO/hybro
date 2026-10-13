@@ -19,6 +19,7 @@ from agent.protocols import (
 )
 from common.auth import ClerkUser, get_current_user
 from common.protocols import (
+    AgentMatcher,
     AgentRegistry,
     ExecutionEngine,
     FileStorage,
@@ -38,6 +39,7 @@ from room.protocols import RoomCenterCompatibility
 class APIGatewayDeps:
     agent_center: AgentCenterCompatibility
     agent_service: AgentRegistry
+    agent_matcher: AgentMatcher
     capability_issue_service: AgentCapabilityIssueStore
     agent_liveness_checker: AgentLivenessChecker
     agent_group_store: AgentGroupStoreCompatibility
@@ -193,6 +195,7 @@ def get_agent_network(
     return AgentNetworkService(
         deps.agent_service,
         deps.agent_group_store,
+        deps.agent_matcher,
         requesting_user_id=user.user_id,
     )
 
