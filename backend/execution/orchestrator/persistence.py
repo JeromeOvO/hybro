@@ -21,10 +21,14 @@ NON_TERMINAL_RUN_STATUSES = (
     "finalizing",
 )
 
-# Suspended Runs remain dormant until ``recovery_claim.next_attempt_at``.  At
-# the profile deadline generic recovery must terminalize even when no HITL
-# answer/cancel arrives, otherwise accepted public Tool children stay open
-# forever.
+# A suspended Run waits for the owner or an external Agent. Its deadline clock
+# is stopped while it waits (``BudgetState.suspended_at``), so it does not end
+# at the profile deadline; it ends on an answer, a late result, a cancel, or a
+# call that exceeds its wait ceiling.
+SUSPENDED_RUN_STATUSES = frozenset({"waiting_external", "awaiting_user"})
+
+# Suspended Runs keep a finite far-future recovery schedule while dormant and
+# are re-armed at their extended deadline when they resume.
 RECOVERY_ELIGIBLE_RUN_STATUSES = (
     "queued",
     "running",

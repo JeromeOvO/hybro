@@ -631,6 +631,8 @@ class BudgetState(ContractModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     deadline_at: datetime
+    # Set while the Run is suspended; the deadline clock is stopped meanwhile.
+    suspended_at: datetime | None = None
     wrap_up_requested: bool = False
 
     @model_validator(mode="after")

@@ -119,6 +119,53 @@ committing; a recreated Room cannot receive an old-incarnation artifact. Room
 epoch activation/deactivation replay uses creation/deletion identity and the
 winner's timestamp rather than caller timestamp equality.
 
+### Canonical wait semantics
+
+A canonical Run waits in `awaiting_user` (owner input) or `waiting_external`
+(a remote Agent). Waiting is not active time:
+
+- The deadline clock stops while the persisted status is suspended.
+  `OrchestratorKernel._checkpoint` sets `BudgetState.suspended_at` when the
+  status enters `waiting_external`/`awaiting_user` and keeps it across a move
+  between the two. When the status leaves suspension, `deadline_at` is extended
+  in place by the suspended duration and `suspended_at` is cleared. The kernel
+  no longer ends a suspended Run at its deadline; model turns and tool calls
+  still check the extended deadline, so active time stays bounded.
+- A suspended Run has a dormant recovery schedule: `now + 10 years`
+  (`DORMANT_RECOVERY_DELAY`), never `None`, which would mean "due now". The
+  hosted driver and generic recovery both release suspended Runs with it.
+  Generic recovery does not re-emit `run_started` for a suspended Run; one that
+  is due anyway (an earlier watchdog, an explicit wake) is re-driven once and
+  returns to the dormant schedule. `schedule_run_recovery` still moves the
+  schedule earlier for typed recoverable failures.
+- A late result or answer for a Run with no live driver resumes through
+  `RunAddressedToolObservationSink.deliver`. Before re-entry it re-arms the
+  watchdog at the extended deadline, so a crash after the resume is re-driven
+  at that deadline.
+- Canonical calls register no push configuration. Late results arrive by
+  `tasks/get` polling in call recovery, every `retry_backoff_max_seconds`. A
+  `working` or `continuation_pending` call with an authoritative remote task
+  alias (`a2a_task_id`) is exempt from `call_deadline_exceeded`, including
+  after a continuation returns it to `working` with the frozen deadline. It
+  expires only after `orchestrator_call_wait_ceiling_hours` (default 168) from
+  its `accepted_at`. A call without the alias still expires at the frozen
+  deadline. External Agents must support `tasks/get`.
+- Cancellation is local first. The two user-initiated paths,
+  `route_cancellation_by_user_message` and `cancel_hitl_interaction`, pass
+  `notify_remote=True` to `A2ACancellationCoordinator.cancel_run`. After a call
+  is canceled locally, a call that this cancellation ended and that has a
+  remote task alias gets one fire-and-forget `A2ADispatchPort.cancel`; failures
+  are logged and never change the local outcome. Recovery cancellation and HITL
+  expiry stay local. When a supervisor approval fails or expires,
+  `terminalize_canonical_hitl_run` cancels the Run's calls locally before it
+  terminalizes the Run, so parallel calls do not stay non-terminal.
+
+Chat impact: a suspended chat Run keeps the room's single active-Run slot
+(`orchestrator_active_room_unique_canceling`) until the user answers or
+cancels, or a polled call reaches its ceiling. This covers supervisor
+`ask_user`, model-surfaced Agent interactions, and `waiting_external` Runs.
+The room shows "needs input" or processing meanwhile.
+
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
 currently present in this repository.
@@ -1128,8 +1175,8 @@ driver still owns, and a driver that dies without releasing stays identifiable.
 Graceful shutdown settles the Runs this process owns as `failed` with reason
 `interrupted`; if the process is killed first, the lease lapses and recovery
 applies the same settlement instead of resuming work whose driver is gone.
-Suspended Runs are unaffected: the driver releases the lease on suspension, so
-their scheduled wake and profile-deadline terminalization behave as before.
+Suspended Runs are unaffected: the driver releases the lease on suspension with
+the dormant recovery schedule described in "Canonical wait semantics".
 
 Generic Run recovery repairs missing or wrong-kind dedicated cancellation rows
 before due selection. Its cancellation branch first terminalizes every local A2A
@@ -1903,7 +1950,8 @@ shapes. Canonical Assistant IDs and internal-turn
 IDs are checkpointed before provider I/O. Recovery restores/adopts any missing
 `turn_start` and `message_start` parents before terminal children, and live Runs
 schedule generic recovery only at their durable deadline/watchdog boundary so a
-normal recovery tick cannot preempt a healthy provider stream. A
+normal recovery tick cannot preempt a healthy provider stream. Suspended Runs
+keep a dormant schedule until a resume re-arms them. A
 `RecoverableAdapterError` from hosted prompt/continuation/observation work or the
 run-addressed observation sink requests the same early recovery wake after five
 seconds, even without a live session. This includes an observation already
@@ -2747,6 +2795,13 @@ second lifecycle authority.
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
 routes do not need to know runtime implementation internals.
 
+Supervisor `ask_user` interactions take their deadline from
+`approval_deadline_hours`, injected through `create_hitl_service`. The default
+`None` stores no `expires_at`, so the interaction never appears in
+`iter_due_interactions` and waits until the user answers or cancels. A set value
+expires the interaction after that many hours and fails its Run. Canonical Agent
+interactions in `orchestrator_hitl_interactions` carry no expiry.
+
 HITL storage is exposed through a focused startup adapter over the HITL, message,
 and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
 access, or the full repository-store aggregate. `HITLService` uses store ports
@@ -3099,10 +3154,11 @@ When a continuation receipt initially routes terminal artifacts through the obse
 inbox, the synchronous post-answer wake queries due inbox work by exact call identity
 rather than scanning a global batch, then re-reads the exact answered call; a matching
 durable terminal plus answer marker is accepted as delivery proof instead of returning
-a stale 503. An `awaiting_user` Run remains dormant until an answer, cancel, terminal
-observation, or its durable profile deadline. At the deadline generic recovery closes
-the questionnaire and accepted Tool descendants once and settles the Run; ordinary
-polls before that timestamp do not wake it or emit periodic `processing` events.
+a stale 503. An `awaiting_user` Run remains dormant until an answer, cancel, or
+terminal observation; its profile deadline does not run while it waits. Ordinary
+recovery polls do not wake it or emit periodic `processing` events. Approval
+expiry or failure closes the questionnaire and accepted Tool descendants once and
+settles the Run as `failed`.
 
 The questionnaire endpoint `POST /rooms/{room_id}/hitl/respond-batch` requires an
 exact, duplicate-free answer inventory for the durable interaction. A missing or

@@ -907,7 +907,10 @@ class DualRuntimeRouter:
             )
         try:
             results = await self._runtime.cancellation_coordinator.cancel_run(
-                run.run_id, reason=reason, deletion_id=deletion_id
+                run.run_id,
+                reason=reason,
+                deletion_id=deletion_id,
+                notify_remote=True,
             )
             if any(
                 state not in TERMINAL_AGENT_CALL_STATES for state in results.values()
@@ -1053,6 +1056,7 @@ class DualRuntimeRouter:
         results = await self._runtime.cancellation_coordinator.cancel_run(
             route.orchestration_run_id,
             reason="hitl_canceled",
+            notify_remote=True,
         )
         if any(state not in TERMINAL_AGENT_CALL_STATES for state in results.values()):
             raise OrchestratorRoutingError(

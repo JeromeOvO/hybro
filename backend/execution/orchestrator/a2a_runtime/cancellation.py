@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 from hashlib import sha256
 
@@ -24,6 +26,8 @@ from .ports import (
 )
 from .terminal_interactions import TerminalInteractionFinalizer
 
+logger = logging.getLogger(__name__)
+
 
 class A2ACancellationCoordinator:
     """Make local cancellation terminal without waiting for a remote Agent."""
@@ -41,13 +45,14 @@ class A2ACancellationCoordinator:
     ) -> None:
         self.ledger = ledger
         self.room_epochs = room_epochs
-        # These ports remain constructor dependencies for composition compatibility.
-        # Cancellation no longer waits on either remote transport operation.
+        # Cancellation never waits on remote transport; ``dispatch`` only sends
+        # the optional best-effort remote cancel after local cancellation.
         self.dispatch = dispatch
         self.observations = observations
         self.terminal_interactions = TerminalInteractionFinalizer(hitl)
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
+        self._remote_cancellations: set[asyncio.Task[None]] = set()
 
     async def cancel_call(
         self,
@@ -117,8 +122,19 @@ class A2ACancellationCoordinator:
         )
 
     async def cancel_run(
-        self, run_id: str, *, reason: str, deletion_id: str | None = None
+        self,
+        run_id: str,
+        *,
+        reason: str,
+        deletion_id: str | None = None,
+        notify_remote: bool = False,
     ) -> dict[str, str]:
+        """Cancel every call of a Run locally.
+
+        With ``notify_remote`` each call this cancellation ended that has a
+        remote task also gets a best-effort remote cancel. It never delays or
+        changes the local outcome.
+        """
         results: dict[str, str] = {}
         for call in await self.ledger.list_for_run(run_id):
             results[call.call_record_id] = await self.cancel_call(
@@ -126,7 +142,34 @@ class A2ACancellationCoordinator:
                 reason=reason,
                 deletion_id=deletion_id,
             )
+            if (
+                notify_remote
+                and call.state not in TERMINAL_AGENT_CALL_STATES
+                and call.a2a_task_id is not None
+                and results[call.call_record_id] == "canceled"
+            ):
+                await self._notify_remote(call.call_record_id)
         return results
+
+    async def _notify_remote(self, call_record_id: str) -> None:
+        canceled = await self.ledger.load_by_record_id(call_record_id)
+        if canceled is None or canceled.cancellation_command is None:
+            return
+        task = asyncio.create_task(
+            self._send_remote_cancel(canceled.cancellation_command)
+        )
+        self._remote_cancellations.add(task)
+        task.add_done_callback(self._remote_cancellations.discard)
+
+    async def _send_remote_cancel(self, command: A2ACancellationCommand) -> None:
+        try:
+            await self.dispatch.cancel(command)
+        except Exception:
+            logger.warning(
+                "best-effort remote cancellation failed",
+                extra={"call_record_id": command.call_record_id},
+                exc_info=True,
+            )
 
 
 async def persist_local_cancellation(

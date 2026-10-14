@@ -53,6 +53,19 @@ from .ports import (
 
 logger = get_logger(__name__)
 
+# States whose own protocol bounds them; the frozen call deadline never expires
+# them.
+_DEADLINE_EXEMPT_STATES = frozenset(
+    {
+        "dispatching",
+        "delivery_uncertain",
+        "resuming",
+        "cancel_pending",
+        "input_required",
+        "auth_required",
+    }
+)
+
 RecoverDispatch = Callable[[AgentCallLedgerRecord], Awaitable[None]]
 RecoverPhase = Callable[[], Awaitable[None]]
 
@@ -74,6 +87,7 @@ class A2ACallRecoveryService:
         run_store: Any | None = None,
         canonical_hitl_control: CanonicalHITLControlPublisher | None = None,
         public_secret_values: tuple[str, ...] = (),
+        call_wait_ceiling: timedelta = timedelta(hours=168),
     ) -> None:
         self.ledger = ledger
         self.checkpoints = checkpoints
@@ -88,6 +102,7 @@ class A2ACallRecoveryService:
         self.run_store = run_store
         self.canonical_hitl_control = canonical_hitl_control
         self.public_secret_values = public_secret_values
+        self.call_wait_ceiling = call_wait_ceiling
 
     async def recover_due(self, *, due_at: datetime) -> int:
         records = await self.ledger.list_due(
@@ -124,14 +139,11 @@ class A2ACallRecoveryService:
         record = claimed
         if not await self.room_epochs.verify_active(record.room_id, record.room_epoch):
             return await self._expire(record, now=now, code="room_epoch_gone")
-        if now > record.dispatch_snapshot.deadline_at and record.state not in {
-            "dispatching",
-            "delivery_uncertain",
-            "resuming",
-            "cancel_pending",
-            "input_required",
-            "auth_required",
-        }:
+        if (
+            now > record.dispatch_snapshot.deadline_at
+            and record.state not in _DEADLINE_EXEMPT_STATES
+            and not self._awaits_acknowledged_task(record, now=now)
+        ):
             return await self._expire(record, now=now, code="call_deadline_exceeded")
         receipt_checkpointed = await self.checkpoints.is_acceptance_checkpointed(
             record.run_id,
@@ -501,6 +513,20 @@ class A2ACallRecoveryService:
                     and winner.inspection_attempts >= retry.inspection_attempts
                 )
             )
+        )
+
+    def _awaits_acknowledged_task(
+        self, record: AgentCallLedgerRecord, *, now: datetime
+    ) -> bool:
+        """True while a remote task the Agent acknowledged may still finish.
+
+        Such a call outlives the frozen Run deadline, including after a
+        continuation, and keeps being polled until the wait ceiling.
+        """
+        return (
+            record.state in {"working", "continuation_pending"}
+            and record.a2a_task_id is not None
+            and now - record.accepted_at <= self.call_wait_ceiling
         )
 
     async def _run_blocks_dispatch(self, record: AgentCallLedgerRecord) -> bool:

@@ -106,6 +106,7 @@ from execution.orchestrator.models import (
     OrchestratorProfile,
     RecoveryClaim,
 )
+from execution.orchestrator.persistence import SUSPENDED_RUN_STATUSES
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
 from execution.orchestrator.projection import (
     ProjectionListener,
@@ -115,6 +116,7 @@ from execution.orchestrator.projection import (
 from execution.orchestrator.session import (
     DefaultRunFactory,
     EventCancellationSignal,
+    dormant_recovery_at,
     interrupted_run_needs_settlement,
 )
 
@@ -136,6 +138,19 @@ class GenericRecoveryFailureDecision:
     next_attempt_at: datetime | None
     quarantined_at: datetime | None
     quarantine_reason: Literal["terminal_invariant_conflict"] | None
+
+
+def _generic_recovery_next_attempt(status: str, *, now: datetime) -> datetime | None:
+    """Schedule after a successful generic recovery pass.
+
+    Terminal Runs need none; suspended Runs stay dormant until a resume re-arms
+    them; any other Run is re-driven shortly.
+    """
+    if status in {"completed", "failed", "canceled", "budget_exhausted"}:
+        return None
+    if status in SUSPENDED_RUN_STATUSES:
+        return dormant_recovery_at(now)
+    return now + timedelta(seconds=2)
 
 
 def _generic_recovery_failure_decision(
@@ -576,6 +591,9 @@ def create_orchestrator_runtime(  # noqa: C901
         run_store=run_store,
         canonical_hitl_control=canonical_hitl_control,
         public_secret_values=public_secret_values,
+        call_wait_ceiling=timedelta(
+            hours=getattr(settings_obj, "orchestrator_call_wait_ceiling_hours", 168.0)
+        ),
     )
     artifact_recovery = A2AArtifactRecoveryService(inbox_recovery)
 
@@ -689,15 +707,17 @@ def create_orchestrator_runtime(  # noqa: C901
                 else:
                     # This deterministic root is safe both before and after its
                     # original append; the publisher reads back the same room row.
-                    await emit(
-                        "run_started",
-                        run,
-                        {
-                            "status": run.status,
-                            "mode": run.profile.profile_id,
-                            "started_at": run.created_at,
-                        },
-                    )
+                    # A suspended Run already published it before it suspended.
+                    if run.status not in SUSPENDED_RUN_STATUSES:
+                        await emit(
+                            "run_started",
+                            run,
+                            {
+                                "status": run.status,
+                                "mode": run.profile.profile_id,
+                                "started_at": run.created_at,
+                            },
+                        )
                     if run.tool_catalog is None:
                         raise RecoverableAdapterError(
                             "recoverable Run has no tool catalog"
@@ -723,11 +743,8 @@ def create_orchestrator_runtime(  # noqa: C901
                         run.run_id,
                         expected_state_version=current.state_version,
                         owner_id=recovery_owner,
-                        next_attempt_at=(
-                            None
-                            if current.status
-                            in {"completed", "failed", "canceled", "budget_exhausted"}
-                            else datetime.now(UTC) + timedelta(seconds=2)
+                        next_attempt_at=_generic_recovery_next_attempt(
+                            current.status, now=datetime.now(UTC)
                         ),
                     )
             except Exception as exc:

@@ -227,7 +227,9 @@ async def test_run_addressed_observation_sink_attaches_lifecycle_listener():
     kernel = SimpleNamespace(observe_tool=AsyncMock())
     listener = AsyncMock()
     sink = RunAddressedToolObservationSink(
-        run_store=SimpleNamespace(load=AsyncMock(return_value=SimpleNamespace())),
+        run_store=SimpleNamespace(
+            load=AsyncMock(return_value=SimpleNamespace(status="running"))
+        ),
         kernel_factory=lambda _run: kernel,
         signal_factory=lambda: SimpleNamespace(),
         listener=listener,
@@ -508,9 +510,12 @@ async def test_router_user_cancellation_terminalizes_live_canonical_run(catalog)
     )
 
     class CancellationCoordinator:
-        async def cancel_run(self, run_id, *, reason, deletion_id=None):
+        async def cancel_run(
+            self, run_id, *, reason, deletion_id=None, notify_remote=False
+        ):
             assert reason == "user:user-1"
             assert deletion_id is None
+            assert notify_remote is True
             return {f"call:{run_id}": "canceled"}
 
     router = DualRuntimeRouter(

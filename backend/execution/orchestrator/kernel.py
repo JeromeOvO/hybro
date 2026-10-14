@@ -16,7 +16,7 @@ from typing import Literal
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from .budget import BudgetExceeded, BudgetPolicy
+from .budget import BudgetExceeded, BudgetPolicy, apply_suspension_clock
 from .context import ContextCompiler, UnresolvedToolBatchError
 from .control import ClientCancellationRequested
 from .models import (
@@ -45,6 +45,7 @@ from .models import (
     ToolSuspension,
     UsageRecord,
 )
+from .persistence import SUSPENDED_RUN_STATUSES
 from .ports import (
     CancellationSignal,
     ContextCompactor,
@@ -1009,13 +1010,6 @@ class OrchestratorKernel:
                 return KernelRunResult("cancellation_pending", run)
             if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
                 return KernelRunResult(_outcome_for_status(run.status), run)
-            if (
-                run.status in {"waiting_external", "awaiting_user"}
-                and self.clock.now() >= run.budget.deadline_at
-            ):
-                return await self._terminate(
-                    run, status="budget_exhausted", reason="deadline"
-                )
             overflow = next(
                 (
                     message
@@ -5039,6 +5033,16 @@ class OrchestratorKernel:
         command_id: str,
     ) -> OrchestratorRunState:
         now = self.clock.now()
+        # The deadline clock stops while the persisted status is suspended and
+        # restarts, with the deadline extended by the pause, when it leaves.
+        budget = updates.get("budget", run.budget)
+        clocked = apply_suspension_clock(
+            budget,  # type: ignore[arg-type]
+            suspended=updates.get("status", run.status) in SUSPENDED_RUN_STATUSES,
+            now=now,
+        )
+        if clocked is not budget:
+            updates = {**updates, "budget": clocked}
         candidate = run.model_copy(
             update={
                 **updates,

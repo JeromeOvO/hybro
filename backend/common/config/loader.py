@@ -111,6 +111,12 @@ class Settings(BaseModel):
     # Mandatory canonical lifecycle worker cadence.
     orchestrator_worker_interval_seconds: int = Field(default=30, gt=0)
 
+    # Waits. A suspended Run's deadline clock is stopped; an acknowledged remote
+    # Agent call is polled until this ceiling, measured from its acceptance.
+    orchestrator_call_wait_ceiling_hours: float = Field(default=168.0, gt=0)
+    # Supervisor ask_user approval deadline; None means no deadline.
+    approval_deadline_hours: float | None = Field(default=None, gt=0)
+
     # Orchestrator canary observability (step 8). The canary job is disabled by
     # default and reads only the existing orchestrator durable stores. Thresholds
     # follow the suggested §8.2 initial values and are tuned before launch.

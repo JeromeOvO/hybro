@@ -22,6 +22,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         "supervisor_resume",
         "canonical_cancellation_requester",
         "public_secret_values",
+        "approval_deadline_hours",
     }
     legacy_aliases = {
         "store",
@@ -48,6 +49,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         supervisor_resume=kwargs.get("supervisor_resume"),
         canonical_cancellation_requester=kwargs.get("canonical_cancellation_requester"),
         public_secret_values=kwargs.get("public_secret_values", ()),
+        approval_deadline_hours=kwargs.get("approval_deadline_hours"),
     )
     service._persistence = kwargs.get("persistence")
     service._delivery = kwargs.get("delivery")

@@ -763,6 +763,77 @@ async def _project_orchestrator_agent_activity(
         )
 
 
+async def terminalize_canonical_hitl_run(
+    orchestrator_runtime: Any,
+    request: Any,
+    *,
+    terminal_status: str,
+    reason: str,
+    session_listener: Callable[[Any], Awaitable[None]],
+) -> bool:
+    """Settle the canonical Run that owns a terminal HITL interaction.
+
+    Returns False when the request is not owned by a canonical Run. Agent calls
+    of the Run are canceled locally before it ends, so parallel calls do not
+    stay non-terminal; while that cancellation is pending the call raises and
+    the HITL reconciler retries.
+    """
+    from execution.orchestrator.a2a_runtime.ledger import TERMINAL_AGENT_CALL_STATES
+    from execution.orchestrator.lifecycle import SessionEvent
+
+    run_id = request.orchestration_run_id
+    if orchestrator_runtime is None or not run_id:
+        return False
+    run = await orchestrator_runtime.run_store.load(run_id)
+    if run is None or run.lifecycle_family != "canonical":
+        return False
+    if run.tool_catalog is None:
+        raise RuntimeError("canonical HITL owner has no Tool catalog")
+    if terminal_status == "canceled":
+        command_id = run.cancellation_command_id
+        if run.status != "canceling" or command_id is None:
+            return run.status == "canceled"
+        results = await orchestrator_runtime.cancellation_coordinator.cancel_run(
+            run_id, reason="canonical_hitl_canceled"
+        )
+        if any(state not in TERMINAL_AGENT_CALL_STATES for state in results.values()):
+            return True
+        await orchestrator_runtime.session_host.reconcile_cancellation(run)
+        await orchestrator_runtime.session_host.signal_run_cancellation(run, command_id)
+        return True
+
+    results = await orchestrator_runtime.cancellation_coordinator.cancel_run(
+        run_id, reason="canonical_hitl_failed"
+    )
+    if any(state not in TERMINAL_AGENT_CALL_STATES for state in results.values()):
+        raise RuntimeError("local Agent-call cancellation remains pending")
+
+    async def emit(event_type, current, payload):
+        await session_listener(
+            SessionEvent(
+                event_type=event_type,
+                session_id=f"hitl-terminal:{current.run_id}",
+                run_id=current.run_id,
+                causation_id=request.request_id,
+                sequence=current.state_version,
+                timestamp=datetime.now(UTC),
+                payload=payload,
+                room_id=current.room_id,
+                user_message_id=current.request.user_message_id,
+                client_request_id=current.client_request_id,
+                lifecycle_family=current.lifecycle_family,
+            )
+        )
+
+    await orchestrator_runtime.kernel_factory(run.tool_catalog).terminalize(
+        run_id,
+        status="failed",
+        reason=reason,
+        lifecycle=emit,
+    )
+    return True
+
+
 @asynccontextmanager
 async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C901
     """Lifespan context manager to handle startup and shutdown events.
@@ -1567,73 +1638,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         return run.status
                 raise RuntimeError("canonical HITL cancellation CAS did not converge")
 
-            async def terminalize_canonical_hitl_run(
+            async def terminalize_canonical_hitl_run_port(
                 request: Any,
                 *,
                 terminal_status: str,
                 reason: str,
             ) -> bool:
-                from execution.orchestrator.a2a_runtime.ledger import (
-                    TERMINAL_AGENT_CALL_STATES,
-                )
-                from execution.orchestrator.lifecycle import SessionEvent
-
-                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
-                run_id = request.orchestration_run_id
-                if orchestrator_runtime is None or not run_id:
-                    return False
-                run = await orchestrator_runtime.run_store.load(run_id)
-                if run is None or run.lifecycle_family != "canonical":
-                    return False
-                if run.tool_catalog is None:
-                    raise RuntimeError("canonical HITL owner has no Tool catalog")
-                if terminal_status == "canceled":
-                    command_id = run.cancellation_command_id
-                    if run.status != "canceling" or command_id is None:
-                        return run.status == "canceled"
-                    results = (
-                        await orchestrator_runtime.cancellation_coordinator.cancel_run(
-                            run_id, reason="canonical_hitl_canceled"
-                        )
-                    )
-                    if any(
-                        state not in TERMINAL_AGENT_CALL_STATES
-                        for state in results.values()
-                    ):
-                        return True
-                    await orchestrator_runtime.session_host.reconcile_cancellation(run)
-                    await orchestrator_runtime.session_host.signal_run_cancellation(
-                        run, command_id
-                    )
-                    return True
-
-                async def emit(event_type, current, payload):
-                    await _orchestrator_session_listener(
-                        SessionEvent(
-                            event_type=event_type,
-                            session_id=f"hitl-terminal:{current.run_id}",
-                            run_id=current.run_id,
-                            causation_id=request.request_id,
-                            sequence=current.state_version,
-                            timestamp=datetime.now(UTC),
-                            payload=payload,
-                            room_id=current.room_id,
-                            user_message_id=current.request.user_message_id,
-                            client_request_id=current.client_request_id,
-                            lifecycle_family=current.lifecycle_family,
-                        )
-                    )
-
-                await orchestrator_runtime.kernel_factory(run.tool_catalog).terminalize(
-                    run_id,
-                    status="canceled" if terminal_status == "canceled" else "failed",
+                return await terminalize_canonical_hitl_run(
+                    getattr(app.state, "orchestrator_runtime", None),
+                    request,
+                    terminal_status=terminal_status,
                     reason=reason,
-                    cancellation_cause=(
-                        "policy" if terminal_status == "canceled" else None
-                    ),
-                    lifecycle=emit,
+                    session_listener=_orchestrator_session_listener,
                 )
-                return True
 
             async def request_supervisor_input_port(
                 *,
@@ -1757,7 +1774,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
                     orchestration_run_store,
                     run_lifecycle,
-                    canonical_terminalizer=terminalize_canonical_hitl_run,
+                    canonical_terminalizer=terminalize_canonical_hitl_run_port,
                 ),
                 lifecycle=hitl_lifecycle_store,
                 application=hitl_application,
@@ -1768,6 +1785,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 supervisor_resume=resume_supervisor_hitl_port,
                 canonical_cancellation_requester=request_canonical_hitl_cancellation,
                 public_secret_values=configured_public_secret_values(runtime.settings),
+                approval_deadline_hours=runtime.settings.approval_deadline_hours,
             )
 
             async def inspect_uncertain_hitl_command(command: dict) -> dict | None:

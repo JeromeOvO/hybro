@@ -25,6 +25,7 @@ from .models import (
     ToolObservation,
     UserMessage,
 )
+from .persistence import SUSPENDED_RUN_STATUSES
 from .ports import OrchestratorRunStore, ToolCatalog
 
 # Live execution lease. The in-process driver owns the Run's recovery claim while
@@ -37,6 +38,15 @@ _EXECUTION_LEASE_RENEW_SECONDS = 20.0
 _TERMINAL_RUN_STATUSES = frozenset(
     {"completed", "failed", "canceled", "budget_exhausted"}
 )
+
+# A suspended Run has no watchdog while it waits. Its recovery schedule is a
+# finite far-future value rather than None, because None means "due now".
+DORMANT_RECOVERY_DELAY = timedelta(days=3650)
+
+
+def dormant_recovery_at(now: datetime) -> datetime:
+    """Return the recovery schedule of a Run that is waiting, not working."""
+    return now + DORMANT_RECOVERY_DELAY
 
 
 def execution_owner_id(session_id: str) -> str:
@@ -270,16 +280,18 @@ class RoomAgentSession:
             next_attempt_at=self._next_recovery_attempt(run),
         )
 
-    @staticmethod
-    def _next_recovery_attempt(run: OrchestratorRunState) -> datetime | None:
+    def _next_recovery_attempt(self, run: OrchestratorRunState) -> datetime | None:
         """Restore the watchdog this Run needs once the driver stops owning it.
 
-        Terminal Runs need no recovery. Everything else keeps the profile
-        deadline watchdog; a typed recoverable failure moves that boundary
-        earlier afterwards through ``schedule_run_recovery``.
+        Terminal Runs need no recovery and suspended Runs stay dormant until a
+        resume re-arms them. Everything else keeps the deadline watchdog; a
+        typed recoverable failure moves that boundary earlier afterwards
+        through ``schedule_run_recovery``.
         """
         if run.status in _TERMINAL_RUN_STATUSES:
             return None
+        if run.status in SUSPENDED_RUN_STATUSES:
+            return dormant_recovery_at(self.clock.now())
         return run.budget.deadline_at
 
     def owns_run(self, run_id: str) -> bool:
@@ -609,6 +621,7 @@ def _replayed_result(run: OrchestratorRunState) -> KernelRunResult | None:
 SessionRunResult = KernelRunResult
 
 __all__ = [
+    "DORMANT_RECOVERY_DELAY",
     "DefaultRunFactory",
     "EventCancellationSignal",
     "RoomAgentSession",
@@ -616,4 +629,5 @@ __all__ = [
     "RunFactory",
     "SessionConflict",
     "SessionRunResult",
+    "dormant_recovery_at",
 ]

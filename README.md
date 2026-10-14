@@ -129,6 +129,24 @@ Provider/model changes. Startup generates missing internal tokens in `auth.json`
 without rotating existing values. Backend overrides live under `backend`, public
 frontend overrides under `frontend`, and image output size is `image_size`.
 
+### Backend configuration fields
+
+Waits for the owner or for a remote Agent:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend.approval_deadline_hours` | `null` (no deadline) | Hours before an unanswered supervisor question expires and fails its Run. Must be greater than 0 when set. |
+| `backend.orchestrator_call_wait_ceiling_hours` | `168` (seven days) | Hours an acknowledged remote Agent task is polled with `tasks/get` before the call expires. Must be greater than 0. |
+
+```bash
+./scripts/hybro config set backend.approval_deadline_hours 48
+./scripts/hybro config set backend.orchestrator_call_wait_ceiling_hours 72.5
+```
+
+A Run waiting for an answer or a remote Agent does not count that time against
+its profile deadline, so it can wait as long as these limits allow. While it
+waits it keeps the room's single active-Run slot.
+
 ### Existing installations
 
 If you previously ran `hybro setup` and have a `~/.hybro/config.yaml`, convert

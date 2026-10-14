@@ -9,7 +9,6 @@ transitions.
 
 from __future__ import annotations
 
-from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1475,9 +1474,10 @@ async def test_terminal_abandonment_failure_is_mutation_free_and_retries_exactly
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("clear_active_turn", [False, True])
-async def test_expired_suspended_run_closes_all_descendants_and_replays_noop(
+async def test_expired_approval_closes_all_descendants_and_replays_noop(
     clear_active_turn,
 ):
+    """A suspended Run no longer ends at its deadline; approval expiry ends it."""
     from delivery.snapshot import RoomEventFold
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
@@ -1547,9 +1547,6 @@ async def test_expired_suspended_run_closes_all_descendants_and_replays_noop(
 
     expired = waiting.run.model_copy(
         update={
-            "budget": waiting.run.budget.model_copy(
-                update={"deadline_at": NOW - timedelta(seconds=1)}
-            ),
             "active_internal_turn_id": None if clear_active_turn else active_turn_id,
             "active_assistant_message_id": (
                 None if clear_active_turn else waiting.run.active_assistant_message_id
@@ -1575,9 +1572,14 @@ async def test_expired_suspended_run_closes_all_descendants_and_replays_noop(
         return list(records.values())
 
     kernel.canonical_event_reader = canonical_event_reader
-    terminal = await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
-    assert terminal.outcome == "budget_exhausted"
-    assert terminal.run.status == "budget_exhausted"
+    terminal = await kernel.terminalize(
+        run_id,
+        status="failed",
+        reason="Human input deadline expired",
+        lifecycle=lifecycle,
+    )
+    assert terminal.outcome == "failed"
+    assert terminal.run.status == "failed"
     assert terminal.run.projection_state == "settled"
     assert all(item.status == "completed" for item in terminal.run.projection_outbox)
     assert runtime.abandoned == [("parent-1", "interaction-1")]
@@ -1641,7 +1643,7 @@ async def test_expired_suspended_run_closes_all_descendants_and_replays_noop(
                 "started_at": terminal.run.created_at.isoformat(),
                 "settled_at": NOW.isoformat(),
                 "duration_ms": 1,
-                "failure_code": "budget_exhausted",
+                "failure_code": "internal_error",
                 "error_summary": "The request could not be completed.",
             },
             "correlation_id": terminal.run.client_request_id,
@@ -1859,7 +1861,10 @@ async def test_terminal_preflight_rejects_malformed_public_tool_end_before_effec
 
 @pytest.mark.asyncio
 async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
-    """Crash after public append but before the aggregate emitted checkpoint."""
+    """Crash after public append but before the aggregate emitted checkpoint.
+
+    Approval expiry, not the Run deadline, terminalizes the suspended Run.
+    """
     from delivery.snapshot import RoomEventFold
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
@@ -1971,9 +1976,6 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
 
     expired = waiting.run.model_copy(
         update={
-            "budget": waiting.run.budget.model_copy(
-                update={"deadline_at": NOW - timedelta(seconds=1)}
-            ),
             "tool_batches": batches,
             "state_version": waiting.run.state_version + 1,
         }
@@ -1990,9 +1992,14 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
 
     kernel.canonical_event_reader = canonical_event_reader
     emissions.clear()
-    terminal = await kernel.run(run_id, signal=NeverCancelled(), lifecycle=lifecycle)
+    terminal = await kernel.terminalize(
+        run_id,
+        status="failed",
+        reason="Human input deadline expired",
+        lifecycle=lifecycle,
+    )
 
-    assert terminal.outcome == "budget_exhausted"
+    assert terminal.outcome == "failed"
     recovered_parent = terminal.run.tool_batches[0].entries[0]
     assert recovered_parent.state == "terminal"
     assert recovered_parent.public_terminal_emitted is True
@@ -2031,7 +2038,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
                     "started_at": terminal.run.created_at.isoformat(),
                     "settled_at": NOW.isoformat(),
                     "duration_ms": 1,
-                    "failure_code": "budget_exhausted",
+                    "failure_code": "internal_error",
                     "error_summary": "The request could not be completed.",
                 },
                 "correlation_id": terminal.run.client_request_id,
