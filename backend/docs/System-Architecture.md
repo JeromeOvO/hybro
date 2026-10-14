@@ -3019,7 +3019,12 @@ Focused tests are organized by module and workflow:
 
 - `tests/test_api_*`: route and API behavior.
 - `tests/test_agent_*`: agent registry, matching, facade behavior.
-- `tests/test_room_*`: room facade and room membership.
+- `tests/test_room_*` and `tests/test_chat_service.py`: conversation container,
+  room membership, and chat room settings.
+- `tests/test_module_boundaries.py`: cross-module import rules. A domain module
+  imports another only through its package root or `protocols`; `common` and
+  `models` import no domain module; `dal` imports none outside an exact debt
+  list. `tests/test_module_protocol_inventory.py` pins module-local protocols.
 - `tests/test_context_memory_*`: memory projection, assembly, compaction, search.
 - `tests/test_delivery_*`: SSE, event bus, cancellation, delivery protocols.
 - `tests/test_execution_*` and related orchestration tests: execution flows.
