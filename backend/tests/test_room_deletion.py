@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
-from models.request import RoomCenterRoomSettingRequest
-from room.compat.runtime import RoomServices
-from room.deletion import (
+from conversation.deletion import (
     RoomDeletionLifecycle,
     RoomDeletionService,
     RoomFileDeletionLifecycle,
 )
+from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
+from models.request import RoomCenterRoomSettingRequest
+from room.compat.runtime import RoomServices
 
 from ._orchestrator_helpers import NOW
 
@@ -346,7 +346,7 @@ async def test_runtime_delete_is_thin_delegate_and_missing_binding_fails_fast():
 
 
 def test_deletion_service_uses_only_narrow_ports_and_container_wires_them():
-    service_source = Path("room/deletion.py").read_text()
+    service_source = Path("conversation/deletion.py").read_text()
     container_source = Path("container.py").read_text()
 
     assert "RoomServices" not in service_source

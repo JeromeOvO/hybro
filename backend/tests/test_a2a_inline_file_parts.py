@@ -66,14 +66,14 @@ def test_file_mode_helpers_normalize_object_cards():
     [(0, 0), (1, 4), (3, 4), (4, 8)],
 )
 def test_encoded_base64_size(raw_size, encoded_size):
-    from room.a2a_file_parts import encoded_base64_size
+    from conversation.a2a_file_parts import encoded_base64_size
 
     assert encoded_base64_size(raw_size) == encoded_size
 
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_builds_inline_bytes():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     raw = b"pdfdata"
     reader = BytesReader({"file-1": raw})
@@ -98,7 +98,7 @@ async def test_build_attachment_file_parts_builds_inline_bytes():
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_unsupported_mime_before_read():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader({"file-1": b"pdfdata"})
 
@@ -119,7 +119,7 @@ async def test_build_attachment_file_parts_rejects_unsupported_mime_before_read(
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_mixed_set_when_any_mime_unsupported():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader(
         {
@@ -153,7 +153,7 @@ async def test_build_attachment_file_parts_rejects_mixed_set_when_any_mime_unsup
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_declared_raw_oversize_before_read():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader({"file-1": b"pdfdata"})
 
@@ -173,7 +173,7 @@ async def test_build_attachment_file_parts_rejects_declared_raw_oversize_before_
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_declared_aggregate_encoded_oversize():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader({"file-1": b"pdfdata"})
 
@@ -194,7 +194,7 @@ async def test_build_attachment_file_parts_rejects_declared_aggregate_encoded_ov
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_actual_aggregate_encoded_oversize():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader({"file-1": b"pdfdata"})
 
@@ -216,7 +216,7 @@ async def test_build_attachment_file_parts_rejects_actual_aggregate_encoded_over
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_handles_missing_storage_bytes():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader({"file-1": None})
 
@@ -235,7 +235,7 @@ async def test_build_attachment_file_parts_handles_missing_storage_bytes():
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_rejects_empty_storage_bytes():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
 
     reader = BytesReader({"file-1": b""})
 
@@ -255,14 +255,14 @@ async def test_build_attachment_file_parts_rejects_empty_storage_bytes():
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_normalizes_storage_exceptions(caplog):
-    from room.a2a_file_parts import (
+    from conversation.a2a_file_parts import (
         AttachmentDispatchContext,
         build_attachment_file_parts,
     )
 
     reader = BytesReader({"file-1": RuntimeError("storage down")})
 
-    with caplog.at_level(logging.ERROR, logger="room.a2a_file_parts"):
+    with caplog.at_level(logging.ERROR, logger="conversation.a2a_file_parts"):
         result = await build_attachment_file_parts(
             attachments=[_attachment()],
             agent_card={"default_input_modes": ["application/pdf"]},
@@ -290,7 +290,7 @@ async def test_build_attachment_file_parts_normalizes_storage_exceptions(caplog)
 
 @pytest.mark.asyncio
 async def test_build_attachment_file_parts_reports_storage_oversize_as_file_too_large():
-    from room.a2a_file_parts import build_attachment_file_parts
+    from conversation.a2a_file_parts import build_attachment_file_parts
     from room_files import FileTooLargeError
 
     reader = BytesReader({"file-1": FileTooLargeError("file-1")})

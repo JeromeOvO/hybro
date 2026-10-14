@@ -11,6 +11,11 @@ from common.types import DataPart, Message, Part, TextPart
 from common.types import MessageRole as Role
 from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
 from common.utils.logger import get_logger
+from conversation.a2a_file_parts import (
+    AttachmentDispatchContext,
+    AttachmentPreflightFailure,
+)
+from conversation.attachments import build_message_parts as platform_build_message_parts
 from conversation.turn_context import (
     TurnQuoteMissingError,
     format_quoted_context_header,
@@ -21,8 +26,6 @@ from models.quote import QuotedSnippet
 from models.request import AgentCenterRequest, RoomCenterAgentMessageRequest
 from models.response import AgentCenterResponse, RoomCenterAgentMessageResponse
 from models.room import RoomUserMessage, UserAttachment
-from room.a2a_file_parts import AttachmentDispatchContext, AttachmentPreflightFailure
-from room.attachments import build_message_parts as platform_build_message_parts
 
 logger = get_logger(__name__)
 

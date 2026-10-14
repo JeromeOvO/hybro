@@ -19,13 +19,13 @@ from common.idempotency import (
 )
 from common.protocols import MongoDAL
 from common.utils.logger import get_logger
-from room.idempotency import (
+from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
     stored_fingerprint_matches,
 )
-from room.message_graph import normalize_history_rows, status_update_payload
-from room.timeline import (
+from conversation.message_graph import normalize_history_rows, status_update_payload
+from conversation.timeline import (
     SOURCE_RANK,
     normalize_timeline_document,
     timeline_key,

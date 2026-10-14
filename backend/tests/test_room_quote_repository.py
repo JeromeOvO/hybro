@@ -60,7 +60,7 @@ class FakeMongo:
 
 
 def test_room_quote_repository_roundtrips_quote_model():
-    from room.repository import RoomQuoteMongoRepository
+    from conversation.repository import RoomQuoteMongoRepository
 
     collection = FakeCollection()
     repo = RoomQuoteMongoRepository(mongo=FakeMongo(collection))
@@ -94,7 +94,7 @@ def test_room_quote_repository_roundtrips_quote_model():
 
 
 def test_room_quote_repository_delete_for_room_uses_room_query():
-    from room.repository import RoomQuoteMongoRepository
+    from conversation.repository import RoomQuoteMongoRepository
 
     collection = FakeCollection(
         [

@@ -19,6 +19,7 @@ from common.dto import (
     UserMessageInsertResult,
 )
 from common.types import Task, TaskState, TaskStatus
+from conversation.idempotency import IdempotencyConflictError
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from models.quote import QuoteSourceKind
 from models.request import RoomCenterUserMessageRequest
@@ -30,7 +31,6 @@ from models.room import (
     UserAttachment,
 )
 from room import RoomFacade
-from room.idempotency import IdempotencyConflictError
 
 NOW = datetime(2026, 5, 11, tzinfo=UTC)
 

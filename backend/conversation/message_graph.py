@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from room.timeline import SOURCE_RANK, timeline_sort_us_from_value
+from conversation.timeline import SOURCE_RANK, timeline_sort_us_from_value
 
 
 def normalize_history_rows(

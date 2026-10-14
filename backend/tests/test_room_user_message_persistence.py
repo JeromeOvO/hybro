@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.dto import UserMessageInsertResult
-from models.room import MessageContent, RoomUserMessage, UserAttachment
-from room.idempotency import UserMessagePersistenceError
-from room.user_message_persistence import (
+from conversation.idempotency import UserMessagePersistenceError
+from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
 )
+from models.room import MessageContent, RoomUserMessage, UserAttachment
 
 
 class _Lease:
@@ -82,7 +82,7 @@ def _command(message: RoomUserMessage) -> UserMessageCommitCommand:
 
 def test_commit_service_is_independent_from_compatibility_and_broad_owners():
     root = Path(__file__).resolve().parents[1]
-    service_source = (root / "room" / "user_message_persistence.py").read_text()
+    service_source = (root / "conversation" / "user_message_persistence.py").read_text()
     runtime_tree = ast.parse((root / "room" / "compat" / "runtime.py").read_text())
     room_services = next(
         node

@@ -11,13 +11,13 @@ import pytest
 from pymongo.errors import DuplicateKeyError
 
 from common.dto import ExecutionRequest
+from conversation.repository import MessageMongoRepository
+from conversation.user_message_persistence import UserMessageCommitService
 from execution.facade import ExecutionFacade
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room
 from room import RoomFacade
 from room.compat.runtime import RoomServices
-from room.repository import MessageMongoRepository
-from room.user_message_persistence import UserMessageCommitService
 
 
 class _RacingUniqueCollection:

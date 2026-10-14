@@ -77,6 +77,13 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
+from conversation.membership_source import RepositoryRoomMembershipSeedSource
+from conversation.repository import RoomQuoteMongoRepository
+from conversation.timeline import (
+    TIMELINE_MIGRATION_MARKER_COLLECTION,
+    TIMELINE_MIGRATION_MARKER_ID,
+    TIMELINE_MIGRATION_VERSION,
+)
 from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.event_publisher import EventPublisherImpl
@@ -114,13 +121,6 @@ from orchestrator_composition import (
     validate_orchestrator_runtime,
 )
 from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
-from room.membership_source import RepositoryRoomMembershipSeedSource
-from room.repository import RoomQuoteMongoRepository
-from room.timeline import (
-    TIMELINE_MIGRATION_MARKER_COLLECTION,
-    TIMELINE_MIGRATION_MARKER_ID,
-    TIMELINE_MIGRATION_VERSION,
-)
 from room_files import LocalFileContentStore, RoomFiles
 
 logger = get_logger(__name__)
@@ -890,6 +890,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.service import AgentService
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
+            from conversation.agent_message_preparation import (
+                AgentMessagePreparationService,
+            )
+            from conversation.deletion import RoomDeletionService
+            from conversation.timeline_projection import RoomTimelineProjector
+            from conversation.user_message_persistence import UserMessageCommitService
             from dal.orchestrator.epoch_bindings import (
                 EpochScopedOrchestratorCleanup,
                 bind_room_epoch_store,
@@ -916,14 +922,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 LocalAgentDiscoveryConfig,
                 LocalAgentService,
             )
-            from room.agent_message_preparation import AgentMessagePreparationService
             from room.compat.runtime import (
                 room_runtime,
             )
-            from room.deletion import RoomDeletionService
             from room.route_adapter import RoomRouteAdapter
-            from room.timeline_projection import RoomTimelineProjector
-            from room.user_message_persistence import UserMessageCommitService
 
             # The compatibility runtime is process-global. Clear bindings from a
             # previous failed or completed lifespan before composing this one.
@@ -2734,7 +2736,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 raise OrchestratorCompositionError(
                     "Orchestrator runtime composition incomplete: " + ", ".join(missing)
                 )
-            from room.agent_call_detail import CanonicalAgentCallDetailService
+            from conversation.agent_call_detail import CanonicalAgentCallDetailService
 
             app.state.canonical_agent_call_detail_reader = (
                 CanonicalAgentCallDetailService(

@@ -13,6 +13,7 @@ PRODUCTION_ROOTS = (
     BACKEND_ROOT / "jobs",
     BACKEND_ROOT / "models",
     BACKEND_ROOT / "room",
+    BACKEND_ROOT / "conversation",
 )
 ORCHESTRATION_RUNTIME_ROOT = BACKEND_ROOT / "execution" / "orchestration"
 ORCHESTRATION_RUNTIME_FILES = {

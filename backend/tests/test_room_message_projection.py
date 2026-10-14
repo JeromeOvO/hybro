@@ -18,10 +18,10 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.timeline_projection import RoomTimelineProjector
 from models.request import RoomCenterRoomMessageRequest
 from models.room import MessageContent, RoomAgentMessage
 from room.compat.runtime import RoomServices
-from room.timeline_projection import RoomTimelineProjector
 
 
 def _bind_projector(runtime: RoomServices) -> None:

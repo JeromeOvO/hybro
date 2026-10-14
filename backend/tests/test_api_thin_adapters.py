@@ -20,7 +20,7 @@ FORBIDDEN_API_IMPORT_PREFIXES = (
     "execution",
     "hub_runtime_bridge",
     "agent.repository",
-    "room.repository",
+    "conversation.repository",
     "context_memory.repository",
 )
 

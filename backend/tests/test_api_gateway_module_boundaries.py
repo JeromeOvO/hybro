@@ -14,7 +14,13 @@ MODULE_ROUTE_PROTOCOL_IMPORTS = {
     "room.protocols",
     "context_memory.protocols",
 }
-FORBIDDEN_ROUTE_MODULE_ROOTS = {"agent", "room", "context_memory", "a2a_adapter"}
+FORBIDDEN_ROUTE_MODULE_ROOTS = {
+    "agent",
+    "room",
+    "conversation",
+    "context_memory",
+    "a2a_adapter",
+}
 
 
 def _api_gateway_py_files():

@@ -36,6 +36,41 @@ from conversation import (
     SUPPORTED_CANDIDATE_SCOPE_SOURCES,
     normalize_candidate_scope,
 )
+from conversation.a2a_file_parts import (
+    AttachmentDispatchContext,
+    AttachmentPreflightFailure,
+)
+from conversation.attachments import (
+    ResolvedAttachments as _ResolvedAttachments,
+)
+from conversation.attachments import (
+    build_message_parts as platform_build_message_parts,
+)
+from conversation.attachments import (
+    resolve_and_apply_room_attachments,
+    resolve_room_attachments,
+)
+from conversation.deletion import RoomDeletionService
+from conversation.idempotency import (
+    IdempotencyConflictError,
+    UnexpectedUserMessageDuplicateError,
+    UserMessagePersistenceError,
+    stored_fingerprint_matches,
+)
+from conversation.timeline import (
+    TimelineCursorError,
+    decode_timeline_cursor,
+    encode_timeline_cursor,
+)
+from conversation.timeline_projection import RoomTimelineProjector
+from conversation.unbound import (
+    UNBOUND_CANCELLATION_CONTROL,
+    UNBOUND_RUNTIME_STORE,
+)
+from conversation.user_message_persistence import (
+    UserMessageCommitCommand,
+    UserMessageCommitService,
+)
 from llm_gateway import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import RoomMemory
@@ -66,38 +101,6 @@ from models.room import (
     UserAttachment,
 )
 from models.room_services_models import ParseResult, ResolvedRoutingScope
-from room.a2a_file_parts import AttachmentDispatchContext, AttachmentPreflightFailure
-from room.attachments import (
-    ResolvedAttachments as _ResolvedAttachments,
-)
-from room.attachments import (
-    build_message_parts as platform_build_message_parts,
-)
-from room.attachments import (
-    resolve_and_apply_room_attachments,
-    resolve_room_attachments,
-)
-from room.compat.unbound import (
-    UNBOUND_CANCELLATION_CONTROL,
-    UNBOUND_RUNTIME_STORE,
-)
-from room.deletion import RoomDeletionService
-from room.idempotency import (
-    IdempotencyConflictError,
-    UnexpectedUserMessageDuplicateError,
-    UserMessagePersistenceError,
-    stored_fingerprint_matches,
-)
-from room.timeline import (
-    TimelineCursorError,
-    decode_timeline_cursor,
-    encode_timeline_cursor,
-)
-from room.timeline_projection import RoomTimelineProjector
-from room.user_message_persistence import (
-    UserMessageCommitCommand,
-    UserMessageCommitService,
-)
 
 logger = get_logger(__name__)
 

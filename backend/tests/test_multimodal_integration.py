@@ -20,6 +20,7 @@ from common.types import (
 )
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
+from conversation.agent_message_preparation import AgentMessagePreparationService
 from models.memory import RoomMemory
 from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
@@ -29,7 +30,6 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room.agent_message_preparation import AgentMessagePreparationService
 from room.compat.runtime import RoomServices
 
 
@@ -163,7 +163,7 @@ class TestBuildMessageParts:
 
         result = await room_svc._build_message_parts("hello", [att], card)
 
-        from room.a2a_file_parts import AttachmentPreflightFailure
+        from conversation.a2a_file_parts import AttachmentPreflightFailure
 
         assert isinstance(result, AttachmentPreflightFailure)
         assert result.code == "agent_does_not_accept_file_type"

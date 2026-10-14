@@ -23,15 +23,18 @@ from common.dto import (
     RoomInfo,
     UserMessageInsertResult,
 )
-from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
-from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
-from room.compat.runtime import RoomServices
-from room.deletion import RoomDeletionService
-from room.idempotency import IdempotencyConflictError, UserMessagePersistenceError
-from room.user_message_persistence import (
+from conversation.deletion import RoomDeletionService
+from conversation.idempotency import (
+    IdempotencyConflictError,
+    UserMessagePersistenceError,
+)
+from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
 )
+from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
+from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
+from room.compat.runtime import RoomServices
 
 
 @pytest.fixture

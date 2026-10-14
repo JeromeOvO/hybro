@@ -33,14 +33,17 @@ def test_room_services_process_agent_message_is_thin_delegate():
 
 def test_agent_message_preparation_has_only_narrow_dependencies():
     from common.protocols import AttachmentContentReader
-    from room.agent_message_preparation import AgentMessagePreparationService
+    from conversation.agent_message_preparation import AgentMessagePreparationService
 
     source = inspect.getsource(AgentMessagePreparationService)
     type_hints = get_type_hints(AgentMessagePreparationService.__init__)
     assert "RoomServices" not in source
     assert "self._store" not in source
     assert "runtime_store" not in source
-    assert "room.compat" not in Path("room/agent_message_preparation.py").read_text()
+    assert (
+        "room.compat"
+        not in Path("conversation/agent_message_preparation.py").read_text()
+    )
     assert type_hints["attachment_content_reader"] is AttachmentContentReader
 
 

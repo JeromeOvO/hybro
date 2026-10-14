@@ -11,6 +11,10 @@ import pytest
 from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.protocols import AttachmentMetadataReader
 from common.types import Task, TaskState, TaskStatus
+from conversation.timeline_projection import (
+    HITLProjectionReader,
+    RoomTimelineProjector,
+)
 from models.room import (
     MessageContent,
     RoomAgentMessage,
@@ -18,10 +22,6 @@ from models.room import (
     UserAttachment,
 )
 from room.compat.runtime import RoomServices
-from room.timeline_projection import (
-    HITLProjectionReader,
-    RoomTimelineProjector,
-)
 
 
 def _page(*messages) -> RoomTimelinePage:
@@ -60,7 +60,7 @@ def test_runtime_timeline_method_keeps_only_query_and_response_orchestration():
 
 
 def test_projector_is_projection_only_and_uses_narrow_ports():
-    source = Path("room/timeline_projection.py").read_text()
+    source = Path("conversation/timeline_projection.py").read_text()
     init_signature = inspect.signature(RoomTimelineProjector)
 
     assert "RoomCenterRoomMessageRequest" not in source

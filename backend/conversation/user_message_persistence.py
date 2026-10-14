@@ -9,8 +9,8 @@ from common.dto import UserMessageInsertResult
 from common.eventing import InternalEventPublisher
 from common.message_commit_events import publish_message_committed
 from common.utils.logger import get_logger
+from conversation.idempotency import UserMessagePersistenceError
 from models.room import RoomUserMessage
-from room.idempotency import UserMessagePersistenceError
 
 logger = get_logger(__name__)
 

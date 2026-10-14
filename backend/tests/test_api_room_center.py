@@ -40,6 +40,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.timeline_projection import RoomTimelineProjector
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -47,7 +48,6 @@ from models.response import (
 from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 from room.compat.runtime import RoomServices
 from room.route_adapter import RoomRouteAdapter as RoomCenter
-from room.timeline_projection import RoomTimelineProjector
 
 # =============================================================================
 # Room Ownership Verification Tests

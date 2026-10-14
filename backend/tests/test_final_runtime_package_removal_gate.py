@@ -23,6 +23,7 @@ RUNTIME_SCAN_ROOTS = (
     "common",
     "database",
     "room",
+    "conversation",
     "execution",
     "context_memory",
     "delivery",

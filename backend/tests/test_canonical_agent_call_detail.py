@@ -5,8 +5,8 @@ from fastapi import HTTPException
 
 from api_gateway.routes.room_routes import get_canonical_agent_call_detail
 from common.auth import ClerkUser
+from conversation.agent_call_detail import CanonicalAgentCallDetailService
 from execution.orchestrator.models import DataPart, TextPart, ToolResult
-from room.agent_call_detail import CanonicalAgentCallDetailService
 
 
 class RunStore:

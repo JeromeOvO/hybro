@@ -56,7 +56,7 @@ def test_room_services_exposes_only_narrow_cancellation_binding():
 
 
 def test_unbound_cancellation_control_is_semantically_named_and_old_sentinels_are_gone():
-    import room.compat.unbound as unbound
+    import conversation.unbound as unbound
 
     service = RoomServices()
     with pytest.raises(

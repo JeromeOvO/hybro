@@ -4,8 +4,8 @@ from typing import Any
 
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
+from conversation.unbound import UNBOUND_RUNTIME_STORE
 from models.request import AgentCenterRequest
-from room.compat.unbound import UNBOUND_RUNTIME_STORE
 
 logger = get_logger(__name__)
 

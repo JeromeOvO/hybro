@@ -19,6 +19,7 @@ PRODUCTION_LLM_CONSUMER_ROOTS = [
     Path("llm_gateway"),
     Path("platform_module"),
     Path("room"),
+    Path("conversation"),
 ]
 
 PROVIDER_NAMED_REMOVED_RUNTIME_MODULES = {
@@ -71,6 +72,7 @@ def test_llm_gateway_services_import_boundary():
         REMOVED_RUNTIME_PACKAGE,
         "execution",
         "room",
+        "conversation",
         "agent",
         "platform_module",
         "api",
@@ -185,6 +187,7 @@ def test_llm_settings_are_not_read_by_feature_runtime_modules():
         Path("api_gateway"),
         Path("agent"),
         Path("room"),
+        Path("conversation"),
         Path("context_memory"),
         Path("llm_gateway/services"),
     ]

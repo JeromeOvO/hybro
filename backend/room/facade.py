@@ -36,15 +36,12 @@ from common.types import MessageRole as Role
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
-from models.quote import QuotedSnippet, QuoteSourceKind
-from models.response import RoomCenterUserMessageResponse
-from models.room import Room, RoomAgentMessage, RoomUserMessage
-from room.idempotency import (
+from conversation.idempotency import (
     IdempotencyConflictError,
     UserMessagePersistenceError,
 )
-from room.membership import resolve_membership_seed
-from room.translators import (
+from conversation.membership import resolve_membership_seed
+from conversation.translators import (
     agent_message_doc_from_input,
     create_room_doc,
     message_info_from_doc,
@@ -52,6 +49,9 @@ from room.translators import (
     saved_user_message_from_doc,
     user_message_doc_from_input,
 )
+from models.quote import QuotedSnippet, QuoteSourceKind
+from models.response import RoomCenterUserMessageResponse
+from models.room import Room, RoomAgentMessage, RoomUserMessage
 
 _ALLOWED_ROOM_UPDATE_KEYS = frozenset(
     {

@@ -12,9 +12,9 @@ from api_gateway.routes.room_routes import (
     reorder_pinned_rooms,
 )
 from common.auth import ClerkUser
+from conversation.repository.mongo import RoomMongoRepository
 from execution.repository.mongo import RunMongoRepository
 from room.facade import RoomFacade
-from room.repository.mongo import RoomMongoRepository
 
 
 @pytest.mark.asyncio

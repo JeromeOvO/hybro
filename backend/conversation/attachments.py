@@ -5,15 +5,15 @@ from typing import Any
 
 from common.protocols import AttachmentContentReader, AttachmentMetadataReader
 from common.types import Part, TextPart
-from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
-from models.request import RoomCenterUserMessageRequest
-from models.response import RoomCenterUserMessageResponse
-from models.room import RoomUserMessage, UserAttachment
-from room.a2a_file_parts import (
+from conversation.a2a_file_parts import (
     AttachmentDispatchContext,
     AttachmentPreflightFailure,
     build_attachment_file_parts,
 )
+from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
+from models.request import RoomCenterUserMessageRequest
+from models.response import RoomCenterUserMessageResponse
+from models.room import RoomUserMessage, UserAttachment
 
 
 @dataclass

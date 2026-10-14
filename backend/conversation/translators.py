@@ -10,7 +10,7 @@ from common.dto import (
     SavedUserMessage,
     UserMessageInput,
 )
-from room.membership import normalize_room_agent_set
+from conversation.membership import normalize_room_agent_set
 
 
 def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:

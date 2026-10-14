@@ -117,6 +117,7 @@ FORBIDDEN_DELIVERY_ROOTS = {
     "modules",
     "platform_module",
     "room",
+    "conversation",
     "services",
 }
 
@@ -138,6 +139,7 @@ PRODUCTION_REVERSE_IMPORT_ROOTS = [
     Path("modules"),
     Path("platform_module"),
     Path("room"),
+    Path("conversation"),
     Path("services"),
     Path("api_gateway"),
 ]
