@@ -11,7 +11,7 @@ from common.types import DataPart, Message, Part, TextPart
 from common.types import MessageRole as Role
 from common.utils.a2a_file_modes import agent_input_modes, mime_type_is_accepted
 from common.utils.logger import get_logger
-from execution.orchestration.turn_context import (
+from conversation.turn_context import (
     TurnQuoteMissingError,
     format_quoted_context_header,
     load_turn_context,

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from execution.orchestration.candidate_scope import (
+from conversation.candidate_scope import (
     candidate_scope_from_envelope,
     normalize_candidate_scope,
 )

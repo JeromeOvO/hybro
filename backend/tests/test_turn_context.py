@@ -1,10 +1,10 @@
-"""Tests for ``execution.orchestration.turn_context`` (QUOTE_REPLY)."""
+"""Tests for ``conversation.turn_context`` (QUOTE_REPLY)."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from execution.orchestration.turn_context import (
+from conversation.turn_context import (
     TurnQuoteMissingError,
     load_turn_context,
 )

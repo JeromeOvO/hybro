@@ -1,4 +1,4 @@
-from execution.hitl.public_prompt import (
+from common.public_prompt import (
     concrete_agent_input_prompt,
     is_internal_agent_contract_prompt,
     public_agent_input_prompt,

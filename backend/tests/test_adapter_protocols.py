@@ -44,7 +44,11 @@ def test_adapter_top_level_exports_are_explicit():
     assert LLMGatewayImpl is llm_gateway.LLMGatewayImpl
     assert ModelRegistryImpl is llm_gateway.ModelRegistryImpl
     assert set(a2a_adapter.__all__) == {"AgentTransportImpl", "AgentCardResolverImpl"}
-    assert set(llm_gateway.__all__) == {"LLMGatewayImpl", "ModelRegistryImpl"}
+    assert set(llm_gateway.__all__) == {
+        "LLMGatewayImpl",
+        "LLMServiceNotBoundError",
+        "ModelRegistryImpl",
+    }
 
 
 def test_llm_gateway_provider_mapping_is_typed_to_provider_protocol():

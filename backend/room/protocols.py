@@ -11,24 +11,6 @@ from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
-from models.room import Room, RoomAgentMessage, RoomUserMessage
-
-
-@runtime_checkable
-class A2ATaskReaderCompatibility(Protocol):
-    async def get_pending_task_messages_for_user(
-        self, user_id: str, states: list[str]
-    ) -> list[RoomAgentMessage]: ...
-    async def get_room_agent_message_by_message_id(
-        self, message_id: str
-    ) -> RoomAgentMessage | None: ...
-    async def get_room_by_room_id(self, room_id: str) -> Room | None: ...
-    async def get_room_user_message_by_message_id(
-        self, message_id: str
-    ) -> RoomUserMessage | None: ...
-    async def get_task_messages_for_room(
-        self, room_id: str, *, limit: int = 50
-    ) -> list[RoomAgentMessage]: ...
 
 
 @runtime_checkable
@@ -71,4 +53,4 @@ class RoomCenterCompatibility(Protocol):
     ) -> bool: ...
 
 
-__all__ = ["A2ATaskReaderCompatibility", "RoomCenterCompatibility"]
+__all__ = ["RoomCenterCompatibility"]

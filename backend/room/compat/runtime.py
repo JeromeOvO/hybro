@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass
 from uuid import uuid4
 
-from agent.routing_safety import sanitize_routing_agent_ids
+from agent import sanitize_routing_agent_ids
 from common.dto import (
     AgentRoutingCandidate,
     CreateRoomRequest,
@@ -32,12 +32,11 @@ from common.utils.cancellation import CancellationToken
 from common.utils.context_utils import build_minimal_context
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from context_memory.projection import _human_size, build_turn_content
-from execution.orchestration.candidate_scope import (
+from conversation import (
     SUPPORTED_CANDIDATE_SCOPE_SOURCES,
     normalize_candidate_scope,
 )
-from llm_gateway.errors import LLMServiceNotBoundError
+from llm_gateway import LLMServiceNotBoundError
 from models.agent import AgentStatus
 from models.memory import RoomMemory
 from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
@@ -3344,8 +3343,6 @@ room_services = room_runtime
 __all__ = [
     "RoomServices",
     "_ResolvedAttachments",
-    "_human_size",
-    "build_turn_content",
     "room_runtime",
     "room_services",
 ]

@@ -3,18 +3,18 @@ from __future__ import annotations
 import inspect
 from typing import Protocol
 
-from common.a2a_task_projection import public_persisted_task_data
-from common.dto import RoomTimelinePage
-from common.protocols import AttachmentMetadataReader
-from common.types import Artifact, Part, Task, TaskState, TextPart
-from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
-from common.utils.logger import get_logger
-from execution.hitl.public_prompt import concrete_agent_input_prompt
-from execution.task_tracking import (
+from common.a2a_task_projection import (
     extract_public_completed_status_text,
+    public_persisted_task_data,
     resolve_public_agent_response_text,
     resolve_public_task_label,
 )
+from common.dto import RoomTimelinePage
+from common.protocols import AttachmentMetadataReader
+from common.public_prompt import concrete_agent_input_prompt
+from common.types import Artifact, Part, Task, TaskState, TextPart
+from common.utils.a2a_helpers import get_message_from_task, get_text_from_message
+from common.utils.logger import get_logger
 from models.room import (
     CoordinatorAgentId,
     MessageContent,

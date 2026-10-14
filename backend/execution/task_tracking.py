@@ -14,10 +14,15 @@ from common.a2a_constants import (
     is_terminal_state,
 )
 from common.a2a_task_projection import (
+    _extract_text_from_message,
+    _state_value,
+    extract_public_completed_status_text,
     public_artifact_data,
     public_message_data,
     public_part_data,
     public_persisted_task_data,
+    resolve_public_agent_response_text,
+    resolve_public_task_label,
 )
 from common.types import Message, Part, Task, TaskState, TaskStatus, TextPart
 from common.types import MessageRole as Role
@@ -57,7 +62,6 @@ _PUBLIC_SAFE_STATUS_TEXT = {
     "canceled": "Task was canceled",
     "expired": "Task expired",
 }
-_COMPLETED_STATE = "completed"
 
 if TYPE_CHECKING:
     from execution.ports import A2ATaskTrackingStorePort
@@ -899,16 +903,6 @@ def _has_push_notification_capability(agent_card) -> bool:
     return bool(push_val)
 
 
-def _extract_text_from_message(message: Message) -> str:
-    texts = []
-    for part in message.parts or []:
-        if hasattr(part, "text") and part.text:
-            texts.append(part.text)
-        elif hasattr(part, "root") and hasattr(part.root, "text"):
-            texts.append(part.root.text)
-    return "".join(texts)
-
-
 def _extract_text_from_task(task: Task) -> str | None:
     if not task.artifacts:
         return None
@@ -978,17 +972,6 @@ def _extract_status_message(task: Task) -> str | None:
     return None
 
 
-def extract_public_completed_status_text(task: Task) -> str | None:
-    """Extract agent-authored public text from a completed A2A Task status."""
-    if _state_value(task.status.state) != _COMPLETED_STATE:
-        return None
-    message = task.status.message
-    if message is None or message.role != Role.AGENT:
-        return None
-    text = _extract_text_from_message(message).strip()
-    return text or None
-
-
 def _extract_reply_response_text(task_result) -> str | None:
     if getattr(task_result, "kind", None) == "task":
         task_text = _extract_text_from_task(task_result)
@@ -998,70 +981,6 @@ def _extract_reply_response_text(task_result) -> str | None:
     if getattr(task_result, "kind", None) == "message":
         return _extract_text_from_message(task_result)
     return None
-
-
-def resolve_public_task_label(extend_info: Any, agent_name: str) -> str:
-    if isinstance(extend_info, dict):
-        public_task_label = extend_info.get("public_task_label")
-        if isinstance(public_task_label, str) and public_task_label.strip():
-            return public_task_label.strip()
-    return f"Requesting {agent_name}"
-
-
-def resolve_public_agent_response_text(
-    room_agent_message: Any,
-    *,
-    preferred_text: str | None = None,
-    fallback_text: str | None = None,
-) -> str | None:
-    """Resolve the public agent-authored body without exposing dispatch seeds.
-
-    Modern A2A responses may carry their human-readable text separately from a
-    DataPart-only artifact.  Legacy rows can instead have the dispatched task
-    copied into ``message_text``; those values are not agent responses and must
-    not be rendered as one.
-    """
-
-    if isinstance(preferred_text, str) and preferred_text.strip():
-        return preferred_text.strip()
-
-    message_content = getattr(room_agent_message, "message_content", None)
-    stored_message_text = getattr(message_content, "message_text", None)
-    stored_message_text = (
-        stored_message_text.strip()
-        if isinstance(stored_message_text, str) and stored_message_text.strip()
-        else None
-    )
-
-    extend_info = getattr(room_agent_message, "extend_info", None)
-    public_label = resolve_public_task_label(
-        extend_info,
-        getattr(room_agent_message, "agent_id", None) or "agent",
-    )
-    public_dispatch_text = (
-        extend_info.get("public_dispatch_text")
-        if isinstance(extend_info, dict)
-        else None
-    )
-    dispatch_seed_texts = {
-        candidate.strip()
-        for candidate in (
-            getattr(room_agent_message, "task_content", None),
-            public_label,
-            public_dispatch_text,
-        )
-        if isinstance(candidate, str) and candidate.strip()
-    }
-    if stored_message_text and stored_message_text not in dispatch_seed_texts:
-        return stored_message_text
-
-    if isinstance(fallback_text, str) and fallback_text.strip():
-        return fallback_text.strip()
-    return None
-
-
-def _state_value(state: TaskState) -> str:
-    return state.value if hasattr(state, "value") else str(state)
 
 
 def _non_text_parts(artifacts) -> list[dict] | None:

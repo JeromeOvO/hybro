@@ -29,6 +29,10 @@ from common.dto import (
     HITLRouteSnapshot,
 )
 from common.dto.hitl import A2AInteractionSpec, HITLAnswerKind, HITLInteractionKind
+from common.public_prompt import (
+    GENERIC_AGENT_INPUT_PROMPT,
+    concrete_agent_input_prompt,
+)
 from common.utils.a2a_helpers import (
     is_authoritative_a2a_id as _is_authoritative_a2a_id,
 )
@@ -45,10 +49,6 @@ from execution.hitl.exceptions import (
     HITLRequestProjectionError,
     HITLRoomMismatchError,
     HITLRoutingFailedError,
-)
-from execution.hitl.public_prompt import (
-    GENERIC_AGENT_INPUT_PROMPT,
-    concrete_agent_input_prompt,
 )
 from execution.hitl.validation import (
     HITLAggregateCorruptionError,

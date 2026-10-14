@@ -1791,7 +1791,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
                 from a2a_adapter.remote_task import fetch_remote_task
                 from common.a2a_constants import TERMINAL_STATES
-                from execution.task_tracking import extract_public_completed_status_text
+                from common.a2a_task_projection import (
+                    extract_public_completed_status_text,
+                )
 
                 message = await message_store.get_room_agent_message_by_message_id(
                     command.get("continuation_message_id")

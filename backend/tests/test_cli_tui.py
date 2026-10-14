@@ -534,7 +534,11 @@ def test_package_initializer_defers_application_imports(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
     spec.loader.exec_module(module)
-    assert module.__all__ == ["LLMGatewayImpl", "ModelRegistryImpl"]
+    assert module.__all__ == [
+        "LLMGatewayImpl",
+        "LLMServiceNotBoundError",
+        "ModelRegistryImpl",
+    ]
     assert "LLMGatewayImpl" not in vars(module)
     assert "ModelRegistryImpl" not in vars(module)
 
