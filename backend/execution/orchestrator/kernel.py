@@ -44,6 +44,7 @@ from .models import (
     ToolResultMessage,
     ToolSuspension,
     UsageRecord,
+    UserMessage,
 )
 from .persistence import SUSPENDED_RUN_STATUSES
 from .ports import (
@@ -1161,6 +1162,16 @@ class OrchestratorKernel:
                         status="failed",
                         reason="unresolved tool batch could not be recovered",
                     )
+                continue
+
+            if run.profile.profile_id == "passthrough":
+                # Passthrough advances by deterministic synthetic steps on the
+                # same durable paths as model turns, without a model call.
+                outcome = await self._run_passthrough_step(
+                    run, signal, lifecycle=lifecycle
+                )
+                if outcome is not None:
+                    return outcome
                 continue
 
             grace = run.budget.model_turns_used >= run.profile.max_model_turns
@@ -4519,6 +4530,334 @@ class OrchestratorKernel:
         )
         return await self._complete(run, assistant)
 
+    async def _run_passthrough_step(
+        self,
+        run: OrchestratorRunState,
+        signal: CancellationSignal,
+        *,
+        lifecycle: KernelLifecycle | None,
+    ) -> KernelRunResult | None:
+        """Take the next model-free step of a passthrough Run.
+
+        The Run sends the user's text to its single mentioned Agent, forwards
+        a typed Agent interaction to the user, and publishes the Agent's answer
+        as the final message. Each step appends one synthetic Assistant message
+        in the same checkpoint that opens it, so recovery always finds the
+        message it has to finish and never needs a model retry. Returns None
+        when the loop should take another step.
+        """
+        presented = _presented_targets(run)
+        if presented:
+            return await self._passthrough_surface(
+                run, presented, signal, lifecycle=lifecycle
+            )
+        if not run.tool_batches:
+            return await self._passthrough_dispatch(run, signal, lifecycle=lifecycle)
+        result = run.tool_batches[0].entries[0].buffered_terminal_result
+        if result is None:
+            return await self._terminate(
+                run, status="failed", reason="passthrough_result_missing"
+            )
+        if result.status != "completed":
+            return await self._passthrough_fail(
+                run, reason=f"agent_{result.status}", lifecycle=lifecycle
+            )
+        return await self._passthrough_final(run, result, lifecycle=lifecycle)
+
+    async def _passthrough_fail(
+        self,
+        run: OrchestratorRunState,
+        *,
+        reason: str,
+        lifecycle: KernelLifecycle | None,
+    ) -> KernelRunResult:
+        """Fail the Run inside a Turn that closes as an error.
+
+        The dispatch Turn already closed when its call finished, and a failed
+        settlement requires an errored last Turn, as a failing model turn
+        would leave. The Turn identity includes the state version so that a
+        restart inside it opens a fresh one after the recovery retry.
+        """
+        turn_id = self._stable_id(run, "passthrough-turn", "failure", run.state_version)
+        message_id = (
+            "assistant-"
+            f"{self._stable_id(run, 'passthrough-failure', run.state_version)[:32]}"
+        )
+        run = await self._checkpoint(
+            run,
+            updates={
+                "active_internal_turn_id": turn_id,
+                "active_assistant_message_id": message_id,
+                "active_attempt": 1,
+                "active_public_text": "",
+                "greatest_public_text_offset": 0,
+            },
+            command_id=f"passthrough-failure:{message_id}",
+        )
+        await self._emit(
+            lifecycle,
+            "turn_started",
+            run,
+            {"internal_turn_id": turn_id, "attempt": 1},
+        )
+        await self._emit(
+            lifecycle,
+            "message_started",
+            run,
+            {"internal_turn_id": turn_id, "message_id": message_id},
+        )
+        return await self._terminate(run, status="failed", reason=reason)
+
+    async def _passthrough_dispatch(
+        self,
+        run: OrchestratorRunState,
+        signal: CancellationSignal,
+        *,
+        lifecycle: KernelLifecycle | None,
+    ) -> KernelRunResult | None:
+        scope = run.candidate_scope
+        if scope.source != "mention" or len(set(scope.agent_ids)) != 1:
+            return await self._terminate(
+                run, status="failed", reason="passthrough_requires_one_agent"
+            )
+        # The frozen catalog holds only the mentioned Agent's tools, one per
+        # skill; the first is the Agent's default skill.
+        tools = self.tool_catalog.list_tools(run)
+        if not tools:
+            return await self._terminate(
+                run, status="failed", reason="passthrough_agent_unavailable"
+            )
+        task = _user_request_text(run)
+        if not task:
+            return await self._terminate(
+                run, status="failed", reason="passthrough_requires_text"
+            )
+        turn_id = self._stable_id(run, "passthrough-turn", "dispatch")
+        assistant = AssistantMessage(
+            message_id=f"assistant-{self._stable_id(run, 'passthrough-dispatch')[:32]}",
+            content=[],
+            tool_calls=[
+                ToolCall(
+                    call_id=f"call-{self._stable_id(run, 'passthrough-call')[:32]}",
+                    tool_name=tools[0].name,
+                    arguments={"task": task},
+                )
+            ],
+            finish_reason="tool_calls",
+            usage=None,
+            created_at=self.clock.now(),
+        )
+        run = await self._open_passthrough_message(
+            run, assistant, turn_id=turn_id, lifecycle=lifecycle
+        )
+        return await self._passthrough_execute(
+            run, assistant, turn_id, signal, lifecycle=lifecycle
+        )
+
+    async def _passthrough_surface(
+        self,
+        run: OrchestratorRunState,
+        presented: list[tuple[str, int, int, ToolBatchEntry]],
+        signal: CancellationSignal,
+        *,
+        lifecycle: KernelLifecycle | None,
+    ) -> KernelRunResult | None:
+        presentation_id, _batch_index, _entry_index, _entry = presented[0]
+        # One presented target needs no arguments; several need the target.
+        arguments: dict[str, object] = (
+            {} if len(presented) == 1 else {"presentation_id": presentation_id}
+        )
+        turn_id = run.active_internal_turn_id or self._stable_id(
+            run, "passthrough-turn", "surface", presentation_id
+        )
+        identity = self._stable_id(run, "passthrough-surface", presentation_id)
+        assistant = AssistantMessage(
+            message_id=f"assistant-{identity[:32]}",
+            content=[],
+            tool_calls=[
+                ToolCall(
+                    call_id=f"call-{identity[32:]}",
+                    tool_name=SURFACE_AGENT_QUESTIONS_TOOL_NAME,
+                    arguments=arguments,
+                )
+            ],
+            finish_reason="tool_calls",
+            usage=None,
+            created_at=self.clock.now(),
+        )
+        run = await self._open_passthrough_message(
+            run, assistant, turn_id=turn_id, lifecycle=lifecycle
+        )
+        return await self._passthrough_execute(
+            run, assistant, turn_id, signal, lifecycle=lifecycle
+        )
+
+    async def _passthrough_final(
+        self,
+        run: OrchestratorRunState,
+        result: ToolResult,
+        *,
+        lifecycle: KernelLifecycle | None,
+    ) -> KernelRunResult:
+        sanitizer = PublicTextSanitizer(secret_values=self.public_secret_values)
+        try:
+            sanitizer.feed(_passthrough_answer_text(result))
+            sanitizer.flush()
+        except ValueError:
+            return await self._terminate(
+                run, status="failed", reason="public_text_oversized"
+            )
+        text = sanitizer.public_text
+        assistant = AssistantMessage(
+            message_id=f"assistant-{self._stable_id(run, 'passthrough-final')[:32]}",
+            content=[TextPart(text=text)] if text else [],
+            tool_calls=[],
+            finish_reason="stop",
+            usage=None,
+            created_at=self.clock.now(),
+        )
+        run = await self._open_passthrough_message(
+            run,
+            assistant,
+            turn_id=self._stable_id(run, "passthrough-turn", "final"),
+            lifecycle=lifecycle,
+        )
+        return await self._finalize_canonical_answer(
+            run, assistant, lifecycle=lifecycle
+        )
+
+    async def _open_passthrough_message(
+        self,
+        run: OrchestratorRunState,
+        assistant: AssistantMessage,
+        *,
+        turn_id: str,
+        lifecycle: KernelLifecycle | None,
+    ) -> OrchestratorRunState:
+        """Open the Turn and message and append the Assistant atomically."""
+        new_turn = run.active_internal_turn_id != turn_id
+        updates: dict[str, object] = {
+            "active_internal_turn_id": turn_id,
+            "active_assistant_message_id": assistant.message_id,
+            "active_attempt": 1,
+            "active_public_text": "",
+            "greatest_public_text_offset": 0,
+            "transcript": [*run.transcript, assistant],
+        }
+        if assistant.tool_calls:
+            updates["tool_batches"] = [
+                *run.tool_batches,
+                _new_tool_batch(assistant, internal_turn_id=turn_id),
+            ]
+        else:
+            updates.update(
+                proposed_final_message_id=assistant.message_id, status="finalizing"
+            )
+        run = await self._checkpoint(
+            run,
+            updates=updates,
+            command_id=f"passthrough-message:{assistant.message_id}",
+        )
+        if new_turn:
+            await self._emit(
+                lifecycle,
+                "turn_started",
+                run,
+                {"internal_turn_id": turn_id, "attempt": 1},
+            )
+        await self._emit(
+            lifecycle,
+            "message_started",
+            run,
+            {"internal_turn_id": turn_id, "message_id": assistant.message_id},
+        )
+        return run
+
+    async def _passthrough_execute(
+        self,
+        run: OrchestratorRunState,
+        assistant: AssistantMessage,
+        turn_id: str,
+        signal: CancellationSignal,
+        *,
+        lifecycle: KernelLifecycle | None,
+    ) -> KernelRunResult | None:
+        """Close a synthetic tool-call message and run its batch."""
+        await self._emit(
+            lifecycle,
+            "message_completed",
+            run,
+            {
+                "public_event_id": (
+                    f"public:{run.run_id}:{turn_id}:{assistant.message_id}:message_end"
+                ),
+                "internal_turn_id": turn_id,
+                "message_id": assistant.message_id,
+                "stop_reason": "tool_use",
+                "disposition": "commentary",
+                "text": "",
+            },
+        )
+        run = await self._checkpoint(
+            run,
+            updates={
+                "active_assistant_message_id": None,
+                "active_public_text": "",
+                "greatest_public_text_offset": 0,
+            },
+            command_id=f"public-message-end:{assistant.message_id}",
+        )
+        try:
+            result = await self._execute_tool_batch(
+                run, assistant, signal, lifecycle=lifecycle
+            )
+        except asyncio.CancelledError:
+            if signal.cancelled:
+                current = await self._load(run.run_id)
+                if current.status == "canceling":
+                    return KernelRunResult("cancellation_pending", current)
+                raise KernelConflict(
+                    "tool cancellation observed without durable cancellation"
+                ) from None
+            raise
+        if result == "retry":
+            # The synthetic declaration was rejected locally; there is no model
+            # to correct it.
+            return await self._terminate(
+                await self._load(run.run_id),
+                status="failed",
+                reason="passthrough_call_rejected",
+            )
+        if result == "decide":
+            return None
+        if result is not None:
+            return result
+        completed = await self._load(run.run_id)
+        closure = _canonical_turn_closure(completed, turn_id)
+        if closure is None:
+            return None
+        await self._emit(
+            lifecycle,
+            "turn_completed",
+            completed,
+            {
+                "internal_turn_id": turn_id,
+                "message_id": closure.message_id,
+                "tool_call_ids": list(closure.public_tool_call_ids),
+                "status": "completed",
+            },
+        )
+        await self._checkpoint(
+            completed,
+            updates={
+                "active_internal_turn_id": None,
+                "active_assistant_message_id": None,
+                "active_attempt": None,
+            },
+            command_id=f"public-turn-end:{turn_id}",
+        )
+        return None
+
     async def _complete(
         self, run: OrchestratorRunState, assistant: AssistantMessage
     ) -> KernelRunResult:
@@ -5161,6 +5500,34 @@ def _new_tool_batch(
             for index, call in enumerate(assistant.tool_calls)
         ],
     )
+
+
+def _user_request_text(run: OrchestratorRunState) -> str:
+    """The text of the user message that started the Run."""
+    message = next(
+        (item for item in run.transcript if isinstance(item, UserMessage)), None
+    )
+    if message is None:
+        return ""
+    return "\n".join(
+        part.text for part in message.content if isinstance(part, TextPart)
+    ).strip()
+
+
+def _passthrough_answer_text(result: ToolResult) -> str:
+    """The Agent's complete answer, as the passthrough final message text."""
+    parts: list[str] = []
+    for part in result.content:
+        if isinstance(part, TextPart):
+            if part.text:
+                parts.append(part.text)
+        elif isinstance(part, DataPart):
+            parts.append(
+                json.dumps(part.data, ensure_ascii=False, separators=(",", ":"))
+            )
+        elif isinstance(part, ArtifactRefPart):
+            parts.append(f"[artifact reference: {part.artifact_ref}]")
+    return "\n".join(parts)
 
 
 def _finalization_candidate(run: OrchestratorRunState) -> AssistantMessage | None:

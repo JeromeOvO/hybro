@@ -166,6 +166,20 @@ cancels, or a polled call reaches its ceiling. This covers supervisor
 `ask_user`, model-surfaced Agent interactions, and `waiting_external` Runs.
 The room shows "needs input" or processing meanwhile.
 
+### Passthrough profile (kernel only)
+
+`OrchestratorProfile` accepts `profile_id="passthrough"`, which needs no model
+route or prompt. The kernel advances such a Run without model turns: it sends
+the user's text as `{task}` to the first tool of the single mentioned Agent,
+forwards a typed Agent interaction to the user through
+`surface_agent_questions`, and publishes the Agent's completed result as the
+final message through the normal canonical finalization. A failed, rejected,
+canceled, or expired result fails the Run (`agent_<status>`); a scope that is
+not one mentioned Agent fails it before dispatch. Each synthetic Assistant
+message is appended in the checkpoint that opens it, so recovery resumes
+without a model retry. No route, request mode, or composition profile produces
+a passthrough Run yet; startup still resolves only `fast` and `ultimate`.
+
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
 currently present in this repository.

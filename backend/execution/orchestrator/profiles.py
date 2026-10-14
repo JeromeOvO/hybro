@@ -43,9 +43,9 @@ class PromptConfiguration(ContractModel):
 
 
 class ProfileConfiguration(ContractModel):
-    profile_id: Literal["fast", "ultimate"]
+    profile_id: Literal["fast", "ultimate", "passthrough"]
     thinking_level: str | None = None
-    max_model_turns: int = Field(gt=0)
+    max_model_turns: int = Field(ge=0)
     grace_model_turns: int = Field(ge=0)
     max_agent_calls: int = Field(gt=0)
     max_parallel_calls: int = Field(gt=0)
@@ -142,14 +142,21 @@ def resolve_prompt_snapshot(config: PromptConfiguration) -> PromptSnapshot:
 def resolve_profile_snapshot(
     config: ProfileConfiguration,
     *,
-    model: ModelRouteConfiguration,
-    prompt: PromptConfiguration,
+    model: ModelRouteConfiguration | None = None,
+    prompt: PromptConfiguration | None = None,
     preferred_strategy: Literal["native", "structured_action"] | None = None,
 ) -> OrchestratorProfile:
-    """Resolve an immutable Run-owned profile snapshot from test/runtime config."""
+    """Resolve an immutable Run-owned profile snapshot from test/runtime config.
+
+    Only the passthrough profile may omit the model route and prompt.
+    """
 
     return OrchestratorProfile(
         **config.model_dump(),
-        model=resolve_model_snapshot(model, preferred_strategy=preferred_strategy),
-        prompt=resolve_prompt_snapshot(prompt),
+        model=(
+            resolve_model_snapshot(model, preferred_strategy=preferred_strategy)
+            if model is not None
+            else None
+        ),
+        prompt=resolve_prompt_snapshot(prompt) if prompt is not None else None,
     )
