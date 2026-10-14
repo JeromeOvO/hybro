@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from conversation.runtime import ConversationRuntime
 from models.room import MessageContent, Room, RoomUserMessage
-from room.compat.runtime import RoomServices
 
 
 def _room() -> Room:
@@ -32,8 +32,8 @@ def _message() -> RoomUserMessage:
     )
 
 
-def _service(*, add_side_effect) -> RoomServices:
-    service = object.__new__(RoomServices)
+def _service(*, add_side_effect) -> ConversationRuntime:
+    service = object.__new__(ConversationRuntime)
     add_room_agent_message = AsyncMock()
     if isinstance(add_side_effect, list):
         add_room_agent_message.side_effect = add_side_effect
@@ -45,7 +45,7 @@ def _service(*, add_side_effect) -> RoomServices:
     return service
 
 
-def _mentions(service: RoomServices, message: RoomUserMessage) -> list[dict]:
+def _mentions(service: ConversationRuntime, message: RoomUserMessage) -> list[dict]:
     return service.parse_agent_mentions(
         message.message_content.message_text,
         _room().room_agent_set,

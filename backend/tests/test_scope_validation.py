@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.dto import UserMessageInsertResult
+from conversation.runtime import ConversationRuntime
 from models.agent import Agent, AgentStatus
 from models.response import (
     RoomCenterUserMessageResponse,
@@ -21,12 +22,11 @@ from models.response import (
 )
 from models.room import MessageContent, Room, RoomUserMessage
 from models.room_services_models import ParseResult, ResolvedRoutingScope
-from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
 def room_center():
-    rc = object.__new__(RoomServices)
+    rc = object.__new__(ConversationRuntime)
     rc._store = AsyncMock()
     rc._store.get_agent_by_agent_id = AsyncMock(return_value=None)
     rc._store.get_agent_group_by_id = AsyncMock(return_value=None)

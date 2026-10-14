@@ -5,9 +5,28 @@ from conversation.candidate_scope import (
     candidate_scope_from_envelope,
     normalize_candidate_scope,
 )
+from conversation.deletion import RoomDeletionService
+from conversation.facade import ConversationFacade
+from conversation.membership_source import RepositoryRoomMembershipSeedSource
+from conversation.repository import (
+    MessageMongoRepository,
+    RoomMongoRepository,
+    RoomQuoteMongoRepository,
+)
+from conversation.runtime import ConversationRuntime, conversation_runtime
+from conversation.translators import room_info_from_doc
 
 __all__ = [
     "SUPPORTED_CANDIDATE_SCOPE_SOURCES",
+    "ConversationFacade",
+    "ConversationRuntime",
+    "MessageMongoRepository",
+    "RepositoryRoomMembershipSeedSource",
+    "RoomDeletionService",
+    "RoomMongoRepository",
+    "RoomQuoteMongoRepository",
     "candidate_scope_from_envelope",
+    "conversation_runtime",
     "normalize_candidate_scope",
+    "room_info_from_doc",
 ]

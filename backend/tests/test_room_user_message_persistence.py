@@ -83,11 +83,11 @@ def _command(message: RoomUserMessage) -> UserMessageCommitCommand:
 def test_commit_service_is_independent_from_compatibility_and_broad_owners():
     root = Path(__file__).resolve().parents[1]
     service_source = (root / "conversation" / "user_message_persistence.py").read_text()
-    runtime_tree = ast.parse((root / "room" / "compat" / "runtime.py").read_text())
+    runtime_tree = ast.parse((root / "conversation" / "runtime.py").read_text())
     room_services = next(
         node
         for node in runtime_tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
+        if isinstance(node, ast.ClassDef) and node.name == "ConversationRuntime"
     )
     runtime_methods = {
         node.name: node
@@ -95,8 +95,8 @@ def test_commit_service_is_independent_from_compatibility_and_broad_owners():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
-    assert "room.compat" not in service_source
-    assert "room.facade" not in service_source
+    assert "conversation.runtime" not in service_source
+    assert "conversation.facade" not in service_source
     assert "room_files" not in service_source
     assert "_hold_room_write" not in runtime_methods
     assert "_persist_user_message_with_lease" not in runtime_methods

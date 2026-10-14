@@ -670,7 +670,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/createNewRoom",
     "response_class": null,
     "response_model": null,
@@ -694,7 +694,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/history",
     "response_class": null,
     "response_model": "RoomHistoryResponse",
@@ -722,7 +722,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/history/pinned-order",
     "response_class": null,
     "response_model": null,
@@ -750,7 +750,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/history/{room_id}",
     "response_class": null,
     "response_model": null,
@@ -778,7 +778,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/history/{room_id}",
     "response_class": null,
     "response_model": "RoomHistoryItem",
@@ -806,7 +806,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "response_class": null,
     "response_model": null,
@@ -834,7 +834,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
     "response_class": null,
     "response_model": null,
@@ -862,7 +862,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/inquiryRoomSetting",
     "response_class": null,
     "response_model": null,
@@ -899,7 +899,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.RoomRouteReader",
-      "room.protocols.RoomCenterCompatibility"
+      "chat.protocols.RoomCenterCompatibility"
     ]
   },
   {
@@ -942,7 +942,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "room.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
     "path": "/api/v1/roomCenter/updateRoomAgentSet",
     "response_class": null,
     "response_model": null,

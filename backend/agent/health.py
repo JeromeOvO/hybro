@@ -8,7 +8,6 @@ from common.config.loader import settings
 from common.observability import get_logger, traced_create_task
 from common.protocols import LeaderElector
 from common.types import AgentCard as CommonAgentCard
-from jobs.constants import AGENT_HEALTH_CHECKER
 from models.agent import (
     AGENT_CARD_HEALTH_NO_SYNC,
     Agent,
@@ -78,11 +77,15 @@ class AgentHealthService:
         # Track active retry tasks per agent to avoid duplicates
         self._retry_tasks: dict[str, asyncio.Task] = {}
         self._leader: LeaderElector | None = None
+        self._leader_lock_name: str | None = None
         self._repository = repository
 
-    def set_leader_election(self, leader: LeaderElector | None) -> None:
-        """Attach a leader election instance for distributed leader gating."""
+    def set_leader_election(
+        self, leader: LeaderElector | None, *, lock_name: str
+    ) -> None:
+        """Attach a leader election instance and the job lock it gates on."""
         self._leader = leader
+        self._leader_lock_name = lock_name
 
     def bind_repository(self, repository) -> None:
         self._repository = repository
@@ -431,13 +434,13 @@ class AgentHealthService:
         """Run a single iteration, gated by leader election if available."""
         if self._leader:
             ttl = self.check_interval * 2
-            acquired = await self._leader.try_acquire(AGENT_HEALTH_CHECKER, ttl)
+            acquired = await self._leader.try_acquire(self._leader_lock_name, ttl)
             if not acquired:
                 return  # another instance is the leader
             try:
                 await self.run_health_check_cycle()
             finally:
-                await self._leader.release(AGENT_HEALTH_CHECKER)
+                await self._leader.release(self._leader_lock_name)
         else:
             await self.run_health_check_cycle()
 

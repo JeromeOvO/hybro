@@ -16,6 +16,7 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
+from chat import ChatFacade
 from common.config.loader import settings
 from common.dto import AgentMessageFinal, DeliveryEmitStatus
 from common.eventing import (
@@ -77,6 +78,7 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
+from conversation import ConversationFacade, MessageMongoRepository, RoomMongoRepository
 from conversation.membership_source import RepositoryRoomMembershipSeedSource
 from conversation.repository import RoomQuoteMongoRepository
 from conversation.timeline import (
@@ -103,7 +105,7 @@ from jobs.cleanup_orphaned_uploads import (
     orphaned_upload_cleaner,
 )
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
-from jobs.constants import ALL_JOB_NAMES
+from jobs.constants import AGENT_HEALTH_CHECKER, ALL_JOB_NAMES
 from jobs.orchestrator_workers import (
     OrchestratorCanaryDeps,
     OrchestratorProjectionDeps,
@@ -120,7 +122,6 @@ from orchestrator_composition import (
     create_orchestrator_runtime,
     validate_orchestrator_runtime,
 )
-from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
 from room_files import LocalFileContentStore, RoomFiles
 
 logger = get_logger(__name__)
@@ -282,10 +283,13 @@ def validate_runtime_bindings(
     del runtime
     errors: list[str] = []
 
-    from room.compat.runtime import room_runtime
+    from chat.service import chat_service
+    from conversation.runtime import conversation_runtime
 
-    for missing in room_runtime.missing_required_bindings():
-        errors.append(f"room.{missing}")
+    for missing in conversation_runtime.missing_required_bindings():
+        errors.append(f"conversation.{missing}")
+    for missing in chat_service.missing_required_bindings():
+        errors.append(f"chat.{missing}")
 
     if getattr(app.state, "delivery_facade", None) is None:
         errors.append("app.state.delivery_facade")
@@ -888,12 +892,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
+            from chat.route_adapter import ChatRouteAdapter
+            from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
             from conversation.agent_message_preparation import (
                 AgentMessagePreparationService,
             )
             from conversation.deletion import RoomDeletionService
+            from conversation.runtime import (
+                conversation_runtime,
+            )
             from conversation.timeline_projection import RoomTimelineProjector
             from conversation.user_message_persistence import UserMessageCommitService
             from dal.orchestrator.epoch_bindings import (
@@ -922,14 +931,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 LocalAgentDiscoveryConfig,
                 LocalAgentService,
             )
-            from room.compat.runtime import (
-                room_runtime,
-            )
-            from room.route_adapter import RoomRouteAdapter
 
             # The compatibility runtime is process-global. Clear bindings from a
             # previous failed or completed lifespan before composing this one.
-            room_runtime.reset_bindings()
+            conversation_runtime.reset_bindings()
+            chat_service.reset_bindings()
             reset_room_epoch_store()
 
             bind_room_epoch_store(
@@ -998,7 +1004,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 or app.state.memory_search_index_ready
             )
 
-            route_room_center = RoomRouteAdapter()
+            route_room_center = ChatRouteAdapter(
+                chat_service=chat_service,
+                conversation_runtime=conversation_runtime,
+            )
             _delivery_config = create_delivery_config(runtime.settings)
             cancellation_startup_policy = create_cancellation_startup_policy(
                 redis_url=runtime.settings.redis_url,
@@ -1181,8 +1190,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             message_parser_llm_service = MessageParserLLMService(
                 llm_provider=llm_provider
             )
-            room_runtime.bind_message_parser_service(message_parser_llm_service)
-            room_runtime.bind_capability_issue_reader(agent_capability_issue_service)
+            conversation_runtime.bind_message_parser_service(message_parser_llm_service)
+            conversation_runtime.bind_capability_issue_reader(
+                agent_capability_issue_service
+            )
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -1837,13 +1848,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.get_room_user_message_by_message_id
                 ),
             )
-            room_runtime.bind_store(room_runtime_store)
-            room_runtime.bind_cancellation_control(
+            conversation_runtime.bind_store(room_runtime_store)
+            conversation_runtime.bind_cancellation_control(
                 cancellation_control=_cancellation_runtime,
             )
-            room_runtime.bind_facade(_room_facade)
-            room_runtime.bind_room_files(file_storage)
-            room_runtime.bind_user_message_commit(
+            conversation_runtime.bind_facade(_room_facade)
+            conversation_runtime.bind_room_files(file_storage)
+            conversation_runtime.bind_user_message_commit(
                 UserMessageCommitService(
                     writer=SimpleNamespace(
                         ensure_user_message_id=_room_facade.ensure_user_message_id,
@@ -1858,9 +1869,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     internal_event_publisher=(_eventing_deps.internal_event_publisher),
                 )
             )
-            room_runtime.bind_attachment_metadata_reader(file_storage)
-            room_runtime.bind_attachment_content_reader(file_storage)
-            room_runtime.bind_timeline_projector(
+            conversation_runtime.bind_attachment_metadata_reader(file_storage)
+            conversation_runtime.bind_attachment_content_reader(file_storage)
+            conversation_runtime.bind_timeline_projector(
                 RoomTimelineProjector(
                     hitl_reader=SimpleNamespace(
                         get_hitl_request=hitl_store.get_hitl_request,
@@ -1870,11 +1881,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                 )
             )
-            room_runtime.bind_a2a_inline_file_limits(
+            conversation_runtime.bind_a2a_inline_file_limits(
                 max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
                 max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,
             )
-            route_room_center.bind_facade(_room_facade)
+            chat_service.bind_facade(_room_deps.chat_facade)
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
                 llm_provider=llm_provider,
@@ -1937,7 +1948,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                 ),
             )
-            room_runtime.bind_room_deletion(room_deletion)
+            chat_service.bind_room_deletion(room_deletion)
             agent_message_preparation = AgentMessagePreparationService(
                 agent_url_reader=SimpleNamespace(
                     get_agent_url_by_agent_id=(
@@ -1971,10 +1982,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 context_assembly=context_memory_facade,
             )
-            room_runtime.bind_agent_message_preparation(agent_message_preparation)
+            conversation_runtime.bind_agent_message_preparation(
+                agent_message_preparation
+            )
 
             execution_facade = create_execution_facade(
-                room_center=route_room_center,
+                room_center=conversation_runtime,
                 hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
@@ -2033,7 +2046,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await _eventing_deps.event_bus.start()
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
-            room_runtime.bind_context_memory(
+            conversation_runtime.bind_context_memory(
                 context_assembly=context_memory_facade,
                 room_memory_cleanup=context_memory_facade,
             )
@@ -2108,7 +2121,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         if agent_health_service is None:
             raise RuntimeError("Agent health service has not been initialized")
-        agent_health_service.set_leader_election(_leader)
+        agent_health_service.set_leader_election(
+            _leader, lock_name=AGENT_HEALTH_CHECKER
+        )
         stale_task_checker.set_leader_election(_leader)
         stale_task_checker.configure_timing(
             stale_check_minutes=runtime.settings.stale_check_minutes,
@@ -3101,6 +3116,7 @@ class RoomDeps:
     room_ownership_reader: RoomOwnershipReader
     room_repository: Any
     message_repository: Any
+    chat_facade: ChatFacade
     room_quote_repository: Any | None = None
 
 
@@ -4410,7 +4426,7 @@ def create_room_deps(
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
     quote_repository = RoomQuoteMongoRepository(mongo=mongo)
-    facade = RoomFacade(
+    facade = ConversationFacade(
         repository=repository,
         message_repository=message_repository,
         agent_registry=agent_registry,
@@ -4429,6 +4445,7 @@ def create_room_deps(
         room_ownership_reader=facade,
         room_repository=repository,
         message_repository=message_repository,
+        chat_facade=ChatFacade(conversation=facade, repository=repository),
         room_quote_repository=quote_repository,
     )
 

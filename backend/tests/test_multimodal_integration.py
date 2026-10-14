@@ -21,6 +21,7 @@ from common.types import (
 from context_memory import assembly
 from context_memory.config import TokenBudgetConfig
 from conversation.agent_message_preparation import AgentMessagePreparationService
+from conversation.runtime import ConversationRuntime
 from models.memory import RoomMemory
 from models.quote import QuotedSnippet
 from models.request import RoomCenterAgentMessageRequest
@@ -30,12 +31,11 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
 def room_svc():
-    svc = RoomServices()
+    svc = ConversationRuntime()
     svc.database_service = MagicMock()
     svc._s3_service = SimpleNamespace(
         get_presigned_url=AsyncMock(return_value="https://s3/presigned")
@@ -72,7 +72,7 @@ class TestUploadToSendFlow:
     async def test_resolve_builds_user_attachment(self, room_svc):
         result = await room_svc._resolve_attachments(["f1"], "room1")
 
-        from room.compat.runtime import _ResolvedAttachments
+        from conversation.runtime import _ResolvedAttachments
 
         assert isinstance(result, _ResolvedAttachments)
         assert len(result.attachments) == 1
@@ -84,7 +84,7 @@ class TestUploadToSendFlow:
     async def test_content_summary_has_images(self, room_svc):
         result = await room_svc._resolve_attachments(["f1"], "room1")
 
-        from room.compat.runtime import _ResolvedAttachments
+        from conversation.runtime import _ResolvedAttachments
 
         assert isinstance(result, _ResolvedAttachments)
         assert result.content_summary["has_images"] is True
@@ -106,7 +106,7 @@ class TestUploadToSendFlow:
 
         result = await room_svc._resolve_attachments(["f1", "f2"], "room1")
 
-        from room.compat.runtime import _ResolvedAttachments
+        from conversation.runtime import _ResolvedAttachments
 
         assert isinstance(result, _ResolvedAttachments)
         assert result.content_summary["has_images"] is True
@@ -255,7 +255,7 @@ class TestProcessAgentMessageAttachmentPreflight:
 
     def _bind_runtime_dependencies(
         self,
-        svc: RoomServices,
+        svc: ConversationRuntime,
         *,
         attachment: UserAttachment,
         agent_card,
@@ -299,7 +299,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         return content_reader
 
     async def test_selected_text_resources_are_separate_parts_without_rewriting(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -434,7 +434,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader.get_bytes.assert_awaited_once_with("f2", max_bytes=1024)
 
     async def test_real_assembly_truncates_long_task_before_resource_parts(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="unused",
             s3_key="uploads/r/unused/file.txt",
@@ -531,7 +531,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert combined_text.count(resource_text) == 1
 
     async def test_text_resources_are_appended_when_context_assembly_fails(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="unused",
             s3_key="uploads/r/unused/file.txt",
@@ -619,7 +619,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert called["current_task"] == dispatch_task
 
     async def test_json_artifact_resource_is_compiled_to_data_part(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="unused",
             s3_key="uploads/r/unused/file.txt",
@@ -682,7 +682,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert data_parts[0].metadata["ref_id"] == ("broker-msg:artifact_id:submission")
 
     async def test_quote_id_uses_explicit_quote_reader(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="unused",
             s3_key="uploads/r/unused/file.txt",
@@ -732,7 +732,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert not hasattr(user_message_reader, "get_quoted_snippet_by_id")
 
     async def test_compatible_pdf_attachment_appends_inline_bytes(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -761,7 +761,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         )
 
     async def test_unsupported_attachment_returns_preflight_failure(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -800,7 +800,7 @@ class TestProcessAgentMessageAttachmentPreflight:
             file_name=private_filename,
             size_bytes=4,
         )
-        svc = RoomServices()
+        svc = ConversationRuntime()
         self._bind_runtime_dependencies(
             svc,
             attachment=attachment,
@@ -816,10 +816,10 @@ class TestProcessAgentMessageAttachmentPreflight:
             persisted_payloads.append(request.message.model_dump(mode="json"))
             return SimpleNamespace(success=True, error=None)
 
-        room_runtime = SimpleNamespace(
+        conversation_runtime = SimpleNamespace(
             update_agent_message_by_message_id=AsyncMock(side_effect=persist)
         )
-        tsm = TaskStateManager(room_runtime, MagicMock())
+        tsm = TaskStateManager(conversation_runtime, MagicMock())
         failure = message.extend_info["attachment_preflight_failure"]
         await tsm.fail_pre_dispatch_task(
             message,
@@ -836,7 +836,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert private_filename not in json.dumps(persisted_payloads[0])
 
     async def test_compatible_only_policy_skips_unsupported_user_attachment(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -863,7 +863,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader.get_bytes.assert_not_called()
 
     async def test_explicit_refs_only_does_not_inherit_original_user_attachment(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -893,7 +893,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader.get_bytes.assert_not_called()
 
     async def test_explicit_refs_only_can_forward_selected_prior_turn_attachment(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -946,7 +946,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader.get_bytes.assert_awaited_once_with("f2", max_bytes=1024)
 
     async def test_oversized_declared_attachment_returns_file_too_large(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",
@@ -971,7 +971,7 @@ class TestProcessAgentMessageAttachmentPreflight:
         reader.get_bytes.assert_not_called()
 
     async def test_empty_attachment_bytes_returns_empty_file(self):
-        svc = RoomServices()
+        svc = ConversationRuntime()
         attachment = UserAttachment(
             file_id="f2",
             s3_key="uploads/r/f2/report.pdf",

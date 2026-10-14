@@ -12,14 +12,14 @@ PRODUCTION_ROOTS = (
     BACKEND_ROOT / "execution",
     BACKEND_ROOT / "jobs",
     BACKEND_ROOT / "models",
-    BACKEND_ROOT / "room",
+    BACKEND_ROOT / "chat",
     BACKEND_ROOT / "conversation",
 )
 ORCHESTRATION_RUNTIME_ROOT = BACKEND_ROOT / "execution" / "orchestration"
 ORCHESTRATION_RUNTIME_FILES = {
     BACKEND_ROOT / "jobs" / "stale_task_checker.py",
     BACKEND_ROOT / "models" / "orchestration.py",
-    BACKEND_ROOT / "room" / "compat" / "runtime.py",
+    BACKEND_ROOT / "conversation" / "runtime.py",
 }
 
 

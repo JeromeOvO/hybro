@@ -204,32 +204,50 @@ flowchart TD
     Frontend[Next.js frontend] -->|REST sendMessage / room reads| FastAPI[main.py FastAPI app]
     APIClient[Other API clients] --> FastAPI
     FastAPI --> APIGateway[api_gateway routers]
-    APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
+    APIGateway --> ChatRoutes[chat.ChatRouteAdapter / RoomCenterCompatibility]
     APIGateway --> OwnerPorts[owner protocols / facades]
-    APIGateway --> Execution[execution facade]
+    APIGateway --> Execution[execution.ExecutionFacade.execute]
+    ChatRoutes --> Chat[chat.ChatService / ChatFacade]
+    ChatRoutes --> Conversation
+    Chat --> Conversation[conversation.ConversationRuntime / ConversationFacade]
 
     Container[container.py composition root] --> ExecutionPorts[Execution ports]
-    Execution --> ExecutionPorts
-    Execution --> RoomMessageCenter[execution.orchestration.RoomMessageCenter]
-    RoomMessageCenter --> QueueExecutor[QueueExecutor]
-    RoomMessageCenter --> SupervisorExecutor[SupervisorExecutor]
-    QueueExecutor --> AgentMessageProcessor[AgentMessageProcessor]
-    SupervisorExecutor --> AgentMessageProcessor
+    Execution -->|persist_message_to_room, run_message_preflight_to_room| Conversation
+    Execution -->|start_orchestration / schedule_orchestration| Router[DualRuntimeRouter.process_room_user_message]
+    Router --> SessionHost[orchestrator RoomSessionHost]
+    SessionHost --> Kernel[OrchestratorKernel]
+    Kernel --> ToolRuntime[A2AAgentToolRuntime]
+    ToolRuntime --> A2A[a2a_adapter / remote A2A agents]
+    Kernel --> Mongo[(MongoDB)]
+    Kernel --> Delivery[delivery facade / SSE]
 
-    AgentMessageProcessor --> DirectTransport[DirectTransport]
-    DirectTransport --> A2A[a2a_adapter / remote A2A agents]
-    DirectTransport --> ResponseHandler[AgentResponseHandler]
-    Webhook[webhook route] --> ResponseHandler
-
-    ResponseHandler --> Mongo[(MongoDB)]
-    ResponseHandler --> Delivery[delivery facade / SSE]
-    RoomWrites[Persisted room messages] --> InternalEventing[common.eventing MessageCommitted]
+    Conversation --> Mongo
+    Conversation --> InternalEventing[common.eventing MessageCommitted]
     InternalEventing --> ContextMemory[context_memory facade]
-    RoomServices --> ContextMemory
-    RoomServices --> RoomFiles[room_files / local filesystem]
+    Conversation --> RoomFiles[room_files / local filesystem]
     ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
 ```
+
+## Modules
+
+| Layer | Module | Owns |
+|---|---|---|
+| Product | `chat` | The owner's rooms as a product: create, read settings, list, history, rename, pin, membership, default mode, delete. `ChatService` (process singleton `chat_service`), `ChatFacade`, `ChatRouteAdapter`, and the route contract `chat.protocols.RoomCenterCompatibility`. |
+| Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, agent-message preparation, quotes, deletion, candidate scope, and turn context. `ConversationRuntime` (process singleton `conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
+| Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. |
+| Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
+| Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, persistence adapters, the A2A SDK boundary, and shared contracts. |
+
+Products depend on core modules; nothing imports `chat`. Execution imports
+Conversation only through the `conversation` package exports. Execution's
+`RoomCenterPort` (persist, preflight, discard, idempotent replay, send, and
+orchestration-status projection) is bound to `conversation_runtime`; the chat
+routes receive `ChatRouteAdapter`, which serves room settings from
+`chat_service` and room message and active-run reads from
+`conversation_runtime`. `container.py` and `orchestrator_composition.py` are
+the composition root. Startup binding validation reports missing bindings as
+`conversation.<name>` and `chat.<name>`.
 
 ## Runtime Entry Point
 
@@ -297,21 +315,23 @@ route -> protocol/facade -> repository/DAL -> external service
 
 Examples:
 
-- Room CRUD, membership, user-message persistence/preflight, and route-shaped
-  room behavior remain in `room.compat.runtime`, `room.route_adapter`, and
-  `room.membership_source`. From the former compatibility execution-service
+- Room settings, listing, membership changes, and deletion are served by
+  `chat.service.ChatService` through `chat.route_adapter.ChatRouteAdapter`.
+  User-message persistence/preflight, room message reads, and membership seeding
+  live in `conversation.runtime.ConversationRuntime` and
+  `conversation.membership_source`. From the former compatibility execution-service
   bundle, the runtime retains only the narrow cancellation-control port for
   message token lifecycle; it does not own Delivery, A2A, agent selection, agent
   compatibility, or remote-task-reader dependencies. Outbound agent-message
   preparation is owned by
-  `room.agent_message_preparation.AgentMessagePreparationService`; the
-  compatibility runtime keeps only a signature-preserving delegate. Public room
-  timeline projection is owned by `room.timeline_projection.RoomTimelineProjector`.
+  `conversation.agent_message_preparation.AgentMessagePreparationService`; the
+  conversation runtime keeps only a signature-preserving delegate. Public room
+  timeline projection is owned by `conversation.timeline_projection.RoomTimelineProjector`.
   It receives already-queried timeline pages and uses narrow, room-scoped file
   metadata and HITL readers to produce safe public messages without mutating
   repository models; request validation, cursor handling, and queries remain in
-  the compatibility runtime. Room deletion orchestration is owned by
-  `room.deletion.RoomDeletionService`, which preserves the compatibility response
+  the conversation runtime. Room deletion orchestration is owned by
+  `conversation.deletion.RoomDeletionService`, bound to `ChatService`, which preserves the compatibility response
   contract while coordinating owner validation, file write draining, phased
   cleanup, Context Memory cleanup, and final deletion through narrow ports.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
@@ -389,8 +409,8 @@ together.
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, `room.agent_message_preparation`, `room.deletion`,
-`room.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
+`conversation.runtime`, `conversation.agent_message_preparation`, `conversation.deletion`,
+`conversation.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
 and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not accept broad compatibility-store aggregates. Queue,
@@ -1056,9 +1076,9 @@ selection, health/liveness, capability-issue exclusion, and inspection workflows
 now live under `agent/`. API gateway dependencies receive Agent-owned protocol
 implementations directly from `container.py`.
 
-### `room`
+### `conversation`
 
-`room.RoomFacade` owns canonical room and message persistence behavior:
+`conversation.ConversationFacade` owns canonical room and message persistence behavior:
 
 - Create/update/delete rooms.
 - Resolve room membership from explicit agent IDs, saved groups, or all-agent
@@ -1072,7 +1092,18 @@ stale threshold. Agent messages stamped with `extend_info.orchestrator_run_id`
 are skipped (orchestrator recovery owns them). Working tasks with no
 `task_updated_at` / `task_created_at` are not treated as stale.
 
-Mongo persistence is implemented by `room.repository.mongo`.
+Mongo persistence is implemented by `conversation.repository.mongo`.
+`conversation.runtime.ConversationRuntime` holds the message engine methods:
+mention parsing, user-message persistence and preflight, agent-message creation,
+message and timeline reads, and orchestration-status projection.
+
+### `chat`
+
+`chat.service.ChatService` serves the room-setting routes: create, read settings,
+list rooms and history, replace membership, rename, update pin and history fields,
+update the default mode, and delete through `RoomDeletionService`.
+`chat.facade.ChatFacade` holds a `ConversationFacade` for container writes and
+reads the room repository for owner listings and the default-mode flag.
 
 ### `execution`
 
@@ -1080,51 +1111,36 @@ Mongo persistence is implemented by `room.repository.mongo`.
 
 Key components:
 
-- `ExecutionFacade`: external execution API used by routes. It accepts a
-  `common.dto.ExecutionRequest`, delegates message creation to RoomCenter, and
-  starts orchestration.
+- `ExecutionFacade`: external execution API used by routes. `execute` accepts a
+  `common.dto.ExecutionRequest`, replays an idempotent send, persists the user
+  message and runs its preflight through the conversation runtime
+  (`persist_message_to_room`, `run_message_preflight_to_room`), rejects a send
+  while the room has an active Run, and then calls `start_orchestration` or
+  `schedule_orchestration`.
+- `execution.orchestrator_routing.DualRuntimeRouter`: `process_room_user_message`
+  freezes the candidate scope and tool catalog, creates the Run, and prompts the
+  orchestrator `RoomSessionHost`; it also routes cancellation, HITL answers, and
+  observations.
 - `execution.events.emit_room_processing_status`: compatibility entrypoint for
   room-message processing status. It normalizes legacy string `details` into the
   typed processing-status payload before lifecycle recording and Delivery
   emission.
-- `RoomMessageCenter`: orchestrates a single room user message. It handles
-  idempotent claims, per-room locks, cancellation tokens, routing between
-  queue and supervisor modes, and terminal processing status.
-- `execution.orchestration.dispatch_strategy`: owns dispatch strategy selection
-  after room agent selection.
 - `execution.ports`: owns the narrow type contracts used inside Execution for
   room runtime, delivery/SSE, rate limit, memory, resolver, health, and
   notification collaborators. Where execution invokes a collaborator method,
   the port must use named parameters and execution-owned result protocols
   instead of `*args`/`**kwargs` catch-all signatures.
-- `QueueExecutor`: sequentially processes pre-created agent messages for
-  non-supervisor flows and explicit non-supervisor mention flows.
-- `SupervisorExecutor`: adaptive supervisor loop for rooms with
-  `extend_info.use_supervisor`.
-- `AgentMessageProcessor`: transport router shared by queue and supervisor
-  execution. It builds the A2A message, runs dispatch middleware, and sends
-  through direct A2A transport.
-- `DirectTransport`: sends work directly to remote A2A agents.
-- `WebhookTransport`: handles inbound A2A webhook callbacks for long-running
-  tasks.
-- `AgentResponseHandler`: single place that normalizes agent events, persists
-  task/artifact state, handles HITL states, and emits SSE/task updates.
-  Handler-owned task notifications use the explicit
-  `TaskNotificationStorePort` for idempotency and message/room reads, keeping
-  task-state persistence writers write-only.
-- `TaskStateManager`: owns task state transitions and persistence for agent
-  messages.
+- Legacy tracked-task components (`execution.task_tracking`,
+  `execution.state.TaskStateManager`, `jobs.stale_task_checker`) remain for
+  compatibility paths; canonical Runs do not create tracked tasks.
 
-A2A response ingestion and finalization are Execution-owned. Direct transport
-normalizes terminal results and persists them through `TaskStateManager`;
-webhook events flow through `AgentResponseHandler`, which uses the injected
-message/task writers. `room.compat.runtime` does not own a second A2A response
-handler; its room responsibilities begin at the explicit ports invoked by
-Execution.
+A2A response ingestion and finalization are Execution-owned: the orchestrator
+A2A runtime records every observation in its inbox and the kernel settles the
+Run. The conversation runtime does not own a second A2A response handler; its
+room responsibilities begin at the explicit ports invoked by Execution.
 
-The main orchestration invariant is that `RoomMessageCenter` serializes
-processing per room. It uses a process-local `asyncio.Lock`, and in multi-worker
-mode this is supplemented by a Redis distributed lock configured at startup.
+A room has at most one non-terminal Run (`orchestrator_active_room_unique_canceling`),
+which serializes processing per room.
 
 Execution also contains an additive orchestrator Agent Core, currently unbound
 from production composition. Its gateway-owned turn contract supports one official OpenAI or DeepSeek
@@ -1819,7 +1835,7 @@ Python consumers. Code importing the removed facade methods, DTOs, model classes
 or utility functions will fail and must migrate to the narrow public ports and
 canonical event projection/assembly flow. No active in-repository REST or frontend
 call depended on those Python surfaces. The narrow `build_minimal_context` helper
-remains because `room.compat.runtime` still calls it in the production fast-routing
+remains because `conversation.runtime` still calls it in the production fast-routing
 path; canonical ContextMemory assembly, projection, compaction, cleanup,
 `create_room_memory`, and `ensure_room_memory` remain supported.
 
@@ -2147,8 +2163,8 @@ KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
 stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
 state immediately after token creation and identity-releases that token for every
 outcome, including ready. If Execution is canceled or fails after persistence,
-`ExecutionFacade` chooses the cleanup point, `RoomRouteAdapter` synchronously
-forwards `discard_message_preflight`, and the room runtime performs the
+`ExecutionFacade` chooses the cleanup point, calls the conversation runtime's
+synchronous `discard_message_preflight`, and the runtime performs the
 identity-fenced token release. Cleanup failure is logged without replacing the
 original cancellation or execution error. Admitted orchestration independently creates and
 hydrates its own token after winning the processing claim. Execution and continuation owners release their exact token on terminal and
@@ -2242,7 +2258,7 @@ module-scoped repositories built from `MongoDAL`. Adapters:
 
 `room_files` owns file metadata, content, references, download authorization,
 artifact materialization, file-deletion fencing, storage lifecycle, and recovery.
-Room-level deletion coordination belongs to `room.deletion`; it drives the
+Room-level deletion coordination belongs to `conversation.deletion`; it drives the
 `room_files` deletion lifecycle through a narrow port. MongoDB
 stores metadata while `LocalFileContentStore` stores bytes beneath
 `HYBRO_FILE_DIR` (or the platform user-data directory). Other modules consume
@@ -2389,7 +2405,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - emits terminal preflight status when a newly persisted room response
      completes before orchestration starts.
 
-5. `RoomServices.send_message_to_room`:
+5. `ConversationRuntime.send_message_to_room`:
    - validates the request and message size,
    - resolves and validates attachments,
    - loads the room and target scope; successful deterministic scope resolution
@@ -2419,64 +2435,30 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      supervisor preparation data.
 
 `MessageMongoRepository` remains the authority for unique-index arbitration,
-and `RoomFacade` remains the canonical serializer/writer. The commit service owns
+and `ConversationFacade` remains the canonical serializer/writer. The commit service owns
 only durable effect ordering and compensation around that writer. Event
 publication still follows the database insert and is not a transactional outbox;
 a publisher failure propagates without rolling back the inserted message or
 committed file references.
 
-6. `ExecutionFacade.start_orchestration` builds an `OrchestrationRequest` and
-   calls `RoomMessageCenter.process_room_user_message`.
+6. `ExecutionFacade.start_orchestration` (awaited) or `schedule_orchestration`
+   (background) builds an `OrchestrationRequest` and calls
+   `DualRuntimeRouter.process_room_user_message`.
 
-7. `RoomMessageCenter`:
-   - claims the user message to prevent duplicate processing,
-   - acquires a per-room lock,
-   - refreshes the processing claim,
-   - loads quoted context when present,
-   - creates or reuses a cancellation token,
-   - chooses one of two execution paths:
-     - Supervisor path for the durable orchestration envelope identified by
-       `extend_info.orchestration`, `orchestration_run_id`, and its candidate scope.
-     - Queue path for pre-created agent messages.
+7. `DualRuntimeRouter.process_room_user_message`:
+   - reads the persisted orchestration envelope; the request's live mode wins
+     for dispatch,
+   - freezes the candidate scope, resource manifest, and Agent tool catalog,
+   - creates the canonical Run (at most one non-terminal Run per room) and
+     prompts the room's `RoomSessionHost` session with the `fast` or `ultimate`
+     profile.
 
-8. Queue path:
-   - Fetch agent messages related to the user message.
-   - Process them sequentially through `QueueExecutor`.
-   - Each item uses `AgentDispatcher` for agent assignment and
-     `AgentMessageProcessor` for transport selection and dispatch.
-   - On success, emit unified summary and terminal `completed` status.
-
-9. Supervisor path:
-   - Build agent registry and room config.
-   - Assemble room/conversation context.
-   - Run the adaptive `SupervisorExecutor` loop.
-   - The supervisor compares the persisted goal with accumulated context and
-     prefers suitable Agents from the complete selector-defined scope.
-   - If no scoped Agent is suitable, use `platform_answer` to stream a direct
-     natural HYBRO response without exposing Agent routing or capabilities.
-   - The Supervisor can delegate to one Agent or coordinate multiple Agents in
-     parallel or sequence.
-   - Execution performs final synthesis after `complete` and marks the run
-     terminal only after the user-facing response has been streamed.
-   - Synthesis persistence writes the answer onto `system:hybro`, stamps
-     `summary_origin: llm`, terminalizes the system task as `completed`, and
-     emits `task_update(completed)` before the final `agent_response`.
-   - RoomMessageCenter persists `turn_completion_kind` on the user message
-     after durable root `COMPLETED` wins (`synthesis` even when a duplicate
-     `summary-*` row is skipped for fewer than two trajectory responses).
-   - Agent messages are created dynamically instead of being pre-generated.
-   - Terminal status is emitted after synthesis or final failure/cancellation.
-
-10. Agent responses flow into `AgentResponseHandler`, which:
-    - public-projects remote A2A task/event payloads before persistence,
-      Delivery/SSE, lifecycle emission, or orchestration ingestion,
-    - persists nonterminal artifact updates into a private durable journal for
-      terminal recovery without broadcasting them publicly,
-    - updates task state on `room_agent_messages`,
-    - handles final responses, errors, cancellations, and HITL states,
-    - emits SSE updates through Delivery,
-    - delegates terminal task notifications through
-      `execution.dispatch.task_notifications`.
+8. `OrchestratorKernel` runs the bounded model/tool loop: model turns choose
+   Agent tools, `A2AAgentToolRuntime` accepts and dispatches the calls over A2A,
+   observations resume suspended calls, typed Agent interactions are presented
+   to the model and may be forwarded to the user, and the final assistant
+   message reaches the room through the projection outbox. See "Orchestrator
+   A2A runtime" and "Canonical wait semantics".
 
 ### `sendMessage` persistence idempotency
 
@@ -2631,7 +2613,7 @@ isolation across HTTP requests.
 Both queue and supervisor execution use `AgentMessageProcessor`.
 
 1. Load current room memory from the database.
-2. Ask `RoomServices.process_agent_message` to build the outbound A2A message.
+2. Ask `ConversationRuntime.process_agent_message` to build the outbound A2A message.
 3. Build a `DispatchContext`.
 4. Run pre-dispatch middleware, including health checks for remote agents.
 5. Call the target agent through direct A2A transport.
@@ -2994,7 +2976,7 @@ The normal terminal states seen by clients are:
 API route handlers remain thin adapters: they parse HTTP input, resolve injected
 dependencies, call route-facing protocols, and format compatible responses.
 Route owner contracts are declared in `common.protocols`, `agent.protocols`,
-`room.protocols`, `context_memory.protocols`, and `execution.ports`. API Gateway route modules do
+`chat.protocols`, `context_memory.protocols`, and `execution.ports`. API Gateway route modules do
 not import runtime implementation packages; they receive owner protocols through
 `APIGatewayDeps`.
 

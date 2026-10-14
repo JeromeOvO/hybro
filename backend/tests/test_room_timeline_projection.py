@@ -11,6 +11,7 @@ import pytest
 from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.protocols import AttachmentMetadataReader
 from common.types import Task, TaskState, TaskStatus
+from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import (
     HITLProjectionReader,
     RoomTimelineProjector,
@@ -21,7 +22,6 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room.compat.runtime import RoomServices
 
 
 def _page(*messages) -> RoomTimelinePage:
@@ -48,7 +48,7 @@ def _projector(*, hitl=None, attachment=None) -> RoomTimelineProjector:
 
 
 def test_runtime_timeline_method_keeps_only_query_and_response_orchestration():
-    source = inspect.getsource(RoomServices.inquiry_room_messages_by_room_id)
+    source = inspect.getsource(ConversationRuntime.inquiry_room_messages_by_room_id)
 
     assert "decode_timeline_cursor" in source
     assert "get_timeline_page" in source
@@ -82,12 +82,12 @@ def test_container_binds_narrow_timeline_projector_dependencies():
     assert "RoomTimelineProjector(" in source
     assert "get_hitl_request=hitl_store.get_hitl_request" in source
     assert "get_for_room_file=file_storage.get_for_room_file" in source
-    assert "room_runtime.bind_timeline_projector(" in source
+    assert "conversation_runtime.bind_timeline_projector(" in source
 
 
 def test_missing_projector_fails_fast():
     with pytest.raises(RuntimeError, match="timeline projector"):
-        RoomServices()._require_timeline_projector()
+        ConversationRuntime()._require_timeline_projector()
 
 
 async def test_user_attachment_projection_is_room_scoped_ordered_and_immutable():
@@ -195,11 +195,11 @@ def _hitl_message() -> tuple[RoomAgentMessage, Task]:
 
 
 def test_room_runtime_has_no_duplicate_a2a_response_handler():
-    runtime_tree = ast.parse(Path("room/compat/runtime.py").read_text())
+    runtime_tree = ast.parse(Path("conversation/runtime.py").read_text())
     room_services = next(
         node
         for node in runtime_tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
+        if isinstance(node, ast.ClassDef) and node.name == "ConversationRuntime"
     )
     runtime_methods = {
         node.name

@@ -15,6 +15,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import RoomTimelineProjector
 from models.request import RoomCenterRoomMessageRequest, RoomCenterUserMessageRequest
 from models.room import (
@@ -23,12 +24,11 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
-def room_runtime():
-    svc = RoomServices()
+def conversation_runtime():
+    svc = ConversationRuntime()
     svc._store = MagicMock()
     attachment_reader = MagicMock()
     attachment_reader.get_for_room_file = AsyncMock(
@@ -80,13 +80,13 @@ def _make_msg_with_attachment(file_id="f1"):
 
 
 class TestMessageRetrieval:
-    async def test_stable_authenticated_url_is_returned(self, room_runtime):
+    async def test_stable_authenticated_url_is_returned(self, conversation_runtime):
         msg = _make_msg_with_attachment()
         facade = MagicMock()
         facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_user_messages_by_room_id(
+        result = await conversation_runtime.inquiry_user_messages_by_room_id(
             RoomCenterUserMessageRequest(room_id="room1")
         )
 
@@ -98,7 +98,7 @@ class TestMessageRetrieval:
 
     async def test_stable_urls_are_derived_for_each_attachment(
         self,
-        room_runtime,
+        conversation_runtime,
     ):
         first = _make_msg_with_attachment("f1")
         second = _make_msg_with_attachment("f2")
@@ -107,9 +107,9 @@ class TestMessageRetrieval:
         second.message_content.attachments[0].file_name = "diagram.png"
         facade = MagicMock()
         facade.get_user_messages_for_room = AsyncMock(return_value=[first, second])
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_user_messages_by_room_id(
+        result = await conversation_runtime.inquiry_user_messages_by_room_id(
             RoomCenterUserMessageRequest(room_id="room1")
         )
 
@@ -122,7 +122,7 @@ class TestMessageRetrieval:
             "/api/v1/files/f2/content",
         ]
 
-    async def test_no_attachments_no_s3_call(self, room_runtime):
+    async def test_no_attachments_no_s3_call(self, conversation_runtime):
         msg = RoomUserMessage(
             room_id="room1",
             message_id="msg1",
@@ -131,9 +131,9 @@ class TestMessageRetrieval:
         )
         facade = MagicMock()
         facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_user_messages_by_room_id(
+        result = await conversation_runtime.inquiry_user_messages_by_room_id(
             RoomCenterUserMessageRequest(room_id="room1")
         )
 
@@ -142,12 +142,14 @@ class TestMessageRetrieval:
 
 class TestRoomMessageRetrieval:
     @pytest.mark.parametrize("limit", [True, "10", 0, -1, 201])
-    async def test_invalid_page_limit_returns_body_level_400(self, room_runtime, limit):
+    async def test_invalid_page_limit_returns_body_level_400(
+        self, conversation_runtime, limit
+    ):
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock()
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1", limit=limit)
         )
 
@@ -156,13 +158,13 @@ class TestRoomMessageRetrieval:
         facade.get_timeline_page.assert_not_awaited()
 
     async def test_timeline_repository_failure_never_returns_partial_page(
-        self, room_runtime
+        self, conversation_runtime
     ):
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock(side_effect=RuntimeError("query failed"))
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1")
         )
 
@@ -173,7 +175,7 @@ class TestRoomMessageRetrieval:
         assert result.error == "Failed to retrieve room timeline"
         assert "query failed" not in result.error
 
-    async def test_page_metadata_and_attachment_projection(self, room_runtime):
+    async def test_page_metadata_and_attachment_projection(self, conversation_runtime):
         user = _make_msg_with_attachment()
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock(
@@ -185,9 +187,9 @@ class TestRoomMessageRetrieval:
                 ),
             )
         )
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1", limit=1)
         )
 
@@ -202,7 +204,7 @@ class TestRoomMessageRetrieval:
 
     async def test_agent_artifact_only_output_is_returned_as_message_text(
         self,
-        room_runtime,
+        conversation_runtime,
     ):
         task = Task(
             id="task-1",
@@ -228,9 +230,9 @@ class TestRoomMessageRetrieval:
         )
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1")
         )
 
@@ -253,7 +255,7 @@ class TestRoomMessageRetrieval:
     )
     async def test_legacy_agent_task_projection_redacts_private_dispatch_fields(
         self,
-        room_runtime,
+        conversation_runtime,
         extend_info,
         expected_label,
     ):
@@ -308,9 +310,9 @@ class TestRoomMessageRetrieval:
         )
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1")
         )
 
@@ -326,7 +328,7 @@ class TestRoomMessageRetrieval:
 
     async def test_agent_projection_preserves_dispatch_and_separate_response_text(
         self,
-        room_runtime,
+        conversation_runtime,
     ):
         task = Task(
             id="task-data-only",
@@ -356,9 +358,9 @@ class TestRoomMessageRetrieval:
         )
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1")
         )
 
@@ -375,7 +377,7 @@ class TestRoomMessageRetrieval:
 
     async def test_system_hybro_projection_does_not_fabricate_request_label(
         self,
-        room_runtime,
+        conversation_runtime,
     ):
         agent_msg = RoomAgentMessage(
             room_id="room1",
@@ -391,9 +393,9 @@ class TestRoomMessageRetrieval:
         )
         facade = MagicMock()
         facade.get_timeline_page = AsyncMock(return_value=_timeline_page(agent_msg))
-        room_runtime.bind_facade(facade)
+        conversation_runtime.bind_facade(facade)
 
-        result = await room_runtime.inquiry_room_messages_by_room_id(
+        result = await conversation_runtime.inquiry_room_messages_by_room_id(
             RoomCenterRoomMessageRequest(room_id="room1")
         )
 

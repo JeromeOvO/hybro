@@ -11,12 +11,12 @@ FORBIDDEN_API_GATEWAY_IMPORTS = (
 )
 MODULE_ROUTE_PROTOCOL_IMPORTS = {
     "agent.protocols",
-    "room.protocols",
+    "chat.protocols",
     "context_memory.protocols",
 }
 FORBIDDEN_ROUTE_MODULE_ROOTS = {
     "agent",
-    "room",
+    "chat",
     "conversation",
     "context_memory",
     "a2a_adapter",
@@ -220,7 +220,7 @@ def test_legacy_api_route_package_is_removed():
 
 
 def test_room_route_owner_protocol_covers_room_route_calls():
-    import room.protocols as protocols
+    import chat.protocols as protocols
 
     required_methods = {
         "create_new_room",

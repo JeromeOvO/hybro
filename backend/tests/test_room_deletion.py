@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from chat.service import ChatService
 from conversation.deletion import (
     RoomDeletionLifecycle,
     RoomDeletionService,
@@ -15,7 +16,6 @@ from conversation.deletion import (
 )
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from models.request import RoomCenterRoomSettingRequest
-from room.compat.runtime import RoomServices
 
 from ._orchestrator_helpers import NOW
 
@@ -326,9 +326,9 @@ async def test_final_room_delete_failure_preserves_finalizing_error():
     ]
 
 
-async def test_runtime_delete_is_thin_delegate_and_missing_binding_fails_fast():
-    source = inspect.getsource(RoomServices.delete_room_by_room_id)
-    runtime = RoomServices()
+async def test_chat_delete_is_thin_delegate_and_missing_binding_fails_fast():
+    source = inspect.getsource(ChatService.delete_room_by_room_id)
+    runtime = ChatService()
 
     assert "_require_room_deletion" in source
     assert "begin_room_deletion" not in source
@@ -349,8 +349,8 @@ def test_deletion_service_uses_only_narrow_ports_and_container_wires_them():
     service_source = Path("conversation/deletion.py").read_text()
     container_source = Path("container.py").read_text()
 
-    assert "RoomServices" not in service_source
-    assert "RoomFacade" not in service_source
+    assert "ConversationRuntime" not in service_source
+    assert "ConversationFacade" not in service_source
     assert "RoomFiles" not in service_source
     assert "runtime_store" not in service_source
     assert set(RoomDeletionLifecycle.__dict__) >= {
@@ -366,7 +366,7 @@ def test_deletion_service_uses_only_narrow_ports_and_container_wires_them():
         "delete_room_state",
     }
     assert "RoomDeletionService(" in container_source
-    assert "room_runtime.bind_room_deletion(room_deletion)" in container_source
+    assert "chat_service.bind_room_deletion(room_deletion)" in container_source
     for method in (
         "get_room_owner",
         "cleanup_room_owned_data",

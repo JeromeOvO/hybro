@@ -40,14 +40,16 @@ async def test_create_room_deps_wires_attachment_metadata_reader_to_facade():
     reader.get_for_room_file.assert_awaited_once_with("room1", "file1")
 
 
-def test_container_startup_binds_file_storage_to_room_runtime():
+def test_container_startup_binds_file_storage_to_conversation_runtime():
     with open("container.py") as source_file:
         source = source_file.read()
 
     assert "attachment_metadata_reader=file_storage" in source
-    assert "room_runtime.bind_attachment_metadata_reader(file_storage)" in source
-    assert "room_runtime.bind_attachment_content_reader(file_storage)" in source
-    assert "room_runtime.bind_a2a_inline_file_limits(" in source
+    assert (
+        "conversation_runtime.bind_attachment_metadata_reader(file_storage)" in source
+    )
+    assert "conversation_runtime.bind_attachment_content_reader(file_storage)" in source
+    assert "conversation_runtime.bind_a2a_inline_file_limits(" in source
     assert "max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes" in source
     assert (
         "max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes"

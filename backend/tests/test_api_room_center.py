@@ -28,6 +28,7 @@ from api_gateway.routes.room_routes import (
     update_room_agent_set,
     verify_room_ownership,
 )
+from chat import ChatRouteAdapter, ChatService
 from common.dto import RoomTimelineEntry, RoomTimelinePage
 from common.types import (
     Artifact,
@@ -40,14 +41,13 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import RoomTimelineProjector
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
 from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
-from room.compat.runtime import RoomServices
-from room.route_adapter import RoomRouteAdapter as RoomCenter
 
 # =============================================================================
 # Room Ownership Verification Tests
@@ -55,7 +55,7 @@ from room.route_adapter import RoomRouteAdapter as RoomCenter
 
 
 def _bind_timeline_projector(
-    runtime: RoomServices,
+    runtime: ConversationRuntime,
     *,
     hitl_reader=None,
 ) -> None:
@@ -72,7 +72,7 @@ def _bind_timeline_projector(
 
 @pytest.mark.asyncio
 async def test_update_user_message_orchestration_status_persists_extend_info():
-    runtime = RoomServices()
+    runtime = ConversationRuntime()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="user-message-1",
@@ -105,7 +105,7 @@ async def test_update_user_message_orchestration_status_persists_extend_info():
 
 @pytest.mark.asyncio
 async def test_orchestration_status_projection_accepts_idempotent_terminal_replay():
-    runtime = RoomServices()
+    runtime = ConversationRuntime()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="user-message-1",
@@ -133,7 +133,7 @@ async def test_orchestration_status_projection_accepts_idempotent_terminal_repla
 
 @pytest.mark.asyncio
 async def test_orchestration_status_projection_accepts_concurrent_target_winner():
-    runtime = RoomServices()
+    runtime = ConversationRuntime()
     original = RoomUserMessage(
         room_id="room-1",
         message_id="user-message-1",
@@ -166,7 +166,7 @@ async def test_orchestration_status_projection_accepts_concurrent_target_winner(
 
 @pytest.mark.asyncio
 async def test_orchestration_status_update_ignores_non_orchestration_message():
-    runtime = RoomServices()
+    runtime = ConversationRuntime()
     user_message = RoomUserMessage(
         room_id="room-1",
         message_id="user-message-1",
@@ -193,42 +193,38 @@ async def test_orchestration_status_update_ignores_non_orchestration_message():
 class TestRoomCenterAdapter:
     @pytest.mark.asyncio
     async def test_fails_before_bind_when_service_unbound(self):
-        center = RoomCenter(room_services=None)
+        center = ChatRouteAdapter(
+            chat_service=ChatService(), conversation_runtime=MagicMock()
+        )
 
         with pytest.raises(
             RuntimeError,
-            match=r"RoomRouteAdapter\.bind_facade\(\) not called - startup incomplete",
+            match=r"ChatService\.bind_facade\(\) not called - startup incomplete",
         ):
             await center.create_new_room(MagicMock())
 
     @pytest.mark.asyncio
-    async def test_delegates_to_bound_room_services(self):
+    async def test_delegates_room_settings_to_the_chat_service(self):
         service = MagicMock()
-        service._bound = True
         service.create_new_room = AsyncMock(return_value="created")
-        center = RoomCenter(room_services=service)
+        center = ChatRouteAdapter(
+            chat_service=service, conversation_runtime=MagicMock()
+        )
 
         assert await center.create_new_room(MagicMock()) == "created"
         service.create_new_room.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_delegates_orchestration_status_projection_to_bound_runtime(self):
-        service = MagicMock()
-        service._bound = True
-        service.update_user_message_orchestration_status = AsyncMock(return_value=True)
-        center = RoomCenter(room_services=service)
+    async def test_delegates_message_reads_to_the_conversation_runtime(self):
+        runtime = MagicMock()
+        runtime.inquiry_room_messages_by_room_id = AsyncMock(return_value="messages")
+        runtime.inquiry_active_runs = AsyncMock(return_value="runs")
+        center = ChatRouteAdapter(
+            chat_service=MagicMock(), conversation_runtime=runtime
+        )
 
-        assert (
-            await center.update_user_message_orchestration_status(
-                "user-message-1",
-                "canceled",
-            )
-            is True
-        )
-        service.update_user_message_orchestration_status.assert_awaited_once_with(
-            "user-message-1",
-            "canceled",
-        )
+        assert await center.inquiry_room_messages_by_room_id(MagicMock()) == "messages"
+        assert await center.inquiry_active_runs(MagicMock()) == "runs"
 
 
 class TestVerifyRoomOwnership:
@@ -1026,10 +1022,12 @@ class TestInquiryRoomMessages:
                 next_position=None,
             )
         )
-        runtime = RoomServices()
+        runtime = ConversationRuntime()
         runtime.bind_facade(facade)
         _bind_timeline_projector(runtime)
-        center = RoomCenter(room_services=runtime)
+        center = ChatRouteAdapter(
+            chat_service=ChatService(), conversation_runtime=runtime
+        )
 
         response = await inquiry_room_messages(
             mock_request,
@@ -1186,7 +1184,7 @@ class TestInquiryRoomMessages:
                 next_position=None,
             )
         )
-        runtime = RoomServices()
+        runtime = ConversationRuntime()
         runtime.bind_facade(facade)
         hitl_reader = SimpleNamespace(
             get_hitl_request=AsyncMock(
@@ -1230,7 +1228,9 @@ class TestInquiryRoomMessages:
             )
         )
         _bind_timeline_projector(runtime, hitl_reader=hitl_reader)
-        center = RoomCenter(room_services=runtime)
+        center = ChatRouteAdapter(
+            chat_service=ChatService(), conversation_runtime=runtime
+        )
 
         response = await inquiry_room_messages(
             mock_request,

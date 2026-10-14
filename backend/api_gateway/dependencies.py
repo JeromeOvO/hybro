@@ -17,6 +17,7 @@ from agent.protocols import (
     AgentNetworkAccess,
     AgentSuggestionService,
 )
+from chat.protocols import RoomCenterCompatibility
 from common.auth import ClerkUser, get_current_user
 from common.protocols import (
     AgentMatcher,
@@ -32,7 +33,6 @@ from common.protocols import (
 from execution.direct_agent import DirectAgentExecution
 from execution.ports import DirectAgentMessenger
 from local_agents.protocols import LocalAgentDiscovery
-from room.protocols import RoomCenterCompatibility
 
 
 @dataclass(frozen=True, slots=True)

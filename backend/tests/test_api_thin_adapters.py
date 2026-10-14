@@ -544,32 +544,32 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     }
     expected = {
         "inquiry_active_runs": {
-            "owner": "room.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.RoomCenterCompatibility",
             "supporting": {
                 "common.protocols.ExecutionEngine",
                 "common.protocols.RoomRouteReader",
             },
         },
         "inquiry_room_setting": {
-            "owner": "room.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.RoomCenterCompatibility",
             "supporting": {
                 "common.protocols.ExecutionEngine",
                 "common.protocols.RoomRouteReader",
             },
         },
         "inquiry_room_messages": {
-            "owner": "room.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.RoomCenterCompatibility",
             "supporting": {"common.protocols.RoomRouteReader"},
         },
         "update_room_agent_set": {
-            "owner": "room.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.RoomCenterCompatibility",
             "supporting": {"common.protocols.RoomRouteReader"},
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
             "supporting": {
                 "common.protocols.RoomRouteReader",
-                "room.protocols.RoomCenterCompatibility",
+                "chat.protocols.RoomCenterCompatibility",
             },
         },
         "suggest_agents": {
@@ -603,7 +603,7 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     expectations = {
         "inquiry_active_runs": (
-            "room.protocols.RoomCenterCompatibility",
+            "chat.protocols.RoomCenterCompatibility",
             ["inquiry_active_runs"],
         ),
         "send_message": (
@@ -656,7 +656,7 @@ def test_room_active_runs_inventory_records_execution_support():
         and route["name"] == "inquiry_active_runs"
     )
     route_source = inspect.getsource(room_center)
-    room_runtime_source = Path("room/compat/runtime.py").read_text()
+    room_runtime_source = Path("conversation/runtime.py").read_text()
 
     assert "_require_execution_engine" not in route_source
     assert "runs = await engine.get_runs_for_room(room_id)" in route_source
@@ -794,11 +794,14 @@ def test_agent_center_route_protocol_excludes_legacy_internal_methods():
 def test_route_bound_compatibility_adapters_satisfy_protocols():
     from agent.protocols import AgentCenterCompatibility
     from agent.route_adapter import AgentRouteAdapter
-    from room.protocols import RoomCenterCompatibility
-    from room.route_adapter import RoomRouteAdapter
+    from chat.protocols import RoomCenterCompatibility
+    from chat.route_adapter import ChatRouteAdapter
 
     assert isinstance(AgentRouteAdapter(service=object()), AgentCenterCompatibility)
-    assert isinstance(RoomRouteAdapter(), RoomCenterCompatibility)
+    assert isinstance(
+        ChatRouteAdapter(chat_service=object(), conversation_runtime=object()),
+        RoomCenterCompatibility,
+    )
 
 
 def test_agent_route_adapter_accepts_service():
@@ -1185,7 +1188,7 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 
 def test_route_protocols_do_not_expose_broad_annotations():
     import agent.protocols as agent_protocols
-    import room.protocols as room_protocols
+    import chat.protocols as room_protocols
     from agent.protocols import AgentGroupStoreCompatibility
     from common.protocols import (
         HealthCheck,
@@ -1255,7 +1258,7 @@ def test_platform_route_protocols_do_not_expose_any_or_wildcard_params():
 def test_route_protocols_have_single_runtime_marker():
     for path in (
         Path("agent/protocols.py"),
-        Path("room/protocols.py"),
+        Path("chat/protocols.py"),
     ):
         source = path.read_text()
         assert "@runtime_checkable\n@runtime_checkable" not in source

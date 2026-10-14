@@ -81,10 +81,10 @@ class TaskStateManager:
 
     def __init__(
         self,
-        room_runtime: RoomRuntimePort,
+        conversation_runtime: RoomRuntimePort,
         task_notifier: NotificationServicePort,
     ) -> None:
-        self.room_runtime = room_runtime
+        self.conversation_runtime = conversation_runtime
         self.task_notifier = task_notifier
 
     # ------------------------------------------------------------------
@@ -93,7 +93,7 @@ class TaskStateManager:
 
     async def persist_message(self, message: RoomAgentMessage) -> bool:
         """Persist a RoomAgentMessage to the database. Returns True on success."""
-        resp = await self.room_runtime.update_agent_message_by_message_id(
+        resp = await self.conversation_runtime.update_agent_message_by_message_id(
             RoomCenterAgentMessageRequest(
                 message_id=message.message_id, message=message
             )

@@ -67,7 +67,7 @@ _ALLOWED_ROOM_UPDATE_KEYS = frozenset(
 logger = get_logger(__name__)
 
 
-class RoomFacade:
+class ConversationFacade:
     def __init__(
         self,
         *,
@@ -173,19 +173,6 @@ class RoomFacade:
         updated = await self._repository.update_fields(room_id, dict(updates))
         return room_info_from_doc(updated) if updated is not None else None
 
-    async def update_room_default_mode(
-        self,
-        room_id: str,
-        *,
-        use_supervisor: bool,
-    ) -> bool:
-        """Atomically update only the persisted room-mode flag."""
-        updated = await self._repository.update_fields(
-            room_id,
-            {"extend_info.use_supervisor": use_supervisor},
-        )
-        return updated is not None
-
     async def update_membership(
         self, room_id: str, request: MembershipUpdateRequest
     ) -> RoomInfo:
@@ -223,22 +210,6 @@ class RoomFacade:
         if updated is None:
             raise ValueError("Room not found")
         return room_info_from_doc(updated)
-
-    async def list_rooms_for_owner(self, owner_id: str) -> list[RoomInfo]:
-        return [
-            room_info_from_doc(doc)
-            for doc in await self._repository.get_by_owner(owner_id)
-        ]
-
-    async def list_room_history_for_owner(
-        self, owner_id: str, *, limit: int = 100
-    ) -> list[RoomInfo]:
-        return [
-            room_info_from_doc(doc)
-            for doc in await self._repository.get_history_by_owner(
-                owner_id, limit=limit
-            )
-        ]
 
     async def replace_membership(
         self,

@@ -57,7 +57,7 @@ def test_llm_gateway_does_not_import_execution_or_room_models():
         for module in imported_modules(path):
             if module == "execution" or module.startswith("execution."):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
-            if module == "room" or module.startswith("room."):
+            if module == "chat" or module.startswith("chat."):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
             if module == "conversation" or module.startswith("conversation."):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
@@ -79,7 +79,7 @@ def test_generic_kernel_session_context_and_budget_have_no_plan3_or_product_depe
     forbidden = {
         "a2a",
         "a2a_adapter",
-        "room",
+        "chat",
         "conversation",
         "motor",
         "pymongo",
@@ -178,7 +178,7 @@ def test_production_entry_points_reach_orchestrator_only_through_routing_seam():
         ROOT / "main.py",
         *(ROOT / "api_gateway").rglob("*.py"),
         *(ROOT / "jobs").rglob("*.py"),
-        *(ROOT / "room").rglob("*.py"),
+        *(ROOT / "chat").rglob("*.py"),
         *(ROOT / "conversation").rglob("*.py"),
         ROOT / "execution" / "facade.py",
     ]

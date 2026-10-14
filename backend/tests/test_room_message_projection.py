@@ -18,13 +18,13 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
+from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import RoomTimelineProjector
 from models.request import RoomCenterRoomMessageRequest
 from models.room import MessageContent, RoomAgentMessage
-from room.compat.runtime import RoomServices
 
 
-def _bind_projector(runtime: RoomServices) -> None:
+def _bind_projector(runtime: ConversationRuntime) -> None:
     hitl_reader = MagicMock()
     hitl_reader.get_hitl_request = AsyncMock(return_value=None)
     attachment_reader = MagicMock()
@@ -77,7 +77,7 @@ async def test_room_message_projection_backfills_legacy_terminal_text_as_artifac
             message_task=task,
         ),
     )
-    runtime = RoomServices()
+    runtime = ConversationRuntime()
     facade = AsyncMock()
     facade.get_timeline_page.return_value = RoomTimelinePage(
         entries=[RoomTimelineEntry(source="agent", message=agent_message)],
@@ -135,7 +135,7 @@ async def test_room_message_projection_drops_inline_file_without_uri() -> None:
         message_created_at=NOW,
         message_content=MessageContent(message_task=task),
     )
-    runtime = RoomServices()
+    runtime = ConversationRuntime()
     facade = AsyncMock()
     facade.get_timeline_page.return_value = RoomTimelinePage(
         entries=[RoomTimelineEntry(source="agent", message=agent_message)],

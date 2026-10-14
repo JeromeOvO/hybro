@@ -1,5 +1,5 @@
 """
-Unit tests for RoomCenter (room_runtime.py) -- pure logic methods.
+Unit tests for RoomCenter (conversation_runtime.py) -- pure logic methods.
 
 Tests cover:
 - _looks_like_agent_id heuristic
@@ -23,24 +23,23 @@ from common.dto import (
     RoomInfo,
     UserMessageInsertResult,
 )
-from conversation.deletion import RoomDeletionService
 from conversation.idempotency import (
     IdempotencyConflictError,
     UserMessagePersistenceError,
 )
+from conversation.runtime import ConversationRuntime
 from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
 )
 from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
-from room.compat.runtime import RoomServices
 
 
 @pytest.fixture
 def room_center():
     """Create a RoomCenter with mocked dependencies."""
-    rc = object.__new__(RoomServices)
+    rc = object.__new__(ConversationRuntime)
     rc._store = MagicMock()
     # Backwards compatibility alias
     rc.database_service = rc._store
@@ -68,7 +67,7 @@ class RecordingEventPublisher:
 
 
 def _bind_user_message_commit(
-    svc: RoomServices,
+    svc: ConversationRuntime,
     *,
     facade,
     publisher,
@@ -85,7 +84,7 @@ def _bind_user_message_commit(
 
 @pytest.mark.asyncio
 async def test_preflight_token_lifecycle_always_releases_identity_owner():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc.cancellation_control = MagicMock()
     token = object()
     context = SimpleNamespace(
@@ -113,7 +112,7 @@ async def test_preflight_token_lifecycle_always_releases_identity_owner():
     "failure", [RuntimeError("parse failed"), asyncio.CancelledError()]
 )
 async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(failure):
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc.cancellation_control = MagicMock()
     token = object()
     context = SimpleNamespace(
@@ -139,10 +138,10 @@ def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
         "_require_context_assembly",
     }
 
-    assert dead_helpers.isdisjoint(RoomServices.__dict__)
+    assert dead_helpers.isdisjoint(ConversationRuntime.__dict__)
     assert (
         "memory_search"
-        not in inspect.signature(RoomServices.bind_context_memory).parameters
+        not in inspect.signature(ConversationRuntime.bind_context_memory).parameters
     )
 
     container_tree = ast.parse(
@@ -154,7 +153,7 @@ def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "room_runtime"
+        and node.func.value.id == "conversation_runtime"
         and node.func.attr == "bind_context_memory"
     )
     assert "memory_search" not in {
@@ -163,7 +162,7 @@ def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
 
 
 def test_room_services_bind_store_sets_runtime_store():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     store = object()
 
     svc.bind_store(store)
@@ -172,107 +171,8 @@ def test_room_services_bind_store_sets_runtime_store():
 
 
 @pytest.mark.asyncio
-async def test_room_services_delegated_methods_fail_before_bind():
-    svc = object.__new__(RoomServices)
-    svc._facade = None
-    svc._bound = False
-
-    with pytest.raises(
-        RuntimeError,
-        match=r"RoomServices\.bind_facade\(\) not called - startup incomplete",
-    ):
-        await svc.create_new_room(RoomCenterRoomSettingRequest(room_name="Room"))
-
-
-@pytest.mark.asyncio
-async def test_room_services_bind_facade_delegates_room_lifecycle_methods():
-    svc = object.__new__(RoomServices)
-    svc._store = MagicMock()
-    svc._bound = False
-    svc._facade = None
-    facade = AsyncMock()
-    facade.create_room.return_value = RoomInfo(
-        room_id="r1",
-        room_name="Room",
-        owner_id="owner",
-        owner_name="Owner",
-        agent_ids=["a1"],
-        agent_set={"a1": "Agent One"},
-    )
-    facade.get_room.return_value = facade.create_room.return_value
-    facade.list_rooms_for_owner.return_value = [facade.create_room.return_value]
-    facade.list_room_history_for_owner.return_value = [facade.create_room.return_value]
-    facade.replace_membership.return_value = facade.create_room.return_value
-    facade.update_room.return_value = facade.create_room.return_value
-    facade.get_room_owner.return_value = "owner"
-    facade.delete_room.return_value = True
-
-    svc.bind_facade(facade)
-    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
-    svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
-    svc.bind_room_deletion(
-        RoomDeletionService(
-            room_lifecycle=facade,
-            memory_cleanup=memory_cleanup,
-        )
-    )
-    svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
-
-    create_response = await svc.create_new_room(
-        RoomCenterRoomSettingRequest(
-            room_name="Room",
-            room_owner_id="owner",
-            room_owner_name="Owner",
-            room_agent_set={"a1": "Agent One"},
-            extend_info={"debateMode": True, "use_supervisor": True},
-            requesting_user_id="owner",
-        )
-    )
-    inquiry_response = await svc.inquiry_room_setting(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
-    )
-    list_response = await svc.inquiry_rooms_by_room_owner_id(
-        RoomCenterRoomSettingRequest(room_owner_id="owner")
-    )
-    history_response = await svc.inquiry_room_history_by_owner_id(
-        RoomCenterRoomSettingRequest(room_owner_id="owner")
-    )
-    replace_response = await svc.update_room_agent_set(
-        RoomCenterRoomSettingRequest(
-            room_id="r1",
-            room_agent_set={"a1": "Agent One"},
-            requesting_user_id="owner",
-        )
-    )
-    rename_response = await svc.update_room_name(
-        RoomCenterRoomSettingRequest(room_id="r1", room_name="Renamed")
-    )
-    delete_response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
-    )
-
-    assert create_response.success is True
-    assert create_response.room.room_id == "r1"
-    assert inquiry_response.room.room_agent_set == {"a1": "Agent One"}
-    assert list_response.room_list[0].room_id == "r1"
-    assert history_response.room_list[0].room_id == "r1"
-    assert replace_response.success is True
-    assert rename_response.success is True
-    assert delete_response.success is True
-    facade.create_room.assert_awaited_once()
-    create_request = facade.create_room.await_args.args[0]
-    assert create_request.extend_info == {"debateMode": True, "use_supervisor": True}
-    facade.get_room.assert_awaited()
-    facade.list_rooms_for_owner.assert_awaited_once_with("owner")
-    facade.list_room_history_for_owner.assert_awaited_once_with("owner", limit=100)
-    facade.replace_membership.assert_awaited_once()
-    facade.update_room.assert_awaited_once_with("r1", {"room_name": "Renamed"})
-    facade.delete_room.assert_awaited_once_with("r1", "owner")
-
-
-@pytest.mark.asyncio
 async def test_room_services_active_runs_response_is_room_metadata_only():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         side_effect=AssertionError("legacy room store should not be used")
@@ -314,57 +214,41 @@ async def test_room_services_active_runs_response_is_room_metadata_only():
     svc._store.get_active_runs_by_room_id.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_room_services_room_setting_returns_room_metadata_only():
-    svc = object.__new__(RoomServices)
-    svc._store = MagicMock()
-    svc._store.get_active_runs_by_room_id = AsyncMock(
-        side_effect=AssertionError("legacy active-run store should not be used")
-    )
-    svc._bound = False
-    svc._facade = None
-    facade = AsyncMock()
-    facade.get_room.return_value = RoomInfo(
-        room_id="r1",
-        room_name="Room",
-        owner_id="owner",
-        owner_name="Owner",
-    )
-    svc.bind_facade(facade)
-
-    response = await svc.inquiry_room_setting(
-        RoomCenterRoomSettingRequest(room_id="r1")
-    )
-
-    assert response.success is True
-    assert response.active_runs is None
-    facade.get_room.assert_awaited_once_with("r1")
-    svc._store.get_active_runs_by_room_id.assert_not_awaited()
-
-
 def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches():
     forbidden_by_method = {
-        "inquiry_room_setting": {"get_room_by_room_id", "update_room_by_room_id"},
-        "inquiry_active_runs": {
+        ("conversation/runtime.py", "ConversationRuntime", "inquiry_active_runs"): {
             "get_room_by_room_id",
             "get_room_user_message_by_message_id",
         },
-        "inquiry_rooms_by_room_owner_id": {"get_rooms_by_room_owner_id"},
-        "inquiry_room_history_by_owner_id": {"get_rooms_by_room_owner_id"},
-        "update_room_agent_set": {"get_room_by_room_id", "update_room_by_room_id"},
-        "update_room_name": {"get_room_by_room_id", "update_room_by_room_id"},
-    }
-    source = _ROOT / "room" / "compat" / "runtime.py"
-    tree = ast.parse(source.read_text())
-    methods = {
-        item.name: item
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
-        for item in node.body
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ("chat/service.py", "ChatService", "inquiry_room_setting"): {
+            "get_room_by_room_id",
+            "update_room_by_room_id",
+        },
+        ("chat/service.py", "ChatService", "inquiry_rooms_by_room_owner_id"): {
+            "get_rooms_by_room_owner_id"
+        },
+        ("chat/service.py", "ChatService", "inquiry_room_history_by_owner_id"): {
+            "get_rooms_by_room_owner_id"
+        },
+        ("chat/service.py", "ChatService", "update_room_agent_set"): {
+            "get_room_by_room_id",
+            "update_room_by_room_id",
+        },
+        ("chat/service.py", "ChatService", "update_room_name"): {
+            "get_room_by_room_id",
+            "update_room_by_room_id",
+        },
     }
     violations: list[str] = []
-    for method_name, forbidden_attrs in forbidden_by_method.items():
+    for (path, class_name, method_name), forbidden_attrs in forbidden_by_method.items():
+        tree = ast.parse((_ROOT / path).read_text())
+        methods = {
+            item.name: item
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+            for item in node.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         method = methods[method_name]
         for node in ast.walk(method):
             if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
@@ -377,7 +261,7 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
 
 @pytest.mark.asyncio
 async def test_room_services_persist_user_message_emits_message_committed_event():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.add_room_user_message = AsyncMock(
         side_effect=AssertionError("legacy message store should not be used")
@@ -425,7 +309,7 @@ async def test_room_services_persist_user_message_emits_message_committed_event(
 
 @pytest.mark.asyncio
 async def test_room_services_persist_user_message_does_not_emit_on_failure():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._bound = False
     svc._facade = None
     publisher = RecordingEventPublisher()
@@ -450,7 +334,7 @@ async def test_room_services_persist_user_message_does_not_emit_on_failure():
 
 @pytest.mark.asyncio
 async def test_room_services_assigns_message_id_before_claiming_file_references():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._bound = False
     svc._facade = None
     publisher = RecordingEventPublisher()
@@ -522,7 +406,7 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
 
 @pytest.mark.asyncio
 async def test_room_services_persist_message_to_room_passes_room_agent_set_to_user_commit_event():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
@@ -583,7 +467,7 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
 async def test_canonical_send_sanitizes_server_owned_user_message_fields(
     with_structured_quote,
 ):
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
@@ -692,7 +576,7 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
 
 @pytest.mark.asyncio
 async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._bound = False
     svc._facade = None
@@ -747,7 +631,7 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
 
 @pytest.mark.asyncio
 async def test_legacy_idempotency_row_replays_without_backfilling_fingerprint(caplog):
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
@@ -786,7 +670,7 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
         async def __aexit__(self, *_args):
             return False
 
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
@@ -894,7 +778,7 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
 
 @pytest.mark.asyncio
 async def test_concurrent_loser_releases_own_claim_without_touching_winner_commit():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._bound = False
     svc._facade = None
     facade = MagicMock()
@@ -965,7 +849,7 @@ async def test_concurrent_loser_releases_own_claim_without_touching_winner_commi
 
 @pytest.mark.asyncio
 async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
         return_value=Room(
@@ -1030,7 +914,7 @@ async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner():
 
 @pytest.mark.asyncio
 async def test_room_services_quote_materialization_delegates_to_room_facade():
-    svc = object.__new__(RoomServices)
+    svc = object.__new__(ConversationRuntime)
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
@@ -1079,12 +963,12 @@ def test_room_services_migrated_message_methods_do_not_call_legacy_store():
             "get_room_agent_messages_by_related_message_id",
         },
     }
-    source = _ROOT / "room" / "compat" / "runtime.py"
+    source = _ROOT / "conversation" / "runtime.py"
     tree = ast.parse(source.read_text())
     methods = {
         item.name: item
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "RoomServices"
+        if isinstance(node, ast.ClassDef) and node.name == "ConversationRuntime"
         for item in node.body
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
@@ -1098,138 +982,6 @@ def test_room_services_migrated_message_methods_do_not_call_legacy_store():
     assert not violations, (
         "Migrated message methods still use legacy store:\n" + "\n".join(violations)
     )
-
-
-@pytest.mark.asyncio
-async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
-    svc = object.__new__(RoomServices)
-    svc._store = MagicMock()
-    svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
-    svc._bound = False
-    svc._facade = None
-    svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
-    facade = AsyncMock()
-    facade.get_room_owner.return_value = "owner"
-    facade.delete_room.return_value = True
-    svc.bind_facade(facade)
-    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=True))
-    svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
-    svc.bind_room_deletion(
-        RoomDeletionService(
-            room_lifecycle=facade,
-            memory_cleanup=memory_cleanup,
-        )
-    )
-
-    response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="intruder")
-    )
-
-    assert response.success is False
-    assert response.status_code == 403
-    assert response.error == "Forbidden"
-    facade.delete_room.assert_not_awaited()
-    memory_cleanup.delete_room_memory.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails():
-    svc = object.__new__(RoomServices)
-    svc._store = MagicMock()
-    svc._store.get_active_runs_by_room_id = AsyncMock(return_value=[])
-    svc._bound = False
-    svc._facade = None
-    svc._s3_service = SimpleNamespace(delete_prefix=AsyncMock())
-    facade = AsyncMock()
-    facade.get_room_owner.return_value = "owner"
-    facade.delete_room.return_value = True
-    svc.bind_facade(facade)
-    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=False))
-    svc.bind_context_memory(room_memory_cleanup=memory_cleanup)
-    svc.bind_room_deletion(
-        RoomDeletionService(
-            room_lifecycle=facade,
-            memory_cleanup=memory_cleanup,
-        )
-    )
-
-    response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
-    )
-
-    assert response.success is True
-    assert response.status_code == 200
-    assert response.error is None
-    facade.delete_room.assert_awaited_once_with("r1", "owner")
-
-
-# =============================================================================
-# _looks_like_agent_id Tests
-# =============================================================================
-
-
-class TestLooksLikeAgentId:
-    """Tests for UUID-style agent ID detection."""
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "550e8400-e29b-41d4-a716-446655440000",
-            "550e8400e29b41d4a716446655440000",
-        ],
-    )
-    def test_recognizes_valid_uuids(self, value):
-        assert RoomServices._looks_like_agent_id(value) is True
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "MyAgent",
-            "agent-name",
-            "",
-            "not-a-uuid-at-all",
-        ],
-    )
-    def test_rejects_non_uuid_strings(self, value):
-        assert RoomServices._looks_like_agent_id(value) is False
-
-    def test_rejects_non_string(self):
-        assert RoomServices._looks_like_agent_id(123) is False
-        assert RoomServices._looks_like_agent_id(None) is False
-
-
-# =============================================================================
-# _normalize_room_agent_set Tests
-# =============================================================================
-
-
-class TestNormalizeRoomAgentSet:
-    """Tests for room_agent_set normalization."""
-
-    def test_returns_empty_for_none(self, room_center):
-        assert room_center._normalize_room_agent_set(None) == {}
-
-    def test_returns_empty_for_empty(self, room_center):
-        assert room_center._normalize_room_agent_set({}) == {}
-
-    def test_preserves_correct_shape(self, room_center):
-        """Keys are UUIDs, values are names -- already canonical."""
-        data = {"550e8400e29b41d4a716446655440000": "MyAgent"}
-        result = room_center._normalize_room_agent_set(data)
-        assert result == data
-
-    def test_flips_inverted_shape(self, room_center):
-        """Keys are names, values are UUIDs -- needs flipping."""
-        data = {"MyAgent": "550e8400e29b41d4a716446655440000"}
-        result = room_center._normalize_room_agent_set(data)
-        assert "550e8400e29b41d4a716446655440000" in result
-        assert result["550e8400e29b41d4a716446655440000"] == "MyAgent"
-
-    def test_handles_ambiguous_data(self, room_center):
-        """When keys and values both look like IDs, preserves original."""
-        data = {"550e8400e29b41d4a716446655440000": "660e8400e29b41d4a716446655440000"}
-        result = room_center._normalize_room_agent_set(data)
-        assert result == data
 
 
 # =============================================================================

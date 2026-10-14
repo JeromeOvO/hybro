@@ -233,7 +233,7 @@ async def test_facade_passes_required_input_modes(mock_matched_agents):
 
 def test_derive_required_input_modes_with_attachments():
     """Test _derive_required_input_modes with attachments."""
-    from room.compat.runtime import RoomServices
+    from conversation.runtime import ConversationRuntime
 
     user_message = RoomUserMessage(
         room_id="room-123",
@@ -260,14 +260,14 @@ def test_derive_required_input_modes_with_attachments():
         ),
     )
 
-    result = RoomServices._derive_required_input_modes(user_message)
+    result = ConversationRuntime._derive_required_input_modes(user_message)
     assert result is not None
     assert result == ["image/png", "application/pdf"]
 
 
 def test_derive_required_input_modes_no_attachments():
     """Test _derive_required_input_modes without attachments."""
-    from room.compat.runtime import RoomServices
+    from conversation.runtime import ConversationRuntime
 
     user_message = RoomUserMessage(
         room_id="room-123",
@@ -279,7 +279,7 @@ def test_derive_required_input_modes_no_attachments():
         ),
     )
 
-    result = RoomServices._derive_required_input_modes(user_message)
+    result = ConversationRuntime._derive_required_input_modes(user_message)
     assert result is None
 
 

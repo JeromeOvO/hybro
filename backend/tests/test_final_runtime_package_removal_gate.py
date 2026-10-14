@@ -22,7 +22,7 @@ RUNTIME_SCAN_ROOTS = (
     "agent",
     "common",
     "database",
-    "room",
+    "chat",
     "conversation",
     "execution",
     "context_memory",

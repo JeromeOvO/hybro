@@ -3,12 +3,12 @@ from __future__ import annotations
 import inspect
 from datetime import UTC, datetime
 
-from room.facade import RoomFacade
+from conversation.facade import ConversationFacade
 
 
 def test_room_facade_exposes_hub_publish_support_protocol_methods() -> None:
-    assert inspect.iscoroutinefunction(RoomFacade.is_message_cancelled)
-    assert inspect.iscoroutinefunction(RoomFacade.get_turn_completion_kind)
+    assert inspect.iscoroutinefunction(ConversationFacade.is_message_cancelled)
+    assert inspect.iscoroutinefunction(ConversationFacade.get_turn_completion_kind)
 
 
 async def test_room_facade_cancellation_reader_uses_repository_cancel_store() -> None:
@@ -20,7 +20,7 @@ async def test_room_facade_cancellation_reader_uses_repository_cancel_store() ->
         async def get_by_id(self, message_id: str):
             raise AssertionError("document fallback should not run")
 
-    facade = RoomFacade(
+    facade = ConversationFacade(
         repository=None,
         message_repository=Messages(),
         agent_registry=None,

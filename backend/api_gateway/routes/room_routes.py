@@ -10,6 +10,7 @@ from api_gateway.dependencies import (
     get_room_store,
 )
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
+from chat.protocols import RoomCenterCompatibility
 from common.auth import ClerkUser, get_current_user
 from common.dto import ExecutionRequest, RunInfo
 from common.idempotency import (
@@ -30,7 +31,6 @@ from models.response import (
     RoomHistoryItem,
     RoomHistoryResponse,
 )
-from room.protocols import RoomCenterCompatibility
 
 router = APIRouter()
 logger = get_logger(__name__)

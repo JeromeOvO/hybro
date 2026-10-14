@@ -491,7 +491,7 @@ def test_message_write_flows_do_not_call_context_memory_write_shims():
         "add_agent_response_to_memory",
     }
     checked_paths = [
-        Path("room/compat/runtime.py"),
+        Path("conversation/runtime.py"),
     ]
     violations: list[str] = []
     for path in checked_paths:
@@ -530,7 +530,7 @@ def test_context_memory_import_boundary():
         "modules",
         "openai",
         "pymongo",
-        "room",
+        "chat",
         "conversation",
         "services",
     }
