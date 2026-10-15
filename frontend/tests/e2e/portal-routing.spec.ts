@@ -86,7 +86,7 @@ test.describe('Unified portal routing', () => {
       await openNavigation()
       await expect(page.locator('[data-sidebar="sidebar"]')).toHaveCount(1)
       await expect(page.getByRole('region', { name: 'History', exact: true })).toHaveCount(0)
-      for (const name of ['Overview', 'Network', 'Room Chat', 'Connect']) {
+      for (const name of ['Overview', 'Network', 'Sessions', 'Chats', 'Connect']) {
         await expect(modules.getByRole('link', { name: new RegExp(`^${name}`) })).toHaveCount(1)
       }
       if (width >= 768) {
@@ -102,7 +102,7 @@ test.describe('Unified portal routing', () => {
       await openNavigation()
       await expect(page.locator('[data-sidebar="sidebar"]')).toHaveCount(1)
       await expect(page.getByRole('region', { name: 'History', exact: true })).toHaveCount(0)
-      await modules.getByRole('link', { name: /^Room Chat/ }).click()
+      await modules.getByRole('link', { name: /^Chats/ }).click()
       await expect(page).toHaveURL(/\/chat$/)
       await openNavigation()
       const history = page.getByRole('region', { name: 'History', exact: true })

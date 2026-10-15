@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveAttention, overviewMetrics, topAgentsByRoomCalls } from '@/lib/overview'
+import { overviewMetrics, recentRooms, recentSessions, topAgentsByCalls } from '@/lib/overview'
 import { placeholderAgent } from '@/lib/network-agent'
 import type { AgentGroup } from '@/lib/types/agent-group'
 import type { RoomHistoryItem } from '@/lib/api/room'
@@ -29,23 +29,25 @@ describe('overview', () => {
     })
   })
 
-  it('orders attention: approvals, rooms needing input, gateway, offline agents, unassigned', () => {
-    expect(deriveAttention({ agents, networks, rooms, sessions, gateway: 'unavailable' }).map(item => item.kind))
-      .toEqual(['session-approval', 'room-input', 'gateway', 'agent-offline', 'unassigned'])
-    expect(deriveAttention({ agents, networks, rooms, sessions, gateway: 'ready' })[0])
-      .toEqual({ kind: 'session-approval', key: 'session:s1', sessionId: 's1', clientLabel: 'Client s1' })
+  it('lists rooms needing input first, then the latest', () => {
+    const list = [
+      { ...room('old', 'idle'), last_activity_at: '2026-10-01T00:00:00Z' },
+      { ...room('new', 'idle'), last_activity_at: '2026-10-12T00:00:00Z' },
+      { ...room('ask', 'awaiting_input'), last_activity_at: '2026-10-02T00:00:00Z' },
+    ]
+    expect(recentRooms(list, 2).map(item => item.room_id)).toEqual(['ask', 'new'])
   })
 
-  it('returns nothing when everything is running', () => {
-    const healthy = [{ ...placeholderAgent('a', '', 'active') }]
-    expect(deriveAttention({ agents: healthy, networks: [{ ...networks[0], agents: ['a'] }], rooms: [room('x', 'idle')], sessions: [], gateway: 'ready' })).toEqual([])
+  it('lists sessions waiting for the owner first, then the latest', () => {
+    const list = [
+      { ...session('old', 'completed'), last_activity_at: '2026-10-01T00:00:00Z' },
+      { ...session('new', 'completed'), last_activity_at: '2026-10-12T00:00:00Z' },
+      { ...session('wait', 'waiting_on_owner'), last_activity_at: '2026-10-02T00:00:00Z' },
+    ]
+    expect(recentSessions(list, 3).map(item => item.session_id)).toEqual(['wait', 'new', 'old'])
   })
 
-  it('does not flag the gateway while it is still checking', () => {
-    expect(deriveAttention({ agents: [], networks: [], rooms: [], sessions: [], gateway: 'checking' })).toEqual([])
-  })
-
-  it('ranks agents by room calls and drops zero-call agents', () => {
-    expect(topAgentsByRoomCalls(agents, 5).map(agent => agent.id)).toEqual(['b', 'a'])
+  it('ranks agents by calls and drops zero-call agents', () => {
+    expect(topAgentsByCalls(agents, 5).map(agent => agent.id)).toEqual(['b', 'a'])
   })
 })

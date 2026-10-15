@@ -175,7 +175,7 @@ The application exposes one unprefixed route tree with four destinations:
   error page. Search updates replace the history entry; other params push one.
 - `/network/agents/[id]` and `/network/agents/new`: agent detail and remote
   agent registration.
-- `/chat` and `/room/[id]`: Room Chat (unchanged chat home and room workspace).
+- `/chat` and `/room/[id]`: Chats (unchanged chat home and room workspace).
 - `/connect/mcp` and `/connect/api`: Connect pages (MCP and API tabs).
 
 There is no host-based route rewrite. Legacy `/agents*`, `/networks`,
@@ -285,7 +285,7 @@ src/hooks/
 |-- useNetworks.ts             # owner-scoped subnet queries, agent inventory, and confirmed CRUD writes
 |-- useNetworkUrlState.ts      # Network workspace URL state bound to the router
 |-- useGraphDisplayPrefs.ts    # graph label switches persisted in localStorage
-|-- useRoomHistory.ts          # shared room history query (sidebar, Room Chat badge, Overview)
+|-- useRoomHistory.ts          # shared room history query (sidebar, Chats badge, Overview)
 |-- useSessions.ts             # owner session list, polled every 15 s (sidebar badge, Overview, /sessions)
 |-- useMcpStatus.ts            # shared /hybro-mcp gateway status query
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
@@ -869,12 +869,20 @@ default.
 The `(portal)` route group provides one shared shell without adding a URL
 segment.
 
-- `/`: Overview. Five metric tiles (Agents, Subnets, Gateway, Rooms,
-  Sessions), a **Needs attention** list (sessions waiting for the owner's
-  approval, rooms needing input, gateway not ready, offline agents, agents in no
-  subnet), a static mini topology linking to `/network`,
-  recent rooms, and most-called agents. Derivation lives in `src/lib/overview.ts`.
-  Call counters are labeled **Room calls**; direct MCP and API sends are not counted.
+- `/`: Overview, stacked line by line: a visible title with **Add agent** and
+  **New chat**; four clickable tiles in the order Sessions (open, and how many
+  need you; opens `/sessions` filtered to Needs you when any do), Chats (how
+  many need input), Agents (offline count when any), and MCP gateway (its
+  status, plus "Check the connection" only when it is not ready). Each tile's
+  number takes its side-menu icon color: Sessions and Chats green
+  (`text-icon-create`), Agents blue (`text-icon-network`), and MCP gateway
+  purple (`text-hybro-bro`, also the Connect icon); Recent
+  sessions and Recent chats (five each, anything waiting on the owner first,
+  then the latest) in one shared row design of title, a grey line of who and
+  when, and status; the static mini topology linking to `/network`; and
+  Most-called agents with their avatar and call count, last. Derivation lives
+  in `src/lib/overview.ts`. Call counts are the agent's `call_count`, which
+  counts every orchestrator agent call from Chat and Sessions once it finishes.
 - `/core`: Hybro Core product page. The hero composer is the same `RoomChatInput`
   as `/chat`, with group and mode menus visible but non-selectable and mention
   and attach buttons visible but non-clickable. While idle it typewrites the
@@ -916,7 +924,7 @@ segment.
   whatever the browser locale. The sidebar **Sessions** entry carries its own
   badge with the number of sessions in `waiting_on_owner`; `useSessions` polls
   unconditionally every 15 s because sessions are created outside the app.
-  Chat history and the Overview Rooms tile exclude session containers because
+  Chat history and the Overview Chats tile exclude session containers because
   the backend history filters them out.
 - `/network`: the Network workspace (see below), replacing the former Agents
   card grid and Subnets page.
@@ -951,15 +959,17 @@ navigation do not occur until the user sends the message. Failed creates perform
 one catalog refresh as a compatibility fallback.
 
 The shared side menu is `PortalSidebar`, a 14.5rem Sidebar with a 4rem
-icon-only collapsed state. `NavAgent` renders the four flat `CONSUMER_NAV`
+icon-only collapsed state. `NavAgent` renders the five flat `CONSUMER_NAV`
 destinations; the active item's icon uses the primary color:
 
 - **Overview** opens `/` (exact match only).
 - **Network** opens `/network` and stays active on `/network/*`.
-- **Room Chat** opens `/chat` and remains active on Room routes. It shows a count
+- **Sessions** opens `/sessions` and stays active on `/sessions/*`. It shows a
+  count badge for sessions in `waiting_on_owner`.
+- **Chats** opens `/chat` and remains active on Room routes. It shows a count
   badge (a dot when collapsed) for rooms with `awaiting_input` status, read from
   the shared `useRoomHistory` query; the accessible name becomes
-  "Room Chat, N need input".
+  "Chats, N need input".
 - **Connect** opens `/connect/mcp` and stays active on `/connect/*`.
 
 The same primary menu is used on `/core`, the other existing portal pages, and
@@ -986,7 +996,7 @@ the existing bottom Sheet. Original page content, Room workflows, and
 
 Chat history uses the lightweight authenticated `GET /roomCenter/history`
 resource through the shared `useRoomHistory` TanStack Query hook (also used by
-the Room Chat badge and the Overview). Each row shows the shared status indicator:
+the Chats badge and the Overview). Each row shows the shared status indicator:
 `queued` is **Queued**, `processing` is **Running** (spinner only without
 reduced motion), `awaiting_input` is **Needs input** with the warning color,
 and `idle` shows nothing.

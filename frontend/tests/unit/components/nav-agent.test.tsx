@@ -12,8 +12,8 @@ afterEach(cleanup)
 describe('NavAgent', () => {
   it('renders the five destinations and marks the current one', () => {
     render(<SidebarProvider><NavAgent navAgents={CONSUMER_NAV} badges={{ '/chat': 2 }} /></SidebarProvider>)
-    expect(CONSUMER_NAV.map(item => item.name)).toEqual(['Overview', 'Network', 'Room Chat', 'Sessions', 'Connect'])
-    for (const name of ['Overview', 'Network', 'Room Chat', 'Sessions', 'Connect']) {
+    expect(CONSUMER_NAV.map(item => item.name)).toEqual(['Overview', 'Network', 'Sessions', 'Chats', 'Connect'])
+    for (const name of ['Overview', 'Network', 'Chats', 'Sessions', 'Connect']) {
       expect(screen.getByRole('link', { name: new RegExp(`^${name}`) })).toBeInTheDocument()
     }
     expect(screen.getByRole('link', { name: /^Network/ })).toHaveAttribute('aria-current', 'page')
@@ -21,11 +21,11 @@ describe('NavAgent', () => {
 
   it('announces the rooms needing input', () => {
     render(<SidebarProvider><NavAgent navAgents={CONSUMER_NAV} badges={{ '/chat': 2 }} /></SidebarProvider>)
-    expect(screen.getByRole('link', { name: 'Room Chat, 2 need input' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chats, 2 need input' })).toBeInTheDocument()
   })
   it('announces sessions waiting on the owner with their own badge', () => {
     render(<SidebarProvider><NavAgent navAgents={CONSUMER_NAV} badges={{ '/sessions': 1 }} /></SidebarProvider>)
     expect(screen.getByRole('link', { name: 'Sessions, 1 need input' })).toHaveAttribute('href', '/sessions')
-    expect(screen.getByRole('link', { name: 'Room Chat' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chats' })).toBeInTheDocument()
   })
 })
