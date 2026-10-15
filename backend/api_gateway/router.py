@@ -11,6 +11,7 @@ from api_gateway.routes import (
     inspection_routes,
     llm_proxy_routes,
     room_routes,
+    session_routes,
     sse_routes,
     webhook_routes,
 )
@@ -29,6 +30,7 @@ def build_api_gateway_router() -> APIRouter:
     )
     gateway_router.include_router(room_routes.router, tags=["room"])
     gateway_router.include_router(hitl_routes.router, tags=["hitl"])
+    gateway_router.include_router(session_routes.router, tags=["session"])
     gateway_router.include_router(sse_routes.router, tags=["sse"])
     gateway_router.include_router(agent_group_routes.router, tags=["agent_group"])
     gateway_router.include_router(files_routes.router, tags=["files"])

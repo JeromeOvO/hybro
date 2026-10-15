@@ -826,6 +826,96 @@
     "include_in_schema": true
   },
   {
+    "path": "/api/v1/sessions",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_sessions",
+    "endpoint_module": "api_gateway.routes.session_routes",
+    "declared_owner": "api_gateway.routes.session_routes",
+    "tags": [
+      "session"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_session_access"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sessions/messages",
+    "methods": [
+      "POST"
+    ],
+    "name": "send_session_message",
+    "endpoint_module": "api_gateway.routes.session_routes",
+    "declared_owner": "api_gateway.routes.session_routes",
+    "tags": [
+      "session"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_session_access"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sessions/{session_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "check_session",
+    "endpoint_module": "api_gateway.routes.session_routes",
+    "declared_owner": "api_gateway.routes.session_routes",
+    "tags": [
+      "session"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_session_access"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sessions/{session_id}/close",
+    "methods": [
+      "POST"
+    ],
+    "name": "close_session",
+    "endpoint_module": "api_gateway.routes.session_routes",
+    "declared_owner": "api_gateway.routes.session_routes",
+    "tags": [
+      "session"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_session_access"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
+    "path": "/api/v1/sessions/{session_id}/record",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_session_record",
+    "endpoint_module": "api_gateway.routes.session_routes",
+    "declared_owner": "api_gateway.routes.session_routes",
+    "tags": [
+      "session"
+    ],
+    "status_code": null,
+    "dependencies": [
+      "get_session_access"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/sse/message/{message_id}/cancel",
     "methods": [
       "POST"

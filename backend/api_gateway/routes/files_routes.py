@@ -3,11 +3,21 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from starlette.responses import StreamingResponse
 
-from api_gateway.dependencies import get_file_storage, get_room_ownership_reader
+from api_gateway.dependencies import (
+    get_file_storage,
+    get_room_ownership_reader,
+    get_room_store,
+)
+from api_gateway.errors import require_chat_room
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user
 from common.errors import FileStoragePlatformError
-from common.protocols import FileStorage, PreparedFileStream, RoomOwnershipReader
+from common.protocols import (
+    FileStorage,
+    PreparedFileStream,
+    RoomOwnershipReader,
+    RoomRouteReader,
+)
 from models.file_upload import FileUploadResponse
 from room_files import normalize_file_id, normalize_mime_type
 
@@ -35,6 +45,7 @@ async def upload_file(
     user: ClerkUser = Depends(get_current_user),
     storage: FileStorage = Depends(get_file_storage),
     room_ownership: RoomOwnershipReader = Depends(get_room_ownership_reader),
+    store: RoomRouteReader = Depends(get_room_store),
 ):
     """Upload a file for attachment to a room message.
 
@@ -55,6 +66,7 @@ async def upload_file(
             status_code=403,
             detail="You do not have permission to access this room",
         )
+    require_chat_room(await store.get_room_by_room_id(room_id))
 
     try:
         file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)

@@ -24,6 +24,7 @@ ROUTE_POLICIES: dict[str, RoutePolicy] = {
     # a Clerk session or a Provider credential.
     "llm_proxy": RoutePolicy(auth="internal-token-route-level", tags=("internal_llm",)),
     "room": RoutePolicy(auth="clerk-route-level", tags=("room",)),
+    "session": RoutePolicy(auth="clerk-route-level", tags=("session",)),
     "sse": RoutePolicy(auth="query-token-supported", tags=("sse",)),
     "webhook": RoutePolicy(auth="bearer-token-route-level", tags=("webhooks",)),
 }

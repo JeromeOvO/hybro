@@ -31,7 +31,10 @@ from common.dto.hitl import (
     HITLAnswerKind,
     HITLConfirmationAnswer,
     HITLMultiChoiceAnswer,
+    HITLPolicyDecision,
+    HITLPolicyDecisionAnswer,
     HITLQuestionAnswer,
+    HITLQuestionSpec,
     HITLSingleChoiceAnswer,
     HITLTextAnswer,
 )
@@ -43,7 +46,10 @@ from execution.hitl.exceptions import (
     HITLDeliveryUncertainError,
     HITLRoomMismatchError,
 )
-from execution.orchestrator.a2a_runtime.hitl_prompt import prompt_type_for_question
+from execution.orchestrator.a2a_runtime.hitl_prompt import (
+    prompt_type_for_question,
+    public_question_fields,
+)
 from execution.orchestrator.a2a_runtime.interaction_outcome import (
     emit_hitl_resolved_events,
     public_activity_message_id,
@@ -77,6 +83,7 @@ MODE_PROFILE_MAP = {
     "direct": "fast",
     "ultimate": "ultimate",
     "supervisor": "ultimate",
+    "passthrough": "passthrough",
 }
 
 _PROFILE_PINNED_INITIAL_ROUTING = "explicit_agent_first"
@@ -539,29 +546,53 @@ def _map_legacy_answers(
         mapped.append(
             HITLQuestionAnswer(
                 question_id=question_id,
-                answer=_answer_for_kind(question.answer_kind, user_input or ""),
+                answer=_answer_for_question(question, user_input or ""),
             )
         )
-    if set(questions) != {answer.question_id for answer in mapped}:
+    required = {
+        question.question_id for question in spec.questions if question.required
+    }
+    if not required.issubset(answer.question_id for answer in mapped):
         raise HITLConflictError(
             "The input request changed before submission. Refresh and try again."
         )
     return mapped
 
 
-def _answer_for_kind(kind: HITLAnswerKind, user_input: str) -> Any:
+def _answer_for_question(question: HITLQuestionSpec, user_input: str) -> Any:
+    """Typed answer for the UI's text: a listed choice, or Other when allowed."""
+
+    kind = question.answer_kind
     if kind == HITLAnswerKind.TEXT:
         return HITLTextAnswer(text=user_input)
+    choices = set(question.choices or ())
     if kind == HITLAnswerKind.SINGLE_CHOICE:
-        return HITLSingleChoiceAnswer(choice=user_input)
+        value = user_input.strip()
+        if value in choices or not question.allow_other:
+            return HITLSingleChoiceAnswer(choice=value)
+        return HITLSingleChoiceAnswer(other=value)
     if kind == HITLAnswerKind.MULTI_CHOICE:
-        choices = [choice.strip() for choice in user_input.split(",") if choice.strip()]
-        return HITLMultiChoiceAnswer(choices=choices)
-    if kind == HITLAnswerKind.CONFIRMATION:
-        normalized = user_input.strip().lower()
-        return HITLConfirmationAnswer(
-            confirmed=normalized in {"true", "yes", "1", "confirmed", "approve"}
+        tokens = [token.strip() for token in user_input.split(",") if token.strip()]
+        if not question.allow_other:
+            return HITLMultiChoiceAnswer(choices=tokens)
+        other = ", ".join(token for token in tokens if token not in choices)
+        return HITLMultiChoiceAnswer(
+            choices=[token for token in tokens if token in choices],
+            other=other or None,
         )
+    normalized = user_input.strip().lower()
+    if kind == HITLAnswerKind.CONFIRMATION:
+        return HITLConfirmationAnswer(
+            confirmed=normalized
+            in {"true", "yes", "1", "confirm", "confirmed", "approve"}
+        )
+    if kind == HITLAnswerKind.POLICY_DECISION:
+        # The UI offers Approve and Reject for policy decisions.
+        if normalized in {"approve", "approved"}:
+            return HITLPolicyDecisionAnswer(decision=HITLPolicyDecision.APPROVE)
+        if normalized in {"reject", "rejected", "deny", "denied"}:
+            return HITLPolicyDecisionAnswer(decision=HITLPolicyDecision.DENY)
+        raise HITLConflictError("Answer this request with Approve or Reject.")
     raise UnsupportedEnvelopeError(
         f"orchestrator cannot serve HITL answer kind {kind.value!r} from legacy text"
     )
@@ -1020,6 +1051,17 @@ class DualRuntimeRouter:
                 and marker.interaction_revision == route.interaction_revision
             ):
                 return latest.state
+            # A different parked round (a new interaction or revision) can only
+            # follow the Agent receiving this answer: delivery is proven.
+            if (
+                latest is not None
+                and latest.state in {"input_required", "auth_required"}
+                and (
+                    latest.pending_interaction_id != interaction_id
+                    or latest.interaction_revision != route.interaction_revision
+                )
+            ):
+                return latest.state
             raise HITLDeliveryUncertainError(
                 "HITL answer was recorded but continuation delivery is uncertain"
             )
@@ -1266,6 +1308,7 @@ class DualRuntimeRouter:
                         client_request_id=run.client_request_id,
                         prompt_type=prompt_type_for_question(question),
                         choices=choices,
+                        **public_question_fields(question, secret_values=secret_values),
                         interaction_id=spec.interaction_id,
                         interaction_status="pending",
                         interaction_version=route.interaction_revision,

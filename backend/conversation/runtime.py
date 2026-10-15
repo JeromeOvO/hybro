@@ -97,6 +97,15 @@ from models.room_services_models import ParseResult, ResolvedRoutingScope
 
 logger = get_logger(__name__)
 
+_PERSISTED_EXECUTION_MODES = frozenset({"direct", "supervisor", "passthrough"})
+
+
+def _persisted_execution_mode(info: dict) -> str:
+    """The request's execution mode as stored on the user message."""
+    mode = info.get("execution_mode")
+    return mode if mode in _PERSISTED_EXECUTION_MODES else "direct"
+
+
 _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
     "quoted_text",
     "quoted_sender_name",
@@ -1284,7 +1293,7 @@ class ConversationRuntime:
         envelope.update(
             {
                 "orchestration": True,
-                "execution_mode": "supervisor",
+                "execution_mode": _persisted_execution_mode(info),
                 "orchestration_run_id": user_message.message_id,
                 "orchestration_status": "created",
                 "candidate_scope_snapshot_id": candidate_scope.snapshot_id,
@@ -1611,9 +1620,7 @@ class ConversationRuntime:
             )
 
         orchestration_info = self._orchestration_request_info(request)
-        execution_mode = orchestration_info.get("execution_mode")
-        if execution_mode not in {"direct", "supervisor"}:
-            execution_mode = "direct"
+        execution_mode = _persisted_execution_mode(orchestration_info)
         scope = orchestration_info.get("agent_scope")
         scope = scope if isinstance(scope, dict) else {"source": "room_default"}
         user_extend_info = (

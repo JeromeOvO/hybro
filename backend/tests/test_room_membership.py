@@ -86,6 +86,7 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
         "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
+        "owner_product": "chat",
     }
 
 

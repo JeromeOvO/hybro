@@ -10,6 +10,7 @@ from api_gateway.dependencies import (
     get_sse_store,
     get_sse_transport,
 )
+from api_gateway.errors import require_chat_room
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from common.auth import ClerkUser, get_current_user, get_current_user_with_query_token
 from common.dto import CancellationAck
@@ -260,6 +261,7 @@ async def cancel_message(
                 status_code=403,
                 detail="You do not have permission to cancel this message",
             )
+        require_chat_room(room)
 
         extend_info = getattr(message, "extend_info", None)
         persisted_status = (

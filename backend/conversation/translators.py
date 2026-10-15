@@ -38,6 +38,7 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
         pin_order=doc.get("pin_order"),
         processing_message_id=doc.get("processing_message_id"),
         extend_info=doc.get("extend_info"),
+        owner_product=_string_value(doc.get("owner_product")) or "chat",
     )
 
 
@@ -55,6 +56,7 @@ def create_room_doc(
     source_group_name: str | None = None,
     processing_message_id: str | None = None,
     extend_info: dict[str, Any] | None = None,
+    owner_product: str = "chat",
 ) -> dict[str, Any]:
     doc = {
         "room_id": room_id,
@@ -73,6 +75,7 @@ def create_room_doc(
         "processing_message_id": processing_message_id,
         "lifecycle_state": "active",
         "write_leases": [],
+        "owner_product": owner_product,
     }
     if extend_info is not None:
         doc["extend_info"] = dict(extend_info)

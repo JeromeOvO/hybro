@@ -72,6 +72,7 @@ class RoomInfo(FrozenDTO):
     pin_order: float | None = None
     processing_message_id: str | None = None
     extend_info: dict[str, Any] | None = None
+    owner_product: str = "chat"
 
 
 class CreateRoomRequest(FrozenDTO):
@@ -80,6 +81,7 @@ class CreateRoomRequest(FrozenDTO):
     room_name: str
     membership_seed: MembershipSeed
     extend_info: dict[str, Any] | None = None
+    owner_product: str = "chat"
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, CreateRoomRequest):

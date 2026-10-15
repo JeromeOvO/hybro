@@ -375,6 +375,18 @@ def _presented_targets(
     return targets
 
 
+def _forwarded_presentation_ids(run: OrchestratorRunState) -> set[str]:
+    """Presentations whose surface_agent_questions call already resolved."""
+    return {
+        entry.presentation_id
+        for batch in run.tool_batches
+        for entry in batch.entries
+        if entry.tool_name == SURFACE_AGENT_QUESTIONS_TOOL_NAME
+        and entry.state == "terminal"
+        and entry.presentation_id
+    }
+
+
 def _surface_agent_questions_tool_definition(
     run: OrchestratorRunState,
 ) -> ToolDefinition:
@@ -4547,10 +4559,22 @@ class OrchestratorKernel:
         when the loop should take another step.
         """
         presented = _presented_targets(run)
-        if presented:
+        forwarded = _forwarded_presentation_ids(run)
+        unanswered = [target for target in presented if target[0] not in forwarded]
+        if unanswered:
             return await self._passthrough_surface(
-                run, presented, signal, lifecycle=lifecycle
+                run, unanswered, signal, lifecycle=lifecycle
             )
+        if presented:
+            # The owner's answer already closed the surface call; the Agent's
+            # continuation result arrives later as a tool observation.
+            if run.status != "waiting_external":
+                run = await self._checkpoint(
+                    run,
+                    updates={"status": "waiting_external"},
+                    command_id=f"passthrough-await-continuation:{presented[0][0]}",
+                )
+            return KernelRunResult("waiting_external", run)
         if not run.tool_batches:
             return await self._passthrough_dispatch(run, signal, lifecycle=lifecycle)
         result = run.tool_batches[0].entries[0].buffered_terminal_result

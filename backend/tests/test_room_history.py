@@ -88,6 +88,7 @@ async def test_history_repository_projects_sorts_and_limits_by_effective_activit
             {
                 "$match": {
                     "room_owner_id": "owner",
+                    "owner_product": {"$ne": "session"},
                     "$or": [
                         {"lifecycle_state": "active"},
                         {"lifecycle_state": {"$exists": False}},

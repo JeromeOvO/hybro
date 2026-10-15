@@ -576,6 +576,75 @@ async def test_owner_answer_resumes_and_completes_without_a_model():
     assert turn["state"] == "completed"
 
 
+async def test_answered_surface_waits_for_the_agent_instead_of_resurfacing():
+    """Production order: the owner's answer closes the surface call first.
+
+    The answer publication terminalizes the surface_agent_questions entry
+    while the Agent entry is still the presented input_required child. The
+    next step must wait for the Agent's continuation result, not surface the
+    answered questions again under the same synthetic message id.
+    """
+    kernel, store, model, runtime, history, run_id = await make_passthrough_kernel()
+    runtime.answers[AGENT] = [question()]
+    parked = await kernel.run(
+        run_id, signal=NeverCancelled(), lifecycle=history.lifecycle
+    )
+    run = parked.run
+    surface_batch = run.tool_batches[1]
+    surface = surface_batch.entries[0]
+    answered_surface = surface_batch.model_copy(
+        update={
+            "entries": [
+                surface.model_copy(
+                    update={
+                        "state": "terminal",
+                        "buffered_terminal_result": ToolResult(
+                            call_id=surface.call_id,
+                            tool_name=surface.tool_name,
+                            status="completed",
+                            content=[TextPart(text="The user's answers were applied.")],
+                            artifact_refs=[],
+                        ),
+                    }
+                )
+            ]
+        }
+    )
+    answered = run.model_copy(
+        update={
+            "status": "running",
+            "tool_batches": [run.tool_batches[0], answered_surface],
+            "state_version": run.state_version + 1,
+        }
+    )
+    stored = await store.cas_mutate(
+        answered,
+        expected_state_version=run.state_version,
+        command_id="test:answer-published",
+    )
+    assert stored.outcome == "accepted"
+
+    waiting = await kernel.run(
+        run_id, signal=NeverCancelled(), lifecycle=history.lifecycle
+    )
+
+    assert waiting.outcome == "waiting_external"
+    assert waiting.run.status == "waiting_external"
+    assert len(waiting.run.tool_batches) == 2
+    assert model.requests == []
+
+    done = await kernel.observe_tool(
+        run_id,
+        _complete(_agent_entry(waiting.run), "Kyoto plan", observation_id="obs-2"),
+        signal=NeverCancelled(),
+        lifecycle=history.lifecycle,
+    )
+
+    assert done.outcome == "final_answer"
+    assert _final_text(done.run) == "Kyoto plan"
+    assert model.requests == []
+
+
 async def test_a_follow_up_question_is_forwarded_again_without_a_model():
     kernel, _store, model, runtime, history, run_id = await make_passthrough_kernel()
     runtime.answers[AGENT] = [question()]

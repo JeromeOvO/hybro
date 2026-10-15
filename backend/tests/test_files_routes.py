@@ -27,6 +27,11 @@ class OwnershipStub:
         return "user-1" if room_id == "room-1" else None
 
 
+class ChatRoomStoreStub:
+    async def get_room_by_room_id(self, room_id):
+        return SimpleNamespace(room_id=room_id, owner_product="chat")
+
+
 class FilesStub:
     def __init__(
         self,
@@ -109,6 +114,7 @@ async def test_upload_route_reads_only_one_byte_past_limit():
         user=_user(),
         storage=storage,
         room_ownership=OwnershipStub(),
+        store=ChatRoomStoreStub(),
     )
 
     assert upload.requested_size == 5 * 1024 * 1024 + 1
@@ -126,6 +132,7 @@ async def test_upload_route_rejects_oversize_before_storage():
             user=_user(),
             storage=storage,
             room_ownership=OwnershipStub(),
+            store=ChatRoomStoreStub(),
         )
 
     assert exc_info.value.status_code == 413

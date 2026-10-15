@@ -123,6 +123,7 @@ from orchestrator_composition import (
     validate_orchestrator_runtime,
 )
 from room_files import LocalFileContentStore, RoomFiles
+from session import MongoSessionRepository, SessionFacade, SessionWaiter
 
 logger = get_logger(__name__)
 
@@ -2251,6 +2252,25 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
 
+        # Sessions bind to the conversation container, Execution (engine and
+        # approvals), and the durable room event log for the bounded wait.
+        session_repository = MongoSessionRepository(mongo_dal)
+        await session_repository.ensure_indexes()
+        session_facade = SessionFacade(
+            store=session_repository,
+            rooms=_room_deps.room_management,
+            registry=_room_deps.room_registry,
+            history=_room_deps.room_history_reader,
+            messages=_room_deps.room_message_store,
+            engine=_execution_deps.execution_engine,
+            approvals=_execution_deps.hitl_manager,
+            waiter=SessionWaiter(
+                _room_event_store,
+                send_wait_seconds=runtime.settings.session_send_wait_seconds,
+                start_grace_seconds=runtime.settings.session_run_start_grace_seconds,
+            ),
+        )
+
         bind_api_gateway_deps(
             app,
             APIGatewayDeps(
@@ -2270,6 +2290,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 execution_engine=_execution_deps.execution_engine,
                 sse_store=sse_state_reader,
                 sse_transport=_delivery_facade,
+                session_facade=session_facade,
                 local_agent_discovery=_local_agent_service,
             ),
         )

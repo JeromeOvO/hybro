@@ -144,6 +144,7 @@ async def test_create_room_validates_required_fields_and_manual_seed():
         "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
+        "owner_product": "chat",
     }
 
 

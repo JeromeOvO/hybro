@@ -55,6 +55,14 @@
       "room"
     ]
   },
+  "session": {
+    "api_key": false,
+    "auth": "clerk-route-level",
+    "cors": "default",
+    "tags": [
+      "session"
+    ]
+  },
   "sse": {
     "api_key": false,
     "auth": "query-token-supported",

@@ -66,6 +66,26 @@ EXPECTED_METHODS = {
             "update_room_name",
         },
     },
+    "session.protocols": {
+        "ConversationEventsPort": {"latest_seq", "read_range"},
+        "SessionAccess": {"check", "close", "get_record", "list_sessions", "send"},
+        "SessionService": {
+            "check",
+            "close",
+            "list_for_owner",
+            "record_for_owner",
+            "send",
+        },
+        "SessionStore": {
+            "get",
+            "list_for_owner",
+            "mark_closed",
+            "record_accepted_agent",
+            "record_send",
+            "reserve",
+            "set_conversation_if_unset",
+        },
+    },
 }
 
 

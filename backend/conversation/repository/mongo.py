@@ -103,6 +103,8 @@ class RoomMongoRepository:
                 {
                     "$match": {
                         "room_owner_id": owner_id,
+                        # Session containers belong to the Session product.
+                        "owner_product": {"$ne": "session"},
                         "$or": [
                             {"lifecycle_state": "active"},
                             {"lifecycle_state": {"$exists": False}},

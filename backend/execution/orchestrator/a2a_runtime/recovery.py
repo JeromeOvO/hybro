@@ -127,6 +127,15 @@ class A2ACallRecoveryService:
             return False
         if await self._run_blocks_dispatch(current):
             return False
+        if (
+            current.state in {"input_required", "auth_required"}
+            and current.answer_applied is not None
+            and current.continuation_command is None
+        ):
+            # An applied answer whose continuation was not dispatched belongs
+            # to the continuation phase, which runs after this one. Leave it
+            # due; re-scheduling it here would strand the owner's answer.
+            return False
         claimed = await self.ledger.claim(
             current.call_record_id,
             expected_state_version=current.state_version,

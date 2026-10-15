@@ -28,6 +28,7 @@ def _deps(**overrides):
         "execution_engine": MagicMock(),
         "sse_store": MagicMock(),
         "sse_transport": MagicMock(),
+        "session_facade": MagicMock(),
     }
     values.update(overrides)
     return APIGatewayDeps(**values)
@@ -94,6 +95,12 @@ def test_api_gateway_deps_report_missing_required_fields():
     deps = _deps(file_storage=None, execution_engine=None)
 
     assert missing_required_deps(deps) == ["file_storage", "execution_engine"]
+
+
+def test_api_gateway_deps_require_the_session_facade():
+    from api_gateway.dependencies import missing_required_deps
+
+    assert missing_required_deps(_deps(session_facade=None)) == ["session_facade"]
 
 
 def test_api_gateway_deps_report_missing_app_state_binding():

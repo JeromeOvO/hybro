@@ -31,6 +31,7 @@ DOMAIN_MODULES = frozenset(
         "llm_gateway",
         "local_agents",
         "room_files",
+        "session",
     }
 )
 SHARED_ROOTS = ("common", "models")

@@ -408,13 +408,7 @@ class DurableHITLApplicationPort:
             or stored.route.fingerprint != route_fingerprint
         ):
             raise ValueError("HITL route fingerprint or revision changed")
-        inventory = {
-            question.question_id: question for question in stored.spec.questions
-        }
-        if set(inventory) != {answer.question_id for answer in answers}:
-            raise ValueError("HITL answer inventory does not match")
-        for answer in answers:
-            inventory[answer.question_id].validate_answer(answer)
+        stored.spec.validate_answers(answers)
         answer_digest = _digest_json(
             [answer.model_dump(mode="json") for answer in answers]
         )

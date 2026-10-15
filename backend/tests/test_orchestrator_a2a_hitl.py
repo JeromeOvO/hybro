@@ -172,6 +172,127 @@ async def test_terminal_continuation_proof_clears_initial_delivery_uncertainty()
     )
 
 
+@pytest.mark.parametrize(
+    ("pending_interaction_id", "interaction_revision"),
+    [("interaction-2", 1), ("interaction-1", 2)],
+)
+async def test_follow_up_challenge_proves_continuation_delivery(
+    pending_interaction_id, interaction_revision
+):
+    """A new parked round after the answer proves the answer reached the Agent."""
+    spec = A2AInteractionSpec.model_validate(
+        {
+            "schema_version": 1,
+            "interaction_id": "interaction-1",
+            "questions": [
+                {
+                    "question_id": "q1",
+                    "interaction_kind": "questionnaire",
+                    "prompt": "Answer",
+                    "answer_kind": "text",
+                }
+            ],
+        }
+    )
+    route = HITLRouteSnapshotV2(
+        orchestration_run_id="run-1",
+        call_record_id="record-1",
+        invocation_id="call-1",
+        room_id="room-1",
+        room_epoch=1,
+        binding_id="binding-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_revision=1,
+        interaction_fingerprint="fingerprint",
+    )
+    follow_up = SimpleNamespace(
+        state="input_required",
+        pending_interaction_id=pending_interaction_id,
+        interaction_revision=interaction_revision,
+        recent_observation_ids=[],
+        answer_applied=None,
+    )
+    runtime = SimpleNamespace(
+        run_store=SimpleNamespace(
+            load=AsyncMock(return_value=SimpleNamespace(status="awaiting_user"))
+        ),
+        hitl_port=SimpleNamespace(
+            read_interaction=AsyncMock(return_value=(spec, route, "fingerprint"))
+        ),
+        continuation=SimpleNamespace(
+            resume=AsyncMock(return_value="delivery_uncertain")
+        ),
+        call_ledger=SimpleNamespace(
+            load_by_record_id=AsyncMock(return_value=follow_up)
+        ),
+        observation_inbox=SimpleNamespace(list_due_for_call=AsyncMock(return_value=[])),
+        observation_processor=SimpleNamespace(process=AsyncMock()),
+    )
+    router = DualRuntimeRouter(runtime=runtime)
+
+    result = await router.route_hitl_answer(
+        interaction_id="interaction-1",
+        answers=[{"request_id": "q1", "user_input": "yes"}],
+        responder_id="user-1",
+        room_id="room-1",
+    )
+
+    assert result == "input_required"
+
+
+async def test_unproven_continuation_still_reports_delivery_uncertain():
+    from execution.hitl.exceptions import HITLDeliveryUncertainError
+
+    spec = interaction()
+    route = HITLRouteSnapshotV2(
+        orchestration_run_id="run-1",
+        call_record_id="record-1",
+        invocation_id="call-1",
+        room_id="room-1",
+        room_epoch=1,
+        binding_id="binding-1",
+        agent_id="agent-1",
+        task_id="task-1",
+        context_id="context-1",
+        interaction_revision=1,
+        interaction_fingerprint="fingerprint",
+    )
+    unproven = SimpleNamespace(
+        state="delivery_uncertain",
+        pending_interaction_id="interaction-1",
+        interaction_revision=1,
+        recent_observation_ids=[],
+        answer_applied=SimpleNamespace(
+            interaction_id="interaction-1", interaction_revision=1
+        ),
+    )
+    runtime = SimpleNamespace(
+        run_store=SimpleNamespace(
+            load=AsyncMock(return_value=SimpleNamespace(status="awaiting_user"))
+        ),
+        hitl_port=SimpleNamespace(
+            read_interaction=AsyncMock(return_value=(spec, route, "fingerprint"))
+        ),
+        continuation=SimpleNamespace(
+            resume=AsyncMock(return_value="delivery_uncertain")
+        ),
+        call_ledger=SimpleNamespace(load_by_record_id=AsyncMock(return_value=unproven)),
+        observation_inbox=SimpleNamespace(list_due_for_call=AsyncMock(return_value=[])),
+        observation_processor=SimpleNamespace(process=AsyncMock()),
+    )
+    router = DualRuntimeRouter(runtime=runtime)
+
+    with pytest.raises(HITLDeliveryUncertainError):
+        await router.route_hitl_answer(
+            interaction_id="interaction-1",
+            answers=[{"request_id": "q1", "user_input": "a"}],
+            responder_id="user-1",
+            room_id="room-1",
+        )
+
+
 async def test_hitl_wake_delivers_distinct_follow_up_interaction_to_kernel():
     runtime = SimpleNamespace(
         call_ledger=SimpleNamespace(

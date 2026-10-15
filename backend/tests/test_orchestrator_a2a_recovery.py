@@ -595,6 +595,52 @@ async def test_uncheckpointed_ready_and_waiting_schedule_bounded_retry():
     assert await runtime.recover_due(due_at=NOW) == 0
 
 
+async def test_dispatch_recovery_leaves_an_applied_answer_due_for_continuation():
+    """An answer whose continuation lost the claim race must stay due.
+
+    Dispatch recovery runs before the continuation phase. Re-scheduling the
+    input_required call here would push it out of every continuation phase
+    and strand the owner's answer.
+    """
+    from execution.orchestrator.a2a_runtime.models import HITLAnswerAppliedMarker
+
+    record = transition_call(
+        ledger_record(), to_state="ready_to_dispatch", updated_at=NOW
+    )
+    record = transition_call(record, to_state="dispatching", updated_at=NOW)
+    record = transition_call(record, to_state="working", updated_at=NOW)
+    record = transition_call(record, to_state="continuation_pending", updated_at=NOW)
+    record = transition_call(
+        record,
+        to_state="input_required",
+        updated_at=NOW,
+        pending_interaction_id="interaction-1",
+        interaction_revision=1,
+        interaction_fingerprint="fingerprint",
+    )
+    record = record.model_copy(
+        update={
+            "answer_applied": HITLAnswerAppliedMarker(
+                interaction_id="interaction-1",
+                interaction_revision=1,
+                route_fingerprint="route",
+                answer_digest="answer",
+                answerer_digest=record.requesting_subject_digest,
+                applied_at=NOW,
+            ),
+            "next_attempt_at": NOW,
+        }
+    )
+    runtime, ledger, _ = await service(record, checkpointed=True)
+
+    assert await runtime.recover_due(due_at=NOW) == 0
+
+    persisted = await ledger.load_by_record_id(record.call_record_id)
+    assert persisted.state_version == record.state_version
+    assert persisted.next_attempt_at == NOW
+    assert persisted.claim_owner is None
+
+
 async def test_failed_recover_dispatch_schedules_bounded_retry_once():
     record = ledger_record()
     runtime, ledger, _ = await service(

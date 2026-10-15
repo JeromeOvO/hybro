@@ -171,6 +171,8 @@ packages = [
     "conversation",
     "conversation.repository",
     "room_files",
+    "session",
+    "session.repository",
     "context_memory",
     "context_memory.repository",
     "dal",

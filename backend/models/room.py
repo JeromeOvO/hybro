@@ -47,6 +47,8 @@ class Room(BaseModel):
     last_activity_at: datetime = Field(default_factory=utcnow)
     is_pinned: bool = False
     pin_order: float | None = None
+    # The product that owns this conversation container: "chat" or "session".
+    owner_product: str = "chat"
 
     # Legacy provenance field — kept for backward compatibility during rollout.
     # Canonical fields below take precedence when present.

@@ -1,11 +1,12 @@
-"""Typed Fast/Ultimate orchestrator profile resolution.
+"""Typed Fast/Ultimate/Passthrough orchestrator profile resolution.
 
 Fast and Ultimate share one Kernel and differ only in resolved parameters
 (system prompt, model route, token/tool/time budgets, tool-execution policy).
 This module reads those parameters from typed ``Settings`` fields
 (``orchestrator_fast_*`` / ``orchestrator_ultimate_*``) and resolves an
 immutable ``OrchestratorProfile`` snapshot through the orchestrator's pure
-``resolve_profile_snapshot`` function.
+``resolve_profile_snapshot`` function. Passthrough runs no model: it has no
+model route or prompt, zero model turns, and one Agent call.
 """
 
 from __future__ import annotations
@@ -23,9 +24,10 @@ from execution.orchestrator.profiles import (
 from llm_gateway.errors import LLMModelRoutingError
 from llm_gateway.model_registry import ModelRegistryImpl
 
-ProfileId = Literal["fast", "ultimate"]
+ModelProfileId = Literal["fast", "ultimate"]
+ProfileId = Literal["fast", "ultimate", "passthrough"]
 
-_DEFAULT_OPENAI_THINKING_LEVEL: dict[ProfileId, str] = {
+_DEFAULT_OPENAI_THINKING_LEVEL: dict[ModelProfileId, str] = {
     "fast": "low",
     "ultimate": "high",
 }
@@ -265,6 +267,8 @@ class OrchestratorProfileResolver:
         self._settings = settings_obj or settings
 
     def resolve(self, profile_id: ProfileId) -> OrchestratorProfile:
+        if profile_id == "passthrough":
+            return resolve_profile_snapshot(self._passthrough_configuration())
         model = self._model_configuration(profile_id)
         return resolve_profile_snapshot(
             self._profile_configuration(profile_id, model=model),
@@ -275,9 +279,26 @@ class OrchestratorProfileResolver:
     def _setting(self, profile_id: ProfileId, name: str, default: Any) -> Any:
         return getattr(self._settings, f"orchestrator_{profile_id}_{name}", default)
 
+    def _passthrough_configuration(self) -> ProfileConfiguration:
+        return ProfileConfiguration(
+            profile_id="passthrough",
+            max_model_turns=0,
+            grace_model_turns=0,
+            max_agent_calls=1,
+            max_parallel_calls=1,
+            max_transport_retries_per_call=self._setting(
+                "passthrough", "max_transport_retries_per_call", 2
+            ),
+            max_compactions=0,
+            deadline_seconds=self._setting("passthrough", "deadline_seconds", 300.0),
+            initial_routing="explicit_agent_first",
+            tool_execution="sequential",
+            finalization="pass_through",
+        )
+
     def _profile_configuration(
         self,
-        profile_id: ProfileId,
+        profile_id: ModelProfileId,
         *,
         model: ModelRouteConfiguration,
     ) -> ProfileConfiguration:
@@ -310,7 +331,9 @@ class OrchestratorProfileResolver:
             finalization=self._setting(profile_id, "finalization", "pass_through"),
         )
 
-    def _model_configuration(self, profile_id: ProfileId) -> ModelRouteConfiguration:
+    def _model_configuration(
+        self, profile_id: ModelProfileId
+    ) -> ModelRouteConfiguration:
         logical_name = self._setting(profile_id, "model_route", None)
         if not logical_name:
             raise OrchestratorProfileResolutionError(
@@ -322,7 +345,7 @@ class OrchestratorProfileResolver:
             raise OrchestratorProfileResolutionError(str(exc)) from exc
         return route_configuration_from_gateway(route)
 
-    def _prompt_configuration(self, profile_id: ProfileId) -> PromptConfiguration:
+    def _prompt_configuration(self, profile_id: ModelProfileId) -> PromptConfiguration:
         prompt_id = self._setting(profile_id, "prompt_id", None)
         if not prompt_id:
             raise OrchestratorProfileResolutionError(

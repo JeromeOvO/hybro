@@ -15,6 +15,7 @@ from common.dto.hitl import (
     HITLQuestionAnswer,
     HITLRouteSnapshotV2,
 )
+from common.utils.logger import get_logger
 
 from ..models import TextPart, ToolResult
 from .errors import (
@@ -56,6 +57,8 @@ from .ports import (
     StoreOutcome,
 )
 from .terminal_interactions import TerminalInteractionFinalizer
+
+logger = get_logger(__name__)
 
 
 class InMemoryHITLApplicationPort:
@@ -285,11 +288,7 @@ class InMemoryHITLApplicationPort:
             or route.fingerprint != route_fingerprint
         ):
             raise ValueError("HITL route fingerprint or revision changed")
-        inventory = {question.question_id: question for question in spec.questions}
-        if set(inventory) != {answer.question_id for answer in answers}:
-            raise ValueError("HITL answer inventory does not match")
-        for answer in answers:
-            inventory[answer.question_id].validate_answer(answer)
+        spec.validate_answers(answers)
         answer_digest = _digest_json(
             [answer.model_dump(mode="json") for answer in answers]
         )
@@ -468,7 +467,11 @@ class A2AContinuationCoordinator:
     async def reconcile_answer(self, *, call_record_id: str) -> str:
         try:
             return await self._reconcile_answer(call_record_id=call_record_id)
-        except RecoverableAdapterError:
+        except RecoverableAdapterError as exc:
+            logger.warning(
+                "hitl_answer_reconcile_deferred",
+                extra={"call_record_id": call_record_id, "reason": str(exc)},
+            )
             return "delivery_uncertain"
 
     async def _reconcile_answer(self, *, call_record_id: str) -> str:
@@ -506,7 +509,11 @@ class A2AContinuationCoordinator:
     async def recover_call(self, *, call_record_id: str) -> str:
         try:
             return await self._recover_call(call_record_id=call_record_id)
-        except RecoverableAdapterError:
+        except RecoverableAdapterError as exc:
+            logger.warning(
+                "hitl_continuation_recovery_deferred",
+                extra={"call_record_id": call_record_id, "reason": str(exc)},
+            )
             return "delivery_uncertain"
 
     async def _recover_call(self, *, call_record_id: str) -> str:
@@ -630,11 +637,7 @@ class A2AContinuationCoordinator:
             or route.call_record_id != call.call_record_id
         ):
             raise ValueError("HITL challenge identity changed")
-        inventory = {question.question_id: question for question in spec.questions}
-        if set(inventory) != {answer.question_id for answer in answers}:
-            raise ValueError("HITL answer inventory does not match")
-        for answer in answers:
-            inventory[answer.question_id].validate_answer(answer)
+        spec.validate_answers(answers)
 
     async def _verify_auth_references(
         self,
@@ -795,6 +798,8 @@ class A2AContinuationCoordinator:
             interaction=interaction,
             interaction_id=answer_record.interaction_id,
             status="responded",
+            answers=answer_record.answers,
+            public_secret_values=self.public_secret_values,
             hitl_delivery=self.hitl_delivery,
             run_store=self.run_store,
             canonical_control=self.canonical_hitl_control,
@@ -832,9 +837,20 @@ class A2AContinuationCoordinator:
             raise PermissionError("frozen continuation binding is unavailable")
         if call.a2a_task_id is None or call.a2a_context_id is None:
             raise ValueError("continuation requires authoritative task/context IDs")
+        call = await self._due_for_answer(call)
         claimed = await self._claim(call)
         if claimed is None:
             current = await self.ledger.load_by_record_id(call.call_record_id)
+            logger.warning(
+                "hitl_continuation_claim_unavailable",
+                extra={
+                    "call_record_id": call.call_record_id,
+                    "state_version": call.state_version,
+                    "current_state_version": (
+                        current.state_version if current is not None else None
+                    ),
+                },
+            )
             return current.state if current is not None else "delivery_uncertain"
         if not await self.room_epochs.verify_active(
             claimed.room_id, claimed.room_epoch
@@ -1475,6 +1491,39 @@ class A2AContinuationCoordinator:
                 "continuation CAS winner could not be classified"
             )
         return winner
+
+    async def _due_for_answer(
+        self, call: AgentCallLedgerRecord
+    ) -> AgentCallLedgerRecord:
+        """Make a parked call claimable now that its answer is recorded.
+
+        Call recovery reschedules parked calls for their next status poll. That
+        schedule must not refuse the owner's answer: clear it unless another
+        worker holds a live claim, which then owns the call until it expires.
+        An authorization-refresh backoff is a real retry delay and is kept.
+        """
+        now = datetime.now(UTC)
+        if (
+            call.state not in {"input_required", "auth_required"}
+            or call.authorization_refresh_attempts
+            or call.next_attempt_at is None
+            or call.next_attempt_at <= now
+            or (call.claim_expires_at is not None and call.claim_expires_at > now)
+        ):
+            return call
+        due = call.model_copy(
+            update={
+                "next_attempt_at": None,
+                "state_version": call.state_version + 1,
+                "updated_at": now,
+            }
+        )
+        try:
+            return await self._cas_or_load_winner(
+                due, expected_state_version=call.state_version
+            )
+        except RecoverableCheckpointError:
+            return call
 
     async def _claim(self, call: AgentCallLedgerRecord) -> AgentCallLedgerRecord | None:
         now = datetime.now(UTC)

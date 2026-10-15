@@ -9,6 +9,7 @@ from api_gateway.dependencies import (
     get_room_center,
     get_room_store,
 )
+from api_gateway.errors import require_chat_room
 from api_gateway.registry import mark_declared_owner as _mark_declared_owner
 from chat.protocols import RoomCenterCompatibility
 from common.auth import ClerkUser, get_current_user
@@ -340,6 +341,7 @@ async def update_room_history_item(
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     room = await _get_verified_room(room_id, user, store)
+    require_chat_room(room)
     if payload.title is None and payload.is_pinned is None:
         raise HTTPException(status_code=400, detail="No history fields supplied")
     if payload.title is not None:
@@ -424,6 +426,7 @@ async def reorder_pinned_rooms(
 
     for room_id in payload.room_ids:
         room = await _get_verified_room(room_id, user, store)
+        require_chat_room(room)
         if not room.is_pinned:
             raise HTTPException(
                 status_code=409, detail="Only pinned rooms can be reordered"
@@ -448,7 +451,8 @@ async def delete_room_history_item(
     store: RoomRouteReader = Depends(get_room_store),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
-    await _get_verified_room(room_id, user, store)
+    room = await _get_verified_room(room_id, user, store)
+    require_chat_room(room)
     response = await center.delete_room_by_room_id(
         RoomCenterRoomSettingRequest(
             room_id=room_id,
@@ -470,7 +474,8 @@ async def update_room_agent_set(
     request_data = await request.json()
     room_id = request_data.get("room_id")
 
-    await verify_room_ownership(room_id, user, store)
+    room = await _get_verified_room(room_id, user, store)
+    require_chat_room(room)
 
     room_center_request = RoomCenterRoomSettingRequest(
         room_id=room_id,
@@ -710,6 +715,7 @@ async def send_message(
         )
 
     room = await _get_verified_room(room_id, user, store)
+    require_chat_room(room)
     mentioned_agent_ids = normalized_scope.get("agent_ids")
     attachments, inline_file_ids, err = _extract_attachments(request_data, message)
     if err is not None:

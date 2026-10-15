@@ -203,6 +203,8 @@ def test_hitl_request_translation():
             "source": "agent",
             "question_count": 1,
             "question_index": 0,
+            "required": True,
+            "allow_other": False,
         },
     }
 
@@ -245,6 +247,8 @@ def test_hitl_request_translation_preserves_full_payload():
             "interaction_id": "group-1",
             "question_count": 2,
             "question_index": 1,
+            "required": True,
+            "allow_other": False,
             "related_message_id": "umsg-1",
             "client_request_id": "cr-1",
         },
@@ -354,6 +358,8 @@ def test_hitl_public_frames_strip_execution_run_fields_for_all_sources():
             "interaction_id": "group-1",
             "question_count": 1,
             "question_index": 0,
+            "required": True,
+            "allow_other": False,
             "related_message_id": "user-msg-1",
             "client_request_id": "client-req-1",
             "trace_id": "trace-1",

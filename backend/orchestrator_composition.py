@@ -386,6 +386,7 @@ def create_orchestrator_runtime(  # noqa: C901
         profiles = {
             "fast": profile_resolver.resolve("fast"),
             "ultimate": profile_resolver.resolve("ultimate"),
+            "passthrough": profile_resolver.resolve("passthrough"),
         }
     except (
         OrchestratorProfileResolutionError,

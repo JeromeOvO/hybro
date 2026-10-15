@@ -471,7 +471,8 @@
     "dependencies": [
       "get_current_user",
       "get_file_storage",
-      "get_room_ownership_reader"
+      "get_room_ownership_reader",
+      "get_room_store"
     ],
     "methods": [
       "POST"
@@ -489,7 +490,8 @@
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.RoomOwnershipReader"
+      "common.protocols.RoomOwnershipReader",
+      "common.protocols.RoomRouteReader"
     ]
   },
   {
@@ -1284,6 +1286,133 @@
     "path": "/redoc",
     "response_class": null,
     "response_model": null,
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_session_access"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.session_routes",
+    "name": "send_session_message",
+    "openapi_response_codes": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "413",
+      "422",
+      "429"
+    ],
+    "owning_protocol": "session.protocols.SessionAccess",
+    "path": "/api/v1/sessions/messages",
+    "response_class": null,
+    "response_model": "SessionMessageResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_session_access"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.session_routes",
+    "name": "list_sessions",
+    "openapi_response_codes": [
+      "200",
+      "401"
+    ],
+    "owning_protocol": "session.protocols.SessionAccess",
+    "path": "/api/v1/sessions",
+    "response_class": null,
+    "response_model": "SessionListResponse",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_session_access"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.session_routes",
+    "name": "check_session",
+    "openapi_response_codes": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "422"
+    ],
+    "owning_protocol": "session.protocols.SessionAccess",
+    "path": "/api/v1/sessions/{session_id}",
+    "response_class": null,
+    "response_model": "SessionStatus",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_session_access"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.session_routes",
+    "name": "close_session",
+    "openapi_response_codes": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "422"
+    ],
+    "owning_protocol": "session.protocols.SessionAccess",
+    "path": "/api/v1/sessions/{session_id}/close",
+    "response_class": null,
+    "response_model": "SessionClosed",
+    "status_code": null,
+    "streaming_response": null
+  },
+  {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_session_access"
+    ],
+    "methods": [
+      "GET"
+    ],
+    "module": "api_gateway.routes.session_routes",
+    "name": "get_session_record",
+    "openapi_response_codes": [
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "422"
+    ],
+    "owning_protocol": "session.protocols.SessionAccess",
+    "path": "/api/v1/sessions/{session_id}/record",
+    "response_class": null,
+    "response_model": "SessionOwnerRecord",
     "status_code": null,
     "streaming_response": null
   }

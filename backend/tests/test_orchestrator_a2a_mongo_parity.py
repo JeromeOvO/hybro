@@ -1579,3 +1579,43 @@ async def test_mongo_hitl_published_flag_filter_and_transitions():
         item.interaction_id for item in await store.get_published_interactions("room-1")
     ]
     assert visible_after == ["published-true", "published-false", "published-missing"]
+
+
+async def test_mongo_hitl_answer_reads_back_as_the_applied_marker():
+    """Recovery compares the call's answer marker with the stored answer.
+
+    Mongo returns naive datetimes. The ledger restores UTC; the HITL answer
+    store must too, or the marker never matches and recovery silently leaves
+    an applied answer undispatched.
+    """
+    from execution.orchestrator.a2a_runtime.hitl import _answer_marker
+
+    interaction_doc = _published_interaction_doc(
+        "room-1", "interaction-1", published=True
+    )
+    collection = FakeCollection()
+    collection.values.append(interaction_doc)
+    store = MongoHITLApplicationStore(collection)
+    route = HITLRouteSnapshotV2.model_validate(interaction_doc["route"])
+    record = _answer_record("Ada", route_fingerprint=route.fingerprint).model_copy(
+        update={"applied_at": NOW.replace(microsecond=123000)}
+    )
+    assert (
+        await store.ensure_answer(
+            interaction_id="interaction-1", interaction_revision=1, record=record
+        )
+        == "accepted"
+    )
+    # Simulate the BSON round trip of the stored document.
+    collection.values[0] = _bson_roundtrip(collection.values[0])
+
+    loaded = await store.load_answer("interaction-1", 1)
+
+    assert loaded is not None
+    assert loaded.applied_at == record.applied_at
+    assert loaded.applied_at.tzinfo is not None
+    assert _answer_marker(loaded) == _answer_marker(record)
+    # A replayed identical answer is still recognized after the round trip.
+    assert await store.ensure_answer(
+        interaction_id="interaction-1", interaction_revision=1, record=record
+    ) in {"accepted", "replayed"}

@@ -1521,12 +1521,17 @@ def _answer_text(value: Any) -> str:
     text = getattr(value, "text", None)
     if isinstance(text, str):
         return text
+    # Choice answers may carry free text the owner typed under "Other".
+    other = getattr(value, "other", None)
+    other_parts = [other] if isinstance(other, str) else []
+    choices = getattr(value, "choices", None)
+    if isinstance(choices, list):
+        return ", ".join([*(str(item) for item in choices), *other_parts])
     choice = getattr(value, "choice", None)
     if isinstance(choice, str):
         return choice
-    choices = getattr(value, "choices", None)
-    if isinstance(choices, list):
-        return ", ".join(str(item) for item in choices)
+    if other_parts:
+        return other_parts[0]
     confirmed = getattr(value, "confirmed", None)
     if confirmed is not None:
         return str(bool(confirmed))

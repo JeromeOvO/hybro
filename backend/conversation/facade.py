@@ -132,6 +132,7 @@ class ConversationFacade:
             source_group_id=resolved.source_group_id,
             source_group_name=resolved.source_group_name,
             extend_info=request.extend_info,
+            owner_product=request.owner_product,
         )
         await self._repository.create(doc)
         try:

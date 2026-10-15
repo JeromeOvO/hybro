@@ -702,6 +702,7 @@ def test_route_owner_protocols_match_handler_calls():
         WebhookReceiver,
     )
     from execution.ports import DirectAgentMessenger
+    from session.protocols import SessionAccess
 
     expected_by_protocol = {
         AgentCapabilityIssueStore: {
@@ -744,6 +745,7 @@ def test_route_owner_protocols_match_handler_calls():
             "search",
         },
         DirectAgentMessenger: {"send"},
+        SessionAccess: {"check", "close", "get_record", "list_sessions", "send"},
         RoomRouteReader: {"get_room_by_room_id"},
         SSEStateReader: {
             "get_room_by_room_id",
@@ -956,9 +958,10 @@ def test_file_upload_route_inventory_records_room_ownership_support():
 
     assert route["module"] == "api_gateway.routes.files_routes"
     assert route["owning_protocol"] == "common.protocols.FileStorage"
-    assert "common.protocols.RoomOwnershipReader" in set(
-        route.get("supporting_protocols") or []
-    )
+    assert {
+        "common.protocols.RoomOwnershipReader",
+        "common.protocols.RoomRouteReader",
+    } <= set(route.get("supporting_protocols") or [])
 
 
 def test_file_upload_route_uses_room_ownership_reader_protocol():
@@ -967,7 +970,7 @@ def test_file_upload_route_uses_room_ownership_reader_protocol():
 
     from api_gateway import dependencies as gateway_deps
     from api_gateway.routes import files_routes as files
-    from common.protocols import FileStorage, RoomOwnershipReader
+    from common.protocols import FileStorage, RoomOwnershipReader, RoomRouteReader
 
     storage_provider_hints = get_type_hints(gateway_deps.get_file_storage)
     room_ownership_provider_hints = get_type_hints(
@@ -979,6 +982,8 @@ def test_file_upload_route_uses_room_ownership_reader_protocol():
     assert room_ownership_provider_hints["return"] is RoomOwnershipReader
     assert route_hints["storage"] is FileStorage
     assert route_hints["room_ownership"] is RoomOwnershipReader
+    # The chat write guard reads the container's owner_product.
+    assert route_hints["store"] is RoomRouteReader
     assert "room_ownership" in inspect.signature(files.upload_file).parameters
 
 
