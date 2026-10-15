@@ -57,6 +57,9 @@ from execution.adapters.profiles import (
 )
 from execution.adapters.resources import RoomFilesResourceMaterializer
 from execution.adapters.session_host import RoomSessionHost
+from execution.orchestrator.a2a_runtime.call_counting import (
+    CountingAgentCallLedgerStore,
+)
 from execution.orchestrator.a2a_runtime.cancellation import A2ACancellationCoordinator
 from execution.orchestrator.a2a_runtime.catalog import FrozenToolCatalog
 from execution.orchestrator.a2a_runtime.catalog_assembler import (
@@ -343,6 +346,7 @@ def create_orchestrator_runtime(  # noqa: C901
     final_message_delivery: Callable[..., Any] | None = None,
     final_message_memory_projection: Callable[[str, str], Any] | None = None,
     canonical_event_reader: Callable[[str, str], Any] | None = None,
+    agent_call_counter: Any | None = None,
     canonical_hitl_control: Callable[[str, str, str, list[str]], Any] | None = None,
     supervisor_hitl: Any | None = None,
     supervisor_hitl_cancellation: Callable[[str], Any] | None = None,
@@ -364,9 +368,12 @@ def create_orchestrator_runtime(  # noqa: C901
     binding_store = MongoAgentToolBindingStore(
         mongo.collection("orchestrator_agent_tool_bindings").raw_collection
     )
-    call_ledger = MongoAgentCallLedgerStore(
+    call_ledger: Any = MongoAgentCallLedgerStore(
         mongo.collection("orchestrator_agent_calls").raw_collection
     )
+    if agent_call_counter is not None:
+        # Each finished agent call counts toward the agent's call totals.
+        call_ledger = CountingAgentCallLedgerStore(call_ledger, agent_call_counter)
     observation_inbox = MongoObservationInboxStore(
         mongo.collection("orchestrator_a2a_observations").raw_collection
     )

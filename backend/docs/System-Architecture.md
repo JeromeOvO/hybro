@@ -2941,6 +2941,19 @@ access, or the full repository-store aggregate. `HITLService` uses store ports
 for request creation, CAS/fenced updates, group routing claims, continuation
 persistence, and stale processing iteration.
 
+### Agent call counts
+
+Each agent's `call_count` and `call_success_count` count orchestrator agent
+calls from Chat and Sessions. `CountingAgentCallLedgerStore`
+(`execution/orchestrator/a2a_runtime/call_counting.py`) wraps the call ledger
+built in `create_orchestrator_runtime`: every terminal write goes through its
+`cas`, and a call counts once, when this process's write is accepted and moves
+the call from a dispatched, unfinished state into a terminal one (success when
+`completed`). Replays, updates to a finished call, lost races, and calls
+rejected or expired before dispatch do not count; counting is best effort and
+never fails the write. The legacy `A2AService` send paths keep counting their
+own sends.
+
 ### Typed question presentation
 
 An Agent's typed interaction (`hybro.ai/a2a/interaction`, `A2AInteractionSpec`)

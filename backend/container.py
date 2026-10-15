@@ -2746,6 +2746,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 llm_gateway=llm_provider,
                 model_registry=model_registry,
                 agent_registry=_agent_deps.agent_registry,
+                agent_call_counter=_agent_deps.agent_call_counter,
                 exclusion_reader=CapabilityIssueExclusionReader(
                     agent_capability_issue_service
                 ),
