@@ -56,13 +56,13 @@ def _build_status_message(
     context_id: str,
     text: str,
     *,
-    input_required: bool,
+    questions: list[dict] | None,
 ) -> Message:
     """Build the final status message, carrying typed HITL metadata."""
     message = new_text_message(text, context_id=context_id, task_id=task_id)
-    if input_required:
+    if questions:
         metadata = Struct()
-        metadata.update(build_input_required_metadata(task_id, text))
+        metadata.update(build_input_required_metadata(task_id, questions))
         message.metadata.CopyFrom(metadata)
     return message
 
@@ -102,10 +102,10 @@ class TravelPlannerAgentExecutor(AgentExecutor):
 
         artifact_id = f"{task_id}-current-result"
         chunks: list[str] = []
-        is_input_required = False
+        questions: list[dict] | None = None
         async for event in self.agent.stream(query, history=history):
             if event.get("status") == "input_required":
-                is_input_required = True
+                questions = event.get("questions")
             chunk = event.get("content") or ""
             if not isinstance(chunk, str):
                 chunk = (
@@ -119,6 +119,7 @@ class TravelPlannerAgentExecutor(AgentExecutor):
                 break
 
         final_text = "".join(chunks)
+        is_input_required = questions is not None
         if final_text and not is_input_required:
             await self._emit_text(
                 event_queue,
@@ -134,7 +135,7 @@ class TravelPlannerAgentExecutor(AgentExecutor):
                 task_id,
                 context_id,
                 final_text,
-                input_required=is_input_required,
+                questions=questions,
             )
         final_state = (
             TaskState.TASK_STATE_INPUT_REQUIRED
