@@ -8,6 +8,8 @@ export const routes = {
   privacy: '/privacy',
   chat: '/chat',
   room: (id: string) => withId('/room', id),
+  sessions: '/sessions',
+  session: (id: string) => withId('/sessions', id),
   network: '/network',
   networkWith: (query: string) => (query ? `/network?${query}` : '/network'),
   networkAgent: (id: string) => withId('/network/agents', id),

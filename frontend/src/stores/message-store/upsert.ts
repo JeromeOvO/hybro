@@ -1,3 +1,4 @@
+import { presentationEqual } from '@/lib/hitl/presentation'
 import { isTerminalState } from '@/lib/types/sse'
 import { patchedPublicAgentName } from '@/lib/agent-display-name'
 import { resolveDisplayType } from './resolve-display-type'
@@ -148,6 +149,7 @@ function mergeIncoming(
       hitlPrompt: incoming.hitlPrompt,
       hitlPromptType: incoming.hitlPromptType,
       hitlChoices: incoming.hitlChoices,
+      hitlPresentation: incoming.hitlPresentation,
       hitlExpiresAt: incoming.hitlExpiresAt,
       hitlResolved: incoming.hitlResolved,
       hitlInteractionId: incoming.hitlInteractionId,
@@ -308,6 +310,7 @@ function mergeIncoming(
     hitlPrompt: acceptsHitlUpdate && incoming.hitlPrompt !== undefined ? incoming.hitlPrompt : existing.hitlPrompt,
     hitlPromptType: acceptsHitlUpdate && incoming.hitlPromptType !== undefined ? incoming.hitlPromptType : existing.hitlPromptType,
     hitlChoices: acceptsHitlUpdate && incoming.hitlChoices !== undefined ? incoming.hitlChoices : existing.hitlChoices,
+    hitlPresentation: acceptsHitlUpdate && incoming.hitlPresentation !== undefined ? incoming.hitlPresentation : existing.hitlPresentation,
     hitlExpiresAt: acceptsHitlUpdate && incoming.hitlExpiresAt !== undefined ? incoming.hitlExpiresAt : existing.hitlExpiresAt,
     hitlResolved: finalizesExistingHitl
       ? true
@@ -434,6 +437,7 @@ export function isNoOpUpdate(
     existing.hitlPromptType    === coalesce(incoming.hitlPromptType, existing.hitlPromptType) &&
     existing.hitlExpiresAt     === coalesce(incoming.hitlExpiresAt, existing.hitlExpiresAt) &&
     arraysShallowEqual(existing.hitlChoices, coalesce(incoming.hitlChoices, existing.hitlChoices)) &&
+    presentationEqual(existing.hitlPresentation, coalesce(incoming.hitlPresentation, existing.hitlPresentation)) &&
     existing.hitlGroupId       === coalesce(incoming.hitlGroupId, existing.hitlGroupId) &&
     existing.hitlGroupTotal    === coalesce(incoming.hitlGroupTotal, existing.hitlGroupTotal) &&
     existing.hitlGroupIndex    === coalesce(incoming.hitlGroupIndex, existing.hitlGroupIndex) &&

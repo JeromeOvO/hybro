@@ -5,9 +5,9 @@ import {
   AlertTriangle,
   ArrowRight,
   CalendarDays,
+  Check,
   KeyRound,
   LoaderCircle,
-  MessageCircleQuestion,
   RefreshCw,
   ShieldAlert,
   X,
@@ -17,26 +17,33 @@ import { useHitlInteractionController } from '@/hooks/useHitlInteractionControll
 import type { HitlDraftValue } from '@/lib/hitl/interaction-controller'
 import type { HITLPromptType } from '@/lib/types/sse'
 import type { HitlLifecycleState } from '@/lib/selectors/conversation-types'
-import { Button } from '@/components/ui/button'
+import type { HitlQuestionPresentation } from '@/lib/hitl/presentation'
+import { cn } from '@/lib/utils'
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
   Questionnaire,
-  QuestionnaireActions,
   QuestionnaireChoice,
+  QuestionnaireChoiceDescription,
   QuestionnaireChoices,
   QuestionnaireError,
   QuestionnaireInput,
   QuestionnaireItem,
   QuestionnaireNext,
   QuestionnairePrevious,
-  QuestionnaireProgress,
+  QuestionnaireSkip,
   QuestionnaireSubmit,
   QuestionnaireTextarea,
   QuestionnaireTitle,
@@ -55,6 +62,7 @@ export interface HitlPromptView {
   clientRequestId?: string
   answer?: string
   groupIndex?: number
+  presentation?: HitlQuestionPresentation
 }
 
 export interface HitlBatchAnswer {
@@ -98,13 +106,37 @@ function choiceOptions(hitl: HitlPromptView): string[] {
   return []
 }
 
-function answerText(value: DraftValue | undefined): string {
-  if (Array.isArray(value)) return value.join(', ')
-  return value?.trim() ?? ''
+// A choice question that allows Other keeps the typed text in its own draft
+// slot; the selection carries this marker in place of a listed value.
+const OTHER_CHOICE = '__other__'
+
+function otherDraftKey(requestId: string): string {
+  return `${requestId}:other`
 }
 
-function hasAnswer(_hitl: HitlPromptView, value: DraftValue | undefined): boolean {
-  return answerText(value).length > 0
+function isRequired(hitl: HitlPromptView): boolean {
+  return hitl.presentation?.required !== false
+}
+
+function answerText(hitl: HitlPromptView, drafts: Record<string, DraftValue>): string {
+  const value = drafts[hitl.hitlId]
+  const selected = Array.isArray(value) ? value : value ? [value] : []
+  if (!selected.includes(OTHER_CHOICE)) {
+    return Array.isArray(value) ? value.join(', ') : value?.trim() ?? ''
+  }
+  const other = drafts[otherDraftKey(hitl.hitlId)]
+  const otherText = typeof other === 'string' ? other.trim() : ''
+  if (!otherText) return ''
+  return [...selected.filter(choice => choice !== OTHER_CHOICE), otherText].join(', ')
+}
+
+function hasAnswer(hitl: HitlPromptView, drafts: Record<string, DraftValue>): boolean {
+  return answerText(hitl, drafts).length > 0
+}
+
+function choiceLabel(hitl: HitlPromptView, value: string): { label: string; description?: string } {
+  const option = hitl.presentation?.choiceOptions?.find(item => item.value === value)
+  return { label: option?.label ?? value, description: option?.description }
 }
 
 function sortHitls(hitls: HitlPromptView[]): HitlPromptView[] {
@@ -177,14 +209,14 @@ function RecoveryState({
   }
 
   return (
-    <Card role="status" aria-live="polite" className="gap-0 overflow-hidden py-0 shadow-lg">
+    <Card role="status" aria-live="polite" className="gap-0 overflow-hidden rounded-xl py-0 shadow-none">
       <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-start">
         <Icon
           className={state === 'applying' ? 'size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none' : 'size-5 shrink-0 text-primary'}
           aria-hidden="true"
         />
         <div className="min-w-0 flex-1">
-          <h3 className="font-semibold">{copy.title}</h3>
+          <h3 className="text-sm font-medium">{copy.title}</h3>
           <p className="mt-1 max-w-[68ch] text-sm text-muted-foreground">
             {message || copy.body}
           </p>
@@ -212,75 +244,103 @@ function RecoveryState({
   )
 }
 
-function PromptQuestion({
+function ChoiceRows({
   hitl,
   value,
-  active,
+  other,
+  multiple,
   onChange,
+  onOtherChange,
 }: {
   hitl: HitlPromptView
   value: DraftValue | undefined
-  active: boolean
+  other: string
+  multiple: boolean
   onChange: (value: DraftValue) => void
+  onOtherChange: (value: string) => void
 }) {
   const selected = new Set(Array.isArray(value) ? value : value ? [value] : [])
-  const textValue = Array.isArray(value) ? value.join(', ') : value ?? ''
-
-  if (hitl.promptType === 'choice' || hitl.promptType === 'single_choice') {
-    return (
-      <QuestionnaireChoices>
-        {(hitl.choices ?? []).map(choice => (
-          <QuestionnaireChoice
-            key={choice}
-            value={choice}
-            checked={selected.has(choice)}
-            onChange={() => onChange(choice)}
-          >
-            <span className="font-medium">{choice}</span>
-          </QuestionnaireChoice>
-        ))}
-      </QuestionnaireChoices>
-    )
+  const allowOther = hitl.presentation?.allowOther === true
+  const values = [...choiceOptions(hitl), ...(allowOther ? [OTHER_CHOICE] : [])]
+  const toggle = (choice: string) => {
+    if (!multiple) return onChange(choice)
+    const next = new Set(selected)
+    if (next.has(choice)) next.delete(choice)
+    else next.add(choice)
+    onChange(values.filter(item => next.has(item)))
   }
-  if (hitl.promptType === 'multi_choice') {
-    return (
+
+  return (
+    <div className="flex flex-col gap-2">
       <QuestionnaireChoices>
-        {(hitl.choices ?? []).map(choice => {
-          const checked = selected.has(choice)
+        {values.map(choice => {
+          const { label, description } = choice === OTHER_CHOICE
+            ? { label: 'Other', description: 'Type your own answer' }
+            : choiceLabel(hitl, choice)
           return (
             <QuestionnaireChoice
               key={choice}
               value={choice}
-              checked={checked}
-              onChange={() => {
-                const next = new Set(selected)
-                if (checked) next.delete(choice)
-                else next.add(choice)
-                onChange([...next])
-              }}
+              checked={selected.has(choice)}
+              onChange={() => toggle(choice)}
+              className="gap-3"
             >
-              <span className="font-medium">{choice}</span>
+              <span className="flex flex-col gap-1">
+                <span className="font-medium leading-5">{label}</span>
+                {description ? (
+                  <QuestionnaireChoiceDescription className="text-xs leading-5">{description}</QuestionnaireChoiceDescription>
+                ) : null}
+              </span>
             </QuestionnaireChoice>
           )
         })}
       </QuestionnaireChoices>
-    )
-  }
-  if (hitl.promptType === 'confirmation' || hitl.promptType === 'approval') {
-    const choices = choiceOptions(hitl)
+      {allowOther && selected.has(OTHER_CHOICE) ? (
+        <Input
+          aria-label="Other answer"
+          placeholder="Your answer"
+          value={other}
+          onChange={event => onOtherChange(event.target.value)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function PromptQuestion({
+  hitl,
+  value,
+  other,
+  active,
+  onChange,
+  onOtherChange,
+}: {
+  hitl: HitlPromptView
+  value: DraftValue | undefined
+  other: string
+  active: boolean
+  onChange: (value: DraftValue) => void
+  onOtherChange: (value: string) => void
+}) {
+  const selected = new Set(Array.isArray(value) ? value : value ? [value] : [])
+  const textValue = Array.isArray(value) ? value.join(', ') : value ?? ''
+
+  if (
+    hitl.promptType === 'choice'
+    || hitl.promptType === 'single_choice'
+    || hitl.promptType === 'multi_choice'
+    || hitl.promptType === 'confirmation'
+    || hitl.promptType === 'approval'
+  ) {
     return (
-      <QuestionnaireChoices>
-        {choices.map(choice => (
-          <QuestionnaireChoice
-            key={choice}
-            value={choice}
-            checked={selected.has(choice)}
-            onChange={() => onChange(choice)}
-          >
-            <span className="font-medium">{choice}</span>
-          </QuestionnaireChoice>
-        ))}
-      </QuestionnaireChoices>
+      <ChoiceRows
+        hitl={hitl}
+        value={value}
+        other={other}
+        multiple={hitl.promptType === 'multi_choice'}
+        onChange={onChange}
+        onOtherChange={onOtherChange}
+      />
     )
   }
   if (hitl.promptType === 'authentication') {
@@ -366,7 +426,8 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
 
   const currentIndex = Math.max(0, ordered.findIndex(hitl => hitl.hitlId === currentId))
   const current = ordered[currentIndex] ?? ordered[0]
-  const allAnswered = ordered.every(hitl => hasAnswer(hitl, drafts[hitl.hitlId]))
+  // Optional questions may be left blank; they are left out of the answers.
+  const allAnswered = ordered.every(hitl => !isRequired(hitl) || hasAnswer(hitl, drafts))
 
   // Authoritative lifecycle reconciliation: local submit/recovery state must
   // never override a fresher store lifecycle (e.g. SSE/refresh reporting
@@ -392,16 +453,16 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
     dispatch({ type: 'navigate', requestId: target.hitlId })
   }, [dispatch, ordered])
 
-  const handleSubmit = useCallback(async () => {
-    if (!interactionId || !allAnswered || submitting) return
+  // `decided` answers a one-question decision card directly from its button.
+  const handleSubmit = useCallback(async (decided?: HitlBatchAnswer[]) => {
+    if (!interactionId || submitting || (!decided && !allAnswered)) return
     dispatch({ type: 'submit_started' })
     try {
       await onSubmit(
         interactionId,
-        ordered.map(hitl => ({
-          requestId: hitl.hitlId,
-          answer: answerText(drafts[hitl.hitlId]),
-        })),
+        decided ?? ordered
+          .filter(hitl => hasAnswer(hitl, drafts))
+          .map(hitl => ({ requestId: hitl.hitlId, answer: answerText(hitl, drafts) })),
         ordered.find(hitl => hitl.clientRequestId)?.clientRequestId,
       )
       dispatch({ type: 'submit_succeeded' })
@@ -527,13 +588,69 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
   }
 
   const sourceLabel = current.source === 'agent' ? (current.agentName ?? 'Agent') : 'HYBRO AI'
+  const heading = (text: string) => (
+    <h2
+      id="hitl-heading"
+      ref={headingRef}
+      tabIndex={-1}
+      className="flex items-center gap-2 text-sm text-muted-foreground outline-none"
+    >
+      <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-status-warning" />
+      {text}
+    </h2>
+  )
+
+  // One approval or yes/no question is answered by its own two buttons.
+  if (
+    ordered.length === 1
+    && (current.promptType === 'approval' || current.promptType === 'confirmation')
+  ) {
+    const [accept, decline] = choiceOptions(current)
+    const decide = (answer: string) => {
+      setDraft(current.hitlId, answer)
+      void handleSubmit([{ requestId: current.hitlId, answer }])
+    }
+    return (
+      <section data-testid="hitl-response-bar" aria-labelledby="hitl-heading">
+        <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 text-card-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            {heading(`${sourceLabel} needs your ${current.promptType === 'approval' ? 'approval' : 'answer'}`)}
+            {current.presentation?.header ? (
+              <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{current.presentation.header}</span>
+            ) : null}
+          </div>
+          <p className="whitespace-pre-wrap text-sm leading-relaxed">{current.prompt}</p>
+          {submissionError ? (
+            <p className="text-sm text-destructive" role="alert">{submissionError}</p>
+          ) : null}
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="destructive" className="font-semibold" disabled={submitting} onClick={() => decide(decline)}>
+              {decline}
+            </Button>
+            <Button type="button" disabled={submitting} onClick={() => decide(accept)}>
+              {submitting ? (
+                <LoaderCircle data-icon="inline-start" className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : null}
+              {accept}
+            </Button>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   const items = ordered.map(hitl => ({
     name: hitl.hitlId,
-    required: true,
-    choices: choiceOptions(hitl).map(value => ({ value })),
+    required: isRequired(hitl),
+    choices: [
+      ...choiceOptions(hitl),
+      ...(hitl.presentation?.allowOther ? [OTHER_CHOICE] : []),
+    ].map(value => ({ value })),
   }))
   const isLast = currentIndex === ordered.length - 1
-  const currentAnswered = hasAnswer(current, drafts[current.hitlId])
+  const currentAnswered = hasAnswer(current, drafts)
+  const currentOptional = !isRequired(current)
+  const singleHeader = ordered.length === 1 ? current.presentation?.header : undefined
 
   const handleFormSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -541,7 +658,7 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
       if (allAnswered) void handleSubmit()
       return
     }
-    if (currentAnswered) goTo(currentIndex + 1)
+    if (currentAnswered || currentOptional) goTo(currentIndex + 1)
   }
 
   return (
@@ -558,69 +675,108 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
         shortcuts="numbers"
         onSubmit={handleFormSubmit}
       >
-        <Card className="gap-0 overflow-hidden py-0 shadow-lg">
-          <CardHeader className="border-b py-4">
-            <CardTitle className="flex items-center gap-2">
-              <MessageCircleQuestion className="size-5 text-primary" aria-hidden="true" />
-              <h2 id="hitl-heading" ref={headingRef} tabIndex={-1} className="outline-none">
-                {sourceLabel} needs your input
-              </h2>
-            </CardTitle>
-            {ordered.length > 1 ? (
-              <CardDescription>
-                <QuestionnaireProgress
-                  render={(props, { current, total }) => (
-                    <span {...props}>Question {current} of {total}</span>
-                  )}
-                />
-              </CardDescription>
+        <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 text-card-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            {heading(`${sourceLabel} needs your input`)}
+            {singleHeader ? (
+              <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{singleHeader}</span>
             ) : null}
-          </CardHeader>
+          </div>
 
-          <CardContent className="py-5">
-            {ordered.map(hitl => (
-              <QuestionnaireItem
-                key={hitl.hitlId}
-                name={hitl.hitlId}
-                required
-                multiple={hitl.promptType === 'multi_choice'}
-              >
-                <QuestionnaireTitle>{hitl.prompt}</QuestionnaireTitle>
-                <PromptQuestion
-                  hitl={hitl}
-                  value={drafts[hitl.hitlId]}
-                  active={hitl.hitlId === current.hitlId}
-                  onChange={value => setDraft(hitl.hitlId, value)}
-                />
-                <QuestionnaireError />
-              </QuestionnaireItem>
-            ))}
-            {submissionError ? (
-              <p className="mt-3 text-sm text-destructive" role="alert">{submissionError}</p>
-            ) : null}
-          </CardContent>
-
-          <CardFooter className="flex flex-col-reverse gap-2 border-t py-3 sm:flex-row sm:justify-between">
-            <div>
-              {onCancel ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={submitting}
-                  onClick={() => onCancel(current.hitlId, current.interactionId)}
-                >
-                  Cancel request
-                </Button>
-              ) : null}
+          {ordered.length > 1 ? (
+            <div role="tablist" aria-label="Questions" className="flex flex-wrap gap-1">
+              {ordered.map((hitl, index) => {
+                const selected = index === currentIndex
+                const answered = hasAnswer(hitl, drafts)
+                return (
+                  <button
+                    key={hitl.hitlId}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => goTo(index)}
+                    className={cn(
+                      'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                      selected ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {answered ? <Check className="size-3 text-status-online" aria-hidden="true" /> : null}
+                    {hitl.presentation?.header ?? `Question ${index + 1}`}
+                  </button>
+                )
+              })}
             </div>
-            <QuestionnaireActions className="w-full sm:w-auto">
+          ) : null}
+
+          {ordered.map(hitl => (
+            <QuestionnaireItem
+              key={hitl.hitlId}
+              name={hitl.hitlId}
+              required={isRequired(hitl)}
+              multiple={hitl.promptType === 'multi_choice'}
+              className="gap-3"
+            >
+              <QuestionnaireTitle className="mb-3 whitespace-pre-wrap text-sm leading-relaxed">{hitl.prompt}</QuestionnaireTitle>
+              <PromptQuestion
+                hitl={hitl}
+                value={drafts[hitl.hitlId]}
+                other={(drafts[otherDraftKey(hitl.hitlId)] as string | undefined) ?? ''}
+                active={hitl.hitlId === current.hitlId}
+                onChange={value => setDraft(hitl.hitlId, value)}
+                onOtherChange={value => setDraft(otherDraftKey(hitl.hitlId), value)}
+              />
+              <QuestionnaireError />
+            </QuestionnaireItem>
+          ))}
+          {submissionError ? (
+            <p className="text-sm text-destructive" role="alert">{submissionError}</p>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-2">
+            {onCancel ? (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" variant="destructive" className="font-semibold" disabled={submitting}>
+                    Reject
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Reject this request?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {sourceLabel} stops waiting for your answer and the request ends.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Go back</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => { void onCancel(current.hitlId, current.interactionId) }}
+                      className={buttonVariants({ variant: 'destructive' })}
+                    >
+                      Reject request
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : null}
+            <div className="ml-auto flex items-center gap-2">
               {ordered.length > 1 ? (
-                <QuestionnairePrevious disabled={submitting || currentIndex === 0}>
+                <QuestionnairePrevious variant="ghost" disabled={submitting || currentIndex === 0}>
                   Back
                 </QuestionnairePrevious>
               ) : null}
+              {/* The primitive only counts an optional question as done once skipped. */}
+              {currentOptional && !currentAnswered ? (
+                <QuestionnaireSkip
+                  variant="ghost"
+                  disabled={submitting}
+                  onClick={() => setDraft(current.hitlId, '')}
+                >
+                  {isLast ? 'Skip and send' : 'Skip'}
+                </QuestionnaireSkip>
+              ) : null}
               {isLast ? (
-                <QuestionnaireSubmit disabled={submitting || !allAnswered}>
+                <QuestionnaireSubmit disabled={submitting || !allAnswered || (currentOptional && !currentAnswered)}>
                   {submitting ? (
                     <LoaderCircle
                       data-icon="inline-start"
@@ -628,17 +784,17 @@ export function HitlResponseBar({ hitls, onSubmit, onCancel, onRefresh }: HitlRe
                       aria-hidden="true"
                     />
                   ) : null}
-                  {submitting ? 'Submitting…' : 'Submit'}
+                  {submitting ? 'Sending…' : 'Send'}
                 </QuestionnaireSubmit>
               ) : (
-                <QuestionnaireNext disabled={submitting || !currentAnswered}>
+                <QuestionnaireNext disabled={submitting || !(currentAnswered || currentOptional)}>
                   Next
                   <ArrowRight data-icon="inline-end" aria-hidden="true" />
                 </QuestionnaireNext>
               )}
-            </QuestionnaireActions>
-          </CardFooter>
-        </Card>
+            </div>
+          </div>
+        </div>
       </Questionnaire>
     </section>
   )

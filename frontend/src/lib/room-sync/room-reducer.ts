@@ -12,6 +12,7 @@
 //
 // Legacy behavior (no room_seq in `connected`) is preserved unchanged.
 
+import { parseHitlPresentation } from '@/lib/hitl/presentation'
 import type {
   AnySSEFrame,
   RoomSnapshotTurn,
@@ -801,6 +802,7 @@ function applySnapshotHitl(
       choices: Array.isArray(request.choices)
         ? request.choices.filter((choice): choice is string => typeof choice === 'string')
         : undefined,
+      presentation: parseHitlPresentation(request),
       timestamp: typeof snapshotTs === 'string' ? snapshotTs : sourceEntity.timestamp,
       agentId: sourceEntity.agentId,
       agentName: canonical?.agent_label ?? sourceEntity.senderName,

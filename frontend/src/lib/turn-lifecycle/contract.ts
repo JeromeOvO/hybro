@@ -86,7 +86,7 @@ function validatePayload(type: CanonicalRunEventType, value: unknown): boolean {
         && id(value.hybro_turn_id)
         && id(value.user_message_id)
         && timestamp(value.started_at)
-        && oneOf(value.mode, ['fast', 'direct', 'ultimate', 'supervisor'])
+        && oneOf(value.mode, ['fast', 'direct', 'ultimate', 'supervisor', 'passthrough'])
     case 'turn_start':
       return exactKeys(value, ['internal_turn_id', 'attempt'])
         && id(value.internal_turn_id)

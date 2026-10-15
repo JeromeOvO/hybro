@@ -7,6 +7,7 @@ vi.mock('@/hooks/useMcpStatus', () => ({ useMcpStatus: () => ({ status: 'ready',
 const history = vi.hoisted(() => ({ isError: false, refetch: vi.fn() }))
 const refreshNetworks = vi.hoisted(() => vi.fn())
 vi.mock('@/hooks/useRoomHistory', () => ({ useRoomHistory: () => ({ refetch: history.refetch, data: { items: [{ room_id: 'r1', title: 'Trip plan', last_activity_at: '2026-10-10T00:00:00Z', is_pinned: false, pin_order: null, status: 'awaiting_input' }] }, dataUpdatedAt: Date.parse('2026-10-10T10:42:00Z'), isLoading: false, isError: history.isError }) }))
+vi.mock('@/hooks/useSessions', () => ({ useSessions: () => ({ data: { sessions: [{ session_id: 's1', client_label: 'Buyer agent', agents: [], state: 'waiting_on_owner', paused_agent_id: 'a', conversation_id: 'c1', opened_at: '2026-10-10T00:00:00Z', last_activity_at: '2026-10-10T00:00:00Z', closed_at: null }] }, isLoading: false, isError: false, refetch: vi.fn() }) }))
 vi.mock('@/hooks/useNetworks', () => ({
   useNetworks: () => ({ networks: [], agents: [{ ...placeholderAgent('a', '', 'active'), name: 'writer', roomCalls: 2, roomCallSuccesses: 1 }], loading: false, agentsLoading: false, error: null, agentsError: null, refresh: refreshNetworks }),
 }))
@@ -32,6 +33,13 @@ describe('OverviewPage', () => {
     expect(screen.getByRole('heading', { name: 'Most-called agents' })).toBeInTheDocument()
     expect(screen.queryByText('Room calls')).toBeNull()
     expect(screen.queryByText(/success/)).toBeNull()
+  })
+
+  it('shows a Sessions tile and an approval row linking to the session', () => {
+    render(<OverviewPage />)
+    expect(screen.getByText('Sessions')).toBeInTheDocument()
+    expect(screen.getByText(/1 waiting for you/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Buyer agent is waiting for your approval/ })).toHaveAttribute('href', '/sessions/s1')
   })
 
   it('retries room history when rooms fail to load', () => {

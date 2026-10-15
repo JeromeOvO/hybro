@@ -30,7 +30,7 @@ describe('Connect page', () => {
     expect(screen.getByRole('tab', { name: 'Claude Code' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByLabelText('Claude Code command')).toHaveTextContent(`claude mcp add --transport http hybro ${MCP_URL}`)
     expect(screen.getByRole('heading', { name: 'Features' })).toBeInTheDocument()
-    for (const tool of ['find_agents', 'list_subnets', 'get_agent', 'send_message']) {
+    for (const tool of ['find_agents', 'list_subnets', 'get_agent', 'send_message', 'check_session']) {
       expect(screen.getByText(tool)).toBeInTheDocument()
     }
     expect(screen.queryByText(/send_agent_message/)).toBeNull()

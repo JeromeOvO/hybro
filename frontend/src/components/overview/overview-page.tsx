@@ -13,10 +13,11 @@ import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { cn } from '@/lib/utils'
 import { useNetworks } from '@/hooks/useNetworks'
 import { useRoomHistory } from '@/hooks/useRoomHistory'
+import { useSessions } from '@/hooks/useSessions'
 import { useMcpStatus } from '@/hooks/useMcpStatus'
 import { useUser } from '@/lib/auth'
 import { routes } from '@/lib/routes'
-import { agentStatusView, gatewayStatusView, roomStatusView } from '@/lib/status'
+import { agentStatusView, gatewayStatusView, roomStatusView, sessionStateView } from '@/lib/status'
 import { deriveAttention, overviewMetrics, topAgentsByRoomCalls, type AttentionItem } from '@/lib/overview'
 
 const ROW = 'flex min-h-12 items-center justify-between gap-3 rounded-lg px-2 py-2 hover:bg-muted'
@@ -46,6 +47,8 @@ function SectionTitle({ id, children }: { id: string; children: ReactNode }) {
 
 function attentionRow(item: AttentionItem) {
   switch (item.kind) {
+    case 'session-approval':
+      return { href: routes.session(item.sessionId), label: `${item.clientLabel} is waiting for your approval`, status: sessionStateView('waiting_on_owner'), detail: 'Session' }
     case 'room-input':
       return { href: routes.room(item.roomId), label: `${item.title} needs input`, status: roomStatusView('awaiting_input'), detail: 'Room' }
     case 'gateway':
@@ -61,11 +64,13 @@ export function OverviewPage() {
   const { user, isLoaded, isSignedIn } = useUser()
   const data = useNetworks()
   const history = useRoomHistory({ userId: user?.id ?? '', enabled: Boolean(isLoaded && isSignedIn && user?.id) })
+  const sessionList = useSessions({ userId: user?.id ?? '', enabled: Boolean(isLoaded && isSignedIn && user?.id) })
   const gateway = useMcpStatus()
   const rooms = history.data?.items ?? []
+  const sessions = sessionList.data?.sessions ?? []
   const loading = data.loading || data.agentsLoading || history.isLoading
-  const metrics = overviewMetrics({ agents: data.agents, networks: data.networks, rooms })
-  const attention = deriveAttention({ agents: data.agents, networks: data.networks, rooms, gateway: gateway.status })
+  const metrics = overviewMetrics({ agents: data.agents, networks: data.networks, rooms, sessions })
+  const attention = deriveAttention({ agents: data.agents, networks: data.networks, rooms, sessions, gateway: gateway.status })
   const failed = data.error || data.agentsError || (history.isError ? "Rooms couldn't load." : null)
   const recentRooms = [...rooms]
     .sort((a, b) => Date.parse(b.last_activity_at) - Date.parse(a.last_activity_at))
@@ -88,8 +93,8 @@ export function OverviewPage() {
             {`Updated ${new Date(history.dataUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
           </p>
         ) : null}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {loading ? Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-[104px] rounded-xl" />) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {loading ? Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-[104px] rounded-xl" />) : (
             <>
               <Tile label="Agents" tone="primary" value={metrics.agents.total} detail={<span><span className="text-status-online">{metrics.agents.online} online</span> · {metrics.agents.offline} offline</span>} />
               <Tile label="Subnets" tone="brand" value={metrics.subnets.total} detail={`${metrics.subnets.unassigned} unassigned agents`} />
@@ -99,6 +104,12 @@ export function OverviewPage() {
                 tone={metrics.rooms.needsInput ? 'warning' : 'primary'}
                 value={metrics.rooms.total}
                 detail={<span>{metrics.rooms.running} running · <span className={metrics.rooms.needsInput ? 'font-medium text-status-warning' : undefined}>{metrics.rooms.needsInput} need input</span></span>}
+              />
+              <Tile
+                label="Sessions"
+                tone={metrics.sessions.waiting ? 'warning' : 'primary'}
+                value={metrics.sessions.open}
+                detail={<span className={metrics.sessions.waiting ? 'font-medium text-status-warning' : undefined}>{metrics.sessions.waiting} waiting for you</span>}
               />
             </>
           )}

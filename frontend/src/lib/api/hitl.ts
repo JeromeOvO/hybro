@@ -14,9 +14,13 @@ export interface HitlPendingRequest {
   prompt: string
   prompt_type: import('@/lib/types/sse').HITLPromptType
   choices?: string[] | null
+  header?: string
+  required?: boolean
+  allow_other?: boolean
+  choice_options?: { value: string; label?: string; description?: string }[]
   status: 'pending'
   expires_at?: string
-  created_at: string
+  created_at?: string
   interaction_id?: string | null
   interaction_status?: string | null
   interaction_version?: number | null

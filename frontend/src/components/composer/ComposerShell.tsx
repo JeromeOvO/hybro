@@ -24,6 +24,7 @@ function toHitlPromptView(hitl: PendingHitl): HitlPromptView {
     prompt: hitl.question,
     promptType: hitl.promptType,
     choices: hitl.choices,
+    presentation: hitl.presentation,
     interactionId: hitl.interactionId,
     lifecycleState: hitl.lifecycleState,
     errorMessage: hitl.errorMessage,

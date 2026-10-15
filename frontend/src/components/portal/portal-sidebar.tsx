@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { MessageCirclePlus, PanelLeftIcon } from 'lucide-react'
 import { useUser } from '@/lib/auth'
 import { useRoomHistory } from '@/hooks/useRoomHistory'
+import { useSessions, waitingOnOwnerCount } from '@/hooks/useSessions'
 import { NavAgent } from '@/components/nav-agent'
 import { ChatHistory } from '@/components/portal/chat-history'
 import { NavUser } from '@/components/nav-user'
@@ -29,6 +30,12 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
 
   const roomHistory = useRoomHistory({ userId: user?.id ?? '', enabled: Boolean(isLoaded && isSignedIn && user?.id) })
   const needsInput = roomHistory.data?.items.filter(item => item.status === 'awaiting_input').length ?? 0
+  const sessions = useSessions({ userId: user?.id ?? '', enabled: Boolean(isLoaded && isSignedIn && user?.id) })
+  const sessionsWaiting = waitingOnOwnerCount(sessions.data?.sessions)
+  const badges = {
+    ...(needsInput ? { [routes.chat]: needsInput } : {}),
+    ...(sessionsWaiting ? { [routes.sessions]: sessionsWaiting } : {}),
+  }
 
   const hideSidebar = MARKETING_PAGES.includes(pathname) && (!isLoaded || !isSignedIn)
   if (hideSidebar) return null
@@ -62,7 +69,7 @@ export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>
           </div>
         </SidebarHeader>
         <SidebarContent>
-          <NavAgent key={user?.id ?? ''} navAgents={CONSUMER_NAV} badges={needsInput ? { [routes.chat]: needsInput } : undefined} />
+          <NavAgent key={user?.id ?? ''} navAgents={CONSUMER_NAV} badges={badges} />
           {isMobile && isChatPage ? history : null}
         </SidebarContent>
         <SidebarFooter>

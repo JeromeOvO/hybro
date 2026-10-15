@@ -23,7 +23,7 @@ export interface RunStartedPayload {
   hybro_turn_id: string
   user_message_id: string
   started_at: string
-  mode: 'fast' | 'direct' | 'ultimate' | 'supervisor'
+  mode: 'fast' | 'direct' | 'ultimate' | 'supervisor' | 'passthrough'
 }
 
 export interface TurnStartPayload {
