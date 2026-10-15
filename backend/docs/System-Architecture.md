@@ -166,7 +166,7 @@ cancels, or a polled call reaches its ceiling. This covers supervisor
 `ask_user`, model-surfaced Agent interactions, and `waiting_external` Runs.
 The room shows "needs input" or processing meanwhile.
 
-### Passthrough profile (kernel only)
+### Passthrough profile
 
 `OrchestratorProfile` accepts `profile_id="passthrough"`, which needs no model
 route or prompt. The kernel advances such a Run without model turns: it sends
@@ -177,8 +177,41 @@ final message through the normal canonical finalization. A failed, rejected,
 canceled, or expired result fails the Run (`agent_<status>`); a scope that is
 not one mentioned Agent fails it before dispatch. Each synthetic Assistant
 message is appended in the checkpoint that opens it, so recovery resumes
-without a model retry. No route, request mode, or composition profile produces
-a passthrough Run yet; startup still resolves only `fast` and `ultimate`.
+without a model retry. When the owner's answer has already closed the surface
+call but the Agent's continuation result has not arrived, the Run moves to
+`waiting_external` instead of surfacing the answered questions again.
+
+Production path: `ExecutionRequest.mode` accepts `passthrough`, which
+`MODE_PROFILE_MAP` maps to the `passthrough` profile. The composition resolves
+three profiles: `fast`, `ultimate` (both need their model routes at startup),
+and `passthrough`, built by `OrchestratorProfileResolver` without a model or
+prompt: zero model turns, one sequential Agent call,
+`orchestrator_passthrough_deadline_seconds` (active time only), and
+`orchestrator_passthrough_max_transport_retries_per_call`. The conversation
+runtime persists the request's mode (`direct`, `supervisor`, or `passthrough`;
+anything else is stored as `direct`) both at persistence and in the
+orchestration envelope written by preflight. The chat route still accepts only
+`direct` and `supervisor`; only Session produces passthrough Runs. Room memory
+projection may still call a model.
+
+Owner answers and continuation recovery:
+
+- Call recovery re-schedules parked (`input_required`/`auth_required`) calls
+  for their next poll. When the owner answers, the continuation coordinator
+  clears that poll schedule before claiming the call, so the answer is
+  dispatched at once; an authorization-refresh backoff and a live claim held by
+  another worker are still honored.
+- Dispatch recovery leaves a parked call that already has an applied answer but
+  no continuation command due for the continuation phase, which runs after it.
+- `MongoHITLApplicationStore.load_answer` restores UTC datetimes like the call
+  ledger, so the answer marker on the call matches the stored answer and
+  `reconcile_answer` can rebuild and dispatch the continuation after a crash or
+  a lost claim. Recovery logs `hitl_answer_reconcile_deferred`,
+  `hitl_continuation_recovery_deferred`, and
+  `hitl_continuation_claim_unavailable` when it has to wait.
+- `respond-batch` treats a new parked round on the same call (a different
+  interaction id or revision) as proof that the answer reached the Agent and
+  returns that state instead of `503 HITL_DELIVERY_UNCERTAIN`.
 
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
@@ -234,12 +267,16 @@ flowchart TD
 | Layer | Module | Owns |
 |---|---|---|
 | Product | `chat` | The owner's rooms as a product: create, read settings, list, history, rename, pin, membership, default mode, delete. `ChatService` (process singleton `chat_service`), `ChatFacade`, `ChatRouteAdapter`, and the route contract `chat.protocols.RoomCenterCompatibility`. |
+| Product | `session` | A client's conversation with the owner's agents, opened through `POST /sessions/messages` or MCP: the session record (collection `sessions`), the bounded event-based wait, and the client projection. `SessionFacade`, `BoundSessionAccess`, `MongoSessionRepository`, and the route contract `session.protocols.SessionAccess`. |
 | Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, agent-message preparation, quotes, deletion, candidate scope, and turn context. `ConversationRuntime` (process singleton `conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
 | Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. |
 | Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
 | Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, persistence adapters, the A2A SDK boundary, and shared contracts. |
 
-Products depend on core modules; nothing imports `chat`. Execution imports
+Products depend on core modules; nothing imports `chat` or `session`, and
+`session` never imports `chat`. A conversation container records its owning
+product in `rooms.owner_product` (`chat` by default, `session` for session
+containers). Execution imports
 Conversation only through the `conversation` package exports. Execution's
 `RoomCenterPort` (persist, preflight, discard, idempotent replay, send, and
 orchestration-status projection) is bound to `conversation_runtime`; the chat
@@ -595,7 +632,8 @@ within a reusable context. The remote agent decides which task/context
 continuations are valid; Hybro does not bind these IDs to a caller,
 maintain conversation history, or implement HITL orchestration for this surface.
 There are no network-API polling, cancel, webhook subscription, or SSE endpoints,
-and no Room, Run, memory, or LLM orchestration is created by this send.
+and no Room, Run, memory, or LLM orchestration is created by this send (except
+through `/sessions`, described in the Session section).
 
 Ownership is deliberately narrow:
 
@@ -624,10 +662,12 @@ discovery response model; the shared contract returns `common.dto.AgentInfo`.
 
 The repository-root `MCP/server.py` is a standalone API client, not another
 backend execution owner. It serves Streamable HTTP at
-`http://127.0.0.1:8001/mcp` and exposes five tools over the agent-network API:
-`list_subnets` (`agents/groups`), `find_agents` (`agents/search`), `get_agent`
-(`agents/{agent_id}/profile`), `discover_agents` (`agents/discovery`), and
-`send_message` (`agents/messages`). Tool arguments and results call saved groups
+`http://127.0.0.1:8001/mcp` and exposes seven tools: `list_subnets`
+(`agents/groups`), `find_agents` (`agents/search`), `get_agent`
+(`agents/{agent_id}/profile`), `discover_agents` (`agents/discovery`),
+`send_message` (`sessions/messages`), `check_session` (`sessions/{id}`), and
+`close_session` (`sessions/{id}/close`). The stateless HTTP route
+`POST /agents/messages` is unchanged but no longer used by the adapter. Tool arguments and results call saved groups
 subnets (`subnet_id`) and translate to backend `group_id`. Its
 Python dependencies, lockfile, and Dockerfile live under `MCP/`; releases publish
 the version-pinned `hybro-mcp` image alongside the other stack images.
@@ -645,28 +685,32 @@ MCP transport with JSON responses, and does not import the backend runtime or
 access persistence. The API remains responsible for message validation,
 inventory, group scope, visibility, ranking, and A2A execution.
 
-`send_message` takes plain `text` plus optional `data`, `files` (URI or small
-base64 bytes), and a `conversation` handle, and builds the A2A user message. It
-returns a summary rather than the raw A2A result: lowercase `state` (a direct
-Message reply is `completed`), `needs_input`, `reply_text` from the status
-message or Message and artifact text parts (status text already contained in an
-artifact is skipped, since agents often repeat the final answer there), `data`
-and `files` from other parts
-with inline bytes omitted, a `conversation` of `context_id` and `task_id`, and a
-`next_action` hint. `task_id` is kept only for submitted, working,
-input-required, or auth-required Tasks, so passing the handle back never reopens
-a finished Task. `include_raw` adds the complete A2A result. Every tool
-publishes an output schema; results are MCP structured content and JSON text.
-HTTP/transport failures and failed/rejected/canceled/expired Tasks become MCP
-tool errors. Error results keep the backend body and add `next_action`, for
-example that `429` was not accepted while `504` may still be running. Other
-task states are not promoted to completion.
+`send_message` is session-backed. It takes plain `text` (at most 10,000
+characters), `agent_id`, and optionally `session_id`, `subnet_id`,
+`client_request_id`, and `client_label`. It mints `client_request_id` when
+absent and sends `client_label` "MCP client" when opening a session without
+one. The result carries `session_id`, `accepted`, the session `state`
+(`completed`, `working`, `waiting_on_owner`, `rejected`, `failed`, `closed`),
+`reply_text`, `paused_agent_id`, `reason`, and a `next_action`: `working` and
+`waiting_on_owner` say to call `check_session` later; `rejected` and `closed`
+say to start a new session; a busy send (`accepted: false`) says the message
+was not recorded and must be resent once `check_session` shows a terminal
+state. Only `failed` is a tool error. `include_raw` adds the backend response.
+A retried call must pass the same `client_request_id` to get the earlier
+outcome; the adapter itself never retries. `check_session` returns the client
+check fields with `next_action`; `close_session` returns `session_id` and
+`status`. Every tool publishes an output schema; results are MCP structured
+content and JSON text. HTTP and transport failures become tool errors that keep
+the backend body and add `next_action`; a `409`/`404` hint branches on the
+backend error code (`session_closed`, `session_not_found`, `request_conflict`,
+otherwise an inactive or out-of-subnet agent).
 
 This adapter is for same-host clients, with no MCP authentication, user isolation,
 auth-store access, retry loop, or orchestration. It relies on a trusted backend's
 existing mock-auth identity and caller-scoped access; it supplies no Clerk
 credentials, so Clerk-mode requests return `401` tool errors. Its 610-second
-local deadline allows the backend's 600-second response to arrive.
+local deadline covers the backend's configurable session wait (30 seconds by
+default).
 `client_request_id` correlation is preserved, including a generated ID when
 omitted. Client cancellation does not imply remote A2A cancellation.
 
@@ -1096,6 +1140,99 @@ Mongo persistence is implemented by `conversation.repository.mongo`.
 `conversation.runtime.ConversationRuntime` holds the message engine methods:
 mention parsing, user-message persistence and preflight, agent-message creation,
 message and timeline reads, and orchestration-status projection.
+
+### `session`
+
+A Session is a conversation that a client of the instance owner opens with the
+owner's agents. The client addresses one agent per message; nothing inside
+Hybro chooses who speaks next; every turn is recorded in a conversation
+container; when an agent needs the owner's permission, the owner approves or
+rejects in the Hybro app. Under the single local identity
+(`backend.auth_mode="mock"`) the separation between client and owner is a
+presentation rule.
+
+Routes (`api_gateway/routes/session_routes.py`, tag `session`, route contract
+`session.protocols.SessionAccess`, bound per request by `get_session_access`
+to the authenticated owner and an owner-bound `AgentNetworkService` resolver):
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/sessions/messages` | `session_id`, `accepted`, `state`, `reply`, `paused_agent_id`, `reason`, `client_request_id` |
+| GET | `/sessions/{session_id}` | client check: `state`, `latest_replies`, `paused_agent_id`, `reason`, `agents`, times; never `conversation_id` |
+| POST | `/sessions/{session_id}/close` | `session_id`, `status` |
+| GET | `/sessions` | owner list with `client_label`, `title`, `agents`, `state`, `conversation_id`, times |
+| GET | `/sessions/{session_id}/record` | owner record: the check fields plus `client_label`, `title`, `status`, `conversation_id`, `closed_at` |
+
+`POST /sessions/messages` is limited to 64 KiB bodies and four concurrent
+requests; each holds its request up to `session_send_wait_seconds`. Errors use
+`{"detail": {"code", "message", ...}}`: `invalid_request` 422,
+`session_not_found`/`agent_not_found`/`subnet_not_found`/`not_found` 404,
+`forbidden` 403, `session_closed`/`request_conflict`/`agent_unavailable` 409,
+`request_rejected` 400.
+
+`SessionFacade` invariants:
+
+- `client_request_id` is required (at most 128 characters, normalized); text
+  is required and at most 10,000 characters; `data` and files are not
+  accepted. `client_label` is required to open a session. The first message,
+  on one line and shortened to 120 characters, becomes the session `title`
+  shown to the owner; sessions opened before titles existed have none.
+- The agent is resolved (visible, active, in the optional subnet) before any
+  write. A send without `session_id` reserves the record under the unique
+  `(owner_user_id, creation_request_id)` key, then creates the container
+  (`owner_product="session"`, empty manual membership) and sets
+  `conversation_id` only if it is still null; a concurrent loser deletes its
+  container. A retry completes a crashed creation.
+- Busy check before execute: a non-terminal run refuses the send with
+  `accepted: false`, `reason: "busy"`, and the earlier run's state
+  (`waiting_on_owner` for `awaiting_input`, else `working`). A retry of the
+  session's last request id skips the busy check and replays.
+- The `ExecutionRequest` uses `mode="passthrough"` and
+  `agent_scope={"source": "mention", "agent_ids": [agent_id]}`; the facade
+  never accepts a mode. Execute-time 409 acks: the fingerprint conflict text
+  maps to `request_conflict`; any other 409 re-reads the active runs and
+  reports busy. An accepted ack records `last_client_request_id`,
+  `last_user_message_id`, and the room event sequence read before execute,
+  calls `schedule_orchestration` (never `start_orchestration`), then adds the
+  agent to the container membership and records `last_accepted_agent_id`.
+- Each invocation is a fresh A2A context on the agent's side; the agent does
+  not receive the session history.
+- `close` cancels a pending approval through `cancel_hitl_interaction`, or else
+  the active run through `ExecutionEngine.cancel`; failures are logged and
+  tolerated, and the session is marked closed. Closed sessions refuse sends
+  with `session_closed` and keep their record.
+
+State resolution (`session/waiter.py`, `session/projection.py`) reads only the
+durable room event log (`app.state.room_event_store`), matching run events by
+`correlation_id` (the request's `client_request_id`) and paging after the
+recorded sequence. A send polls every 500 ms until `run_settled`
+(`completed`, `rejected` when a `hitl_response` with `status: canceled`
+preceded a canceled settlement for the same run, otherwise `failed` with the
+public `error_summary`), a pause (`run_waiting_input` not yet followed by
+`run_resumed` or settlement: `waiting_on_owner`), or `session_send_wait_seconds`
+(`working`). No correlated run event within `session_run_start_grace_seconds`
+reports `failed` with `run_not_started`. `check` and the owner list scan the
+same way without waiting; `closed` takes precedence. `latest_replies` holds the
+text of the settled run's `final_message_id`; agent-call rows are excluded
+because they can carry the owner's approval question, which the client view
+never contains. `paused_agent_id` comes from the awaiting run's trigger message
+`extend_info.candidate_agent_ids`, falling back to `last_accepted_agent_id`.
+
+Chat guard: chat history (`get_history_by_owner`) excludes containers with
+`owner_product="session"`. Chat writes refuse them with 409
+(`require_chat_room` in `api_gateway/errors.py`): `sendMessage`,
+`updateRoomAgentSet`, history rename/pin, pinned order, history delete,
+`/sse/message/{id}/cancel`, and `/files/upload`. Chat read routes,
+`inquiryActiveRuns`, the room SSE stream, and the HITL routes stay open, so the
+owner's session page renders the record through them and answers approvals
+there.
+
+External agent contract: publish a standard Agent Card and be registered;
+return `input-required` with the typed `hybro.ai/a2a/interaction` metadata to
+ask the owner (an untyped `input-required` completes as an ordinary reply);
+support `tasks/get` (late results arrive by polling); accept a best-effort
+remote cancel meaning "stop; this request will not proceed", sent on owner
+reject and on client close.
 
 ### `chat`
 
@@ -2803,6 +2940,42 @@ and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
 access, or the full repository-store aggregate. `HITLService` uses store ports
 for request creation, CAS/fenced updates, group routing claims, continuation
 persistence, and stale processing iteration.
+
+### Typed question presentation
+
+An Agent's typed interaction (`hybro.ai/a2a/interaction`, `A2AInteractionSpec`)
+may ask several short questions instead of one prompt. Besides `prompt`,
+`answer_kind`, `required`, and `choices`, each `HITLQuestionSpec` may carry:
+
+- `header`: a 1-40 character label for the question, such as `Destination`.
+- `choices` as `{value, label, description}` objects. They are split into the
+  `choices` values, which answers must use, and `choice_options` for display.
+  Plain string choices remain valid.
+- `allow_other`: a single- or multi-choice question also accepts free text. The
+  typed answer carries it as `other` (`{"kind": "single_choice", "other": ...}`,
+  or `choices` plus `other` for multi-choice); the Agent's continuation text
+  lists it after any picked choices.
+
+`A2AInteractionSpec.validate_answers` is the single answer-inventory check:
+every required question once, optional (`required: false`) questions may be
+left out, and no unknown or repeated question IDs. The UI's text answers map to
+typed answers by matching a listed choice value first and falling back to
+`other` when allowed. A policy decision is answered by the UI's Approve or
+Reject (`approve`/`deny`; other text is a conflict), and a confirmation counts
+Confirm, Yes, or Approve as confirmed. Questions without presentation fields serialize exactly
+as before, so persisted interaction fingerprints stay valid.
+
+The pending API (`GET /rooms/{room_id}/hitl/pending`) and the `hitl_request`
+SSE frame expose `header`, `required`, `allow_other`, and `choice_options`,
+sanitized and bounded like the prompt and choices for canonical Runs. When an
+interaction is answered, each `hitl_response` frame also carries
+`answer_text`: the owner's answer as the owner reads it (choice labels, Yes or
+No, Approved or Rejected, Signed in for authorization results, never the
+reference), sanitized and bounded to 1,000 characters. Skipped questions and
+cancellations carry none. The legacy
+`A2A_RESUME` follow-up path still publishes prompt and choices only. The bundled
+Travel Planner asks one question per missing detail with a header, two to four
+suggested choices with descriptions, and `allow_other`.
 
 ### HITL Lifecycle Consistency
 

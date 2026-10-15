@@ -147,6 +147,20 @@ A Run waiting for an answer or a remote Agent does not count that time against
 its profile deadline, so it can wait as long as these limits allow. While it
 waits it keeps the room's single active-Run slot.
 
+Passthrough Runs (session sends, no orchestrator model turns):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend.orchestrator_passthrough_deadline_seconds` | `300` | Active seconds a passthrough Run may take; time spent waiting for the owner or a remote Agent does not count. Must be greater than 0. |
+| `backend.orchestrator_passthrough_max_transport_retries_per_call` | `2` | Transport retries for the single Agent call. Must be greater than 0. |
+
+Sessions:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend.session_send_wait_seconds` | `30` | Seconds `POST /sessions/messages` waits for the Run to settle or pause for the owner before answering `working`. Must be greater than 0. |
+| `backend.session_run_start_grace_seconds` | `10` | Seconds without any lifecycle event for the request before a send reports `failed` with `run_not_started`. Must be greater than 0. |
+
 ### Existing installations
 
 If you previously ran `hybro setup` and have a `~/.hybro/config.yaml`, convert
