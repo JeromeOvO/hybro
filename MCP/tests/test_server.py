@@ -20,186 +20,253 @@ async def call_with_transport(handler, tool, arguments):
             return await client.call_tool(tool, arguments)
 
 
-def task_payload(state, **extra):
+def session_reply(state="completed", **extra):
     return {
-        "agent_id": "story",
+        "session_id": "sess-1",
+        "accepted": True,
+        "state": state,
+        "reply": "Here is your plan." if state == "completed" else None,
+        "paused_agent_id": "story" if state == "waiting_on_owner" else None,
+        "reason": None,
         "client_request_id": "turn-1",
-        "result": {
-            "kind": "task",
-            "id": "task-1",
-            "contextId": "context-1",
-            "status": {
-                "state": state,
-                "message": {"parts": [{"text": "A question or failure reason"}]},
-            },
-            **extra,
-        },
+        **extra,
     }
 
 
-@pytest.mark.parametrize(
-    ("state", "summary_state", "is_error", "task_id"),
-    [
-        ("TASK_STATE_INPUT_REQUIRED", "input_required", False, "task-1"),
-        ("TASK_STATE_WORKING", "working", False, "task-1"),
-        ("TASK_STATE_COMPLETED", "completed", False, None),
-        ("TASK_STATE_FAILED", "failed", True, None),
-    ],
-)
-async def test_send_summarizes_task_state_and_continuation(
-    state, summary_state, is_error, task_id
-):
-    payload = task_payload(state)
+async def test_first_send_opens_a_session_with_minted_ids():
+    sent = []
+
+    def backend(request):
+        sent.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json=session_reply())
+
     result = await call_with_transport(
-        lambda _: httpx.Response(200, json=payload),
-        "send_message",
-        {"agent_id": "story", "text": "Go"},
+        backend, "send_message", {"agent_id": "story", "text": "Plan a trip"}
     )
+
+    assert not result.is_error
+    path, payload = sent[0]
+    assert path == "/api/v1/sessions/messages"
+    assert payload["agent_id"] == "story"
+    assert payload["text"] == "Plan a trip"
+    assert payload["client_label"] == "MCP client"
+    assert len(payload["client_request_id"]) == 32
+    assert "session_id" not in payload
     summary = result.structured_content
-    assert result.is_error is is_error
-    assert summary["state"] == summary_state
-    assert summary["needs_input"] is (summary_state == "input_required")
-    assert summary["reply_text"] == "A question or failure reason"
-    # Finished tasks cannot be reopened, so only open tasks keep their ID.
-    assert summary["conversation"] == {"context_id": "context-1", "task_id": task_id}
-    assert summary["client_request_id"] == "turn-1"
+    assert summary["session_id"] == "sess-1"
+    assert summary["accepted"] is True
+    assert summary["state"] == "completed"
+    assert summary["reply_text"] == "Here is your plan."
+    assert summary["agent_id"] == "story"
     assert "raw" not in summary
+    assert {"conversation", "needs_input", "data", "files"}.isdisjoint(summary)
     assert json.loads(result.content[0].text) == summary
 
 
-async def test_send_builds_a2a_message_and_continues_conversation():
+async def test_send_with_handle_continues_the_session():
     sent = []
 
     def backend(request):
         sent.append(json.loads(request.content))
-        return httpx.Response(200, json=task_payload("TASK_STATE_COMPLETED"))
+        return httpx.Response(200, json=session_reply())
 
     result = await call_with_transport(
         backend,
         "send_message",
         {
-            "agent_id": "story",
-            "text": "Paris",
-            "data": {"days": 3},
-            "files": [
-                {"uri": "https://files.test/a.png", "media_type": "image/png"},
-                {"bytes": "aGk=", "name": "hi.txt"},
-            ],
-            "conversation": {"context_id": "context-1", "task_id": "task-1"},
-            "subnet_id": "travel",
+            "agent_id": "travel",
+            "text": "Now book it",
+            "session_id": "sess-1",
+            "subnet_id": "team",
             "client_request_id": "turn-2",
+            "client_label": "Buyer agent",
         },
     )
+
     assert not result.is_error
     assert sent == [
         {
-            "agent_id": "story",
+            "agent_id": "travel",
+            "text": "Now book it",
+            "session_id": "sess-1",
+            "subnet_id": "team",
             "client_request_id": "turn-2",
-            "group_id": "travel",
-            "message": {
-                "contextId": "context-1",
-                "taskId": "task-1",
-                "parts": [
-                    {"kind": "text", "text": "Paris"},
-                    {"kind": "data", "data": {"days": 3}},
-                    {
-                        "kind": "file",
-                        "file": {
-                            "uri": "https://files.test/a.png",
-                            "mimeType": "image/png",
-                        },
-                    },
-                    {"kind": "file", "file": {"bytes": "aGk=", "name": "hi.txt"}},
-                ],
-            },
+            "client_label": "Buyer agent",
         }
     ]
 
 
-async def test_send_collects_artifacts_and_direct_messages():
-    task = task_payload(
-        "TASK_STATE_COMPLETED",
-        artifacts=[
-            {
-                "artifactId": "a1",
-                "parts": [
-                    {"text": "Itinerary ready"},
-                    {"data": {"days": 3}},
-                    {"url": "https://files.test/plan.pdf", "filename": "plan.pdf"},
-                    {"raw": "c2VjcmV0", "mediaType": "image/png"},
-                ],
-            }
-        ],
-    )
-    result = await call_with_transport(
-        lambda _: httpx.Response(200, json=task),
+async def test_send_with_handle_does_not_mint_a_label():
+    sent = []
+
+    def backend(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=session_reply())
+
+    await call_with_transport(
+        backend,
         "send_message",
-        {"agent_id": "story", "text": "Plan", "include_raw": True},
+        {"agent_id": "story", "text": "Go", "session_id": "sess-1"},
     )
+
+    assert "client_label" not in sent[0]
+
+
+@pytest.mark.parametrize(
+    ("state", "is_error", "hint"),
+    [
+        ("completed", False, "Done"),
+        ("working", False, "check_session"),
+        ("waiting_on_owner", False, "check_session"),
+        ("rejected", False, "new session"),
+        ("closed", False, "new session"),
+        ("failed", True, "run_not_started"),
+    ],
+)
+async def test_send_states_carry_next_action(state, is_error, hint):
+    reply = session_reply(state)
+    if state == "failed":
+        reply["reason"] = "run_not_started"
+
+    result = await call_with_transport(
+        lambda _: httpx.Response(200, json=reply),
+        "send_message",
+        {"agent_id": "story", "text": "Go"},
+    )
+
     summary = result.structured_content
-    assert summary["reply_text"] == "A question or failure reason\n\nItinerary ready"
-    assert summary["data"] == [{"days": 3}]
-    assert summary["files"] == [
-        {
-            "name": "plan.pdf",
-            "media_type": None,
-            "uri": "https://files.test/plan.pdf",
-            "bytes_omitted": False,
-        },
-        {"name": None, "media_type": "image/png", "uri": None, "bytes_omitted": True},
-    ]
-    assert "c2VjcmV0" not in json.dumps(
-        {key: value for key, value in summary.items() if key != "raw"}
-    )
-    assert summary["raw"] == task["result"]
+    assert result.is_error is is_error
+    assert summary["state"] == state
+    assert hint in summary["next_action"]
+    if state == "waiting_on_owner":
+        assert summary["paused_agent_id"] == "story"
 
-    message = {
-        "agent_id": "story",
-        "client_request_id": "turn-3",
-        "result": {
-            "kind": "message",
-            "contextId": "context-9",
-            "role": "ROLE_AGENT",
-            "parts": [{"text": "Hello"}],
-        },
-    }
+
+async def test_busy_send_says_the_message_was_not_accepted():
+    reply = session_reply("waiting_on_owner", accepted=False, reason="busy")
+
     result = await call_with_transport(
-        lambda _: httpx.Response(200, json=message),
+        lambda _: httpx.Response(200, json=reply),
         "send_message",
-        {"agent_id": "story", "text": "Hi"},
+        {"agent_id": "story", "text": "Go", "session_id": "sess-1"},
     )
-    assert result.structured_content["state"] == "completed"
-    assert result.structured_content["reply_text"] == "Hello"
-    assert result.structured_content["conversation"] == {
-        "context_id": "context-9",
-        "task_id": None,
-    }
+
+    assert not result.is_error
+    summary = result.structured_content
+    assert summary["accepted"] is False
+    assert "not accepted" in summary["next_action"]
+    assert "check_session" in summary["next_action"]
 
 
-async def test_reply_text_skips_status_text_repeated_in_artifacts():
-    answer = "Sunny, 24C in Tokyo tomorrow."
-    payload = task_payload(
-        "TASK_STATE_COMPLETED",
-        artifacts=[{"artifactId": "a1", "parts": [{"text": answer}]}],
-    )
-    payload["result"]["status"]["message"]["parts"] = [{"text": f"{answer}\n"}]
+async def test_include_raw_returns_the_backend_response():
+    reply = session_reply()
+
     result = await call_with_transport(
-        lambda _: httpx.Response(200, json=payload),
+        lambda _: httpx.Response(200, json=reply),
         "send_message",
-        {"agent_id": "story", "text": "Weather?"},
+        {"agent_id": "story", "text": "Go", "include_raw": True},
     )
-    assert result.structured_content["reply_text"] == answer
+
+    assert result.structured_content["raw"] == reply
 
 
-async def test_file_input_requires_exactly_one_source():
+async def test_send_rejects_text_over_the_session_limit():
     sent = []
     result = await call_with_transport(
         lambda request: sent.append(request) or httpx.Response(200, json={}),
         "send_message",
-        {"agent_id": "story", "text": "Go", "files": [{"name": "empty"}]},
+        {"agent_id": "story", "text": "x" * 10_001},
     )
     assert result.is_error
     assert sent == []
+
+
+@pytest.mark.parametrize("removed", ["conversation", "data", "files"])
+async def test_send_no_longer_accepts_a2a_arguments(removed):
+    async with httpx.AsyncClient(base_url=server.BACKEND_API_URL) as http:
+        async with Client(create_server(http)) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+    assert removed not in tools["send_message"].input_schema["properties"]
+
+
+@pytest.mark.parametrize(
+    ("code", "hint"),
+    [
+        ("session_closed", "Omit session_id"),
+        ("request_conflict", "new client_request_id"),
+        ("agent_unavailable", "Choose another agent"),
+    ],
+)
+async def test_send_conflicts_branch_on_the_backend_code(code, hint):
+    error = {"detail": {"code": code, "message": "m", "client_request_id": "t"}}
+
+    result = await call_with_transport(
+        lambda _: httpx.Response(409, json=error),
+        "send_message",
+        {"agent_id": "story", "text": "Go"},
+    )
+
+    assert result.is_error
+    assert result.structured_content["detail"] == error["detail"]
+    assert hint in result.structured_content["next_action"]
+
+
+async def test_unknown_session_hint_starts_a_new_session():
+    error = {"detail": {"code": "session_not_found", "message": "m"}}
+
+    result = await call_with_transport(
+        lambda _: httpx.Response(404, json=error),
+        "check_session",
+        {"session_id": "missing"},
+    )
+
+    assert result.is_error
+    assert "Omit session_id" in result.structured_content["next_action"]
+
+
+async def test_check_session_reads_state_and_latest_replies():
+    calls = []
+    status = {
+        "session_id": "s/1",
+        "state": "waiting_on_owner",
+        "latest_replies": [],
+        "paused_agent_id": "story",
+        "reason": None,
+        "agents": [{"agent_id": "story", "name": "Story"}],
+        "opened_at": "2026-10-14T00:00:00Z",
+        "last_activity_at": "2026-10-14T00:00:00Z",
+    }
+
+    def backend(request):
+        calls.append(request)
+        return httpx.Response(200, json=status)
+
+    result = await call_with_transport(backend, "check_session", {"session_id": "s/1"})
+
+    assert not result.is_error
+    assert calls[0].method == "GET"
+    assert calls[0].url.raw_path == b"/api/v1/sessions/s%2F1"
+    summary = result.structured_content
+    assert summary["state"] == "waiting_on_owner"
+    assert summary["paused_agent_id"] == "story"
+    assert "check_session later" in summary["next_action"]
+
+
+async def test_close_session_posts_close():
+    calls = []
+
+    def backend(request):
+        calls.append(request)
+        return httpx.Response(200, json={"session_id": "sess-1", "status": "closed"})
+
+    result = await call_with_transport(
+        backend, "close_session", {"session_id": "sess-1"}
+    )
+
+    assert not result.is_error
+    assert calls[0].method == "POST"
+    assert calls[0].url.path == "/api/v1/sessions/sess-1/close"
+    assert result.structured_content == {"session_id": "sess-1", "status": "closed"}
 
 
 async def test_list_subnets_uses_subnet_vocabulary():
@@ -324,11 +391,15 @@ async def test_tools_publish_output_schemas():
         "get_agent",
         "discover_agents",
         "send_message",
+        "check_session",
+        "close_session",
     }
     for tool in tools.values():
         assert tool.output_schema is not None
     assert tools["send_message"].annotations.destructive_hint is True
     assert tools["find_agents"].annotations.read_only_hint is True
+    assert tools["check_session"].annotations.read_only_hint is True
+    assert tools["close_session"].annotations.destructive_hint is True
 
 
 async def test_http_validation_error_is_an_actionable_tool_error():
