@@ -110,8 +110,9 @@ test.describe('Sessions', () => {
     await expect(thread.getByText('answered').first()).toBeVisible({ timeout: 30_000 })
     await expect(thread.getByText(/^replied/)).toBeVisible({ timeout: 30_000 })
 
-    // Back returns to the same filtered list.
-    await page.getByRole('link', { name: 'Sessions', exact: true }).click()
+    // Back returns to the same filtered list. Scope to the page: the sidebar
+    // link is also named "Sessions" once no session waits on the owner.
+    await page.getByRole('main').getByRole('link', { name: 'Sessions', exact: true }).click()
     await expect(page.getByRole('searchbox', { name: 'Search sessions' })).toHaveValue(label)
     await expect(page).toHaveURL(/status=waiting_on_owner/)
 
