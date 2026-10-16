@@ -69,11 +69,11 @@ def test_configured_secret_inventory_extracts_percent_decoded_dsn_credentials():
 
 def test_credential_patterns_cover_headers_urls_queries_and_scalar_keys():
     raw = (
-        "Bearer abcd1234 https://user:pass@example.test/path?api_key=xyz123 "
+        "Bearer ab12cd34ef56gh78 https://user:pass@example.test/path?api_key=xyz123 "
         "password: hunter2"
     )
     public = sanitize_public_text(raw)
-    assert "abcd1234" not in public
+    assert "ab12cd34ef56gh78" not in public
     assert "user:pass" not in public
     assert "xyz123" not in public
     assert "hunter2" not in public
@@ -83,10 +83,20 @@ def test_credential_patterns_cover_headers_urls_queries_and_scalar_keys():
 @pytest.mark.parametrize(
     "token",
     [
+        # Bearer: 16+ token characters with a digit.
         "Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig",
+        "bearer ab12cd34ef56gh78",
+        "Bearer 0123456789abcdef",
+        "Bearer 12345678901234567890",
+        "Bearer sk-proj-ABCDEF1234567890",
+        "Bearer ghp_A1b2C3d4E5f6G7h8I9j0",
+        "Bearer dead-beef-cafe-babe-0001",
+        "Bearer abcdefghij1234567890-xyz",
+        "Bearer\nab12cd34ef56gh78",
+        # Basic: standard base64 of user:password.
         "Basic dXNlcjpwYXNz",
-        "bearer abcd1234",
-        "Bearer abcdefghijklmnopqrstuvwxyz",
+        "Basic dXNlcjpwYXNzd29yZA==",
+        "Basic YWxhZGRpbjpvcGVuc2VzYW1l",
     ],
 )
 def test_auth_scheme_tokens_are_redacted(token: str):
@@ -100,10 +110,38 @@ def test_auth_scheme_tokens_are_redacted(token: str):
         "A basic understanding of the city helps.",
         "Bearer bonds were common then.",
         "Start with Basic 101 lessons.",
+        "Learn basic JavaScript today",
+        "The math is basic arithmetic.",
+        "Learn Basic PowerPoint",
+        "A basic step-by-step guide",
+        "Use Basic English.",
+        "basic knowledge-sharing",
+        "A basic\nunderstanding.",
+        "Learn basic input/output.",
+        "basic HTML/CSS",
+        "basic read/write ops",
+        "Basic 10-minute setup",
+        "basic C++/Java",
+        "basic JavaScript-TypeScript",
+        "Basic IPv6-only networks",
+        "BASIC TRAINING",
+        "## BASIC REQUIREMENTS",
+        "THE BEARER INSTRUMENT",
+        "basic JavaScript/TypeScript",
+        "basic IPv4/IPv6",
+        "Basic iOS17/Android14",
+        "basic internationalization",
+        "Basic test",
+        "Bearer Passw0rd",
+        "pallbearer ab12cd34ef56gh78 ok",
     ],
 )
 def test_ordinary_words_after_basic_or_bearer_are_kept(prose: str):
     assert sanitize_public_text(prose) == prose
+
+
+def test_sentence_punctuation_after_a_token_is_kept():
+    assert sanitize_public_text("Use Bearer ab12cd34ef56gh78.") == f"Use {REDACTION}."
 
 
 def test_coalescer_uses_unicode_offsets_and_deterministic_identity():
@@ -151,7 +189,8 @@ def test_configured_secret_is_never_split_at_release_boundaries(start: int):
 def test_credential_forms_are_never_split_at_release_boundaries(
     credential: str, offset: int
 ):
-    raw = f"{'x' * offset}{credential}{' z' * 400}"
+    # The padding ends in a space: "xBearer" is not an auth scheme.
+    raw = f"{'x' * (offset - 1)} {credential}{' z' * 400}"
     expected = sanitize_public_text(raw)
     for split in range(offset, offset + len(credential) + 1):
         sanitizer = PublicTextSanitizer()
@@ -202,3 +241,99 @@ def test_coalescer_flushes_on_time_size_and_semantic_boundary():
     assert coalescer.add("tail", now=NOW + timedelta(milliseconds=52)) == []
     semantic = coalescer.semantic_flush(now=NOW + timedelta(milliseconds=53))
     assert [item.delta for item in semantic] == ["tail"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Use Bearer ab12cd34ef56gh78. Then BASIC TRAINING starts.",
+        "basic JavaScript/TypeScript and Basic dXNlcjpwYXNz- ok",
+        "pallbearer ab12cd34ef56gh78 ok",
+        # A scheme word inside a token is part of that token.
+        "Use Bearer abcdefghij1.Bearer now",
+        "Use Bearer ab12cd34ef/basic now",
+        "Bearer abc.def.123-Basic\tx",
+        "Bearer abc1defghij=basic x",
+        "Bearer abc1defghij.bearer now",
+        "Bearer sk-1234567-basic ok",
+        "Basic dXNlcjpwYXNzd29yZA==basic end",
+        # A scalar marker inside a token does not split it either.
+        "bearer\tVQVxG45xssu9V1-token:BASIC",
+    ],
+)
+def test_streaming_matches_one_shot_for_auth_schemes_at_every_split(raw: str):
+    expected = sanitize_public_text(raw)
+    for split in range(len(raw) + 1):
+        sanitizer = PublicTextSanitizer()
+        sanitizer.feed(raw[:split])
+        sanitizer.feed(raw[split:])
+        sanitizer.finish()
+        assert sanitizer.public_text == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "public"),
+    [
+        # A scheme word is never the other scheme's token.
+        (
+            "use basic Bearer 0123456789abcdef0123 now",
+            f"use basic {REDACTION} now",
+        ),
+        ("Bearer Basic YWxpY2U6czNjcmV0", f"Bearer {REDACTION}"),
+        (
+            "Schemes: Basic\nBearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig123",
+            f"Schemes: Basic\n{REDACTION}",
+        ),
+        # The trailing "-" counts toward the token's length but stays visible.
+        ("Bearer ab12cd34ef56gh7-", f"{REDACTION}-"),
+        # A scheme word followed by a token character is part of the token.
+        ("Bearer Bearer-ab12cd34ef56gh78ij90", REDACTION),
+        ("Bearer basic.ab12cd34ef56gh78ij90", REDACTION),
+        # A sentence-final "." does not count toward the 16 characters.
+        ("Bearer abcdefghijklmn1. ok", "Bearer abcdefghijklmn1. ok"),
+        ("Bearer abcdefghijklmn12. ok", f"{REDACTION}. ok"),
+        # Basic values must be padded standard base64 (RFC 7617).
+        ("Basic dXNlcjpwYXNzd29yZA", "Basic dXNlcjpwYXNzd29yZA"),
+    ],
+)
+def test_auth_scheme_edge_cases(raw: str, public: str):
+    assert sanitize_public_text(raw) == public
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Superbasic dXNlcjpwYXNz ok",
+        "tribasic dXNlcjpwYXNzd29yZA== then",
+        "nonbearer ab12cd34ef56gh78ij90 ok",
+        "use basic Bearer 0123456789abcdef0123 now",
+        "Bearer Basic YWxpY2U6czNjcmV0 end",
+        "0123456789aBearer ab12cd34ef56gh78ij90 ok",
+        "0123456789abBasic dXNlcjpwYXNz ok",
+    ],
+)
+def test_streaming_one_character_at_a_time_matches_one_shot(raw: str):
+    sanitizer = PublicTextSanitizer()
+    for character in raw:
+        sanitizer.feed(character)
+    sanitizer.finish()
+    assert sanitizer.public_text == sanitize_public_text(raw)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("Use Bearer ab12cd34ef56basic ", "now"),
+        ("Use Bearer ab12cd34ef56Bearer ", "now"),
+        ("Basic dXNlcjpwYXNzd29yZA==basic ", "end"),
+        ("Use Bearer abcdefghij1.Bearer ", "now"),
+    ],
+)
+def test_streaming_never_splits_a_token_at_an_embedded_scheme_word(
+    first: str, second: str
+):
+    sanitizer = PublicTextSanitizer()
+    sanitizer.feed(first)
+    sanitizer.feed(second)
+    sanitizer.finish()
+    assert sanitizer.public_text == sanitize_public_text(first + second)
