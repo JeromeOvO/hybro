@@ -57,6 +57,7 @@ class RuntimeRoomRecord(FrozenDTO):
     source_group_name: str | None = None
     extend_info: Any | None = None
     processing_message_id: str | None = None
+    owner_product: str = "chat"
 
 
 class RuntimeUserAttachment(FrozenDTO):

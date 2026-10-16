@@ -17,6 +17,7 @@ from agent.protocols import (
     AgentNetworkAccess,
     AgentSuggestionService,
 )
+from chat.protocols import RoomCenterCompatibility
 from common.auth import ClerkUser, get_current_user
 from common.protocols import (
     AgentMatcher,
@@ -32,7 +33,8 @@ from common.protocols import (
 from execution.direct_agent import DirectAgentExecution
 from execution.ports import DirectAgentMessenger
 from local_agents.protocols import LocalAgentDiscovery
-from room.protocols import RoomCenterCompatibility
+from session.access import BoundSessionAccess
+from session.protocols import SessionAccess, SessionOwner, SessionService
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +55,7 @@ class APIGatewayDeps:
     execution_engine: ExecutionEngine
     sse_store: SSEStateReader
     sse_transport: SSERouteTransport
+    session_facade: SessionService
     local_agent_discovery: LocalAgentDiscovery | None = None
 
 
@@ -212,3 +215,28 @@ def get_direct_agent_execution(
 DirectAgentExecutionDependency = Annotated[
     DirectAgentMessenger, Depends(get_direct_agent_execution)
 ]
+
+
+def get_session_access(
+    user: Annotated[ClerkUser, Depends(get_current_user)],
+    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
+) -> SessionAccess:
+    """Bind the session facade to the authenticated owner for one request."""
+    return BoundSessionAccess(
+        deps.session_facade,
+        owner=SessionOwner(
+            user_id=user.user_id,
+            name=getattr(user, "username", None)
+            or getattr(user, "email", None)
+            or user.user_id,
+        ),
+        resolver=AgentNetworkService(
+            deps.agent_service,
+            deps.agent_group_store,
+            deps.agent_matcher,
+            requesting_user_id=user.user_id,
+        ),
+    )
+
+
+SessionAccessDependency = Annotated[SessionAccess, Depends(get_session_access)]

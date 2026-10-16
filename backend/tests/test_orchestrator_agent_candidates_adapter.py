@@ -308,7 +308,8 @@ async def test_multiskill_card_freezes_only_skill_bindings_and_model_tools():
         created_at=NOW,
     )
 
-    expected_skill_ids = ["quote-negotiation", "quote-review", "submission-intake"]
+    # Agent Card order, so the first tool is the card's first skill.
+    expected_skill_ids = ["submission-intake", "quote-negotiation", "quote-review"]
     assert [binding.skill_id for binding in prepared.bindings] == expected_skill_ids
     assert len(prepared.snapshot.entries) == 3
     assert len(prepared.bindings) == 3

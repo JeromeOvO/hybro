@@ -288,3 +288,46 @@ async def test_update_agent_card_in_db_syncs_extra_sdk_card_fields():
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_health_cycle_is_gated_by_the_injected_leader_lock():
+    calls: list[tuple[str, str]] = []
+
+    class Leader:
+        async def try_acquire(self, name, ttl):
+            calls.append(("acquire", name))
+            return True
+
+        async def release(self, name):
+            calls.append(("release", name))
+
+    service = AgentHealthService(repository=_Repo())
+    cycles = []
+
+    async def cycle():
+        cycles.append(True)
+
+    service.run_health_check_cycle = cycle
+    service.set_leader_election(Leader(), lock_name="agent_health_checker")
+
+    await service._run_one_iteration()
+
+    assert cycles == [True]
+    assert calls == [
+        ("acquire", "agent_health_checker"),
+        ("release", "agent_health_checker"),
+    ]
+
+
+def test_agent_health_does_not_import_jobs():
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("agent/health.py").read_text())
+    modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert not any(module.split(".")[0] == "jobs" for module in modules)

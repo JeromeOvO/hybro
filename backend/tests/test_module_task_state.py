@@ -140,7 +140,7 @@ class TestTransitionTask:
         notif_svc = MagicMock()
         notif_svc.send_task_update = AsyncMock()
         return TaskStateManager(
-            room_runtime=room_svc,
+            conversation_runtime=room_svc,
             task_notifier=notif_svc,
         )
 
@@ -173,14 +173,16 @@ class TestTransitionTask:
     async def test_persists_by_default(self, tsm):
         msg = _make_message_with_task(CommonTaskState.submitted)
         await tsm.transition_task(msg, CommonTaskState.working)
-        tsm.room_runtime.update_agent_message_by_message_id.assert_called_once()
+        tsm.conversation_runtime.update_agent_message_by_message_id.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_lost_terminal_cas_restores_stale_in_memory_state(self, tsm):
         msg = _make_message_with_task(CommonTaskState.working)
-        tsm.room_runtime.update_agent_message_by_message_id.return_value = MagicMock(
-            success=False,
-            error="durable terminal winner",
+        tsm.conversation_runtime.update_agent_message_by_message_id.return_value = (
+            MagicMock(
+                success=False,
+                error="durable terminal winner",
+            )
         )
 
         await tsm.transition_task(msg, CommonTaskState.completed)
@@ -191,7 +193,7 @@ class TestTransitionTask:
     async def test_skips_persist_when_disabled(self, tsm):
         msg = _make_message_with_task(CommonTaskState.submitted)
         await tsm.transition_task(msg, CommonTaskState.working, persist=False)
-        tsm.room_runtime.update_agent_message_by_message_id.assert_not_called()
+        tsm.conversation_runtime.update_agent_message_by_message_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_longer_notifies_directly(self, tsm):
@@ -214,7 +216,7 @@ class TestTransitionTask:
         msg = MagicMock()
         msg.message_content = None
         await tsm.transition_task(msg, CommonTaskState.working)
-        tsm.room_runtime.update_agent_message_by_message_id.assert_not_called()
+        tsm.conversation_runtime.update_agent_message_by_message_id.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -225,7 +227,7 @@ async def test_fail_pre_dispatch_task_creates_failed_task_when_missing():
     )
     notif_svc = MagicMock()
     notif_svc.send_task_update = AsyncMock()
-    tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
+    tsm = TaskStateManager(conversation_runtime=room_svc, task_notifier=notif_svc)
 
     msg = _make_real_message_with_common_task()
 
@@ -259,7 +261,7 @@ async def test_fail_pre_dispatch_task_transitions_existing_task_once_with_metada
     )
     notif_svc = MagicMock()
     notif_svc.send_task_update = AsyncMock()
-    tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
+    tsm = TaskStateManager(conversation_runtime=room_svc, task_notifier=notif_svc)
 
     msg = _make_real_message_with_common_task(CommonTaskState.submitted)
 
@@ -289,7 +291,7 @@ async def test_fail_pre_dispatch_task_leaves_terminal_task_unchanged():
     )
     notif_svc = MagicMock()
     notif_svc.send_task_update = AsyncMock()
-    tsm = TaskStateManager(room_runtime=room_svc, task_notifier=notif_svc)
+    tsm = TaskStateManager(conversation_runtime=room_svc, task_notifier=notif_svc)
 
     msg = _make_real_message_with_common_task(CommonTaskState.completed)
     task = get_task(msg)
@@ -325,7 +327,7 @@ class TestCancelRemainingQueue:
         )
         notif_svc = MagicMock()
         return TaskStateManager(
-            room_runtime=room_svc,
+            conversation_runtime=room_svc,
             task_notifier=notif_svc,
         )
 

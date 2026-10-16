@@ -101,7 +101,7 @@ ignore = ["E501"]
 # Compatibility lint baseline. Global rules stay enabled so new files and newly
 # introduced violations outside these exact files are still checked.
 "a2a_adapter/artifact_storage.py" = ["C901"]
-"room/a2a_file_parts.py" = ["UP042"]
+"conversation/a2a_file_parts.py" = ["UP042"]
 "tests/test_module_room_message_center.py" = ["C901"]
 
 "a2a_adapter/runtime_service.py" = ["C901"]
@@ -118,7 +118,7 @@ ignore = ["E501"]
 "api_gateway/routes/webhook_routes.py" = ["B008"]
 "agent/health.py" = ["C901"]
 "agent/service.py" = ["C901"]
-"room/compat/runtime.py" = ["C901", "UP042"]
+"conversation/runtime.py" = ["C901", "UP042"]
 "common/a2a_constants.py" = ["UP042"]
 "common/dto/execution.py" = ["UP042"]
 "common/observability/tracing.py" = ["UP035"]
@@ -167,10 +167,12 @@ py-modules = ["main", "container", "configuration_cli", "cli_stack", "cli_upgrad
 packages = [
     "agent",
     "agent.repository",
-    "room",
-    "room.compat",
-    "room.repository",
+    "chat",
+    "conversation",
+    "conversation.repository",
     "room_files",
+    "session",
+    "session.repository",
     "context_memory",
     "context_memory.repository",
     "dal",
@@ -198,6 +200,7 @@ packages = [
     "api_gateway.routes",
     "models",
     "common",
+    "common.eventing",
     "common.client",
     "common.config",
     "common.dto",

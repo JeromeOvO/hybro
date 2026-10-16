@@ -250,6 +250,8 @@ jobs:
                       "get_agent",
                       "discover_agents",
                       "send_message",
+                      "check_session",
+                      "close_session",
                   }
                   result = await client.call_tool("discover_agents", {})
                   assert not result.is_error
@@ -290,7 +292,7 @@ jobs:
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
-        run: npx playwright test tests/e2e/functional-hitl-workflow.spec.ts
+        run: npx playwright test tests/e2e/functional-hitl-workflow.spec.ts tests/e2e/sessions.spec.ts
 
       - name: Dump Container Logs on Failure
         if: failure()

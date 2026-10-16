@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from common.dto.base import FrozenDTO
+from common.dto.hitl import HITLChoiceOption
 
 
 class RunState(str, Enum):
@@ -54,7 +55,7 @@ class ExecutionRequest(FrozenDTO):
     inline_file_ids: list[str] | None = None
     parent_message_id: str | None = None
     client_request_id: str | None = None
-    mode: Literal["direct", "supervisor"] = "direct"
+    mode: Literal["direct", "supervisor", "passthrough"] = "direct"
     agent_scope: AgentScopeInput = Field(
         default_factory=lambda: RoomDefaultAgentScope(source="room_default")
     )
@@ -142,6 +143,10 @@ class HITLRequest(FrozenDTO):
         "date",
     ] = "text"
     choices: list[str] | None = None
+    header: str | None = None
+    required: bool = True
+    allow_other: bool = False
+    choice_options: list[HITLChoiceOption] | None = None
     interaction_id: str | None = None
     interaction_status: str | None = None
     interaction_version: int | None = None

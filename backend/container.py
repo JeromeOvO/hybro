@@ -16,6 +16,7 @@ from api_gateway.dependencies import (
     bind_api_gateway_deps,
     missing_required_deps,
 )
+from chat import ChatFacade
 from common.config.loader import settings
 from common.dto import AgentMessageFinal, DeliveryEmitStatus
 from common.eventing import (
@@ -77,6 +78,14 @@ from context_memory.config import (
     MemorySearchConfig,
     TokenBudgetConfig,
 )
+from conversation import ConversationFacade, MessageMongoRepository, RoomMongoRepository
+from conversation.membership_source import RepositoryRoomMembershipSeedSource
+from conversation.repository import RoomQuoteMongoRepository
+from conversation.timeline import (
+    TIMELINE_MIGRATION_MARKER_COLLECTION,
+    TIMELINE_MIGRATION_MARKER_ID,
+    TIMELINE_MIGRATION_VERSION,
+)
 from delivery.config import DeliveryConfig
 from delivery.event_bus import CrossInstanceEventBus
 from delivery.event_publisher import EventPublisherImpl
@@ -96,7 +105,7 @@ from jobs.cleanup_orphaned_uploads import (
     orphaned_upload_cleaner,
 )
 from jobs.compaction_sweep import CompactionSweepDeps, compaction_sweep
-from jobs.constants import ALL_JOB_NAMES
+from jobs.constants import AGENT_HEALTH_CHECKER, ALL_JOB_NAMES
 from jobs.orchestrator_workers import (
     OrchestratorCanaryDeps,
     OrchestratorProjectionDeps,
@@ -113,15 +122,8 @@ from orchestrator_composition import (
     create_orchestrator_runtime,
     validate_orchestrator_runtime,
 )
-from room import MessageMongoRepository, RoomFacade, RoomMongoRepository
-from room.membership_source import RepositoryRoomMembershipSeedSource
-from room.repository import RoomQuoteMongoRepository
-from room.timeline import (
-    TIMELINE_MIGRATION_MARKER_COLLECTION,
-    TIMELINE_MIGRATION_MARKER_ID,
-    TIMELINE_MIGRATION_VERSION,
-)
 from room_files import LocalFileContentStore, RoomFiles
+from session import MongoSessionRepository, SessionFacade, SessionWaiter
 
 logger = get_logger(__name__)
 
@@ -282,10 +284,13 @@ def validate_runtime_bindings(
     del runtime
     errors: list[str] = []
 
-    from room.compat.runtime import room_runtime
+    from chat.service import chat_service
+    from conversation.runtime import conversation_runtime
 
-    for missing in room_runtime.missing_required_bindings():
-        errors.append(f"room.{missing}")
+    for missing in conversation_runtime.missing_required_bindings():
+        errors.append(f"conversation.{missing}")
+    for missing in chat_service.missing_required_bindings():
+        errors.append(f"chat.{missing}")
 
     if getattr(app.state, "delivery_facade", None) is None:
         errors.append("app.state.delivery_facade")
@@ -763,6 +768,77 @@ async def _project_orchestrator_agent_activity(
         )
 
 
+async def terminalize_canonical_hitl_run(
+    orchestrator_runtime: Any,
+    request: Any,
+    *,
+    terminal_status: str,
+    reason: str,
+    session_listener: Callable[[Any], Awaitable[None]],
+) -> bool:
+    """Settle the canonical Run that owns a terminal HITL interaction.
+
+    Returns False when the request is not owned by a canonical Run. Agent calls
+    of the Run are canceled locally before it ends, so parallel calls do not
+    stay non-terminal; while that cancellation is pending the call raises and
+    the HITL reconciler retries.
+    """
+    from execution.orchestrator.a2a_runtime.ledger import TERMINAL_AGENT_CALL_STATES
+    from execution.orchestrator.lifecycle import SessionEvent
+
+    run_id = request.orchestration_run_id
+    if orchestrator_runtime is None or not run_id:
+        return False
+    run = await orchestrator_runtime.run_store.load(run_id)
+    if run is None or run.lifecycle_family != "canonical":
+        return False
+    if run.tool_catalog is None:
+        raise RuntimeError("canonical HITL owner has no Tool catalog")
+    if terminal_status == "canceled":
+        command_id = run.cancellation_command_id
+        if run.status != "canceling" or command_id is None:
+            return run.status == "canceled"
+        results = await orchestrator_runtime.cancellation_coordinator.cancel_run(
+            run_id, reason="canonical_hitl_canceled"
+        )
+        if any(state not in TERMINAL_AGENT_CALL_STATES for state in results.values()):
+            return True
+        await orchestrator_runtime.session_host.reconcile_cancellation(run)
+        await orchestrator_runtime.session_host.signal_run_cancellation(run, command_id)
+        return True
+
+    results = await orchestrator_runtime.cancellation_coordinator.cancel_run(
+        run_id, reason="canonical_hitl_failed"
+    )
+    if any(state not in TERMINAL_AGENT_CALL_STATES for state in results.values()):
+        raise RuntimeError("local Agent-call cancellation remains pending")
+
+    async def emit(event_type, current, payload):
+        await session_listener(
+            SessionEvent(
+                event_type=event_type,
+                session_id=f"hitl-terminal:{current.run_id}",
+                run_id=current.run_id,
+                causation_id=request.request_id,
+                sequence=current.state_version,
+                timestamp=datetime.now(UTC),
+                payload=payload,
+                room_id=current.room_id,
+                user_message_id=current.request.user_message_id,
+                client_request_id=current.client_request_id,
+                lifecycle_family=current.lifecycle_family,
+            )
+        )
+
+    await orchestrator_runtime.kernel_factory(run.tool_catalog).terminalize(
+        run_id,
+        status="failed",
+        reason=reason,
+        lifecycle=emit,
+    )
+    return True
+
+
 @asynccontextmanager
 async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C901
     """Lifespan context manager to handle startup and shutdown events.
@@ -817,8 +893,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
             from agent.service import AgentService
+            from chat.route_adapter import ChatRouteAdapter
+            from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
+            from conversation.agent_message_preparation import (
+                AgentMessagePreparationService,
+            )
+            from conversation.deletion import RoomDeletionService
+            from conversation.runtime import (
+                conversation_runtime,
+            )
+            from conversation.timeline_projection import RoomTimelineProjector
+            from conversation.user_message_persistence import UserMessageCommitService
             from dal.orchestrator.epoch_bindings import (
                 EpochScopedOrchestratorCleanup,
                 bind_room_epoch_store,
@@ -845,18 +932,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 LocalAgentDiscoveryConfig,
                 LocalAgentService,
             )
-            from room.agent_message_preparation import AgentMessagePreparationService
-            from room.compat.runtime import (
-                room_runtime,
-            )
-            from room.deletion import RoomDeletionService
-            from room.route_adapter import RoomRouteAdapter
-            from room.timeline_projection import RoomTimelineProjector
-            from room.user_message_persistence import UserMessageCommitService
 
             # The compatibility runtime is process-global. Clear bindings from a
             # previous failed or completed lifespan before composing this one.
-            room_runtime.reset_bindings()
+            conversation_runtime.reset_bindings()
+            chat_service.reset_bindings()
             reset_room_epoch_store()
 
             bind_room_epoch_store(
@@ -925,7 +1005,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 or app.state.memory_search_index_ready
             )
 
-            route_room_center = RoomRouteAdapter()
+            route_room_center = ChatRouteAdapter(
+                chat_service=chat_service,
+                conversation_runtime=conversation_runtime,
+            )
             _delivery_config = create_delivery_config(runtime.settings)
             cancellation_startup_policy = create_cancellation_startup_policy(
                 redis_url=runtime.settings.redis_url,
@@ -1108,8 +1191,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             message_parser_llm_service = MessageParserLLMService(
                 llm_provider=llm_provider
             )
-            room_runtime.bind_message_parser_service(message_parser_llm_service)
-            room_runtime.bind_capability_issue_reader(agent_capability_issue_service)
+            conversation_runtime.bind_message_parser_service(message_parser_llm_service)
+            conversation_runtime.bind_capability_issue_reader(
+                agent_capability_issue_service
+            )
             agent_card_resolver = AgentCardResolverImpl()
             _agent_deps = create_agent_deps(
                 mongo=mongo_dal,
@@ -1567,73 +1652,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         return run.status
                 raise RuntimeError("canonical HITL cancellation CAS did not converge")
 
-            async def terminalize_canonical_hitl_run(
+            async def terminalize_canonical_hitl_run_port(
                 request: Any,
                 *,
                 terminal_status: str,
                 reason: str,
             ) -> bool:
-                from execution.orchestrator.a2a_runtime.ledger import (
-                    TERMINAL_AGENT_CALL_STATES,
-                )
-                from execution.orchestrator.lifecycle import SessionEvent
-
-                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
-                run_id = request.orchestration_run_id
-                if orchestrator_runtime is None or not run_id:
-                    return False
-                run = await orchestrator_runtime.run_store.load(run_id)
-                if run is None or run.lifecycle_family != "canonical":
-                    return False
-                if run.tool_catalog is None:
-                    raise RuntimeError("canonical HITL owner has no Tool catalog")
-                if terminal_status == "canceled":
-                    command_id = run.cancellation_command_id
-                    if run.status != "canceling" or command_id is None:
-                        return run.status == "canceled"
-                    results = (
-                        await orchestrator_runtime.cancellation_coordinator.cancel_run(
-                            run_id, reason="canonical_hitl_canceled"
-                        )
-                    )
-                    if any(
-                        state not in TERMINAL_AGENT_CALL_STATES
-                        for state in results.values()
-                    ):
-                        return True
-                    await orchestrator_runtime.session_host.reconcile_cancellation(run)
-                    await orchestrator_runtime.session_host.signal_run_cancellation(
-                        run, command_id
-                    )
-                    return True
-
-                async def emit(event_type, current, payload):
-                    await _orchestrator_session_listener(
-                        SessionEvent(
-                            event_type=event_type,
-                            session_id=f"hitl-terminal:{current.run_id}",
-                            run_id=current.run_id,
-                            causation_id=request.request_id,
-                            sequence=current.state_version,
-                            timestamp=datetime.now(UTC),
-                            payload=payload,
-                            room_id=current.room_id,
-                            user_message_id=current.request.user_message_id,
-                            client_request_id=current.client_request_id,
-                            lifecycle_family=current.lifecycle_family,
-                        )
-                    )
-
-                await orchestrator_runtime.kernel_factory(run.tool_catalog).terminalize(
-                    run_id,
-                    status="canceled" if terminal_status == "canceled" else "failed",
+                return await terminalize_canonical_hitl_run(
+                    getattr(app.state, "orchestrator_runtime", None),
+                    request,
+                    terminal_status=terminal_status,
                     reason=reason,
-                    cancellation_cause=(
-                        "policy" if terminal_status == "canceled" else None
-                    ),
-                    lifecycle=emit,
+                    session_listener=_orchestrator_session_listener,
                 )
-                return True
 
             async def request_supervisor_input_port(
                 *,
@@ -1757,7 +1788,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
                     orchestration_run_store,
                     run_lifecycle,
-                    canonical_terminalizer=terminalize_canonical_hitl_run,
+                    canonical_terminalizer=terminalize_canonical_hitl_run_port,
                 ),
                 lifecycle=hitl_lifecycle_store,
                 application=hitl_application,
@@ -1768,12 +1799,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 supervisor_resume=resume_supervisor_hitl_port,
                 canonical_cancellation_requester=request_canonical_hitl_cancellation,
                 public_secret_values=configured_public_secret_values(runtime.settings),
+                approval_deadline_hours=runtime.settings.approval_deadline_hours,
             )
 
             async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
                 from a2a_adapter.remote_task import fetch_remote_task
                 from common.a2a_constants import TERMINAL_STATES
-                from execution.task_tracking import extract_public_completed_status_text
+                from common.a2a_task_projection import (
+                    extract_public_completed_status_text,
+                )
 
                 message = await message_store.get_room_agent_message_by_message_id(
                     command.get("continuation_message_id")
@@ -1815,13 +1849,13 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.get_room_user_message_by_message_id
                 ),
             )
-            room_runtime.bind_store(room_runtime_store)
-            room_runtime.bind_cancellation_control(
+            conversation_runtime.bind_store(room_runtime_store)
+            conversation_runtime.bind_cancellation_control(
                 cancellation_control=_cancellation_runtime,
             )
-            room_runtime.bind_facade(_room_facade)
-            room_runtime.bind_room_files(file_storage)
-            room_runtime.bind_user_message_commit(
+            conversation_runtime.bind_facade(_room_facade)
+            conversation_runtime.bind_room_files(file_storage)
+            conversation_runtime.bind_user_message_commit(
                 UserMessageCommitService(
                     writer=SimpleNamespace(
                         ensure_user_message_id=_room_facade.ensure_user_message_id,
@@ -1836,9 +1870,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     internal_event_publisher=(_eventing_deps.internal_event_publisher),
                 )
             )
-            room_runtime.bind_attachment_metadata_reader(file_storage)
-            room_runtime.bind_attachment_content_reader(file_storage)
-            room_runtime.bind_timeline_projector(
+            conversation_runtime.bind_attachment_metadata_reader(file_storage)
+            conversation_runtime.bind_attachment_content_reader(file_storage)
+            conversation_runtime.bind_timeline_projector(
                 RoomTimelineProjector(
                     hitl_reader=SimpleNamespace(
                         get_hitl_request=hitl_store.get_hitl_request,
@@ -1848,11 +1882,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                 )
             )
-            room_runtime.bind_a2a_inline_file_limits(
+            conversation_runtime.bind_a2a_inline_file_limits(
                 max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
                 max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,
             )
-            route_room_center.bind_facade(_room_facade)
+            chat_service.bind_facade(_room_deps.chat_facade)
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
                 llm_provider=llm_provider,
@@ -1915,7 +1949,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                 ),
             )
-            room_runtime.bind_room_deletion(room_deletion)
+            chat_service.bind_room_deletion(room_deletion)
             agent_message_preparation = AgentMessagePreparationService(
                 agent_url_reader=SimpleNamespace(
                     get_agent_url_by_agent_id=(
@@ -1949,10 +1983,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
                 context_assembly=context_memory_facade,
             )
-            room_runtime.bind_agent_message_preparation(agent_message_preparation)
+            conversation_runtime.bind_agent_message_preparation(
+                agent_message_preparation
+            )
 
             execution_facade = create_execution_facade(
-                room_center=route_room_center,
+                room_center=conversation_runtime,
                 hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
@@ -2011,7 +2047,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             await _eventing_deps.event_bus.start()
             await _eventing_deps.event_bus.refresh_health()
             app.state.eventing_connected = _eventing_deps.event_bus.is_connected
-            room_runtime.bind_context_memory(
+            conversation_runtime.bind_context_memory(
                 context_assembly=context_memory_facade,
                 room_memory_cleanup=context_memory_facade,
             )
@@ -2086,7 +2122,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         if agent_health_service is None:
             raise RuntimeError("Agent health service has not been initialized")
-        agent_health_service.set_leader_election(_leader)
+        agent_health_service.set_leader_election(
+            _leader, lock_name=AGENT_HEALTH_CHECKER
+        )
         stale_task_checker.set_leader_election(_leader)
         stale_task_checker.configure_timing(
             stale_check_minutes=runtime.settings.stale_check_minutes,
@@ -2214,6 +2252,24 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
 
+        # Sessions bind to the conversation container, Execution (engine and
+        # approvals), and the durable room event log for the bounded wait.
+        session_repository = MongoSessionRepository(mongo_dal)
+        await session_repository.ensure_indexes()
+        session_facade = SessionFacade(
+            store=session_repository,
+            rooms=_room_deps.room_management,
+            registry=_room_deps.room_registry,
+            history=_room_deps.room_history_reader,
+            messages=_room_deps.room_message_store,
+            engine=_execution_deps.execution_engine,
+            approvals=_execution_deps.hitl_manager,
+            waiter=SessionWaiter(
+                _room_event_store,
+                start_grace_seconds=runtime.settings.session_run_start_grace_seconds,
+            ),
+        )
+
         bind_api_gateway_deps(
             app,
             APIGatewayDeps(
@@ -2233,6 +2289,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 execution_engine=_execution_deps.execution_engine,
                 sse_store=sse_state_reader,
                 sse_transport=_delivery_facade,
+                session_facade=session_facade,
                 local_agent_discovery=_local_agent_service,
             ),
         )
@@ -2688,6 +2745,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 llm_gateway=llm_provider,
                 model_registry=model_registry,
                 agent_registry=_agent_deps.agent_registry,
+                agent_call_counter=_agent_deps.agent_call_counter,
                 exclusion_reader=CapabilityIssueExclusionReader(
                     agent_capability_issue_service
                 ),
@@ -2714,7 +2772,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 raise OrchestratorCompositionError(
                     "Orchestrator runtime composition incomplete: " + ", ".join(missing)
                 )
-            from room.agent_call_detail import CanonicalAgentCallDetailService
+            from conversation.agent_call_detail import CanonicalAgentCallDetailService
 
             app.state.canonical_agent_call_detail_reader = (
                 CanonicalAgentCallDetailService(
@@ -3079,6 +3137,7 @@ class RoomDeps:
     room_ownership_reader: RoomOwnershipReader
     room_repository: Any
     message_repository: Any
+    chat_facade: ChatFacade
     room_quote_repository: Any | None = None
 
 
@@ -4388,7 +4447,7 @@ def create_room_deps(
     repository = RoomMongoRepository(mongo=mongo)
     message_repository = MessageMongoRepository(mongo=mongo)
     quote_repository = RoomQuoteMongoRepository(mongo=mongo)
-    facade = RoomFacade(
+    facade = ConversationFacade(
         repository=repository,
         message_repository=message_repository,
         agent_registry=agent_registry,
@@ -4407,6 +4466,7 @@ def create_room_deps(
         room_ownership_reader=facade,
         room_repository=repository,
         message_repository=message_repository,
+        chat_facade=ChatFacade(conversation=facade, repository=repository),
         room_quote_repository=quote_repository,
     )
 

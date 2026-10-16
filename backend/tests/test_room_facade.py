@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from chat import ChatFacade
 from common.dto import (
     AgentInfo,
     AgentMessageInput,
@@ -19,6 +20,8 @@ from common.dto import (
     UserMessageInsertResult,
 )
 from common.types import Task, TaskState, TaskStatus
+from conversation import ConversationFacade
+from conversation.idempotency import IdempotencyConflictError
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from models.quote import QuoteSourceKind
 from models.request import RoomCenterUserMessageRequest
@@ -29,15 +32,13 @@ from models.room import (
     RoomUserMessage,
     UserAttachment,
 )
-from room import RoomFacade
-from room.idempotency import IdempotencyConflictError
 
 NOW = datetime(2026, 5, 11, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
 async def test_update_room_default_mode_uses_atomic_nested_field_write():
-    facade, rooms, _, _, _ = _facade(
+    conversation, rooms, _, _, _ = _facade(
         room_docs=[
             {
                 "room_id": "r1",
@@ -49,6 +50,7 @@ async def test_update_room_default_mode_uses_atomic_nested_field_write():
         ]
     )
 
+    facade = ChatFacade(conversation=conversation, repository=rooms)
     updated = await facade.update_room_default_mode("r1", use_supervisor=True)
 
     assert updated is True
@@ -142,6 +144,7 @@ async def test_create_room_validates_required_fields_and_manual_seed():
         "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
+        "owner_product": "chat",
     }
 
 
@@ -988,7 +991,7 @@ def _facade(
     )
     id_iter = iter(ids or ["generated-id"])
     epoch_store = epoch_store or InMemoryRoomEpochStore()
-    facade = RoomFacade(
+    facade = ConversationFacade(
         repository=rooms,
         message_repository=messages,
         agent_registry=registry,

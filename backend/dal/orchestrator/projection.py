@@ -14,6 +14,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
+from conversation.timeline import normalize_timeline_document
 from execution.orchestrator.models import (
     AssistantMessage,
     DataPart,
@@ -25,7 +26,6 @@ from execution.orchestrator.models import (
 from execution.orchestrator.ports import StoreOutcome
 from models.room import CoordinatorAgentId
 from models.run import TERMINAL_RUN_STATES, RunState
-from room.timeline import normalize_timeline_document
 
 _TERMINAL_RUN_STATE_VALUES = [state.value for state in TERMINAL_RUN_STATES]
 FinalMessageDelivery = Callable[

@@ -1,0 +1,206 @@
+"""Public payloads for client sessions with the owner's agents.
+
+A session is a conversation that a client of the instance owner opens through
+the API or MCP. The client addresses one agent per message; the owner approves
+or rejects agent interactions in the Hybro app. The client never sees the
+conversation container id or the approval question.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated, Literal, Self
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
+from common.utils.time import ensure_utc
+from models.room import MAX_MESSAGE_LENGTH
+
+SessionState = Literal[
+    "completed", "working", "waiting_on_owner", "rejected", "failed", "closed"
+]
+
+SessionIdentifier = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
+]
+ClientRequestId = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=MAX_CLIENT_REQUEST_ID_LENGTH
+    ),
+]
+ClientLabel = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+]
+SessionText = Annotated[str, StringConstraints(max_length=MAX_MESSAGE_LENGTH)]
+
+
+class SessionMessageRequest(BaseModel):
+    """One client message to one agent, opening a session when no handle is given."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: SessionIdentifier | None = None
+    agent_id: SessionIdentifier
+    text: SessionText
+    subnet_id: SessionIdentifier | None = None
+    client_request_id: ClientRequestId
+    client_label: ClientLabel | None = None
+
+    @model_validator(mode="after")
+    def _require_text_and_label(self) -> Self:
+        if not self.text.strip():
+            raise ValueError("text must not be blank")
+        if self.session_id is None and self.client_label is None:
+            raise ValueError("client_label is required to open a session")
+        return self
+
+
+class SessionAgent(BaseModel):
+    agent_id: str
+    name: str | None = None
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    # Stored times come back naive; they are UTC.
+    return ensure_utc(value) if value is not None else None
+
+
+SessionReceiptStatus = Literal["created", "accepted", "busy"]
+
+RECEIPT_TIP = (
+    "Use session_id to query this session (MCP check_session, or "
+    "GET /sessions/{session_id}) for the agents' responses."
+)
+
+
+class SessionMessageResponse(BaseModel):
+    """The receipt for one client message, returned as soon as Hybro has it.
+
+    ``created`` opened the session, ``accepted`` recorded a message in an
+    existing session, and ``busy`` means the message was not recorded because
+    an earlier one is still active. Agents' responses come from the query.
+    """
+
+    session_id: str
+    client_request_id: str
+    agent_id: str
+    status: SessionReceiptStatus
+    state: SessionState
+    message: str
+    created_at: datetime
+    updated_at: datetime
+
+    _utc_times = field_validator("created_at", "updated_at")(_utc)
+
+
+class SessionHistoryEntry(BaseModel):
+    """One client message and what came of it.
+
+    It never carries the owner's decisions: a request waiting for the owner
+    only shows ``waiting_on_owner``.
+    """
+
+    client_request_id: str
+    text: str
+    sent_at: datetime | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    state: SessionState
+    reason: str | None = None
+    reply: str | None = None
+    replied_at: datetime | None = None
+
+    _utc_times = field_validator("sent_at", "replied_at")(_utc)
+
+
+class SessionStatus(BaseModel):
+    """The client's view of a session. It never carries the container id."""
+
+    session_id: str
+    state: SessionState
+    reason: str | None = None
+    agents: list[SessionAgent] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    history: list[SessionHistoryEntry] = Field(default_factory=list)
+
+    _utc_times = field_validator("created_at", "updated_at")(_utc)
+
+
+class SessionClosed(BaseModel):
+    session_id: str
+    status: Literal["open", "closed"]
+
+
+class SessionSummary(BaseModel):
+    """One row of the owner's session list."""
+
+    session_id: str
+    client_label: str
+    title: str | None = None
+    agents: list[SessionAgent] = Field(default_factory=list)
+    state: SessionState
+    paused_agent_id: str | None = None
+    conversation_id: str | None = None
+    opened_at: datetime
+    last_activity_at: datetime
+    closed_at: datetime | None = None
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary] = Field(default_factory=list)
+
+
+class SessionOwnerRecord(BaseModel):
+    """The owner's view of one session, including the conversation container."""
+
+    session_id: str
+    client_label: str
+    title: str | None = None
+    state: SessionState
+    reason: str | None = None
+    paused_agent_id: str | None = None
+    agents: list[SessionAgent] = Field(default_factory=list)
+    status: Literal["open", "closed"]
+    conversation_id: str | None = None
+    opened_at: datetime
+    last_activity_at: datetime
+    closed_at: datetime | None = None
+
+
+class SessionErrorDetail(BaseModel):
+    code: str
+    message: str
+    session_id: str | None = None
+    client_request_id: str | None = None
+
+
+class SessionErrorResponse(BaseModel):
+    detail: SessionErrorDetail
+
+
+__all__ = [
+    "RECEIPT_TIP",
+    "SessionAgent",
+    "SessionClosed",
+    "SessionErrorDetail",
+    "SessionErrorResponse",
+    "SessionListResponse",
+    "SessionMessageRequest",
+    "SessionMessageResponse",
+    "SessionOwnerRecord",
+    "SessionHistoryEntry",
+    "SessionReceiptStatus",
+    "SessionState",
+    "SessionStatus",
+    "SessionSummary",
+]

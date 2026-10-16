@@ -67,12 +67,13 @@ class PromptSnapshot(ContractModel):
 
 
 class OrchestratorProfile(ContractModel):
-    profile_id: Literal["fast", "ultimate"]
-    model: ResolvedModelSnapshot
-    prompt: PromptSnapshot
+    profile_id: Literal["fast", "ultimate", "passthrough"]
+    # A passthrough Run performs no model turn and needs neither.
+    model: ResolvedModelSnapshot | None = None
+    prompt: PromptSnapshot | None = None
     thinking_level: str | None = None
 
-    max_model_turns: int = Field(gt=0)
+    max_model_turns: int = Field(ge=0)
     grace_model_turns: int = Field(ge=0)
     max_agent_calls: int = Field(gt=0)
     max_parallel_calls: int = Field(gt=0)
@@ -91,9 +92,13 @@ class OrchestratorProfile(ContractModel):
     def _parallelism_fits_call_budget(self) -> OrchestratorProfile:
         if self.max_parallel_calls > self.max_agent_calls:
             raise ValueError("max_parallel_calls cannot exceed max_agent_calls")
-        if (
-            self.thinking_level is not None
-            and self.thinking_level not in self.model.supported_thinking_levels
+        if self.profile_id != "passthrough" and (
+            self.model is None or self.prompt is None
+        ):
+            raise ValueError("model profiles require a model route and prompt")
+        if self.thinking_level is not None and (
+            self.model is None
+            or self.thinking_level not in self.model.supported_thinking_levels
         ):
             raise ValueError("thinking_level is unsupported by the frozen model route")
         return self
@@ -631,6 +636,8 @@ class BudgetState(ContractModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     deadline_at: datetime
+    # Set while the Run is suspended; the deadline clock is stopped meanwhile.
+    suspended_at: datetime | None = None
     wrap_up_requested: bool = False
 
     @model_validator(mode="after")

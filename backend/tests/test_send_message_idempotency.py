@@ -11,13 +11,13 @@ import pytest
 from pymongo.errors import DuplicateKeyError
 
 from common.dto import ExecutionRequest
+from conversation import ConversationFacade
+from conversation.repository import MessageMongoRepository
+from conversation.runtime import ConversationRuntime
+from conversation.user_message_persistence import UserMessageCommitService
 from execution.facade import ExecutionFacade
 from models.response import RoomCenterUserMessageResponse
 from models.room import Room
-from room import RoomFacade
-from room.compat.runtime import RoomServices
-from room.repository import MessageMongoRepository
-from room.user_message_persistence import UserMessageCommitService
 
 
 class _RacingUniqueCollection:
@@ -153,7 +153,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     user_messages = _RacingUniqueCollection()
     message_repository = MessageMongoRepository(mongo=_Mongo(user_messages))
     ids = count(1)
-    room_facade = RoomFacade(
+    room_facade = ConversationFacade(
         repository=MagicMock(),
         message_repository=message_repository,
         agent_registry=MagicMock(),
@@ -162,7 +162,7 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         now=MagicMock(),
     )
 
-    room_services = RoomServices()
+    room_services = ConversationRuntime()
     room_services.bind_facade(room_facade)
     room_services.bind_store(
         SimpleNamespace(

@@ -5,9 +5,9 @@ from models.room import MessageContent
 
 class TestTurnIdOnRoomAgentMessage:
     def test_create_agent_message_includes_turn_id(self):
-        from room.compat.runtime import RoomServices
+        from conversation.runtime import ConversationRuntime
 
-        svc = RoomServices.__new__(RoomServices)
+        svc = ConversationRuntime.__new__(ConversationRuntime)
         svc._generate_agent_message_content = MagicMock(
             return_value=MessageContent(message_text="task")
         )
@@ -21,9 +21,9 @@ class TestTurnIdOnRoomAgentMessage:
         assert msg.turn_id == "user_msg_1"
 
     def test_create_agent_message_without_turn_id_is_none(self):
-        from room.compat.runtime import RoomServices
+        from conversation.runtime import ConversationRuntime
 
-        svc = RoomServices.__new__(RoomServices)
+        svc = ConversationRuntime.__new__(ConversationRuntime)
         svc._generate_agent_message_content = MagicMock(
             return_value=MessageContent(message_text="task")
         )

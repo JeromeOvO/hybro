@@ -3,10 +3,17 @@ import type { HitlLifecycleState, PendingHitl, HitlState } from './conversation-
 
 const GENERIC_PROMPT = /^the agent needs additional information\.?$/i
 
-function deriveLifecycleState(entity: MessageEntity, question: string): HitlLifecycleState {
-  const interaction = entity.hitlInteractionStatus
-  const application = entity.hitlApplicationStatus
-  if (entity.taskStatus === 'canceled' || interaction === 'canceled') return 'canceled'
+// Lifecycle of one pending question from its durable statuses. Shared by the
+// chat store selector and the session page, which reads the pending API.
+export function hitlLifecycleState({ interactionStatus, applicationStatus, canceled = false, question }: {
+  interactionStatus?: string | null
+  applicationStatus?: string | null
+  canceled?: boolean
+  question: string
+}): HitlLifecycleState {
+  const interaction = interactionStatus
+  const application = applicationStatus
+  if (canceled || interaction === 'canceled') return 'canceled'
   if (interaction === 'expired') return 'expired'
   if (
     interaction === 'delivery_uncertain'
@@ -24,6 +31,15 @@ function deriveLifecycleState(entity: MessageEntity, question: string): HitlLife
     GENERIC_PROMPT.test(question.trim())
   ) return 'routing_failed'
   return 'open'
+}
+
+function deriveLifecycleState(entity: MessageEntity, question: string): HitlLifecycleState {
+  return hitlLifecycleState({
+    interactionStatus: entity.hitlInteractionStatus,
+    applicationStatus: entity.hitlApplicationStatus,
+    canceled: entity.taskStatus === 'canceled',
+    question,
+  })
 }
 
 export function selectPendingHitls(
@@ -58,6 +74,7 @@ export function selectPendingHitls(
         question,
         promptType: e.hitlPromptType ?? 'text',
         choices: e.hitlChoices ?? undefined,
+        presentation: e.hitlPresentation,
         messageId: e.hitlMessageId ?? e.id,
         interactionId: e.hitlInteractionId ?? e.hitlGroupId ?? e.hitlRequestId!,
         interactionVersion: e.hitlInteractionVersion,

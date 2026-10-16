@@ -12,10 +12,14 @@ from common.dto import (
     SavedAgentGroupSnapshot,
     UserMessageInput,
 )
-from room.membership import normalize_room_agent_set, resolve_membership_seed
-from room.membership_source import RepositoryRoomMembershipSeedSource
-from room.message_graph import select_thread, sort_messages, status_update_payload
-from room.translators import (
+from conversation.membership import normalize_room_agent_set, resolve_membership_seed
+from conversation.membership_source import RepositoryRoomMembershipSeedSource
+from conversation.message_graph import (
+    select_thread,
+    sort_messages,
+    status_update_payload,
+)
+from conversation.translators import (
     create_room_doc,
     message_info_from_doc,
     room_info_from_doc,
@@ -82,6 +86,7 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
         "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
+        "owner_product": "chat",
     }
 
 
@@ -178,7 +183,7 @@ async def test_membership_source_logs_agent_service_fallback():
         ),
     )
 
-    with patch("room.membership_source.logger", create=True) as logger:
+    with patch("conversation.membership_source.logger", create=True) as logger:
         agents = await source.list_current_agents("owner")
 
     assert [agent.agent_id for agent in agents] == ["a1"]
@@ -188,7 +193,7 @@ async def test_membership_source_logs_agent_service_fallback():
 def test_membership_source_warns_for_missing_critical_agent_fields():
     agent = SimpleNamespace(agent_id="a1", agent_card=None)
 
-    with patch("room.membership_source.logger", create=True) as logger:
+    with patch("conversation.membership_source.logger", create=True) as logger:
         info = RepositoryRoomMembershipSeedSource.agent_info_from_record(agent)
 
     assert info.agent_id == "a1"

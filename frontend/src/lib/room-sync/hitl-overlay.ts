@@ -1,3 +1,4 @@
+import { parseHitlPresentation } from '@/lib/hitl/presentation'
 import type { MutableRefObject } from 'react'
 import type { HitlPendingRequest } from '@/lib/api/hitl'
 import { fetchPendingHitlRequests } from '@/lib/api/hitl'
@@ -37,6 +38,7 @@ export async function overlayPendingHitlRequests(
       prompt: req.prompt,
       promptType: req.prompt_type,
       choices: req.choices,
+      presentation: parseHitlPresentation(req),
       timestamp: req.created_at,
       agentId: req.agent_id,
       agentName: name,

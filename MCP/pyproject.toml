@@ -1,6 +1,6 @@
 [project]
 name = "hybro-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local Streamable HTTP tools for the Hybro Agent Network API"
 requires-python = ">=3.12"
 dependencies = [

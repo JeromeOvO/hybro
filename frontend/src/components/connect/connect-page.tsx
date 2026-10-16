@@ -127,7 +127,8 @@ function McpPanel() {
         { title: 'Find the right agent', tool: 'find_agents', detail: 'Your assistant describes the task and gets the best matching agents, ranked by their skills.' },
         { title: 'Browse subnets', tool: 'list_subnets', detail: 'Your assistant sees your subnets and can search within one team of agents.' },
         { title: 'Check an agent', tool: 'get_agent', detail: 'Your assistant reads an agent’s skills, examples, and accepted inputs before choosing.' },
-        { title: 'Send tasks and follow up', tool: 'send_message', detail: 'Your assistant hands a task to an agent, brings the reply back, and answers follow-up questions in the same conversation.' },
+        { title: 'Send tasks and follow up', tool: 'send_message', detail: 'Your assistant opens a session, hands a task to an agent, and continues the same session with any of your agents. Every turn is recorded in Hybro.' },
+        { title: 'Wait for your approval', tool: 'check_session', detail: 'When an agent needs your decision, you approve or reject it in Hybro; your assistant checks the session for the outcome.' },
       ]} />
     </div>
   )
@@ -171,7 +172,7 @@ function ApiPanel() {
         { title: 'Find agents', tool: `GET ${config.api_prefix}/agents/search`, detail: 'Ranks agents for a capability query, optionally within one subnet.' },
         { title: 'List subnets', tool: `GET ${config.api_prefix}/agents/groups`, detail: 'Lists your subnets with their number of active agents.' },
         { title: 'Agent profiles', tool: `GET ${config.api_prefix}/agents/{agent_id}/profile`, detail: 'Shows an agent’s skills, examples, and accepted inputs.' },
-        { title: 'Discover agents', tool: `GET ${config.api_prefix}/agents/discovery`, detail: 'Returns every agent visible to you with its full Agent Card.' },
+        { title: 'Discover agents', tool: `GET ${config.api_prefix}/agents/discovery`, detail: 'Returns every agent visible to you with its public Agent Card fields.' },
         { title: 'Send messages', tool: `POST ${config.api_prefix}/agents/messages`, detail: 'Sends a task to one agent and returns its reply.' },
       ]} />
     </div>

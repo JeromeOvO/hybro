@@ -13,7 +13,7 @@ import pytest
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from room.timeline import normalize_timeline_document
+from conversation.timeline import normalize_timeline_document
 from scripts.migrate_room_timeline_sort_keys import audit_collection, run_migration
 
 

@@ -873,7 +873,8 @@ async def test_materializing_interaction_is_not_emitted_before_exact_inventory_o
     lifecycle.get_interaction_strict = AsyncMock(
         return_value={"status": HITLInteractionStatus.MATERIALIZING.value}
     )
-    service = HITLService(lifecycle=lifecycle)
+    # A configured deadline must persist as a BSON datetime, not a string.
+    service = HITLService(lifecycle=lifecycle, approval_deadline_hours=24.0)
     service._persistence = persistence
     service.recover_open_interaction_projection = AsyncMock()
 

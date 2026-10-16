@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { HitlResponseBar, type HitlPromptView } from '@/components/composer/HitlResponseBar'
 
 const baseHitl: HitlPromptView = {
@@ -33,7 +33,8 @@ describe('HitlResponseBar', () => {
       { ...baseHitl, hitlId: 'hitl-2', prompt: 'Renewal date?', promptType: 'date', groupIndex: 1 },
     ], onSubmit)
 
-    expect(screen.getByText('Question 1 of 2')).toBeDefined()
+    const steps = screen.getByRole('tablist', { name: 'Questions' })
+    expect(within(steps).getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Question 1', 'Question 2'])
     fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Acme' } })
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     expect(screen.getByText('Renewal date?')).toBeDefined()
@@ -42,7 +43,7 @@ describe('HitlResponseBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     expect((screen.getByPlaceholderText('Type your answer…') as HTMLInputElement).value).toBe('Acme')
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
       'interaction-1',
@@ -70,9 +71,11 @@ describe('HitlResponseBar', () => {
       />,
     )
 
-    const cancel = screen.getByRole('button', { name: 'Cancel request' })
-    expect((cancel as HTMLButtonElement).type).toBe('button')
-    fireEvent.click(cancel)
+    const reject = screen.getByRole('button', { name: 'Reject' })
+    expect((reject as HTMLButtonElement).type).toBe('button')
+    fireEvent.click(reject)
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject request' }))
 
     await waitFor(() => expect(onCancel).toHaveBeenCalledWith(
       'reused-question',
@@ -90,10 +93,10 @@ describe('HitlResponseBar', () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderBar([{ ...baseHitl, prompt: 'Where are you going?', promptType: 'text' }], onSubmit)
 
-    expect(screen.queryByText('Question 1 of 1')).toBeNull()
+    expect(screen.queryByRole('tablist')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Review answers' })).toBeNull()
     fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'New York City' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
       'interaction-1',
@@ -114,7 +117,7 @@ describe('HitlResponseBar', () => {
     )
 
     fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'New York City' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
     expect(await screen.findByText('Applying your answers')).toBeDefined()
     await waitFor(() => expect(onRefresh).toHaveBeenCalled())
@@ -188,7 +191,7 @@ describe('HitlResponseBar', () => {
 
     const textarea = screen.getByPlaceholderText('Add the details needed to continue…')
     fireEvent.change(textarea, { target: { value: 'Window seat and vegetarian meal' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
       'interaction-1',
       [{ requestId: 'hitl-1', answer: 'Window seat and vegetarian meal' }],
@@ -226,6 +229,219 @@ describe('HitlResponseBar', () => {
 })
 
 
+describe('HitlResponseBar structured questions', () => {
+  afterEach(cleanup)
+
+  const destination: HitlPromptView = {
+    ...baseHitl,
+    hitlId: 'destination',
+    prompt: 'Where would you like to go?',
+    promptType: 'single_choice',
+    choices: ['Kyoto', 'Osaka'],
+    groupIndex: 0,
+    presentation: {
+      header: 'Destination',
+      required: true,
+      allowOther: true,
+      choiceOptions: [
+        { value: 'Kyoto', description: 'Temples and food' },
+        { value: 'Osaka', label: 'Osaka city' },
+      ],
+    },
+  }
+  const budget: HitlPromptView = {
+    ...baseHitl,
+    hitlId: 'budget',
+    prompt: 'Any budget?',
+    promptType: 'text',
+    groupIndex: 1,
+    presentation: { header: 'Budget', required: false, allowOther: false },
+  }
+
+  it('labels each question by its header and lets the owner jump between them', () => {
+    renderBar([destination, budget])
+
+    const steps = screen.getByRole('tablist', { name: 'Questions' })
+    const [first, second] = within(steps).getAllByRole('tab')
+    expect(first.textContent).toBe('Destination')
+    expect(first.getAttribute('aria-selected')).toBe('true')
+
+    fireEvent.click(second)
+    expect(second.getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('Any budget?')).toBeDefined()
+  })
+
+  it('shows choice labels and descriptions', () => {
+    renderBar([destination])
+
+    expect(screen.getByRole('radio', { name: /Kyoto/ })).toBeDefined()
+    expect(screen.getByText('Temples and food')).toBeDefined()
+    expect(screen.getByRole('radio', { name: /Osaka city/ })).toBeDefined()
+  })
+
+  it('submits a typed Other answer for a choice question', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([destination], onSubmit)
+
+    fireEvent.click(screen.getByRole('radio', { name: /Other/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Other answer' }), { target: { value: 'Lisbon' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'destination', answer: 'Lisbon' }],
+      undefined,
+    ))
+  })
+
+  it('needs text before an Other answer counts', () => {
+    renderBar([destination])
+    fireEvent.click(screen.getByRole('radio', { name: /Other/ }))
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('combines picked choices and Other text for multi-choice questions', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{
+      ...destination,
+      promptType: 'multi_choice',
+      choices: ['Food', 'Temples'],
+      presentation: { header: 'Interests', required: true, allowOther: true },
+    }], onSubmit)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Food' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Other/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Other answer' }), { target: { value: 'Hiking' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'destination', answer: 'Food, Hiking' }],
+      undefined,
+    ))
+  })
+
+  it('lets the owner skip an optional question and leaves it out of the answers', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{ ...budget, groupIndex: 0 }, { ...destination, groupIndex: 1 }], onSubmit)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.click(screen.getByRole('radio', { name: /Kyoto/ }))
+    expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'destination', answer: 'Kyoto' }],
+      undefined,
+    ))
+  })
+})
+
+
+describe('HitlResponseBar decisions', () => {
+  afterEach(cleanup)
+
+  it('answers a single approval with one click on Approve', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, prompt: 'Share floor-plan.pdf with the client?' }]}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'HITL Mock Agent needs your approval' })).toBeDefined()
+    expect(screen.queryByRole('radio')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'Approve' }],
+      undefined,
+    ))
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('answers Reject as the decision and shows it in red', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{ ...baseHitl, prompt: 'Share floor-plan.pdf with the client?' }], onSubmit)
+
+    const reject = screen.getByRole('button', { name: 'Reject' })
+    expect(reject.className).toContain('bg-destructive')
+    fireEvent.click(reject)
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'Reject' }],
+      undefined,
+    ))
+  })
+
+  it('offers Confirm and Decline for a yes-or-no question', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([{ ...baseHitl, prompt: 'Book the hotel?', promptType: 'confirmation' }], onSubmit)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'hitl-1', answer: 'Confirm' }],
+      undefined,
+    ))
+    expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull()
+  })
+
+  it('shows the cancel Reject in red for other questions and confirms first', async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined)
+    render(
+      <HitlResponseBar
+        hitls={[{ ...baseHitl, prompt: 'Where?', promptType: 'text' }]}
+        onSubmit={vi.fn()}
+        onCancel={onCancel}
+      />,
+    )
+    const reject = screen.getByRole('button', { name: 'Reject' })
+    expect(reject.className).toContain('bg-destructive')
+    fireEvent.click(reject)
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject request' }))
+    await waitFor(() => expect(onCancel).toHaveBeenCalledWith('hitl-1', 'interaction-1'))
+  })
+})
+
+
+describe('HitlResponseBar optional last question', () => {
+  afterEach(cleanup)
+
+  it('sends the earlier answers when the last optional question is skipped', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderBar([
+      { ...baseHitl, hitlId: 'name', prompt: 'Name?', promptType: 'text', groupIndex: 0 },
+      {
+        ...baseHitl,
+        hitlId: 'notes',
+        prompt: 'Notes?',
+        promptType: 'text',
+        groupIndex: 1,
+        presentation: { required: false, allowOther: false },
+      },
+    ], onSubmit)
+
+    fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Acme' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip and send' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(
+      'interaction-1',
+      [{ requestId: 'name', answer: 'Acme' }],
+      undefined,
+    ))
+  })
+})
+
+
 describe('HitlResponseBar server lifecycle reconciliation', () => {
   afterEach(cleanup)
 
@@ -240,7 +456,7 @@ describe('HitlResponseBar server lifecycle reconciliation', () => {
     )
 
     fireEvent.change(screen.getByPlaceholderText('Type your answer…'), { target: { value: 'Ok' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
     expect(await screen.findByText('Applying your answers')).toBeDefined()
 

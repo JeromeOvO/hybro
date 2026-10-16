@@ -1,3 +1,4 @@
+import type { HitlQuestionPresentation } from '@/lib/hitl/presentation'
 import type { MessageEntity, ArtifactData, ArtifactPart } from '@/stores/message-store/types'
 import type { HITLPromptType } from '@/lib/types/sse'
 import { AGENT_PALETTE, agentColorIndex } from '@/lib/mention-color'
@@ -75,6 +76,7 @@ export interface PendingHitl {
   question: string
   promptType: HITLPromptType
   choices?: string[]
+  presentation?: HitlQuestionPresentation
   messageId: string
   interactionId: string
   interactionVersion?: number

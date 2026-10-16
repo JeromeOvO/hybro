@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, model_validator
 
 from common.dto.base import FrozenDTO
+from common.dto.hitl import HITLChoiceOption
 from common.dto.turn_lifecycle import (
     CANONICAL_RUN_EVENT_KINDS,
     CanonicalRunEventPayload,
@@ -265,6 +266,10 @@ class HITLRequestEvent(DeliveryEventBase):
     prompt: str = Field(max_length=4_000)
     prompt_type: str
     choices: list[str] | None = None
+    header: str | None = None
+    required: bool = True
+    allow_other: bool = False
+    choice_options: list[HITLChoiceOption] | None = None
     agent_id: str | None = None
     agent_name: str | None = None
     agent_label: str | None = None
@@ -336,6 +341,8 @@ class HITLResolvedEvent(DeliveryEventBase):
     question_index: int = 0
     error_message: str | None = None
     answer_ref: str | None = None
+    # The owner's answer as they would read it; only on responded questions.
+    answer_text: str | None = Field(default=None, max_length=1_000)
     related_message_id: str | None = None
     related_user_message_id: str | None = None
     client_request_id: str | None = None

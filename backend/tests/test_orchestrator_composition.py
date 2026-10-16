@@ -76,7 +76,9 @@ def test_composition_binds_the_full_graph_without_io():
     )
 
     assert validate_orchestrator_runtime(runtime) == []
-    assert set(runtime.profiles) == {"fast", "ultimate"}
+    assert set(runtime.profiles) == {"fast", "ultimate", "passthrough"}
+    assert runtime.profiles["passthrough"].model is None
+    assert runtime.profiles["passthrough"].max_model_turns == 0
     assert runtime.profiles["fast"].initial_routing == "explicit_agent_first"
     assert runtime.profiles["fast"].finalization == "pass_through"
     assert runtime.session_host is not None

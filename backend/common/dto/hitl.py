@@ -9,14 +9,16 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     StrictBool,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -42,6 +44,22 @@ _AuthorizationReference = Annotated[
     ),
 ]
 _StrictVersion = Annotated[int, Field(strict=True, ge=1)]
+_Header = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=40),
+]
+_ChoiceLabel = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+]
+_ChoiceDescription = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+]
+_OtherText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1_000),
+]
 
 
 class HITLInteractionKind(StrEnum):
@@ -93,18 +111,32 @@ class HITLTextAnswer(_HITLContract):
 
 
 class HITLSingleChoiceAnswer(_HITLContract):
+    """One listed choice, or free text when the question allows Other."""
+
     kind: Literal[HITLAnswerKind.SINGLE_CHOICE] = HITLAnswerKind.SINGLE_CHOICE
-    choice: _NonBlankId
+    choice: _NonBlankId | None = None
+    other: _OtherText | None = None
+
+    @model_validator(mode="after")
+    def validate_one_selection(self) -> Self:
+        if (self.choice is None) == (self.other is None):
+            raise ValueError("answer exactly one of choice or other")
+        return self
 
 
 class HITLMultiChoiceAnswer(_HITLContract):
+    """Listed choices, plus free text when the question allows Other."""
+
     kind: Literal[HITLAnswerKind.MULTI_CHOICE] = HITLAnswerKind.MULTI_CHOICE
-    choices: list[_NonBlankId] = Field(min_length=1, max_length=100)
+    choices: list[_NonBlankId] = Field(default_factory=list, max_length=100)
+    other: _OtherText | None = None
 
     @model_validator(mode="after")
-    def validate_unique_choices(self) -> Self:
+    def validate_choices(self) -> Self:
         if len(set(self.choices)) != len(self.choices):
             raise ValueError("choices must be unique")
+        if not self.choices and self.other is None:
+            raise ValueError("answer at least one choice or other")
         return self
 
 
@@ -139,17 +171,56 @@ HITLAnswer = Annotated[
 ]
 
 
+class HITLChoiceOption(_HITLContract):
+    """Presentation for one choice; ``value`` is what the answer carries."""
+
+    value: _NonBlankId
+    label: _ChoiceLabel | None = None
+    description: _ChoiceDescription | None = None
+
+
 class HITLQuestionSpec(_HITLContract):
-    """Immutable question definition used to validate a typed answer."""
+    """Immutable question definition used to validate a typed answer.
+
+    ``choices`` may be sent as strings or as ``{value, label, description}``
+    objects; objects are split into the ``choices`` values and
+    ``choice_options``. ``header`` is a short label for the question and
+    ``allow_other`` lets a choice question also take a free-text answer.
+    """
 
     question_id: _NonBlankId
     interaction_kind: HITLInteractionKind
+    header: _Header | None = None
     prompt: _Prompt
     answer_kind: HITLAnswerKind
     required: StrictBool = True
     choices: list[_NonBlankId] | None = Field(
         default=None, min_length=2, max_length=100
     )
+    choice_options: list[HITLChoiceOption] | None = None
+    allow_other: StrictBool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def split_described_choices(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not any(
+            isinstance(choice, dict) for choice in choices
+        ):
+            return data
+        if data.get("choice_options") is not None:
+            raise ValueError("send described choices in choices only")
+        options = [
+            choice if isinstance(choice, dict) else {"value": choice}
+            for choice in choices
+        ]
+        return {
+            **data,
+            "choices": [option.get("value") for option in options],
+            "choice_options": options,
+        }
 
     @model_validator(mode="after")
     def validate_structure(self) -> Self:
@@ -164,6 +235,13 @@ class HITLQuestionSpec(_HITLContract):
                 raise ValueError("question choices must be unique")
         elif self.choices is not None:
             raise ValueError("only choice questions may define choices")
+        elif self.allow_other:
+            raise ValueError("only choice questions may allow Other answers")
+        if (
+            self.choice_options is not None
+            and [option.value for option in self.choice_options] != self.choices
+        ):
+            raise ValueError("choice_options must match choices")
 
         permitted_by_interaction = {
             HITLInteractionKind.QUESTIONNAIRE: {
@@ -182,6 +260,22 @@ class HITLQuestionSpec(_HITLContract):
             )
         return self
 
+    @model_serializer(mode="wrap")
+    def omit_unset_presentation(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        # Specs without presentation keep their earlier dump, so interaction
+        # fingerprints persisted before these fields existed still match.
+        data = handler(self)
+        for key, unset in (
+            ("header", None),
+            ("choice_options", None),
+            ("allow_other", False),
+        ):
+            if key in data and data[key] == unset:
+                del data[key]
+        return data
+
     def validate_answer(self, answer: HITLQuestionAnswer) -> None:
         """Validate answer identity, kind, and selections against this question."""
 
@@ -189,8 +283,16 @@ class HITLQuestionSpec(_HITLContract):
             raise ValueError("answer question_id does not match question")
         if answer.answer.kind != self.answer_kind:
             raise ValueError("answer kind does not match question")
+        if (
+            isinstance(answer.answer, HITLSingleChoiceAnswer | HITLMultiChoiceAnswer)
+            and answer.answer.other is not None
+            and not self.allow_other
+        ):
+            raise ValueError("this question does not allow Other answers")
         if isinstance(answer.answer, HITLSingleChoiceAnswer):
-            if self.choices is None or answer.answer.choice not in self.choices:
+            if answer.answer.choice is not None and (
+                self.choices is None or answer.answer.choice not in self.choices
+            ):
                 raise ValueError("answer choice is not in the question inventory")
         if isinstance(answer.answer, HITLMultiChoiceAnswer):
             inventory = set(self.choices or ())
@@ -220,6 +322,23 @@ class A2AInteractionSpec(_HITLContract):
         if len(set(question_ids)) != len(question_ids):
             raise ValueError("question_id values must be unique")
         return self
+
+    def validate_answers(self, answers: list[HITLQuestionAnswer]) -> None:
+        """Every required question answered once; optional ones may be skipped."""
+
+        inventory = {question.question_id: question for question in self.questions}
+        answered = [answer.question_id for answer in answers]
+        if len(set(answered)) != len(answered):
+            raise ValueError("each question may be answered only once")
+        if not set(answered).issubset(inventory):
+            raise ValueError("HITL answer inventory does not match")
+        required = {
+            question.question_id for question in self.questions if question.required
+        }
+        if not required.issubset(answered):
+            raise ValueError("HITL answer inventory is missing a required question")
+        for answer in answers:
+            inventory[answer.question_id].validate_answer(answer)
 
 
 class HITLQuestionAnswer(_HITLContract):
@@ -348,6 +467,7 @@ __all__ = [
     "HITLApplicationRoute",
     "HITLAuthorizationResultAnswer",
     "HITLCancelCommand",
+    "HITLChoiceOption",
     "HITLConfirmationAnswer",
     "HITLEvidenceOrigin",
     "HITLInteractionKind",

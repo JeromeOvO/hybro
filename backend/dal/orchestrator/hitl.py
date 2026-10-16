@@ -204,7 +204,9 @@ class MongoHITLApplicationStore:
         raw = answers.get(str(interaction_revision))
         if raw is None:
             return None
-        return DurableHITLAnswerRecord.model_validate(raw)
+        # Mongo returns naive datetimes; the answer marker on the call ledger is
+        # compared with this record, so restore UTC like the ledger does.
+        return DurableHITLAnswerRecord.model_validate(_restore_utc_datetimes(raw))
 
     async def ensure_answer(
         self,

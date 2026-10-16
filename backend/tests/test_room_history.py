@@ -12,9 +12,9 @@ from api_gateway.routes.room_routes import (
     reorder_pinned_rooms,
 )
 from common.auth import ClerkUser
+from conversation.facade import ConversationFacade
+from conversation.repository.mongo import RoomMongoRepository
 from execution.repository.mongo import RunMongoRepository
-from room.facade import RoomFacade
-from room.repository.mongo import RoomMongoRepository
 
 
 @pytest.mark.asyncio
@@ -88,6 +88,7 @@ async def test_history_repository_projects_sorts_and_limits_by_effective_activit
             {
                 "$match": {
                     "room_owner_id": "owner",
+                    "owner_product": {"$ne": "session"},
                     "$or": [
                         {"lifecycle_state": "active"},
                         {"lifecycle_state": {"$exists": False}},
@@ -141,7 +142,7 @@ async def test_saving_messages_touches_durable_room_activity():
         update_fields=AsyncMock(return_value={}),
     )
     message_repository = SimpleNamespace(save_user_message=AsyncMock(return_value="m1"))
-    facade = RoomFacade(
+    facade = ConversationFacade(
         repository=room_repository,
         message_repository=message_repository,
         agent_registry=AsyncMock(),
@@ -172,7 +173,7 @@ async def test_streaming_agent_message_updates_do_not_touch_room_activity():
     message_repository = SimpleNamespace(
         update_agent_message=AsyncMock(return_value=True)
     )
-    facade = RoomFacade(
+    facade = ConversationFacade(
         repository=room_repository,
         message_repository=message_repository,
         agent_registry=AsyncMock(),

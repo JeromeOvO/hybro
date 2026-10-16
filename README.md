@@ -129,6 +129,37 @@ Provider/model changes. Startup generates missing internal tokens in `auth.json`
 without rotating existing values. Backend overrides live under `backend`, public
 frontend overrides under `frontend`, and image output size is `image_size`.
 
+### Backend configuration fields
+
+Waits for the owner or for a remote Agent:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend.approval_deadline_hours` | `null` (no deadline) | Hours before an unanswered supervisor question expires and fails its Run. Must be greater than 0 when set. |
+| `backend.orchestrator_call_wait_ceiling_hours` | `168` (seven days) | Hours an acknowledged remote Agent task is polled with `tasks/get` before the call expires. Must be greater than 0. |
+
+```bash
+./scripts/hybro config set backend.approval_deadline_hours 48
+./scripts/hybro config set backend.orchestrator_call_wait_ceiling_hours 72.5
+```
+
+A Run waiting for an answer or a remote Agent does not count that time against
+its profile deadline, so it can wait as long as these limits allow. While it
+waits it keeps the room's single active-Run slot.
+
+Passthrough Runs (session sends, no orchestrator model turns):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend.orchestrator_passthrough_deadline_seconds` | `300` | Active seconds a passthrough Run may take; time spent waiting for the owner or a remote Agent does not count. Must be greater than 0. |
+| `backend.orchestrator_passthrough_max_transport_retries_per_call` | `2` | Transport retries for the single Agent call. Must be greater than 0. |
+
+Sessions:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `backend.session_run_start_grace_seconds` | `10` | Seconds after a send without any lifecycle event for the request before the session reports `failed` with `run_not_started`. Must be greater than 0. |
+
 ### Existing installations
 
 If you previously ran `hybro setup` and have a `~/.hybro/config.yaml`, convert

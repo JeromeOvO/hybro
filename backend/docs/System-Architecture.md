@@ -119,6 +119,102 @@ committing; a recreated Room cannot receive an old-incarnation artifact. Room
 epoch activation/deactivation replay uses creation/deletion identity and the
 winner's timestamp rather than caller timestamp equality.
 
+### Canonical wait semantics
+
+A canonical Run waits in `awaiting_user` (owner input) or `waiting_external`
+(a remote Agent). Waiting is not active time:
+
+- The deadline clock stops while the persisted status is suspended.
+  `OrchestratorKernel._checkpoint` sets `BudgetState.suspended_at` when the
+  status enters `waiting_external`/`awaiting_user` and keeps it across a move
+  between the two. When the status leaves suspension, `deadline_at` is extended
+  in place by the suspended duration and `suspended_at` is cleared. The kernel
+  no longer ends a suspended Run at its deadline; model turns and tool calls
+  still check the extended deadline, so active time stays bounded.
+- A suspended Run has a dormant recovery schedule: `now + 10 years`
+  (`DORMANT_RECOVERY_DELAY`), never `None`, which would mean "due now". The
+  hosted driver and generic recovery both release suspended Runs with it.
+  Generic recovery does not re-emit `run_started` for a suspended Run; one that
+  is due anyway (an earlier watchdog, an explicit wake) is re-driven once and
+  returns to the dormant schedule. `schedule_run_recovery` still moves the
+  schedule earlier for typed recoverable failures.
+- A late result or answer for a Run with no live driver resumes through
+  `RunAddressedToolObservationSink.deliver`. Before re-entry it re-arms the
+  watchdog at the extended deadline, so a crash after the resume is re-driven
+  at that deadline.
+- Canonical calls register no push configuration. Late results arrive by
+  `tasks/get` polling in call recovery, every `retry_backoff_max_seconds`. A
+  `working` or `continuation_pending` call with an authoritative remote task
+  alias (`a2a_task_id`) is exempt from `call_deadline_exceeded`, including
+  after a continuation returns it to `working` with the frozen deadline. It
+  expires only after `orchestrator_call_wait_ceiling_hours` (default 168) from
+  its `accepted_at`. A call without the alias still expires at the frozen
+  deadline. External Agents must support `tasks/get`.
+- Cancellation is local first. The two user-initiated paths,
+  `route_cancellation_by_user_message` and `cancel_hitl_interaction`, pass
+  `notify_remote=True` to `A2ACancellationCoordinator.cancel_run`. After a call
+  is canceled locally, a call that this cancellation ended and that has a
+  remote task alias gets one fire-and-forget `A2ADispatchPort.cancel`; failures
+  are logged and never change the local outcome. Recovery cancellation and HITL
+  expiry stay local. When a supervisor approval fails or expires,
+  `terminalize_canonical_hitl_run` cancels the Run's calls locally before it
+  terminalizes the Run, so parallel calls do not stay non-terminal.
+
+Chat impact: a suspended chat Run keeps the room's single active-Run slot
+(`orchestrator_active_room_unique_canceling`) until the user answers or
+cancels, or a polled call reaches its ceiling. This covers supervisor
+`ask_user`, model-surfaced Agent interactions, and `waiting_external` Runs.
+The room shows "needs input" or processing meanwhile.
+
+### Passthrough profile
+
+`OrchestratorProfile` accepts `profile_id="passthrough"`, which needs no model
+route or prompt. The kernel advances such a Run without model turns: it sends
+the user's text as `{task}` to the first tool of the single mentioned Agent
+(the frozen catalog keeps each Agent's tools in Agent Card skill order, so this
+is the card's first skill),
+forwards a typed Agent interaction to the user through
+`surface_agent_questions`, and publishes the Agent's completed result as the
+final message through the normal canonical finalization. A failed, rejected,
+canceled, or expired result fails the Run (`agent_<status>`); a scope that is
+not one mentioned Agent fails it before dispatch. Each synthetic Assistant
+message is appended in the checkpoint that opens it, so recovery resumes
+without a model retry. When the owner's answer has already closed the surface
+call but the Agent's continuation result has not arrived, the Run moves to
+`waiting_external` instead of surfacing the answered questions again.
+
+Production path: `ExecutionRequest.mode` accepts `passthrough`, which
+`MODE_PROFILE_MAP` maps to the `passthrough` profile. The composition resolves
+three profiles: `fast`, `ultimate` (both need their model routes at startup),
+and `passthrough`, built by `OrchestratorProfileResolver` without a model or
+prompt: zero model turns, one sequential Agent call,
+`orchestrator_passthrough_deadline_seconds` (active time only), and
+`orchestrator_passthrough_max_transport_retries_per_call`. The conversation
+runtime persists the request's mode (`direct`, `supervisor`, or `passthrough`;
+anything else is stored as `direct`) both at persistence and in the
+orchestration envelope written by preflight. The chat route still accepts only
+`direct` and `supervisor`; only Session produces passthrough Runs. Room memory
+projection may still call a model.
+
+Owner answers and continuation recovery:
+
+- Call recovery re-schedules parked (`input_required`/`auth_required`) calls
+  for their next poll. When the owner answers, the continuation coordinator
+  clears that poll schedule before claiming the call, so the answer is
+  dispatched at once; an authorization-refresh backoff and a live claim held by
+  another worker are still honored.
+- Dispatch recovery leaves a parked call that already has an applied answer but
+  no continuation command due for the continuation phase, which runs after it.
+- `MongoHITLApplicationStore.load_answer` restores UTC datetimes like the call
+  ledger, so the answer marker on the call matches the stored answer and
+  `reconcile_answer` can rebuild and dispatch the continuation after a crash or
+  a lost claim. Recovery logs `hitl_answer_reconcile_deferred`,
+  `hitl_continuation_recovery_deferred`, and
+  `hitl_continuation_claim_unavailable` when it has to wait.
+- `respond-batch` treats a new parked round on the same call (a different
+  interaction id or revision) as proof that the answer reached the Agent and
+  returns that state instead of `503 HITL_DELIVERY_UNCERTAIN`.
+
 This document describes the current architecture and core workflows of the
 canonical backend in this repository's `backend/` directory. It focuses on code
 currently present in this repository.
@@ -143,32 +239,54 @@ flowchart TD
     Frontend[Next.js frontend] -->|REST sendMessage / room reads| FastAPI[main.py FastAPI app]
     APIClient[Other API clients] --> FastAPI
     FastAPI --> APIGateway[api_gateway routers]
-    APIGateway --> RoomRoutes[room.route_adapter / RoomCenterCompatibility]
+    APIGateway --> ChatRoutes[chat.ChatRouteAdapter / RoomCenterCompatibility]
     APIGateway --> OwnerPorts[owner protocols / facades]
-    APIGateway --> Execution[execution facade]
+    APIGateway --> Execution[execution.ExecutionFacade.execute]
+    ChatRoutes --> Chat[chat.ChatService / ChatFacade]
+    ChatRoutes --> Conversation
+    Chat --> Conversation[conversation.ConversationRuntime / ConversationFacade]
 
     Container[container.py composition root] --> ExecutionPorts[Execution ports]
-    Execution --> ExecutionPorts
-    Execution --> RoomMessageCenter[execution.orchestration.RoomMessageCenter]
-    RoomMessageCenter --> QueueExecutor[QueueExecutor]
-    RoomMessageCenter --> SupervisorExecutor[SupervisorExecutor]
-    QueueExecutor --> AgentMessageProcessor[AgentMessageProcessor]
-    SupervisorExecutor --> AgentMessageProcessor
+    Execution -->|persist_message_to_room, run_message_preflight_to_room| Conversation
+    Execution -->|start_orchestration / schedule_orchestration| Router[DualRuntimeRouter.process_room_user_message]
+    Router --> SessionHost[orchestrator RoomSessionHost]
+    SessionHost --> Kernel[OrchestratorKernel]
+    Kernel --> ToolRuntime[A2AAgentToolRuntime]
+    ToolRuntime --> A2A[a2a_adapter / remote A2A agents]
+    Kernel --> Mongo[(MongoDB)]
+    Kernel --> Delivery[delivery facade / SSE]
 
-    AgentMessageProcessor --> DirectTransport[DirectTransport]
-    DirectTransport --> A2A[a2a_adapter / remote A2A agents]
-    DirectTransport --> ResponseHandler[AgentResponseHandler]
-    Webhook[webhook route] --> ResponseHandler
-
-    ResponseHandler --> Mongo[(MongoDB)]
-    ResponseHandler --> Delivery[delivery facade / SSE]
-    RoomWrites[Persisted room messages] --> InternalEventing[common.eventing MessageCommitted]
+    Conversation --> Mongo
+    Conversation --> InternalEventing[common.eventing MessageCommitted]
     InternalEventing --> ContextMemory[context_memory facade]
-    RoomServices --> ContextMemory
-    RoomServices --> RoomFiles[room_files / local filesystem]
+    Conversation --> RoomFiles[room_files / local filesystem]
     ContextMemory --> Mongo
     Delivery --> Redis[(Redis, optional)]
 ```
+
+## Modules
+
+| Layer | Module | Owns |
+|---|---|---|
+| Product | `chat` | The owner's rooms as a product: create, read settings, list, history, rename, pin, membership, default mode, delete. `ChatService` (process singleton `chat_service`), `ChatFacade`, `ChatRouteAdapter`, and the route contract `chat.protocols.RoomCenterCompatibility`. |
+| Product | `session` | A client's conversation with the owner's agents, opened through `POST /sessions/messages` or MCP: the session record (collection `sessions`), the bounded event-based wait, and the client projection. `SessionFacade`, `BoundSessionAccess`, `MongoSessionRepository`, and the route contract `session.protocols.SessionAccess`. |
+| Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, agent-message preparation, quotes, deletion, candidate scope, and turn context. `ConversationRuntime` (process singleton `conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
+| Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. |
+| Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
+| Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, persistence adapters, the A2A SDK boundary, and shared contracts. |
+
+Products depend on core modules; nothing imports `chat` or `session`, and
+`session` never imports `chat`. A conversation container records its owning
+product in `rooms.owner_product` (`chat` by default, `session` for session
+containers). Execution imports
+Conversation only through the `conversation` package exports. Execution's
+`RoomCenterPort` (persist, preflight, discard, idempotent replay, send, and
+orchestration-status projection) is bound to `conversation_runtime`; the chat
+routes receive `ChatRouteAdapter`, which serves room settings from
+`chat_service` and room message and active-run reads from
+`conversation_runtime`. `container.py` and `orchestrator_composition.py` are
+the composition root. Startup binding validation reports missing bindings as
+`conversation.<name>` and `chat.<name>`.
 
 ## Runtime Entry Point
 
@@ -236,21 +354,23 @@ route -> protocol/facade -> repository/DAL -> external service
 
 Examples:
 
-- Room CRUD, membership, user-message persistence/preflight, and route-shaped
-  room behavior remain in `room.compat.runtime`, `room.route_adapter`, and
-  `room.membership_source`. From the former compatibility execution-service
+- Room settings, listing, membership changes, and deletion are served by
+  `chat.service.ChatService` through `chat.route_adapter.ChatRouteAdapter`.
+  User-message persistence/preflight, room message reads, and membership seeding
+  live in `conversation.runtime.ConversationRuntime` and
+  `conversation.membership_source`. From the former compatibility execution-service
   bundle, the runtime retains only the narrow cancellation-control port for
   message token lifecycle; it does not own Delivery, A2A, agent selection, agent
   compatibility, or remote-task-reader dependencies. Outbound agent-message
   preparation is owned by
-  `room.agent_message_preparation.AgentMessagePreparationService`; the
-  compatibility runtime keeps only a signature-preserving delegate. Public room
-  timeline projection is owned by `room.timeline_projection.RoomTimelineProjector`.
+  `conversation.agent_message_preparation.AgentMessagePreparationService`; the
+  conversation runtime keeps only a signature-preserving delegate. Public room
+  timeline projection is owned by `conversation.timeline_projection.RoomTimelineProjector`.
   It receives already-queried timeline pages and uses narrow, room-scoped file
   metadata and HITL readers to produce safe public messages without mutating
   repository models; request validation, cursor handling, and queries remain in
-  the compatibility runtime. Room deletion orchestration is owned by
-  `room.deletion.RoomDeletionService`, which preserves the compatibility response
+  the conversation runtime. Room deletion orchestration is owned by
+  `conversation.deletion.RoomDeletionService`, bound to `ChatService`, which preserves the compatibility response
   contract while coordinating owner validation, file write draining, phased
   cleanup, Context Memory cleanup, and final deletion through narrow ports.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
@@ -328,8 +448,8 @@ together.
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`room.compat.runtime`, `room.agent_message_preparation`, `room.deletion`,
-`room.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
+`conversation.runtime`, `conversation.agent_message_preparation`, `conversation.deletion`,
+`conversation.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
 and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not accept broad compatibility-store aggregates. Queue,
@@ -423,9 +543,13 @@ An explicit positive `limit` remains bounded even with `exhaust=True`.
 | Another owner's group ID | HTTP `403`, before inspecting its membership. |
 | `room_team` | HTTP `422`; room membership requires a room and is not a network scope. |
 
-Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card is
-the stored raw Card with legacy `authentication.credentials` removed; there is
-no user-specific Card projection. Activity is stored registry state, not proof
+Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card
+keeps an allowlist of stored fields (`name`, `description`, `version`,
+`protocolVersion`, `provider`, `documentationUrl`, `iconUrl`, `capabilities`,
+`defaultInputModes`, `defaultOutputModes`, `skills` without per-skill
+`security`). Endpoint URLs, interfaces, security schemes and requirements,
+signatures, and `authentication` are omitted; routing still reads the stored
+raw Card. There is no user-specific Card projection. Activity is stored registry state, not proof
 of current reachability.
 
 Three read-only routes help consumers choose an agent without loading every
@@ -514,7 +638,8 @@ within a reusable context. The remote agent decides which task/context
 continuations are valid; Hybro does not bind these IDs to a caller,
 maintain conversation history, or implement HITL orchestration for this surface.
 There are no network-API polling, cancel, webhook subscription, or SSE endpoints,
-and no Room, Run, memory, or LLM orchestration is created by this send.
+and no Room, Run, memory, or LLM orchestration is created by this send (except
+through `/sessions`, described in the Session section).
 
 Ownership is deliberately narrow:
 
@@ -543,11 +668,14 @@ discovery response model; the shared contract returns `common.dto.AgentInfo`.
 
 The repository-root `MCP/server.py` is a standalone API client, not another
 backend execution owner. It serves Streamable HTTP at
-`http://127.0.0.1:8001/mcp` and exposes five tools over the agent-network API:
-`list_subnets` (`agents/groups`), `find_agents` (`agents/search`), `get_agent`
-(`agents/{agent_id}/profile`), `discover_agents` (`agents/discovery`), and
-`send_message` (`agents/messages`). Tool arguments and results call saved groups
-subnets (`subnet_id`) and translate to backend `group_id`. Its
+`http://127.0.0.1:8001/mcp` and exposes seven tools: `list_subnets`
+(`agents/groups`), `find_agents` (`agents/search`), `get_agent`
+(`agents/{agent_id}/profile`), `discover_agents` (`agents/discovery`),
+`send_message` (`sessions/messages`), `check_session` (`sessions/{id}`), and
+`close_session` (`sessions/{id}/close`). The stateless HTTP route
+`POST /agents/messages` is unchanged but no longer used by the adapter. Tool arguments and results call saved groups
+subnets (`subnet_id`) and translate to backend `group_id`; `list_subnets` strips
+the app's `[hybro-use-case:<id>]` preset tag from descriptions. Its
 Python dependencies, lockfile, and Dockerfile live under `MCP/`; releases publish
 the version-pinned `hybro-mcp` image alongside the other stack images.
 
@@ -564,28 +692,33 @@ MCP transport with JSON responses, and does not import the backend runtime or
 access persistence. The API remains responsible for message validation,
 inventory, group scope, visibility, ranking, and A2A execution.
 
-`send_message` takes plain `text` plus optional `data`, `files` (URI or small
-base64 bytes), and a `conversation` handle, and builds the A2A user message. It
-returns a summary rather than the raw A2A result: lowercase `state` (a direct
-Message reply is `completed`), `needs_input`, `reply_text` from the status
-message or Message and artifact text parts (status text already contained in an
-artifact is skipped, since agents often repeat the final answer there), `data`
-and `files` from other parts
-with inline bytes omitted, a `conversation` of `context_id` and `task_id`, and a
-`next_action` hint. `task_id` is kept only for submitted, working,
-input-required, or auth-required Tasks, so passing the handle back never reopens
-a finished Task. `include_raw` adds the complete A2A result. Every tool
-publishes an output schema; results are MCP structured content and JSON text.
-HTTP/transport failures and failed/rejected/canceled/expired Tasks become MCP
-tool errors. Error results keep the backend body and add `next_action`, for
-example that `429` was not accepted while `504` may still be running. Other
-task states are not promoted to completion.
+`send_message` is session-backed. It takes plain `text` (at most 10,000
+characters), `agent_id`, and optionally `session_id`, `subnet_id`,
+`client_request_id`, and `client_label`. It mints `client_request_id` when
+absent and sends `client_label` "MCP client" when opening a session without
+one. The result is the backend receipt (`session_id`, `client_request_id`,
+`agent_id`, `status` of `created`, `accepted`, or `busy`, `state`, `message`,
+`created_at`, `updated_at`) with a `next_action`: call `check_session` for the
+agents' responses and do not resend, or, for `busy`, send again once that
+request finishes. A `failed` receipt is a tool error. `include_raw` adds the
+backend response. A retried call must pass the same `client_request_id` to get
+the same receipt; the adapter itself never retries. `check_session` returns
+the client view (`state`, `reason`, `agents`, `created_at`, `updated_at`,
+`history`) with a `next_action` per state: `completed` points to the last
+history entry's reply, `working` and `waiting_on_owner` say to check again
+later, and `rejected` and `closed` say to start a new session.
+`close_session` returns `session_id` and `status`. Every tool publishes an output schema; results are MCP structured
+content and JSON text. HTTP and transport failures become tool errors that keep
+the backend body and add `next_action`; a `409`/`404` hint branches on the
+backend error code (`session_closed`, `session_not_found`, `request_conflict`,
+otherwise an inactive or out-of-subnet agent).
 
 This adapter is for same-host clients, with no MCP authentication, user isolation,
 auth-store access, retry loop, or orchestration. It relies on a trusted backend's
 existing mock-auth identity and caller-scoped access; it supplies no Clerk
 credentials, so Clerk-mode requests return `401` tool errors. Its 610-second
-local deadline allows the backend's 600-second response to arrive.
+local deadline covers the backend's configurable session wait (30 seconds by
+default).
 `client_request_id` correlation is preserved, including a generated ID when
 omitted. Client cancellation does not imply remote A2A cancellation.
 
@@ -995,9 +1128,9 @@ selection, health/liveness, capability-issue exclusion, and inspection workflows
 now live under `agent/`. API gateway dependencies receive Agent-owned protocol
 implementations directly from `container.py`.
 
-### `room`
+### `conversation`
 
-`room.RoomFacade` owns canonical room and message persistence behavior:
+`conversation.ConversationFacade` owns canonical room and message persistence behavior:
 
 - Create/update/delete rooms.
 - Resolve room membership from explicit agent IDs, saved groups, or all-agent
@@ -1011,7 +1144,130 @@ stale threshold. Agent messages stamped with `extend_info.orchestrator_run_id`
 are skipped (orchestrator recovery owns them). Working tasks with no
 `task_updated_at` / `task_created_at` are not treated as stale.
 
-Mongo persistence is implemented by `room.repository.mongo`.
+Mongo persistence is implemented by `conversation.repository.mongo`.
+`conversation.runtime.ConversationRuntime` holds the message engine methods:
+mention parsing, user-message persistence and preflight, agent-message creation,
+message and timeline reads, and orchestration-status projection.
+
+### `session`
+
+A Session is a conversation that a client of the instance owner opens with the
+owner's agents. The client addresses one agent per message; nothing inside
+Hybro chooses who speaks next; every turn is recorded in a conversation
+container; when an agent needs the owner's permission, the owner approves or
+rejects in the Hybro app. Under the single local identity
+(`backend.auth_mode="mock"`) the separation between client and owner is a
+presentation rule.
+
+Routes (`api_gateway/routes/session_routes.py`, tag `session`, route contract
+`session.protocols.SessionAccess`, bound per request by `get_session_access`
+to the authenticated owner and an owner-bound `AgentNetworkService` resolver):
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/sessions/messages` | receipt: `session_id`, `client_request_id`, `agent_id`, `status` (`created`, `accepted`, `busy`), `state`, `message`, `created_at`, `updated_at` |
+| GET | `/sessions/{session_id}` | client view: `state`, `reason`, `agents`, `created_at`, `updated_at`, `history` of client messages and agents' final replies; never `conversation_id`, internal message ids, or owner decisions |
+| POST | `/sessions/{session_id}/close` | `session_id`, `status` |
+| GET | `/sessions` | owner list with `client_label`, `title`, `agents`, `state`, `conversation_id`, times: the 100 most recently active sessions plus every open session whose latest run awaits the owner |
+| GET | `/sessions/{session_id}/record` | owner record: `state`, `reason`, `paused_agent_id`, `agents`, `client_label`, `title`, `status`, `conversation_id`, `opened_at`, `last_activity_at`, `closed_at` |
+
+`POST /sessions/messages` is limited to 64 KiB bodies and four concurrent
+requests; it returns the receipt without waiting for the run. Errors use
+`{"detail": {"code", "message", ...}}`: `invalid_request` 422,
+`session_not_found`/`agent_not_found`/`subnet_not_found`/`not_found` 404,
+`forbidden` 403, `session_closed`/`request_conflict`/`agent_unavailable` 409,
+`request_rejected` 400.
+
+`SessionFacade` invariants:
+
+- `client_request_id` is required (at most 128 characters, normalized); text
+  is required and at most 10,000 characters; `data` and files are not
+  accepted. `client_label` is required to open a session. The first message,
+  on one line and shortened to 120 characters, becomes the session `title`
+  shown to the owner; sessions opened before titles existed have none.
+- The agent is resolved (visible, active, in the optional subnet) before any
+  write. A send without `session_id` reserves the record under the unique
+  `(owner_user_id, creation_request_id)` key, then creates the container
+  (`owner_product="session"`, empty manual membership) and sets
+  `conversation_id` only if it is still null; a concurrent loser deletes its
+  container. A retry completes a crashed creation.
+- Busy check before execute: a non-terminal run refuses the send with a
+  `status: busy` receipt carrying the earlier run's state
+  (`waiting_on_owner` for `awaiting_input`, else `working`). A retry of any
+  request id the session already recorded skips the busy check and replays
+  through the engine (which still rejects a changed request with the
+  fingerprint conflict); a retry of an earlier request records nothing new and
+  returns that request's receipt.
+- The `ExecutionRequest` uses `mode="passthrough"` and
+  `agent_scope={"source": "mention", "agent_ids": [agent_id]}`; the facade
+  never accepts a mode. Execute-time 409 acks: the fingerprint conflict text
+  maps to `request_conflict`; any other 409 re-reads the active runs and
+  reports busy. An accepted new send records `last_client_request_id`,
+  `last_user_message_id`, the room event sequence read before execute, and
+  appends `{client_request_id, user_message_id, sent_at}` to `requests` in one
+  guarded update; if a concurrent send of the same id already recorded it,
+  nothing is written, so a newer request is never undone. The send whose engine
+  call created the message always schedules its run, even if a faster replay
+  of the same request recorded it first. A send that finds the stored record
+  already moved past its own send (a different latest request or event
+  sequence) returns the recorded request's receipt; a duplicate that meets the
+  other send's active run at the busy check re-reads the session and replays
+  instead of reporting busy,
+  calls `schedule_orchestration` (never `start_orchestration`), then adds the
+  agent to the container membership and records `last_accepted_agent_id`.
+- Each invocation is a fresh A2A context on the agent's side; the agent does
+  not receive the session history.
+- `close` cancels a pending approval through `cancel_hitl_interaction`, or else
+  the active run through `ExecutionEngine.cancel`; when no pending approval
+  could be canceled it cancels the run instead. Failures are logged and
+  tolerated, and the session is marked closed. Closed sessions refuse sends
+  with `session_closed` and keep their record.
+
+State resolution (`session/waiter.py`, `session/projection.py`) reads only the
+durable room event log (`app.state.room_event_store`), matching run events by
+`correlation_id` (the request's `client_request_id`) and paging after the
+recorded sequence; nothing waits for a run. A request is `completed`,
+`rejected` (a `hitl_response` with `status: canceled` preceded a canceled
+settlement for the same run), or `failed` (the public `error_summary`) once
+`run_settled` arrives; `waiting_on_owner` while `run_waiting_input` is not yet
+followed by `run_resumed` or settlement; otherwise `working`. A request with no
+correlated run event `session_run_start_grace_seconds` after its send reports
+`failed` with `run_not_started`; `closed` takes precedence. The client
+`history` lists the record's `requests` in send order, each resolved from one
+pass over the log grouped by `correlation_id` (a request whose run never started
+keeps its own start grace and then reads `failed`): the client message text from
+its `user_message_id`, the target agent from the message's
+`extend_info.candidate_agent_ids` (named from the container), and the text of
+the settled run's `final_message_id`. Agent-call rows and HITL frames are never
+read into it, because they carry the owner's questions and answers.
+`updated_at` and the owner's `last_activity_at` are the latest of the last send
+and the request's newest event or reply. The owner record's
+`paused_agent_id` comes from the awaiting run's trigger message
+`extend_info.candidate_agent_ids`, falling back to `last_accepted_agent_id`.
+
+Chat guard: chat history (`get_history_by_owner`) excludes containers with
+`owner_product="session"`. Chat writes refuse them with 409
+(`require_chat_room` in `api_gateway/errors.py`): `sendMessage`,
+`updateRoomAgentSet`, history rename/pin, pinned order, history delete,
+`/sse/message/{id}/cancel`, and `/files/upload`. Chat read routes,
+`inquiryActiveRuns`, the room SSE stream, and the HITL routes stay open, so the
+owner's session page renders the record through them and answers approvals
+there.
+
+External agent contract: publish a standard Agent Card and be registered;
+return `input-required` with the typed `hybro.ai/a2a/interaction` metadata to
+ask the owner (an untyped `input-required` completes as an ordinary reply);
+support `tasks/get` (late results arrive by polling); accept a best-effort
+remote cancel meaning "stop; this request will not proceed", sent on owner
+reject and on client close.
+
+### `chat`
+
+`chat.service.ChatService` serves the room-setting routes: create, read settings,
+list rooms and history, replace membership, rename, update pin and history fields,
+update the default mode, and delete through `RoomDeletionService`.
+`chat.facade.ChatFacade` holds a `ConversationFacade` for container writes and
+reads the room repository for owner listings and the default-mode flag.
 
 ### `execution`
 
@@ -1019,51 +1275,36 @@ Mongo persistence is implemented by `room.repository.mongo`.
 
 Key components:
 
-- `ExecutionFacade`: external execution API used by routes. It accepts a
-  `common.dto.ExecutionRequest`, delegates message creation to RoomCenter, and
-  starts orchestration.
+- `ExecutionFacade`: external execution API used by routes. `execute` accepts a
+  `common.dto.ExecutionRequest`, replays an idempotent send, persists the user
+  message and runs its preflight through the conversation runtime
+  (`persist_message_to_room`, `run_message_preflight_to_room`), rejects a send
+  while the room has an active Run, and then calls `start_orchestration` or
+  `schedule_orchestration`.
+- `execution.orchestrator_routing.DualRuntimeRouter`: `process_room_user_message`
+  freezes the candidate scope and tool catalog, creates the Run, and prompts the
+  orchestrator `RoomSessionHost`; it also routes cancellation, HITL answers, and
+  observations.
 - `execution.events.emit_room_processing_status`: compatibility entrypoint for
   room-message processing status. It normalizes legacy string `details` into the
   typed processing-status payload before lifecycle recording and Delivery
   emission.
-- `RoomMessageCenter`: orchestrates a single room user message. It handles
-  idempotent claims, per-room locks, cancellation tokens, routing between
-  queue and supervisor modes, and terminal processing status.
-- `execution.orchestration.dispatch_strategy`: owns dispatch strategy selection
-  after room agent selection.
 - `execution.ports`: owns the narrow type contracts used inside Execution for
   room runtime, delivery/SSE, rate limit, memory, resolver, health, and
   notification collaborators. Where execution invokes a collaborator method,
   the port must use named parameters and execution-owned result protocols
   instead of `*args`/`**kwargs` catch-all signatures.
-- `QueueExecutor`: sequentially processes pre-created agent messages for
-  non-supervisor flows and explicit non-supervisor mention flows.
-- `SupervisorExecutor`: adaptive supervisor loop for rooms with
-  `extend_info.use_supervisor`.
-- `AgentMessageProcessor`: transport router shared by queue and supervisor
-  execution. It builds the A2A message, runs dispatch middleware, and sends
-  through direct A2A transport.
-- `DirectTransport`: sends work directly to remote A2A agents.
-- `WebhookTransport`: handles inbound A2A webhook callbacks for long-running
-  tasks.
-- `AgentResponseHandler`: single place that normalizes agent events, persists
-  task/artifact state, handles HITL states, and emits SSE/task updates.
-  Handler-owned task notifications use the explicit
-  `TaskNotificationStorePort` for idempotency and message/room reads, keeping
-  task-state persistence writers write-only.
-- `TaskStateManager`: owns task state transitions and persistence for agent
-  messages.
+- Legacy tracked-task components (`execution.task_tracking`,
+  `execution.state.TaskStateManager`, `jobs.stale_task_checker`) remain for
+  compatibility paths; canonical Runs do not create tracked tasks.
 
-A2A response ingestion and finalization are Execution-owned. Direct transport
-normalizes terminal results and persists them through `TaskStateManager`;
-webhook events flow through `AgentResponseHandler`, which uses the injected
-message/task writers. `room.compat.runtime` does not own a second A2A response
-handler; its room responsibilities begin at the explicit ports invoked by
-Execution.
+A2A response ingestion and finalization are Execution-owned: the orchestrator
+A2A runtime records every observation in its inbox and the kernel settles the
+Run. The conversation runtime does not own a second A2A response handler; its
+room responsibilities begin at the explicit ports invoked by Execution.
 
-The main orchestration invariant is that `RoomMessageCenter` serializes
-processing per room. It uses a process-local `asyncio.Lock`, and in multi-worker
-mode this is supplemented by a Redis distributed lock configured at startup.
+A room has at most one non-terminal Run (`orchestrator_active_room_unique_canceling`),
+which serializes processing per room.
 
 Execution also contains an additive orchestrator Agent Core, currently unbound
 from production composition. Its gateway-owned turn contract supports one official OpenAI or DeepSeek
@@ -1128,8 +1369,8 @@ driver still owns, and a driver that dies without releasing stays identifiable.
 Graceful shutdown settles the Runs this process owns as `failed` with reason
 `interrupted`; if the process is killed first, the lease lapses and recovery
 applies the same settlement instead of resuming work whose driver is gone.
-Suspended Runs are unaffected: the driver releases the lease on suspension, so
-their scheduled wake and profile-deadline terminalization behave as before.
+Suspended Runs are unaffected: the driver releases the lease on suspension with
+the dormant recovery schedule described in "Canonical wait semantics".
 
 Generic Run recovery repairs missing or wrong-kind dedicated cancellation rows
 before due selection. Its cancellation branch first terminalizes every local A2A
@@ -1616,7 +1857,13 @@ changed identity or inventory is a safe conflict.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
 HITL status messages pass through a bounded public-text sanitizer across both initial
-dispatch and follow-up replies; safe concrete questions are projected to the HITL request,
+dispatch and follow-up replies (after a standalone `Bearer`, a token of 16+ characters,
+not counting a sentence-final ".", with a digit is redacted; after `Basic`, only padded standard base64 of
+`user:password` per RFC 7617, so unpadded or URL-safe values are kept; a scheme word
+followed by whitespace is never taken as the token. Streaming finds Bearer/Basic
+tokens left to right the way the one-shot pattern consumes them, so a scheme word
+inside a token never splits it, and it never releases text inside such a token or
+one that may still grow); safe concrete questions are projected to the HITL request,
 while internal markers, oversized text, and control content fall back to a generic public prompt.
 
 ### `context_memory`
@@ -1758,7 +2005,7 @@ Python consumers. Code importing the removed facade methods, DTOs, model classes
 or utility functions will fail and must migrate to the narrow public ports and
 canonical event projection/assembly flow. No active in-repository REST or frontend
 call depended on those Python surfaces. The narrow `build_minimal_context` helper
-remains because `room.compat.runtime` still calls it in the production fast-routing
+remains because `conversation.runtime` still calls it in the production fast-routing
 path; canonical ContextMemory assembly, projection, compaction, cleanup,
 `create_room_memory`, and `ensure_room_memory` remain supported.
 
@@ -1903,7 +2150,8 @@ shapes. Canonical Assistant IDs and internal-turn
 IDs are checkpointed before provider I/O. Recovery restores/adopts any missing
 `turn_start` and `message_start` parents before terminal children, and live Runs
 schedule generic recovery only at their durable deadline/watchdog boundary so a
-normal recovery tick cannot preempt a healthy provider stream. A
+normal recovery tick cannot preempt a healthy provider stream. Suspended Runs
+keep a dormant schedule until a resume re-arms them. A
 `RecoverableAdapterError` from hosted prompt/continuation/observation work or the
 run-addressed observation sink requests the same early recovery wake after five
 seconds, even without a live session. This includes an observation already
@@ -2085,8 +2333,8 @@ KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
 stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
 state immediately after token creation and identity-releases that token for every
 outcome, including ready. If Execution is canceled or fails after persistence,
-`ExecutionFacade` chooses the cleanup point, `RoomRouteAdapter` synchronously
-forwards `discard_message_preflight`, and the room runtime performs the
+`ExecutionFacade` chooses the cleanup point, calls the conversation runtime's
+synchronous `discard_message_preflight`, and the runtime performs the
 identity-fenced token release. Cleanup failure is logged without replacing the
 original cancellation or execution error. Admitted orchestration independently creates and
 hydrates its own token after winning the processing claim. Execution and continuation owners release their exact token on terminal and
@@ -2180,7 +2428,7 @@ module-scoped repositories built from `MongoDAL`. Adapters:
 
 `room_files` owns file metadata, content, references, download authorization,
 artifact materialization, file-deletion fencing, storage lifecycle, and recovery.
-Room-level deletion coordination belongs to `room.deletion`; it drives the
+Room-level deletion coordination belongs to `conversation.deletion`; it drives the
 `room_files` deletion lifecycle through a narrow port. MongoDB
 stores metadata while `LocalFileContentStore` stores bytes beneath
 `HYBRO_FILE_DIR` (or the platform user-data directory). Other modules consume
@@ -2327,7 +2575,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - emits terminal preflight status when a newly persisted room response
      completes before orchestration starts.
 
-5. `RoomServices.send_message_to_room`:
+5. `ConversationRuntime.send_message_to_room`:
    - validates the request and message size,
    - resolves and validates attachments,
    - loads the room and target scope; successful deterministic scope resolution
@@ -2357,64 +2605,30 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
      supervisor preparation data.
 
 `MessageMongoRepository` remains the authority for unique-index arbitration,
-and `RoomFacade` remains the canonical serializer/writer. The commit service owns
+and `ConversationFacade` remains the canonical serializer/writer. The commit service owns
 only durable effect ordering and compensation around that writer. Event
 publication still follows the database insert and is not a transactional outbox;
 a publisher failure propagates without rolling back the inserted message or
 committed file references.
 
-6. `ExecutionFacade.start_orchestration` builds an `OrchestrationRequest` and
-   calls `RoomMessageCenter.process_room_user_message`.
+6. `ExecutionFacade.start_orchestration` (awaited) or `schedule_orchestration`
+   (background) builds an `OrchestrationRequest` and calls
+   `DualRuntimeRouter.process_room_user_message`.
 
-7. `RoomMessageCenter`:
-   - claims the user message to prevent duplicate processing,
-   - acquires a per-room lock,
-   - refreshes the processing claim,
-   - loads quoted context when present,
-   - creates or reuses a cancellation token,
-   - chooses one of two execution paths:
-     - Supervisor path for the durable orchestration envelope identified by
-       `extend_info.orchestration`, `orchestration_run_id`, and its candidate scope.
-     - Queue path for pre-created agent messages.
+7. `DualRuntimeRouter.process_room_user_message`:
+   - reads the persisted orchestration envelope; the request's live mode wins
+     for dispatch,
+   - freezes the candidate scope, resource manifest, and Agent tool catalog,
+   - creates the canonical Run (at most one non-terminal Run per room) and
+     prompts the room's `RoomSessionHost` session with the `fast` or `ultimate`
+     profile.
 
-8. Queue path:
-   - Fetch agent messages related to the user message.
-   - Process them sequentially through `QueueExecutor`.
-   - Each item uses `AgentDispatcher` for agent assignment and
-     `AgentMessageProcessor` for transport selection and dispatch.
-   - On success, emit unified summary and terminal `completed` status.
-
-9. Supervisor path:
-   - Build agent registry and room config.
-   - Assemble room/conversation context.
-   - Run the adaptive `SupervisorExecutor` loop.
-   - The supervisor compares the persisted goal with accumulated context and
-     prefers suitable Agents from the complete selector-defined scope.
-   - If no scoped Agent is suitable, use `platform_answer` to stream a direct
-     natural HYBRO response without exposing Agent routing or capabilities.
-   - The Supervisor can delegate to one Agent or coordinate multiple Agents in
-     parallel or sequence.
-   - Execution performs final synthesis after `complete` and marks the run
-     terminal only after the user-facing response has been streamed.
-   - Synthesis persistence writes the answer onto `system:hybro`, stamps
-     `summary_origin: llm`, terminalizes the system task as `completed`, and
-     emits `task_update(completed)` before the final `agent_response`.
-   - RoomMessageCenter persists `turn_completion_kind` on the user message
-     after durable root `COMPLETED` wins (`synthesis` even when a duplicate
-     `summary-*` row is skipped for fewer than two trajectory responses).
-   - Agent messages are created dynamically instead of being pre-generated.
-   - Terminal status is emitted after synthesis or final failure/cancellation.
-
-10. Agent responses flow into `AgentResponseHandler`, which:
-    - public-projects remote A2A task/event payloads before persistence,
-      Delivery/SSE, lifecycle emission, or orchestration ingestion,
-    - persists nonterminal artifact updates into a private durable journal for
-      terminal recovery without broadcasting them publicly,
-    - updates task state on `room_agent_messages`,
-    - handles final responses, errors, cancellations, and HITL states,
-    - emits SSE updates through Delivery,
-    - delegates terminal task notifications through
-      `execution.dispatch.task_notifications`.
+8. `OrchestratorKernel` runs the bounded model/tool loop: model turns choose
+   Agent tools, `A2AAgentToolRuntime` accepts and dispatches the calls over A2A,
+   observations resume suspended calls, typed Agent interactions are presented
+   to the model and may be forwarded to the user, and the final assistant
+   message reaches the room through the projection outbox. See "Orchestrator
+   A2A runtime" and "Canonical wait semantics".
 
 ### `sendMessage` persistence idempotency
 
@@ -2569,7 +2783,7 @@ isolation across HTTP requests.
 Both queue and supervisor execution use `AgentMessageProcessor`.
 
 1. Load current room memory from the database.
-2. Ask `RoomServices.process_agent_message` to build the outbound A2A message.
+2. Ask `ConversationRuntime.process_agent_message` to build the outbound A2A message.
 3. Build a `DispatchContext`.
 4. Run pre-dispatch middleware, including health checks for remote agents.
 5. Call the target agent through direct A2A transport.
@@ -2747,11 +2961,67 @@ second lifecycle authority.
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
 routes do not need to know runtime implementation internals.
 
+Supervisor `ask_user` interactions take their deadline from
+`approval_deadline_hours`, injected through `create_hitl_service`. The default
+`None` stores no `expires_at`, so the interaction never appears in
+`iter_due_interactions` and waits until the user answers or cancels. A set value
+expires the interaction after that many hours and fails its Run. Canonical Agent
+interactions in `orchestrator_hitl_interactions` carry no expiry.
+
 HITL storage is exposed through a focused startup adapter over the HITL, message,
 and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
 access, or the full repository-store aggregate. `HITLService` uses store ports
 for request creation, CAS/fenced updates, group routing claims, continuation
 persistence, and stale processing iteration.
+
+### Agent call counts
+
+Each agent's `call_count` and `call_success_count` count orchestrator agent
+calls from Chat and Sessions. `CountingAgentCallLedgerStore`
+(`execution/orchestrator/a2a_runtime/call_counting.py`) wraps the call ledger
+built in `create_orchestrator_runtime`: every terminal write goes through its
+`cas`, and a call counts once, when this process's write is accepted and moves
+the call from a dispatched, unfinished state into a terminal one (success when
+`completed`). Replays, updates to a finished call, lost races, and calls
+rejected or expired before dispatch do not count; counting is best effort and
+never fails the write. The legacy `A2AService` send paths keep counting their
+own sends.
+
+### Typed question presentation
+
+An Agent's typed interaction (`hybro.ai/a2a/interaction`, `A2AInteractionSpec`)
+may ask several short questions instead of one prompt. Besides `prompt`,
+`answer_kind`, `required`, and `choices`, each `HITLQuestionSpec` may carry:
+
+- `header`: a 1-40 character label for the question, such as `Destination`.
+- `choices` as `{value, label, description}` objects. They are split into the
+  `choices` values, which answers must use, and `choice_options` for display.
+  Plain string choices remain valid.
+- `allow_other`: a single- or multi-choice question also accepts free text. The
+  typed answer carries it as `other` (`{"kind": "single_choice", "other": ...}`,
+  or `choices` plus `other` for multi-choice); the Agent's continuation text
+  lists it after any picked choices.
+
+`A2AInteractionSpec.validate_answers` is the single answer-inventory check:
+every required question once, optional (`required: false`) questions may be
+left out, and no unknown or repeated question IDs. The UI's text answers map to
+typed answers by matching a listed choice value first and falling back to
+`other` when allowed. A policy decision is answered by the UI's Approve or
+Reject (`approve`/`deny`; other text is a conflict), and a confirmation counts
+Confirm, Yes, or Approve as confirmed. Questions without presentation fields serialize exactly
+as before, so persisted interaction fingerprints stay valid.
+
+The pending API (`GET /rooms/{room_id}/hitl/pending`) and the `hitl_request`
+SSE frame expose `header`, `required`, `allow_other`, and `choice_options`,
+sanitized and bounded like the prompt and choices for canonical Runs. When an
+interaction is answered, each `hitl_response` frame also carries
+`answer_text`: the owner's answer as the owner reads it (choice labels, Yes or
+No, Approved or Rejected, Signed in for authorization results, never the
+reference), sanitized and bounded to 1,000 characters. Skipped questions and
+cancellations carry none. The legacy
+`A2A_RESUME` follow-up path still publishes prompt and choices only. The bundled
+Travel Planner asks one question per missing detail with a header, two to four
+suggested choices with descriptions, and `allow_other`.
 
 ### HITL Lifecycle Consistency
 
@@ -2925,7 +3195,7 @@ The normal terminal states seen by clients are:
 API route handlers remain thin adapters: they parse HTTP input, resolve injected
 dependencies, call route-facing protocols, and format compatible responses.
 Route owner contracts are declared in `common.protocols`, `agent.protocols`,
-`room.protocols`, `context_memory.protocols`, and `execution.ports`. API Gateway route modules do
+`chat.protocols`, `context_memory.protocols`, and `execution.ports`. API Gateway route modules do
 not import runtime implementation packages; they receive owner protocols through
 `APIGatewayDeps`.
 
@@ -2968,7 +3238,12 @@ Focused tests are organized by module and workflow:
 
 - `tests/test_api_*`: route and API behavior.
 - `tests/test_agent_*`: agent registry, matching, facade behavior.
-- `tests/test_room_*`: room facade and room membership.
+- `tests/test_room_*` and `tests/test_chat_service.py`: conversation container,
+  room membership, and chat room settings.
+- `tests/test_module_boundaries.py`: cross-module import rules. A domain module
+  imports another only through its package root or `protocols`; `common` and
+  `models` import no domain module; `dal` imports none outside an exact debt
+  list. `tests/test_module_protocol_inventory.py` pins module-local protocols.
 - `tests/test_context_memory_*`: memory projection, assembly, compaction, search.
 - `tests/test_delivery_*`: SSE, event bus, cancellation, delivery protocols.
 - `tests/test_execution_*` and related orchestration tests: execution flows.
@@ -3099,10 +3374,11 @@ When a continuation receipt initially routes terminal artifacts through the obse
 inbox, the synchronous post-answer wake queries due inbox work by exact call identity
 rather than scanning a global batch, then re-reads the exact answered call; a matching
 durable terminal plus answer marker is accepted as delivery proof instead of returning
-a stale 503. An `awaiting_user` Run remains dormant until an answer, cancel, terminal
-observation, or its durable profile deadline. At the deadline generic recovery closes
-the questionnaire and accepted Tool descendants once and settles the Run; ordinary
-polls before that timestamp do not wake it or emit periodic `processing` events.
+a stale 503. An `awaiting_user` Run remains dormant until an answer, cancel, or
+terminal observation; its profile deadline does not run while it waits. Ordinary
+recovery polls do not wake it or emit periodic `processing` events. Approval
+expiry or failure closes the questionnaire and accepted Tool descendants once and
+settles the Run as `failed`.
 
 The questionnaire endpoint `POST /rooms/{room_id}/hitl/respond-batch` requires an
 exact, duplicate-free answer inventory for the durable interaction. A missing or

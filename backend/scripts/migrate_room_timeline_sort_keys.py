@@ -13,7 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 
 from common.config import settings
-from room.timeline import (
+from conversation.timeline import (
     TIMELINE_MIGRATION_MARKER_COLLECTION,
     TIMELINE_MIGRATION_MARKER_ID,
     TIMELINE_MIGRATION_VERSION,

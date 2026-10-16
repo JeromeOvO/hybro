@@ -77,8 +77,12 @@ With `backend.auth_mode="clerk"`, callers need a valid Clerk session; add
 With local `backend.auth_mode="mock"`, the existing override supplies
 `user_local_developer`; this mode must remain on a trusted network.
 Discovery and sending are limited to public agents and the caller's own private
-agents. Saved groups must belong to that caller. Discovery removes legacy
-`authentication.credentials`, not arbitrary secrets embedded in Card metadata.
+agents. Saved groups must belong to that caller. Discovery returns only the
+Card fields a client needs to choose an agent (name, description, version,
+protocol version, provider, documentation and icon URLs, capabilities, default
+modes, and skills without per-skill `security`). Endpoint URLs, interfaces, and
+security data stay inside Hybro; clients reach agents by `agent_id`. Secrets
+embedded in those kept fields are not detected.
 
 ### Discover stored active agents
 
@@ -274,11 +278,72 @@ validation-detail array.
 Implementation ownership and protocol inventory are documented in
 [`System Architecture`](docs/System-Architecture.md#agent-network-api).
 
+## Sessions API
+
+A session is a conversation a client of the instance owner opens with the
+owner's agents. Each message names one agent; every turn is recorded in Hybro;
+when an agent needs the owner's permission, the owner approves or rejects in the
+app (**Sessions** in the sidebar). Under local `backend.auth_mode="mock"` the
+client and the owner share one identity, so the separation is a presentation
+rule.
+
+```sh
+# Open a session (client_label is required without session_id).
+curl --request POST http://localhost:8000/api/v1/sessions/messages \
+  --header 'Content-Type: application/json' \
+  --data '{"agent_id": "<agent_id>", "text": "Generate a travel plan for Kyoto.",
+           "client_request_id": "turn-1", "client_label": "Buyer agent"}'
+
+# Continue it, possibly with another agent.
+curl --request POST http://localhost:8000/api/v1/sessions/messages \
+  --header 'Content-Type: application/json' \
+  --data '{"session_id": "<session_id>", "agent_id": "<agent_id>",
+           "text": "Now list the hotels.", "client_request_id": "turn-2"}'
+
+# Check, close; the owner list and record include the conversation id.
+curl http://localhost:8000/api/v1/sessions/<session_id>
+curl --request POST http://localhost:8000/api/v1/sessions/<session_id>/close
+curl http://localhost:8000/api/v1/sessions
+curl http://localhost:8000/api/v1/sessions/<session_id>/record
+```
+
+A send returns a receipt as soon as Hybro has the message: `session_id`,
+`client_request_id`, `agent_id`, `status` (`created` when it opened the
+session, `accepted` for a later message, `busy` when it was not recorded
+because an earlier message is still active), `state`, `message` (a short
+confirmation with the tip to query the session), and the session's
+`created_at` and `updated_at` (UTC). The agents' responses come from
+`GET /sessions/{session_id}`: `state`, `reason`, `agents`, `created_at`,
+`updated_at`, and `history`, which lists each client message oldest first with
+its `text`, `sent_at`, `agent_id`, `agent_name`, `state`, `reason`, and the
+agent's final `reply` and `replied_at`. Agents' questions to the owner and the
+owner's decisions are never included; a waiting request shows only
+`waiting_on_owner`. A request with no run event within
+`backend.session_run_start_grace_seconds` (10) of its send reports `failed`
+with `run_not_started`. Text is limited to 10,000 characters; `data` and files
+are not accepted. Retrying with the same `client_request_id`, including an
+earlier request's, returns that request's receipt without sending it again.
+
+Under mock auth anyone who can call the HTTP API holds the owner's identity,
+so the owner-only routes (`GET /sessions`, `GET /sessions/{session_id}/record`)
+and the room routes behind `conversation_id` are reachable too. The MCP adapter
+calls only the client routes. Agents run in passthrough mode:
+no orchestrator model turns, one call to the named agent, and a fresh A2A
+context per message (the agent does not receive the session history).
+
+An agent that takes part in sessions must publish a standard Agent Card and be
+registered; return `input-required` with the typed `hybro.ai/a2a/interaction`
+metadata to ask the owner (an untyped `input-required` completes as an ordinary
+reply); support `tasks/get`, since late results arrive by polling; and accept a
+best-effort remote cancel meaning "stop; this request will not proceed", sent
+on owner reject and on client close.
+
 ## Local MCP access
 
 The repository-root [`MCP/`](../MCP/) directory contains a separate Python
-Streamable HTTP adapter for these two APIs. It does not import the backend
-runtime, access the database, create rooms, or change Agent visibility rules.
+Streamable HTTP adapter for the agent-network and session APIs. It does not
+import the backend runtime, access the database, or change Agent visibility
+rules.
 
 `hybro start` and the TUI's **Start services** start MCP as an ordinary default
 Compose service. Its own `MCP/Dockerfile` builds the adapter; released stacks use
@@ -312,68 +377,70 @@ already running at `http://127.0.0.1:8000/api/v1/`:
 uv run --project MCP --frozen --no-env-file python MCP/server.py
 ```
 
-The adapter has its own locked environment and exposes five tools. Backend
+The adapter has its own locked environment and exposes seven tools. Backend
 saved groups appear as **subnets** (`subnet_id`) in tool arguments and results.
 
 - `list_subnets()`: the caller's subnets with active member counts, from
-  `GET /agents/groups`.
+  `GET /agents/groups`. The app's internal preset tag
+  (`[hybro-use-case:<id>]`) is removed from descriptions.
 - `find_agents(query, subnet_id?, limit?)`: ranked compact matches from
   `GET /agents/search`, each listing its subnets.
 - `get_agent(agent_id)`: one agent's consumer profile from
   `GET /agents/{agent_id}/profile`.
-- `discover_agents(subnet_id?)`: every active agent with its raw Card, from
-  `GET /agents/discovery`. Output is large; prefer `find_agents` to choose.
-- `send_message(agent_id, text, conversation?, data?, files?, subnet_id?,
-  client_request_id?, include_raw?)`: builds the A2A message, sends it through
-  `POST /agents/messages`, and returns a summary.
+- `discover_agents(subnet_id?)`: every active agent with its public Card
+  fields, from `GET /agents/discovery`. Output is large; prefer `find_agents` to choose.
+- `send_message(agent_id, text, session_id?, subnet_id?, client_request_id?,
+  client_label?, include_raw?)`: sends one message in a session through
+  `POST /sessions/messages` and returns the receipt. Without `session_id` it
+  opens a session; the receipt carries the `session_id` to pass back.
+- `check_session(session_id)`: the session state and its history of client
+  messages and agents' replies, from `GET /sessions/{session_id}`.
+- `close_session(session_id)`: `POST /sessions/{session_id}/close`.
 
 For example, after `find_agents`, call `send_message` with:
 
 ```json
 {
   "agent_id": "<an ID returned by find_agents>",
-  "text": "Write a short story about a robot seeing the sea."
+  "text": "Generate a travel plan for Kyoto."
 }
 ```
 
-The summary is:
+The result is:
 
 ```json
 {
+  "session_id": "b-S7K-y3wXKVefny4gvETXhcKJGj80Wo",
   "agent_id": "...",
   "client_request_id": "...",
-  "state": "input_required",
-  "needs_input": true,
-  "reply_text": "How long should it be?",
-  "data": [],
-  "files": [],
-  "conversation": {"context_id": "remote-context-1", "task_id": "remote-task-1"},
-  "next_action": "Answer the agent's question, ..."
+  "status": "created",
+  "state": "working",
+  "message": "Created. Use session_id to query this session (MCP check_session, or GET /sessions/{session_id}) for the agents' responses.",
+  "created_at": "2026-10-15T22:13:51.445000Z",
+  "updated_at": "2026-10-15T22:13:52.674000Z",
+  "next_action": "Hybro has the message. Call check_session with this session_id for the agents' responses; do not resend."
 }
 ```
 
-`state` is the A2A task state in lowercase without the `TASK_STATE_` prefix;
-a direct Message reply is `completed`. `reply_text` joins text from the status
-message or Message and from artifacts, skipping status text that an artifact
-already contains; `data` and `files` collect the other
-parts, and inline file bytes are omitted. To continue, pass `conversation` back
-unchanged. It carries `task_id` only while the Task is `submitted`, `working`,
-`input_required`, or `auth_required`, so a finished Task is never reopened.
-`include_raw: true` adds the complete A2A result as `raw`. Files accept `uri`
-(preferred) or small base64 `bytes`.
+`status: busy` means the message was not recorded because an earlier message
+in the session is still active; send it again once `check_session` shows that
+request finished. `check_session` returns `state` (`completed`, `working`,
+`waiting_on_owner` while the owner decides in the Hybro app, `rejected`,
+`failed`, or `closed`) and `history`; the latest reply is the last entry's
+`reply`. A `failed` receipt sets `isError`. The client view never contains the
+owner's question or answer. `include_raw: true` adds the backend response as
+`raw`. A missing `client_request_id` is generated; a retried call must pass the
+same value to get the same receipt instead of a new send.
+A missing `client_label` defaults to "MCP client" when a session is opened.
 
 Every tool publishes an output schema. Results are sent as both MCP structured
-content and JSON text. Failed, rejected, canceled, or expired Tasks and all
-HTTP/transport errors set `isError`. Errors keep the backend `detail` and add a
-`next_action` hint, for example that `429` was not accepted and can be retried
-shortly, while `504` may still be running and must not be resent. A missing
-`client_request_id` is generated before sending so local transport failures can
-also be correlated.
+content and JSON text. HTTP/transport errors set `isError`, keep the backend
+`detail`, and add a `next_action` hint; a `409` hint depends on the backend code
+(`session_closed`: start a new session; `request_conflict`: use a new
+`client_request_id`; otherwise the agent is inactive or outside the subnet).
 
-The adapter allows 610 seconds for the backend's 600-second deadline and response
-delivery. Configure the MCP client's tool timeout to exceed 610 seconds if it
-supports that setting. There are no automatic retries, remote cancellation, or
-polling.
+The adapter allows 610 seconds per backend call; a session send returns its
+receipt at once. There are no automatic retries.
 
 Native mode uses fixed loopback endpoints and the `/api/v1` prefix. Container
 mode (`--container`) requires the CLI's validated `HYBRO_MCP_CONFIG` projection,

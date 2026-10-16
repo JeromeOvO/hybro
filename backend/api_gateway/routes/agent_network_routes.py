@@ -60,7 +60,10 @@ async def discover_agents(
     network: AgentNetworkDependency,
     group_id: Annotated[NetworkIdentifier | None, Query()] = None,
 ) -> AgentDiscoveryResponse:
-    """Return stored cards for active agents, optionally scoped to a saved team.
+    """Return public card fields for active agents, optionally scoped to a saved team.
+
+    Cards omit endpoint URLs, interfaces, and security data; clients reach an
+    agent through Hybro by ``agent_id``.
 
     Only public agents and the caller's own private agents are visible. Saved
     groups must belong to the caller. No network scan or card refresh is performed.

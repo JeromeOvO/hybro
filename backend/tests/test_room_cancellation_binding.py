@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from room.compat.runtime import RoomServices
+from conversation.runtime import ConversationRuntime
 
 _DEAD_DEPENDENCY_ATTRIBUTES = {
     "agent_service",
@@ -36,11 +36,11 @@ def _dotted_name(node: ast.AST) -> str | None:
 
 
 def test_room_services_exposes_only_narrow_cancellation_binding():
-    service = RoomServices()
-    signature = inspect.signature(RoomServices.bind_cancellation_control)
+    service = ConversationRuntime()
+    signature = inspect.signature(ConversationRuntime.bind_cancellation_control)
 
     assert not any(hasattr(service, name) for name in _DEAD_DEPENDENCY_ATTRIBUTES)
-    assert "bind_legacy_dependencies" not in RoomServices.__dict__
+    assert "bind_legacy_dependencies" not in ConversationRuntime.__dict__
     assert list(signature.parameters) == ["self", "cancellation_control"]
     assert (
         signature.parameters["cancellation_control"].kind
@@ -56,9 +56,9 @@ def test_room_services_exposes_only_narrow_cancellation_binding():
 
 
 def test_unbound_cancellation_control_is_semantically_named_and_old_sentinels_are_gone():
-    import room.compat.unbound as unbound
+    import conversation.unbound as unbound
 
-    service = RoomServices()
+    service = ConversationRuntime()
     with pytest.raises(
         RuntimeError,
         match="cancellation control dependency has not been bound",
@@ -75,13 +75,13 @@ def test_container_has_single_keyword_only_cancellation_wiring():
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and _dotted_name(node.func) == "room_runtime.bind_cancellation_control"
+        and _dotted_name(node.func) == "conversation_runtime.bind_cancellation_control"
     ]
     legacy_calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and _dotted_name(node.func) == "room_runtime.bind_legacy_dependencies"
+        and _dotted_name(node.func) == "conversation_runtime.bind_legacy_dependencies"
     ]
 
     assert len(narrow_calls) == 1
@@ -94,7 +94,7 @@ def test_container_has_single_keyword_only_cancellation_wiring():
 
 
 def test_room_runtime_token_lifecycle_calls_cancellation_control_directly():
-    source = Path("room/compat/runtime.py").read_text()
+    source = Path("conversation/runtime.py").read_text()
     tree = ast.parse(source)
     calls = {
         _dotted_name(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)
@@ -111,7 +111,7 @@ def test_room_runtime_token_lifecycle_calls_cancellation_control_directly():
 
 @pytest.mark.asyncio
 async def test_preflight_release_behavior_is_unchanged():
-    service = object.__new__(RoomServices)
+    service = object.__new__(ConversationRuntime)
     control = SimpleNamespace(
         create_token=MagicMock(),
         check_cancelled=AsyncMock(),

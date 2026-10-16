@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from common.dto import TimelinePosition
-from room.timeline import (
+from conversation.timeline import (
     MAX_BSON_INT64,
     MAX_CURSOR_LENGTH,
     MIN_BSON_INT64,

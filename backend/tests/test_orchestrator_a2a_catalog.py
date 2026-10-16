@@ -511,3 +511,21 @@ async def test_preparation_fails_closed_for_inactive_epoch():
         pass
     else:
         raise AssertionError("inactive Room epoch was accepted")
+
+
+async def test_catalog_keeps_each_agents_skills_in_card_order():
+    # Card order: agent-1 lists "beta" before "alpha". Passthrough calls an
+    # Agent's first catalog tool, which must be its first card skill.
+    prepared, _source, _store = await prepare(
+        [
+            candidate("agent-2", skill_id="zeta"),
+            candidate("agent-1", skill_id="beta"),
+            candidate("agent-1", skill_id="alpha"),
+        ]
+    )
+
+    assert [entry.definition.name for entry in prepared.snapshot.entries] == [
+        deterministic_tool_name("agent-1", "beta"),
+        deterministic_tool_name("agent-1", "alpha"),
+        deterministic_tool_name("agent-2", "zeta"),
+    ]

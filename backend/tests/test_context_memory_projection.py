@@ -10,7 +10,7 @@ from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
 from context_memory import projection
 from context_memory.config import ContextMemoryLLMConfig
 from context_memory.translators import normalize_room_memory
-from room.translators import message_info_from_doc
+from conversation.translators import message_info_from_doc
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 

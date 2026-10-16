@@ -17,9 +17,9 @@ def _import_roots(path: Path) -> set[str]:
 
 
 def test_room_services_process_agent_message_is_thin_delegate():
-    from room.compat.runtime import RoomServices
+    from conversation.runtime import ConversationRuntime
 
-    source = inspect.getsource(RoomServices.process_agent_message)
+    source = inspect.getsource(ConversationRuntime.process_agent_message)
     tree = ast.parse(textwrap.dedent(source))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
@@ -33,14 +33,17 @@ def test_room_services_process_agent_message_is_thin_delegate():
 
 def test_agent_message_preparation_has_only_narrow_dependencies():
     from common.protocols import AttachmentContentReader
-    from room.agent_message_preparation import AgentMessagePreparationService
+    from conversation.agent_message_preparation import AgentMessagePreparationService
 
     source = inspect.getsource(AgentMessagePreparationService)
     type_hints = get_type_hints(AgentMessagePreparationService.__init__)
-    assert "RoomServices" not in source
+    assert "ConversationRuntime" not in source
     assert "self._store" not in source
     assert "runtime_store" not in source
-    assert "room.compat" not in Path("room/agent_message_preparation.py").read_text()
+    assert (
+        "conversation.runtime"
+        not in Path("conversation/agent_message_preparation.py").read_text()
+    )
     assert type_hints["attachment_content_reader"] is AttachmentContentReader
 
 
@@ -52,7 +55,7 @@ def test_container_wires_explicit_preparation_readers():
     assert "quote_reader=SimpleNamespace(" in source
     assert "message_lineage_reader=SimpleNamespace(" in source
     assert "attachment_content_reader=SimpleNamespace(" in source
-    assert "room_runtime.bind_agent_message_preparation(" in source
+    assert "conversation_runtime.bind_agent_message_preparation(" in source
     assert "get_room_user_messages_by_room_id=(" in source
     assert "get_quoted_snippet_by_id=get_quoted_snippet_by_id" in source
 
@@ -60,17 +63,17 @@ def test_container_wires_explicit_preparation_readers():
 def test_room_services_syncs_context_assembly_for_either_binding_order():
     from unittest.mock import MagicMock
 
-    from room.compat.runtime import RoomServices
+    from conversation.runtime import ConversationRuntime
 
     context_assembly = object()
     preparation = MagicMock()
-    services = RoomServices()
+    services = ConversationRuntime()
     services.bind_context_memory(context_assembly=context_assembly)
     services.bind_agent_message_preparation(preparation)
     preparation.bind_context_assembly.assert_called_once_with(context_assembly)
 
     preparation.reset_mock()
-    services = RoomServices()
+    services = ConversationRuntime()
     services.bind_agent_message_preparation(preparation)
     services.bind_context_memory(context_assembly=context_assembly)
     preparation.bind_context_assembly.assert_called_once_with(context_assembly)
@@ -83,12 +86,12 @@ def test_execution_does_not_import_room_compat_runtime():
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
-                and node.module == "room.compat.runtime"
+                and node.module == "conversation.runtime"
             ):
                 violations.append(f"{path}:{node.lineno}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == "room.compat.runtime":
+                    if alias.name == "conversation.runtime":
                         violations.append(f"{path}:{node.lineno}")
     assert violations == []
 

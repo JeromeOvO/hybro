@@ -6,9 +6,11 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
+from ..budget import resumed_deadline_at
 from ..kernel import KernelLifecycle, KernelRunResult, OrchestratorKernel, SystemClock
 from ..lifecycle import LifecycleEmitter, SessionEvent, SessionEventListener
 from ..models import OrchestratorRunState, ToolObservation
+from ..persistence import SUSPENDED_RUN_STATUSES
 from ..ports import CancellationSignal, OrchestratorRunStore
 from ..session import schedule_run_recovery
 from .errors import RecoverableAdapterError
@@ -62,6 +64,15 @@ class RunAddressedToolObservationSink:
         run = await self.run_store.load(run_id)
         if run is None:
             raise KeyError(run_id)
+        if run.status in SUSPENDED_RUN_STATUSES:
+            # No driver owns this re-entry. Re-arm the dormant watchdog at the
+            # deadline the resume extends to, so a crash after re-entry is
+            # still recovered.
+            await schedule_run_recovery(
+                self.run_store,
+                run_id,
+                next_attempt_at=resumed_deadline_at(run.budget, now=self.clock.now()),
+            )
         built = self.kernel_factory(run)
         kernel = await built if hasattr(built, "__await__") else built
         lifecycle = self.lifecycle_factory(run) if self.lifecycle_factory else None

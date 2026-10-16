@@ -1,3 +1,4 @@
+import { parseHitlPresentation } from '@/lib/hitl/presentation'
 import type { RoomSSEFrameMap, TaskState } from '@/lib/types/sse'
 import {
   buildPendingHitlIncomingMessage,
@@ -84,6 +85,7 @@ export async function handleHitlRequest(
     prompt,
     promptType: prompt_type,
     choices: Array.isArray(choices) ? choices as string[] : null,
+    presentation: parseHitlPresentation(sseMessage.data),
     timestamp: sseMessage.timestamp,
     agentId: agent_id,
     agentName: resolvedAgentName,

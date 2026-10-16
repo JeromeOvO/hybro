@@ -25,6 +25,8 @@ from common.a2a_constants import SSEProcessingStatus
 from common.a2a_task_projection import (
     public_part_data,
     public_persisted_task_data,
+    resolve_public_agent_response_text,
+    resolve_public_task_label,
 )
 from common.types import (
     Task,
@@ -35,10 +37,6 @@ from common.utils.a2a_helpers import (
     extract_status_message,
 )
 from common.utils.logger import get_logger
-from execution.task_tracking import (
-    resolve_public_agent_response_text,
-    resolve_public_task_label,
-)
 
 if TYPE_CHECKING:
     from execution.ports import (

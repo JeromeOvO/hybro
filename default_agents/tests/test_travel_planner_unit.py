@@ -17,34 +17,80 @@ from travel_planner_agent.interaction_metadata import (
 )
 
 
-def test_input_required_metadata_is_exact_typed_and_stable():
-    first = build_input_required_metadata(
-        "remote-task-1", "Where do you want to go?"
-    )
-    repeated = build_input_required_metadata(
-        "remote-task-1", "Where do you want to go?"
-    )
-    changed = build_input_required_metadata(
-        "remote-task-1", "How many days will you stay?"
-    )
+QUESTIONS = [
+    {
+        "header": "Destination",
+        "question": "Where would you like to go?",
+        "choices": [
+            {"label": "Kyoto", "description": "Temples and food"},
+            {"label": "Osaka"},
+        ],
+        "multi_select": False,
+    },
+    {
+        "header": "Duration",
+        "question": "How many days?",
+        "choices": [],
+        "multi_select": False,
+    },
+]
+
+
+def test_input_required_metadata_asks_each_question_separately():
+    first = build_input_required_metadata("remote-task-1", QUESTIONS)
+    repeated = build_input_required_metadata("remote-task-1", QUESTIONS)
+    changed = build_input_required_metadata("remote-task-1", QUESTIONS[:1])
 
     assert first == repeated
     assert first != changed
     assert set(first) == {HYBRO_A2A_INTERACTION_METADATA_KEY}
     spec = first[HYBRO_A2A_INTERACTION_METADATA_KEY]
-    assert set(spec) == {"schema_version", "interaction_id", "questions"}
     assert spec["schema_version"] == 1
     assert spec["interaction_id"].startswith("travel-planner:")
     assert spec["questions"] == [
         {
-            "question_id": spec["questions"][0]["question_id"],
+            "question_id": "destination",
             "interaction_kind": "questionnaire",
-            "prompt": "Where do you want to go?",
+            "header": "Destination",
+            "prompt": "Where would you like to go?",
+            "answer_kind": "single_choice",
+            "required": True,
+            "choices": [
+                {"value": "Kyoto", "description": "Temples and food"},
+                {"value": "Osaka"},
+            ],
+            "allow_other": True,
+        },
+        {
+            "question_id": "duration",
+            "interaction_kind": "questionnaire",
+            "header": "Duration",
+            "prompt": "How many days?",
             "answer_kind": "text",
             "required": True,
-        }
+        },
     ]
-    assert spec["questions"][0]["question_id"].startswith("travel-details:")
+
+
+def test_input_required_metadata_keeps_question_ids_unique():
+    spec = build_input_required_metadata(
+        "task", [QUESTIONS[1], {**QUESTIONS[1], "question": "Nights?"}]
+    )[HYBRO_A2A_INTERACTION_METADATA_KEY]
+    assert [q["question_id"] for q in spec["questions"]] == ["duration", "duration-2"]
+
+
+def test_multi_select_question_becomes_multi_choice():
+    question = {
+        "header": "Interests",
+        "question": "What do you enjoy?",
+        "choices": [{"label": "Food"}, {"label": "Temples"}],
+        "multi_select": True,
+    }
+    [spec] = build_input_required_metadata("task", [question])[
+        HYBRO_A2A_INTERACTION_METADATA_KEY
+    ]["questions"]
+    assert spec["answer_kind"] == "multi_choice"
+    assert spec["allow_other"] is True
 
 
 def test_travel_planner_agent_card_has_routing_friendly_metadata():
@@ -77,7 +123,7 @@ async def test_tool_call_only_stream_yields_input_required():
             tool_call_chunks=[
                 {
                     "name": "AskUserForClarification",
-                    "args": '{"question": "Where do ',
+                    "args": '{"questions": [{"header": "Destination", "question": "Where do ',
                     "id": "call-1",
                     "index": 0,
                 }
@@ -89,7 +135,7 @@ async def test_tool_call_only_stream_yields_input_required():
             tool_call_chunks=[
                 {
                     "name": None,
-                    "args": 'you want to go?"}',
+                    "args": 'you want to go?", "choices": [{"label": "Kyoto"}, {"label": "Osaka"}]}]}',
                     "id": "call-1",
                     "index": 0,
                 }
@@ -105,9 +151,20 @@ async def test_tool_call_only_stream_yields_input_required():
 
     assert len(events) == 1
     assert events[0] == {
-        "content": "Where do you want to go?",
+        "content": "Destination: Where do you want to go?",
         "done": True,
         "status": "input_required",
+        "questions": [
+            {
+                "header": "Destination",
+                "question": "Where do you want to go?",
+                "choices": [
+                    {"label": "Kyoto", "description": None},
+                    {"label": "Osaka", "description": None},
+                ],
+                "multi_select": False,
+            }
+        ],
     }
 
 
@@ -125,7 +182,7 @@ async def test_text_and_tool_call_stream_prefers_input_required():
             tool_call_chunks=[
                 {
                     "name": "AskUserForClarification",
-                    "args": '{"question": "How many days will you stay?"}',
+                    "args": '{"questions": [{"header": "Duration", "question": "How many days will you stay?"}]}',
                     "id": "call-2",
                     "index": 0,
                 }
@@ -141,11 +198,9 @@ async def test_text_and_tool_call_stream_prefers_input_required():
 
     assert len(events) == 2
     assert events[0] == {"content": "Thinking about your trip...", "done": False}
-    assert events[1] == {
-        "content": "How many days will you stay?",
-        "done": True,
-        "status": "input_required",
-    }
+    assert events[1]["content"] == "Duration: How many days will you stay?"
+    assert events[1]["status"] == "input_required"
+    assert events[1]["questions"][0]["choices"] == []
 
 
 @pytest.mark.asyncio
@@ -204,6 +259,14 @@ async def test_tool_call_missing_question_arg_falls_back_safely():
         "content": "Could you provide more details?",
         "done": True,
         "status": "input_required",
+        "questions": [
+            {
+                "header": None,
+                "question": "Could you provide more details?",
+                "choices": [],
+                "multi_select": False,
+            }
+        ],
     }
 
 
@@ -239,4 +302,12 @@ async def test_invalid_tool_call_malformed_json_args_falls_back_safely():
         "content": "Could you provide more details?",
         "done": True,
         "status": "input_required",
+        "questions": [
+            {
+                "header": None,
+                "question": "Could you provide more details?",
+                "choices": [],
+                "multi_select": False,
+            }
+        ],
     }

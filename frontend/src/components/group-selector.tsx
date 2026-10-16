@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef } from 'react'
-import { ChevronDown, Globe, Users, Loader2, Pencil, Trash2, Plus } from 'lucide-react'
+import { ChevronDown, Globe, Users, Loader2, Pencil, Trash2, Plus, Waypoints } from 'lucide-react'
 import { getAgentAvatarUri } from '@/lib/agent-avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -116,7 +116,7 @@ export function GroupSelector({
 
     if (selectedGroup === BUILTIN_GROUP_ALL_AGENTS) {
       return {
-        icon: <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
+        icon: <Globe className="h-3.5 w-3.5 text-icon-network" />,
         label: 'All agents',
         description: 'All currently available agents',
       }
@@ -126,7 +126,7 @@ export function GroupSelector({
     const customGroup = groups.find(g => g.group_id === selectedGroup)
     if (customGroup) {
       return {
-        icon: <Users className="h-3.5 w-3.5" />,
+        icon: <Waypoints className="h-3.5 w-3.5 text-hybro-bro" />,
         label: customGroup.name,
         description: `${customGroup.agents.length} agents`,
       }
@@ -135,14 +135,14 @@ export function GroupSelector({
     // Preserve persisted provenance while the team catalog is loading or unavailable.
     if (selectedGroupName) {
       return {
-        icon: <Users className="h-3.5 w-3.5" />,
+        icon: <Waypoints className="h-3.5 w-3.5 text-hybro-bro" />,
         label: selectedGroupName,
         description: 'Room source subnet',
       }
     }
 
     return {
-      icon: <Globe className="h-3.5 w-3.5 text-muted-foreground" />,
+      icon: <Globe className="h-3.5 w-3.5 text-icon-network" />,
       label: 'All agents',
       description: 'All currently available agents',
     }
@@ -275,7 +275,7 @@ export function GroupSelector({
                       readOnly && 'cursor-default',
                     )}
                   >
-                    <Globe className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                    <Globe className="h-4 w-4 mt-0.5 text-icon-network" />
                     <div className="flex-1">
                       <div className="font-medium">All agents</div>
                     </div>
@@ -307,7 +307,7 @@ export function GroupSelector({
                             readOnly && 'cursor-default',
                           )}
                         >
-                          <Users className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                          <Waypoints className="h-4 w-4 mt-0.5 text-hybro-bro" />
                           <div className="flex-1 min-w-0">
                             <div className="font-medium truncate">{group.name}</div>
                             <div className="text-xs text-muted-foreground truncate">

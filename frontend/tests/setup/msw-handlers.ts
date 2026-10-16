@@ -6,8 +6,46 @@ const agent = getApiUrl('agent')
 const orchestrationCenter = getApiUrl('orchestrationCenter')
 const task = getApiUrl('task')
 const sseBase = getApiUrl('sse')
+const sessions = getApiUrl('sessions')
+
+const sessionTimes = {
+  opened_at: '2026-10-14T09:00:00Z',
+  last_activity_at: '2026-10-14T09:05:00Z',
+}
 
 export const handlers = [
+  // Session API handlers
+  http.get(sessions, () => HttpResponse.json({
+    sessions: [{
+      session_id: 'sess-1',
+      client_label: 'Buyer agent',
+      agents: [{ agent_id: 'agent-1', name: 'Travel Planner' }],
+      state: 'waiting_on_owner',
+      paused_agent_id: 'agent-1',
+      conversation_id: 'conv-1',
+      closed_at: null,
+      ...sessionTimes,
+    }],
+  })),
+
+  http.get(`${sessions}/:id/record`, ({ params }) => HttpResponse.json({
+    session_id: params.id,
+    state: 'waiting_on_owner',
+    paused_agent_id: 'agent-1',
+    reason: null,
+    agents: [{ agent_id: 'agent-1', name: 'Travel Planner' }],
+    client_label: 'Buyer agent',
+    status: 'open',
+    conversation_id: 'conv-1',
+    closed_at: null,
+    ...sessionTimes,
+  })),
+
+  http.post(`${sessions}/:id/close`, ({ params }) => HttpResponse.json({
+    session_id: params.id,
+    status: 'closed',
+  })),
+
   // Room Center API handlers
   http.post(`${roomCenter}/createNewRoom`, async ({ request }) => {
     const body = await request.json() as Record<string, unknown>

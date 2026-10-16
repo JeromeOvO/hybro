@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import re
 from collections.abc import Iterable
@@ -17,8 +19,46 @@ _PUBLIC_DSN_SCHEMES = (
     r"(?:https?|mongodb(?:\+srv)?|redis(?:s)?|amqps?|postgres(?:ql)?|mysql)"
 )
 
+# A scheme word followed by whitespace is never the token, so "basic Bearer
+# <token>" still checks the bearer token; "Bearer Bearer-<token>" is a token.
+_AUTH_SCHEME = re.compile(
+    r"(?i)\b(Bearer|Basic)\s+(?!(?:Bearer|Basic)\s)([A-Za-z0-9._~+/=-]+)"
+)
+_AUTH_MARKER_PROBES = frozenset({"bearer ", "basic "})
+_BASE64 = re.compile(r"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+
+
+def _is_auth_token(scheme: str, value: str, token: str) -> bool:
+    """Whether the word after "Bearer"/"Basic" is a credential.
+
+    ``token`` is ``value`` without a trailing "." or "-". A bearer value is 16+
+    characters (not counting a trailing ".") with a digit; a Basic token is padded standard base64 of
+    "user:password" (RFC 7617), so unpadded or URL-safe values are kept. Prose
+    such as "Basic French", "BASIC TRAINING" or "basic IPv4/IPv6" is kept.
+    """
+    if scheme.casefold() == "bearer":
+        # A trailing "-" counts toward the length; a sentence-final "." does not.
+        return len(value.rstrip(".")) >= 16 and any(c.isdigit() for c in token)
+    if not token or not _BASE64.fullmatch(token):
+        return False
+    try:
+        decoded = base64.b64decode(token, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    user, sep, password = decoded.partition(":")
+    return bool(sep and user and password and decoded.isprintable())
+
+
+def _redact_auth_token(match: re.Match[str], replacement: str) -> str:
+    value = match.group(2)
+    # A trailing "." or "-" ends the sentence, not the token.
+    token = value.rstrip(".-")
+    if not _is_auth_token(match.group(1), value, token):
+        return match.group(0)
+    return replacement + value[len(token) :]
+
+
 _CREDENTIAL_PATTERNS = (
-    re.compile(r"(?i)(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{4,}"),
     re.compile(rf"(?i)({_PUBLIC_DSN_SCHEMES}://)([^/@\s:]*):([^/@\s]+)@"),
     re.compile(
         r"(?i)([?&](?:api[_-]?key|access[_-]?token|auth|password|secret|token)=)"
@@ -32,8 +72,12 @@ _CREDENTIAL_PATTERNS = (
 # Credential values are unbounded, so an unterminated value is retained from
 # its marker rather than cut at a fixed look-behind boundary. These expressions
 # intentionally also match values shorter than the complete redaction regexes.
+# Bearer/Basic spans are found left to right the way _AUTH_SCHEME consumes
+# them, so a scheme word inside a token never starts a new span.
+_AUTH_TOKEN_SPAN = re.compile(
+    r"(?i)\b(?:Bearer|Basic)\s+(?!(?:Bearer|Basic)\s)[A-Za-z0-9._~+/=-]*"
+)
 _ACTIVE_CREDENTIAL_PATTERNS = (
-    re.compile(r"(?i)(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]*$"),
     re.compile(rf"(?i){_PUBLIC_DSN_SCHEMES}://[^@\s]*$"),
     re.compile(
         r"(?i)[?&](?:api[_-]?key|access[_-]?token|auth|password|secret|token)="
@@ -109,6 +153,45 @@ _DSN_MARKER_PROBES = frozenset(
 _STRICT_CREDENTIAL_MARKER_PROBES = tuple(
     marker for marker in _CREDENTIAL_MARKER_PROBES if marker not in _DSN_MARKER_PROBES
 )
+
+
+_CONTEXT_CHARS = max(len(value) for value in _CREDENTIAL_MARKER_PROBES)
+
+
+def _outside_auth_tokens(
+    detector_text: str, context_length: int, release_at: int
+) -> int:
+    """Move a release point out of any Bearer/Basic token.
+
+    A token that runs to the end of the text may still grow, and a cut inside
+    a token would judge only its prefix, so both are held from the scheme.
+    """
+    pending_length = len(detector_text) - context_length
+    for match in _AUTH_TOKEN_SPAN.finditer(detector_text):
+        start = match.start() - context_length
+        end = match.end() - context_length
+        if end >= pending_length or start < release_at < end:
+            release_at = min(release_at, max(0, start))
+    return release_at
+
+
+def _is_word_char(character: str) -> bool:
+    # The characters ``\w`` matches, so this agrees with ``\b``.
+    return character.isalnum() or character == "_"
+
+
+def _context_window(text: str) -> str:
+    """The released tail kept to detect markers split across chunks.
+
+    When the window starts inside a word, it is prefixed with the letter "x",
+    which no credential marker contains, so a word boundary (``\b``) appears
+    only where the full text has one: "Superbasic" never looks like "basic".
+    """
+    if len(text) <= _CONTEXT_CHARS:
+        return text
+    window = text[-_CONTEXT_CHARS:]
+    inside_word = _is_word_char(text[-_CONTEXT_CHARS - 1]) and _is_word_char(window[0])
+    return f"x{window}" if inside_word else window
 
 
 class PublicTextSanitizer:
@@ -223,11 +306,20 @@ class PublicTextSanitizer:
             if completed_secret_suffix and size <= completed_secret_suffix:
                 continue
             suffix = lowered[-size:]
+            # "Bearer"/"Basic" are schemes only at a word start, as in
+            # _AUTH_SCHEME; inside a token they must not split it.
+            at_word_start = not _is_word_char(
+                detector_text[-size - 1] if len(detector_text) > size else ""
+            )
             if any(
-                marker.startswith(suffix) for marker in _STRICT_CREDENTIAL_MARKER_PROBES
+                marker.startswith(suffix)
+                and (at_word_start or marker not in _AUTH_MARKER_PROBES)
+                for marker in _STRICT_CREDENTIAL_MARKER_PROBES
             ):
                 release_at = min(release_at, len(self._pending) - size)
                 break
+
+        release_at = _outside_auth_tokens(detector_text, context_length, release_at)
 
         retained = len(self._pending) - release_at
         if retained > self._lookbehind_chars:
@@ -255,8 +347,7 @@ class PublicTextSanitizer:
                 replacement=self._replacement,
             )
         )
-        context_chars = max(len(value) for value in _CREDENTIAL_MARKER_PROBES)
-        self._raw_context = combined[-context_chars:]
+        self._raw_context = _context_window(combined)
         self._public_parts.append(sanitized)
         self._public_length += len(sanitized)
         if self._public_length > self._max_public_chars:
@@ -304,11 +395,13 @@ def sanitize_public_text(
         reverse=True,
     ):
         sanitized = sanitized.replace(secret, replacement)
-    sanitized = _CREDENTIAL_PATTERNS[0].sub(replacement, sanitized)
-    sanitized = _CREDENTIAL_PATTERNS[1].sub(
+    sanitized = _AUTH_SCHEME.sub(
+        lambda match: _redact_auth_token(match, replacement), sanitized
+    )
+    sanitized = _CREDENTIAL_PATTERNS[0].sub(
         lambda match: f"{match.group(1)}{replacement}@", sanitized
     )
-    for pattern in _CREDENTIAL_PATTERNS[2:]:
+    for pattern in _CREDENTIAL_PATTERNS[1:]:
         sanitized = pattern.sub(
             lambda match: f"{match.group(1)}{replacement}", sanitized
         )

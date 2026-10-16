@@ -9,11 +9,11 @@ import pytest
 from pymongo.errors import DuplicateKeyError
 
 from common.dto import TimelinePosition
-from room.idempotency import (
+from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
 )
-from room.repository import MessageMongoRepository, RoomMongoRepository
+from conversation.repository import MessageMongoRepository, RoomMongoRepository
 
 
 class FakeMongo:

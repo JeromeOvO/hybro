@@ -423,8 +423,8 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
 
 
 def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
+    from conversation.agent_message_preparation import AgentMessagePreparationService
     from models.memory import ConversationTurn, RoomMemory, TurnRole
-    from room.agent_message_preparation import AgentMessagePreparationService
 
     class FailingAssembly:
         received_memory = None
@@ -468,7 +468,7 @@ def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
 
 
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
-    from room.deletion import RoomDeletionService
+    from conversation.deletion import RoomDeletionService
 
     source = inspect.getsource(RoomDeletionService.delete_room_by_room_id)
 
@@ -477,7 +477,7 @@ def test_room_delete_has_no_stale_direct_context_memory_cleanup():
 
 
 def test_room_delete_logs_when_context_memory_cleanup_is_unbound():
-    from room.deletion import RoomDeletionService
+    from conversation.deletion import RoomDeletionService
 
     source = inspect.getsource(RoomDeletionService._cleanup_context_memory_for_room)
 
@@ -491,7 +491,7 @@ def test_message_write_flows_do_not_call_context_memory_write_shims():
         "add_agent_response_to_memory",
     }
     checked_paths = [
-        Path("room/compat/runtime.py"),
+        Path("conversation/runtime.py"),
     ]
     violations: list[str] = []
     for path in checked_paths:
@@ -530,7 +530,8 @@ def test_context_memory_import_boundary():
         "modules",
         "openai",
         "pymongo",
-        "room",
+        "chat",
+        "conversation",
         "services",
     }
     allowed_stdlib = set(sys.stdlib_module_names) | {"__future__"}

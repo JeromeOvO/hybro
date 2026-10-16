@@ -13,6 +13,7 @@ from common.dto import (
     ProcessingStatusEvent,
     RunInfo,
 )
+from conversation import ConversationRuntime
 from execution.cancellation import CancellationPropagationResult
 from execution.facade import (
     ExecutionFacade,
@@ -31,7 +32,6 @@ from models.orchestration import (
 )
 from models.response import RoomCenterUserMessageResponse
 from models.run import RunState
-from room.route_adapter import RoomRouteAdapter
 
 
 class RecordingTaskFactory:
@@ -755,8 +755,7 @@ async def test_real_room_adapter_preserves_processing_cancellation_and_discards_
         run_message_preflight_to_room=AsyncMock(),
         discard_message_preflight=MagicMock(),
     )
-    adapter = RoomRouteAdapter(bound_room_runtime=runtime)
-    facade, _ = _make_facade(room_center=adapter)
+    facade, _ = _make_facade(room_center=runtime)
     facade._emit_room_preflight_processing_status = AsyncMock(
         side_effect=asyncio.CancelledError
     )
@@ -764,7 +763,9 @@ async def test_real_room_adapter_preserves_processing_cancellation_and_discards_
     with pytest.raises(asyncio.CancelledError):
         await facade.execute(ExecutionRequest(room_id="room-1", sender_id="user-1"))
 
-    assert not inspect.iscoroutinefunction(RoomRouteAdapter.discard_message_preflight)
+    assert not inspect.iscoroutinefunction(
+        ConversationRuntime.discard_message_preflight
+    )
     runtime.discard_message_preflight.assert_called_once_with(preflight_context)
     runtime.run_message_preflight_to_room.assert_not_awaited()
 
@@ -789,8 +790,7 @@ async def test_cleanup_failure_does_not_mask_original_processing_cancellation(ca
         run_message_preflight_to_room=AsyncMock(),
         discard_message_preflight=MagicMock(side_effect=RuntimeError("cleanup failed")),
     )
-    adapter = RoomRouteAdapter(bound_room_runtime=runtime)
-    facade, _ = _make_facade(room_center=adapter)
+    facade, _ = _make_facade(room_center=runtime)
     facade._emit_room_preflight_processing_status = AsyncMock(
         side_effect=asyncio.CancelledError("original cancellation")
     )

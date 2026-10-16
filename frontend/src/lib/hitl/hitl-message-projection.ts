@@ -1,6 +1,7 @@
 import type { HITLPromptType, TaskState } from '@/lib/types/sse'
 import { normalizeTimestampOrNow } from '@/lib/time'
 import type { IncomingMessage } from '@/stores/message-store/types'
+import type { HitlQuestionPresentation } from '@/lib/hitl/presentation'
 
 export type HitlAgentSource = 'cloud' | 'local' | 'hub' | undefined
 
@@ -12,6 +13,7 @@ export type PendingHitlProjectionInput = {
   prompt: string | null | undefined
   promptType: string | null | undefined
   choices: string[] | null | undefined
+  presentation?: HitlQuestionPresentation
   timestamp: string | null | undefined
   agentId: string | null | undefined
   agentName: string | null | undefined
@@ -117,6 +119,7 @@ export function buildPendingHitlIncomingMessage(
     hitlPrompt: input.prompt || '',
     hitlPromptType: normalizePromptType(input.promptType),
     hitlChoices: Array.isArray(input.choices) ? input.choices : null,
+    hitlPresentation: input.presentation,
     hitlExpiresAt: input.expiresAt ?? undefined,
     hitlResolved: false,
     hitlInteractionId: input.interactionId ?? input.groupId ?? input.requestId,

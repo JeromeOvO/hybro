@@ -29,6 +29,10 @@ from common.dto import (
     HITLRouteSnapshot,
 )
 from common.dto.hitl import A2AInteractionSpec, HITLAnswerKind, HITLInteractionKind
+from common.public_prompt import (
+    GENERIC_AGENT_INPUT_PROMPT,
+    concrete_agent_input_prompt,
+)
 from common.utils.a2a_helpers import (
     is_authoritative_a2a_id as _is_authoritative_a2a_id,
 )
@@ -45,10 +49,6 @@ from execution.hitl.exceptions import (
     HITLRequestProjectionError,
     HITLRoomMismatchError,
     HITLRoutingFailedError,
-)
-from execution.hitl.public_prompt import (
-    GENERIC_AGENT_INPUT_PROMPT,
-    concrete_agent_input_prompt,
 )
 from execution.hitl.validation import (
     HITLAggregateCorruptionError,
@@ -183,6 +183,7 @@ class HITLService:
         supervisor_resume=None,
         canonical_cancellation_requester=None,
         public_secret_values=(),
+        approval_deadline_hours: float | None = None,
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
@@ -201,6 +202,8 @@ class HITLService:
         self._public_secret_values = tuple(
             value for value in public_secret_values if isinstance(value, str) and value
         )
+        # None means interactions wait for the owner without a deadline.
+        self._approval_deadline_hours = approval_deadline_hours
 
     @property
     def persistence(self):
@@ -249,7 +252,6 @@ class HITLService:
         route_snapshot: HITLRouteSnapshot,
         questions: list[dict[str, Any]],
         orchestration_run_id: str | None = None,
-        expires_in_hours: float = 24.0,
     ) -> list[HITLRequest] | None:
         """Validate and create one complete ordered persisted interaction."""
 
@@ -324,7 +326,11 @@ class HITLService:
 
         if self._lifecycle is None:
             raise HITLRequestProjectionError("HITL lifecycle persistence is required")
-        shared_expiry = utcnow() + timedelta(hours=expires_in_hours)
+        shared_expiry = (
+            utcnow() + timedelta(hours=self._approval_deadline_hours)
+            if self._approval_deadline_hours is not None
+            else None
+        )
         interaction = HITLInteraction(
             schema_version=3,
             interaction_id=interaction_id,
@@ -420,7 +426,6 @@ class HITLService:
         continuation_message_id: str | None = None,
         display_message_id: str | None = None,
         orchestration_run_id: str | None = None,
-        expires_in_hours: float = 24.0,
         expires_at: Any | None = None,
         request_id: str | None = None,
     ) -> HITLRequest | None:
@@ -530,7 +535,7 @@ class HITLService:
             display_message_id=resolved_display_message_id,
             client_request_id=resolved_client_request_id,
             orchestration_run_id=orchestration_run_id,
-            expires_at=expires_at or (utcnow() + timedelta(hours=expires_in_hours)),
+            expires_at=expires_at,
         )
         if request_id:
             request_data["request_id"] = request_id

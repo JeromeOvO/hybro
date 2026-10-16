@@ -56,6 +56,8 @@ def route_group_for_path(path: str) -> str:
         return "room"
     if matches("/rooms") and "/hitl" in normalized:
         return "hitl"
+    if matches("/sessions"):
+        return "session"
     if matches("/sse"):
         return "sse"
     if matches("/webhooks"):

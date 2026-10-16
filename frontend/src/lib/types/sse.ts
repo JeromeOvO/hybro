@@ -300,6 +300,10 @@ export type HITLInputRequestedData = RoomEventMeta & {
   prompt: string
   prompt_type: string
   choices?: unknown
+  header?: string | null
+  required?: boolean
+  allow_other?: boolean
+  choice_options?: unknown
   agent_id?: string | null
   agent_name?: string | null
   agent_label?: string | null

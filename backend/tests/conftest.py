@@ -634,6 +634,7 @@ def make_api_gateway_deps(
             return_value=ExecutionAck(success=True, message_id="new-message-id")
         )
         execution_engine.start_orchestration = AsyncMock()
+        execution_engine.schedule_orchestration = MagicMock()
         execution_engine.get_runs_for_room = AsyncMock(return_value=[])
         execution_engine.cancel = AsyncMock(return_value=True)
 
@@ -671,6 +672,7 @@ def make_api_gateway_deps(
             "execution_engine": execution_engine,
             "sse_store": mock_db_service,
             "sse_transport": mock_sse_transport,
+            "session_facade": MagicMock(),
         }
         defaults.update(overrides)
         return APIGatewayDeps(**defaults)

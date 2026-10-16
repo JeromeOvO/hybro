@@ -1,5 +1,6 @@
 import type { McpStatus } from '@/lib/mcp'
 import type { RoomHistoryStatus } from '@/lib/api/room'
+import type { SessionState } from '@/lib/api/session'
 import type { NetworkAgent } from '@/components/networks/types'
 
 export type StatusTone = 'online' | 'offline' | 'unverified' | 'warning' | 'error'
@@ -44,6 +45,17 @@ export function roomStatusView(status: RoomHistoryStatus): StatusView | null {
     case 'processing': return view('Running', 'offline', 'spinner')
     case 'awaiting_input': return view('Needs input', 'warning', 'filled', true)
     default: return null
+  }
+}
+
+export function sessionStateView(state: SessionState): StatusView {
+  switch (state) {
+    case 'waiting_on_owner': return view('Needs you', 'warning', 'filled', true)
+    case 'working': return view('Working', 'offline', 'spinner')
+    case 'completed': return view('Completed', 'online', 'filled')
+    case 'rejected': return view('Rejected', 'offline', 'hollow')
+    case 'failed': return view('Failed', 'error', 'filled')
+    case 'closed': return view('Closed', 'offline', 'hollow')
   }
 }
 

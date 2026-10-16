@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from runtime_config import get_config
 
@@ -19,6 +19,10 @@ or Duration (how many days/nights), you MUST call the AskUserForClarification to
 of generating a response:
 - Destination (where they want to go)
 - Duration (how many days/nights)
+
+Ask one short question per missing detail, each with a 1-2 word header such as
+"Destination" or "Duration", and offer 2-4 suggested choices when sensible answers
+exist. The user can always type their own answer, so never add an "Other" choice.
 
 If BOTH destination and duration are provided (either in the initial query or across prior
 turns in the conversation history), you MUST NOT call the AskUserForClarification tool.
@@ -45,6 +49,81 @@ For itineraries:
 Always maintain a helpful, enthusiastic but realistic tone and acknowledge
 any limitations in your knowledge when appropriate.
 """
+
+
+FALLBACK_QUESTION = "Could you provide more details?"
+
+
+class ClarifyingChoice(BaseModel):
+    label: str = Field(description="A short suggested answer, 1-5 words")
+    description: str | None = Field(
+        default=None, description="One short line explaining this choice"
+    )
+
+
+class ClarifyingQuestion(BaseModel):
+    header: str = Field(
+        description="A 1-2 word label for the question, such as 'Destination'"
+    )
+    question: str = Field(description="One short question about a single detail")
+    choices: list[ClarifyingChoice] = Field(
+        default_factory=list,
+        description="2-4 suggested answers; leave empty for free-form answers",
+    )
+    multi_select: bool = Field(
+        default=False, description="True when several choices may apply"
+    )
+
+
+class AskUserForClarification(BaseModel):
+    """Ask the user for missing trip details, one short question per detail."""
+
+    questions: list[ClarifyingQuestion] = Field(min_length=1, max_length=4)
+
+
+def clarifying_questions(args: object) -> list[dict]:
+    """Normalized questions from the tool call, or one fallback question."""
+
+    try:
+        call = AskUserForClarification.model_validate(args)
+    except ValidationError:
+        return [
+            {
+                "header": None,
+                "question": FALLBACK_QUESTION,
+                "choices": [],
+                "multi_select": False,
+            }
+        ]
+    questions = []
+    for item in call.questions:
+        choices, seen = [], set()
+        for choice in item.choices:
+            label = choice.label.strip()[:200]
+            if label and label not in seen:
+                seen.add(label)
+                description = (choice.description or "").strip()[:500] or None
+                choices.append({"label": label, "description": description})
+        questions.append(
+            {
+                "header": item.header.strip()[:40] or None,
+                "question": item.question.strip() or FALLBACK_QUESTION,
+                "choices": choices if len(choices) >= 2 else [],
+                "multi_select": item.multi_select,
+            }
+        )
+    return questions
+
+
+def questions_text(questions: list[dict]) -> str:
+    """Plain-text form for A2A clients and the task history."""
+
+    return "\n".join(
+        f"{question['header']}: {question['question']}"
+        if question["header"]
+        else question["question"]
+        for question in questions
+    )
 
 
 class TravelPlannerAgent:
@@ -84,11 +163,6 @@ class TravelPlannerAgent:
         try:
             model = self._ensure_model()
 
-            class AskUserForClarification(BaseModel):
-                """Call this when you need the user to clarify something, like specific dates, cities, or preferences."""
-
-                question: str = Field(description="The question to ask the user")
-
             model_with_tools = model.bind_tools([AskUserForClarification])
 
             messages: list = [SystemMessage(content=SYSTEM_PROMPT)]
@@ -114,19 +188,7 @@ class TravelPlannerAgent:
                 tool_calls = getattr(full_response, "tool_calls", None) or []
                 for tc in tool_calls:
                     if tc.get("name") == "AskUserForClarification":
-                        args = tc.get("args") or {}
-                        question = (
-                            args.get("question")
-                            if isinstance(args, dict)
-                            else None
-                        )
-                        if not isinstance(question, str) or not question.strip():
-                            question = "Could you provide more details?"
-                        yield {
-                            "content": question.strip(),
-                            "done": True,
-                            "status": "input_required",
-                        }
+                        yield self._input_required(tc.get("args"))
                         return
 
                 invalid_tool_calls = (
@@ -134,11 +196,7 @@ class TravelPlannerAgent:
                 )
                 for itc in invalid_tool_calls:
                     if itc.get("name") == "AskUserForClarification":
-                        yield {
-                            "content": "Could you provide more details?",
-                            "done": True,
-                            "status": "input_required",
-                        }
+                        yield self._input_required(None)
                         return
 
             yield {"content": "", "done": True}
@@ -149,3 +207,13 @@ class TravelPlannerAgent:
                 "content": "Sorry, an error occurred while processing your request.",
                 "done": True,
             }
+
+    @staticmethod
+    def _input_required(args: object) -> dict[str, Any]:
+        questions = clarifying_questions(args)
+        return {
+            "content": questions_text(questions),
+            "done": True,
+            "status": "input_required",
+            "questions": questions,
+        }

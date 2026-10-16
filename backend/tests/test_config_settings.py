@@ -248,3 +248,31 @@ def test_webhook_signing_key_rejects_short_configured_value() -> None:
         match="WEBHOOK_SIGNING_KEY must be at least 32 bytes",
     ):
         Settings(webhook_signing_key="too-short")
+
+
+def test_wait_semantics_settings_default_to_no_approval_deadline_and_week_ceiling():
+    settings = Settings()
+
+    assert settings.approval_deadline_hours is None
+    assert settings.orchestrator_call_wait_ceiling_hours == 168.0
+
+
+@pytest.mark.parametrize("value", [48, 48.5])
+def test_wait_semantics_settings_accept_int_and_float_hours(value) -> None:
+    settings = Settings.model_validate(
+        {
+            "approval_deadline_hours": value,
+            "orchestrator_call_wait_ceiling_hours": value,
+        }
+    )
+
+    assert settings.approval_deadline_hours == value
+    assert settings.orchestrator_call_wait_ceiling_hours == value
+
+
+@pytest.mark.parametrize(
+    "field", ["approval_deadline_hours", "orchestrator_call_wait_ceiling_hours"]
+)
+def test_wait_semantics_settings_reject_zero(field) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({field: 0})

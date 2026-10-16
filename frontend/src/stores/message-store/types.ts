@@ -1,3 +1,4 @@
+import type { HitlQuestionPresentation } from '@/lib/hitl/presentation'
 import type { TaskState } from '@/lib/types/sse'
 import type { HITLPromptType } from '@/lib/types/sse'
 import type { AttachmentData } from '@/lib/types/attachments'
@@ -88,6 +89,7 @@ export interface MessageEntity {
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType
   hitlChoices?: string[] | null
+  hitlPresentation?: HitlQuestionPresentation
   hitlExpiresAt?: string
   hitlResolved?: boolean
   hitlInteractionId?: string
@@ -172,6 +174,7 @@ export interface IncomingMessage {
   hitlPrompt?: string
   hitlPromptType?: HITLPromptType
   hitlChoices?: string[] | null
+  hitlPresentation?: HitlQuestionPresentation
   hitlExpiresAt?: string
   hitlResolved?: boolean
   hitlInteractionId?: string

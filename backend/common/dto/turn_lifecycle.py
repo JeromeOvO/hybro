@@ -23,7 +23,7 @@ class RunStartedPayload(CanonicalEventPayloadDTO):
     hybro_turn_id: PublicId
     user_message_id: PublicId
     started_at: PublicTimestamp
-    mode: Literal["fast", "direct", "ultimate", "supervisor"]
+    mode: Literal["fast", "direct", "ultimate", "supervisor", "passthrough"]
 
 
 class TurnStartPayload(CanonicalEventPayloadDTO):

@@ -371,3 +371,52 @@ def test_status_does_not_create_runtime_or_read_dotenv(monkeypatch, tmp_path):
     assert cli.main(["status"]) == 0
     assert calls[0][-2:] == ["ps", "--all"]
     assert not runtime.home.exists()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("48", 48), ("48.5", 48.5), ("null", None)],
+)
+def test_config_set_round_trips_approval_deadline_hours(
+    monkeypatch, tmp_path, raw, expected
+):
+    from common.config.loader import validate_backend
+
+    runtime = configured(tmp_path)
+    monkeypatch.setenv("HYBRO_HOME", str(runtime.home))
+
+    assert cli.main(["config", "set", "backend.approval_deadline_hours", raw]) == 0
+
+    backend = runtime.read_config().backend
+    assert backend["approval_deadline_hours"] == expected
+    assert validate_backend(backend).approval_deadline_hours == expected
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("48", 48), ("48.5", 48.5)])
+def test_config_set_round_trips_call_wait_ceiling_hours(
+    monkeypatch, tmp_path, raw, expected
+):
+    from common.config.loader import validate_backend
+
+    runtime = configured(tmp_path)
+    monkeypatch.setenv("HYBRO_HOME", str(runtime.home))
+
+    assert (
+        cli.main(["config", "set", "backend.orchestrator_call_wait_ceiling_hours", raw])
+        == 0
+    )
+
+    backend = runtime.read_config().backend
+    assert backend["orchestrator_call_wait_ceiling_hours"] == expected
+    assert validate_backend(backend).orchestrator_call_wait_ceiling_hours == expected
+
+
+@pytest.mark.parametrize(
+    "field", ["approval_deadline_hours", "orchestrator_call_wait_ceiling_hours"]
+)
+def test_config_set_rejects_zero_wait_hours(monkeypatch, tmp_path, field):
+    runtime = configured(tmp_path)
+    monkeypatch.setenv("HYBRO_HOME", str(runtime.home))
+
+    assert cli.main(["config", "set", f"backend.{field}", "0"]) == 1
+    assert field not in runtime.read_config().backend

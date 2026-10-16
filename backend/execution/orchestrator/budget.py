@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .models import BudgetState, OrchestratorProfile, UsageRecord
 
@@ -207,4 +207,35 @@ class BudgetPolicy:
             raise BudgetExceeded("output_tokens")
 
 
-__all__ = ["AttemptUsageLedger", "BudgetExceeded", "BudgetPolicy"]
+def resumed_deadline_at(budget: BudgetState, *, now: datetime) -> datetime:
+    """Return the deadline after resuming at ``now``, extended by the pause."""
+    if budget.suspended_at is None:
+        return budget.deadline_at
+    return budget.deadline_at + max(now - budget.suspended_at, timedelta(0))
+
+
+def apply_suspension_clock(
+    budget: BudgetState, *, suspended: bool, now: datetime
+) -> BudgetState:
+    """Stop the deadline clock while suspended; extend the deadline on resume."""
+    if suspended:
+        if budget.suspended_at is not None:
+            return budget
+        return budget.model_copy(update={"suspended_at": now})
+    if budget.suspended_at is None:
+        return budget
+    return budget.model_copy(
+        update={
+            "deadline_at": resumed_deadline_at(budget, now=now),
+            "suspended_at": None,
+        }
+    )
+
+
+__all__ = [
+    "AttemptUsageLedger",
+    "BudgetExceeded",
+    "BudgetPolicy",
+    "apply_suspension_clock",
+    "resumed_deadline_at",
+]

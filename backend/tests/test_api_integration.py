@@ -154,8 +154,8 @@ class TestRoomCenterHTTPIntegration:
         integration_user,
         pagination,
     ):
+        from conversation.runtime import ConversationRuntime
         from models.room import Room
-        from room.compat.runtime import RoomServices
 
         mock_room = Room(
             room_id="room-http-invalid-page",
@@ -170,7 +170,9 @@ class TestRoomCenterHTTPIntegration:
         from api_gateway.routes import room_routes as room_api
 
         integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
-        integration_app.dependency_overrides[room_api.get_room_center] = RoomServices
+        integration_app.dependency_overrides[room_api.get_room_center] = (
+            ConversationRuntime
+        )
         try:
             resp = await http_client.post(
                 "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",

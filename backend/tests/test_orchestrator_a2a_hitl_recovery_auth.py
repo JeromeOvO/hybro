@@ -1955,3 +1955,80 @@ async def test_same_call_later_auth_challenge_cannot_reuse_consumed_reference():
         )
     assert await hitl.read_answer_record(second_spec.interaction_id, 1) is None
     assert len(dispatch.commands) == 1
+
+
+async def _schedule_call(ledger, call_record_id, next_attempt_at):
+    """Simulate call recovery releasing a parked call into a retry window."""
+    current = await ledger.load_by_record_id(call_record_id)
+    scheduled = current.model_copy(
+        update={
+            "next_attempt_at": next_attempt_at,
+            "state_version": current.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(scheduled, expected_state_version=current.state_version)
+        == "accepted"
+    )
+
+
+async def test_owner_answer_in_a_recovery_retry_window_dispatches_now():
+    """A parked call scheduled for its next poll must not refuse the answer.
+
+    Call recovery releases parked calls with a short retry delay. An owner
+    answer that lands inside that window used to lose the claim and return
+    the parked state without dispatching the continuation.
+    """
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting()
+    await _schedule_call(
+        ledger, call.call_record_id, datetime.now(UTC) + timedelta(seconds=30)
+    )
+
+    state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+
+    assert state == "working"
+    assert len(dispatch.commands) == 1
+
+
+async def test_recovery_dispatches_an_applied_answer_left_without_a_command():
+    """An answer recorded while another worker held the claim is recovered."""
+    coordinator, ledger, _, _, dispatch, call, route = await setup_waiting()
+    current = await ledger.load_by_record_id(call.call_record_id)
+    held = current.model_copy(
+        update={
+            "claim_owner": "other-worker",
+            "claim_expires_at": datetime.now(UTC) + timedelta(seconds=30),
+            "state_version": current.state_version + 1,
+        }
+    )
+    assert (
+        await ledger.cas(held, expected_state_version=current.state_version)
+        == "accepted"
+    )
+
+    state = await coordinator.resume(
+        call_record_id=call.call_record_id,
+        interaction_id="interaction-1",
+        interaction_revision=1,
+        route_fingerprint=route.fingerprint,
+        answers=questionnaire_answers(),
+        authenticated_answerer_id="user-1",
+    )
+    assert state == "input_required"
+    persisted = await ledger.load_by_record_id(call.call_record_id)
+    assert persisted.answer_applied is not None
+    assert persisted.continuation_command is None
+    assert dispatch.commands == []
+
+    await expire_claim(ledger, call.call_record_id)
+    recovery = A2AContinuationRecoveryService(coordinator, ledger)
+    assert await recovery.recover_due(due_at=datetime.now(UTC)) == 1
+    assert (await ledger.load_by_record_id(call.call_record_id)).state == "working"
+    assert len(dispatch.commands) == 1

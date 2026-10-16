@@ -3,7 +3,7 @@ Integration tests for Agent Matching & Dispatch Pipeline
 
 End-to-end tests verifying data flow across:
 - AgentMatcher → AgentSelectionService
-- RoomServices explicit routing scopes
+- ConversationRuntime explicit routing scopes
 - Scope resolution
 - required_input_modes threading
 
@@ -22,10 +22,10 @@ from agent.matcher import (
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
 from common.types import AgentCapabilities, AgentCard
+from conversation.runtime import ConversationRuntime
 from models.agent import Agent, AgentStatus
 from models.room import MessageContent, RoomUserMessage, UserAttachment
 from models.room_services_models import ResolvedRoutingScope
-from room.compat.runtime import RoomServices
 
 # ---- Test Helpers ----
 
@@ -120,10 +120,10 @@ async def test_room_team_bypasses_matcher():
         side_effect=lambda aid: _make_agent(aid, f"Agent {aid}", f"Test agent {aid}")
     )
 
-    room_runtime = RoomServices()
-    room_runtime._store = mock_db
+    conversation_runtime = ConversationRuntime()
+    conversation_runtime._store = mock_db
 
-    result = await room_runtime._resolve_explicit_target_scope(
+    result = await conversation_runtime._resolve_explicit_target_scope(
         room=room,
         message_text="Test message",
         target_group="room_team",
@@ -154,12 +154,12 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         room_owner_id="user123",
         room_owner_name="Test User",
     )
-    room_runtime = RoomServices()
-    room_runtime._store = MagicMock()
-    room_runtime._store.get_all_active_agents = AsyncMock(return_value=agents)
-    room_runtime._sanitize_routing_scope = AsyncMock(return_value=(agents, []))
+    conversation_runtime = ConversationRuntime()
+    conversation_runtime._store = MagicMock()
+    conversation_runtime._store.get_all_active_agents = AsyncMock(return_value=agents)
+    conversation_runtime._sanitize_routing_scope = AsyncMock(return_value=(agents, []))
 
-    result = await room_runtime._resolve_explicit_target_scope(
+    result = await conversation_runtime._resolve_explicit_target_scope(
         room=room,
         message_text="A request that lexical search would normally filter",
         target_group="all_agents",
@@ -173,10 +173,10 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
     }
     assert result.auto_assign_agents is True
     assert result.agents == agents
-    room_runtime._store.get_all_active_agents.assert_awaited_once_with(
+    conversation_runtime._store.get_all_active_agents.assert_awaited_once_with(
         user_id="user123"
     )
-    room_runtime._sanitize_routing_scope.assert_awaited_once_with(
+    conversation_runtime._sanitize_routing_scope.assert_awaited_once_with(
         ["agent1", "agent2"],
         sender_user_id="user123",
         required_input_modes=None,
@@ -215,8 +215,8 @@ async def test_derive_required_input_modes_flows_to_matcher():
     )
 
     # Derive required_input_modes
-    room_runtime = RoomServices()
-    required_modes = room_runtime._derive_required_input_modes(user_message)
+    conversation_runtime = ConversationRuntime()
+    required_modes = conversation_runtime._derive_required_input_modes(user_message)
 
     # Verify MIME types extracted
     assert required_modes == ["application/pdf", "image/jpeg"]

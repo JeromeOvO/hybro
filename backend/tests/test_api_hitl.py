@@ -191,6 +191,8 @@ class TestGetPendingHitlRequests:
             "prompt": "Approve this action?",
             "prompt_type": "choice",
             "choices": ["Approve", "Reject"],
+            "required": True,
+            "allow_other": False,
             "source": "agent",
             "agent_id": "agent-public-1",
             "agent_name": "Researcher",

@@ -147,6 +147,8 @@ src/app/
     |-- chat/page.tsx
     |-- pricing/page.tsx
     |-- room/[id]/page.tsx
+    |-- sessions/page.tsx        # Sessions workspace: searchable list, no selection
+    |-- sessions/[id]/page.tsx   # same workspace with the session record selected
     |-- agents/page.tsx          # redirect -> /network
     |-- agents/[id]/page.tsx     # redirect -> /network/agents/[id]
     |-- agents/new/page.tsx      # redirect -> /network/agents/new
@@ -173,7 +175,7 @@ The application exposes one unprefixed route tree with four destinations:
   error page. Search updates replace the history entry; other params push one.
 - `/network/agents/[id]` and `/network/agents/new`: agent detail and remote
   agent registration.
-- `/chat` and `/room/[id]`: Room Chat (unchanged chat home and room workspace).
+- `/chat` and `/room/[id]`: Chats (unchanged chat home and room workspace).
 - `/connect/mcp` and `/connect/api`: Connect pages (MCP and API tabs).
 
 There is no host-based route rewrite. Legacy `/agents*`, `/networks`,
@@ -283,7 +285,8 @@ src/hooks/
 |-- useNetworks.ts             # owner-scoped subnet queries, agent inventory, and confirmed CRUD writes
 |-- useNetworkUrlState.ts      # Network workspace URL state bound to the router
 |-- useGraphDisplayPrefs.ts    # graph label switches persisted in localStorage
-|-- useRoomHistory.ts          # shared room history query (sidebar, Room Chat badge, Overview)
+|-- useRoomHistory.ts          # shared room history query (sidebar, Chats badge, Overview)
+|-- useSessions.ts             # owner session list, polled every 15 s (sidebar badge, Overview, /sessions)
 |-- useMcpStatus.ts            # shared /hybro-mcp gateway status query
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- usePrimaryStreamScroll.ts
@@ -795,6 +798,7 @@ src/lib/api/
 |-- agent.ts
 |-- agent-group.ts
 |-- room.ts
+|-- session.ts                 # owner session list, record, close, event replay
 |-- sse.ts
 |-- inspection.ts
 |-- files.ts
@@ -865,11 +869,20 @@ default.
 The `(portal)` route group provides one shared shell without adding a URL
 segment.
 
-- `/`: Overview. Four metric tiles (Agents, Subnets, Gateway, Rooms), a
-  **Needs attention** list (rooms needing input, gateway not ready, offline
-  agents, agents in no subnet), a static mini topology linking to `/network`,
-  recent rooms, and most-called agents. Derivation lives in `src/lib/overview.ts`.
-  Call counters are labeled **Room calls**; direct MCP and API sends are not counted.
+- `/`: Overview, stacked line by line: a visible title with **Add agent** and
+  **New chat**; four clickable tiles in the order Sessions (open, and how many
+  need you; opens `/sessions` filtered to Needs you when any do), Chats (how
+  many need input), Agents (offline count when any), and MCP gateway (its
+  status, plus "Check the connection" only when it is not ready). Each tile's
+  number takes its side-menu icon color: Sessions and Chats green
+  (`text-icon-create`), Agents blue (`text-icon-network`), and MCP gateway
+  purple (`text-hybro-bro`, also the Connect icon); Recent
+  sessions and Recent chats (five each, anything waiting on the owner first,
+  then the latest) in one shared row design of title, a grey line of who and
+  when, and status; the static mini topology linking to `/network`; and
+  Most-called agents with their avatar and call count, last. Derivation lives
+  in `src/lib/overview.ts`. Call counts are the agent's `call_count`, which
+  counts every orchestrator agent call from Chat and Sessions once it finishes.
 - `/core`: Hybro Core product page. The hero composer is the same `RoomChatInput`
   as `/chat`, with group and mode menus visible but non-selectable and mention
   and attach buttons visible but non-clickable. While idle it typewrites the
@@ -878,6 +891,42 @@ segment.
   n8n, CrewAI, LangChain, and LangGraph. Send-on-demo creates a room named after the current
   use case, seeds those Agents, and prefills the prompt without auto-sending or a sign-in redirect.
 - `/chat` and `/room/[id]`: chat creation and real-time room workspace.
+- `/sessions` and `/sessions/[id]`: client sessions opened through MCP or
+  `POST /sessions/messages`, shown as a work-ticket system on two pages. The
+  list (`SessionsTablePage`) is a table of Name (the session title, or
+  "Untitled session" for sessions opened before titles existed), Status,
+  Requester, Created, and Updated. A top search covers names, requesters,
+  agents, and session IDs; each column header sorts and has a filter menu
+  (name contains, status and requester checkboxes, time presets for Created
+  and Updated). The view lives in the URL (`src/lib/session-list-state.ts`,
+  `useSessionListUrlState`), which builds each change on the last requested
+  URL so quick successive changes are not lost; the query is also kept in
+  `sessionStorage` so a ticket's back link returns to the same view. On narrow
+  screens the requester and update time move under the name. The ticket page
+  (`SessionRecordView`) shows the title, a chronological record, and a
+  Details panel (status, requester, agents, created, updated, closed, request
+  count, copyable session ID, Close session with confirmation). The record is
+  built by `foldSessionEvents` (`src/lib/session-record.ts`) from the room
+  event replay (`GET /sse/room/{id}/events`, paged 1000 events at a time up to
+  the log's latest sequence) and reads as plain sentences with
+  an avatar per actor (a registered agent's own `getAgentAvatarUri` avatar,
+  matched by name to the session's agents; a generic agent avatar for the
+  external requester or an unmatched agent; "You" for the owner): the requester asked an agent, the agent asked you (each
+  question under its header), you answered (your answer text) or rejected,
+  the agent replied after its duration (long replies fold behind Show full
+  reply), or couldn't finish. A pending question appears at the end of the
+  record in the same `HitlResponseBar` card the chat composer uses (pending
+  rows from `GET /rooms/{id}/hitl/pending` mapped with the shared
+  `hitlLifecycleState`; Send calls `respondToHitlBatch`, Reject cancels through
+  `cancelHitl`), and the page opens scrolled to it. The record, events, and
+  pending questions poll every 4 s while the session is working or waiting
+  and every 20 s otherwise. Times are formatted in English
+  (`src/lib/session-format.ts`)
+  whatever the browser locale. The sidebar **Sessions** entry carries its own
+  badge with the number of sessions in `waiting_on_owner`; `useSessions` polls
+  unconditionally every 15 s because sessions are created outside the app.
+  Chat history and the Overview Chats tile exclude session containers because
+  the backend history filters them out.
 - `/network`: the Network workspace (see below), replacing the former Agents
   card grid and Subnets page.
 - `/network/agents/[id]`: AgentCard detail with Chat, Documentation, Share, and
@@ -911,15 +960,17 @@ navigation do not occur until the user sends the message. Failed creates perform
 one catalog refresh as a compatibility fallback.
 
 The shared side menu is `PortalSidebar`, a 14.5rem Sidebar with a 4rem
-icon-only collapsed state. `NavAgent` renders the four flat `CONSUMER_NAV`
+icon-only collapsed state. `NavAgent` renders the five flat `CONSUMER_NAV`
 destinations; the active item's icon uses the primary color:
 
 - **Overview** opens `/` (exact match only).
 - **Network** opens `/network` and stays active on `/network/*`.
-- **Room Chat** opens `/chat` and remains active on Room routes. It shows a count
+- **Sessions** opens `/sessions` and stays active on `/sessions/*`. It shows a
+  count badge for sessions in `waiting_on_owner`.
+- **Chats** opens `/chat` and remains active on Room routes. It shows a count
   badge (a dot when collapsed) for rooms with `awaiting_input` status, read from
   the shared `useRoomHistory` query; the accessible name becomes
-  "Room Chat, N need input".
+  "Chats, N need input".
 - **Connect** opens `/connect/mcp` and stays active on `/connect/*`.
 
 The same primary menu is used on `/core`, the other existing portal pages, and
@@ -946,7 +997,7 @@ the existing bottom Sheet. Original page content, Room workflows, and
 
 Chat history uses the lightweight authenticated `GET /roomCenter/history`
 resource through the shared `useRoomHistory` TanStack Query hook (also used by
-the Room Chat badge and the Overview). Each row shows the shared status indicator:
+the Chats badge and the Overview). Each row shows the shared status indicator:
 `queued` is **Queued**, `processing` is **Running** (spinner only without
 reduced motion), `awaiting_input` is **Needs input** with the warning color,
 and `idle` shows nothing.
@@ -1173,7 +1224,7 @@ Important generated/local-only files:
 Every message send carries two immutable fields alongside `client_request_id`:
 
 ```ts
-type ExecutionMode = 'direct' | 'supervisor'
+type ExecutionMode = 'direct' | 'supervisor'  // chat sends
 type AgentScopeInput =
   | { source: 'mention'; agent_ids: [string, ...string[]] }
   | { source: 'room_default' }
@@ -1181,7 +1232,9 @@ type AgentScopeInput =
   | { source: 'saved_group'; group_id: string }
 ```
 
-Fast maps to `direct`; Ultimate maps to `supervisor`. Changing the selector remains
+Fast maps to `direct`; Ultimate maps to `supervisor`. The canonical
+`run_started` payload also accepts `passthrough`, the model-free mode the
+backend uses for session sends; the chat composer never sends it. Changing the selector remains
 local until the user sends a message. `SendMessage` emits `mode` and `agent_scope`;
 before handing a valid, authorized send attempt to Execution, the backend atomically
 persists a changed mode as `room.extend_info.use_supervisor` without replacing other
@@ -1267,7 +1320,17 @@ contradiction rejects the whole snapshot and requests recovery without advancing
 watermark. This lets snapshot-first hydration recreate the pending message entity and
 composer response controls atomically. The Composer exclusively owns
 question text and answer controls through the shadcn `Questionnaire` primitive composed
-inside the shared `Card`, `Input`, and `Button` surfaces. While the Turn awaits input,
+inside one flat bordered card (`HitlResponseBar`, shared with Sessions). Several
+questions in one interaction show as header tabs that mark answered questions; choices
+show their labels, descriptions, and number shortcuts; `allow_other` adds an Other row
+with its own text field; optional questions offer Skip (or Skip and send on the last
+one) and are left out of the submitted answers. A single approval or yes/no
+question is a decision card instead: the prompt with two buttons (Approve and a red
+Reject, or Confirm and Decline) that send the answer in one click. Presentation fields from the
+`hitl_request` frame, snapshot requests, and pending rows are parsed once by
+`parseHitlPresentation` (`src/lib/hitl/presentation.ts`) into the message entity's
+`hitlPresentation`. On other cards the red Reject asks for confirmation before
+canceling the interaction. While the Turn awaits input,
 the canonical Final slot stays empty and the Conversation Body retains only the
 truthful `Asking you · Waiting for input` Trace event. Compatibility legacy HITL
 projections for the same active canonical interaction are suppressed from the Body so

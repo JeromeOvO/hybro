@@ -3,10 +3,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 class TestMissingFileId:
     async def test_resolve_attachments_missing_file(self):
+        from conversation.runtime import ConversationRuntime
         from models.response import RoomCenterUserMessageResponse
-        from room.compat.runtime import RoomServices
 
-        svc = RoomServices()
+        svc = ConversationRuntime()
         svc.database_service = MagicMock()
 
         reader = MagicMock()

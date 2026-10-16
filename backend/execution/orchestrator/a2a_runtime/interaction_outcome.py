@@ -16,11 +16,15 @@ from common.dto.delivery import (
     HITLRequestEvent,
     HITLResolvedEvent,
 )
-from common.dto.hitl import A2AInteractionSpec
+from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
 
 from ..models import TextPart, ToolResult
 from .errors import RecoverableCheckpointError
-from .hitl_prompt import prompt_type_for_question
+from .hitl_prompt import (
+    prompt_type_for_question,
+    public_answer_text,
+    public_question_fields,
+)
 from .ledger import apply_observation, transition_call
 from .models import AgentCallLedgerRecord, NormalizedA2AObservation
 from .ports import HITLApplicationPort
@@ -373,6 +377,10 @@ async def emit_hitl_request_events(
                 else question.prompt
             ),
             prompt_type=prompt_type_for_question(question),
+            **public_question_fields(
+                question,
+                secret_values=public_secret_values if canonical else None,
+            ),
             choices=(
                 [
                     _public_text(
@@ -418,6 +426,8 @@ async def emit_hitl_resolved_events(
     run_store: Any | None = None,
     canonical_control: CanonicalHITLControlPublisher | None = None,
     answer_ref: str | None = None,
+    answers: list[HITLQuestionAnswer] | None = None,
+    public_secret_values: tuple[str, ...] = (),
 ) -> None:
     run = await _load_hitl_run(record, run_store)
     canonical = getattr(run, "lifecycle_family", None) == "canonical"
@@ -432,9 +442,11 @@ async def emit_hitl_resolved_events(
     if canonical and (not related_user_message_id or not client_request_id):
         raise RuntimeError("canonical HITL response has no exact Turn root")
     message_id = public_activity_message_id(record, run)
+    answered = {answer.question_id: answer.answer for answer in answers or ()}
     request_ids: list[str] = []
     for index, question in enumerate(interaction.questions):
         request_ids.append(question.question_id)
+        given = answered.get(question.question_id)
         event = HITLResolvedEvent(
             room_id=record.room_id,
             run_id=record.run_id if canonical else None,
@@ -448,6 +460,12 @@ async def emit_hitl_resolved_events(
             question_count=len(interaction.questions),
             question_index=index,
             answer_ref=answer_ref if canonical else None,
+            answer_text=(
+                public_answer_text(question, given, secret_values=public_secret_values)
+                or None
+                if given is not None and status == "responded"
+                else None
+            ),
             related_message_id=(None if canonical else related_user_message_id),
             related_user_message_id=(related_user_message_id if canonical else None),
             client_request_id=client_request_id,

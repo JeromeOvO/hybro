@@ -235,6 +235,19 @@ def to_sse_frame(
         }
         _add_optional(data, "run_id", event.run_id)
         _add_optional(data, "choices", event.choices)
+        _add_optional(data, "header", event.header)
+        data["required"] = event.required
+        data["allow_other"] = event.allow_other
+        _add_optional(
+            data,
+            "choice_options",
+            [
+                option.model_dump(mode="json", exclude_none=True)
+                for option in event.choice_options
+            ]
+            if event.choice_options is not None
+            else None,
+        )
         _add_optional(data, "agent_id", event.agent_id)
         _add_optional(data, "agent_name", event.agent_name)
         _add_optional(data, "agent_label", event.agent_label)
@@ -275,6 +288,7 @@ def to_sse_frame(
         _add_optional(data, "run_id", event.run_id)
         _add_optional(data, "error_message", event.error_message)
         _add_optional(data, "answer_ref", event.answer_ref)
+        _add_optional(data, "answer_text", event.answer_text)
         _add_optional(data, "related_message_id", event.related_message_id)
         _add_optional(data, "related_user_message_id", event.related_user_message_id)
         _add_optional(data, "client_request_id", event.client_request_id)

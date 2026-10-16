@@ -3,9 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from execution.orchestration.candidate_scope import (
-    candidate_scope_from_envelope,
-)
+from conversation import candidate_scope_from_envelope
 from models.orchestration import (
     TERMINAL_ORCHESTRATION_STATUSES,
     CandidateScopeSnapshot,

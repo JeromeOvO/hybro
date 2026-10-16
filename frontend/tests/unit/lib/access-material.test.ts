@@ -28,11 +28,17 @@ describe('access materials', () => {
     expect(material.prompt).toContain('Research')
     expect(material.prompt).toContain('subnet_id "g1"')
     expect(material.prompt).toContain('every find_agents, discover_agents and send_message call')
-    expect(material.prompt).toContain('within a conversation')
+    expect(material.prompt).toContain('within a session')
     expect(material.toolCalls).toContain('find_agents({"query": "<capability keywords>", "subnet_id": "g1"})')
     expect(material.toolCalls).toContain('send_message({')
     expect(material.toolCalls).toContain('"subnet_id": "g1"')
     expect(material.toolCalls).not.toContain('group_id')
+  })
+
+  it('shows how to continue and check a session', () => {
+    const material = buildAccessMaterial('mcp', 'http://127.0.0.1:8001/mcp', '/api/v1')
+    expect(material.toolCalls).toContain('check_session({"session_id": "<session_id from send_message>"})')
+    expect(material.prompt).toContain('session_id')
   })
 
   it('keeps the whole-network MCP prompt unscoped', () => {

@@ -19,7 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests" / "fixtures" / "phase7a_processing_status_callers.json"
-PRODUCTION_ROOTS = ("api_gateway", "jobs", "execution", "room")
+PRODUCTION_ROOTS = ("api_gateway", "jobs", "execution", "chat", "conversation")
 OBSOLETE_CALL_IDS: set[str] = set()
 DELETED_PACKAGE_PATH_PREFIXES = ("config/", "infrastructure/", "modules/", "services/")
 EXECUTION_STATUS_HELPERS = {"emit_room_processing_status"}
@@ -215,9 +215,9 @@ def _discover_calls() -> list[ProcessingStatusCall]:
                 )
                 emitter_kind = "direct_transport"
                 if (
-                    rel_path == "room/compat/runtime.py"
+                    rel_path == "conversation/runtime.py"
                     and _enclosing_function(node, parents)
-                    == "RoomServices._emit_processing_status_event"
+                    == "ConversationRuntime._emit_processing_status_event"
                 ):
                     status_expression = "status"
                     client_request_id_expression = "client_request_id"
@@ -298,8 +298,9 @@ def _assert_lifecycle_helper_matches(
     helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
     if (
         helper is None
-        and item.path == "room/compat/runtime.py"
-        and item.function_or_method == "RoomServices._emit_processing_status_event"
+        and item.path == "conversation/runtime.py"
+        and item.function_or_method
+        == "ConversationRuntime._emit_processing_status_event"
     ):
         for stmt in reversed(_prior_statements(item)):
             if not isinstance(stmt, ast.If) or not _expr_equal(

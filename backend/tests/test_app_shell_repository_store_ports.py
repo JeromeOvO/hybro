@@ -342,7 +342,7 @@ def test_container_binds_room_runtime_to_focused_room_store_adapter():
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if _dotted_name(node.func) != "room_runtime.bind_store":
+        if _dotted_name(node.func) != "conversation_runtime.bind_store":
             continue
         assert len(node.args) == 1
         assert isinstance(node.args[0], ast.Name)

@@ -18,7 +18,8 @@ PRODUCTION_LLM_CONSUMER_ROOTS = [
     Path("jobs"),
     Path("llm_gateway"),
     Path("platform_module"),
-    Path("room"),
+    Path("chat"),
+    Path("conversation"),
 ]
 
 PROVIDER_NAMED_REMOVED_RUNTIME_MODULES = {
@@ -59,7 +60,7 @@ def test_llm_gateway_services_import_boundary():
     assert services_path.exists(), "llm_gateway/services package must exist"
     forbidden_domain_modules = {
         "execution.orchestration.synthesis_coordinator",
-        "room.compat.runtime",
+        "conversation.runtime",
     }
     allowed_roots = set(sys.stdlib_module_names) | {
         "__future__",
@@ -70,7 +71,8 @@ def test_llm_gateway_services_import_boundary():
         "models",
         REMOVED_RUNTIME_PACKAGE,
         "execution",
-        "room",
+        "chat",
+        "conversation",
         "agent",
         "platform_module",
         "api",
@@ -142,7 +144,7 @@ def test_container_binds_focused_llm_services_to_production_consumers():
         "settings_obj=runtime.settings,",
         "agent_selection_llm_service = AgentSelectionLLMService(",
         "message_parser_llm_service = MessageParserLLMService(",
-        "room_runtime.bind_message_parser_service(message_parser_llm_service)",
+        "conversation_runtime.bind_message_parser_service(message_parser_llm_service)",
         "context_memory_facade = create_context_memory_facade(",
         "llm_provider=llm_provider,",
     ]
@@ -184,7 +186,8 @@ def test_llm_settings_are_not_read_by_feature_runtime_modules():
         Path("execution"),
         Path("api_gateway"),
         Path("agent"),
-        Path("room"),
+        Path("chat"),
+        Path("conversation"),
         Path("context_memory"),
         Path("llm_gateway/services"),
     ]
