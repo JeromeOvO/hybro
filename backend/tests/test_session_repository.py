@@ -151,14 +151,27 @@ async def test_record_send_and_close_update_fields():
         event_seq=7,
         at=NOW,
     )
-    _query, update = collection.find_one_and_update.await_args.args
+    query, update = collection.find_one_and_update.await_args.args
+    # The request is appended only if it is not recorded yet.
+    assert query == {
+        "session_id": "sess-1",
+        "requests.client_request_id": {"$ne": "cr-2"},
+    }
     assert update == {
         "$set": {
             "last_client_request_id": "cr-2",
             "last_user_message_id": "msg-2",
             "last_send_event_seq": 7,
             "last_activity_at": NOW,
-        }
+        },
+        # Every sent request is kept for retries and the client's history.
+        "$push": {
+            "requests": {
+                "client_request_id": "cr-2",
+                "user_message_id": "msg-2",
+                "sent_at": NOW,
+            }
+        },
     }
 
     await repository.mark_closed("sess-1", NOW)
@@ -166,6 +179,29 @@ async def test_record_send_and_close_update_fields():
     assert update == {
         "$set": {"status": "closed", "closed_at": NOW, "last_activity_at": NOW}
     }
+
+
+@pytest.mark.asyncio
+async def test_record_send_of_a_recorded_request_does_not_append_it_again():
+    repository, collection = _repository()
+    collection.find_one_and_update.return_value = None
+    collection.find_one.return_value = _record(
+        last_client_request_id="cr-3"
+    ).model_dump()
+
+    stored = await repository.record_send(
+        "sess-1",
+        client_request_id="cr-2",
+        user_message_id="msg-2",
+        event_seq=7,
+        at=NOW,
+    )
+
+    # A concurrent send already recorded it; a later request must not be undone.
+    assert stored is not None
+    assert stored.last_client_request_id == "cr-3"
+    assert collection.find_one_and_update.await_count == 1
+    assert collection.find_one.await_args.args[0] == {"session_id": "sess-1"}
 
 
 @pytest.mark.asyncio

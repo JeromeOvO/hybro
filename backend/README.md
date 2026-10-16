@@ -321,8 +321,8 @@ owner's decisions are never included; a waiting request shows only
 `waiting_on_owner`. A request with no run event within
 `backend.session_run_start_grace_seconds` (10) of its send reports `failed`
 with `run_not_started`. Text is limited to 10,000 characters; `data` and files
-are not accepted. Retrying with the same `client_request_id` returns the same
-receipt.
+are not accepted. Retrying with the same `client_request_id`, including an
+earlier request's, returns that request's receipt without sending it again.
 
 Under mock auth anyone who can call the HTTP API holds the owner's identity,
 so the owner-only routes (`GET /sessions`, `GET /sessions/{session_id}/record`)

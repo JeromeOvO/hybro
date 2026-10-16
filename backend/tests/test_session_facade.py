@@ -8,6 +8,7 @@ production.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -29,7 +30,7 @@ from common.errors import AppError, ConflictError, NotFoundError
 from delivery.room_events import InMemoryRoomEventStore
 from models.session import SessionMessageRequest
 from session.facade import SessionFacade, SessionOwner
-from session.models import SessionRecord
+from session.models import SessionRecord, SessionRequest
 from session.waiter import SessionWaiter
 
 NOW = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
@@ -93,12 +94,23 @@ class FakeSessionStore:
         event_seq: int,
         at: datetime,
     ) -> SessionRecord | None:
-        record = self.records[session_id].model_copy(
+        current = self.records[session_id]
+        if current.request(client_request_id) is not None:
+            return current
+        record = current.model_copy(
             update={
                 "last_client_request_id": client_request_id,
                 "last_user_message_id": user_message_id,
                 "last_send_event_seq": event_seq,
                 "last_activity_at": at,
+                "requests": (
+                    *current.requests,
+                    SessionRequest(
+                        client_request_id=client_request_id,
+                        user_message_id=user_message_id,
+                        sent_at=at,
+                    ),
+                ),
             }
         )
         self.records[session_id] = record
@@ -226,6 +238,8 @@ class FakeEngine:
 
     async def execute(self, request: ExecutionRequest) -> ExecutionAck:
         self.executed.append(request)
+        # Let a concurrent send interleave here, as a real engine call does.
+        await asyncio.sleep(0)
         if self.acks:
             ack = self.acks.pop(0)
         elif self.ack is not None:
@@ -1427,3 +1441,356 @@ async def test_history_includes_a_request_whose_run_has_not_started():
     assert entry.client_request_id == "cr-1"
     assert entry.text == "Plan a weekend in Lyon"
     assert entry.state == "working"
+
+
+# -- Earlier requests -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sends_of_one_request_list_it_once():
+    h = make_harness(on_schedule=[started("msg-1")])
+    first = await h.send()
+    h.engine.acks = [
+        ExecutionAck(
+            room_id="conv-1",
+            message_id="msg-2",
+            success=True,
+            should_start_orchestration=True,
+            preflight_outcome="ready",
+        ),
+        ExecutionAck(
+            room_id="conv-1",
+            message_id="msg-2",
+            success=True,
+            should_start_orchestration=False,
+        ),
+    ]
+    data = SessionMessageRequest(
+        session_id=first.session_id,
+        agent_id=AGENT,
+        text="Make it three days",
+        client_request_id="cr-2",
+    )
+
+    receipts = await asyncio.gather(
+        h.facade.send(data, owner=OWNER, resolver=h.resolver),
+        h.facade.send(data, owner=OWNER, resolver=h.resolver),
+    )
+
+    record = h.store.records["sess-1"]
+    assert [r.client_request_id for r in record.requests] == ["cr-1", "cr-2"]
+    assert record.last_client_request_id == "cr-2"
+    assert record.last_user_message_id == record.requests[-1].user_message_id
+    # The replay starts nothing; only the first send scheduled a run.
+    assert len(h.engine.scheduled) == 2
+    assert [(r.status, r.state) for r in receipts] == [
+        ("accepted", "working"),
+        ("accepted", "working"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_creating_send_schedules_its_run_even_when_it_loses_the_record():
+    h = make_harness(on_schedule=[started("msg-1")])
+    first = await h.send()
+    start = ExecutionAck(
+        room_id="conv-1",
+        message_id="msg-2",
+        success=True,
+        should_start_orchestration=True,
+        preflight_outcome="ready",
+    )
+    replay = ExecutionAck(
+        room_id="conv-1",
+        message_id="msg-2",
+        success=True,
+        should_start_orchestration=False,
+    )
+    calls = 0
+
+    async def execute(request: ExecutionRequest) -> ExecutionAck:
+        # The creating call is slow; the replay returns and records first.
+        nonlocal calls
+        calls += 1
+        h.engine.executed.append(request)
+        if calls == 1:
+            for _ in range(3):
+                await asyncio.sleep(0)
+            return start
+        await asyncio.sleep(0)
+        return replay
+
+    real_latest_seq = h.facade._waiter.latest_seq
+
+    async def latest_seq(room_id: str) -> int:
+        # A room event lands between the two sends' reads.
+        seq = await real_latest_seq(room_id)
+        await h.events.append(room_id=room_id, kind="noise", payload_public={})
+        return seq
+
+    real_earlier = h.facade._earlier_receipt
+    earlier_calls: list[str] = []
+
+    async def earlier_receipt(record, earlier, agent_id):
+        earlier_calls.append(earlier.client_request_id)
+        return await real_earlier(record, earlier, agent_id)
+
+    h.engine.execute = execute  # type: ignore[method-assign]
+    h.facade._waiter.latest_seq = latest_seq  # type: ignore[method-assign]
+    h.facade._earlier_receipt = earlier_receipt  # type: ignore[method-assign]
+    data = SessionMessageRequest(
+        session_id=first.session_id,
+        agent_id=AGENT,
+        text="Make it three days",
+        client_request_id="cr-2",
+    )
+
+    receipts = await asyncio.gather(
+        h.facade.send(data, owner=OWNER, resolver=h.resolver),
+        h.facade.send(data, owner=OWNER, resolver=h.resolver),
+    )
+
+    scheduled = [request.client_request_id for request, _ack in h.engine.scheduled]
+    assert scheduled == ["cr-1", "cr-2"]
+    assert [r.status for r in receipts] == ["accepted", "accepted"]
+    # The creating send lost the record and reported the recorded request.
+    assert earlier_calls == ["cr-2"]
+    assert h.store.records["sess-1"].last_accepted_agent_id == AGENT
+
+
+def _stale_get_once(h: Harness, snapshot: SessionRecord) -> None:
+    """The next read returns the record as it was before a concurrent send."""
+    real_get = h.store.get
+    calls = 0
+
+    async def get(session_id: str) -> SessionRecord | None:
+        nonlocal calls
+        calls += 1
+        return snapshot if calls == 1 else await real_get(session_id)
+
+    h.store.get = get  # type: ignore[method-assign]
+
+
+@pytest.mark.asyncio
+async def test_a_losing_duplicate_send_reports_the_recorded_request():
+    h = make_harness(start_grace_seconds=1.0)
+    h.engine.on_schedule = [
+        started("msg-1"),
+        settled("completed", final_message_id="f1"),
+    ]
+    first = await h.send()
+    snapshot = h.store.records["sess-1"]
+    h.engine.run_id = "run-2"
+    h.engine.on_schedule = [
+        started("msg-2"),
+        settled("completed", final_message_id="f2"),
+    ]
+    await h.send(
+        session_id=first.session_id, client_request_id="cr-2", client_label=None
+    )
+    winner = h.store.records["sess-1"]
+    # The losing send read the session before cr-2 was recorded, and its
+    # engine call returns after the run settled and the start grace passed.
+    h.clock.now = 30.0
+    h.engine.ack = ExecutionAck(
+        room_id="conv-1",
+        message_id="msg-2",
+        success=True,
+        should_start_orchestration=False,
+    )
+    _stale_get_once(h, snapshot)
+
+    receipt = await h.send(
+        session_id=first.session_id, client_request_id="cr-2", client_label=None
+    )
+
+    assert (receipt.status, receipt.state) == ("accepted", "completed")
+    assert h.store.records["sess-1"] == winner
+
+
+@pytest.mark.asyncio
+async def test_a_losing_duplicate_send_is_not_reported_busy():
+    h = make_harness()
+    h.engine.on_schedule = [
+        started("msg-1"),
+        settled("completed", final_message_id="f1"),
+    ]
+    first = await h.send()
+    snapshot = h.store.records["sess-1"]
+    h.engine.run_id = "run-2"
+    h.engine.on_schedule = [started("msg-2")]
+    await h.send(
+        session_id=first.session_id, client_request_id="cr-2", client_label=None
+    )
+    # cr-2's run is active when the losing send, holding the old record,
+    # reaches the busy check.
+    h.engine.runs = [_run(RunState.PROCESSING, trigger="msg-2")]
+    h.engine.ack = ExecutionAck(
+        room_id="conv-1",
+        message_id="msg-2",
+        success=True,
+        should_start_orchestration=False,
+    )
+    _stale_get_once(h, snapshot)
+
+    receipt = await h.send(
+        session_id=first.session_id, client_request_id="cr-2", client_label=None
+    )
+
+    assert (receipt.status, receipt.state) == ("accepted", "working")
+
+
+@pytest.mark.asyncio
+async def test_reusing_an_earlier_request_id_for_other_text_conflicts():
+    h = make_harness()
+    first = await _two_completed_requests(h)
+    h.engine.ack = ExecutionAck(
+        room_id="conv-1",
+        message_id=None,
+        success=False,
+        error=FINGERPRINT_CONFLICT,
+        status_code=409,
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        await h.send(session_id=first.session_id, client_label=None, text="Other")
+
+    assert exc_info.value.code == "request_conflict"
+
+
+async def _two_completed_requests(h: Harness):
+    h.engine.on_schedule = [
+        started("msg-1"),
+        settled("completed", final_message_id="f1"),
+    ]
+    h.messages.add(user_message("msg-1", "Plan a weekend in Lyon"))
+    h.messages.add(final_message("f1", "conv-1", "Day 1: Vieux Lyon"))
+    first = await h.send(text="Plan a weekend in Lyon")
+    h.engine.run_id = "run-2"
+    h.engine.on_schedule = [
+        started("msg-2"),
+        settled("completed", final_message_id="f2"),
+    ]
+    h.messages.add(user_message("msg-2", "Make it three days"))
+    h.messages.add(final_message("f2", "conv-1", "Day 3: Croix-Rousse"))
+    await h.send(
+        session_id=first.session_id,
+        client_request_id="cr-2",
+        client_label=None,
+        text="Make it three days",
+    )
+    return first
+
+
+@pytest.mark.asyncio
+async def test_retrying_an_earlier_request_returns_its_receipt_without_resending():
+    h = make_harness(start_grace_seconds=1.0)
+    first = await _two_completed_requests(h)
+    h.clock.now = 60.0
+    h.engine.ack = _replay_ack()
+
+    retry = await h.send(
+        session_id=first.session_id, client_label=None, text="Plan a weekend in Lyon"
+    )
+
+    assert retry.client_request_id == "cr-1"
+    assert retry.status == "created"
+    assert retry.state == "completed"
+    # The engine replays the stored message; no run starts and no send is added.
+    assert len(h.engine.scheduled) == 2
+    assert len(h.store.records["sess-1"].requests) == 2
+    status = await h.check()
+    assert status.state == "completed"
+    assert [(e.client_request_id, e.state) for e in status.history] == [
+        ("cr-1", "completed"),
+        ("cr-2", "completed"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retrying_an_earlier_request_while_a_later_one_runs_is_not_busy():
+    h = make_harness()
+    h.engine.on_schedule = [
+        started("msg-1"),
+        settled("completed", final_message_id="f1"),
+    ]
+    h.messages.add(final_message("f1", "conv-1", "Day 1: Vieux Lyon"))
+    first = await h.send()
+    h.engine.run_id = "run-2"
+    h.engine.on_schedule = [started("msg-2")]
+    await h.send(
+        session_id=first.session_id, client_request_id="cr-2", client_label=None
+    )
+    h.engine.runs = [_run(RunState.PROCESSING, trigger="msg-2")]
+    h.engine.ack = _replay_ack()
+
+    retry = await h.send(session_id=first.session_id, client_label=None)
+
+    assert retry.status == "created"
+    assert retry.state == "completed"
+    assert len(h.engine.scheduled) == 2
+    assert (await h.check()).state == "working"
+
+
+@pytest.mark.asyncio
+async def test_an_unstarted_request_stays_in_history_after_the_next_send():
+    h = make_harness(on_schedule=[], start_grace_seconds=1.0)
+    h.messages.add(user_message("msg-1", "Plan a weekend in Lyon"))
+    first = await h.send(text="Plan a weekend in Lyon")
+    h.clock.now = 5.0
+    h.engine.on_schedule = [started("msg-2"), WAITING]
+    h.messages.add(user_message("msg-2", "Make it three days"))
+    await h.send(
+        session_id=first.session_id,
+        client_request_id="cr-2",
+        client_label=None,
+        text="Make it three days",
+    )
+
+    history = (await h.check()).history
+
+    assert [(e.client_request_id, e.text, e.state, e.reason) for e in history] == [
+        ("cr-1", "Plan a weekend in Lyon", "failed", "run_not_started"),
+        ("cr-2", "Make it three days", "waiting_on_owner", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_waiter_history_reads_each_event_once_and_keeps_rejects_per_run(
+    monkeypatch,
+):
+    from session import waiter as waiter_module
+
+    events = InMemoryRoomEventStore()
+    for index in range(1, 4):
+        correlation, run_id = f"cr-{index}", f"run-{index}"
+        await append_event(events, "conv", *STARTED, correlation, run_id)
+        if index == 2:
+            await append_event(events, "conv", *REJECTED_FRAME, None, run_id)
+            await append_event(
+                events, "conv", *settled("canceled"), correlation, run_id
+            )
+        else:
+            await append_event(
+                events, "conv", *settled("completed"), correlation, run_id
+            )
+    calls = 0
+    absorb = waiter_module.CorrelatedOutcome.absorb
+
+    def counting(self, record, correlation_id):
+        nonlocal calls
+        calls += 1
+        return absorb(self, record, correlation_id)
+
+    monkeypatch.setattr(waiter_module.CorrelatedOutcome, "absorb", counting)
+    waiter = SessionWaiter(events, start_grace_seconds=1)
+
+    outcomes = await waiter.history("conv")
+
+    assert {key: o.rejected for key, o in outcomes.items()} == {
+        "cr-1": False,
+        "cr-2": True,
+        "cr-3": False,
+    }
+    # Six run events plus one owner frame fanned out to the two known requests.
+    assert calls == 8

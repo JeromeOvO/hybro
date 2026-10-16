@@ -52,7 +52,7 @@ from models.session import (
     SessionStatus,
     SessionSummary,
 )
-from session.models import SessionRecord, new_session_id
+from session.models import SessionRecord, SessionRequest, new_session_id
 from session.projection import (
     busy_state,
     final_message_id,
@@ -134,12 +134,21 @@ class SessionFacade:
         assert conversation_id is not None
 
         is_retry = record.last_client_request_id == client_request_id
-        if not is_retry:
+        # A retry of an earlier request replays it; it is not a new send.
+        earlier = None if is_retry else record.request(client_request_id)
+        if not is_retry and earlier is None:
             runs = await self._engine.get_runs_for_room(conversation_id)
             if runs:
-                return await self._busy(
-                    record, runs, client_request_id, request.agent_id
-                )
+                # A concurrent send of this request may have recorded it and
+                # started its run since this send read the session.
+                current = await self._store.get(record.session_id) or record
+                if current.request(client_request_id) is None:
+                    return await self._busy(
+                        record, runs, client_request_id, request.agent_id
+                    )
+                record = current
+                is_retry = record.last_client_request_id == client_request_id
+                earlier = None if is_retry else record.request(client_request_id)
 
         seq_before = await self._waiter.latest_seq(conversation_id)
         execution_request = ExecutionRequest(
@@ -163,23 +172,25 @@ class SessionFacade:
         if not ack.message_id:
             raise _error("execution_error", "The message was not recorded")
 
+        if earlier is not None:
+            # The engine replays a recorded request; no run starts.
+            return await self._earlier_receipt(record, earlier, request.agent_id)
+        lost_to: SessionRequest | None = None
         if is_retry:
             after = record.last_send_event_seq
         else:
             after = seq_before
-            record = (
-                await self._store.record_send(
-                    record.session_id,
-                    client_request_id=client_request_id,
-                    user_message_id=ack.message_id,
-                    event_seq=seq_before,
-                    at=self._now(),
-                )
-                or record
+            record, lost_to = await self._record_send(
+                record, client_request_id, ack.message_id, seq_before
             )
+        # Only the engine call that created the message may start its run, and
+        # it can still lose the record to a faster replay of the same request.
         if ack.should_start_orchestration:
             self._engine.schedule_orchestration(execution_request, ack)
             record = await self._accept_agent(record, request.agent_id)
+        if lost_to is not None:
+            # Report the recorded request, not this send's view of the log.
+            return await self._earlier_receipt(record, lost_to, request.agent_id)
 
         # The receipt returns at once; the client queries for the responses.
         outcome = await self._waiter.scan(
@@ -343,6 +354,54 @@ class SessionFacade:
             or record
         )
 
+    async def _record_send(
+        self,
+        record: SessionRecord,
+        client_request_id: str,
+        user_message_id: str,
+        seq_before: int,
+    ) -> tuple[SessionRecord, SessionRequest | None]:
+        """Record a new send; also return the request if another send won."""
+        stored = (
+            await self._store.record_send(
+                record.session_id,
+                client_request_id=client_request_id,
+                user_message_id=user_message_id,
+                event_seq=seq_before,
+                at=self._now(),
+            )
+            or record
+        )
+        recorded = stored.request(client_request_id)
+        if recorded is not None and (
+            stored.last_client_request_id != client_request_id
+            or stored.last_send_event_seq != seq_before
+        ):
+            # A concurrent send of this request recorded it first.
+            return stored, recorded
+        return stored, None
+
+    async def _earlier_receipt(
+        self, record: SessionRecord, earlier: SessionRequest, agent_id: str
+    ) -> SessionMessageResponse:
+        assert record.conversation_id is not None
+        outcomes = await self._waiter.history(record.conversation_id)
+        state, _reason = self._resolve(
+            outcomes.get(earlier.client_request_id) or CorrelatedOutcome(),
+            sent_at=earlier.sent_at,
+        )
+        return self._receipt(
+            record,
+            earlier.client_request_id,
+            agent_id,
+            status=(
+                "created"
+                if record.creation_request_id == earlier.client_request_id
+                else "accepted"
+            ),
+            state=state,
+        )
+
     async def _busy(
         self,
         record: SessionRecord,
@@ -488,61 +547,47 @@ class SessionFacade:
         """
         if not record.conversation_id:
             return []
-        requests = await self._waiter.history(record.conversation_id)
-        if record.last_client_request_id and record.last_client_request_id not in {
-            correlation for correlation, _ in requests
-        }:
-            # The latest request's run may not have started yet.
-            requests.append((record.last_client_request_id, None))
+        outcomes = await self._waiter.history(record.conversation_id)
         names = {agent.agent_id: agent.name for agent in agents}
-        message_ids = [
-            outcome.user_message_id
-            for _, outcome in requests
-            if outcome is not None and outcome.user_message_id
-        ]
-        if record.last_user_message_id:
-            message_ids.append(record.last_user_message_id)
         reply_ids = [
             reply_id
-            for _, outcome in requests
-            if (reply_id := final_message_id(outcome)) is not None
+            for request in record.requests
+            if (reply_id := final_message_id(outcomes.get(request.client_request_id)))
+            is not None
         ]
         messages = {
             message.message_id: message
             for message in await self._history.get_messages_by_ids(
-                list(dict.fromkeys(message_ids + reply_ids))
+                list(
+                    dict.fromkeys(
+                        [request.user_message_id for request in record.requests]
+                        + reply_ids
+                    )
+                )
             )
         }
         closed = record.status == "closed"
         entries: list[SessionHistoryEntry] = []
-        for correlation, outcome in requests:
-            latest = correlation == record.last_client_request_id
-            user_id = (
-                outcome.user_message_id
-                if outcome is not None and outcome.user_message_id
-                else record.last_user_message_id
-                if latest
-                else None
-            )
-            user = messages.get(user_id or "")
+        for request in record.requests:
+            outcome = outcomes.get(request.client_request_id)
+            user = messages.get(request.user_message_id)
             reply = messages.get(final_message_id(outcome) or "")
-            # Only the latest request can be unstarted or closed.
+            # Only the latest request can be closed.
+            latest = request.client_request_id == record.last_client_request_id
             state, reason = self._resolve(
                 outcome or CorrelatedOutcome(),
-                sent_at=record.last_activity_at,
+                sent_at=request.sent_at,
                 closed=closed and latest,
             )
             agent_id = _target_agent(user)
             entries.append(
                 SessionHistoryEntry(
-                    client_request_id=correlation,
+                    client_request_id=request.client_request_id,
                     text=_message_text(user),
                     sent_at=(
                         user.created_at
                         if user is not None and user.created_at
-                        else outcome.started_at
-                        if outcome is not None
-                        else None
+                        else request.sent_at
                     ),
                     agent_id=agent_id,
                     agent_name=(names.get(agent_id) if agent_id else None)

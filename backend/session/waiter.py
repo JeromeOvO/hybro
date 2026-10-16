@@ -117,6 +117,24 @@ def _event_time(value: object) -> datetime | None:
     return ensure_utc(value) if isinstance(value, datetime) else None
 
 
+def _absorb_into(
+    outcomes: dict[str, CorrelatedOutcome], record: dict[str, Any]
+) -> None:
+    payload = record.get("payload_public")
+    if not isinstance(payload, dict):
+        return
+    if record.get("kind") == _HITL_RESPONSE:
+        # Owner frames carry a run id, not a correlation id.
+        for correlation_id, outcome in outcomes.items():
+            outcome.absorb(record, correlation_id)
+        return
+    correlation_id = payload.get("correlation_id")
+    if record.get("kind") == _RUN_EVENT and isinstance(correlation_id, str):
+        outcomes.setdefault(correlation_id, CorrelatedOutcome()).absorb(
+            record, correlation_id
+        )
+
+
 class SessionWaiter:
     """Reads a conversation's event log; it never waits for a run."""
 
@@ -142,37 +160,20 @@ class SessionWaiter:
         await self._read_new(room_id, correlation_id, outcome)
         return outcome
 
-    async def history(self, room_id: str) -> list[tuple[str, CorrelatedOutcome]]:
-        """Every request's outcome in the order its run started."""
-        records: list[dict[str, Any]] = []
+    async def history(self, room_id: str) -> dict[str, CorrelatedOutcome]:
+        """Every request's outcome, keyed by correlation id, in one pass."""
+        outcomes: dict[str, CorrelatedOutcome] = {}
         cursor = 0
         while True:
             page = await self._events.read_range(
                 room_id, after=cursor, limit=self._page_size
             )
-            records.extend(page)
+            for record in page:
+                _absorb_into(outcomes, record)
             last = max((int(r.get("room_seq") or 0) for r in page), default=cursor)
             if len(page) < self._page_size or last <= cursor:
-                break
+                return outcomes
             cursor = last
-        order: list[str] = []
-        for record in records:
-            payload = record.get("payload_public")
-            if (
-                record.get("kind") == _RUN_EVENT
-                and isinstance(payload, dict)
-                and payload.get("type") == _STARTED
-                and isinstance(payload.get("correlation_id"), str)
-                and payload["correlation_id"] not in order
-            ):
-                order.append(payload["correlation_id"])
-        outcomes = []
-        for correlation_id in order:
-            outcome = CorrelatedOutcome()
-            for record in records:
-                outcome.absorb(record, correlation_id)
-            outcomes.append((correlation_id, outcome))
-        return outcomes
 
     async def _read_new(
         self, room_id: str, correlation_id: str, outcome: CorrelatedOutcome

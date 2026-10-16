@@ -81,15 +81,31 @@ class MongoSessionRepository:
         event_seq: int,
         at: datetime,
     ) -> SessionRecord | None:
-        return await self._update(
-            {"session_id": session_id},
+        fields = {
+            "last_client_request_id": client_request_id,
+            "last_user_message_id": user_message_id,
+            "last_send_event_seq": event_seq,
+            "last_activity_at": at,
+        }
+        # Concurrent sends of one request both record it. Only the first write
+        # lands; a later one must not undo a request recorded since.
+        appended = await self._update(
             {
-                "last_client_request_id": client_request_id,
-                "last_user_message_id": user_message_id,
-                "last_send_event_seq": event_seq,
-                "last_activity_at": at,
+                "session_id": session_id,
+                "requests.client_request_id": {"$ne": client_request_id},
+            },
+            fields,
+            push={
+                "requests": {
+                    "client_request_id": client_request_id,
+                    "user_message_id": user_message_id,
+                    "sent_at": at,
+                }
             },
         )
+        if appended is not None:
+            return appended
+        return await self.get(session_id)
 
     async def record_accepted_agent(
         self, session_id: str, agent_id: str
@@ -116,11 +132,18 @@ class MongoSessionRepository:
         return [SessionRecord.model_validate(doc) for doc in docs]
 
     async def _update(
-        self, query: dict[str, Any], fields: dict[str, Any]
+        self,
+        query: dict[str, Any],
+        fields: dict[str, Any],
+        *,
+        push: dict[str, Any] | None = None,
     ) -> SessionRecord | None:
+        update: dict[str, Any] = {"$set": fields}
+        if push:
+            update["$push"] = push
         doc = await self._sessions.find_one_and_update(
             query,
-            {"$set": fields},
+            update,
             projection=_PROJECTION,
             return_document=ReturnDocument.AFTER,
         )

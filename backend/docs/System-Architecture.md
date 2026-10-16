@@ -1191,14 +1191,26 @@ requests; it returns the receipt without waiting for the run. Errors use
   container. A retry completes a crashed creation.
 - Busy check before execute: a non-terminal run refuses the send with a
   `status: busy` receipt carrying the earlier run's state
-  (`waiting_on_owner` for `awaiting_input`, else `working`). A retry of the
-  session's last request id skips the busy check and replays.
+  (`waiting_on_owner` for `awaiting_input`, else `working`). A retry of any
+  request id the session already recorded skips the busy check and replays
+  through the engine (which still rejects a changed request with the
+  fingerprint conflict); a retry of an earlier request records nothing new and
+  returns that request's receipt.
 - The `ExecutionRequest` uses `mode="passthrough"` and
   `agent_scope={"source": "mention", "agent_ids": [agent_id]}`; the facade
   never accepts a mode. Execute-time 409 acks: the fingerprint conflict text
   maps to `request_conflict`; any other 409 re-reads the active runs and
-  reports busy. An accepted ack records `last_client_request_id`,
-  `last_user_message_id`, and the room event sequence read before execute,
+  reports busy. An accepted new send records `last_client_request_id`,
+  `last_user_message_id`, the room event sequence read before execute, and
+  appends `{client_request_id, user_message_id, sent_at}` to `requests` in one
+  guarded update; if a concurrent send of the same id already recorded it,
+  nothing is written, so a newer request is never undone. The send whose engine
+  call created the message always schedules its run, even if a faster replay
+  of the same request recorded it first. A send that finds the stored record
+  already moved past its own send (a different latest request or event
+  sequence) returns the recorded request's receipt; a duplicate that meets the
+  other send's active run at the busy check re-reads the session and replays
+  instead of reporting busy,
   calls `schedule_orchestration` (never `start_orchestration`), then adds the
   agent to the container membership and records `last_accepted_agent_id`.
 - Each invocation is a fresh A2A context on the agent's side; the agent does
@@ -1218,9 +1230,10 @@ settlement for the same run), or `failed` (the public `error_summary`) once
 followed by `run_resumed` or settlement; otherwise `working`. A request with no
 correlated run event `session_run_start_grace_seconds` after its send reports
 `failed` with `run_not_started`; `closed` takes precedence. The client
-`history` folds the whole log per `correlation_id` in run-start order (plus the
-latest request if its run has not started): the client message text from the
-run's `user_message_id`, the target agent from the message's
+`history` lists the record's `requests` in send order, each resolved from one
+pass over the log grouped by `correlation_id` (a request whose run never started
+keeps its own start grace and then reads `failed`): the client message text from
+its `user_message_id`, the target agent from the message's
 `extend_info.candidate_agent_ids` (named from the container), and the text of
 the settled run's `final_message_id`. Agent-call rows and HITL frames are never
 read into it, because they carry the owner's questions and answers.
@@ -1841,7 +1854,13 @@ changed identity or inventory is a safe conflict.
 
 Internal dispatch prompts are private Execution/adapter data. Agent-originated
 HITL status messages pass through a bounded public-text sanitizer across both initial
-dispatch and follow-up replies; safe concrete questions are projected to the HITL request,
+dispatch and follow-up replies (after a standalone `Bearer`, a token of 16+ characters,
+not counting a sentence-final ".", with a digit is redacted; after `Basic`, only padded standard base64 of
+`user:password` per RFC 7617, so unpadded or URL-safe values are kept; a scheme word
+followed by whitespace is never taken as the token. Streaming finds Bearer/Basic
+tokens left to right the way the one-shot pattern consumes them, so a scheme word
+inside a token never splits it, and it never releases text inside such a token or
+one that may still grow); safe concrete questions are projected to the HITL request,
 while internal markers, oversized text, and control content fall back to a generic public prompt.
 
 ### `context_memory`
