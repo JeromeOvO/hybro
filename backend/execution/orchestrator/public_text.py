@@ -17,8 +17,16 @@ _PUBLIC_DSN_SCHEMES = (
     r"(?:https?|mongodb(?:\+srv)?|redis(?:s)?|amqps?|postgres(?:ql)?|mysql)"
 )
 
+# A token after "Bearer"/"Basic" has a credential's shape: a digit or symbol,
+# lowercase-then-uppercase like base64, or unusual length. Ordinary prose such
+# as "Basic French" or "Bearer bonds" is kept.
+_AUTH_SCHEME_TOKEN = (
+    r"(?:(?=[A-Za-z0-9._~+/=-]*(?:[0-9._~+/=-]|[a-z][A-Z]))[A-Za-z0-9._~+/=-]{8,}"
+    r"|[A-Za-z0-9._~+/=-]{20,})"
+)
+
 _CREDENTIAL_PATTERNS = (
-    re.compile(r"(?i)(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{4,}"),
+    re.compile(rf"(?i:Bearer|Basic)\s+{_AUTH_SCHEME_TOKEN}"),
     re.compile(rf"(?i)({_PUBLIC_DSN_SCHEMES}://)([^/@\s:]*):([^/@\s]+)@"),
     re.compile(
         r"(?i)([?&](?:api[_-]?key|access[_-]?token|auth|password|secret|token)=)"

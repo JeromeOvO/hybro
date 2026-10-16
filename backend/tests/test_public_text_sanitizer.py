@@ -69,15 +69,41 @@ def test_configured_secret_inventory_extracts_percent_decoded_dsn_credentials():
 
 def test_credential_patterns_cover_headers_urls_queries_and_scalar_keys():
     raw = (
-        "Bearer abcdefgh https://user:pass@example.test/path?api_key=xyz123 "
+        "Bearer abcd1234 https://user:pass@example.test/path?api_key=xyz123 "
         "password: hunter2"
     )
     public = sanitize_public_text(raw)
-    assert "abcdefgh" not in public
+    assert "abcd1234" not in public
     assert "user:pass" not in public
     assert "xyz123" not in public
     assert "hunter2" not in public
     assert public.count(REDACTION) == 4
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig",
+        "Basic dXNlcjpwYXNz",
+        "bearer abcd1234",
+        "Bearer abcdefghijklmnopqrstuvwxyz",
+    ],
+)
+def test_auth_scheme_tokens_are_redacted(token: str):
+    assert sanitize_public_text(f"use {token} here") == f"use {REDACTION} here"
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Language: Basic French greetings are appreciated.",
+        "A basic understanding of the city helps.",
+        "Bearer bonds were common then.",
+        "Start with Basic 101 lessons.",
+    ],
+)
+def test_ordinary_words_after_basic_or_bearer_are_kept(prose: str):
+    assert sanitize_public_text(prose) == prose
 
 
 def test_coalescer_uses_unicode_offsets_and_deterministic_identity():
@@ -114,8 +140,8 @@ def test_configured_secret_is_never_split_at_release_boundaries(start: int):
 @pytest.mark.parametrize(
     "credential",
     [
-        "Bearer abcdefghijklmnop",
-        "Basic abcdefghijklmnop",
+        "Bearer abcd1234efgh5678",
+        "Basic dXNlcjpwYXNzd29yZA==",
         "https://user:password@example.test/path",
         "?api_key=abcdefghijklmnop&ok=1",
         " token: abcdefghijklmnop; done",

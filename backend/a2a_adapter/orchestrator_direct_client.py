@@ -382,7 +382,11 @@ def _task_to_observation_kwargs(  # noqa: C901
 
     if artifact_text_parts:
         artifact_text = "".join(artifact_text_parts)
-        text = f"{text}\n{artifact_text}".strip() if text else artifact_text
+        # Agents often repeat the result in the final status message; keep it once.
+        if text and text.strip() != artifact_text.strip():
+            text = f"{text}\n{artifact_text}".strip()
+        else:
+            text = artifact_text
     if not text and generated_file_descriptions:
         text = f"[Generated file: {', '.join(generated_file_descriptions)}]"
     if text:
