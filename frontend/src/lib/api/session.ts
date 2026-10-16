@@ -84,13 +84,28 @@ export interface SessionEventsResponse {
   events: RoomEventRecord[]
 }
 
+// The route returns at most this many events per request.
+const EVENTS_PAGE = 1000
+
 // The owner reads the session's conversation container through the room event
-// replay, the same durable record the client's state is resolved from.
-export function fetchSessionEvents(
+// replay, the same durable record the client's state is resolved from. Pages
+// until the log's latest sequence so long sessions keep their later replies.
+export async function fetchSessionEvents(
   conversationId: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
 ): Promise<SessionEventsResponse> {
-  const url = getApiUrl(`sse/room/${encodeURIComponent(conversationId)}/events?after=0&limit=1000`)
-  return apiGet<SessionEventsResponse>(url, getToken, signal)
+  const events: RoomEventRecord[] = []
+  let after = 0
+  let roomSeq = 0
+  for (;;) {
+    const url = getApiUrl(`sse/room/${encodeURIComponent(conversationId)}/events?after=${after}&limit=${EVENTS_PAGE}`)
+    const page = await apiGet<SessionEventsResponse>(url, getToken, signal)
+    events.push(...page.events)
+    roomSeq = page.room_seq
+    const last = page.events.at(-1)?.room_seq ?? after
+    if (page.events.length < EVENTS_PAGE || last <= after || last >= roomSeq) break
+    after = last
+  }
+  return { room_seq: roomSeq, events }
 }

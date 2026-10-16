@@ -218,6 +218,26 @@ async def test_list_for_owner_sorts_by_activity():
 
 
 @pytest.mark.asyncio
+async def test_list_open_conversations_reads_every_open_session():
+    repository, collection = _repository()
+    collection.find.return_value = [
+        {"session_id": "sess-1", "conversation_id": "conv-1"},
+        {"session_id": "sess-2", "conversation_id": "conv-2"},
+    ]
+
+    rooms = await repository.list_open_conversations("owner-1")
+
+    assert rooms == {"conv-1": "sess-1", "conv-2": "sess-2"}
+    assert collection.find.await_args.args[0] == {
+        "owner_user_id": "owner-1",
+        "status": "open",
+        "conversation_id": {"$type": "string"},
+    }
+    # Not capped: a waiting session must never fall off this read.
+    assert collection.find.await_args.kwargs["exhaust"] is True
+
+
+@pytest.mark.asyncio
 async def test_records_read_back_from_mongo_are_utc_aware():
     # Mongo returns naive datetimes; serialized without a zone, browsers read
     # them as local time.

@@ -84,6 +84,7 @@ class SessionStore(Protocol):
     async def list_for_owner(
         self, owner_user_id: str, limit: int = 100
     ) -> list[SessionRecord]: ...
+    async def list_open_conversations(self, owner_user_id: str) -> dict[str, str]: ...
 
 
 @runtime_checkable

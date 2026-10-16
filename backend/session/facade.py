@@ -228,7 +228,9 @@ class SessionFacade:
     # -- Owner ---------------------------------------------------------------
 
     async def list_for_owner(self, *, owner: SessionOwner) -> SessionListResponse:
-        records = await self._store.list_for_owner(owner.user_id, _LIST_LIMIT)
+        records = await self._with_waiting(
+            await self._store.list_for_owner(owner.user_id, _LIST_LIMIT), owner
+        )
         statuses = await asyncio.gather(*(self._owner_record(r) for r in records))
         return SessionListResponse(
             sessions=[
@@ -255,6 +257,28 @@ class SessionFacade:
         return await self._owner_record(record)
 
     # -- Internals -------------------------------------------------------------
+
+    async def _with_waiting(
+        self, records: list[SessionRecord], owner: SessionOwner
+    ) -> list[SessionRecord]:
+        """Add open sessions waiting on the owner that fell outside the page.
+
+        The page is the most recently active sessions, and a run parking on
+        the owner does not touch the session record.
+        """
+        open_rooms = await self._store.list_open_conversations(owner.user_id)
+        if not open_rooms:
+            return records
+        runs = await self._engine.get_latest_runs_for_rooms(list(open_rooms))
+        listed = {record.session_id for record in records}
+        missing = [
+            open_rooms[room_id]
+            for room_id, run in runs.items()
+            if _state_value(run) == "awaiting_input"
+            and open_rooms.get(room_id) not in listed
+        ]
+        found = await asyncio.gather(*(self._store.get(sid) for sid in missing))
+        return [record for record in found if record is not None] + records
 
     async def _session_for_send(
         self,
@@ -634,7 +658,11 @@ class SessionFacade:
         return record.last_accepted_agent_id
 
     async def _stop_activity(self, conversation_id: str, owner: SessionOwner) -> None:
-        """Best-effort stop: cancel a pending approval, else the active run."""
+        """Best-effort stop: cancel a pending approval, else the active run.
+
+        If no pending approval could be canceled, the run is canceled instead,
+        so a closed session never leaves its run going.
+        """
         try:
             pending = await self._approvals.get_pending_hitl(conversation_id)
         except Exception:
@@ -649,12 +677,14 @@ class SessionFacade:
             for request in pending
             if request.interaction_id and request.interaction_version is not None
         }
+        canceled_any = False
         if interactions:
             for interaction_id, version in interactions.items():
                 try:
                     await self._approvals.cancel_hitl_interaction(
                         conversation_id, interaction_id, version
                     )
+                    canceled_any = True
                 except Exception:
                     logger.warning(
                         "session_close_interaction_cancel_failed",
@@ -664,7 +694,8 @@ class SessionFacade:
                         },
                         exc_info=True,
                     )
-            return
+            if canceled_any:
+                return
         for run in await self._engine.get_runs_for_room(conversation_id):
             if not run.trigger_message_id:
                 continue

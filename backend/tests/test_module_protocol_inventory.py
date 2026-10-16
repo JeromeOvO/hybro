@@ -79,6 +79,7 @@ EXPECTED_METHODS = {
         "SessionStore": {
             "get",
             "list_for_owner",
+            "list_open_conversations",
             "mark_closed",
             "record_accepted_agent",
             "record_send",

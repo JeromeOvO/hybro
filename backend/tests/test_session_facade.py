@@ -138,6 +138,15 @@ class FakeSessionStore:
         records = [r for r in self.records.values() if r.owner_user_id == owner_user_id]
         return sorted(records, key=lambda r: r.last_activity_at, reverse=True)[:limit]
 
+    async def list_open_conversations(self, owner_user_id: str) -> dict[str, str]:
+        return {
+            r.conversation_id: r.session_id
+            for r in self.records.values()
+            if r.owner_user_id == owner_user_id
+            and r.status == "open"
+            and r.conversation_id
+        }
+
 
 class FakeRooms:
     """RoomManagement + RoomRegistry over an in-memory container set."""
@@ -287,7 +296,7 @@ class FakeEngine:
         return None
 
     async def get_latest_runs_for_rooms(self, room_ids):
-        return {}
+        return {run.room_id: run for run in self.runs if run.room_id in room_ids}
 
     async def cancel_inflight_tasks(self) -> int:
         return 0
@@ -1202,6 +1211,48 @@ async def test_close_tolerates_cancellation_errors():
     closed = await h.facade.close(first.session_id, owner=OWNER)
 
     assert closed.status == "closed"
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_the_run_when_no_interaction_cancel_succeeds():
+    h = make_harness(on_schedule=[STARTED, WAITING])
+    first = await h.send()
+    h.approvals.pending = [_pending()]
+    h.approvals.cancel_error = RuntimeError("version conflict")
+    h.engine.runs = [_run(RunState.AWAITING_INPUT, trigger="msg-1")]
+
+    closed = await h.facade.close(first.session_id, owner=OWNER)
+
+    assert closed.status == "closed"
+    # The interaction could not be canceled, so the run itself is stopped.
+    assert h.engine.canceled == [("conv-1", "msg-1", OWNER.user_id)]
+
+
+@pytest.mark.asyncio
+async def test_owner_list_keeps_a_waiting_session_beyond_the_page():
+    h = make_harness(on_schedule=[STARTED, WAITING])
+    await h.send()
+    h.engine.runs = [_run(RunState.AWAITING_INPUT, trigger="msg-1")]
+    waiting = h.store.records["sess-1"]
+    # 100 newer sessions fill the page; none of them waits on the owner.
+    for index in range(100):
+        newer = waiting.model_copy(
+            update={
+                "session_id": f"newer-{index}",
+                "conversation_id": None,
+                "creation_request_id": f"newer-{index}",
+                "requests": (),
+                "last_client_request_id": None,
+                "last_activity_at": waiting.last_activity_at
+                + timedelta(minutes=index + 1),
+            }
+        )
+        h.store.records[newer.session_id] = newer
+
+    sessions = (await h.facade.list_for_owner(owner=OWNER)).sessions
+
+    listed = {session.session_id: session.state for session in sessions}
+    assert listed["sess-1"] == "waiting_on_owner"
 
 
 @pytest.mark.asyncio

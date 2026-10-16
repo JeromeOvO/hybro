@@ -907,7 +907,8 @@ segment.
   Details panel (status, requester, agents, created, updated, closed, request
   count, copyable session ID, Close session with confirmation). The record is
   built by `foldSessionEvents` (`src/lib/session-record.ts`) from the room
-  event replay (`GET /sse/room/{id}/events`) and reads as plain sentences with
+  event replay (`GET /sse/room/{id}/events`, paged 1000 events at a time up to
+  the log's latest sequence) and reads as plain sentences with
   an avatar per actor (a registered agent's own `getAgentAvatarUri` avatar,
   matched by name to the session's agents; a generic agent avatar for the
   external requester or an unmatched agent; "You" for the owner): the requester asked an agent, the agent asked you (each

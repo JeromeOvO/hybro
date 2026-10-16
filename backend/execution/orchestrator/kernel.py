@@ -4645,7 +4645,7 @@ class OrchestratorKernel:
                 run, status="failed", reason="passthrough_requires_one_agent"
             )
         # The frozen catalog holds only the mentioned Agent's tools, one per
-        # skill; the first is the Agent's default skill.
+        # skill in Agent Card order; the first is the card's first skill.
         tools = self.tool_catalog.list_tools(run)
         if not tools:
             return await self._terminate(

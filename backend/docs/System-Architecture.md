@@ -170,7 +170,9 @@ The room shows "needs input" or processing meanwhile.
 
 `OrchestratorProfile` accepts `profile_id="passthrough"`, which needs no model
 route or prompt. The kernel advances such a Run without model turns: it sends
-the user's text as `{task}` to the first tool of the single mentioned Agent,
+the user's text as `{task}` to the first tool of the single mentioned Agent
+(the frozen catalog keeps each Agent's tools in Agent Card skill order, so this
+is the card's first skill),
 forwards a typed Agent interaction to the user through
 `surface_agent_questions`, and publishes the Agent's completed result as the
 final message through the normal canonical finalization. A failed, rejected,
@@ -1166,7 +1168,7 @@ to the authenticated owner and an owner-bound `AgentNetworkService` resolver):
 | POST | `/sessions/messages` | receipt: `session_id`, `client_request_id`, `agent_id`, `status` (`created`, `accepted`, `busy`), `state`, `message`, `created_at`, `updated_at` |
 | GET | `/sessions/{session_id}` | client view: `state`, `reason`, `agents`, `created_at`, `updated_at`, `history` of client messages and agents' final replies; never `conversation_id`, internal message ids, or owner decisions |
 | POST | `/sessions/{session_id}/close` | `session_id`, `status` |
-| GET | `/sessions` | owner list with `client_label`, `title`, `agents`, `state`, `conversation_id`, times |
+| GET | `/sessions` | owner list with `client_label`, `title`, `agents`, `state`, `conversation_id`, times: the 100 most recently active sessions plus every open session whose latest run awaits the owner |
 | GET | `/sessions/{session_id}/record` | owner record: `state`, `reason`, `paused_agent_id`, `agents`, `client_label`, `title`, `status`, `conversation_id`, `opened_at`, `last_activity_at`, `closed_at` |
 
 `POST /sessions/messages` is limited to 64 KiB bodies and four concurrent
@@ -1216,7 +1218,8 @@ requests; it returns the receipt without waiting for the run. Errors use
 - Each invocation is a fresh A2A context on the agent's side; the agent does
   not receive the session history.
 - `close` cancels a pending approval through `cancel_hitl_interaction`, or else
-  the active run through `ExecutionEngine.cancel`; failures are logged and
+  the active run through `ExecutionEngine.cancel`; when no pending approval
+  could be canceled it cancels the run instead. Failures are logged and
   tolerated, and the session is marked closed. Closed sessions refuse sends
   with `session_closed` and keep their record.
 

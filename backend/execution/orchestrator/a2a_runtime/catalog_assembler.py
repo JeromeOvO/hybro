@@ -73,9 +73,9 @@ class AgentToolCatalogAssembler:
         bindings: list[AgentToolBindingRecord] = []
         entries: list[FrozenToolCatalogEntry] = []
         used_names: set[str] = set()
-        for candidate in sorted(
-            usable, key=lambda item: (item.agent_id, item.skill_id or "")
-        ):
+        # Agents are ordered by id; a stable sort keeps each Agent's skills in
+        # Agent Card order, so its first tool is its first card skill.
+        for candidate in sorted(usable, key=lambda item: item.agent_id):
             name = deterministic_tool_name(candidate.agent_id, candidate.skill_id)
             if name in used_names:
                 raise ValueError("deterministic Agent tool name collision")

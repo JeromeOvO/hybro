@@ -131,6 +131,19 @@ class MongoSessionRepository:
         )
         return [SessionRecord.model_validate(doc) for doc in docs]
 
+    async def list_open_conversations(self, owner_user_id: str) -> dict[str, str]:
+        """Every open session's conversation id, mapped to its session id."""
+        docs = await self._sessions.find(
+            {
+                "owner_user_id": owner_user_id,
+                "status": "open",
+                "conversation_id": {"$type": "string"},
+            },
+            projection={"_id": 0, "session_id": 1, "conversation_id": 1},
+            exhaust=True,
+        )
+        return {doc["conversation_id"]: doc["session_id"] for doc in docs}
+
     async def _update(
         self,
         query: dict[str, Any],
