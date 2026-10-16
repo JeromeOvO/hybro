@@ -541,9 +541,13 @@ An explicit positive `limit` remains bounded even with `exhaust=True`.
 | Another owner's group ID | HTTP `403`, before inspecting its membership. |
 | `room_team` | HTTP `422`; room membership requires a room and is not a network scope. |
 
-Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card is
-the stored raw Card with legacy `authentication.credentials` removed; there is
-no user-specific Card projection. Activity is stored registry state, not proof
+Each discovery item is `{"agent_id": "...", "agent_card": {...}}`. The Card
+keeps an allowlist of stored fields (`name`, `description`, `version`,
+`protocolVersion`, `provider`, `documentationUrl`, `iconUrl`, `capabilities`,
+`defaultInputModes`, `defaultOutputModes`, `skills` without per-skill
+`security`). Endpoint URLs, interfaces, security schemes and requirements,
+signatures, and `authentication` are omitted; routing still reads the stored
+raw Card. There is no user-specific Card projection. Activity is stored registry state, not proof
 of current reachability.
 
 Three read-only routes help consumers choose an agent without loading every
@@ -668,7 +672,8 @@ backend execution owner. It serves Streamable HTTP at
 `send_message` (`sessions/messages`), `check_session` (`sessions/{id}`), and
 `close_session` (`sessions/{id}/close`). The stateless HTTP route
 `POST /agents/messages` is unchanged but no longer used by the adapter. Tool arguments and results call saved groups
-subnets (`subnet_id`) and translate to backend `group_id`. Its
+subnets (`subnet_id`) and translate to backend `group_id`; `list_subnets` strips
+the app's `[hybro-use-case:<id>]` preset tag from descriptions. Its
 Python dependencies, lockfile, and Dockerfile live under `MCP/`; releases publish
 the version-pinned `hybro-mcp` image alongside the other stack images.
 
@@ -689,17 +694,18 @@ inventory, group scope, visibility, ranking, and A2A execution.
 characters), `agent_id`, and optionally `session_id`, `subnet_id`,
 `client_request_id`, and `client_label`. It mints `client_request_id` when
 absent and sends `client_label` "MCP client" when opening a session without
-one. The result carries `session_id`, `accepted`, the session `state`
-(`completed`, `working`, `waiting_on_owner`, `rejected`, `failed`, `closed`),
-`reply_text`, `paused_agent_id`, `reason`, and a `next_action`: `working` and
-`waiting_on_owner` say to call `check_session` later; `rejected` and `closed`
-say to start a new session; a busy send (`accepted: false`) says the message
-was not recorded and must be resent once `check_session` shows a terminal
-state. Only `failed` is a tool error. `include_raw` adds the backend response.
-A retried call must pass the same `client_request_id` to get the earlier
-outcome; the adapter itself never retries. `check_session` returns the client
-check fields with `next_action`; `close_session` returns `session_id` and
-`status`. Every tool publishes an output schema; results are MCP structured
+one. The result is the backend receipt (`session_id`, `client_request_id`,
+`agent_id`, `status` of `created`, `accepted`, or `busy`, `state`, `message`,
+`created_at`, `updated_at`) with a `next_action`: call `check_session` for the
+agents' responses and do not resend, or, for `busy`, send again once that
+request finishes. A `failed` receipt is a tool error. `include_raw` adds the
+backend response. A retried call must pass the same `client_request_id` to get
+the same receipt; the adapter itself never retries. `check_session` returns
+the client view (`state`, `reason`, `agents`, `created_at`, `updated_at`,
+`history`) with a `next_action` per state: `completed` points to the last
+history entry's reply, `working` and `waiting_on_owner` say to check again
+later, and `rejected` and `closed` say to start a new session.
+`close_session` returns `session_id` and `status`. Every tool publishes an output schema; results are MCP structured
 content and JSON text. HTTP and transport failures become tool errors that keep
 the backend body and add `next_action`; a `409`/`404` hint branches on the
 backend error code (`session_closed`, `session_not_found`, `request_conflict`,
@@ -1157,14 +1163,14 @@ to the authenticated owner and an owner-bound `AgentNetworkService` resolver):
 
 | Method | Path | Returns |
 |---|---|---|
-| POST | `/sessions/messages` | `session_id`, `accepted`, `state`, `reply`, `paused_agent_id`, `reason`, `client_request_id` |
-| GET | `/sessions/{session_id}` | client check: `state`, `latest_replies`, `paused_agent_id`, `reason`, `agents`, times; never `conversation_id` |
+| POST | `/sessions/messages` | receipt: `session_id`, `client_request_id`, `agent_id`, `status` (`created`, `accepted`, `busy`), `state`, `message`, `created_at`, `updated_at` |
+| GET | `/sessions/{session_id}` | client view: `state`, `reason`, `agents`, `created_at`, `updated_at`, `history` of client messages and agents' final replies; never `conversation_id`, internal message ids, or owner decisions |
 | POST | `/sessions/{session_id}/close` | `session_id`, `status` |
 | GET | `/sessions` | owner list with `client_label`, `title`, `agents`, `state`, `conversation_id`, times |
-| GET | `/sessions/{session_id}/record` | owner record: the check fields plus `client_label`, `title`, `status`, `conversation_id`, `closed_at` |
+| GET | `/sessions/{session_id}/record` | owner record: `state`, `reason`, `paused_agent_id`, `agents`, `client_label`, `title`, `status`, `conversation_id`, `opened_at`, `last_activity_at`, `closed_at` |
 
 `POST /sessions/messages` is limited to 64 KiB bodies and four concurrent
-requests; each holds its request up to `session_send_wait_seconds`. Errors use
+requests; it returns the receipt without waiting for the run. Errors use
 `{"detail": {"code", "message", ...}}`: `invalid_request` 422,
 `session_not_found`/`agent_not_found`/`subnet_not_found`/`not_found` 404,
 `forbidden` 403, `session_closed`/`request_conflict`/`agent_unavailable` 409,
@@ -1183,8 +1189,8 @@ requests; each holds its request up to `session_send_wait_seconds`. Errors use
   (`owner_product="session"`, empty manual membership) and sets
   `conversation_id` only if it is still null; a concurrent loser deletes its
   container. A retry completes a crashed creation.
-- Busy check before execute: a non-terminal run refuses the send with
-  `accepted: false`, `reason: "busy"`, and the earlier run's state
+- Busy check before execute: a non-terminal run refuses the send with a
+  `status: busy` receipt carrying the earlier run's state
   (`waiting_on_owner` for `awaiting_input`, else `working`). A retry of the
   session's last request id skips the busy check and replays.
 - The `ExecutionRequest` uses `mode="passthrough"` and
@@ -1205,17 +1211,22 @@ requests; each holds its request up to `session_send_wait_seconds`. Errors use
 State resolution (`session/waiter.py`, `session/projection.py`) reads only the
 durable room event log (`app.state.room_event_store`), matching run events by
 `correlation_id` (the request's `client_request_id`) and paging after the
-recorded sequence. A send polls every 500 ms until `run_settled`
-(`completed`, `rejected` when a `hitl_response` with `status: canceled`
-preceded a canceled settlement for the same run, otherwise `failed` with the
-public `error_summary`), a pause (`run_waiting_input` not yet followed by
-`run_resumed` or settlement: `waiting_on_owner`), or `session_send_wait_seconds`
-(`working`). No correlated run event within `session_run_start_grace_seconds`
-reports `failed` with `run_not_started`. `check` and the owner list scan the
-same way without waiting; `closed` takes precedence. `latest_replies` holds the
-text of the settled run's `final_message_id`; agent-call rows are excluded
-because they can carry the owner's approval question, which the client view
-never contains. `paused_agent_id` comes from the awaiting run's trigger message
+recorded sequence; nothing waits for a run. A request is `completed`,
+`rejected` (a `hitl_response` with `status: canceled` preceded a canceled
+settlement for the same run), or `failed` (the public `error_summary`) once
+`run_settled` arrives; `waiting_on_owner` while `run_waiting_input` is not yet
+followed by `run_resumed` or settlement; otherwise `working`. A request with no
+correlated run event `session_run_start_grace_seconds` after its send reports
+`failed` with `run_not_started`; `closed` takes precedence. The client
+`history` folds the whole log per `correlation_id` in run-start order (plus the
+latest request if its run has not started): the client message text from the
+run's `user_message_id`, the target agent from the message's
+`extend_info.candidate_agent_ids` (named from the container), and the text of
+the settled run's `final_message_id`. Agent-call rows and HITL frames are never
+read into it, because they carry the owner's questions and answers.
+`updated_at` and the owner's `last_activity_at` are the latest of the last send
+and the request's newest event or reply. The owner record's
+`paused_agent_id` comes from the awaiting run's trigger message
 `extend_info.candidate_agent_ids`, falling back to `last_accepted_agent_id`.
 
 Chat guard: chat history (`get_history_by_owner`) excludes containers with

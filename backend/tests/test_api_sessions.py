@@ -18,11 +18,11 @@ from main import SESSION_MESSAGE_MAX_BYTES, SESSION_MESSAGE_MAX_CONCURRENT, crea
 from models.session import (
     SessionAgent,
     SessionClosed,
+    SessionHistoryEntry,
     SessionListResponse,
     SessionMessageRequest,
     SessionMessageResponse,
     SessionOwnerRecord,
-    SessionReply,
     SessionStatus,
     SessionSummary,
 )
@@ -52,21 +52,42 @@ class AccessStub:
         self.sent.append(request)
         return SessionMessageResponse(
             session_id="sess-1",
-            accepted=True,
-            state="completed",
-            reply="Done.",
             client_request_id=request.client_request_id,
+            agent_id=request.agent_id,
+            status="created",
+            state="working",
+            message="Created. Use session_id to query this session.",
+            created_at=NOW,
+            updated_at=NOW,
         )
 
     def _status(self, session_id: str) -> SessionStatus:
         return SessionStatus(
             session_id=session_id,
             state="waiting_on_owner",
-            latest_replies=[SessionReply(message_id="f1", text="Earlier answer")],
-            paused_agent_id="agent-1",
             agents=[SessionAgent(agent_id="agent-1", name="Travel")],
-            opened_at=NOW,
-            last_activity_at=NOW,
+            created_at=NOW,
+            updated_at=NOW,
+            history=[
+                SessionHistoryEntry(
+                    client_request_id="cr-0",
+                    text="Plan a trip",
+                    sent_at=NOW,
+                    agent_id="agent-1",
+                    agent_name="Travel",
+                    state="completed",
+                    reply="Earlier answer",
+                    replied_at=NOW,
+                ),
+                SessionHistoryEntry(
+                    client_request_id="cr-1",
+                    text="Make it longer",
+                    sent_at=NOW,
+                    agent_id="agent-1",
+                    agent_name="Travel",
+                    state="waiting_on_owner",
+                ),
+            ],
         )
 
     async def check(self, session_id: str) -> SessionStatus:
@@ -94,10 +115,15 @@ class AccessStub:
     async def get_record(self, session_id: str) -> SessionOwnerRecord:
         self._raise()
         return SessionOwnerRecord(
-            **self._status(session_id).model_dump(),
+            session_id=session_id,
             client_label="Buyer agent",
+            state="waiting_on_owner",
+            paused_agent_id="agent-1",
+            agents=[SessionAgent(agent_id="agent-1", name="Travel")],
             status="open",
             conversation_id="conv-1",
+            opened_at=NOW,
+            last_activity_at=NOW,
         )
 
 
@@ -133,7 +159,7 @@ def test_stub_satisfies_session_access():
     assert isinstance(AccessStub(), SessionAccess)
 
 
-async def test_send_returns_the_session_result():
+async def test_send_returns_a_receipt():
     app, access = make_app()
     async with client_for(app) as client:
         response = await client.post(SEND, json=body())
@@ -141,12 +167,13 @@ async def test_send_returns_the_session_result():
     assert response.status_code == 200
     assert response.json() == {
         "session_id": "sess-1",
-        "accepted": True,
-        "state": "completed",
-        "reply": "Done.",
-        "paused_agent_id": None,
-        "reason": None,
         "client_request_id": "cr-1",
+        "agent_id": "agent-1",
+        "status": "created",
+        "state": "working",
+        "message": "Created. Use session_id to query this session.",
+        "created_at": "2026-10-14T00:00:00Z",
+        "updated_at": "2026-10-14T00:00:00Z",
     }
     assert access.sent[0].agent_id == "agent-1"
 
@@ -222,8 +249,28 @@ async def test_check_close_list_and_record():
         close = await client.post("/api/v1/sessions/sess-1/close")
 
     assert check.status_code == 200
-    assert check.json()["state"] == "waiting_on_owner"
-    assert "conversation_id" not in check.json()
+    client_view = check.json()
+    assert client_view["state"] == "waiting_on_owner"
+    assert set(client_view) == {
+        "session_id",
+        "state",
+        "reason",
+        "agents",
+        "created_at",
+        "updated_at",
+        "history",
+    }
+    assert set(client_view["history"][0]) == {
+        "client_request_id",
+        "text",
+        "sent_at",
+        "agent_id",
+        "agent_name",
+        "state",
+        "reason",
+        "reply",
+        "replied_at",
+    }
     assert record.json()["conversation_id"] == "conv-1"
     assert listing.json()["sessions"][0]["conversation_id"] == "conv-1"
     assert close.json() == {"session_id": "sess-1", "status": "closed"}

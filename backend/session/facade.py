@@ -39,19 +39,21 @@ from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from models.room import MAX_MESSAGE_LENGTH
 from models.session import (
+    RECEIPT_TIP,
     SessionAgent,
     SessionClosed,
+    SessionHistoryEntry,
     SessionListResponse,
     SessionMessageRequest,
     SessionMessageResponse,
     SessionOwnerRecord,
-    SessionReply,
+    SessionReceiptStatus,
+    SessionState,
     SessionStatus,
     SessionSummary,
 )
 from session.models import SessionRecord, new_session_id
 from session.projection import (
-    BUSY,
     busy_state,
     final_message_id,
     resolve_state,
@@ -66,6 +68,14 @@ logger = get_logger(__name__)
 FINGERPRINT_CONFLICT_ERROR = (
     "The client_request_id was already used for a different request"
 )
+_RECEIPT_MESSAGES: dict[str, str] = {
+    "created": "Created.",
+    "accepted": "Received.",
+    "busy": (
+        "Not recorded: an earlier message in this session is still active. "
+        "Send it again once that request finishes."
+    ),
+}
 _ROOM_NAME_WORDS = 8
 _ROOM_NAME_MAX = 80
 _TITLE_MAX = 120
@@ -127,7 +137,9 @@ class SessionFacade:
         if not is_retry:
             runs = await self._engine.get_runs_for_room(conversation_id)
             if runs:
-                return await self._busy(record, runs, client_request_id)
+                return await self._busy(
+                    record, runs, client_request_id, request.agent_id
+                )
 
         seq_before = await self._waiter.latest_seq(conversation_id)
         execution_request = ExecutionRequest(
@@ -147,7 +159,7 @@ class SessionFacade:
         )
         ack = await self._engine.execute(execution_request)
         if not ack.success:
-            return await self._refused(record, ack, client_request_id)
+            return await self._refused(record, ack, client_request_id, request.agent_id)
         if not ack.message_id:
             raise _error("execution_error", "The message was not recorded")
 
@@ -169,28 +181,26 @@ class SessionFacade:
             self._engine.schedule_orchestration(execution_request, ack)
             record = await self._accept_agent(record, request.agent_id)
 
-        outcome = await self._waiter.wait(
+        # The receipt returns at once; the client queries for the responses.
+        outcome = await self._waiter.scan(
             conversation_id, client_request_id, after=after
         )
-        state, reason = resolve_state(outcome, closed=False)
-        replies = await self._replies(outcome)
-        return SessionMessageResponse(
-            session_id=record.session_id,
-            accepted=True,
-            state=state,
-            reply=replies[0].text if replies else None,
-            paused_agent_id=(
-                await self._paused_agent_id(record)
-                if state == "waiting_on_owner"
-                else None
+        state, _reason = self._resolve(outcome, sent_at=record.last_activity_at)
+        return self._receipt(
+            record,
+            client_request_id,
+            request.agent_id,
+            status=(
+                "created"
+                if record.creation_request_id == client_request_id
+                else "accepted"
             ),
-            reason=reason,
-            client_request_id=client_request_id,
+            state=state,
         )
 
     async def check(self, session_id: str, *, owner: SessionOwner) -> SessionStatus:
         record = await self._owned(session_id, owner)
-        return await self._status(record)
+        return await self._client_status(record)
 
     async def close(self, session_id: str, *, owner: SessionOwner) -> SessionClosed:
         record = await self._owned(session_id, owner)
@@ -208,7 +218,7 @@ class SessionFacade:
 
     async def list_for_owner(self, *, owner: SessionOwner) -> SessionListResponse:
         records = await self._store.list_for_owner(owner.user_id, _LIST_LIMIT)
-        statuses = await asyncio.gather(*(self._status(r) for r in records))
+        statuses = await asyncio.gather(*(self._owner_record(r) for r in records))
         return SessionListResponse(
             sessions=[
                 SessionSummary(
@@ -220,7 +230,7 @@ class SessionFacade:
                     paused_agent_id=status.paused_agent_id,
                     conversation_id=record.conversation_id,
                     opened_at=record.opened_at,
-                    last_activity_at=record.last_activity_at,
+                    last_activity_at=status.last_activity_at,
                     closed_at=record.closed_at,
                 )
                 for record, status in zip(records, statuses, strict=True)
@@ -231,15 +241,7 @@ class SessionFacade:
         self, session_id: str, *, owner: SessionOwner
     ) -> SessionOwnerRecord:
         record = await self._owned(session_id, owner)
-        status = await self._status(record)
-        return SessionOwnerRecord(
-            **status.model_dump(),
-            client_label=record.client_label,
-            title=record.title,
-            status=record.status,
-            conversation_id=record.conversation_id,
-            closed_at=record.closed_at,
-        )
+        return await self._owner_record(record)
 
     # -- Internals -------------------------------------------------------------
 
@@ -346,19 +348,14 @@ class SessionFacade:
         record: SessionRecord,
         runs: list[RunInfo],
         client_request_id: str,
+        agent_id: str,
     ) -> SessionMessageResponse:
-        state = busy_state([_state_value(run) for run in runs])
-        return SessionMessageResponse(
-            session_id=record.session_id,
-            accepted=False,
-            state=state,
-            paused_agent_id=(
-                await self._paused_agent_id(record, runs)
-                if state == "waiting_on_owner"
-                else None
-            ),
-            reason=BUSY,
-            client_request_id=client_request_id,
+        return self._receipt(
+            record,
+            client_request_id,
+            agent_id,
+            status="busy",
+            state=busy_state([_state_value(run) for run in runs]),
         )
 
     async def _refused(
@@ -366,6 +363,7 @@ class SessionFacade:
         record: SessionRecord,
         ack: ExecutionAck,
         client_request_id: str,
+        agent_id: str,
     ) -> SessionMessageResponse:
         message = ack.error or "The message was not accepted"
         if ack.status_code == 409:
@@ -373,30 +371,50 @@ class SessionFacade:
                 raise _error("request_conflict", message)
             # The engine saw an active run after the busy check: a race.
             runs = await self._engine.get_runs_for_room(record.conversation_id or "")
-            return await self._busy(record, runs, client_request_id)
+            return await self._busy(record, runs, client_request_id, agent_id)
         if ack.status_code == 404:
             raise _error("not_found", message)
         if 400 <= ack.status_code < 500:
             raise _error("request_rejected", message)
         raise _error("execution_error", message)
 
-    async def _status(self, record: SessionRecord) -> SessionStatus:
-        outcome = await self._outcome(record)
-        closed = record.status == "closed"
-        state, reason = resolve_state(outcome, closed=closed)
-        return SessionStatus(
+    def _resolve(
+        self,
+        outcome: CorrelatedOutcome | None,
+        *,
+        sent_at: datetime,
+        closed: bool = False,
+    ) -> tuple[SessionState, str | None]:
+        """Client state, giving a just-sent request its start grace."""
+        if (
+            outcome is not None
+            and not outcome.seen
+            and not closed
+            and (self._now() - sent_at).total_seconds()
+            < self._waiter.start_grace_seconds
+        ):
+            return "working", None
+        return resolve_state(outcome, closed=closed)
+
+    def _receipt(
+        self,
+        record: SessionRecord,
+        client_request_id: str,
+        agent_id: str,
+        *,
+        status: SessionReceiptStatus,
+        state: SessionState,
+    ) -> SessionMessageResponse:
+        message = _RECEIPT_MESSAGES[status]
+        return SessionMessageResponse(
             session_id=record.session_id,
+            client_request_id=client_request_id,
+            agent_id=agent_id,
+            status=status,
             state=state,
-            latest_replies=await self._replies(outcome),
-            paused_agent_id=(
-                await self._paused_agent_id(record)
-                if state == "waiting_on_owner"
-                else None
-            ),
-            reason=reason,
-            agents=await self._agents(record),
-            opened_at=record.opened_at,
-            last_activity_at=record.last_activity_at,
+            message=f"{message} {RECEIPT_TIP}",
+            created_at=record.opened_at,
+            updated_at=record.last_activity_at,
         )
 
     async def _outcome(self, record: SessionRecord) -> CorrelatedOutcome | None:
@@ -408,25 +426,134 @@ class SessionFacade:
             after=record.last_send_event_seq,
         )
 
-    async def _replies(self, outcome: CorrelatedOutcome | None) -> list[SessionReply]:
-        # Only the final answer is a client reply. Agent-call rows can carry
-        # the owner's approval question, which the client must never see.
-        message_id = final_message_id(outcome)
-        if message_id is None:
+    def _updated_at(
+        self, record: SessionRecord, outcomes: list[CorrelatedOutcome | None]
+    ) -> datetime:
+        times = [record.last_activity_at]
+        times.extend(o.last_event_at for o in outcomes if o and o.last_event_at)
+        return max(times)
+
+    async def _owner_record(self, record: SessionRecord) -> SessionOwnerRecord:
+        outcome = await self._outcome(record)
+        closed = record.status == "closed"
+        state, reason = self._resolve(
+            outcome, sent_at=record.last_activity_at, closed=closed
+        )
+        return SessionOwnerRecord(
+            session_id=record.session_id,
+            client_label=record.client_label,
+            title=record.title,
+            state=state,
+            reason=reason,
+            paused_agent_id=(
+                await self._paused_agent_id(record)
+                if state == "waiting_on_owner"
+                else None
+            ),
+            agents=await self._agents(record),
+            status=record.status,
+            conversation_id=record.conversation_id,
+            opened_at=record.opened_at,
+            last_activity_at=self._updated_at(record, [outcome]),
+            closed_at=record.closed_at,
+        )
+
+    async def _client_status(self, record: SessionRecord) -> SessionStatus:
+        outcome = await self._outcome(record)
+        closed = record.status == "closed"
+        state, reason = self._resolve(
+            outcome, sent_at=record.last_activity_at, closed=closed
+        )
+        agents = await self._agents(record)
+        history = await self._client_history(record, agents)
+        return SessionStatus(
+            session_id=record.session_id,
+            state=state,
+            reason=reason,
+            agents=agents,
+            created_at=record.opened_at,
+            updated_at=max(
+                [self._updated_at(record, [outcome])]
+                + [entry.replied_at for entry in history if entry.replied_at]
+            ),
+            history=history,
+        )
+
+    async def _client_history(
+        self, record: SessionRecord, agents: list[SessionAgent]
+    ) -> list[SessionHistoryEntry]:
+        """The client's messages and the agents' final replies, oldest first.
+
+        Agents' questions to the owner and the owner's decisions stay out.
+        """
+        if not record.conversation_id:
             return []
-        messages = await self._history.get_messages_by_ids([message_id])
-        replies = []
-        for message in messages:
-            text = message.content.get("message_text")
-            if isinstance(text, str) and text:
-                replies.append(
-                    SessionReply(
-                        message_id=message.message_id,
-                        text=text,
-                        created_at=message.created_at,
-                    )
+        requests = await self._waiter.history(record.conversation_id)
+        if record.last_client_request_id and record.last_client_request_id not in {
+            correlation for correlation, _ in requests
+        }:
+            # The latest request's run may not have started yet.
+            requests.append((record.last_client_request_id, None))
+        names = {agent.agent_id: agent.name for agent in agents}
+        message_ids = [
+            outcome.user_message_id
+            for _, outcome in requests
+            if outcome is not None and outcome.user_message_id
+        ]
+        if record.last_user_message_id:
+            message_ids.append(record.last_user_message_id)
+        reply_ids = [
+            reply_id
+            for _, outcome in requests
+            if (reply_id := final_message_id(outcome)) is not None
+        ]
+        messages = {
+            message.message_id: message
+            for message in await self._history.get_messages_by_ids(
+                list(dict.fromkeys(message_ids + reply_ids))
+            )
+        }
+        closed = record.status == "closed"
+        entries: list[SessionHistoryEntry] = []
+        for correlation, outcome in requests:
+            latest = correlation == record.last_client_request_id
+            user_id = (
+                outcome.user_message_id
+                if outcome is not None and outcome.user_message_id
+                else record.last_user_message_id
+                if latest
+                else None
+            )
+            user = messages.get(user_id or "")
+            reply = messages.get(final_message_id(outcome) or "")
+            # Only the latest request can be unstarted or closed.
+            state, reason = self._resolve(
+                outcome or CorrelatedOutcome(),
+                sent_at=record.last_activity_at,
+                closed=closed and latest,
+            )
+            agent_id = _target_agent(user)
+            entries.append(
+                SessionHistoryEntry(
+                    client_request_id=correlation,
+                    text=_message_text(user),
+                    sent_at=(
+                        user.created_at
+                        if user is not None and user.created_at
+                        else outcome.started_at
+                        if outcome is not None
+                        else None
+                    ),
+                    agent_id=agent_id,
+                    agent_name=(names.get(agent_id) if agent_id else None)
+                    or _agent_name(outcome),
+                    state=state,
+                    reason=reason,
+                    reply=_message_text(reply) or None,
+                    replied_at=reply.created_at if reply is not None else None,
                 )
-        return replies
+            )
+        return entries
 
     async def _agents(self, record: SessionRecord) -> list[SessionAgent]:
         if not record.conversation_id:
@@ -555,6 +682,31 @@ async def _resolve_agent(
         if exc.code == "FORBIDDEN":
             raise _error("forbidden", exc.message) from exc
         raise
+
+
+def _message_text(message: object | None) -> str:
+    content = getattr(message, "content", None)
+    text = content.get("message_text") if isinstance(content, dict) else None
+    return text if isinstance(text, str) else ""
+
+
+def _target_agent(message: object | None) -> str | None:
+    """The agent a client message addressed, from its routing metadata."""
+    metadata = getattr(message, "metadata", None)
+    extend_info = metadata.get("extend_info") if isinstance(metadata, dict) else None
+    candidates = (
+        extend_info.get("candidate_agent_ids")
+        if isinstance(extend_info, dict)
+        else None
+    )
+    if isinstance(candidates, list) and candidates:
+        return str(candidates[0])
+    return None
+
+
+def _agent_name(outcome: CorrelatedOutcome | None) -> str | None:
+    label = outcome.agent_label if outcome is not None else None
+    return label.split(" - ", 1)[0] if label else None
 
 
 def _title(text: str) -> str | None:

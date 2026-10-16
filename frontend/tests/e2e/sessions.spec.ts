@@ -100,9 +100,12 @@ test.describe('Sessions', () => {
       if (outcome === 'completed') break
       await answerQuestions(decision)
     }
-    expect((await sessionState(request, sessionId)).state).toBe('completed')
-    const status = await sessionState(request, sessionId)
-    expect((status.latest_replies as unknown[]).length).toBeGreaterThan(0)
+    // The client's view: its own messages and the agent's reply, no owner decisions.
+    const client = await sessionState(request, sessionId)
+    expect(client.state).toBe('completed')
+    const requests = client.history as { text: string; reply: string | null }[]
+    expect(requests.at(-1)?.reply).toBeTruthy()
+    expect(JSON.stringify(client)).not.toContain(ANSWER)
     const thread = page.getByRole('list', { name: 'Session record' })
     await expect(thread.getByText('answered').first()).toBeVisible({ timeout: 30_000 })
     await expect(thread.getByText(/^replied/)).toBeVisible({ timeout: 30_000 })

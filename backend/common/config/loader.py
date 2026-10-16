@@ -127,7 +127,6 @@ class Settings(BaseModel):
     # Sessions. A send waits this long for its run to settle or pause for the
     # owner before answering "working"; a run with no lifecycle event within
     # the grace is reported as not started.
-    session_send_wait_seconds: float = Field(default=30.0, gt=0)
     session_run_start_grace_seconds: float = Field(default=10.0, gt=0)
 
     # Orchestrator canary observability (step 8). The canary job is disabled by

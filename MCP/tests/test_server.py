@@ -20,15 +20,17 @@ async def call_with_transport(handler, tool, arguments):
             return await client.call_tool(tool, arguments)
 
 
-def session_reply(state="completed", **extra):
+def session_reply(status="created", state="working", **extra):
+    """The backend's receipt for one message."""
     return {
         "session_id": "sess-1",
-        "accepted": True,
-        "state": state,
-        "reply": "Here is your plan." if state == "completed" else None,
-        "paused_agent_id": "story" if state == "waiting_on_owner" else None,
-        "reason": None,
         "client_request_id": "turn-1",
+        "agent_id": "story",
+        "status": status,
+        "state": state,
+        "message": "Created. Use session_id to query this session.",
+        "created_at": "2026-10-15T21:52:37Z",
+        "updated_at": "2026-10-15T21:52:37Z",
         **extra,
     }
 
@@ -54,10 +56,14 @@ async def test_first_send_opens_a_session_with_minted_ids():
     assert "session_id" not in payload
     summary = result.structured_content
     assert summary["session_id"] == "sess-1"
-    assert summary["accepted"] is True
-    assert summary["state"] == "completed"
-    assert summary["reply_text"] == "Here is your plan."
+    assert summary["status"] == "created"
+    assert summary["state"] == "working"
+    assert summary["created_at"] == "2026-10-15T21:52:37Z"
+    assert summary["updated_at"] == "2026-10-15T21:52:37Z"
+    assert summary["message"].startswith("Created.")
     assert summary["agent_id"] == "story"
+    assert "check_session" in summary["next_action"]
+    assert "reply_text" not in summary
     assert "raw" not in summary
     assert {"conversation", "needs_input", "data", "files"}.isdisjoint(summary)
     assert json.loads(result.content[0].text) == summary
@@ -113,37 +119,31 @@ async def test_send_with_handle_does_not_mint_a_label():
 
 
 @pytest.mark.parametrize(
-    ("state", "is_error", "hint"),
+    ("status", "state", "is_error", "hint"),
     [
-        ("completed", False, "Done"),
-        ("working", False, "check_session"),
-        ("waiting_on_owner", False, "check_session"),
-        ("rejected", False, "new session"),
-        ("closed", False, "new session"),
-        ("failed", True, "run_not_started"),
+        ("created", "working", False, "check_session"),
+        ("accepted", "working", False, "check_session"),
+        ("accepted", "failed", True, "check_session"),
     ],
 )
-async def test_send_states_carry_next_action(state, is_error, hint):
-    reply = session_reply(state)
-    if state == "failed":
-        reply["reason"] = "run_not_started"
-
+async def test_receipts_point_the_client_to_check_session(
+    status, state, is_error, hint
+):
     result = await call_with_transport(
-        lambda _: httpx.Response(200, json=reply),
+        lambda _: httpx.Response(200, json=session_reply(status, state)),
         "send_message",
         {"agent_id": "story", "text": "Go"},
     )
 
     summary = result.structured_content
     assert result.is_error is is_error
-    assert summary["state"] == state
+    assert summary["status"] == status
     assert hint in summary["next_action"]
-    if state == "waiting_on_owner":
-        assert summary["paused_agent_id"] == "story"
+    assert "do not resend" in summary["next_action"]
 
 
-async def test_busy_send_says_the_message_was_not_accepted():
-    reply = session_reply("waiting_on_owner", accepted=False, reason="busy")
+async def test_busy_send_says_the_message_was_not_recorded():
+    reply = session_reply("busy", "waiting_on_owner")
 
     result = await call_with_transport(
         lambda _: httpx.Response(200, json=reply),
@@ -153,8 +153,8 @@ async def test_busy_send_says_the_message_was_not_accepted():
 
     assert not result.is_error
     summary = result.structured_content
-    assert summary["accepted"] is False
-    assert "not accepted" in summary["next_action"]
+    assert summary["status"] == "busy"
+    assert "not recorded" in summary["next_action"]
     assert "check_session" in summary["next_action"]
 
 
@@ -224,17 +224,28 @@ async def test_unknown_session_hint_starts_a_new_session():
     assert "Omit session_id" in result.structured_content["next_action"]
 
 
-async def test_check_session_reads_state_and_latest_replies():
+async def test_check_session_reads_state_and_history():
     calls = []
     status = {
         "session_id": "s/1",
-        "state": "waiting_on_owner",
-        "latest_replies": [],
-        "paused_agent_id": "story",
+        "state": "completed",
         "reason": None,
         "agents": [{"agent_id": "story", "name": "Story"}],
-        "opened_at": "2026-10-14T00:00:00Z",
-        "last_activity_at": "2026-10-14T00:00:00Z",
+        "created_at": "2026-10-14T00:00:00Z",
+        "updated_at": "2026-10-14T00:01:00Z",
+        "history": [
+            {
+                "client_request_id": "turn-1",
+                "text": "Write a story",
+                "sent_at": "2026-10-14T00:00:00Z",
+                "agent_id": "story",
+                "agent_name": "Story",
+                "state": "completed",
+                "reason": None,
+                "reply": "Once upon a time",
+                "replied_at": "2026-10-14T00:01:00Z",
+            }
+        ],
     }
 
     def backend(request):
@@ -247,9 +258,35 @@ async def test_check_session_reads_state_and_latest_replies():
     assert calls[0].method == "GET"
     assert calls[0].url.raw_path == b"/api/v1/sessions/s%2F1"
     summary = result.structured_content
-    assert summary["state"] == "waiting_on_owner"
-    assert summary["paused_agent_id"] == "story"
-    assert "check_session later" in summary["next_action"]
+    assert summary["history"][0]["reply"] == "Once upon a time"
+    assert summary["updated_at"] == "2026-10-14T00:01:00Z"
+    assert "history" in summary["next_action"]
+
+
+@pytest.mark.parametrize(
+    ("state", "hint"),
+    [
+        ("working", "check_session later"),
+        ("waiting_on_owner", "owner's decision"),
+        ("rejected", "new session"),
+        ("closed", "new session"),
+    ],
+)
+async def test_check_session_states_carry_next_action(state, hint):
+    status = {
+        "session_id": "s1",
+        "state": state,
+        "agents": [],
+        "created_at": "2026-10-14T00:00:00Z",
+        "updated_at": "2026-10-14T00:00:00Z",
+        "history": [],
+    }
+    result = await call_with_transport(
+        lambda _: httpx.Response(200, json=status),
+        "check_session",
+        {"session_id": "s1"},
+    )
+    assert hint in result.structured_content["next_action"]
 
 
 async def test_close_session_posts_close():
@@ -301,6 +338,32 @@ async def test_list_subnets_uses_subnet_vocabulary():
         ]
     }
     assert calls[0].url.path == "/api/v1/agents/groups"
+
+
+@pytest.mark.parametrize(
+    ("stored", "shown"),
+    [
+        (
+            "Preset team for the \u201cTravel Planner\u201d use case. "
+            "[hybro-use-case:travel-planner]",
+            "Preset team for the \u201cTravel Planner\u201d use case.",
+        ),
+        ("[hybro-use-case:travel-planner]", None),
+        ("Research team", "Research team"),
+    ],
+)
+async def test_list_subnets_hides_internal_preset_markers(stored, shown):
+    def backend(request):
+        group = {
+            "group_id": "g1",
+            "name": "Travel Planner",
+            "description": stored,
+            "agent_count": 3,
+        }
+        return httpx.Response(200, json={"groups": [group]})
+
+    result = await call_with_transport(backend, "list_subnets", {})
+    assert result.structured_content["subnets"][0]["description"] == shown
 
 
 async def test_find_agents_scopes_search_and_renames_groups():

@@ -16,12 +16,6 @@ export interface SessionAgent {
   name: string | null
 }
 
-export interface SessionReply {
-  message_id: string
-  text: string
-  created_at: string | null
-}
-
 export interface SessionSummary {
   session_id: string
   client_label: string
@@ -43,7 +37,6 @@ export interface SessionListResponse {
 export interface SessionRecord {
   session_id: string
   state: SessionState
-  latest_replies: SessionReply[]
   paused_agent_id: string | null
   reason: string | null
   agents: SessionAgent[]

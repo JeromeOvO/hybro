@@ -69,13 +69,12 @@ async def send_session_message(
 ) -> SessionMessageResponse:
     """Send one text message to one agent, opening a session without `session_id`.
 
-    The call waits up to the configured bound for the agent's answer. It
-    returns `completed` with the reply, `working` when the agent is still
-    busy, or `waiting_on_owner` when the agent needs the owner's decision in
-    the Hybro app. `accepted: false` with `reason: "busy"` means the message
-    was not recorded because an earlier message is still active; resend it
-    once `GET /sessions/{session_id}` reports a terminal state. Retrying with
-    the same `client_request_id` returns the earlier outcome.
+    Returns a receipt as soon as Hybro has the message: `status` is `created`
+    when this message opened the session, `accepted` for a later message, or
+    `busy` when it was not recorded because an earlier message is still
+    active. The receipt carries the session's `created_at` and `updated_at`.
+    The agents' responses come from `GET /sessions/{session_id}`. Retrying
+    with the same `client_request_id` returns the same receipt.
     """
     try:
         return await sessions.send(request)
@@ -103,7 +102,8 @@ async def list_sessions(sessions: SessionAccessDependency) -> SessionListRespons
 async def check_session(
     session_id: SessionIdentifier, sessions: SessionAccessDependency
 ) -> SessionStatus:
-    """Return the session state and the latest reply, without the owner's question."""
+    """Return the session state and its history: each client message and the
+    agents' final replies. The owner's decisions are never included."""
     try:
         return await sessions.check(session_id)
     except AppError as exc:

@@ -11,9 +11,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
+from common.utils.time import ensure_utc
 from models.room import MAX_MESSAGE_LENGTH
 
 SessionState = Literal[
@@ -61,20 +69,57 @@ class SessionAgent(BaseModel):
     name: str | None = None
 
 
-class SessionReply(BaseModel):
-    message_id: str
-    text: str
-    created_at: datetime | None = None
+def _utc(value: datetime | None) -> datetime | None:
+    # Stored times come back naive; they are UTC.
+    return ensure_utc(value) if value is not None else None
+
+
+SessionReceiptStatus = Literal["created", "accepted", "busy"]
+
+RECEIPT_TIP = (
+    "Use session_id to query this session (MCP check_session, or "
+    "GET /sessions/{session_id}) for the agents' responses."
+)
 
 
 class SessionMessageResponse(BaseModel):
+    """The receipt for one client message, returned as soon as Hybro has it.
+
+    ``created`` opened the session, ``accepted`` recorded a message in an
+    existing session, and ``busy`` means the message was not recorded because
+    an earlier one is still active. Agents' responses come from the query.
+    """
+
     session_id: str
-    accepted: bool
-    state: SessionState
-    reply: str | None = None
-    paused_agent_id: str | None = None
-    reason: str | None = None
     client_request_id: str
+    agent_id: str
+    status: SessionReceiptStatus
+    state: SessionState
+    message: str
+    created_at: datetime
+    updated_at: datetime
+
+    _utc_times = field_validator("created_at", "updated_at")(_utc)
+
+
+class SessionHistoryEntry(BaseModel):
+    """One client message and what came of it.
+
+    It never carries the owner's decisions: a request waiting for the owner
+    only shows ``waiting_on_owner``.
+    """
+
+    client_request_id: str
+    text: str
+    sent_at: datetime | None = None
+    agent_id: str | None = None
+    agent_name: str | None = None
+    state: SessionState
+    reason: str | None = None
+    reply: str | None = None
+    replied_at: datetime | None = None
+
+    _utc_times = field_validator("sent_at", "replied_at")(_utc)
 
 
 class SessionStatus(BaseModel):
@@ -82,12 +127,13 @@ class SessionStatus(BaseModel):
 
     session_id: str
     state: SessionState
-    latest_replies: list[SessionReply] = Field(default_factory=list)
-    paused_agent_id: str | None = None
     reason: str | None = None
     agents: list[SessionAgent] = Field(default_factory=list)
-    opened_at: datetime
-    last_activity_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    history: list[SessionHistoryEntry] = Field(default_factory=list)
+
+    _utc_times = field_validator("created_at", "updated_at")(_utc)
 
 
 class SessionClosed(BaseModel):
@@ -114,13 +160,20 @@ class SessionListResponse(BaseModel):
     sessions: list[SessionSummary] = Field(default_factory=list)
 
 
-class SessionOwnerRecord(SessionStatus):
-    """The owner's view: the client fields plus the conversation container."""
+class SessionOwnerRecord(BaseModel):
+    """The owner's view of one session, including the conversation container."""
 
+    session_id: str
     client_label: str
     title: str | None = None
+    state: SessionState
+    reason: str | None = None
+    paused_agent_id: str | None = None
+    agents: list[SessionAgent] = Field(default_factory=list)
     status: Literal["open", "closed"]
     conversation_id: str | None = None
+    opened_at: datetime
+    last_activity_at: datetime
     closed_at: datetime | None = None
 
 
@@ -136,6 +189,7 @@ class SessionErrorResponse(BaseModel):
 
 
 __all__ = [
+    "RECEIPT_TIP",
     "SessionAgent",
     "SessionClosed",
     "SessionErrorDetail",
@@ -144,7 +198,8 @@ __all__ = [
     "SessionMessageRequest",
     "SessionMessageResponse",
     "SessionOwnerRecord",
-    "SessionReply",
+    "SessionHistoryEntry",
+    "SessionReceiptStatus",
     "SessionState",
     "SessionStatus",
     "SessionSummary",

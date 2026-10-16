@@ -1,4 +1,4 @@
-"""Event-based, bounded wait on a session request's run.
+"""What the durable event log says about a session's requests.
 
 The durable room event log is the only source. Lifecycle events are records of
 kind ``run_event`` whose ``payload_public`` carries the run's ``type``,
@@ -10,12 +10,11 @@ retried request finds the earlier outcome.
 
 from __future__ import annotations
 
-import asyncio
-import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
+from common.utils.time import ensure_utc
 from session.protocols import ConversationEventsPort
 
 _RUN_EVENT = "run_event"
@@ -23,6 +22,10 @@ _HITL_RESPONSE = "hitl_response"
 _SETTLED = "run_settled"
 _WAITING_INPUT = "run_waiting_input"
 _RESUMED = "run_resumed"
+_STARTED = "run_started"
+_TOOL_START = "tool_execution_start"
+# The passthrough kernel's internal tool that forwards questions to the owner.
+_SURFACE_TOOL = "surface_agent_questions"
 
 
 @dataclass(slots=True)
@@ -38,7 +41,12 @@ class CorrelatedOutcome:
     settlement: dict[str, Any] | None = None
     rejected: bool = False
     last_seq: int = 0
-    timed_out: bool = False
+    # When the request's run last changed (answers, resumes, settlement).
+    last_event_at: datetime | None = None
+    started_at: datetime | None = None
+    user_message_id: str | None = None
+    # The called agent's tool label, "Agent name - skill".
+    agent_label: str | None = None
     not_started: bool = False
     _canceled_hitl_runs: set[str] = field(default_factory=set)
 
@@ -63,9 +71,14 @@ class CorrelatedOutcome:
         if not isinstance(event_type, str):
             return
         run_id = payload.get("run_id")
+        at = _event_time(record.get("ts"))
+        if at is not None and (self.last_event_at is None or at > self.last_event_at):
+            self.last_event_at = at
         self.seen = True
         self.run_id = run_id if isinstance(run_id, str) else self.run_id
         self.last_type = event_type
+        inner = payload.get("payload")
+        self._note_details(event_type, inner if isinstance(inner, dict) else {}, at)
         if event_type == _WAITING_INPUT:
             self.paused = True
         elif event_type == _RESUMED:
@@ -80,26 +93,43 @@ class CorrelatedOutcome:
                 and self.run_id in self._canceled_hitl_runs
             )
 
+    def _note_details(
+        self, event_type: str, inner: dict[str, Any], at: datetime | None
+    ) -> None:
+        """The request's message, start time, and called agent."""
+        if event_type == _STARTED:
+            message_id = inner.get("user_message_id")
+            if isinstance(message_id, str) and message_id:
+                self.user_message_id = message_id
+            self.started_at = _event_time(inner.get("started_at")) or at
+        elif event_type == _TOOL_START and self.agent_label is None:
+            tool = inner.get("tool_name")
+            if isinstance(tool, str) and tool and tool != _SURFACE_TOOL:
+                self.agent_label = tool
+
+
+def _event_time(value: object) -> datetime | None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return ensure_utc(value) if isinstance(value, datetime) else None
+
 
 class SessionWaiter:
+    """Reads a conversation's event log; it never waits for a run."""
+
     def __init__(
         self,
         events: ConversationEventsPort,
         *,
-        send_wait_seconds: float,
         start_grace_seconds: float,
-        poll_interval: float = 0.5,
         page_size: int = 500,
-        clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._events = events
-        self._send_wait_seconds = send_wait_seconds
-        self._start_grace_seconds = start_grace_seconds
-        self._poll_interval = poll_interval
+        self.start_grace_seconds = start_grace_seconds
         self._page_size = page_size
-        self._clock = clock
-        self._sleep = sleep
 
     async def latest_seq(self, room_id: str) -> int:
         return await self._events.latest_seq(room_id)
@@ -112,28 +142,37 @@ class SessionWaiter:
         await self._read_new(room_id, correlation_id, outcome)
         return outcome
 
-    async def wait(
-        self, room_id: str, correlation_id: str, *, after: int
-    ) -> CorrelatedOutcome:
-        """Poll until settlement, a pause for the owner, or the deadline.
-
-        No correlated run event within the start grace means the run never
-        started; the deadline without settlement means it is still working.
-        """
-        outcome = CorrelatedOutcome(last_seq=after)
-        started_at = self._clock()
+    async def history(self, room_id: str) -> list[tuple[str, CorrelatedOutcome]]:
+        """Every request's outcome in the order its run started."""
+        records: list[dict[str, Any]] = []
+        cursor = 0
         while True:
-            await self._read_new(room_id, correlation_id, outcome)
-            if outcome.settlement is not None or outcome.waiting_input:
-                return outcome
-            elapsed = self._clock() - started_at
-            if not outcome.seen and elapsed >= self._start_grace_seconds:
-                outcome.not_started = True
-                return outcome
-            if elapsed >= self._send_wait_seconds:
-                outcome.timed_out = True
-                return outcome
-            await self._sleep(self._poll_interval)
+            page = await self._events.read_range(
+                room_id, after=cursor, limit=self._page_size
+            )
+            records.extend(page)
+            last = max((int(r.get("room_seq") or 0) for r in page), default=cursor)
+            if len(page) < self._page_size or last <= cursor:
+                break
+            cursor = last
+        order: list[str] = []
+        for record in records:
+            payload = record.get("payload_public")
+            if (
+                record.get("kind") == _RUN_EVENT
+                and isinstance(payload, dict)
+                and payload.get("type") == _STARTED
+                and isinstance(payload.get("correlation_id"), str)
+                and payload["correlation_id"] not in order
+            ):
+                order.append(payload["correlation_id"])
+        outcomes = []
+        for correlation_id in order:
+            outcome = CorrelatedOutcome()
+            for record in records:
+                outcome.absorb(record, correlation_id)
+            outcomes.append((correlation_id, outcome))
+        return outcomes
 
     async def _read_new(
         self, room_id: str, correlation_id: str, outcome: CorrelatedOutcome

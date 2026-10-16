@@ -103,10 +103,11 @@ async def test_mock_auth_discovery_send_and_continue_preserve_a2a_results(networ
     assert discovery.status_code == 200
     discovered = discovery.json()["agents"]
     assert [agent["agent_id"] for agent in discovered] == ["reviewer"]
-    assert (
-        discovered[0]["agent_card"]["supportedInterfaces"][0]["url"]
-        == "http://agent.test/"
-    )
+    # Clients reach agents through Hybro by agent_id, never directly.
+    card = discovered[0]["agent_card"]
+    assert "supportedInterfaces" not in card
+    assert "url" not in card
+    assert "http://agent.test" not in str(card)
 
     response = await client.post("/api/v1/agents/messages", json=message_body())
     assert response.status_code == 200
@@ -355,3 +356,53 @@ async def test_clerk_can_discover_and_invoke_public_or_owned_agent(
     assert response.status_code == 200
     assert response.json()["result"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
     assert remote.last_message()["parts"][0]["text"] == "Review this code"
+
+
+def test_discovery_card_keeps_choice_fields_and_drops_transport_and_security():
+    from agent.network import _discovery_card
+
+    raw = {
+        "name": "Reviewer",
+        "description": "Reviews code",
+        "version": "1.0.0",
+        "protocolVersion": "1.0",
+        "provider": {"organization": "Acme", "url": "https://acme.test"},
+        "documentationUrl": "https://docs.acme.test",
+        "iconUrl": "https://acme.test/icon.png",
+        "capabilities": {"streaming": True},
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [
+            {"id": "review", "name": "Review", "security": [{"oauth": ["read"]}]}
+        ],
+        "url": "http://reviewer:7001",
+        "preferredTransport": "JSONRPC",
+        "supportedInterfaces": [
+            {"url": "http://reviewer:7001", "protocolBinding": "JSONRPC"}
+        ],
+        "additionalInterfaces": [{"url": "http://reviewer:7002", "transport": "GRPC"}],
+        "security": [{"oauth": ["read"]}],
+        "securitySchemes": {"oauth": {"type": "oauth2"}},
+        "signatures": [{"protected": "x", "signature": "y"}],
+        "supportsAuthenticatedExtendedCard": True,
+        "authentication": {"schemes": ["bearer"], "credentials": "secret"},
+    }
+
+    card = _discovery_card(raw)
+
+    assert set(card) == {
+        "name",
+        "description",
+        "version",
+        "protocolVersion",
+        "provider",
+        "documentationUrl",
+        "iconUrl",
+        "capabilities",
+        "defaultInputModes",
+        "defaultOutputModes",
+        "skills",
+    }
+    assert card["skills"] == [{"id": "review", "name": "Review"}]
+    assert "reviewer:700" not in str(card)
+    assert raw["url"] == "http://reviewer:7001"

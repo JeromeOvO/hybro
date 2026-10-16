@@ -382,7 +382,7 @@
           "agent"
         ],
         "summary": "Discover Agents",
-        "description": "Return stored cards for active agents, optionally scoped to a saved team.\n\nOnly public agents and the caller's own private agents are visible. Saved\ngroups must belong to the caller. No network scan or card refresh is performed.\n`all_agents` selects all visible agents; `room_team` is not supported.",
+        "description": "Return public card fields for active agents, optionally scoped to a saved team.\n\nCards omit endpoint URLs, interfaces, and security data; clients reach an\nagent through Hybro by ``agent_id``.\n\nOnly public agents and the caller's own private agents are visible. Saved\ngroups must belong to the caller. No network scan or card refresh is performed.\n`all_agents` selects all visible agents; `room_team` is not supported.",
         "operationId": "discover_agents_api_v1_agents_discovery_get",
         "parameters": [
           {
@@ -1937,7 +1937,7 @@
           "session"
         ],
         "summary": "Send Session Message",
-        "description": "Send one text message to one agent, opening a session without `session_id`.\n\nThe call waits up to the configured bound for the agent's answer. It\nreturns `completed` with the reply, `working` when the agent is still\nbusy, or `waiting_on_owner` when the agent needs the owner's decision in\nthe Hybro app. `accepted: false` with `reason: \"busy\"` means the message\nwas not recorded because an earlier message is still active; resend it\nonce `GET /sessions/{session_id}` reports a terminal state. Retrying with\nthe same `client_request_id` returns the earlier outcome.",
+        "description": "Send one text message to one agent, opening a session without `session_id`.\n\nReturns a receipt as soon as Hybro has the message: `status` is `created`\nwhen this message opened the session, `accepted` for a later message, or\n`busy` when it was not recorded because an earlier message is still\nactive. The receipt carries the session's `created_at` and `updated_at`.\nThe agents' responses come from `GET /sessions/{session_id}`. Retrying\nwith the same `client_request_id` returns the same receipt.",
         "operationId": "send_session_message_api_v1_sessions_messages_post",
         "requestBody": {
           "content": {
@@ -2053,7 +2053,7 @@
           "session"
         ],
         "summary": "Check Session",
-        "description": "Return the session state and the latest reply, without the owner's question.",
+        "description": "Return the session state and its history: each client message and the\nagents' final replies. The owner's decisions are never included.",
         "operationId": "check_session_api_v1_sessions__session_id__get",
         "parameters": [
           {
@@ -4897,10 +4897,6 @@
             "type": "string",
             "title": "Session Id"
           },
-          "accepted": {
-            "type": "boolean",
-            "title": "Accepted"
-          },
           "state": {
             "type": "string",
             "enum": [
@@ -4913,52 +4909,51 @@
             ],
             "title": "State"
           },
-          "reply": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reply"
-          },
-          "paused_agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Paused Agent Id"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
           "client_request_id": {
             "type": "string",
             "title": "Client Request Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "created",
+              "accepted",
+              "busy"
+            ],
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           }
         },
         "type": "object",
         "required": [
           "session_id",
-          "accepted",
+          "client_request_id",
+          "agent_id",
+          "status",
           "state",
-          "client_request_id"
+          "message",
+          "created_at",
+          "updated_at"
         ],
-        "title": "SessionMessageResponse"
+        "title": "SessionMessageResponse",
+        "description": "The receipt for one client message, returned as soon as Hybro has it.\n\n``created`` opened the session, ``accepted`` recorded a message in an\nexisting session, and ``busy`` means the message was not recorded because\nan earlier one is still active. Agents' responses come from the query."
       },
       "SessionOwnerRecord": {
         "properties": {
@@ -4977,13 +4972,6 @@
               "closed"
             ],
             "title": "State"
-          },
-          "latest_replies": {
-            "items": {
-              "$ref": "#/components/schemas/SessionReply"
-            },
-            "type": "array",
-            "title": "Latest Replies"
           },
           "paused_agent_id": {
             "anyOf": [
@@ -5074,44 +5062,14 @@
         "type": "object",
         "required": [
           "session_id",
-          "state",
-          "opened_at",
-          "last_activity_at",
           "client_label",
-          "status"
+          "state",
+          "status",
+          "opened_at",
+          "last_activity_at"
         ],
         "title": "SessionOwnerRecord",
-        "description": "The owner's view: the client fields plus the conversation container."
-      },
-      "SessionReply": {
-        "properties": {
-          "message_id": {
-            "type": "string",
-            "title": "Message Id"
-          },
-          "text": {
-            "type": "string",
-            "title": "Text"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message_id",
-          "text"
-        ],
-        "title": "SessionReply"
+        "description": "The owner's view of one session, including the conversation container."
       },
       "SessionStatus": {
         "properties": {
@@ -5131,24 +5089,6 @@
             ],
             "title": "State"
           },
-          "latest_replies": {
-            "items": {
-              "$ref": "#/components/schemas/SessionReply"
-            },
-            "type": "array",
-            "title": "Latest Replies"
-          },
-          "paused_agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Paused Agent Id"
-          },
           "reason": {
             "anyOf": [
               {
@@ -5167,23 +5107,30 @@
             "type": "array",
             "title": "Agents"
           },
-          "opened_at": {
+          "created_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Opened At"
+            "title": "Created At"
           },
-          "last_activity_at": {
+          "updated_at": {
             "type": "string",
             "format": "date-time",
-            "title": "Last Activity At"
+            "title": "Updated At"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/SessionHistoryEntry"
+            },
+            "type": "array",
+            "title": "History"
           }
         },
         "type": "object",
         "required": [
           "session_id",
           "state",
-          "opened_at",
-          "last_activity_at"
+          "created_at",
+          "updated_at"
         ],
         "title": "SessionStatus",
         "description": "The client's view of a session. It never carries the container id."
@@ -5283,6 +5230,106 @@
         ],
         "title": "SessionSummary",
         "description": "One row of the owner's session list."
+      },
+      "SessionHistoryEntry": {
+        "properties": {
+          "client_request_id": {
+            "type": "string",
+            "title": "Client Request Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "working",
+              "waiting_on_owner",
+              "rejected",
+              "failed",
+              "closed"
+            ],
+            "title": "State"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply"
+          },
+          "replied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replied At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "client_request_id",
+          "text",
+          "state"
+        ],
+        "title": "SessionHistoryEntry",
+        "description": "One client message and what came of it.\n\nIt never carries the owner's decisions: a request waiting for the owner\nonly shows ``waiting_on_owner``."
       }
     },
     "securitySchemes": {

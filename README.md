@@ -158,8 +158,7 @@ Sessions:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `backend.session_send_wait_seconds` | `30` | Seconds `POST /sessions/messages` waits for the Run to settle or pause for the owner before answering `working`. Must be greater than 0. |
-| `backend.session_run_start_grace_seconds` | `10` | Seconds without any lifecycle event for the request before a send reports `failed` with `run_not_started`. Must be greater than 0. |
+| `backend.session_run_start_grace_seconds` | `10` | Seconds after a send without any lifecycle event for the request before the session reports `failed` with `run_not_started`. Must be greater than 0. |
 
 ### Existing installations
 

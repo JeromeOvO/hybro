@@ -339,6 +339,7 @@ async def append_event(
     payload: dict[str, Any],
     correlation_id: str | None,
     run_id: str,
+    ts: datetime | None = None,
 ) -> None:
     if kind == "hitl_response":
         payload_public = {"run_id": run_id, **payload}
@@ -352,7 +353,9 @@ async def append_event(
             "correlation_id": correlation_id,
         }
         kind = "run_event"
-    await events.append(room_id=room_id, kind=kind, payload_public=payload_public)
+    await events.append(
+        room_id=room_id, kind=kind, payload_public=payload_public, ts=ts
+    )
 
 
 def settled(status: str, **extra: Any) -> tuple[str, dict[str, Any]]:
@@ -397,34 +400,31 @@ class Harness:
             "client_label": "Buyer agent",
         }
         data.update(values)
-        return await self.facade.send(
+        receipt = await self.facade.send(
             SessionMessageRequest(**data), owner=OWNER, resolver=self.resolver
         )
+        # The run proceeds after the receipt returns.
+        await self.engine.flush()
+        return receipt
+
+    async def check(self, session_id: str = "sess-1"):
+        return await self.facade.check(session_id, owner=OWNER)
 
 
 def make_harness(
     *,
     on_schedule: list[tuple[str, dict[str, Any]]] | None = None,
-    send_wait_seconds: float = 30.0,
     start_grace_seconds: float = 10.0,
     resolver: FakeResolver | None = None,
 ) -> Harness:
     events = InMemoryRoomEventStore()
     clock = VirtualClock()
     engine = FakeEngine(events=events, on_schedule=list(on_schedule or []))
-    clock.on_sleep.append(engine.flush)
     store = FakeSessionStore()
     rooms = FakeRooms()
     messages = FakeMessages()
     approvals = FakeApprovals()
-    waiter = SessionWaiter(
-        events,
-        send_wait_seconds=send_wait_seconds,
-        start_grace_seconds=start_grace_seconds,
-        poll_interval=0.5,
-        clock=clock,
-        sleep=clock.sleep,
-    )
+    waiter = SessionWaiter(events, start_grace_seconds=start_grace_seconds)
     facade = SessionFacade(
         store=store,
         rooms=rooms,
@@ -434,7 +434,7 @@ def make_harness(
         engine=engine,
         approvals=approvals,
         waiter=waiter,
-        now=lambda: NOW,
+        now=lambda: NOW + timedelta(seconds=clock.now),
         id_factory=iter(f"sess-{n}" for n in range(1, 100)).__next__,
     )
     return Harness(
@@ -472,10 +472,9 @@ async def test_first_send_reserves_then_creates_session_container():
     result = await h.send()
 
     assert result.session_id == "sess-1"
-    assert result.accepted is True
-    assert result.state == "completed"
-    assert result.reply == "Here is your plan."
+    assert result.status == "created"
     assert result.client_request_id == "cr-1"
+    assert result.agent_id == AGENT
     record = h.store.records["sess-1"]
     assert record.conversation_id == "conv-1"
     assert record.creation_request_id == "cr-1"
@@ -488,6 +487,9 @@ async def test_first_send_reserves_then_creates_session_container():
     # The agent joins only after the accepted ack.
     assert created.membership_seed.mode == "manual"
     assert created.membership_seed.agent_ids == []
+    status = await h.check()
+    assert status.state == "completed"
+    assert status.history[-1].reply == "Here is your plan."
 
 
 @pytest.mark.asyncio
@@ -602,7 +604,7 @@ async def test_retry_completes_a_reservation_left_without_container():
 
     assert result.session_id == "sess-crashed"
     assert h.store.records["sess-crashed"].conversation_id == "conv-1"
-    assert result.state == "completed"
+    assert (await h.check("sess-crashed")).state == "completed"
 
 
 @pytest.mark.asyncio
@@ -751,25 +753,14 @@ async def test_busy_send_is_not_accepted(state, expected):
     h = make_harness(on_schedule=[STARTED, WAITING])
     first = await h.send()
     h.engine.runs = [_run(state)]
-    h.messages.add(
-        RoomMessageInfo(
-            room_id="conv-1",
-            message_id="msg-1",
-            message_type="user",
-            content={"message_text": "x"},
-            metadata={"extend_info": {"candidate_agent_ids": [AGENT]}},
-        )
-    )
 
     result = await h.send(
         session_id=first.session_id, client_request_id="cr-2", client_label=None
     )
 
-    assert result.accepted is False
-    assert result.reason == "busy"
+    assert result.status == "busy"
     assert result.state == expected
-    if expected == "waiting_on_owner":
-        assert result.paused_agent_id == AGENT
+    assert result.message.startswith("Not recorded")
     assert len(h.engine.executed) == 1
 
 
@@ -802,8 +793,7 @@ async def test_other_execute_conflicts_reread_runs(message, runs, expected):
 
     result = await h.send()
 
-    assert result.accepted is False
-    assert result.reason == "busy"
+    assert result.status == "busy"
     assert result.state == expected
 
 
@@ -840,16 +830,17 @@ async def test_preflight_404_keeps_its_code():
 
 
 @pytest.mark.asyncio
-async def test_waiting_input_returns_waiting_on_owner_without_question_text():
+async def test_waiting_input_reports_waiting_on_owner_without_question_text():
     h = make_harness(on_schedule=[STARTED, WAITING])
 
     result = await h.send()
+    status = await h.check(result.session_id)
 
-    assert result.state == "waiting_on_owner"
-    assert result.paused_agent_id == AGENT
-    assert result.reply is None
-    dumped = result.model_dump_json()
-    assert "Which hotel" not in dumped
+    assert status.state == "waiting_on_owner"
+    assert status.history[-1].state == "waiting_on_owner"
+    assert status.history[-1].reply is None
+    assert "Which hotel" not in status.model_dump_json()
+    assert "Which hotel" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -867,36 +858,41 @@ async def test_tool_events_after_waiting_input_keep_waiting_on_owner():
 
     result = await h.send()
 
-    assert result.state == "waiting_on_owner"
-    status = await h.facade.check(result.session_id, owner=OWNER)
-    assert status.state == "waiting_on_owner"
+    assert (await h.check(result.session_id)).state == "waiting_on_owner"
 
 
 @pytest.mark.asyncio
-async def test_deadline_without_settlement_reports_working():
-    h = make_harness(on_schedule=[STARTED], send_wait_seconds=3.0)
+async def test_send_returns_a_receipt_without_waiting_for_the_run():
+    h = make_harness(on_schedule=[STARTED])
 
-    result = await h.send()
+    receipt = await h.send()
 
-    assert result.accepted is True
-    assert result.state == "working"
-    assert h.clock.now >= 3.0
+    assert receipt.status == "created"
+    assert receipt.state == "working"
+    assert receipt.message.startswith("Created.")
+    assert "session_id" in receipt.message
+    assert receipt.created_at == NOW
+    assert receipt.updated_at == NOW
+    assert h.clock.now == 0.0
 
 
 @pytest.mark.asyncio
-async def test_no_correlated_event_reports_run_not_started():
+async def test_no_correlated_event_reports_run_not_started_after_the_grace():
     h = make_harness(on_schedule=[], start_grace_seconds=2.0)
+    await h.send()
 
-    result = await h.send()
+    assert (await h.check()).state == "working"
 
-    assert result.state == "failed"
-    assert result.reason == "run_not_started"
-    assert 2.0 <= h.clock.now < 30.0
+    h.clock.now = 2.0
+    status = await h.check()
+
+    assert status.state == "failed"
+    assert status.reason == "run_not_started"
 
 
 @pytest.mark.asyncio
 async def test_events_from_other_requests_are_ignored():
-    h = make_harness(on_schedule=[STARTED], send_wait_seconds=2.0)
+    h = make_harness(on_schedule=[STARTED])
     await append_event(
         h.events,
         "conv-1",
@@ -905,9 +901,9 @@ async def test_events_from_other_requests_are_ignored():
         run_id="run-0",
     )
 
-    result = await h.send()
+    await h.send()
 
-    assert result.state == "working"
+    assert (await h.check()).state == "working"
 
 
 @pytest.mark.asyncio
@@ -923,10 +919,12 @@ async def test_failed_settlement_reports_public_summary():
         ]
     )
 
-    result = await h.send()
+    await h.send()
+    status = await h.check()
 
-    assert result.state == "failed"
-    assert result.reason == "The run could not be completed."
+    assert status.state == "failed"
+    assert status.reason == "The run could not be completed."
+    assert status.history[-1].reason == "The run could not be completed."
 
 
 @pytest.mark.asyncio
@@ -942,9 +940,9 @@ async def test_budget_exhaustion_maps_to_failed():
         ]
     )
 
-    result = await h.send()
+    await h.send()
 
-    assert result.state == "failed"
+    assert (await h.check()).state == "failed"
 
 
 @pytest.mark.asyncio
@@ -958,9 +956,9 @@ async def test_owner_reject_maps_to_rejected():
         ]
     )
 
-    result = await h.send()
+    await h.send()
 
-    assert result.state == "rejected"
+    assert (await h.check()).state == "rejected"
 
 
 @pytest.mark.asyncio
@@ -969,9 +967,9 @@ async def test_other_cancellation_maps_to_failed():
         on_schedule=[STARTED, settled("canceled", cancellation_code="shutdown")]
     )
 
-    result = await h.send()
+    await h.send()
 
-    assert result.state == "failed"
+    assert (await h.check()).state == "failed"
 
 
 # -- Replay -------------------------------------------------------------------
@@ -995,36 +993,22 @@ async def test_replay_after_settlement_returns_the_settled_outcome():
 
     replay = await h.send(session_id=first.session_id, client_label=None)
 
-    assert replay.accepted is True
     assert replay.state == "completed"
-    assert replay.reply == "Here is your plan."
     assert len(h.engine.scheduled) == 1
+    assert (await h.check()).history[-1].reply == "Here is your plan."
 
 
 @pytest.mark.asyncio
-async def test_replay_during_active_run_skips_busy_check_and_waits():
-    h = make_harness(on_schedule=[STARTED], send_wait_seconds=2.0)
+async def test_replay_during_active_run_skips_busy_check():
+    h = make_harness(on_schedule=[STARTED])
     first = await h.send()
-    assert first.state == "working"
     h.engine.runs = [_run(RunState.PROCESSING)]
     h.engine.ack = _replay_ack()
 
-    async def settle_later() -> None:
-        if h.clock.now >= 1.0 and not getattr(settle_later, "done", False):
-            settle_later.done = True
-            await append_event(
-                h.events,
-                "conv-1",
-                *settled("completed", final_message_id="f1"),
-                correlation_id="cr-1",
-                run_id="run-1",
-            )
-
-    h.clock.on_sleep.append(settle_later)
     replay = await h.send(session_id=first.session_id, client_label=None)
 
-    assert replay.accepted is True
-    assert replay.state == "completed"
+    assert replay.status == "created"
+    assert replay.state == "working"
     assert len(h.engine.executed) == 2
 
 
@@ -1032,20 +1016,21 @@ async def test_replay_during_active_run_skips_busy_check_and_waits():
 async def test_replay_after_run_not_started_still_reports_failed():
     h = make_harness(on_schedule=[], start_grace_seconds=1.0)
     first = await h.send()
-    assert first.reason == "run_not_started"
+    h.clock.now = 1.0
     h.engine.ack = _replay_ack()
 
     replay = await h.send(session_id=first.session_id, client_label=None)
 
+    assert replay.status == "created"
     assert replay.state == "failed"
-    assert replay.reason == "run_not_started"
+    assert (await h.check()).reason == "run_not_started"
 
 
 # -- Check, list, record ------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_check_resolves_from_events_and_returns_latest_reply():
+async def test_check_resolves_from_events_and_returns_the_reply():
     h = make_harness(on_schedule=[STARTED, WAITING])
     first = await h.send()
     await append_event(
@@ -1057,7 +1042,7 @@ async def test_check_resolves_from_events_and_returns_latest_reply():
         "run-1",
     )
 
-    status = await h.facade.check(first.session_id, owner=OWNER)
+    status = await h.check(first.session_id)
     assert status.state == "working"
 
     await append_event(
@@ -1068,17 +1053,17 @@ async def test_check_resolves_from_events_and_returns_latest_reply():
         run_id="run-1",
     )
     h.messages.add(final_message("f1", "conv-1", "Booked."))
-    status = await h.facade.check(first.session_id, owner=OWNER)
+    status = await h.check(first.session_id)
 
     assert status.state == "completed"
-    assert [reply.text for reply in status.latest_replies] == ["Booked."]
+    assert [entry.reply for entry in status.history] == ["Booked."]
     assert [agent.agent_id for agent in status.agents] == [AGENT]
-    assert status.opened_at == NOW
+    assert status.created_at == NOW
     assert "conversation_id" not in status.model_dump()
 
 
 @pytest.mark.asyncio
-async def test_check_reports_paused_agent_from_trigger_message():
+async def test_owner_record_reports_paused_agent_from_trigger_message():
     h = make_harness(on_schedule=[STARTED, WAITING])
     first = await h.send()
     second_agent_send = h.store.records["sess-1"].model_copy(
@@ -1096,10 +1081,10 @@ async def test_check_reports_paused_agent_from_trigger_message():
         )
     )
 
-    status = await h.facade.check(first.session_id, owner=OWNER)
+    record = await h.facade.record_for_owner(first.session_id, owner=OWNER)
 
-    assert status.state == "waiting_on_owner"
-    assert status.paused_agent_id == AGENT
+    assert record.state == "waiting_on_owner"
+    assert record.paused_agent_id == AGENT
 
 
 @pytest.mark.asyncio
@@ -1107,9 +1092,9 @@ async def test_paused_agent_falls_back_to_last_accepted_agent():
     h = make_harness(on_schedule=[STARTED, WAITING])
     first = await h.send()
 
-    status = await h.facade.check(first.session_id, owner=OWNER)
+    record = await h.facade.record_for_owner(first.session_id, owner=OWNER)
 
-    assert status.paused_agent_id == AGENT
+    assert record.paused_agent_id == AGENT
 
 
 @pytest.mark.asyncio
@@ -1119,8 +1104,9 @@ async def test_check_without_correlated_events_reports_run_not_started():
     h.store.records["sess-1"] = h.store.records["sess-1"].model_copy(
         update={"last_client_request_id": "never-ran"}
     )
+    h.clock.now = 11.0
 
-    status = await h.facade.check(first.session_id, owner=OWNER)
+    status = await h.check(first.session_id)
 
     assert status.state == "failed"
     assert status.reason == "run_not_started"
@@ -1181,7 +1167,7 @@ async def test_close_with_pending_approval_cancels_the_interaction():
 
 @pytest.mark.asyncio
 async def test_close_without_approval_cancels_the_active_run():
-    h = make_harness(on_schedule=[STARTED], send_wait_seconds=1.0)
+    h = make_harness(on_schedule=[STARTED])
     first = await h.send()
     h.engine.runs = [_run(RunState.PROCESSING, trigger="msg-1")]
 
@@ -1192,7 +1178,7 @@ async def test_close_without_approval_cancels_the_active_run():
 
 @pytest.mark.asyncio
 async def test_close_tolerates_cancellation_errors():
-    h = make_harness(on_schedule=[STARTED], send_wait_seconds=1.0)
+    h = make_harness(on_schedule=[STARTED])
     first = await h.send()
     h.engine.runs = [_run(RunState.PROCESSING)]
     h.engine.cancel_error = RuntimeError(
@@ -1229,7 +1215,7 @@ async def test_closed_session_refuses_sends_and_takes_state_precedence():
     first = await h.send()
     await h.facade.close(first.session_id, owner=OWNER)
 
-    status = await h.facade.check(first.session_id, owner=OWNER)
+    status = await h.check(first.session_id)
     assert status.state == "closed"
 
     with pytest.raises(AppError) as exc_info:
@@ -1259,16 +1245,7 @@ async def test_waiter_pages_past_the_read_limit():
     await append_event(
         events, "conv", *settled("completed", final_message_id="f"), "cr", "run-1"
     )
-    clock = VirtualClock()
-    waiter = SessionWaiter(
-        events,
-        send_wait_seconds=5,
-        start_grace_seconds=1,
-        poll_interval=0.5,
-        page_size=3,
-        clock=clock,
-        sleep=clock.sleep,
-    )
+    waiter = SessionWaiter(events, start_grace_seconds=1, page_size=3)
 
     outcome = await waiter.scan("conv", "cr", after=0)
 
@@ -1283,21 +1260,12 @@ async def test_waiter_starts_after_the_recorded_sequence():
     await append_event(
         events, "conv", *settled("completed", final_message_id="old"), "cr", "run-0"
     )
-    clock = VirtualClock()
-    waiter = SessionWaiter(
-        events,
-        send_wait_seconds=1,
-        start_grace_seconds=1,
-        poll_interval=0.5,
-        clock=clock,
-        sleep=clock.sleep,
-    )
+    waiter = SessionWaiter(events, start_grace_seconds=1)
 
     after = await waiter.latest_seq("conv")
-    outcome = await waiter.wait("conv", "cr", after=after)
+    outcome = await waiter.scan("conv", "cr", after=after)
 
     assert outcome.seen is False
-    assert outcome.not_started is True
 
 
 def test_session_record_ids_are_opaque_and_long():
@@ -1348,3 +1316,114 @@ async def test_long_first_message_title_is_shortened():
     assert title is not None
     assert len(title) <= 120
     assert title.endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_activity_time_follows_the_latest_event_of_the_request():
+    h = make_harness(on_schedule=[STARTED, WAITING])
+    first = await h.send()
+    answered = NOW + timedelta(minutes=3)
+    await append_event(
+        h.events,
+        "conv-1",
+        "run_resumed",
+        {"interaction_id": "int-1"},
+        correlation_id="cr-1",
+        run_id=h.engine.run_id,
+        ts=answered.replace(tzinfo=None),
+    )
+
+    status = await h.check(first.session_id)
+    listing = await h.facade.list_for_owner(owner=OWNER)
+    record = await h.facade.record_for_owner(first.session_id, owner=OWNER)
+
+    assert status.updated_at == answered
+    assert listing.sessions[0].last_activity_at == answered
+    assert record.last_activity_at == answered
+
+
+@pytest.mark.asyncio
+async def test_reply_times_are_utc():
+    h = make_harness(on_schedule=[STARTED, settled("completed", final_message_id="f1")])
+    message = final_message("f1", "conv-1", "Here is your plan.").model_copy(
+        update={"created_at": datetime(2026, 10, 15, 21, 53, 48)}
+    )
+    h.messages.add(message)
+
+    await h.send()
+    status = await h.check()
+
+    [entry] = status.history
+    assert entry.replied_at == datetime(2026, 10, 15, 21, 53, 48, tzinfo=UTC)
+    assert entry.model_dump(mode="json")["replied_at"] == "2026-10-15T21:53:48Z"
+    assert status.updated_at == datetime(2026, 10, 15, 21, 53, 48, tzinfo=UTC)
+
+
+def user_message(message_id: str, text: str) -> RoomMessageInfo:
+    return RoomMessageInfo(
+        room_id="conv-1",
+        message_id=message_id,
+        message_type="user",
+        content={"message_text": text},
+        metadata={"extend_info": {"candidate_agent_ids": [AGENT]}},
+    )
+
+
+def started(message_id: str) -> tuple[str, dict[str, Any]]:
+    return ("run_started", {"mode": "passthrough", "user_message_id": message_id})
+
+
+@pytest.mark.asyncio
+async def test_history_lists_each_request_with_its_reply_oldest_first():
+    h = make_harness(
+        on_schedule=[
+            started("msg-1"),
+            ("tool_execution_start", {"tool_name": "Travel Planner Agent - Trips"}),
+            settled("completed", final_message_id="f1"),
+        ]
+    )
+    h.messages.add(user_message("msg-1", "Plan a weekend in Lyon"))
+    h.messages.add(final_message("f1", "conv-1", "Day 1: Vieux Lyon"))
+    first = await h.send(text="Plan a weekend in Lyon")
+    h.engine.on_schedule = [started("msg-2"), WAITING]
+    h.messages.add(user_message("msg-2", "Make it three days"))
+    await h.send(
+        session_id=first.session_id,
+        client_request_id="cr-2",
+        client_label=None,
+        text="Make it three days",
+    )
+    # The owner's question and answer are in the log but never reach the client.
+    await h.events.append(
+        room_id="conv-1",
+        kind="hitl_request",
+        payload_public={"request_id": "q1", "prompt": "Which hotel budget?"},
+    )
+
+    status = await h.check()
+
+    assert [
+        (entry.client_request_id, entry.text, entry.state, entry.reply)
+        for entry in status.history
+    ] == [
+        ("cr-1", "Plan a weekend in Lyon", "completed", "Day 1: Vieux Lyon"),
+        ("cr-2", "Make it three days", "waiting_on_owner", None),
+    ]
+    assert status.history[0].agent_id == AGENT
+    # The room's own name for the agent wins over the tool label.
+    assert status.history[0].agent_name == status.agents[0].name
+    assert status.state == "waiting_on_owner"
+    assert "Which hotel budget" not in status.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_history_includes_a_request_whose_run_has_not_started():
+    h = make_harness(on_schedule=[])
+    h.messages.add(user_message("msg-1", "Plan a weekend in Lyon"))
+
+    await h.send(text="Plan a weekend in Lyon")
+    [entry] = (await h.check()).history
+
+    assert entry.client_request_id == "cr-1"
+    assert entry.text == "Plan a weekend in Lyon"
+    assert entry.state == "working"

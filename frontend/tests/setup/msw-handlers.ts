@@ -31,7 +31,6 @@ export const handlers = [
   http.get(`${sessions}/:id/record`, ({ params }) => HttpResponse.json({
     session_id: params.id,
     state: 'waiting_on_owner',
-    latest_replies: [],
     paused_agent_id: 'agent-1',
     reason: null,
     agents: [{ agent_id: 'agent-1', name: 'Travel Planner' }],

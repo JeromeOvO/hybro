@@ -5,7 +5,6 @@ const api = vi.hoisted(() => ({
   record: {
     session_id: 'sess-1',
     state: 'waiting_on_owner',
-    latest_replies: [],
     paused_agent_id: 'agent-1',
     reason: null,
     agents: [{ agent_id: 'agent-1', name: 'Travel Planner Agent' }],

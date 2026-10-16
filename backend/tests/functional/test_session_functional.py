@@ -84,8 +84,10 @@ async def test_session_owner_answers_and_client_reads_completed(
 ):
     client = functional_client
     first = await _send(client, travel_planner_agent_id)
-    assert first["accepted"] is True
+    assert first["status"] == "created"
     assert first["state"] in {"waiting_on_owner", "working", "completed"}
+    assert first["created_at"].endswith("Z")
+    assert "session_id" in first["message"]
     session_id = first["session_id"]
     room_id = await _conversation_id(client, session_id)
 
@@ -100,35 +102,41 @@ async def test_session_owner_answers_and_client_reads_completed(
     deadline = time.monotonic() + 120.0
     status = await _wait_for_state(client, session_id, {"waiting_on_owner"} | TERMINAL)
     while status["state"] == "waiting_on_owner" and time.monotonic() < deadline:
-        assert status["paused_agent_id"] == travel_planner_agent_id
+        assert status["history"][-1]["agent_id"] == travel_planner_agent_id
         # The client view never carries the owner's question.
-        for request in await _wait_for_pending(client, room_id):
+        pending = await _wait_for_pending(client, room_id)
+        interaction_id = pending[0]["interaction_id"]
+        # Answer every question of the interaction together: a listed choice
+        # when the agent offered some, else the prepared text.
+        questions = [r for r in pending if r["interaction_id"] == interaction_id]
+        for request in questions:
             assert request["prompt"] not in str(status)
-            response = await client.post(
-                f"/rooms/{room_id}/hitl/respond-batch",
-                json={
-                    "interaction_id": request["interaction_id"],
-                    "answers": [
-                        {
-                            "request_id": request["request_id"],
-                            "user_input": next(answers, "Yes, proceed"),
-                        }
-                    ],
-                    "client_request_id": request.get("client_request_id")
-                    or first["client_request_id"],
-                },
-            )
-            assert response.status_code == 200, response.text
-            answered += 1
-            break
+        response = await client.post(
+            f"/rooms/{room_id}/hitl/respond-batch",
+            json={
+                "interaction_id": interaction_id,
+                "answers": [
+                    {
+                        "request_id": request["request_id"],
+                        "user_input": (request.get("choices") or [None])[0]
+                        or next(answers, "Yes, proceed"),
+                    }
+                    for request in questions
+                ],
+                "client_request_id": questions[0].get("client_request_id")
+                or first["client_request_id"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        answered += 1
         status = await _wait_for_state(
             client, session_id, {"waiting_on_owner"} | TERMINAL
         )
 
     assert status["state"] == "completed", status
     assert answered >= 1
-    assert status["latest_replies"], status
-    assert status["latest_replies"][0]["text"]
+    assert status["history"][-1]["reply"], status
+    assert status["history"][-1]["text"]
     assert "conversation_id" not in status
     assert [agent["agent_id"] for agent in status["agents"]] == [
         travel_planner_agent_id
@@ -202,7 +210,7 @@ async def test_session_owner_reject_reports_rejected(
 
     status = await _wait_for_state(client, session_id, TERMINAL)
     assert status["state"] == "rejected", status
-    assert status["latest_replies"] == []
+    assert status["history"][-1]["reply"] is None
 
 
 @pytest.mark.asyncio
@@ -221,7 +229,7 @@ async def test_session_send_retry_returns_the_same_outcome(
     )
 
     assert retry["session_id"] == first["session_id"]
-    assert retry["accepted"] is True
+    assert retry["status"] == "created"
     assert retry["state"] in {"waiting_on_owner", "working"} | TERMINAL
 
     busy = await _send(
@@ -231,6 +239,5 @@ async def test_session_send_retry_returns_the_same_outcome(
         text="A second question",
     )
     if retry["state"] in {"waiting_on_owner", "working"}:
-        assert busy["accepted"] is False
-        assert busy["reason"] == "busy"
+        assert busy["status"] == "busy"
     await client.post(f"/sessions/{first['session_id']}/close")

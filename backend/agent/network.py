@@ -203,13 +203,34 @@ class AgentNetworkService:
         return group.agents
 
 
+# Card fields a client needs to choose an agent. Transport (endpoint URLs,
+# interfaces) and security (schemes, requirements, signatures, credentials) stay
+# inside Hybro: clients reach agents only through Hybro by agent_id.
+_DISCOVERY_CARD_FIELDS = (
+    "name",
+    "description",
+    "version",
+    "protocolVersion",
+    "provider",
+    "documentationUrl",
+    "iconUrl",
+    "capabilities",
+    "defaultInputModes",
+    "defaultOutputModes",
+    "skills",
+)
+
+
 def _discovery_card(raw_card: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    card = dict(raw_card)
-    authentication = card.get("authentication")
-    if isinstance(authentication, dict) and "credentials" in authentication:
-        card["authentication"] = {
-            key: value for key, value in authentication.items() if key != "credentials"
-        }
+    card = {key: raw_card[key] for key in _DISCOVERY_CARD_FIELDS if key in raw_card}
+    skills = card.get("skills")
+    if isinstance(skills, list):
+        card["skills"] = [
+            {key: value for key, value in skill.items() if key != "security"}
+            if isinstance(skill, dict)
+            else skill
+            for skill in skills
+        ]
     return card
 
 

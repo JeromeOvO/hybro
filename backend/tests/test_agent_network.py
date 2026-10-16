@@ -158,8 +158,9 @@ async def test_network_rejects_missing_and_room_scoped_groups(group_id, error):
 
 
 @pytest.mark.asyncio
-async def test_discovery_preserves_registered_card_except_credentials():
+async def test_discovery_omits_transport_and_security_but_routing_keeps_them():
     doc = _doc("agent", "Agent")
+    public_card = dict(doc["agent_card"])
     doc["agent_card"].update(
         {
             "authentication": {"schemes": ["Bearer"], "credentials": "secret"},
@@ -175,13 +176,14 @@ async def test_discovery_preserves_registered_card_except_credentials():
 
     discovered = await network.discover()
 
-    expected_card = {
-        **doc["agent_card"],
-        "authentication": {"schemes": ["Bearer"]},
+    assert discovered.agents[0].agent_card == {
+        key: value for key, value in public_card.items() if key != "url"
     }
-    assert discovered.agents[0].agent_card == expected_card
     target = await network.resolve_target("agent")
     assert target.raw_card["authentication"]["credentials"] == "secret"
+    assert (
+        target.raw_card["supportedInterfaces"][0]["url"] == "https://agent.example/a2a"
+    )
 
 
 def _skilled_doc(agent_id: str, name: str, skill: str, **kwargs) -> dict:

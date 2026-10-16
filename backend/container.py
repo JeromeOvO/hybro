@@ -2266,7 +2266,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             approvals=_execution_deps.hitl_manager,
             waiter=SessionWaiter(
                 _room_event_store,
-                send_wait_seconds=runtime.settings.session_send_wait_seconds,
                 start_grace_seconds=runtime.settings.session_run_start_grace_seconds,
             ),
         )

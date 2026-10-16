@@ -389,12 +389,17 @@ def test_passthrough_settings_reject_zero(field):
         Settings.model_validate({field: 0})
 
 
-def test_session_wait_settings_defaults_and_bounds():
+def test_session_start_grace_default_and_bounds():
     settings = Settings()
 
-    assert settings.session_send_wait_seconds == 30.0
     assert settings.session_run_start_grace_seconds == 10.0
-    for field in ("session_send_wait_seconds", "session_run_start_grace_seconds"):
-        with pytest.raises(ValidationError):
-            Settings.model_validate({field: 0})
-        assert Settings.model_validate({field: 5}).model_dump()[field] == 5
+    field = "session_run_start_grace_seconds"
+    with pytest.raises(ValidationError):
+        Settings.model_validate({field: 0})
+    assert Settings.model_validate({field: 5}).model_dump()[field] == 5
+
+
+def test_session_send_no_longer_has_a_wait_setting():
+    # Sends return a receipt at once, so the old wait field is unknown.
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"session_send_wait_seconds": 30})
