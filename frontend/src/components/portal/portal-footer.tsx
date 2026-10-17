@@ -1,5 +1,6 @@
 import { BookOpen, Mail } from "lucide-react"
 import { DiscordIcon, GithubIcon } from "@/components/icons"
+import { DOCS_URL } from "@/lib/docs"
 
 export function PortalFooter() {
   return (
@@ -16,7 +17,7 @@ export function PortalFooter() {
             hybro
           </a>
           <a
-            href="https://docs.hybro.ai/"
+            href={DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"

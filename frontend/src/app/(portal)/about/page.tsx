@@ -8,6 +8,7 @@ import {
 } from "lucide-react"
 import { AboutCtaButton } from "./about-cta-button"
 import { PortalFooter } from '@/components/portal/portal-footer'
+import { DOCS_URL } from '@/lib/docs'
 import { FadeInSection } from "@/components/fade-in-section"
 import Link from "next/link"
 
@@ -295,7 +296,7 @@ export default function AboutPage() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <AboutCtaButton />
             <Link
-              href="https://docs.hybro.ai"
+              href={DOCS_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors px-4 py-2 rounded-md border border-border/60 hover:border-border"
