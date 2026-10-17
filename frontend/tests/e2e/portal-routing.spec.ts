@@ -4,7 +4,6 @@ test.describe('Unified portal routing', () => {
   test('serves canonical routes and redirects legacy management paths', async ({ page, request }) => {
     for (const path of [
       '/',
-      '/core',
       '/about',
       '/pricing',
       '/chat',
@@ -52,6 +51,7 @@ test.describe('Unified portal routing', () => {
     for (const path of [
       '/c',
       '/c/chat',
+      '/core',
       '/d',
       '/d/agents',
       '/hub',
@@ -64,7 +64,7 @@ test.describe('Unified portal routing', () => {
   })
 
   for (const width of [1440, 390]) {
-    test(`uses the original shared menu on core and feature pages at ${width}px`, async ({ page }) => {
+    test(`uses the original shared menu on marketing and feature pages at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 })
       await page.route('**/agent/getAllAgents**', route => route.fulfill({ json: { success: true, agents: [] } }))
       await page.route('**/agent/getAgent/me', route => route.fulfill({ json: { success: true, agents: [] } }))
@@ -82,7 +82,7 @@ test.describe('Unified portal routing', () => {
         if (width < 768) await page.getByRole('button', { name: 'Toggle Sidebar', exact: true }).click()
       }
       const modules = page.getByRole('navigation', { name: 'Modules', exact: true })
-      await page.goto('/core')
+      await page.goto('/about')
       await openNavigation()
       await expect(page.locator('[data-sidebar="sidebar"]')).toHaveCount(1)
       await expect(page.getByRole('region', { name: 'History', exact: true })).toHaveCount(0)

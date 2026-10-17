@@ -26,7 +26,7 @@ export function Logo({
       hideOnMobile && "max-sm:hidden",
       className
     )}>
-      <Link href={routes.core} className="flex items-center gap-0.5">
+      <Link href={routes.overview} className="flex items-center gap-0.5">
         <span
           className={cn(
             "font-bold font-spaceGrotesk text-[hsl(var(--color-hybro-hy))]",

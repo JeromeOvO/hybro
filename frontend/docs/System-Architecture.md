@@ -138,7 +138,6 @@ src/app/
     |-- layout.tsx
     |-- page.tsx                 # Overview
     |-- about/page.tsx
-    |-- core/page.tsx
     |-- network/page.tsx         # Network workspace (topology and structure views)
     |-- network/agents/[id]/page.tsx
     |-- network/agents/new/page.tsx
@@ -223,12 +222,11 @@ src/components/
 |-- ui/                       # shadcn/ui primitives
 |-- conversation/             # turn/timeline rendering system
 |-- composer/                 # chat composer shell and HITL response bar
-|-- portal/                   # shared sidebar, header, ChatHistory, Core page
+|-- portal/                   # shared sidebar, header, footer, ChatHistory
 |-- overview/                 # Overview page and static mini topology
 |-- networks/                 # Network workspace: toolbar, SVG graph, structure view, details panel, add-to-subnet menu, Agent picker
 |-- subnets/                  # one subnet dialog (create/edit), delete confirmation, room/chat dialog host
 |-- connect/                  # Connect pages, per-assistant setups, copyable access materials
-|-- open-source/              # Core page terminal animation
 |-- providers/                # React Query provider
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
@@ -883,13 +881,8 @@ segment.
   Most-called agents with their avatar and call count, last. Derivation lives
   in `src/lib/overview.ts`. Call counts are the agent's `call_count`, which
   counts every orchestrator agent call from Chat and Sessions once it finishes.
-- `/core`: Hybro Core product page. The hero composer is the same `RoomChatInput`
-  as `/chat`, with group and mode menus visible but non-selectable and mention
-  and attach buttons visible but non-clickable. While idle it typewrites the
-  featured use cases from `src/lib/use-case-templates.ts` (Travel Planner,
-  Story & Image Creator). The header logo links to `/core`. The logo wall lists Hermes, OpenClaw, Pi, Ollama,
-  n8n, CrewAI, LangChain, and LangGraph. Send-on-demo creates a room named after the current
-  use case, seeds those Agents, and prefills the prompt without auto-sending or a sign-in redirect.
+- The header logo links to the Overview at `/`. The public product page is not
+  part of this app; `/core` is retired and returns 404.
 - `/chat` and `/room/[id]`: chat creation and real-time room workspace.
 - `/sessions` and `/sessions/[id]`: client sessions opened through MCP or
   `POST /sessions/messages`, shown as a work-ticket system on two pages. The
@@ -973,7 +966,7 @@ destinations; the active item's icon uses the primary color:
   "Chats, N need input".
 - **Connect** opens `/connect/mcp` and stays active on `/connect/*`.
 
-The same primary menu is used on `/core`, the other existing portal pages, and
+The same primary menu is used on `/about`, the other existing portal pages, and
 the feature pages. Chat and Room routes add a separate History column
 immediately to its right on desktop. That column has no collapse control and
 stays visible when the primary sidebar collapses. It starts with a secondary

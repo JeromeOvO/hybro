@@ -7,10 +7,11 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
+import { DOCS_URL } from "@/lib/docs"
 
 export function DocsButton() {
   const handleDocsClick = () => {
-    window.open('https://docs.hybro.ai/', '_blank')
+    window.open(DOCS_URL, '_blank')
   }
 
   return (

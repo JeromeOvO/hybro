@@ -20,7 +20,7 @@ import { SIDEBAR_ICON_HIDDEN } from '@/lib/sidebar-styles'
 import { Button } from '@/components/ui/button'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, useSidebar } from '@/components/ui/sidebar'
 
-const MARKETING_PAGES: string[] = [routes.core, routes.about, routes.pricing]
+const MARKETING_PAGES: string[] = [routes.about, routes.pricing]
 
 export function PortalSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { user, isLoaded, isSignedIn } = useUser()
