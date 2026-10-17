@@ -8,7 +8,7 @@ import { Logo } from '@/components/logo';
 import { useUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
-const MARKETING_PAGES = ['/core', '/about', '/pricing']
+const MARKETING_PAGES = ['/about', '/pricing']
 
 export const PortalHeader = () => {
   const [mounted, setMounted] = React.useState(false);
@@ -46,7 +46,6 @@ export const PortalHeader = () => {
             <Logo />
             <nav className="hidden sm:flex items-center gap-1 ml-4">
               {[
-                { href: '/core', label: 'Core' },
                 { href: '/network', label: 'Explore' },
                 { href: '/about', label: 'About' },
               ].map(link => (
