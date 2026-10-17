@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.19](https://github.com/hybroai/hybro/compare/v0.2.18...v0.2.19) (2026-10-17)
+
+
+### Features
+
+* **agent-network:** add agent search and consumer-friendly MCP tools ([5e9c6eb](https://github.com/hybroai/hybro/commit/5e9c6eb90417f665ccc9d6ecde9b6e06b1656f19))
+* **agent-network:** add agent search and consumer-friendly MCP tools ([f13e32c](https://github.com/hybroai/hybro/commit/f13e32c5ccad58e0474f68cdef9769c8e088f459))
+* **agent-network:** add direct APIs and local MCP access ([be67f25](https://github.com/hybroai/hybro/commit/be67f2599603206ec1527644d0107af6e9772f5c))
+* **agent-network:** add network visualization, direct APIs, and local MCP access ([8355e8a](https://github.com/hybroai/hybro/commit/8355e8a9e03fecdff58b89b57aafa95bc9440840))
+* **backend:** add client sessions and structured agent questions ([9b82899](https://github.com/hybroai/hybro/commit/9b82899c4bd6ef0e5d86ec71b66a2b15793e06d1))
+* **default-agents:** ask travel details as separate questions ([8e0e400](https://github.com/hybroai/hybro/commit/8e0e400fc5e1aaaf64adfb4d995020b29c02f57b))
+* **frontend:** add sessions ticket pages and redesign the question card ([3d98728](https://github.com/hybroai/hybro/commit/3d98728dbf8f978249cde45ee1c7f175a29cc6d8))
+* **frontend:** restack the Overview and align menu colors ([3283677](https://github.com/hybroai/hybro/commit/328367765d112327b10e0d080ec08582f1b8f5f3))
+* **mcp:** integrate startup controls and connection panel ([86cd05d](https://github.com/hybroai/hybro/commit/86cd05d8f29a29f48d42cbb46158c7845f9b9afb))
+* **mcp:** integrate startup controls and connection panel ([743d6ae](https://github.com/hybroai/hybro/commit/743d6aedd996403000ec036c19e303f5c403206e))
+* **mcp:** open and manage sessions through MCP ([70a0c47](https://github.com/hybroai/hybro/commit/70a0c47868a3adcebcb587c209e5c6fd685f5ffd))
+* **networks:** add agent relationship overview ([7c4c02e](https://github.com/hybroai/hybro/commit/7c4c02e7d8a9a391cad9e578873c79ec3cc5ddf9))
+* **orchestrator:** add passthrough profile to the kernel ([a910ce5](https://github.com/hybroai/hybro/commit/a910ce5ef40fd6979f457a0a03fe88a44bbb9811))
+* **orchestrator:** let suspended runs and acknowledged calls wait ([5c3264c](https://github.com/hybroai/hybro/commit/5c3264cc828e50d100413abc9b5f23065db815b1))
+* **sessions:** let clients reach the owner's agents through sessions with owner decisions ([e3cf13f](https://github.com/hybroai/hybro/commit/e3cf13f72b7bba9f9877cd9212303b6fbb3b2b21))
+* **sessions:** return send receipts and a client history, hide internal discovery data ([9d0d774](https://github.com/hybroai/hybro/commit/9d0d7741eb0a53a166a6eafbabcb5c6e6b9805e6))
+* **ui:** redesign the frontend into Overview, Network, Room Chat, and Connect ([a891852](https://github.com/hybroai/hybro/commit/a891852aebdcc7ae0724c0e0826d12389b602f10))
+* **ui:** redesign the portal into Overview, Network, Room Chat, and Connect ([92ec833](https://github.com/hybroai/hybro/commit/92ec833b0f92b363eb4939587a1f62dfc340edf7))
+* **ui:** unify navigation and add access pages ([d37f410](https://github.com/hybroai/hybro/commit/d37f410ea01e22ae2311c7231049d332fd67ed36))
+
+
+### Bug Fixes
+
+* **agent-network:** break execution package dependency cycle ([0c4d959](https://github.com/hybroai/hybro/commit/0c4d959892db19fbb140be0c363ec2fae4f5069c))
+* **agent-network:** enforce auth and request limits ([1330ae1](https://github.com/hybroai/hybro/commit/1330ae1bdb29d63780d6e4c5b1f65bc960ee12a6))
+* **agent-network:** rank all visible agents and dedupe MCP reply text ([3e21a09](https://github.com/hybroai/hybro/commit/3e21a095323f478cea5e31937d00d3b5a0051272))
+* **agent-network:** scope unbounded reads to discovery ([8694350](https://github.com/hybroai/hybro/commit/8694350c652067d33f91f3fd4fc7ecab7d435c41))
+* **backend:** count orchestrator agent calls ([c652b27](https://github.com/hybroai/hybro/commit/c652b275178a37d13d96cbd34e458ff96932d8be))
+* **backend:** default agent card skills to an empty list ([eee8a4d](https://github.com/hybroai/hybro/commit/eee8a4db9dcfa69fb43766fd6d4ef5b3db98e0f2))
+* **backend:** keep agent replies once and stop redacting ordinary words ([16848a9](https://github.com/hybroai/hybro/commit/16848a9fecad430e93f36bee01830a8b5c087298))
+* **backend:** redact only credential-shaped Bearer and Basic values ([fc140aa](https://github.com/hybroai/hybro/commit/fc140aa5a7b72a69dfa8310f06b5b619269a3fd3))
+* **frontend:** open the docs on hybro.ai from the sidebar ([1573c4a](https://github.com/hybroai/hybro/commit/1573c4a68dbcb55da660b29d44b7f8ed1043f95d))
+* **frontend:** share one docs URL and drop unused framework icons ([de82fb8](https://github.com/hybroai/hybro/commit/de82fb804abdfc202f6745c9a75078b5a8cd3ae5))
+* load agent cards without skills, and unify error toasts and Add agent menu ([c5567df](https://github.com/hybroai/hybro/commit/c5567dff3e827ecacf953cef742a7640dbea0a35))
+* **sessions:** address review on waiting sessions, events, close and skills ([fbe6be4](https://github.com/hybroai/hybro/commit/fbe6be4ad985e7159f45ad3b50220925ac39e0c7))
+* **sessions:** keep every client request and handle retries and races ([111e596](https://github.com/hybroai/hybro/commit/111e5967307b4d909401f7489f85dea1a594f565))
+* **ui:** address PR review on Add agent menu label and architecture docs ([6eb1c8b](https://github.com/hybroai/hybro/commit/6eb1c8b73d6209c2a8b86f9e6f36c63c2eecb0a6))
+* **ui:** address PR review on connect link, overview retry, and docs ([3fc7864](https://github.com/hybroai/hybro/commit/3fc7864dfdb741ff48d7fb4c7602173730c8f61f))
+* **ui:** center Add agent menu items and rename them to Add Remote Agent and Scan Local Agent ([440791a](https://github.com/hybroai/hybro/commit/440791aed2ab9af98c7c0551533f5747bb7e4bf7))
+* **ui:** restore sidebar icon colors, unify fonts, and drop the Work Logs label ([8e9e83e](https://github.com/hybroai/hybro/commit/8e9e83e896e163a884b02e3f1a8b204fec97cfea))
+
 ## [0.2.18](https://github.com/hybroai/hybro/compare/v0.2.17...v0.2.18) (2026-09-13)
 
 
