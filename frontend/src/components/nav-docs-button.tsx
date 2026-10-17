@@ -10,7 +10,7 @@ import { SIDEBAR_ICON_CENTER, SIDEBAR_ICON_HIDDEN } from "@/lib/sidebar-styles"
 
 export function DocsButton() {
   const handleDocsClick = () => {
-    window.open('https://docs.hybro.ai/', '_blank')
+    window.open('https://hybro.ai/docs', '_blank')
   }
 
   return (
