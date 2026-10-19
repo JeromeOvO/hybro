@@ -25,7 +25,6 @@ from common.protocols.context_memory_protocols import (
 )
 from common.protocols.dal_protocols import (
     DistributedLock,
-    IndexRegistry,
     LeaderElector,
     MongoChangeStream,
     MongoCollection,
@@ -126,7 +125,6 @@ __all__ = [
     "HealthCheck",
     "HITLManager",
     "HITLRepository",
-    "IndexRegistry",
     "JsonMap",
     "JsonScalar",
     "JsonValue",

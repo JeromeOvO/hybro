@@ -35,9 +35,7 @@ from common.dto import (
     MessageRecord,
     ModelInfo,
     NotificationPayload,
-    PaginationParams,
     ProcessingStatusEvent,
-    QueryFilter,
     RoomCreated,
     RoomCreationParams,
     RoomInfo,
@@ -47,7 +45,6 @@ from common.dto import (
     RunInfo,
     RunState,
     SavedUserMessage,
-    SortOrder,
     SSEEvent,
     TaskSubmittedEvent,
     TaskUpdateEvent,
@@ -198,9 +195,6 @@ def test_common_dtos_can_be_instantiated():
         sha256="0" * 64,
         status="ready",
     )
-    QueryFilter(criteria={"room_id": "r1"})
-    PaginationParams(page=1, limit=10)
-    SortOrder(field="created_at", direction="desc")
     InternalDomainEvent(timestamp=now)
     AgentRegistered(agent_id="a1", timestamp=now)
     RoomCreated(room_id="r1", owner_id="u1", timestamp=now)

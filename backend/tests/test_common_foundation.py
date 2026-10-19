@@ -128,39 +128,6 @@ def test_common_utils_dependency_seams_are_protocol_typed_not_any_globals():
     )
 
 
-def test_common_card_resolver_keeps_sdk_agent_card_validation(monkeypatch):
-    from common.client.card_resolver import A2ACardResolver
-    from common.types import A2AClientJSONError
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "name": "Incomplete",
-                "url": "https://agent.example",
-                "version": "1.0.0",
-                "capabilities": {},
-                "skills": [],
-            }
-
-    class Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def get(self, url):
-            return Response()
-
-    monkeypatch.setattr("httpx.Client", Client)
-
-    with pytest.raises(A2AClientJSONError, match="description"):
-        A2ACardResolver("https://agent.example").get_agent_card()
-
-
 def test_common_types_expose_sdk_free_task_parts():
     from pydantic import TypeAdapter
 
@@ -987,7 +954,6 @@ def test_protocol_methods_match_design_doc():
         protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
         protocols.DistributedLock: {"acquire", "release", "renew"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
-        protocols.IndexRegistry: {"register", "ensure_all"},
         protocols.AgentRepository: {
             "get_by_id",
             "get_by_ids",

@@ -233,10 +233,8 @@ class ContentStorageMongoRepository:
         *,
         mongo: MongoDAL,
         collection_name: str = "conversation_content",
-        index_registry: Any | None = None,
     ) -> None:
         self._content: MongoCollection = mongo.collection(collection_name)
-        self._index_registry = index_registry
 
     async def upsert_full_content(
         self,

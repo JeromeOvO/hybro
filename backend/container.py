@@ -4465,7 +4465,6 @@ def create_context_memory_facade(
     room_history_reader: RoomHistoryReader,
     memory_repository: MemoryRepository | None = None,
     content_repository: ContentStorageRepository | None = None,
-    index_registry: Any | None = None,
     token_budget: TokenBudgetConfig | None = None,
     compaction_config: CompactionConfig | None = None,
     search_config: MemorySearchConfig | None = None,
@@ -4474,8 +4473,7 @@ def create_context_memory_facade(
 ) -> ContextMemoryFacade:
     memory_repository = memory_repository or MemoryMongoRepository(mongo=mongo)
     content_repository = content_repository or ContentStorageMongoRepository(
-        mongo=mongo,
-        index_registry=index_registry,
+        mongo=mongo
     )
     token_budget = token_budget or TokenBudgetConfig(
         model_context_window=settings.context_model_window,

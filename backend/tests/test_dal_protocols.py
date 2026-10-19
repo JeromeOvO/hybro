@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 from common.protocols import (
     DistributedLock,
-    IndexRegistry,
     LeaderElector,
     MongoChangeStream,
     MongoCollection,
@@ -20,7 +19,6 @@ from common.protocols import (
 def test_dal_implementations_satisfy_runtime_protocols():
     from dal import (
         DistributedLockImpl,
-        IndexRegistryImpl,
         LeaderElectorImpl,
         MongoCollectionAdapter,
         MongoDALImpl,
@@ -38,7 +36,6 @@ def test_dal_implementations_satisfy_runtime_protocols():
     assert isinstance(
         LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector
     )
-    assert isinstance(IndexRegistryImpl(mongo=MagicMock()), IndexRegistry)
 
 
 def test_mongo_collection_protocol_covers_repository_operations():
@@ -119,7 +116,6 @@ def test_dal_top_level_exports_are_explicit():
 
     assert set(dal.__all__) == {
         "DistributedLockImpl",
-        "IndexRegistryImpl",
         "LeaderElectorImpl",
         "MongoCollectionAdapter",
         "MongoDALImpl",

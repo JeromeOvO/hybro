@@ -1,4 +1,3 @@
-from dal.index_registry import IndexRegistryImpl
 from dal.mongo import MongoCollectionAdapter, MongoDALImpl
 from dal.redis import (
     DistributedLockImpl,
@@ -10,7 +9,6 @@ from dal.redis import (
 
 __all__ = [
     "DistributedLockImpl",
-    "IndexRegistryImpl",
     "LeaderElectorImpl",
     "MongoCollectionAdapter",
     "MongoDALImpl",

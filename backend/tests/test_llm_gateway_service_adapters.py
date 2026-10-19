@@ -3,19 +3,12 @@ import pytest
 from common.dto import (
     AgentRoutingCandidate,
     ParsedUserMessageRequest,
-    RoomMemoryGenerationInput,
-    RoomMessageSummary,
 )
 from common.dto.llm import LLMResponse, LLMStructuredResponse
 from llm_gateway.errors import LLMModelRoutingError
 from llm_gateway.services import (
     AgentSelectionLLMService,
-    DiscoveryLLMService,
-    EmbeddingLLMService,
     MessageParserLLMService,
-    RoomMemoryLLMService,
-    SummaryLLMService,
-    SupervisorLLMService,
 )
 
 
@@ -126,33 +119,6 @@ async def test_agent_selection_ranking_falls_back_for_unparseable_output():
         "agent-a",
         "agent-b",
     ]
-
-
-@pytest.mark.asyncio
-async def test_discovery_service_propagates_routing_errors():
-    class RoutingErrorGateway:
-        async def generate(self, messages, **kwargs):
-            raise LLMModelRoutingError("unregistered model")
-
-    service = DiscoveryLLMService(RoutingErrorGateway())
-
-    with pytest.raises(LLMModelRoutingError):
-        await service.expand_query_for_discovery("AI")
-
-
-@pytest.mark.asyncio
-async def test_room_memory_service_uses_dto_inputs():
-    gateway = FakeWorkflowGateway()
-    service = RoomMemoryLLMService(gateway)
-
-    memory = await service.generate_room_memory_content(
-        RoomMemoryGenerationInput(
-            messages=[RoomMessageSummary(agent_name="Agent", message="done")]
-        )
-    )
-
-    assert memory == "generated"
-    assert all(call[1]["model"] == "lead_ai_model" for call in gateway.generate_calls)
 
 
 @pytest.mark.asyncio
@@ -271,120 +237,3 @@ async def test_message_parser_service_preserves_auto_mode_assignment_rules():
     assert "Assign every task step" in system_prompt
     assert result["task_steps"][0]["agent_id"] == "agent-a"
     assert result["task_steps"][0]["agent_name"] == "Agent A"
-
-
-@pytest.mark.asyncio
-async def test_summary_service_uses_room_message_summary_dtos():
-    gateway = FakeWorkflowGateway()
-    service = SummaryLLMService(gateway)
-
-    chunks = [
-        chunk
-        async for chunk in service.summarize_agent_responses_stream(
-            [
-                RoomMessageSummary(
-                    agent_id="agent-a",
-                    agent_name="Agent A",
-                    message="Response A",
-                )
-            ],
-            user_question="question",
-        )
-    ]
-
-    assert chunks == ["summary"]
-    assert gateway.stream_calls[0][1]["model"] == "lead_ai_model"
-    user_prompt = gateway.stream_calls[0][0][1]["content"]
-    assert "Agent A" in user_prompt
-    assert "Response A" in user_prompt
-
-
-@pytest.mark.asyncio
-async def test_embedding_service_resizes_embeddings_and_uses_logical_model():
-    gateway = FakeWorkflowGateway()
-    service = EmbeddingLLMService(gateway)
-
-    resized = await service.get_embedding("hello", target_dim=6)
-    truncated = await service.get_embedding("hello", target_dim=2)
-
-    assert resized == [1.0, 2.0, 3.0, 4.0, 0.0, 0.0]
-    assert truncated == [1.0, 2.0]
-    assert gateway.embed_calls == [
-        ("hello", {"model": "embedding_model"}),
-        ("hello", {"model": "embedding_model"}),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_supervisor_service_uses_default_supervisor_model_for_json_text_and_stream():
-    gateway = FakeWorkflowGateway(
-        structured_data={"action": "done", "reasoning": "complete"}
-    )
-    service = SupervisorLLMService(gateway)
-
-    json_result = await service.call_json("system", "user")
-    text_result = await service.call_text("system", "user")
-    stream_result = [
-        chunk async for chunk in service.call_text_stream("system", "user")
-    ]
-
-    assert json_result == {"action": "done", "reasoning": "complete"}
-    assert text_result == "generated"
-    assert stream_result == ["summary"]
-    assert gateway.structured_calls[0][1]["model"] == "supervisor_model"
-    assert gateway.generate_calls[0][1]["model"] == "supervisor_model"
-    assert gateway.stream_calls[0][1]["model"] == "supervisor_model"
-
-
-@pytest.mark.asyncio
-async def test_supervisor_service_uses_configured_timeout_defaults():
-    gateway = FakeWorkflowGateway(structured_data={"action": "complete"})
-    service = SupervisorLLMService(
-        gateway,
-        json_timeout_seconds=7.5,
-        text_timeout_seconds=8.5,
-        stream_timeout_seconds=9.5,
-    )
-
-    await service.call_json("system", "user")
-    await service.call_text("system", "user")
-    _ = [chunk async for chunk in service.call_text_stream("system", "user")]
-
-    assert gateway.structured_calls[0][1]["timeout_seconds"] == 7.5
-    assert gateway.generate_calls[0][1]["timeout_seconds"] == 8.5
-    assert gateway.stream_calls[0][1]["timeout_seconds"] == 9.5
-
-
-@pytest.mark.asyncio
-async def test_supervisor_service_passes_json_schema_to_gateway_for_json_calls():
-    schema = {
-        "type": "object",
-        "properties": {"action": {"type": "string"}},
-        "required": ["action"],
-    }
-    gateway = FakeWorkflowGateway(structured_data={"action": "delegate"})
-    service = SupervisorLLMService(gateway)
-
-    result = await service.call_json("system", "user", schema=schema)
-
-    assert result == {"action": "delegate"}
-    assert gateway.structured_calls[0][1]["schema"] == schema
-    assert gateway.structured_calls[0][1]["json_mode"] is False
-
-
-@pytest.mark.asyncio
-async def test_supervisor_service_preserves_strict_schema_for_gateway_validation():
-    schema = {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {"action": {"type": "string"}, "reason": {"type": "string"}},
-        "required": ["action", "reason"],
-    }
-    gateway = FakeWorkflowGateway(structured_data={"action": "delegate"})
-    service = SupervisorLLMService(gateway)
-
-    await service.call_json("system", "user", schema=schema)
-
-    submitted_schema = gateway.structured_calls[0][1]["schema"]
-    assert submitted_schema["additionalProperties"] is False
-    assert "reason" in submitted_schema["required"]

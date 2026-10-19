@@ -247,9 +247,7 @@ def test_api_gateway_packages_are_registered_for_distribution():
     assert {
         "api_gateway",
         "api_gateway.routes",
-        "common.client",
         "common.middleware",
-        "common.server",
         "common.utils",
     }.issubset(packages)
     assert "main" in set(setuptools_config.get("py-modules", []))

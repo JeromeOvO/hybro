@@ -13,11 +13,6 @@ from common.dto.context_memory import (
     ContextBlock,
     MemorySearchResult,
 )
-from common.dto.dal import (
-    PaginationParams,
-    QueryFilter,
-    SortOrder,
-)
 from common.dto.delivery import (
     AgentMessageFinal,
     AgentMessagePartial,
@@ -220,10 +215,8 @@ __all__ = [
     "MessageUpdatePayload",
     "ModelInfo",
     "NotificationPayload",
-    "PaginationParams",
     "ParsedUserMessageRequest",
     "ProcessingStatusEvent",
-    "QueryFilter",
     "RoomCreated",
     "RoomCreationParams",
     "RoomInfo",
@@ -255,7 +248,6 @@ __all__ = [
     "SSEEvent",
     "SavedAgentGroupSnapshot",
     "SavedUserMessage",
-    "SortOrder",
     "LocalAgentUpsertResult",
     "TaskSubmittedEvent",
     "TaskUpdateEvent",

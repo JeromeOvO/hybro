@@ -118,17 +118,8 @@ class LeaderElector(Protocol):
     async def release_all(self, job_names: list[str]) -> None: ...
 
 
-@runtime_checkable
-class IndexRegistry(Protocol):
-    def register(
-        self, module_name: str, collection: str, index_spec: list[tuple], **kwargs
-    ) -> None: ...
-    async def ensure_all(self) -> None: ...
-
-
 __all__ = [
     "DistributedLock",
-    "IndexRegistry",
     "LeaderElector",
     "MongoChangeStream",
     "MongoCollection",

@@ -1092,16 +1092,8 @@ OpenAI-backed because DeepSeek does not expose an embeddings API.
 Focused workflow services under `llm_gateway/services/` wrap prompt workflows
 without importing domain models:
 
-- `SupervisorLLMService`: supervisor JSON/text/stream calls through the
-  `supervisor_model` logical route.
-- `EmbeddingLLMService`: an independent, optional embedding gateway capability
-  through `embedding_model`. Agent matching and Context Memory have no runtime
-  embedding consumers; future features must opt in explicitly.
-- `DiscoveryLLMService`: discovery query expansion.
-- `SummaryLLMService`: streaming synthesis of multi-agent responses (system prompt includes shared markdown formatting rules from `common/prompts/markdown_response_format.py`).
-- `AgentSelectionLLMService`, `MessageParserLLMService`, and
-  `RoomMemoryLLMService`: DTO-backed workflows used directly by runtime modules
-  or tested as focused LLM capabilities.
+- `AgentSelectionLLMService` and `MessageParserLLMService`: DTO-backed
+  workflows used directly by runtime modules.
 
 `container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
 focused services into production consumers. Runtime modules now depend on
@@ -1295,7 +1287,7 @@ Key components:
   the port must use named parameters and execution-owned result protocols
   instead of `*args`/`**kwargs` catch-all signatures.
 - Legacy tracked-task components (`execution.task_tracking`,
-  `execution.state.TaskStateManager`, `jobs.stale_task_checker`) remain for
+  `jobs.stale_task_checker`) remain for
   compatibility paths; canonical Runs do not create tracked tasks.
 
 A2A response ingestion and finalization are Execution-owned: the orchestrator
@@ -1417,8 +1409,8 @@ set durably and emits a stable-ID terminal `task_update` for every affected chil
 a retry reconstructs the same IDs after a DB-before-SSE crash. The dedicated
 system task is excluded from descendant cleanup and remains owned exclusively by
 its system-task DB/delivery steps. Terminal task projections atomically write a
-winner event marker with task state. All full-content, status, HITL, finalization,
-and `TaskStateManager` persistence paths use a non-terminal Mongo CAS, so a late
+winner event marker with task state. All full-content, status, HITL, and
+finalization persistence paths use a non-terminal Mongo CAS, so a late
 completion or opposing terminal writer cannot overwrite the durable marked
 winner. Queue execution retries creation of its system task and refuses all agent
 dispatch if the create remains unacknowledged; the resulting root failure omits
@@ -1578,11 +1570,7 @@ recovery hints. The next planning attempt must correct that error instead of
 repeating an identical invalid action. Delegation defaults to one Agent per
 planner step; multiple targets are reserved for independent work with one shared
 parallel group, while dependent Agent work advances sequentially across steps.
-Agent terminal responses can
-be normalized into `AgentResultRead` records and projected by the pure,
-replay-safe `AgentResultIngestor` when an orchestration ingestion service is
-bound. Sparse or identical terminal replays preserve richer output and do not
-advance the run-state version. The state-driven supervisor loop consumes these
+The state-driven supervisor loop consumes these
 boundaries to plan, reduce, persist, and resume each versioned step.
 
 HITL records preserve the optional `orchestration_run_id` needed to resume the
@@ -2381,9 +2369,6 @@ module boundary.
 - Resolve and validate AgentCards.
 - Own all production imports of the upstream A2A SDK.
 - Build outbound A2A send, stream, cancellation, HITL, and task-fetch requests.
-- Remote task reads are exposed to Execution through
-  `a2a_adapter.remote_task_reader.RemoteTaskReader`, which delegates SDK calls
-  to `a2a_adapter.remote_task`.
 - Translate internal common models to SDK payloads and normalize SDK responses
   back to SDK-free dictionaries or `common.types` models.
 - Own A2A output-mode negotiation and response/task coercion helpers used by
@@ -2404,9 +2389,8 @@ module boundary.
   services.
 - Materialize inline or remote file artifacts into room-owned storage.
 - Own Docker host fallback for backend-initiated agent endpoint calls. Owner
-  modules such as `agent.health`, `agent.resolver`, Execution jobs, and legacy
-  transport compatibility paths must call adapter helpers instead of opening
-  direct `httpx` or A2A SDK clients against agent URLs.
+  modules such as `agent.health` and Execution jobs must call adapter helpers
+  instead of opening direct `httpx` or A2A SDK clients against agent URLs.
 - Keep registered `agent_card.url` values unchanged during fallback. The
   adapter may retry `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` URLs through
   `host.docker.internal` for connection-style failures, but that rewrite is
@@ -2428,7 +2412,6 @@ module-scoped repositories built from `MongoDAL`. Adapters:
 - `dal.mongo`: generic Mongo collection/DAL adapter.
 - `dal.redis`: Redis KV, Pub/Sub, Streams, leader election, and room
   distributed locking support.
-- `dal.index_registry`: startup index registration across modules.
 
 `room_files` owns file metadata, content, references, download authorization,
 artifact materialization, file-deletion fencing, storage lifecycle, and recovery.
@@ -2872,9 +2855,7 @@ artifact rather than treating token chunks as hundreds of durable artifacts.
 List/section markdown repair runs only in the
 frontend remark plugin pipeline
 (`frontend/src/lib/markdown/conversation-remark-plugins.ts`) at Streamdown
-render time. Hybro-controlled LLM paths (supervisor synthesis,
-`SummaryLLMService`) append `HYBRO_MARKDOWN_RESPONSE_FORMAT` so synthesis uses
-`###` section headers; third-party agent text is still stored as-is. Backend
+render time. Agent text is stored as-is. Backend
 terminal helpers in `common/utils/a2a_helpers.py`
 (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`,
 `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts
@@ -3107,10 +3088,6 @@ The canonical workflow and persistence invariants are defined in
 This workflow does not add a frontend API or UI state: the frontend still sends
 and renders Room messages through the existing REST/SSE flow, while ContextMemory
 is an internal backend projection and execution dependency.
-
-An optional provider-neutral `extensions.vector_store.VectorStore` protocol is
-available for future features. It has no factory, default implementation,
-container binding, application state, or current runtime consumer.
 
 Deferred follow-ups are intentionally separate from the local-default removal:
 

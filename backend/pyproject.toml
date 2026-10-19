@@ -125,7 +125,6 @@ ignore = ["E501"]
 "common/types.py" = ["UP042"]
 "common/utils/a2a_helpers.py" = ["C901"]
 "common/utils/context_utils.py" = ["C901", "UP047"]
-"common/utils/remote_agent_connection.py" = ["C901"]
 "context_memory/assembly.py" = ["C901"]
 "context_memory/compaction.py" = ["C901"]
 "context_memory/models.py" = ["UP042"]
@@ -177,7 +176,6 @@ packages = [
     "context_memory.repository",
     "dal",
     "dal.mongo",
-    "extensions",
     "dal.redis",
     "dal.runtime_store",
     "dal.runtime_store.parts",
@@ -201,15 +199,12 @@ packages = [
     "models",
     "common",
     "common.eventing",
-    "common.client",
     "common.config",
     "common.dto",
     "common.errors",
     "common.middleware",
     "common.observability",
-    "common.prompts",
     "common.protocols",
-    "common.server",
     "common.utils",
     "a2a_adapter",
     "llm_gateway",

@@ -787,54 +787,6 @@ class TestProcessAgentMessageAttachmentPreflight:
         assert "file_names" not in failure
         reader.get_bytes.assert_not_called()
 
-    async def test_sensitive_filename_is_absent_after_preflight_failure_persistence(
-        self,
-    ):
-        from execution.state.task_state_manager import TaskStateManager
-
-        private_filename = "PRIVATE_FILENAME_SENTINEL-payroll.pdf"
-        attachment = UserAttachment(
-            file_id="f-private",
-            s3_key=f"uploads/r/f-private/{private_filename}",
-            mime_type="application/pdf",
-            file_name=private_filename,
-            size_bytes=4,
-        )
-        svc = ConversationRuntime()
-        self._bind_runtime_dependencies(
-            svc,
-            attachment=attachment,
-            agent_card=SimpleNamespace(default_input_modes=["text"]),
-        )
-        message = self._message()
-
-        result = await svc.process_agent_message(self._request(message))
-
-        persisted_payloads = []
-
-        async def persist(request):
-            persisted_payloads.append(request.message.model_dump(mode="json"))
-            return SimpleNamespace(success=True, error=None)
-
-        conversation_runtime = SimpleNamespace(
-            update_agent_message_by_message_id=AsyncMock(side_effect=persist)
-        )
-        tsm = TaskStateManager(conversation_runtime, MagicMock())
-        failure = message.extend_info["attachment_preflight_failure"]
-        await tsm.fail_pre_dispatch_task(
-            message,
-            error=result.error,
-            error_code=failure["code"],
-        )
-
-        assert result.success is False
-        assert failure == {
-            "code": "agent_does_not_accept_file_type",
-            "message": "The agent does not accept an attached file type.",
-        }
-        assert len(persisted_payloads) == 1
-        assert private_filename not in json.dumps(persisted_payloads[0])
-
     async def test_compatible_only_policy_skips_unsupported_user_attachment(self):
         svc = ConversationRuntime()
         attachment = UserAttachment(

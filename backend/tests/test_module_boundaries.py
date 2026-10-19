@@ -26,7 +26,6 @@ DOMAIN_MODULES = frozenset(
         "conversation",
         "delivery",
         "execution",
-        "extensions",
         "jobs",
         "llm_gateway",
         "local_agents",
@@ -41,7 +40,6 @@ DAL_ROOT = "dal"
 # package root or protocols.
 DOMAIN_IMPORT_DEBT = frozenset(
     {
-        ("agent/resolver.py", "llm_gateway.errors"),
         ("execution/adapters/profiles.py", "llm_gateway.errors"),
         ("execution/adapters/profiles.py", "llm_gateway.model_registry"),
         ("execution/orchestrator/model_runtime.py", "llm_gateway.error_classification"),

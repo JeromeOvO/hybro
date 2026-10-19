@@ -10,7 +10,6 @@ import pytest
 
 from common.protocols import (
     AgentCardResolver,
-    AgentTransport,
     LLMGateway,
     LLMProviderAdapter,
     ModelRegistry,
@@ -18,13 +17,12 @@ from common.protocols import (
 
 
 def test_adapter_implementations_satisfy_runtime_protocols():
-    from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
+    from a2a_adapter import AgentCardResolverImpl
     from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
 
     fake_client = MagicMock()
     registry = ModelRegistryImpl()
 
-    assert isinstance(AgentTransportImpl(timeout=1, client=fake_client), AgentTransport)
     assert isinstance(AgentCardResolverImpl(client=fake_client), AgentCardResolver)
     assert isinstance(
         LLMGatewayImpl(model_registry=registry, providers={"openai": MagicMock()}),
@@ -36,14 +34,13 @@ def test_adapter_implementations_satisfy_runtime_protocols():
 def test_adapter_top_level_exports_are_explicit():
     import a2a_adapter
     import llm_gateway
-    from a2a_adapter import AgentCardResolverImpl, AgentTransportImpl
+    from a2a_adapter import AgentCardResolverImpl
     from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
 
-    assert AgentTransportImpl is a2a_adapter.AgentTransportImpl
     assert AgentCardResolverImpl is a2a_adapter.AgentCardResolverImpl
     assert LLMGatewayImpl is llm_gateway.LLMGatewayImpl
     assert ModelRegistryImpl is llm_gateway.ModelRegistryImpl
-    assert set(a2a_adapter.__all__) == {"AgentTransportImpl", "AgentCardResolverImpl"}
+    assert set(a2a_adapter.__all__) == {"AgentCardResolverImpl"}
     assert set(llm_gateway.__all__) == {
         "LLMGatewayImpl",
         "LLMServiceNotBoundError",
