@@ -1752,12 +1752,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             ),
         )
 
-        # ── Orchestrator runtime composition (dark launch, 0% traffic) ──
+        # ── Orchestrator runtime composition ──
         #
-        # The composition is constructed eagerly so a misconfigured model
-        # route, prompt asset, or profile parameter is detected during startup
-        # even though nothing routes into it yet. Adapter-level failures
-        # degrade the dark launch; programming errors still fail startup.
+        # The canonical orchestrator is the only execution path. It is built
+        # eagerly so a misconfigured model route, prompt asset, or profile
+        # parameter fails startup instead of the first request.
         from common.dto import ProcessingStatusEvent, RunEventNotification
         from execution.orchestrator.projection import public_terminal_status
         from execution.orchestrator.public_projection import (

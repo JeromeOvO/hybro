@@ -1,4 +1,4 @@
-"""Canary observability for the orchestrator dark launch (plan §8.2).
+"""Canary observability for the orchestrator runtime.
 
 Metrics are derived exclusively from the existing orchestrator durable stores
 (``orchestrator_runs``, ``orchestrator_agent_calls``,
@@ -52,9 +52,9 @@ async def collect_metrics(
 
     ``runs``, ``agent_calls``, and ``conflicts`` are collection-like objects
     exposing ``find(query) -> cursor`` (the bounded Mongo collections behind the
-    orchestrator stores). The collector performs a full scan; traffic during the
-    dark launch is expected to be zero-to-small, so this is acceptable for the
-    canary job and can be replaced with server-side aggregation later.
+    orchestrator stores). The collector performs a full scan, which suits the
+    opt-in canary job; server-side aggregation can replace it if run volume
+    makes the scan costly.
     """
     now = _as_utc(now) if now is not None else datetime.now(UTC)
     run_metrics = _scan_runs(

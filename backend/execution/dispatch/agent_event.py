@@ -1,8 +1,8 @@
-"""AgentEvent — transport-agnostic normalized event dataclass.
+"""Transport-agnostic normalized agent events.
 
-All three entry points (direct cloud, hub relay, push webhook) normalize
-their transport-specific events into ``AgentEvent`` before delegating to
-``AgentResponseHandler`` for shared result processing.
+``AgentEvent`` is one agent response or status change in a shared shape;
+``AgentInputObservation`` is the private evidence from an agent's
+input-required event.
 """
 
 from __future__ import annotations

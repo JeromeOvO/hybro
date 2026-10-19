@@ -159,9 +159,8 @@ class RoomDeletionService:
             )
 
         # Epoch deactivation is the primary fence for the exact incarnation.
-        # Cancellation of non-terminal calls is intentionally NOT wired here:
-        # the A2A cancellation coordinator needs step-5 dispatch adapters. The
-        # step-6 recovery cycle expires those calls via `room_epoch_gone`.
+        # Non-terminal calls are not cancelled here; the A2A recovery cycle
+        # expires them via `room_epoch_gone`.
         deactivation_ok, epoch = await self._deactivate_room_epoch(room_id, deletion_id)
         if not deactivation_ok:
             return RoomCenterRoomSettingResponse(

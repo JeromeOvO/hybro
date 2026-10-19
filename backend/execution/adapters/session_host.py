@@ -3,8 +3,7 @@
 The host resolves the active Room epoch from the bound epoch store and builds a
 ``RoomAgentSession`` with a frozen profile/catalog/scope snapshot before Run
 creation. Lifecycle ``SessionEvent`` values are forwarded to an injected
-listener (the step-6 listener will write to the projection outbox; during the
-step-5b dark launch a no-op/recording listener is used).
+listener.
 
 The host is deliberately unreachable from routes: it exposes only the builder
 surface used by the composition root and tests.

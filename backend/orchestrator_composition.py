@@ -1,4 +1,4 @@
-"""Production composition root for the orchestrator runtime (dark launch).
+"""Production composition root for the orchestrator runtime.
 
 This module assembles the full ``execution.orchestrator`` runtime from Mongo
 stores, typed settings, and the existing product services. It is imported only
@@ -130,7 +130,7 @@ logger = get_logger(__name__)
 
 
 class OrchestratorCompositionError(RuntimeError):
-    """Adapter-level composition failure; safe to degrade the dark launch."""
+    """Adapter-level composition failure; startup reports it and stops."""
 
 
 _GENERIC_RECOVERY_MAX_INVARIANT_FAILURES = 3
