@@ -54,7 +54,6 @@ DOMAIN_IMPORT_DEBT = frozenset(
         ("execution/orchestrator_routing.py", "context_memory.translators"),
         ("jobs/orchestrator_workers.py", "execution.adapters.canary_metrics"),
         ("jobs/stale_task_checker.py", "execution.cancellation.ports"),
-        ("jobs/stale_task_checker.py", "execution.dispatch.agent_event"),
         ("local_agents/card_probe.py", "agent.url_utils"),
     }
 )

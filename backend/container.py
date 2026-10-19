@@ -1087,7 +1087,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_capability_issue_service = create_agent_capability_issue_service(
                 repository=agent_capability_issue_repository
             )
-            from common.observability.run_metrics import increment_counter
             from dal.runtime_store.cancellation_repository import (
                 MongoCancellationMarkerRepository,
             )
@@ -1105,10 +1104,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from execution.dispatch.task_notifications import (
                 bind_processing_status_emitter as bind_task_processing_status_emitter,
-            )
-            from execution.events import (
-                emit_processing_status,
-                run_event_notification_from_payload,
             )
             from execution.events import (
                 emit_room_processing_status as emit_execution_room_processing_status,
@@ -1400,7 +1395,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_non_tracked_stale_task_messages=(
                     task_store.get_non_tracked_stale_task_messages
                 ),
-                find_stale_non_terminal_runs=task_store.find_stale_non_terminal_runs,
                 touch_task_message=task_store.touch_task_message,
                 is_message_cancelled=task_store.is_message_cancelled,
                 is_message_cancelled_strict=task_store.is_message_cancelled_strict,
@@ -2071,7 +2065,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 store=stale_task_store,
                 rooms_collection=mongo_dal.collection("rooms"),
                 notify_task_update=notify_task_update,
-                increment_counter=increment_counter,
                 a2a_service=a2a_service,
             )
         )
@@ -2079,46 +2072,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from jobs.stale_task_checker import (
                 StaleCancellationReconciliationDeps,
                 StaleHITLDeps,
-                StaleRunWatchdogEventDeps,
-                StaleTerminalProjectionDeps,
             )
-
-            async def emit_watchdog_run_event(
-                *,
-                room_id: str,
-                payload: dict,
-                client_request_id: str | None = None,
-            ) -> None:
-                if payload and run_event_sse_enabled():
-                    await _delivery_deps.event_publisher.emit(
-                        run_event_notification_from_payload(
-                            room_id=room_id,
-                            payload=payload,
-                            correlation_id=client_request_id,
-                        )
-                    )
-
-            async def emit_watchdog_processing_status(
-                *,
-                room_id: str,
-                status: str,
-                message_id: str,
-                client_request_id: str | None = None,
-                details: str | None = None,
-            ) -> None:
-                await emit_processing_status(
-                    room_id=room_id,
-                    status=status,
-                    message_id=message_id,
-                    lifecycle_message_id=message_id,
-                    record_lifecycle=False,
-                    client_request_id=client_request_id,
-                    details={"message": details} if details else None,
-                    run_lifecycle=run_lifecycle,
-                    event_publisher=_delivery_deps.event_publisher,
-                    run_event_enabled=run_event_sse_enabled,
-                    client_request_id_resolver=execution_client_request_id_resolver,
-                )
 
             stale_task_checker.set_cancellation_reconciliation_deps(
                 StaleCancellationReconciliationDeps(
@@ -2130,18 +2084,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     recover_stale_processing=hitl_manager.recover_stale_processing,
                     cancel_requests_for_message=hitl_manager.cancel_requests_for_message,
                     reconcile_lifecycle=hitl_reconciler.reconcile_lifecycle,
-                )
-            )
-            stale_task_checker.set_run_watchdog_event_deps(
-                StaleRunWatchdogEventDeps(
-                    append_run_timeout_failure=run_lifecycle.append_run_timeout_failure,
-                    emit_run_event=emit_watchdog_run_event,
-                    emit_processing_status=emit_watchdog_processing_status,
-                )
-            )
-            stale_task_checker.set_terminal_projection_deps(
-                StaleTerminalProjectionDeps(
-                    recover_pending=run_lifecycle.recover_terminal_projections,
                 )
             )
         compaction_sweep.set_leader_election(_leader)

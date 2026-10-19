@@ -10,10 +10,6 @@ from common.dto import DeliveryEmitStatus, ProcessingStatusEvent
 from execution.events import emit_processing_status
 from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
 from execution.terminal_projection import TerminalProjectionFinalizer
-from jobs.stale_task_checker import (
-    StaleTaskChecker,
-    StaleTerminalProjectionDeps,
-)
 from models.run import Run, RunEvent
 
 
@@ -703,16 +699,3 @@ async def test_unknown_and_malformed_steps_are_durably_blocked():
         for name, value in lifecycle.fact["terminal_projection"]["steps"].items()
     } == {"future_step": "blocked", "corrupt_step": "blocked"}
     assert lifecycle.fact["terminal_projection"]["pending"] is False
-
-
-@pytest.mark.asyncio
-async def test_stale_checker_invokes_terminal_projection_recovery():
-    checker = StaleTaskChecker()
-    recover = AsyncMock(return_value=2)
-    checker.set_terminal_projection_deps(
-        StaleTerminalProjectionDeps(recover_pending=recover)
-    )
-
-    await checker._recover_terminal_projections()
-
-    recover.assert_awaited_once_with(limit=100)

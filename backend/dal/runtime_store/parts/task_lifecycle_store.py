@@ -333,25 +333,6 @@ class TaskLifecycleRuntimeStorePart:
             logger.error("Failed to get rooms with non-terminal runs", exc_info=True)
             return []
 
-    async def find_stale_non_terminal_runs(
-        self,
-        stale_minutes: int,
-        limit: int = 200,
-    ) -> list[dict]:
-        try:
-            cutoff = utcnow() - timedelta(minutes=stale_minutes)
-            return await self._runs.find(
-                {
-                    "state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)},
-                    "updated_at": {"$lt": cutoff},
-                },
-                sort=[("updated_at", 1)],
-                limit=limit,
-            )
-        except Exception:
-            logger.error("Failed to find stale runs", exc_info=True)
-            return []
-
     async def get_stale_task_messages(
         self,
         stale_minutes: int,

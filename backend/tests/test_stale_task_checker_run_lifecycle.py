@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -14,7 +14,7 @@ from common.types import (
     TaskStatus,
     TextPart,
 )
-from jobs.stale_task_checker import StaleRunWatchdogEventDeps, StaleTaskChecker
+from jobs.stale_task_checker import StaleTaskChecker
 from models.room import MessageContent, RoomAgentMessage
 
 
@@ -40,133 +40,12 @@ async def test_journal_finalization_is_never_taken_over_by_stale_poller():
             )
         ),
     )
-    handler = AsyncMock()
     checker = StaleTaskChecker()
-    checker.set_terminal_event_handler(handler)
     checker._get_task_from_agent = AsyncMock()
 
     await checker._process_stale_task(msg)
 
     checker._get_task_from_agent.assert_not_awaited()
-    handler.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_message_finalization_with_agent_url_resumes_persisted_projection():
-    msg = RoomAgentMessage(
-        room_id="room-1",
-        message_id="agent-message-1",
-        user_id="user-1",
-        agent_id="agent-1",
-        agent_url="https://agent.example",
-        has_task_tracking=True,
-        terminal_finalization={
-            "state": "finalizing",
-            "target_state": "completed",
-            "recovery_source": "message",
-        },
-        message_content=MessageContent(
-            message_text="persisted result",
-            message_task=Task(
-                id="remote-task",
-                context_id="remote-context",
-                status=TaskStatus(state=TaskState.working),
-                artifacts=[],
-            ),
-        ),
-    )
-    handler = AsyncMock()
-    checker = StaleTaskChecker()
-    checker.set_terminal_event_handler(handler)
-    checker._get_task_from_agent = AsyncMock()
-
-    await checker._process_stale_task(msg)
-
-    checker._get_task_from_agent.assert_not_awaited()
-    event = handler.await_args.args[0]
-    assert event.kind == "response"
-    assert event.message_id == "agent-message-1"
-    assert event.text == "persisted result"
-    assert event.state == "completed"
-
-
-@pytest.mark.asyncio
-async def test_watchdog_terminal_append_owns_durable_delivery_projection(
-    monkeypatch,
-):
-    import jobs.stale_task_checker as mod
-
-    calls: list[str] = []
-    payload = {
-        "event_id": "evt-timeout",
-        "run_id": "run-1",
-        "seq": 9,
-        "type": "RUN_FAILED",
-        "payload": {},
-    }
-    append_timeout = AsyncMock(return_value=payload)
-    emit_run_event = AsyncMock(side_effect=lambda *a, **k: calls.append("broadcast"))
-    emit_status = AsyncMock(side_effect=lambda *a, **k: calls.append("send"))
-    monkeypatch.setattr(
-        mod.store,
-        "find_stale_non_terminal_runs",
-        AsyncMock(
-            return_value=[
-                {
-                    "room_id": "room-1",
-                    "run_id": "run-1",
-                    "trigger_message_id": "msg-1",
-                    "client_request_id": "cr-1",
-                }
-            ]
-        ),
-    )
-    monkeypatch.setattr(mod, "increment_counter", lambda name: calls.append("metric"))
-    checker = StaleTaskChecker()
-    checker.set_run_watchdog_event_deps(
-        StaleRunWatchdogEventDeps(
-            append_run_timeout_failure=append_timeout,
-            emit_run_event=emit_run_event,
-            emit_processing_status=emit_status,
-        )
-    )
-
-    await checker._fail_stale_runs()
-
-    append_timeout.assert_awaited_once_with("room-1", "run-1", stale_minutes=90)
-    emit_run_event.assert_not_awaited()
-    emit_status.assert_not_awaited()
-    assert calls == ["metric"]
-
-
-@pytest.mark.asyncio
-async def test_watchdog_payload_none_suppresses_metric_and_delivery(monkeypatch):
-    import jobs.stale_task_checker as mod
-
-    append_timeout = AsyncMock(return_value=None)
-    emit_run_event = AsyncMock()
-    emit_status = AsyncMock()
-    counter = MagicMock()
-    monkeypatch.setattr(
-        mod.store,
-        "find_stale_non_terminal_runs",
-        AsyncMock(return_value=[{"room_id": "room-1", "run_id": "run-1"}]),
-    )
-    monkeypatch.setattr(mod, "increment_counter", counter)
-    checker = StaleTaskChecker()
-    checker.set_run_watchdog_event_deps(
-        StaleRunWatchdogEventDeps(
-            append_run_timeout_failure=append_timeout,
-            emit_run_event=emit_run_event,
-            emit_processing_status=emit_status,
-        )
-    )
-
-    await checker._fail_stale_runs()
-
-    counter.assert_not_called()
-    emit_run_event.assert_not_awaited()
-    emit_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -222,7 +101,6 @@ async def test_stale_recovery_persists_public_projection_without_inline_file_byt
             store=store,
             rooms_collection=None,
             notify_task_update=AsyncMock(),
-            increment_counter=MagicMock(),
             a2a_service=SimpleNamespace(
                 get_agent_card_from_url=AsyncMock(return_value=SimpleNamespace())
             ),
@@ -317,7 +195,6 @@ async def test_stale_recovery_drops_inline_file_when_s3_conversion_fails():
             store=store,
             rooms_collection=None,
             notify_task_update=AsyncMock(),
-            increment_counter=MagicMock(),
             a2a_service=SimpleNamespace(
                 get_agent_card_from_url=AsyncMock(return_value=SimpleNamespace())
             ),

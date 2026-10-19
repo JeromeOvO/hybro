@@ -68,7 +68,6 @@ async def test_polled_stale_task_persists_only_public_terminal_artifacts():
             store=store,
             rooms_collection=None,
             notify_task_update=notify_task_update,
-            increment_counter=MagicMock(),
             a2a_service=SimpleNamespace(
                 get_agent_card_from_url=AsyncMock(return_value=MagicMock())
             ),

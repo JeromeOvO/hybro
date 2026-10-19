@@ -1,4 +1,4 @@
-"""Tests for RunCommandHandler.heal_head_from_events and watchdog integration."""
+"""Tests for RunCommandHandler.heal_head_from_events."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -139,41 +139,3 @@ async def test_heal_active_event_projects_forward():
     assert updates["state"] == RunState.PROCESSING.value
     assert updates["seq"] == 2
     assert "ended_at" not in updates
-
-
-@pytest.mark.asyncio
-async def test_watchdog_heals_instead_of_appending():
-    """When heal succeeds, append_run_timeout_failure should return None without
-    calling _record_terminal."""
-    run_repo, event_repo, handler = _run_handler()
-    handler.heal_head_from_events = AsyncMock(return_value=True)
-    handler._record_terminal = AsyncMock()
-
-    result = await handler.append_run_timeout_failure(
-        "room-1", "run-1", stale_minutes=90
-    )
-
-    assert result is None
-    handler.heal_head_from_events.assert_called_once_with("run-1")
-    handler._record_terminal.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_watchdog_falls_through_when_no_divergence():
-    """When heal returns False, the watchdog proceeds normally to _record_terminal."""
-    run_repo, _event_repo, handler = _run_handler()
-    handler.heal_head_from_events = AsyncMock(return_value=False)
-    run_repo.find_one = AsyncMock(
-        return_value=_make_run_doc(run_id="run-1", room_id="room-1")
-    )
-    handler._record_terminal = AsyncMock(return_value={"event_id": "e1"})
-
-    result = await handler.append_run_timeout_failure(
-        "room-1", "run-1", stale_minutes=90
-    )
-
-    assert result == {"event_id": "e1"}
-    handler._record_terminal.assert_called_once()
-    call_kw = handler._record_terminal.call_args[1]
-    assert call_kw["terminal_state"] == RunState.FAILED
-    assert call_kw["error_code"] == "RUN_TIMEOUT"

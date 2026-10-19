@@ -1071,11 +1071,3 @@ class RunLifecyclePort(Protocol):
     ) -> dict[str, Any] | None: ...
 
     async def heal_diverged_runs(self, limit: int = 500) -> int: ...
-
-    async def append_run_timeout_failure(
-        self,
-        room_id: str,
-        run_id: str,
-        *,
-        stale_minutes: int,
-    ) -> dict[str, Any] | None: ...

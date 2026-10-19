@@ -26,18 +26,15 @@ from common.a2a_constants import (
     is_terminal_state,
 )
 from common.a2a_task_projection import public_persisted_task_data
-from common.config import settings
 from common.observability import safe_exception_metadata, traced_create_task
 from common.types import Task
 from common.utils.a2a_helpers import (
-    artifacts_to_dicts,
     extract_text_from_artifacts,
     materialize_artifacts,
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
 from execution.cancellation.ports import CancellationReconciliationPort
-from execution.dispatch.agent_event import AgentEvent
 from jobs.constants import STALE_TASK_CHECKER
 from models.room import RoomAgentMessage
 
@@ -71,25 +68,9 @@ async def notify_task_update(**_kwargs) -> Any:
     raise RuntimeError("Stale task checker notification dependency is not bound")
 
 
-def increment_counter(_name: str) -> None:
-    raise RuntimeError("Stale task checker metrics dependency is not bound")
-
-
 @dataclass(frozen=True)
 class StaleCancellationReconciliationDeps:
     reconciliation: CancellationReconciliationPort
-
-
-@dataclass(frozen=True)
-class StaleRunWatchdogEventDeps:
-    append_run_timeout_failure: Callable[..., Awaitable[dict[str, Any] | None]]
-    emit_run_event: Callable[..., Awaitable[None]]
-    emit_processing_status: Callable[..., Awaitable[None]]
-
-
-@dataclass(frozen=True)
-class StaleTerminalProjectionDeps:
-    recover_pending: Callable[..., Awaitable[int]]
 
 
 @dataclass(frozen=True)
@@ -104,7 +85,6 @@ class StaleTaskCheckerDeps:
     store: Any
     rooms_collection: Any
     notify_task_update: Callable[..., Awaitable[Any]]
-    increment_counter: Callable[[str], Any]
     a2a_service: Any
 
 
@@ -174,13 +154,8 @@ class StaleTaskChecker:
         self._cancellation_reconciliation_deps: (
             StaleCancellationReconciliationDeps | None
         ) = None
-        self._watchdog_event_deps: StaleRunWatchdogEventDeps | None = None
-        self._terminal_projection_deps: StaleTerminalProjectionDeps | None = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
-        self._terminal_event_handler: Callable[[AgentEvent], Awaitable[None]] | None = (
-            None
-        )
 
     def set_cancellation_reconciliation_deps(
         self,
@@ -210,11 +185,6 @@ class StaleTaskChecker:
     def set_runtime_deps(self, deps: StaleTaskCheckerDeps) -> None:
         self._runtime_deps = deps
 
-    def set_terminal_event_handler(
-        self, handler: Callable[[AgentEvent], Awaitable[None]]
-    ) -> None:
-        self._terminal_event_handler = handler
-
     def _deps(self) -> StaleTaskCheckerDeps:
         if self._runtime_deps is not None:
             return self._runtime_deps
@@ -222,7 +192,6 @@ class StaleTaskChecker:
             store=store,
             rooms_collection=None,
             notify_task_update=notify_task_update,
-            increment_counter=increment_counter,
             a2a_service=a2a_service,
         )
 
@@ -240,15 +209,6 @@ class StaleTaskChecker:
 
     async def _notify_task_update(self, **kwargs) -> Any:
         return await self._deps().notify_task_update(**kwargs)
-
-    def _increment_counter(self, name: str) -> Any:
-        return self._deps().increment_counter(name)
-
-    def set_run_watchdog_event_deps(self, deps: StaleRunWatchdogEventDeps) -> None:
-        self._watchdog_event_deps = deps
-
-    def set_terminal_projection_deps(self, deps: StaleTerminalProjectionDeps) -> None:
-        self._terminal_projection_deps = deps
 
     def set_hitl_deps(self, deps: StaleHITLDeps) -> None:
         self._hitl_deps = deps
@@ -399,60 +359,6 @@ class StaleTaskChecker:
         # mandatory orchestrator workers. This legacy checker never creates a
         # second Run/Task lifecycle for canonical requests.
 
-    async def _recover_terminal_projections(self) -> None:
-        if self._terminal_projection_deps is None:
-            return
-        try:
-            recovered = await self._terminal_projection_deps.recover_pending(limit=100)
-            if recovered:
-                logger.info(
-                    "terminal_projection_recovery_completed",
-                    extra={"result_count": recovered},
-                )
-        except Exception:
-            logger.error("terminal projection recovery failed", exc_info=True)
-
-    async def _fail_stale_runs(self) -> None:
-        """Append run_failed for non-terminal runs past RUN_WATCHDOG_STALE_MINUTES."""
-        stale_mins = settings.run_watchdog_stale_minutes
-        try:
-            stale = await self._store.find_stale_non_terminal_runs(
-                stale_mins,
-                limit=100,
-            )
-        except Exception as e:
-            logger.error("run watchdog: failed to list stale runs: %s", e)
-            return
-        if not stale:
-            return
-        if self._watchdog_event_deps is None:
-            logger.warning(
-                "run watchdog: skipped because Execution event dependencies are not bound"
-            )
-            return
-        event_deps = self._watchdog_event_deps
-
-        for doc in stale:
-            room_id = str(doc.get("room_id") or "")
-            run_id = str(doc.get("run_id") or "")
-            if not room_id or not run_id:
-                continue
-            try:
-                payload = await event_deps.append_run_timeout_failure(
-                    room_id, run_id, stale_minutes=stale_mins
-                )
-                if payload is None:
-                    continue
-                self._increment_counter("run_watchdog_forced_failure_total")
-            except Exception as e:
-                logger.error(
-                    "run watchdog: failed to timeout run_id=%s room=%s: %s",
-                    run_id,
-                    room_id,
-                    e,
-                    exc_info=True,
-                )
-
     async def _message_or_parent_cancelled(self, msg: RoomAgentMessage) -> bool:
         if await self._is_message_cancelled_for_recovery(msg.message_id):
             return True
@@ -480,36 +386,6 @@ class StaleTaskChecker:
             and finalization.get("recovery_source") == "journal"
         ):
             return
-        if (
-            finalization.get("state") == "finalizing"
-            and self._terminal_event_handler is not None
-        ):
-            target_state = str(finalization.get("target_state") or "failed")
-            kind = (
-                "response"
-                if target_state == "completed"
-                else "canceled"
-                if target_state == "canceled"
-                else "error"
-            )
-            await self._terminal_event_handler(
-                AgentEvent(
-                    kind=kind,
-                    message_id=message_id,
-                    room_id=msg.room_id,
-                    agent_id=msg.agent_id or "",
-                    user_id=msg.user_id,
-                    related_message_id=msg.related_message_id,
-                    turn_id=msg.turn_id,
-                    state=target_state,
-                    text=msg.message_content.message_text or "",
-                    artifacts=(
-                        artifacts_to_dicts(task.artifacts) if task.artifacts else None
-                    ),
-                )
-            )
-            return
-
         if await self._message_or_parent_cancelled(msg):
             await self._notify_task_update(
                 message_id=message_id,
@@ -636,42 +512,6 @@ class StaleTaskChecker:
                 task_text = (
                     extract_text_from_artifacts(projected_task.artifacts) or None
                 )
-            if is_terminal_state(current_task.status.state) and (
-                self._terminal_event_handler is not None
-            ):
-                terminal_state = current_task.status.state
-                re_cancelled = await self._is_message_cancelled_for_recovery(message_id)
-                if not re_cancelled and msg.related_message_id:
-                    re_cancelled = await self._is_message_cancelled_for_recovery(
-                        msg.related_message_id
-                    )
-                if re_cancelled or terminal_state == CommonTaskState.CANCELED:
-                    kind = "canceled"
-                elif terminal_state == CommonTaskState.COMPLETED:
-                    kind = "response"
-                else:
-                    kind = "error"
-                await self._terminal_event_handler(
-                    AgentEvent(
-                        kind=kind,
-                        message_id=message_id,
-                        room_id=msg.room_id,
-                        agent_id=msg.agent_id or "",
-                        related_message_id=msg.related_message_id,
-                        user_id=msg.user_id,
-                        client_request_id=msg.client_request_id,
-                        task_id=current_task.id,
-                        context_id=current_task.context_id,
-                        state=getattr(terminal_state, "value", str(terminal_state)),
-                        text=task_text or "",
-                        artifacts=[
-                            artifact.model_dump(mode="json", exclude_none=True)
-                            for artifact in (current_task.artifacts or [])
-                        ]
-                        or None,
-                    )
-                )
-                return
             await self._store.update_task_on_message(
                 message_id,
                 projected_task_data,
@@ -878,7 +718,8 @@ class StaleTaskChecker:
         Null legacy rooms.processing_message_id when there are no non-terminal runs.
 
         Mirrors are no longer written on the lifecycle path; this job clears stale
-        Mongo values using the same predicate as compaction (runs-only busy).
+        Mongo values when the legacy ``runs`` mirror has no non-terminal run for
+        the room.
         """
         try:
             busy_ids = await self._store.get_room_ids_with_non_terminal_runs()

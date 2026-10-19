@@ -421,47 +421,6 @@ class RunCommandHandler:
         )
         return True
 
-    async def append_run_timeout_failure(
-        self,
-        room_id: str,
-        run_id: str,
-        *,
-        stale_minutes: int,
-        _lease_held: bool = False,
-    ) -> dict[str, Any] | None:
-        """Watchdog: fail a stuck non-terminal run.
-
-        Before appending a new RUN_FAILED event, checks run_events for any
-        events ahead of the runs head.  If found (diverged head), projects
-        the head forward instead — avoiding the DuplicateKeyError loop that
-        previously left the run stuck forever.
-        """
-        if self._room_files is not None and not _lease_held:
-            async with self._room_files.write_lease(room_id, "run-watchdog"):
-                return await self.append_run_timeout_failure(
-                    room_id,
-                    run_id,
-                    stale_minutes=stale_minutes,
-                    _lease_held=True,
-                )
-
-        if await self.heal_head_from_events(run_id):
-            return None
-
-        run_doc = await self._runs.find_one({"run_id": run_id})
-        if not run_doc or str(run_doc.get("room_id")) != room_id:
-            return None
-        trigger = str(run_doc.get("trigger_message_id") or run_id)
-        return await self._record_terminal(
-            room_id=room_id,
-            run_id=run_id,
-            trigger_message_id=trigger,
-            client_request_id=run_doc.get("client_request_id"),
-            terminal_state=RunState.FAILED,
-            error_code="RUN_TIMEOUT",
-            error_message=f"No terminal transition within {stale_minutes} minutes",
-        )
-
     async def _ensure_run_exists(
         self,
         *,

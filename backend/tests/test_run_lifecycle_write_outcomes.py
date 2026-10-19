@@ -341,51 +341,42 @@ async def test_concurrent_same_terminal_replays_merge_disjoint_steps_monotonical
 
 
 @pytest.mark.asyncio
-async def test_projected_and_watchdog_terminal_facts_include_delivery_recovery_intent():
-    for source in ("projection", "watchdog"):
-        repository = InMemoryRunRepository([deepcopy(_processing_run())])
-        events = InMemoryRunEventRepository()
-        handler = RunCommandHandler(
-            run_repository=repository,
-            run_event_repository=events,
-        )
-        if source == "projection":
-            payload = await handler.project_run_state(
-                room_id="room-1",
-                run_id="msg-1",
-                trigger_message_id="msg-1",
-                target_state=RunState.CANCELED,
-                terminal_reason="request canceled",
-                causation_id="cancel-fact",
-            )
-            expected_status = "canceled"
-        else:
-            payload = await handler.append_run_timeout_failure(
-                "room-1", "msg-1", stale_minutes=5
-            )
-            expected_status = "failed"
+async def test_projected_terminal_facts_include_delivery_recovery_intent():
+    repository = InMemoryRunRepository([deepcopy(_processing_run())])
+    events = InMemoryRunEventRepository()
+    handler = RunCommandHandler(
+        run_repository=repository,
+        run_event_repository=events,
+    )
+    payload = await handler.project_run_state(
+        room_id="room-1",
+        run_id="msg-1",
+        trigger_message_id="msg-1",
+        target_state=RunState.CANCELED,
+        terminal_reason="request canceled",
+        causation_id="cancel-fact",
+    )
 
-        projection = payload["terminal_projection"]
-        assert projection["canonical_status"] == expected_status
-        assert projection["pending"] is True
-        assert set(projection["steps"]) == {
-            "descendant_cleanup",
-            "run_event_sse",
-            "processing_sse",
-        }
-        assert projection["descendant_cleanup_root_id"] == "msg-1"
-        assert projection["delivery_id"].endswith(":processing")
+    projection = payload["terminal_projection"]
+    assert projection["canonical_status"] == "canceled"
+    assert projection["pending"] is True
+    assert set(projection["steps"]) == {
+        "descendant_cleanup",
+        "run_event_sse",
+        "processing_sse",
+    }
+    assert projection["descendant_cleanup_root_id"] == "msg-1"
+    assert projection["delivery_id"].endswith(":processing")
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_adapter_immediately_finalizes_projected_and_watchdog_facts():
+async def test_lifecycle_adapter_immediately_finalizes_projected_facts():
     payload = {
         "event_id": "evt-1",
         "terminal_projection": {"version": 1},
     }
     command = AsyncMock()
     command.project_run_state.return_value = payload
-    command.append_run_timeout_failure.return_value = payload
     adapter = RunLifecycleAdapter(command, AsyncMock())
     finalizer = AsyncMock()
     adapter.bind_terminal_finalizer(finalizer)
@@ -401,12 +392,8 @@ async def test_lifecycle_adapter_immediately_finalizes_projected_and_watchdog_fa
         )
         == payload
     )
-    assert (
-        await adapter.append_run_timeout_failure("room-1", "msg-2", stale_minutes=5)
-        == payload
-    )
 
-    assert finalizer.finalize.await_count == 2
+    finalizer.finalize.assert_awaited_once_with(payload)
 
 
 @pytest.mark.asyncio

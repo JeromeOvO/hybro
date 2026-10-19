@@ -516,15 +516,6 @@ class RuntimeRepositoryStore:
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
         return await self._task_delegate().get_room_ids_with_non_terminal_runs()
 
-    async def find_stale_non_terminal_runs(
-        self,
-        stale_minutes: int,
-        limit: int = 200,
-    ) -> list[dict]:
-        return await self._task_delegate().find_stale_non_terminal_runs(
-            stale_minutes, limit
-        )
-
     async def get_stale_task_messages(
         self,
         stale_minutes: int,

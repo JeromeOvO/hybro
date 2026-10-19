@@ -2499,8 +2499,8 @@ SSE status and cancellation lookup.
 Background jobs start only after infrastructure and multi-worker safety checks
 pass:
 
-- `stale_task_checker`: recovers stale tasks, orphaned messages, stale HITL,
-  and run watchdog events.
+- `stale_task_checker`: recovers stale tasks, orphaned messages, and stale
+  HITL.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
 - `agent.health.AgentHealthService`: periodic health/liveness support for
@@ -3079,7 +3079,7 @@ election setup.
 
 - `agent_health_service`: health/liveness checks.
 - `stale_task_checker`: expires stale task messages, recovers orphaned
-  processing, handles stale HITL, and emits watchdog run events.
+  processing, and handles stale HITL.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: deletes unused uploads from the local content store.
 

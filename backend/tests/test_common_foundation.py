@@ -859,7 +859,6 @@ def test_protocol_methods_match_design_doc():
         protocols.RuntimeTaskLifecycleStore: {
             "check_task_limits",
             "enable_task_tracking_on_message",
-            "find_stale_non_terminal_runs",
             "generate_webhook_token",
             "get_active_runs_by_room_id",
             "get_and_clear_continuation_on_message",

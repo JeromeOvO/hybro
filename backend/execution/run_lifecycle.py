@@ -109,11 +109,6 @@ class RunLifecycleAdapter:
         if self._terminal_finalizer is not None:
             await self._terminal_finalizer.finalize(payload)
 
-    async def recover_terminal_projections(self, limit: int = 100) -> int:
-        if self._terminal_finalizer is None:
-            return 0
-        return await self._terminal_finalizer.recover_pending(limit=limit)
-
     async def list_incomplete_terminal_projections(self, limit: int = 100):
         return await self._command_handler.list_incomplete_terminal_projections(limit)
 
@@ -164,19 +159,3 @@ class RunLifecycleAdapter:
                     "startup heal: error healing run %s", run_id, exc_info=True
                 )
         return healed
-
-    async def append_run_timeout_failure(
-        self,
-        room_id: str,
-        run_id: str,
-        *,
-        stale_minutes: int,
-    ) -> dict[str, Any] | None:
-        payload = await self._command_handler.append_run_timeout_failure(
-            room_id,
-            run_id,
-            stale_minutes=stale_minutes,
-        )
-        if payload and payload.get("terminal_projection") is not None:
-            await self.finalize_terminal_projection(payload)
-        return payload
