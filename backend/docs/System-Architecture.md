@@ -455,7 +455,7 @@ the methods they call through execution-owned protocols in `execution/ports.py`.
 
 Agent dependency assembly is also container-owned. `container.py` constructs
 `AgentService`, `AgentRouteAdapter`, `AgentMatcher`, `AgentSelectionService`,
-`AgentResolverService`, `AgentHealthService`, `AgentLivenessService`, and
+`AgentHealthService`, `AgentLivenessService`, and
 `AgentInspectionService` from `agent/`; `APIGatewayDeps` receives these
 Agent-owned protocol implementations directly. Agent runtime behavior is owned
 by `agent/`.
@@ -1994,10 +1994,9 @@ This is a repository-internal cleanup, not a compatibility promise for external
 Python consumers. Code importing the removed facade methods, DTOs, model classes,
 or utility functions will fail and must migrate to the narrow public ports and
 canonical event projection/assembly flow. No active in-repository REST or frontend
-call depended on those Python surfaces. The narrow `build_minimal_context` helper
-remains because `conversation.runtime` still calls it in the production fast-routing
-path; canonical ContextMemory assembly, projection, compaction, cleanup,
-`create_room_memory`, and `ensure_room_memory` remain supported.
+call depended on those Python surfaces. Canonical ContextMemory assembly,
+projection, compaction, cleanup, `create_room_memory`, and `ensure_room_memory`
+remain supported.
 
 The generic `extend_info` fields on active Room and message models remain supported
 metadata containers. They are unrelated to ChatContext compatibility and are not

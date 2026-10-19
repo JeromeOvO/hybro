@@ -2,14 +2,13 @@
 
 This module assembles the full ``execution.orchestrator`` runtime from Mongo
 stores, typed settings, and the existing product services. It is imported only
-by ``container.py`` (the composition root) and tests; no route, facade, or job
-may reach it until step 7 wires dual-routing ingress.
+by ``container.py`` (the composition root) and tests; routes, facades, and jobs
+reach the runtime through the container-built adapters.
 
-Construction is failure-isolated at the adapter boundary: missing model routes,
-missing prompt assets, or invalid profile parameters raise
-``OrchestratorCompositionError`` so ``container.py`` can log and continue
-serving the legacy product. Programming errors (broken wiring, wrong types,
-import failures) are intentionally *not* swallowed here.
+The canonical runtime is required. Missing model routes, missing prompt assets,
+or invalid profile parameters raise ``OrchestratorCompositionError``, which
+``container.py`` turns into a startup failure. Programming errors (broken
+wiring, wrong types, import failures) propagate unchanged.
 """
 
 from __future__ import annotations

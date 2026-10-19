@@ -450,53 +450,8 @@ def _value(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
-def _role_value(value: Any) -> str:
-    return str(_value(value))
-
-
 def _representation_value(value: Any) -> str:
     return str(_value(value))
-
-
-def _render_turn_for_context(turn: Any) -> str:
-    if hasattr(turn, "to_context_string"):
-        return turn.to_context_string()
-    if _role_value(getattr(turn, "role", "")) == "user":
-        content = getattr(turn, "content", None) or "[content unavailable]"
-        return f"User: {content}"
-    speaker = getattr(turn, "agent_name", None) or "Agent"
-    content = getattr(turn, "content", None) or "[content unavailable]"
-    return f"{speaker}: {content}"
-
-
-def build_minimal_context(
-    memory_content: MemoryContentLike,
-    current_task: str,
-    max_turns: int = 5,
-) -> str:
-    """
-    Build a minimal context with only the most recent turns.
-    Useful when you want to reduce token usage.
-
-    Args:
-        memory_content: The room's MemoryContent
-        current_task: The current user request
-        max_turns: Maximum number of recent turns to include
-
-    Returns:
-        Minimal context string
-    """
-    parts = []
-
-    # Only include recent turns
-    recent_turns = memory_content.conversation_history[-max_turns:]
-    if recent_turns:
-        for turn in recent_turns:
-            parts.append(_render_turn_for_context(turn))
-        parts.append("")
-
-    parts.append(f"User: {current_task}")
-    return "\n".join(parts)
 
 
 def get_context_stats(room_memory: RoomMemoryLike) -> dict:

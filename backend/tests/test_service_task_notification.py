@@ -116,7 +116,6 @@ def _setup_notifier_mock(notifier):
 
 def _setup_delivery_mock(delivery):
     """Ensure delivery methods are AsyncMock."""
-    delivery.send_processing_status = AsyncMock()
     from execution.dispatch import task_notifications
 
     task_notifications._delivery = delivery
@@ -152,7 +151,6 @@ class TestNotifyTaskUpdate:
             assert result is False
             db.update_last_notified_state.assert_awaited_once_with("msg-1", "completed")
             notifier.send_task_update.assert_not_called()
-            delivery.send_processing_status.assert_not_called()
 
     # --------------------------------------------------------------------- #
     # 2. Proceeds when idempotency DB check raises

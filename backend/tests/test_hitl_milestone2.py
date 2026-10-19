@@ -20,6 +20,7 @@ from models.hitl import (
     HITLRequest,
     HITLResumeCommand,
     HITLResumeCommandStatus,
+    HITLStatus,
 )
 
 
@@ -495,6 +496,70 @@ async def test_batch_records_every_answer_before_single_application():
     assert persistence.claim_hitl_request.await_count == 2
     assert lifecycle.record_interaction_answer.await_count == 2
     coordinator.apply_interaction.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_records_answer_without_application_until_aggregate_ready():
+    request = _request_doc()
+    persistence = MagicMock()
+    persistence.get_hitl_request = AsyncMock(return_value=request)
+    persistence.claim_hitl_request = AsyncMock(return_value=request)
+    partially_answered = _interaction(
+        answer_request_ids=["request-1"],
+        status=HITLInteractionStatus.PARTIALLY_ANSWERED.value,
+    )
+    lifecycle = MagicMock()
+    lifecycle.get_interaction_strict = AsyncMock(
+        side_effect=[_interaction(), partially_answered]
+    )
+    lifecycle.record_interaction_answer = AsyncMock(return_value=partially_answered)
+    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+    coordinator.apply_interaction = AsyncMock()
+
+    with pytest.raises(HITLRoutingFailedError, match="application is not ready"):
+        await coordinator.handle_batch_response(
+            SimpleNamespace(persistence=persistence),
+            room_id="room-1",
+            interaction_id="interaction-1",
+            answers=[{"request_id": "request-1", "user_input": "Market A"}],
+            user_id="user-1",
+        )
+
+    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
+        HITLStatus.ANSWER_RECORDED.value
+    )
+    coordinator.apply_interaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_failed_answer_recording_never_marks_request_responded():
+    request = _request_doc()
+    persistence = MagicMock()
+    persistence.get_hitl_request = AsyncMock(return_value=request)
+    persistence.claim_hitl_request = AsyncMock(return_value=request)
+    lifecycle = MagicMock()
+    lifecycle.get_interaction_strict = AsyncMock(return_value=_interaction())
+    lifecycle.record_interaction_answer = AsyncMock(return_value=None)
+    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
+    coordinator.apply_interaction = AsyncMock()
+
+    with pytest.raises(HITLRoutingFailedError, match="Failed to record"):
+        await coordinator.handle_batch_response(
+            SimpleNamespace(persistence=persistence),
+            room_id="room-1",
+            interaction_id="interaction-1",
+            answers=[{"request_id": "request-1", "user_input": "Market A"}],
+            user_id="user-1",
+        )
+
+    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
+        HITLStatus.ANSWER_RECORDED.value
+    )
+    assert all(
+        call.kwargs.get("status") != HITLStatus.RESPONDED.value
+        for call in persistence.mock_calls
+    )
+    coordinator.apply_interaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio

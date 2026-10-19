@@ -617,33 +617,3 @@ class _FakeMessageCollection:
         if message_id in self.documents:
             raise DuplicateKeyError("message_id")
         self.documents[message_id] = document
-
-
-class _RecordingMessageUpdates:
-    def __init__(self) -> None:
-        self.updates: list[tuple[dict, dict]] = []
-
-    async def update_one(self, query, update, **kwargs):
-        assert kwargs == {"upsert": False}
-        self.updates.append((query, update))
-        return True
-
-
-class _FakeRunsCollection:
-    def __init__(self) -> None:
-        self.documents: dict[str, dict] = {}
-
-    async def update_one(self, query, update, **kwargs):
-        run_id = query["run_id"]
-        existing = self.documents.get(run_id)
-        if existing is not None and existing.get("state") in {
-            "completed",
-            "failed",
-            "canceled",
-        }:
-            raise DuplicateKeyError("run_id")
-        self.documents[run_id] = {**update.get("$set", {}), "run_id": run_id}
-        return True
-
-    async def find_one(self, query):
-        return self.documents.get(query["run_id"])

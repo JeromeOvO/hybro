@@ -437,7 +437,6 @@ def mock_sse_transport():
     transport.cancel_message = MagicMock()
     transport.cancel_message_and_broadcast = AsyncMock()
     transport.clear_cancellation = MagicMock()
-    transport.send_processing_status = AsyncMock()
     transport.get_room_status = MagicMock(return_value={"connections": 0})
     return transport
 

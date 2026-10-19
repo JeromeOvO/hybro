@@ -441,7 +441,6 @@ class TestMessageCancellationFlow:
 
         mock_sse = MagicMock()
         mock_sse.cancel_message_and_broadcast = AsyncMock()
-        mock_sse.send_processing_status = AsyncMock()
 
         mock_hitl = MagicMock()
         mock_hitl.cancel_requests_for_message = AsyncMock()

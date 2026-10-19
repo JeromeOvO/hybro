@@ -30,7 +30,7 @@ def _production_files() -> list[Path]:
     ]
 
 
-def _string_elements(node: ast.Set | ast.List) -> set[str] | None:
+def _string_elements(node: ast.Set | ast.List | ast.Tuple) -> set[str] | None:
     values: set[str] = set()
     for element in node.elts:
         if not (isinstance(element, ast.Constant) and isinstance(element.value, str)):
@@ -66,7 +66,7 @@ def test_no_production_copy_of_the_terminal_run_status_set():
     for path in _production_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Set | ast.List):
+            if not isinstance(node, ast.Set | ast.List | ast.Tuple):
                 continue
             values = _string_elements(node)
             if values is None or not TERMINAL <= values:
