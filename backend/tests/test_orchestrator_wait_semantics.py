@@ -15,14 +15,6 @@ from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from execution.orchestrator.a2a_runtime.ledger import transition_call
 from execution.orchestrator.budget import BudgetPolicy, resumed_deadline_at
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.models import (
@@ -38,6 +30,14 @@ from execution.orchestrator.session import (
     DORMANT_RECOVERY_DELAY,
     DefaultRunFactory,
     schedule_run_recovery,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 from ._orchestrator_a2a_helpers import ledger_record

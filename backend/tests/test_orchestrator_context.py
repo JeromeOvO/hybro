@@ -8,14 +8,6 @@ from execution.orchestrator.compaction import (
     ModelBackedCompactor,
 )
 from execution.orchestrator.context import ContextCompiler, UnresolvedToolBatchError
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.models import (
     AssistantMessage,
@@ -36,6 +28,14 @@ from tests._orchestrator_helpers import (
     final_events,
     make_run,
     user_message,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 

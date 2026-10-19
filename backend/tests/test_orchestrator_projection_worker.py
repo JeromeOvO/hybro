@@ -16,10 +16,6 @@ from dal.orchestrator.projection import (
     _repair_terminal_agent_cards,
 )
 from delivery.snapshot import RoomEventFold
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorEventStore,
-    InMemoryOrchestratorRunStore,
-)
 from execution.orchestrator.models import (
     AssistantMessage,
     DataPart,
@@ -33,6 +29,10 @@ from execution.orchestrator.settlement import (
     TerminalCommitRequest,
     TerminalDecisionFacts,
     commit_terminal_decision,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorEventStore,
+    InMemoryOrchestratorRunStore,
 )
 
 from ._orchestrator_helpers import NOW, make_run

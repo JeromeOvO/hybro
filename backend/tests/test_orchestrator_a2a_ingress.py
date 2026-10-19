@@ -41,9 +41,9 @@ from execution.orchestrator.a2a_runtime.recovery import (
     A2AInboxRecoveryService,
     A2ARecoveryCycle,
 )
-from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
 from execution.orchestrator.kernel import KernelConflict
 from execution.orchestrator.models import TextPart, ToolResult
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
 
 from ._orchestrator_a2a_helpers import ledger_record
 from ._orchestrator_helpers import NOW, make_run

@@ -7,8 +7,8 @@ from copy import deepcopy
 from pymongo.errors import DuplicateKeyError
 
 from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from execution.orchestrator.in_memory import InMemoryOrchestratorEventStore
 from execution.orchestrator.models import OrchestratorEvent
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorEventStore
 
 from ._orchestrator_helpers import NOW
 from .test_orchestrator_a2a_mongo_parity import FakeCollection

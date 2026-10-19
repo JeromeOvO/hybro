@@ -16,9 +16,11 @@ from execution.orchestrator import (
     commit_terminal_decision,
     commit_terminal_status,
 )
-from execution.orchestrator.contract_harness import InMemoryOrchestratorContractHarness
-from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
 from execution.orchestrator.ports import OrchestratorRunStore
+from tests.orchestrator_harness.contract_harness import (
+    InMemoryOrchestratorContractHarness,
+)
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
 
 from ._orchestrator_helpers import NOW, make_run
 

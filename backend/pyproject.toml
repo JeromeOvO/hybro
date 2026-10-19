@@ -101,6 +101,7 @@ ignore = ["E501"]
 # Compatibility lint baseline. Global rules stay enabled so new files and newly
 # introduced violations outside these exact files are still checked.
 "a2a_adapter/artifact_storage.py" = ["C901"]
+"tests/orchestrator_harness/conformance.py" = ["C901"]
 "tests/test_module_room_message_center.py" = ["C901"]
 
 "a2a_adapter/runtime_service.py" = ["C901"]
@@ -134,7 +135,6 @@ ignore = ["E501"]
 "execution/orchestration/room_message_center.py" = ["C901"]
 "execution/orchestration/room_supervisor_service.py" = ["C901"]
 "execution/orchestration/supervisor_executor.py" = ["C901"]
-"execution/orchestrator/conformance.py" = ["C901"]
 "execution/orchestrator/kernel.py" = ["C901"]
 "execution/orchestrator/model_runtime.py" = ["C901"]
 "execution/orchestrator/transcript.py" = ["C901"]

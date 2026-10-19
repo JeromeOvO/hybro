@@ -6,7 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from hashlib import sha256
 
-from .models import (
+from execution.orchestrator.models import (
     DataPart,
     ResolvedTool,
     TextPart,
@@ -18,7 +18,7 @@ from .models import (
     ToolResult,
     ToolSuspension,
 )
-from .ports import CancellationSignal, ParkedInteractionCloseout
+from execution.orchestrator.ports import CancellationSignal, ParkedInteractionCloseout
 
 
 def fake_agent_definitions() -> list[ToolDefinition]:

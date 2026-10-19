@@ -18,7 +18,6 @@ from execution.orchestrator.a2a_runtime.models import AgentToolCandidate
 from execution.orchestrator.a2a_runtime.preparation import (
     RunPreparedInvocationSnapshotReader,
 )
-from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
 from execution.orchestrator.models import (
     AssistantMessage,
     CandidateScopeSnapshot,
@@ -32,6 +31,7 @@ from execution.orchestrator.models import (
     ToolInvocation,
     ToolResult,
 )
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
 
 from ._orchestrator_a2a_helpers import invocation
 from ._orchestrator_helpers import NOW, make_run

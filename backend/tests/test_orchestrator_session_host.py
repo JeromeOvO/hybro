@@ -18,14 +18,6 @@ from execution.orchestrator.a2a_runtime.observations import (
 )
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.models import (
     FrozenToolCatalogSnapshot,
@@ -36,6 +28,14 @@ from execution.orchestrator.models import (
 from execution.orchestrator.public_projection import PublicProjectionTranslator
 from execution.orchestrator.session import DefaultRunFactory, SessionConflict
 from execution.orchestrator_routing import DualRuntimeRouter
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
+)
 
 from ._orchestrator_helpers import (
     NOW,

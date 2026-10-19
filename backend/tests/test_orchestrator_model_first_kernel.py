@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
-from execution.orchestrator.fake_tools import RecordingFakeToolRuntime
 from execution.orchestrator.kernel import (
     KernelConflict,
     _surface_agent_questions_tool_definition,
@@ -43,6 +42,7 @@ from tests._orchestrator_helpers import (
     make_run,
     tool_events,
 )
+from tests.orchestrator_harness.fake_tools import RecordingFakeToolRuntime
 
 
 def _interaction_suspension(

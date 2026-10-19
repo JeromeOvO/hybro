@@ -7,11 +7,6 @@ import pytest
 from execution.orchestrator.budget import BudgetExceeded, BudgetPolicy
 from execution.orchestrator.compaction import DeterministicFakeCompactor
 from execution.orchestrator.context import CompiledContext
-from execution.orchestrator.fake_tools import RecordingFakeToolRuntime
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryRunStoreResult,
-)
 from execution.orchestrator.kernel import KernelConflict
 from execution.orchestrator.models import (
     AssistantMessage,
@@ -39,6 +34,11 @@ from tests._orchestrator_helpers import (
     make_kernel,
     make_run,
     tool_events,
+)
+from tests.orchestrator_harness.fake_tools import RecordingFakeToolRuntime
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryRunStoreResult,
 )
 
 

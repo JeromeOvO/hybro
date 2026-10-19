@@ -7,14 +7,6 @@ import pytest
 
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import KernelRunResult, OrchestratorKernel
 from execution.orchestrator.lifecycle import LifecycleEmitter
 from execution.orchestrator.models import TextPart, ToolObservation, ToolResult
@@ -34,6 +26,14 @@ from tests._orchestrator_helpers import (
     session_config,
     tool_events,
     user_message,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 

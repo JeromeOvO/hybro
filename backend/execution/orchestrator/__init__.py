@@ -6,12 +6,6 @@ from .compaction import (
     DeterministicFakeCompactor,
     ModelBackedCompactor,
 )
-from .conformance import (
-    ProviderConformanceCase,
-    ProviderConformanceError,
-    ProviderConformanceResult,
-    run_provider_conformance,
-)
 from .context import (
     CompiledContext,
     ContextCompiler,
@@ -19,17 +13,6 @@ from .context import (
     UnresolvedToolBatchError,
 )
 from .events import EventAppendEvaluation, evaluate_event_append
-from .fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-    fake_agent_definitions,
-)
-from .in_memory import (
-    InMemoryOrchestratorEventStore,
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-    InMemoryRunStore,
-)
 from .kernel import KernelConflict, KernelRunResult, OrchestratorKernel
 from .lifecycle import LifecycleEmitter, SessionEvent, SessionEventListener
 from .model_runtime import GatewayModelRuntime
@@ -179,16 +162,11 @@ __all__ = [
     "DeterministicTokenEstimator",
     "EventCancellationSignal",
     "GatewayModelRuntime",
-    "InMemoryOrchestratorEventStore",
-    "InMemoryOrchestratorRunStore",
-    "InMemoryProjectionDriver",
-    "InMemoryRunStore",
     "KernelConflict",
     "KernelRunResult",
     "LifecycleEmitter",
     "ModelBackedCompactor",
     "OrchestratorKernel",
-    "RecordingFakeToolRuntime",
     "RoomAgentSession",
     "RoomAgentSessionConfig",
     "SessionConflict",
@@ -196,7 +174,6 @@ __all__ = [
     "SessionEventListener",
     "SessionRunResult",
     "SettlingProjectionDriver",
-    "StaticFakeToolCatalog",
     "TranscriptCorruptionError",
     "UnresolvedToolBatchError",
     "EVENT_TYPES",
@@ -261,9 +238,6 @@ __all__ = [
     "ProjectionProjector",
     "ProjectionSettlementResult",
     "PromptConfiguration",
-    "ProviderConformanceCase",
-    "ProviderConformanceError",
-    "ProviderConformanceResult",
     "PromptSnapshot",
     "RecoveryClaim",
     "ResolvedModelSnapshot",
@@ -303,12 +277,10 @@ __all__ = [
     "evaluate_event_append",
     "evaluate_projection_settlement",
     "evaluate_terminal_decision",
-    "fake_agent_definitions",
     "public_terminal_status",
     "resolve_model_snapshot",
     "resolve_profile_snapshot",
     "resolve_prompt_snapshot",
-    "run_provider_conformance",
     "transition_after_terminal_evaluation",
     "transition_projection_intent",
     "transition_projection_settlement",

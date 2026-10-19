@@ -18,10 +18,10 @@ from pydantic import ValidationError
 
 from dal.orchestrator.artifacts import RoomFilesEpochFencedArtifactOwner
 from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from execution.orchestrator.in_memory import InMemoryOrchestratorEventStore
 from execution.orchestrator.models import OrchestratorRunState
 from execution.orchestrator.ports import OrchestratorEventStore
 from execution.orchestrator.profiles import ProfileConfiguration
+from tests.orchestrator_harness.in_memory import InMemoryOrchestratorEventStore
 
 from ._orchestrator_helpers import make_run
 

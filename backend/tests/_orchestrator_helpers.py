@@ -6,14 +6,6 @@ from datetime import UTC, datetime
 
 from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
-from execution.orchestrator.fake_tools import (
-    RecordingFakeToolRuntime,
-    StaticFakeToolCatalog,
-)
-from execution.orchestrator.in_memory import (
-    InMemoryOrchestratorRunStore,
-    InMemoryProjectionDriver,
-)
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.models import (
     CandidateScopeSnapshot,
@@ -32,6 +24,14 @@ from execution.orchestrator.session import (
     DefaultRunFactory,
     EventCancellationSignal,
     RoomAgentSessionConfig,
+)
+from tests.orchestrator_harness.fake_tools import (
+    RecordingFakeToolRuntime,
+    StaticFakeToolCatalog,
+)
+from tests.orchestrator_harness.in_memory import (
+    InMemoryOrchestratorRunStore,
+    InMemoryProjectionDriver,
 )
 
 NOW = datetime(2030, 1, 1, tzinfo=UTC)

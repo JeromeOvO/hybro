@@ -541,13 +541,13 @@ async def test_surface_selects_one_of_two_durable_private_interactions(  # noqa:
         transition_call,
     )
     from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
-    from execution.orchestrator.fake_tools import StaticFakeToolCatalog
     from execution.orchestrator.models import (
         FrozenToolCatalogEntry,
         FrozenToolCatalogSnapshot,
         ToolObservation,
         ToolResultMessage,
     )
+    from tests.orchestrator_harness.fake_tools import StaticFakeToolCatalog
 
     run = _run_with_retries(0)
     catalog = StaticFakeToolCatalog()
@@ -1608,8 +1608,6 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     from execution.hitl.exceptions import HITLDeliveryUncertainError
     from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
     from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
-    from execution.orchestrator.fake_tools import StaticFakeToolCatalog
-    from execution.orchestrator.in_memory import InMemoryOrchestratorRunStore
     from execution.orchestrator.models import (
         FrozenToolCatalogEntry,
         FrozenToolCatalogSnapshot,
@@ -1619,6 +1617,8 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     from execution.orchestrator.session import DefaultRunFactory
     from execution.orchestrator_routing import DualRuntimeRouter
     from tests._orchestrator_helpers import FixedIDs, ScriptedModelRuntime, user_message
+    from tests.orchestrator_harness.fake_tools import StaticFakeToolCatalog
+    from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
     from tests.test_orchestrator_a2a_hitl_recovery_auth import (
         questionnaire_spec,
         setup_waiting,

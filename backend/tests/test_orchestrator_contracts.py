@@ -31,8 +31,6 @@ from execution.orchestrator import (
     OrchestratorRunStore,
     ProfileConfiguration,
     PromptConfiguration,
-    ProviderConformanceCase,
-    ProviderConformanceError,
     ResolvedModelSnapshot,
     SessionNotice,
     TextPart,
@@ -48,13 +46,17 @@ from execution.orchestrator import (
     evaluate_event_append,
     resolve_model_snapshot,
     resolve_profile_snapshot,
-    run_provider_conformance,
     validate_tool_result_correlation,
 )
 from execution.orchestrator.a2a_runtime.models import AGENT_CALL_STATES
 from execution.orchestrator.a2a_runtime.ports import HITLApplicationPort
 from execution.orchestrator.models import AgentMessage
 from execution.orchestrator.ports import InvocationOutcomeCheckpointReader
+from tests.orchestrator_harness.conformance import (
+    ProviderConformanceCase,
+    ProviderConformanceError,
+    run_provider_conformance,
+)
 
 NOW = datetime(2026, 3, 12, tzinfo=UTC)
 
