@@ -821,7 +821,6 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RuntimeMemoryStore: {
             "get_room_memory_by_room_id",
-            "update_turn_notes",
         },
         protocols.RuntimeMessageStore: {
             "accumulate_artifact_on_message",

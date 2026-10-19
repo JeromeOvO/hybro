@@ -446,7 +446,6 @@ def mock_sse_transport():
 def mock_hitl_service():
     """Create a mock HITL service."""
     mock = MagicMock()
-    mock.handle_response = AsyncMock(return_value={"success": True})
     mock.get_pending_requests = AsyncMock(return_value=[])
     mock.cancel_request = AsyncMock()
     mock.cancel_requests_for_message = AsyncMock()
@@ -562,7 +561,6 @@ def mock_room_center():
     mock.update_room_name = AsyncMock()
     mock.update_room_default_mode = AsyncMock(return_value=True)
     mock.inquiry_room_messages_by_room_id = AsyncMock()
-    mock.send_message_to_room = AsyncMock()
     return mock
 
 

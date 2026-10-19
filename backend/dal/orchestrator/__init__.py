@@ -9,7 +9,6 @@ from .hitl import HITL_INTERACTIONS_COLLECTION, MongoHITLApplicationStore
 from .projection import (
     MongoAppendEventProjector,
     MongoFinalMessageProjector,
-    MongoTerminalRunStatusProjector,
 )
 from .run_store import MongoOrchestratorRunStore, MongoRunStoreResult
 from .stores import (
@@ -37,5 +36,4 @@ __all__ = [
     "MongoOrchestratorRunStore",
     "MongoRunStoreResult",
     "MongoRoomEpochStore",
-    "MongoTerminalRunStatusProjector",
 ]

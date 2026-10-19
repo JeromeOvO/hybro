@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from execution.hitl.service import BoundHITLServiceProxy, HITLService
+from execution.hitl.service import HITLService
 
 
 def create_hitl_service(**kwargs: Any) -> HITLService:
@@ -59,4 +59,4 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
     return service
 
 
-__all__ = ["BoundHITLServiceProxy", "create_hitl_service"]
+__all__ = ["create_hitl_service"]

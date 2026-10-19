@@ -158,27 +158,6 @@ def test_hitl_response_translator_preserves_route_dict_shape():
     assert response.reclaimed is True
 
 
-def test_bound_hitl_service_proxy_raises_before_binding_and_forwards_after_binding():
-    from execution.hitl.factory import BoundHITLServiceProxy
-
-    proxy = BoundHITLServiceProxy()
-    with pytest.raises(RuntimeError):
-        attr_name = "recover_stale_processing"
-        getattr(proxy, attr_name)
-
-    target = MagicMock()
-    target.recover_stale_processing = AsyncMock(return_value=3)
-    proxy.bind(target)
-    assert proxy.recover_stale_processing is target.recover_stale_processing
-
-
-def test_bound_hitl_proxy_class_is_available_without_global_singleton():
-    from execution.hitl.service import BoundHITLServiceProxy
-
-    proxy = BoundHITLServiceProxy()
-    assert proxy._service is None
-
-
 @pytest.mark.asyncio
 async def test_canonical_interaction_cancel_claims_run_before_hitl_mutation():
     order: list[str] = []

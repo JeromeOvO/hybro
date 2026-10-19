@@ -10,94 +10,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
-@pytest.mark.asyncio
-async def test_delivery_compatibility_uses_only_facade_public_api():
-    import inspect
-
-    from delivery.facade import DeliveryCompatibility
-
-    class Facade:
-        delivery_kv_connected = True
-        delivery_pubsub_connected = True
-        redis_connected = True
-        broker_connected = True
-        change_stream_connected = True
-        room_connections = {"room-1": ["conn-1"]}
-
-        def __init__(self) -> None:
-            self.calls = []
-
-        async def open_connection(self, room_id: str):
-            self.calls.append(("open_connection", room_id))
-            return "connection"
-
-        async def remove_connection(self, room_id: str, connection_id: str) -> None:
-            self.calls.append(("remove_connection", room_id, connection_id))
-
-        def get_room_status(self, room_id: str) -> dict:
-            self.calls.append(("get_room_status", room_id))
-            return {"room_id": room_id}
-
-        def is_cancelled(self, message_id: str) -> bool:
-            self.calls.append(("is_cancelled", message_id))
-            return False
-
-        def cancel_message(self, message_id: str) -> None:
-            self.calls.append(("cancel_message", message_id))
-
-        async def cancel_message_and_broadcast(self, message_id: str) -> None:
-            self.calls.append(("cancel_message_and_broadcast", message_id))
-
-        async def check_cancelled(self, message_id: str) -> bool:
-            self.calls.append(("check_cancelled", message_id))
-            return False
-
-        def clear_cancellation(self, message_id: str) -> None:
-            self.calls.append(("clear_cancellation", message_id))
-
-        def create_token(self, message_id: str):
-            self.calls.append(("create_token", message_id))
-            return "token"
-
-        def get_token(self, message_id: str):
-            self.calls.append(("get_token", message_id))
-            return "token"
-
-        def remove_token(self, message_id: str) -> None:
-            self.calls.append(("remove_token", message_id))
-
-        async def start_change_stream_watcher(self) -> None:
-            self.calls.append(("start_change_stream_watcher",))
-
-        async def stop_change_stream_watcher(self) -> None:
-            self.calls.append(("stop_change_stream_watcher",))
-
-        def set_draining(self, draining: bool) -> None:
-            self.calls.append(("set_draining", draining))
-
-        async def refresh_health(self) -> None:
-            self.calls.append(("refresh_health",))
-
-    facade = Facade()
-    compat = DeliveryCompatibility(facade)
-
-    assert await compat.open_connection("room-1") == "connection"
-    await compat.remove_connection("room-1", "conn-1")
-    assert compat.get_room_status("room-1") == {"room_id": "room-1"}
-    assert compat.room_connections == {"room-1": ["conn-1"]}
-    compat.set_draining(True)
-    assert compat.delivery_kv_connected is True
-    assert compat.delivery_pubsub_connected is True
-    await compat.refresh_health()
-    assert compat.redis_connected is True
-    assert compat.broker_connected is True
-
-    source = inspect.getsource(DeliveryCompatibility)
-    assert "._sse_transport" not in source
-    assert "._cancellation_watcher" not in source
-
-
 FORBIDDEN_DELIVERY_ROOTS = {
     "a2a_adapter",
     "agent",
@@ -568,7 +480,7 @@ def _make_facade(redis_kv=None, bus_connected=True):
 
 
 @pytest.mark.asyncio
-async def test_delivery_facade_lifecycle_health_and_compatibility():
+async def test_delivery_facade_lifecycle_and_health():
     redis_kv = _FakeRedisKV(result=True)
     facade, publisher, transport, bus, calls = _make_facade(redis_kv=redis_kv)
 
@@ -579,9 +491,6 @@ async def test_delivery_facade_lifecycle_health_and_compatibility():
     assert facade.delivery_pubsub_connected is True
     assert facade.redis_connected is True
     assert facade.broker_connected is True
-
-    assert await facade.compat.open_connection("room-1") == "connection"
-    assert transport.compat_calls == [("open_connection", "room-1")]
 
     facade.set_draining(True)
     assert transport.draining is True

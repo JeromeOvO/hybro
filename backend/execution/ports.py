@@ -41,7 +41,6 @@ class TaskFactory(Protocol):
 
 
 RunEventEnabled = Callable[[], bool]
-RunDualWriteEnabled = Callable[[], bool]
 ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 
 
@@ -644,9 +643,6 @@ class RateLimitPort(Protocol):
     async def record_request(self, agent_id: str, user_id: str) -> None: ...
 
 
-RoomCoordinatorPort = CoordinatorSynthesisPort
-
-
 class RoomMemoryPort(Protocol):
     async def add_synthesis_to_history(
         self,
@@ -934,52 +930,6 @@ class ExecutionDeliveryPort(Protocol):
         client_request_id: str | None = None,
         delivery_id: str | None = None,
     ) -> bool | None: ...
-
-    async def send_rate_limit_error(
-        self,
-        room_id: str,
-        message_id: str,
-        agent_id: str,
-        reason: str,
-        retry_after_seconds: int | None = None,
-        user_requests_used: int = 0,
-        user_requests_limit: int | None = None,
-        system_requests_used: int = 0,
-        system_requests_limit: int | None = None,
-    ) -> None: ...
-
-    async def send_agent_response(
-        self,
-        room_id: str,
-        message_id: str,
-        agent_id: str,
-        content: str,
-        related_message_id: str | None = None,
-        parts: list[dict[str, Any]] | None = None,
-        client_request_id: str | None = None,
-    ) -> None: ...
-
-    async def send_artifact_update(
-        self,
-        *,
-        room_id: str,
-        message_id: str,
-        agent_id: str,
-        artifact: dict[str, Any],
-        append: bool = False,
-        last_chunk: bool = False,
-        client_request_id: str | None = None,
-    ) -> None: ...
-
-    async def send_error(
-        self,
-        room_id: str,
-        error: str,
-        message_id: str | None = None,
-    ) -> None: ...
-
-
-SSEDeliveryPort = ExecutionDeliveryPort
 
 
 class CancellationControlPort(Protocol):

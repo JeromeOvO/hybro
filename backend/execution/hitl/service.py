@@ -857,27 +857,6 @@ class HITLService:
             client_request_id=client_request_id,
         )
 
-    @_room_write_fenced
-    async def handle_response(
-        self,
-        room_id: str,
-        request_id: str,
-        user_input: str,
-        user_id: str,
-    ) -> dict:
-        """Record one answer through its required persisted interaction."""
-        if self._application is None:
-            raise HITLRoutingFailedError(
-                "HITL responses require lifecycle-bound application"
-            )
-        return await self._application.handle_response(
-            self,
-            room_id=room_id,
-            request_id=request_id,
-            user_input=user_input,
-            user_id=user_id,
-        )
-
     async def _project_completed_hitl_display(
         self,
         *,
@@ -1378,15 +1357,6 @@ class HITLService:
             docs = await self.persistence.get_pending_hitl_requests(room_id)
         return await self._public_pending_requests(docs)
 
-    async def get_pending_requests_for_message(
-        self, user_message_id: str
-    ) -> list[HITLRequest]:
-        """Get pending HITL requests associated with a specific user message."""
-        docs = await self.persistence.get_pending_hitl_requests_for_message(
-            user_message_id
-        )
-        return await self._public_pending_requests(docs)
-
     # ------------------------------------------------------------------
     # Cancellation
     # ------------------------------------------------------------------
@@ -1661,52 +1631,6 @@ class HITLService:
             raise HITLRoutingFailedError("Persisted HITL interaction is missing")
         await self.reconcile_terminal_interaction(interaction)
 
-    async def cancel_interaction(
-        self,
-        interaction_id: str,
-        room_id: str,
-        *,
-        failure_reason: str,
-    ) -> bool:
-        """Fail-closed compensation for an interaction creation/projection error."""
-
-        if self._lifecycle is None:
-            raise HITLRoutingFailedError("HITL lifecycle persistence is required")
-        interaction = await self._lifecycle.get_interaction_strict(interaction_id)
-        if interaction is None:
-            return False
-        if interaction.get("room_id") != room_id:
-            raise HITLRoomMismatchError("Room mismatch")
-        terminal = await self._lifecycle.terminalize_interaction(
-            interaction_id,
-            expected_statuses=[
-                HITLInteractionStatus.MATERIALIZING.value,
-                HITLInteractionStatus.OPEN.value,
-                HITLInteractionStatus.PARTIALLY_ANSWERED.value,
-                HITLInteractionStatus.ANSWERS_RECORDED.value,
-            ],
-            status=HITLInteractionStatus.FAILED.value,
-            reason=failure_reason,
-            member_status=HITLStatus.CANCELED.value,
-            owning_run_terminal_status="failed",
-        )
-        if terminal is None:
-            terminal = await self._lifecycle.get_interaction_strict(interaction_id)
-        if terminal is None:
-            return False
-        if terminal.get("status") == HITLInteractionStatus.FAILED.value:
-            try:
-                await self.reconcile_terminal_interaction(terminal)
-            except (HITLRoutingFailedError, RuntimeError):
-                # A MATERIALIZING aggregate may not have every member yet. Its
-                # terminal aggregate state is still sufficient to prevent opening.
-                logger.warning(
-                    "HITL interaction compensation awaits member reconciliation",
-                    extra={"interaction_id": interaction_id},
-                )
-            return True
-        return False
-
     async def cancel_interaction_by_user(
         self,
         interaction_id: str,
@@ -1796,35 +1720,6 @@ class HITLService:
             owning_run_terminal_reason=(
                 failure_reason or "Human input request was canceled"
             ),
-        )
-
-    async def expire_request(self, request_id: str, room_id: str | None = None) -> None:
-        """Expire the aggregate that owns the public request member."""
-        doc = await self.persistence.get_hitl_request(request_id)
-        if not doc:
-            raise HITLNotFoundError("HITL request not found")
-        request = HITLRequest(
-            **{key: value for key, value in doc.items() if key != "_id"}
-        )
-        if room_id is not None and request.room_id != room_id:
-            raise HITLRoomMismatchError("Room mismatch")
-        if request.status == HITLStatus.EXPIRED:
-            await self._reconcile_terminal_request(
-                request, event_type=HITLEventType.INPUT_EXPIRED
-            )
-            return
-        if request.status not in {
-            HITLStatus.PENDING,
-            HITLStatus.PROCESSING,
-            HITLStatus.ANSWER_RECORDED,
-        }:
-            return
-        await self._terminalize_interaction_requests(
-            request,
-            status=HITLStatus.EXPIRED,
-            event_type=HITLEventType.INPUT_EXPIRED,
-            owning_run_terminal_status="failed",
-            owning_run_terminal_reason="Human input request expired",
         )
 
     async def cancel_requests_for_message(
@@ -1925,7 +1820,7 @@ class HITLService:
         """Recover HITL requests stuck in 'processing' after a crash.
 
         For each stale request, checks the ``routing_completed_at`` field
-        (set by handle_response immediately after successful routing):
+        (no current path sets it; older documents may carry it):
         - Field is set   -> finalize to 'responded' (routing succeeded,
           only the status write was lost)
         - Field is absent -> revert to 'pending' (routing never completed,
@@ -2262,19 +2157,3 @@ class HITLService:
         result = self.delivery.emit(event)
         if inspect.isawaitable(result):
             await result
-
-
-class BoundHITLServiceProxy:
-    def __init__(self) -> None:
-        self._service: HITLService | None = None
-
-    def bind(self, service: HITLService) -> None:
-        self._service = service
-
-    def _require_service(self) -> HITLService:
-        if self._service is None:
-            raise RuntimeError("HITLService has not been bound at startup")
-        return self._service
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._require_service(), name)

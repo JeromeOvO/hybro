@@ -17,7 +17,7 @@ from common.types import (
 )
 from conversation.runtime import ConversationRuntime
 from conversation.timeline_projection import RoomTimelineProjector
-from models.request import RoomCenterRoomMessageRequest, RoomCenterUserMessageRequest
+from models.request import RoomCenterRoomMessageRequest
 from models.room import (
     MessageContent,
     RoomAgentMessage,
@@ -77,67 +77,6 @@ def _make_msg_with_attachment(file_id="f1"):
         message_type="user",
         message_content=MessageContent(message_text="hi", attachments=[att]),
     )
-
-
-class TestMessageRetrieval:
-    async def test_stable_authenticated_url_is_returned(self, conversation_runtime):
-        msg = _make_msg_with_attachment()
-        facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
-        conversation_runtime.bind_facade(facade)
-
-        result = await conversation_runtime.inquiry_user_messages_by_room_id(
-            RoomCenterUserMessageRequest(room_id="room1")
-        )
-
-        assert result.success
-        assert (
-            result.message_list[0].message_content.attachments[0].file_url
-            == "/api/v1/files/f1/content"
-        )
-
-    async def test_stable_urls_are_derived_for_each_attachment(
-        self,
-        conversation_runtime,
-    ):
-        first = _make_msg_with_attachment("f1")
-        second = _make_msg_with_attachment("f2")
-        second.message_id = "msg2"
-        second.message_content.attachments[0].file_id = "f2"
-        second.message_content.attachments[0].file_name = "diagram.png"
-        facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[first, second])
-        conversation_runtime.bind_facade(facade)
-
-        result = await conversation_runtime.inquiry_user_messages_by_room_id(
-            RoomCenterUserMessageRequest(room_id="room1")
-        )
-
-        assert result.success
-        assert [
-            message.message_content.attachments[0].file_url
-            for message in result.message_list
-        ] == [
-            "/api/v1/files/f1/content",
-            "/api/v1/files/f2/content",
-        ]
-
-    async def test_no_attachments_no_s3_call(self, conversation_runtime):
-        msg = RoomUserMessage(
-            room_id="room1",
-            message_id="msg1",
-            message_type="user",
-            message_content=MessageContent(message_text="hi"),
-        )
-        facade = MagicMock()
-        facade.get_user_messages_for_room = AsyncMock(return_value=[msg])
-        conversation_runtime.bind_facade(facade)
-
-        result = await conversation_runtime.inquiry_user_messages_by_room_id(
-            RoomCenterUserMessageRequest(room_id="room1")
-        )
-
-        assert result.success
 
 
 class TestRoomMessageRetrieval:

@@ -39,14 +39,12 @@ from conversation.user_message_persistence import (
 )
 from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
-    RoomCenterAgentMessageRequest,
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
 from models.response import (
     RoomCenterActiveRunsResponse,
-    RoomCenterAgentMessageResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterUserMessageResponse,
     ScopeResolutionError,
@@ -650,27 +648,6 @@ class ConversationRuntime:
             status_code=200,
         )
 
-    async def send_message_to_room(
-        self,
-        request: RoomCenterUserMessageRequest,
-        target_group: str = "room_team",
-        mentioned_agent_ids: list[str] | None = None,
-        *,
-        idempotency_fingerprint: str | None = None,
-        idempotency_fingerprint_version: int | None = None,
-    ) -> RoomCenterUserMessageResponse:
-        """Add and parse user message to room and return execution preflight metadata."""
-        persisted_response, preflight_context = await self.persist_message_to_room(
-            request,
-            target_group,
-            mentioned_agent_ids,
-            idempotency_fingerprint=idempotency_fingerprint,
-            idempotency_fingerprint_version=idempotency_fingerprint_version,
-        )
-        if preflight_context is None:
-            return persisted_response
-        return await self.run_message_preflight_to_room(preflight_context)
-
     async def persist_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
@@ -1235,7 +1212,7 @@ class ConversationRuntime:
     def _validate_send_message_request(
         self, request: RoomCenterUserMessageRequest
     ) -> RoomCenterUserMessageResponse | None:
-        """Validate required fields for send_message_to_room."""
+        """Validate required fields for a user message send."""
         if request.room_id is None:
             return RoomCenterUserMessageResponse(
                 message_id=None,
@@ -1528,147 +1505,6 @@ class ConversationRuntime:
                 message=error_msg,
             ),
             status_code=400,
-        )
-
-    async def update_agent_message_by_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse:
-        if request.message_id is None:
-            return RoomCenterAgentMessageResponse(
-                message=None,
-                success=False,
-                error="Message id is required",
-                status_code=400,
-            )
-
-        message_id = request.message_id
-        message = request.message
-        if message is None:
-            return RoomCenterAgentMessageResponse(
-                message=None,
-                success=False,
-                error="Message is required",
-                status_code=400,
-            )
-
-        update_message_success = await self._require_facade().update_agent_message(
-            message_id,
-            message,
-        )
-        if update_message_success:
-            return RoomCenterAgentMessageResponse(
-                message=message, success=True, error=None, status_code=200
-            )
-        else:
-            return RoomCenterAgentMessageResponse(
-                message=None,
-                success=False,
-                error="Failed to update message",
-                status_code=500,
-            )
-
-    async def inquiry_user_messages_by_room_id(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse:
-        if request.room_id is None:
-            return RoomCenterUserMessageResponse(
-                message_list=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        messages = await self._require_facade().get_user_messages_for_room(room_id)
-
-        for msg in messages:
-            if msg.message_content and msg.message_content.attachments:
-                for att in msg.message_content.attachments:
-                    try:
-                        room_files = self.room_files
-                    except RuntimeError:
-                        room_files = None
-                    att.file_url = (
-                        await room_files.get_url(att.file_id)
-                        if room_files is not None
-                        else att.file_url or f"/api/v1/files/{att.file_id}/content"
-                    )
-
-        return RoomCenterUserMessageResponse(
-            message_list=messages, success=True, error=None, status_code=200
-        )
-
-    async def inquiry_agent_messages_by_room_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse:
-        if request.room_id is None:
-            return RoomCenterAgentMessageResponse(
-                message_list=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        messages = await self._require_facade().get_agent_messages_for_room(room_id)
-
-        return RoomCenterAgentMessageResponse(
-            message_list=messages, success=True, error=None, status_code=200
-        )
-
-    async def inquiry_agent_message_by_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse:
-        if request.message_id is None:
-            return RoomCenterAgentMessageResponse(
-                message=None,
-                success=False,
-                error="Message id is required",
-                status_code=400,
-            )
-
-        message_id = request.message_id
-        message = await self._require_facade().get_agent_message_model(message_id)
-        return RoomCenterAgentMessageResponse(
-            message=message, success=True, error=None, status_code=200
-        )
-
-    async def inquiry_user_message_by_message_id(
-        self, request: RoomCenterUserMessageRequest
-    ) -> RoomCenterUserMessageResponse:
-        if request.message_id is None:
-            return RoomCenterUserMessageResponse(
-                message=None,
-                success=False,
-                error="Message id is required",
-                status_code=400,
-            )
-
-        message_id = request.message_id
-        message = await self._require_facade().get_user_message_model(message_id)
-        return RoomCenterUserMessageResponse(
-            message=message, success=True, error=None, status_code=200
-        )
-
-    async def inquiry_agent_messages_by_related_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse:
-        if request.related_message_id is None:
-            return RoomCenterAgentMessageResponse(
-                message_list=None,
-                success=False,
-                error="Related message id is required",
-                status_code=400,
-            )
-
-        related_message_id = request.related_message_id
-        messages = (
-            await self._require_facade().get_agent_messages_by_related_message_id(
-                related_message_id
-            )
-        )
-        return RoomCenterAgentMessageResponse(
-            message_list=messages, success=True, error=None, status_code=200
         )
 
     async def inquiry_room_messages_by_room_id(

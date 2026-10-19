@@ -6,11 +6,9 @@ Tests cover:
 """
 
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 
-from common.config import settings
 from common.utils.time import utcnow
 from delivery.sse.connection import SSEConnection
 from tests.fakes.delivery import make_delivery_facade
@@ -88,85 +86,3 @@ class TestDeliveryFacadeConnections:
 
         await mgr.remove_connection("room-1", conn.connection_id)
         assert "room-1" not in mgr.room_connections
-
-    @pytest.mark.asyncio
-    async def test_typed_helper_delivers_to_all_connections(self):
-        mgr = make_delivery_facade()
-        c1 = await mgr.add_connection("room-1")
-        c2 = await mgr.add_connection("room-1")
-
-        await mgr.send_processing_status("room-1", "processing", "msg-1")
-
-        for conn in [c1, c2]:
-            parsed = await conn.queue.get()
-            assert parsed["type"] == "processing_status"
-            assert parsed["data"]["message_id"] == "msg-1"
-
-    @pytest.mark.asyncio
-    async def test_typed_helper_to_empty_room_is_noop(self):
-        mgr = make_delivery_facade()
-        await mgr.send_processing_status("nonexistent", "processing", "msg-1")
-
-        # =============================================================================
-        # send_processing_status client_request_id Tests
-        # =============================================================================
-
-
-class TestSendProcessingStatusClientRequestId:
-    """Tests that client_request_id is included/omitted correctly in SSE payload."""
-
-    @pytest.mark.asyncio
-    async def test_send_processing_status_includes_client_request_id(self):
-        mgr = make_delivery_facade()
-        conn = await mgr.add_connection("room-1")
-
-        await mgr.send_processing_status(
-            "room-1", "processing", "msg-1", client_request_id="cr-abc"
-        )
-
-        parsed = await conn.queue.get()
-        assert parsed["type"] == "processing_status"
-        assert parsed["data"]["client_request_id"] == "cr-abc"
-        assert parsed["data"]["message_id"] == "msg-1"
-
-    @pytest.mark.asyncio
-    async def test_send_processing_status_omits_client_request_id_when_none(self):
-        mgr = make_delivery_facade()
-        conn = await mgr.add_connection("room-1")
-
-        await mgr.send_processing_status("room-1", "processing", "msg-1")
-
-        parsed = await conn.queue.get()
-        assert parsed["type"] == "processing_status"
-        assert "client_request_id" not in parsed["data"]
-
-    @pytest.mark.asyncio
-    async def test_send_processing_status_does_not_record_or_emit_run_event(
-        self, monkeypatch
-    ):
-        import execution.run_command_handler as handler_mod
-
-        mgr = make_delivery_facade()
-        conn = await mgr.add_connection("room-1")
-        record = AsyncMock(
-            return_value={
-                "event_id": "evt-1",
-                "run_id": "msg-1",
-                "seq": 1,
-                "type": "RUN_STARTED",
-                "payload": {},
-            }
-        )
-        monkeypatch.setattr(settings, "feature_run_event_sse", True)
-        monkeypatch.setattr(
-            handler_mod.run_command_handler,
-            "record_processing_status",
-            record,
-        )
-
-        await mgr.send_processing_status("room-1", "processing", "msg-1")
-
-        record.assert_not_awaited()
-        parsed = await conn.queue.get()
-        assert parsed["type"] == "processing_status"
-        assert conn.queue.empty()

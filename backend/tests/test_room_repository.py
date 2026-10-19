@@ -1091,56 +1091,6 @@ async def test_runtime_store_task_tracking_noop_successes_by_readback():
 
 
 @pytest.mark.asyncio
-async def test_runtime_store_memory_write_uses_room_repository():
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    class RoomRepositoryWithTurnNotes:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, str, dict]] = []
-
-        async def update_turn_notes(
-            self,
-            room_id: str,
-            turn_id: str,
-            turn_notes: dict,
-        ) -> bool:
-            self.calls.append((room_id, turn_id, deepcopy(turn_notes)))
-            return True
-
-    class FailingRoomRepository:
-        async def update_turn_notes(self, *args, **kwargs):
-            raise RuntimeError("database down")
-
-    room_repository = RoomRepositoryWithTurnNotes()
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=room_repository,
-        message_repository=object(),
-        agent_repository=object(),
-    )
-
-    turn_notes = {"summary": "note"}
-    assert await store.update_turn_notes("room-1", "turn-1", turn_notes) is True
-    assert room_repository.calls == [("room-1", "turn-1", turn_notes)]
-
-    no_method_store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-    assert await no_method_store.update_turn_notes("room-1", "turn-1", {}) is False
-
-    failing_store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=FailingRoomRepository(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-    assert await failing_store.update_turn_notes("room-1", "turn-1", {}) is False
-
-
-@pytest.mark.asyncio
 async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     from common.dto import (
         RuntimeMessageContent,

@@ -5,7 +5,6 @@ from time import monotonic
 from typing import Any
 from uuid import uuid4
 
-from agent.repository.capability_issue_mongo import AgentCapabilityIssueMongoRepository
 from common.config import settings
 from common.utils.time import utcnow
 from models.agent import AgentCapabilityIssue, IssueStatus
@@ -157,21 +156,10 @@ class AgentCapabilityIssueServiceAdapter:
         """Backwards-compat binder retained for phased migration."""
         self._service = AgentCapabilityIssueService(repository=repository)
 
-    def bind_mongo(
-        self, mongo: Any, collection_name: str = "agent_capability_issues"
-    ) -> None:
-        """Bind a MongoDAL directly."""
-        self.bind_repository(
-            AgentCapabilityIssueMongoRepository(
-                mongo=mongo,
-                collection_name=collection_name,
-            )
-        )
-
     def _get_service(self) -> AgentCapabilityIssueService:
         if self._service is None:
             raise AgentCapabilityIssueServiceNotBound(
-                "Capability-issue service is not bound. Call bind_repository/bind_mongo "
+                "Capability-issue service is not bound. Call bind_repository "
                 "during startup before resolution paths use it."
             )
         return self._service

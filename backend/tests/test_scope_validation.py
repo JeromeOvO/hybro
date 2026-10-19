@@ -68,6 +68,18 @@ def _make_room(room_id="room-1", owner_id="user-1", agent_set=None, extend_info=
     return room
 
 
+async def _send(
+    room_center, request, target_group="room_team", mentioned_agent_ids=None
+):
+    """Persist, then run preflight, as Execution does for one send."""
+    response, context = await room_center.persist_message_to_room(
+        request, target_group, mentioned_agent_ids
+    )
+    if context is None:
+        return response
+    return await room_center.run_message_preflight_to_room(context)
+
+
 # =============================================================================
 # _validate_canonical_mentions Tests
 # =============================================================================
@@ -390,7 +402,8 @@ class TestPrePersistScopeValidation:
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
 
-        result = await room_center.send_message_to_room(
+        result = await _send(
+            room_center,
             request,
             target_group="room_team",
             mentioned_agent_ids=["ghost-agent"],
@@ -417,7 +430,8 @@ class TestPrePersistScopeValidation:
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
 
-        result = await room_center.send_message_to_room(
+        result = await _send(
+            room_center,
             request,
             target_group="room_team",
             mentioned_agent_ids=None,
@@ -445,7 +459,8 @@ class TestPrePersistScopeValidation:
         room_center._resolve_and_apply_attachments = AsyncMock(return_value=None)
         room_center._persist_user_message = AsyncMock(return_value=True)
 
-        result = await room_center.send_message_to_room(
+        result = await _send(
+            room_center,
             request,
             target_group="nonexistent-group",
             mentioned_agent_ids=None,
@@ -536,19 +551,17 @@ class TestInlineMentionBehavior:
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         room_center.cancellation_control.create_token = MagicMock(return_value=None)
         room_center.cancellation_control.check_cancelled = AsyncMock(return_value=False)
-        handle_mentions = AsyncMock()
         prepare_orchestration = AsyncMock(return_value=ParseResult(success=True))
-        room_center._handle_mentions_flow = handle_mentions
         room_center._prepare_orchestration_envelope = prepare_orchestration
 
-        result = await room_center.send_message_to_room(
+        result = await _send(
+            room_center,
             request,
             target_group="room_team",
             mentioned_agent_ids=None,
         )
 
         assert result.success is True
-        handle_mentions.assert_not_awaited()
         assert prepare_orchestration.await_args.kwargs["explicit_mentions"] == [
             {
                 "agent_id": "a1",
@@ -614,7 +627,8 @@ class TestAllAgentsPostPersistMessageId:
         room_center._resolve_explicit_target_scope = AsyncMock(
             return_value=error_response
         )
-        result = await room_center.send_message_to_room(
+        result = await _send(
+            room_center,
             request,
             target_group="all_agents",
             mentioned_agent_ids=None,
@@ -638,7 +652,7 @@ class TestClientRequestIdPropagation:
     """Verify client_request_id stays on the request message for execution preflight."""
 
     @pytest.mark.asyncio
-    async def test_send_message_to_room_preserves_client_request_id_for_execution_preflight(
+    async def test_send_preserves_client_request_id_for_execution_preflight(
         self, room_center
     ):
         room = _make_room(agent_set={"a1": "Alpha"})
@@ -686,7 +700,8 @@ class TestClientRequestIdPropagation:
             return_value=error_response
         )
 
-        result = await room_center.send_message_to_room(
+        result = await _send(
+            room_center,
             request,
             target_group="all_agents",
             mentioned_agent_ids=None,

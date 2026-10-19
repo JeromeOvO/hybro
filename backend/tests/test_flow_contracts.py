@@ -33,7 +33,6 @@ from models.response import (
     AgentCenterResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
-    RoomCenterUserMessageResponse,
 )
 from models.room import MessageContent, Room, RoomUserMessage
 
@@ -106,12 +105,6 @@ class TestRoomLifecycleFlow:
         )
         mock_rc.inquiry_room_setting = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(success=True, room=mock_room)
-        )
-        mock_rc.send_message_to_room = AsyncMock(
-            return_value=RoomCenterUserMessageResponse(
-                success=True,
-                message_id=message_id,
-            )
         )
         mock_rc.update_room_default_mode = AsyncMock(return_value=True)
         mock_rc.inquiry_room_messages_by_room_id = AsyncMock(

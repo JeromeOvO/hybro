@@ -747,7 +747,7 @@ def test_manifest_paths_do_not_reference_deleted_packages() -> None:
     assert not deleted_paths
 
 
-def test_delivery_facade_processing_status_has_no_run_lifecycle_side_effects() -> None:
+def test_delivery_facade_does_not_import_run_lifecycle() -> None:
     if os.environ.get("PHASE7A_ALLOW_LEGACY_SSE_MANAGER") == "1":
         return
 
@@ -762,32 +762,3 @@ def test_delivery_facade_processing_status_has_no_run_lifecycle_side_effects() -
             forbidden_imports.extend(alias.name for alias in node.names)
     assert "run_command_handler" not in forbidden_imports
     assert "run_event_sse_enabled" not in forbidden_imports
-
-    send_func: ast.AsyncFunctionDef | None = None
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.AsyncFunctionDef)
-            and node.name == "send_processing_status"
-        ):
-            send_func = node
-            break
-    assert send_func is not None
-
-    for node in ast.walk(send_func):
-        if (
-            isinstance(node, ast.Call)
-            and _call_name(node) == "record_processing_status"
-        ):
-            raise AssertionError(
-                f"send_processing_status still records lifecycle at line {node.lineno}"
-            )
-        if isinstance(node, ast.Call) and _call_name(node) == "emit_to_room":
-            event_type = _arg_or_kw(node, 1, "message_type")
-            if isinstance(event_type, ast.Constant) and event_type.value == "run_event":
-                raise AssertionError(
-                    f"send_processing_status still emits run_event at line {node.lineno}"
-                )
-        if isinstance(node, ast.Call) and _call_name(node) == "run_event_sse_enabled":
-            raise AssertionError(
-                f"send_processing_status still checks run_event_sse_enabled at line {node.lineno}"
-            )

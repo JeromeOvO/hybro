@@ -20,7 +20,6 @@ from models.hitl import (
     HITLRequest,
     HITLResumeCommand,
     HITLResumeCommandStatus,
-    HITLStatus,
 )
 
 
@@ -269,89 +268,6 @@ async def test_pending_projection_validates_complete_inventory_then_hides_respon
 
     assert [request.request_id for request in result] == ["request-2"]
     assert persistence.get_hitl_request.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_partial_group_records_answer_without_application():
-    request = _request_doc(interaction_id="group-1", group_total=2, group_index=0)
-    request_2 = _request_doc(
-        request_id="request-2",
-        interaction_id="group-1",
-        group_total=2,
-        group_index=1,
-    )
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(
-        side_effect=lambda request_id: (
-            request if request_id == "request-1" else request_2
-        )
-    )
-    persistence.claim_hitl_request = AsyncMock(return_value=request)
-    lifecycle = MagicMock()
-    lifecycle.get_interaction_strict = AsyncMock(
-        return_value=_interaction(
-            interaction_id="group-1",
-            request_ids=["request-1", "request-2"],
-            required_request_ids=["request-1", "request-2"],
-            expected_request_count=2,
-        )
-    )
-    lifecycle.record_interaction_answer = AsyncMock(
-        return_value=_interaction(
-            interaction_id="group-1",
-            request_ids=["request-1", "request-2"],
-            required_request_ids=["request-1", "request-2"],
-            expected_request_count=2,
-            answer_request_ids=["request-1"],
-            status=HITLInteractionStatus.PARTIALLY_ANSWERED.value,
-        )
-    )
-    lifecycle.claim_interaction_application = AsyncMock()
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-    service = SimpleNamespace(persistence=persistence)
-
-    result = await coordinator.handle_response(
-        service,
-        room_id="room-1",
-        request_id="request-1",
-        user_input="Market A",
-        user_id="user-1",
-    )
-
-    assert result["status"] == "accepted"
-    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
-        HITLStatus.ANSWER_RECORDED.value
-    )
-    lifecycle.claim_interaction_application.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_crash_after_answer_recording_never_marks_request_responded():
-    request = _request_doc()
-    persistence = MagicMock()
-    persistence.get_hitl_request = AsyncMock(return_value=request)
-    persistence.claim_hitl_request = AsyncMock(return_value=request)
-    lifecycle = MagicMock()
-    lifecycle.get_interaction_strict = AsyncMock(return_value=_interaction())
-    lifecycle.record_interaction_answer = AsyncMock(return_value=None)
-    coordinator = HITLApplicationCoordinator(lifecycle=lifecycle)
-
-    with pytest.raises(HITLRoutingFailedError):
-        await coordinator.handle_response(
-            SimpleNamespace(persistence=persistence),
-            room_id="room-1",
-            request_id="request-1",
-            user_input="Market A",
-            user_id="user-1",
-        )
-
-    assert persistence.claim_hitl_request.await_args.kwargs["status"] == (
-        HITLStatus.ANSWER_RECORDED.value
-    )
-    assert all(
-        call.kwargs.get("status") != HITLStatus.RESPONDED.value
-        for call in persistence.mock_calls
-    )
 
 
 @pytest.mark.asyncio

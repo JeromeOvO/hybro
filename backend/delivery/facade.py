@@ -5,12 +5,8 @@ from typing import Any
 from cachetools import TTLCache
 
 from common.dto import (
-    AgentMessageFinal,
-    ArtifactUpdateEvent,
     DeliveryEmitStatus,
     DeliveryEvent,
-    ErrorEvent,
-    ProcessingStatusEvent,
     TaskSubmittedEvent,
     TaskUpdateEvent,
 )
@@ -23,58 +19,6 @@ logger = get_logger(__name__)
 
 def _enum_value(value: Any) -> Any:
     return value.value if isinstance(value, Enum) else value
-
-
-class DeliveryCompatibility:
-    def __init__(self, facade: "DeliveryFacade") -> None:
-        self._facade = facade
-
-    async def open_connection(self, room_id: str) -> Any:
-        return await self._facade.open_connection(room_id)
-
-    async def remove_connection(self, room_id: str, connection_id: str) -> None:
-        await self._facade.remove_connection(room_id, connection_id)
-
-    def get_room_status(self, room_id: str) -> dict:
-        return self._facade.get_room_status(room_id)
-
-    @property
-    def room_connections(self) -> dict:
-        return self._facade.room_connections
-
-    async def start_redis_service(self, redis_service: Any | None = None) -> None:
-        return None
-
-    async def stop_redis_service(self) -> None:
-        return None
-
-    async def start_event_broker(self, broker: Any | None = None) -> None:
-        return None
-
-    async def stop_event_broker(self) -> None:
-        return None
-
-    def set_draining(self, draining: bool) -> None:
-        self._facade.set_draining(draining)
-
-    @property
-    def delivery_kv_connected(self) -> bool:
-        return self._facade.delivery_kv_connected
-
-    @property
-    def delivery_pubsub_connected(self) -> bool:
-        return self._facade.delivery_pubsub_connected
-
-    async def refresh_health(self) -> None:
-        await self._facade.refresh_health()
-
-    @property
-    def redis_connected(self) -> bool:
-        return self._facade.redis_connected
-
-    @property
-    def broker_connected(self) -> bool:
-        return self._facade.broker_connected
 
 
 class DeliveryFacade:
@@ -96,7 +40,6 @@ class DeliveryFacade:
         self._redis_kv = redis_kv
         self.config = config
         self.instance_id = instance_id
-        self.compat = DeliveryCompatibility(self)
         self._delivery_kv_connected = False
         self._delivery_pubsub_connected = False
         self._started = False
@@ -180,154 +123,6 @@ class DeliveryFacade:
         await self._event_bus.stop()
         await self._close_kv_once()
         self._started = False
-
-    async def send_agent_response(
-        self,
-        room_id: str,
-        message_id: str,
-        agent_id: str,
-        content: str,
-        related_message_id: str | None = None,
-        parts: list[dict] | None = None,
-        client_request_id: str | None = None,
-    ) -> None:
-        content_payload: dict[str, Any] = {
-            "content": content,
-            "related_message_id": related_message_id,
-        }
-        if client_request_id:
-            content_payload["client_request_id"] = client_request_id
-        if parts:
-            content_payload["parts"] = parts
-        delivered = await self.emit(
-            AgentMessageFinal(
-                room_id=room_id,
-                message_id=message_id,
-                agent_id=agent_id,
-                content=content_payload,
-            )
-        )
-        self._record_terminal_delivery(
-            room_id=room_id,
-            message_id=message_id,
-            outcome="completed" if delivered else "delivery_failed",
-            terminal_kind="agent_message_final",
-            agent_id=agent_id,
-        )
-
-    async def send_error(
-        self,
-        room_id: str,
-        error: str,
-        message_id: str | None = None,
-    ) -> None:
-        delivered = await self.emit(
-            ErrorEvent(room_id=room_id, error=error, message_id=message_id)
-        )
-        if message_id:
-            self._record_terminal_delivery(
-                room_id=room_id,
-                message_id=message_id,
-                outcome="error" if delivered else "delivery_failed",
-                terminal_kind="error",
-            )
-
-    async def send_rate_limit_error(
-        self,
-        room_id: str,
-        message_id: str,
-        agent_id: str,
-        reason: str,
-        retry_after_seconds: int | None = None,
-        user_requests_used: int = 0,
-        user_requests_limit: int | None = None,
-        system_requests_used: int = 0,
-        system_requests_limit: int | None = None,
-    ) -> None:
-        if message_id:
-            self._delivery_started_at.setdefault(
-                (room_id, message_id),
-                time.perf_counter(),
-            )
-        delivered = await self.emit(
-            ErrorEvent(
-                room_id=room_id,
-                error=reason,
-                error_type="rate_limit_exceeded",
-                message_id=message_id,
-                agent_id=agent_id,
-                retry_after_seconds=retry_after_seconds,
-                user_requests_used=user_requests_used,
-                user_requests_limit=user_requests_limit,
-                system_requests_used=system_requests_used,
-                system_requests_limit=system_requests_limit,
-            )
-        )
-        self._record_terminal_delivery(
-            room_id=room_id,
-            message_id=message_id,
-            outcome="rate_limited" if delivered else "delivery_failed",
-            terminal_kind="rate_limit_error",
-            agent_id=agent_id,
-        )
-
-    async def send_artifact_update(
-        self,
-        room_id: str,
-        message_id: str,
-        agent_id: str,
-        artifact: Any,
-        append: bool = False,
-        last_chunk: bool = False,
-        client_request_id: str | None = None,
-    ) -> None:
-        await self.emit(
-            ArtifactUpdateEvent(
-                room_id=room_id,
-                message_id=message_id,
-                agent_id=agent_id,
-                artifact=artifact,
-                append=append,
-                last_chunk=last_chunk,
-                client_request_id=client_request_id,
-            )
-        )
-
-    async def send_processing_status(
-        self,
-        room_id: str,
-        status: Any,
-        message_id: str | None = None,
-        details: Any = None,
-        related_message_id: str | None = None,
-        client_request_id: str | None = None,
-        agents: list[dict] | None = None,
-    ) -> None:
-        delivered = await self.emit(
-            ProcessingStatusEvent(
-                room_id=room_id,
-                message_id=message_id,
-                status=_enum_value(status),
-                details=(
-                    details
-                    if isinstance(details, dict)
-                    else {"message": details}
-                    if isinstance(details, str)
-                    else None
-                ),
-                related_message_id=related_message_id,
-                client_request_id=client_request_id,
-                agents=agents,
-            )
-        )
-        normalized_status = str(_enum_value(status)).lower()
-        if message_id and normalized_status in self.config.terminal_processing_statuses:
-            self._record_terminal_delivery(
-                room_id=room_id,
-                message_id=message_id,
-                outcome=normalized_status if delivered else "delivery_failed",
-                terminal_kind="processing_status",
-            )
 
     async def send_task_submitted(
         self,
@@ -484,4 +279,4 @@ class DeliveryFacade:
         )
 
 
-__all__ = ["DeliveryCompatibility", "DeliveryFacade"]
+__all__ = ["DeliveryFacade"]

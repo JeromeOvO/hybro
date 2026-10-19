@@ -523,6 +523,3 @@ class RuntimeMemoryStore(Protocol):
     async def get_room_memory_by_room_id(
         self, room_id: str
     ) -> RuntimeRoomMemory | None: ...
-    async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
-    ) -> bool: ...

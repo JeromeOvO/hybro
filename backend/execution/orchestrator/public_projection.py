@@ -25,15 +25,6 @@ from .public_summaries import PublicSummaryRegistry
 from .public_text import enforce_public_label_policy, sanitize_public_text
 
 PUBLIC_RUN_EVENT_KINDS = CANONICAL_RUN_EVENT_KINDS
-LEGACY_PUBLIC_RUN_EVENT_KINDS = frozenset(
-    {
-        "llm_call_completed",
-        "llm_retry_scheduled",
-        "orchestrator_decision",
-        "tool_call_accepted",
-        "tool_call_completed",
-    }
-)
 
 _DEFAULT_SUMMARY_LIMIT = 240
 _DEFAULT_ARG_KEYS = 8
@@ -628,7 +619,6 @@ def _exit_code(raw: dict[str, Any]) -> int | None:
 
 
 __all__ = [
-    "LEGACY_PUBLIC_RUN_EVENT_KINDS",
     "PUBLIC_RUN_EVENT_KINDS",
     "PublicProjectionTranslator",
     "PublicRunEvent",

@@ -25,14 +25,3 @@ class MemoryRuntimeStorePart:
         except Exception:
             logger.error("Failed to get room memory", exc_info=True)
             return None
-
-    async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        updater = getattr(self._room_repository, "update_turn_notes", None)
-        if callable(updater):
-            try:
-                return await updater(room_id, turn_id, turn_notes)
-            except Exception:
-                logger.error("Failed to update turn notes", exc_info=True)
-        return False

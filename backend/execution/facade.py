@@ -76,16 +76,6 @@ class RoomCenterPort(Protocol):
         idempotency_fingerprint_version: int,
     ) -> Any | None: ...
 
-    async def send_message_to_room(
-        self,
-        request: RoomCenterUserMessageRequest,
-        target_group: Any = None,
-        mentioned_agent_ids: Any = None,
-        *,
-        idempotency_fingerprint: str | None = None,
-        idempotency_fingerprint_version: int | None = None,
-    ) -> Any: ...
-
     async def persist_message_to_room(
         self,
         request: RoomCenterUserMessageRequest,
@@ -109,14 +99,6 @@ class RoomCenterPort(Protocol):
 
 class HITLServicePort(Protocol):
     async def request_interaction(self, **kwargs: Any) -> list[Any] | None: ...
-
-    async def handle_response(
-        self,
-        room_id: str,
-        request_id: str,
-        user_input: str,
-        user_id: str,
-    ) -> dict[str, Any]: ...
 
     async def handle_batch_response(
         self,

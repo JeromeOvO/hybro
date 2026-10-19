@@ -943,24 +943,6 @@ async def test_room_services_quote_materialization_delegates_to_room_facade():
 def test_room_services_migrated_message_methods_do_not_call_legacy_store():
     forbidden_by_method = {
         "_persist_user_message": {"add_room_user_message"},
-        "update_agent_message_by_message_id": {
-            "get_room_agent_message_by_message_id",
-            "update_room_agent_message_by_message_id",
-        },
-        "inquiry_user_messages_by_room_id": {"get_room_user_messages_by_room_id"},
-        "inquiry_agent_messages_by_room_id": {
-            "get_room_agent_messages_by_room_id",
-            "update_room_agent_message_by_message_id",
-        },
-        "inquiry_agent_message_by_message_id": {
-            "get_room_agent_message_by_message_id",
-        },
-        "inquiry_user_message_by_message_id": {
-            "get_room_user_message_by_message_id",
-        },
-        "inquiry_agent_messages_by_related_message_id": {
-            "get_room_agent_messages_by_related_message_id",
-        },
     }
     source = _ROOT / "conversation" / "runtime.py"
     tree = ast.parse(source.read_text())

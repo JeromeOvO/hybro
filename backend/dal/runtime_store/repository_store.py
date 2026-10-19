@@ -806,13 +806,6 @@ class RuntimeRepositoryStore:
     async def ensure_hitl_indexes(self) -> None:
         return await self._hitl_delegate().ensure_hitl_indexes()
 
-    async def update_turn_notes(
-        self, room_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        return await self._memory_delegate().update_turn_notes(
-            room_id, turn_id, turn_notes
-        )
-
     async def claim_user_message_for_processing(self, message_id: str) -> bool:
         return await self._message_delegate().claim_user_message_for_processing(
             message_id

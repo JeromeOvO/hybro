@@ -3,7 +3,7 @@ import inspect
 from pathlib import Path
 
 from common.protocols import SSETransport
-from delivery.facade import DeliveryCompatibility, DeliveryFacade
+from delivery.facade import DeliveryFacade
 from execution.cancellation import CancellationRuntime
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -73,7 +73,7 @@ def test_delivery_public_surfaces_do_not_expose_cancellation_methods():
         "start_change_stream_watcher",
         "stop_change_stream_watcher",
     }
-    for surface in (DeliveryFacade, DeliveryCompatibility, SSETransport):
+    for surface in (DeliveryFacade, SSETransport):
         assert not (forbidden & set(dir(surface)))
 
 

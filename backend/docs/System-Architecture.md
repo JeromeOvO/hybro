@@ -2552,7 +2552,8 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - emits terminal preflight status when a newly persisted room response
      completes before orchestration starts.
 
-5. `ConversationRuntime.send_message_to_room`:
+5. `ConversationRuntime.persist_message_to_room` and
+   `run_message_preflight_to_room`:
    - validates the request and message size,
    - resolves and validates attachments,
    - loads the room and target scope; successful deterministic scope resolution
