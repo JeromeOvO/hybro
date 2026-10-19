@@ -17,6 +17,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     SecretStr,
     StringConstraints,
     TypeAdapter,
@@ -70,14 +71,34 @@ class RuntimeConfig(_StrictModel):
     backend: dict[str, object] = Field(default_factory=dict)
     frontend: dict[str, object] = Field(default_factory=dict)
     image_size: Literal["1024x1024", "1536x1024", "1024x1536", "auto"] = "1024x1024"
+    _removed_backend_fields: tuple[str, ...] = PrivateAttr(default=())
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def record_removed_backend_fields(cls, data: object, handler) -> Self:
+        from common.config.loader import strip_removed_fields
+
+        removed: tuple[str, ...] = ()
+        if isinstance(data, Mapping) and isinstance(data.get("backend"), Mapping):
+            _, removed = strip_removed_fields(dict(data["backend"]))
+        config = handler(data)
+        if removed:
+            config._removed_backend_fields = removed
+        return config
+
+    @property
+    def removed_backend_fields(self) -> tuple[str, ...]:
+        """Retired backend keys dropped while this document was validated."""
+        return self._removed_backend_fields
 
     @field_validator("backend")
     @classmethod
     def validate_backend_settings(cls, value: dict[str, object]) -> dict[str, object]:
-        from common.config.loader import validate_backend
+        from common.config.loader import strip_removed_fields, validate_backend
 
-        validate_backend(value)
-        return value
+        pruned, _ = strip_removed_fields(value)
+        validate_backend(pruned)
+        return pruned
 
     @field_validator("frontend")
     @classmethod

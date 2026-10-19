@@ -1643,7 +1643,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             task_expiry_hours=runtime.settings.task_expiry_hours,
             pending_task_warning_hours=runtime.settings.pending_task_warning_hours,
             orphan_threshold_minutes=runtime.settings.orphan_threshold_minutes,
-            processing_status_expiry_minutes=runtime.settings.processing_status_expiry_minutes,
         )
         stale_task_checker.set_runtime_deps(
             StaleTaskCheckerDeps(

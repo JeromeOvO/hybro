@@ -776,7 +776,12 @@ and OAuth refresh. There is
 no `settings.py`, dotenv discovery or environment-backed application settings.
 JSON overrides live under `backend` and `frontend`, alongside setup's `provider`,
 `models`, `version` and Agent `image_size`. Unknown fields, invalid types/ranges
-and missing setup fail before services start. Credentials stay in `auth.json`;
+and missing setup fail before services start. The exception is a retired backend
+key listed in `loader.REMOVED_FIELDS`: older files (including ones written by
+`config migrate --from-env`) may still carry it, so it is dropped on read, named
+in one startup warning, and not written back by `config set`; setting it
+explicitly is rejected. The set is removed in the next major release.
+Credentials stay in `auth.json`;
 its `services` mapping contains scoped service secrets, separately from Provider
 credentials. Setup edits and OAuth rotations preserve unrelated fields.
 

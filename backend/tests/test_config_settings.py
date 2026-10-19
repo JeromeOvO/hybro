@@ -70,42 +70,6 @@ def test_feature_run_event_sse_defaults_on(monkeypatch):
     assert settings.feature_run_event_sse is True
 
 
-def test_orchestration_outcome_guardrails_defaults_on(monkeypatch):
-    monkeypatch.delenv("ORCHESTRATION_OUTCOME_GUARDRAILS", raising=False)
-    settings = Settings()
-    assert settings.orchestration_outcome_guardrails is True
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("", False),
-        ("0", False),
-        ("false", False),
-        ("1", True),
-        ("true", True),
-    ],
-)
-def test_orchestration_outcome_guardrails_parsing(
-    raw: str,
-    expected: bool,
-) -> None:
-    settings = Settings(orchestration_outcome_guardrails=raw)
-
-    assert settings.orchestration_outcome_guardrails is expected
-
-
-def test_orchestration_outcome_guardrails_ignores_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_runtime_config_env(monkeypatch)
-    monkeypatch.setenv("ORCHESTRATION_OUTCOME_GUARDRAILS", "false")
-
-    settings = Settings()
-
-    assert settings.orchestration_outcome_guardrails is True
-
-
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -141,72 +105,16 @@ def test_blank_orchestrator_thinking_level_normalizes_to_none(raw: str | None) -
 def test_runtime_config_unification_explicit_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SUPERVISOR_MAX_STEPS", "13")
-    monkeypatch.setenv("RUN_WATCHDOG_STALE_MINUTES", "31")
     monkeypatch.setenv("AGENT_HEALTH_CHECK_INTERVAL", "120")
     monkeypatch.setenv("COMPACTION_CONCURRENCY", "7")
 
     settings = Settings(
-        supervisor_max_steps=13,
-        run_watchdog_stale_minutes=31,
         agent_health_check_interval=120,
         compaction_concurrency=7,
     )
 
-    assert settings.supervisor_max_steps == 13
-    assert settings.run_watchdog_stale_minutes == 31
     assert settings.agent_health_check_interval == 120
     assert settings.compaction_concurrency == 7
-
-
-def test_a2a_inline_file_dispatch_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("A2A_INLINE_FILE_MAX_RAW_BYTES", raising=False)
-    monkeypatch.delenv("A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES", raising=False)
-
-    settings = Settings()
-
-    assert settings.a2a_inline_file_max_raw_bytes == 5 * 1024 * 1024
-    assert settings.a2a_inline_message_max_encoded_bytes == 6_990_508
-
-
-def test_a2a_inline_file_dispatch_explicit_overrides(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("A2A_INLINE_FILE_MAX_RAW_BYTES", "1024")
-    monkeypatch.setenv("A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES", "2048")
-
-    settings = Settings(
-        a2a_inline_file_max_raw_bytes=1024, a2a_inline_message_max_encoded_bytes=2048
-    )
-
-    assert settings.a2a_inline_file_max_raw_bytes == 1024
-    assert settings.a2a_inline_message_max_encoded_bytes == 2048
-
-
-@pytest.mark.parametrize(
-    ("raw_file_limit", "raw_message_limit", "expected_raw", "expected_encoded"),
-    [
-        ("", "", 5 * 1024 * 1024, 6_990_508),
-        ("0", "0", 1, 4),
-        ("-9", "-1", 1, 4),
-        ("3", "0", 3, 4),
-        ("4", "", 4, 8),
-        ("bad", "also-bad", 5 * 1024 * 1024, 6_990_508),
-    ],
-)
-def test_a2a_inline_file_dispatch_normalizes_limits(
-    raw_file_limit: str,
-    raw_message_limit: str,
-    expected_raw: int,
-    expected_encoded: int,
-) -> None:
-    settings = Settings(
-        a2a_inline_file_max_raw_bytes=raw_file_limit,
-        a2a_inline_message_max_encoded_bytes=raw_message_limit,
-    )
-
-    assert settings.a2a_inline_file_max_raw_bytes == expected_raw
-    assert settings.a2a_inline_message_max_encoded_bytes == expected_encoded
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
 """Typed defaults and JSON startup snapshot. No dotenv or import-time file I/O."""
 
+import logging
 import math
 import os
 from functools import lru_cache
@@ -13,8 +14,9 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
-    model_validator,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseModel):
@@ -30,9 +32,6 @@ class Settings(BaseModel):
 
     mongodb_url: str = "localhost:27017"
     mongodb_db_name: str = "hybro"
-    mongodb_host: str = "127.0.0.1"
-    mongodb_port: int = 27017
-    mongodb_username: str = ""
     mongodb_password: str = ""
 
     openai_api_key: str = ""
@@ -144,11 +143,6 @@ class Settings(BaseModel):
 
     # Feature Flags (runtime-toggleable behavior gates)
     feature_run_event_sse: bool = True
-    orchestration_outcome_guardrails: bool = True
-
-    # Execution Tuning
-    supervisor_max_steps: int = 8
-    run_watchdog_stale_minutes: int = 90
 
     # Agent Health
     agent_health_check_interval: int = 3600
@@ -169,8 +163,6 @@ class Settings(BaseModel):
     # Compaction
     compaction_concurrency: int = 5
 
-    parse_confidence_threshold: float = 0.3
-
     # Clerk Authentication
     clerk_secret_key: str = ""  # Clerk Secret Key for backend API
     auth_mode: Literal["mock", "clerk"] = "mock"  # "mock" or "clerk"
@@ -185,7 +177,6 @@ class Settings(BaseModel):
     # Agent Health Check Settings
     agent_health_check_enabled: bool = True  # enable/disable agent health check
     cloud_health_check_timeout: float = 5.0  # seconds for on-demand cloud agent probe
-    cloud_health_cache_ttl: float = 30.0  # cache healthy/unhealthy result for this long
 
     # Agent Capability Issue Tracking
     capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
@@ -195,15 +186,10 @@ class Settings(BaseModel):
         ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
     )
     webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
-    max_tasks_per_user: int = 100  # Max concurrent non-terminal tasks per user
-    max_tasks_per_room: int = 50  # Max concurrent non-terminal tasks per room
     stale_check_minutes: int = 10  # Poll tasks not updated in this time
     task_expiry_hours: int = 4  # Auto-fail tasks older than this
     pending_task_warning_hours: int = 1  # Warn (log) after this time
     orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
-    processing_status_expiry_minutes: int = (
-        30  # Clear stuck processing status older than this
-    )
 
     # Delivery / SSE settings
     heartbeat_interval_seconds: float = 30.0
@@ -307,8 +293,6 @@ class Settings(BaseModel):
         default="",
         validation_alias=AliasChoices("HYBRO_FILE_DIR", "hybro_file_dir"),
     )
-    a2a_inline_file_max_raw_bytes: int = 5 * 1024 * 1024
-    a2a_inline_message_max_encoded_bytes: int = 0
 
     # Graceful Shutdown Settings
     shutdown_drain_seconds: float = (
@@ -408,15 +392,6 @@ class Settings(BaseModel):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    @field_validator("orchestration_outcome_guardrails", mode="before")
-    @classmethod
-    def normalize_orchestration_outcome_guardrails(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
     @field_validator(
         "orchestrator_canary_enabled",
         mode="before",
@@ -428,30 +403,6 @@ class Settings(BaseModel):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-    @field_validator("a2a_inline_file_max_raw_bytes", mode="before")
-    @classmethod
-    def normalize_a2a_inline_file_max_raw_bytes(cls, value):
-        try:
-            return max(1, int(value))
-        except (TypeError, ValueError):
-            return 5 * 1024 * 1024
-
-    @field_validator("a2a_inline_message_max_encoded_bytes", mode="before")
-    @classmethod
-    def normalize_a2a_inline_message_max_encoded_bytes(cls, value):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
-
-    @model_validator(mode="after")
-    def apply_a2a_inline_encoded_default(self):
-        if self.a2a_inline_message_max_encoded_bytes <= 0:
-            self.a2a_inline_message_max_encoded_bytes = 4 * math.ceil(
-                self.a2a_inline_file_max_raw_bytes / 3
-            )
-        return self
 
     @property
     def is_gunicorn(self) -> bool:
@@ -473,6 +424,27 @@ PRIVATE_FIELDS = frozenset(
         "webhook_signing_key",
     }
 )
+# Retired backend settings. Existing config.json files may still carry them
+# (`config migrate --from-env` copied any matching env key), so they are
+# accepted, dropped, and named in one startup warning instead of failing
+# validation. Remove this set in the next major release.
+REMOVED_FIELDS = frozenset(
+    {
+        "mongodb_host",
+        "mongodb_port",
+        "mongodb_username",
+        "orchestration_outcome_guardrails",
+        "supervisor_max_steps",
+        "parse_confidence_threshold",
+        "cloud_health_cache_ttl",
+        "max_tasks_per_user",
+        "max_tasks_per_room",
+        "run_watchdog_stale_minutes",
+        "processing_status_expiry_minutes",
+        "a2a_inline_file_max_raw_bytes",
+        "a2a_inline_message_max_encoded_bytes",
+    }
+)
 ROUTE_FIELDS = frozenset(
     {
         "lead_ai_model",
@@ -486,6 +458,16 @@ ROUTE_FIELDS = frozenset(
         "llm_gateway_default_supervisor_model",
     }
 )
+
+
+def strip_removed_fields(
+    values: dict[str, object],
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Return the values without retired keys, and the sorted retired keys found."""
+    removed = tuple(sorted(REMOVED_FIELDS.intersection(values)))
+    if not removed:
+        return values, ()
+    return {k: v for k, v in values.items() if k not in REMOVED_FIELDS}, removed
 
 
 def validate_openai_base_url(value: str | None) -> str | None:
@@ -577,6 +559,12 @@ def get_settings() -> Settings:
 
     store = RuntimeConfigStore(runtime_home(os.environ))
     document = store.load({}).config
+    if document.removed_backend_fields:
+        logger.warning(
+            "Ignoring removed config.json backend settings: %s. "
+            "Delete them; they will be rejected in the next major release.",
+            ", ".join(document.removed_backend_fields),
+        )
     values = dict(document.backend)
     services = store.read_service_credentials()
     if any(key in values and key in services for key in ("mongodb_url", "redis_url")):

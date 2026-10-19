@@ -373,8 +373,10 @@ class RuntimeConfigStore:
             credential = resolve_credential(
                 config, parse_credential(auth_data), environment
             ).credential
+            # Compare field data only: which retired keys a parse dropped is not
+            # a selection change.
             if (
-                config != expected
+                config.model_dump() != expected.model_dump()
                 or not isinstance(credential, OAuthCredential)
                 or credential.account_id != account
             ):
@@ -523,6 +525,12 @@ class RuntimeConfigStore:
             if previous is None:
                 raise RuntimeConfigurationError("Missing config.json; run hybro setup.")
             document = _json_object(previous)
+            from common.config.loader import REMOVED_FIELDS, strip_removed_fields
+
+            if path[0] == "backend" and len(path) == 2 and path[1] in REMOVED_FIELDS:
+                raise RuntimeConfigurationError(
+                    f"backend.{path[1]} was removed and is no longer a setting."
+                )
             target = document
             for part in path[:-1]:
                 child = target.setdefault(part, {})
@@ -532,6 +540,10 @@ class RuntimeConfigStore:
                     )
                 target = child
             target[path[-1]] = value
+            # A retired key is dropped on read, so it is not written back either.
+            backend = document.get("backend")
+            if isinstance(backend, dict):
+                document["backend"], _ = strip_removed_fields(backend)
             encoded = (json.dumps(document, indent=2, allow_nan=False) + "\n").encode()
             parse_config(encoded)
             self._replace("config.json", encoded)

@@ -129,7 +129,6 @@ class StaleTaskChecker:
         pending_task_warning_hours: int = 1,
         check_interval_minutes: int = 5,
         orphan_threshold_minutes: int = 2,
-        processing_status_expiry_minutes: int = 30,
     ):
         """
         Initialize the stale task checker.
@@ -140,14 +139,12 @@ class StaleTaskChecker:
             pending_task_warning_hours: Warn (log) after this time
             check_interval_minutes: How often to run the check
             orphan_threshold_minutes: Recover orphaned messages older than this
-            processing_status_expiry_minutes: Reserved (legacy cleanup no longer uses age threshold)
         """
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
         self.pending_task_warning_hours = pending_task_warning_hours
         self.check_interval_minutes = check_interval_minutes
         self.orphan_threshold_minutes = orphan_threshold_minutes
-        self.processing_status_expiry_minutes = processing_status_expiry_minutes
         self._running = False
         self._task: asyncio.Task | None = None
         self._leader: LeaderGate | None = None
@@ -174,13 +171,11 @@ class StaleTaskChecker:
         task_expiry_hours: int,
         pending_task_warning_hours: int,
         orphan_threshold_minutes: int,
-        processing_status_expiry_minutes: int,
     ) -> None:
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
         self.pending_task_warning_hours = pending_task_warning_hours
         self.orphan_threshold_minutes = orphan_threshold_minutes
-        self.processing_status_expiry_minutes = processing_status_expiry_minutes
 
     def set_runtime_deps(self, deps: StaleTaskCheckerDeps) -> None:
         self._runtime_deps = deps
