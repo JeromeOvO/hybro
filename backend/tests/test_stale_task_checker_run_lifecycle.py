@@ -91,7 +91,6 @@ async def test_stale_recovery_persists_public_projection_without_inline_file_byt
         message_content=MessageContent(message_task=existing_task),
     )
     store = SimpleNamespace(
-        is_message_cancelled=AsyncMock(return_value=False),
         update_task_on_message=AsyncMock(return_value=True),
         touch_task_message=AsyncMock(),
     )
@@ -185,7 +184,6 @@ async def test_stale_recovery_drops_inline_file_when_s3_conversion_fails():
         ),
     )
     store = SimpleNamespace(
-        is_message_cancelled=AsyncMock(return_value=False),
         update_task_on_message=AsyncMock(return_value=True),
         touch_task_message=AsyncMock(),
     )

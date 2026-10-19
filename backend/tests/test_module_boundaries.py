@@ -53,7 +53,6 @@ DOMAIN_IMPORT_DEBT = frozenset(
         ("execution/orchestrator_routing.py", "context_memory.resources"),
         ("execution/orchestrator_routing.py", "context_memory.translators"),
         ("jobs/orchestrator_workers.py", "execution.adapters.canary_metrics"),
-        ("jobs/stale_task_checker.py", "execution.cancellation.ports"),
         ("local_agents/card_probe.py", "agent.url_utils"),
     }
 )
@@ -67,7 +66,6 @@ DAL_IMPORT_DEBT = frozenset(
         "dal/orchestrator/projection.py",
         "dal/orchestrator/run_store.py",
         "dal/orchestrator/stores.py",
-        "dal/runtime_store/cancellation_repository.py",
         "dal/runtime_store/parts/message_store.py",
     }
 )

@@ -43,7 +43,6 @@ class TestHealthStatus:
             delivery_kv_connected=False,
             redis_runtime_connected=False,
             redis_url="",
-            change_stream_connected=True,
             agent_search_index_ready=True,
             memory_search_index_ready=True,
             search_indexes_ready=True,
@@ -67,7 +66,6 @@ class TestHealthStatus:
             delivery_kv_connected=True,
             redis_runtime_connected=True,
             redis_url="redis://localhost:6379/0",
-            change_stream_connected=True,
             agent_search_index_ready=True,
             memory_search_index_ready=True,
             search_indexes_ready=True,
@@ -92,7 +90,6 @@ class TestHealthStatus:
             delivery_kv_connected=True,
             redis_runtime_connected=True,
             redis_url="redis://localhost:6379/0",
-            change_stream_connected=True,
             agent_search_index_ready=True,
             memory_search_index_ready=True,
             search_indexes_ready=True,
@@ -111,7 +108,6 @@ class TestHealthStatus:
             delivery_kv_connected=True,
             redis_runtime_connected=True,
             redis_url="redis://localhost:6379/0",
-            change_stream_connected=True,
             agent_search_index_ready=True,
             memory_search_index_ready=True,
             search_indexes_ready=True,
@@ -124,28 +120,6 @@ class TestHealthStatus:
         assert result["body"]["redis_service_connected"] is True
         assert result["body"]["legacy_redis_service_connected"] is True
 
-    def test_health_status_degraded_when_change_stream_disconnected(self):
-        from main import compute_health_status
-
-        result = compute_health_status(
-            delivery_pubsub_connected=True,
-            delivery_kv_connected=True,
-            redis_runtime_connected=True,
-            redis_url="redis://localhost:6379/0",
-            change_stream_connected=False,
-            agent_search_index_ready=True,
-            memory_search_index_ready=True,
-            search_indexes_ready=True,
-        )
-
-        assert result["body"]["status"] == "degraded"
-        assert result["status_code"] == 503
-        assert result["body"]["change_stream_connected"] is False
-        assert (
-            result["body"]["legacy_redis_service_connected"]
-            is (result["body"]["redis_runtime_connected"])
-        )
-
     def test_health_status_degraded_when_either_search_index_is_unready(self):
         from main import compute_health_status
 
@@ -154,7 +128,6 @@ class TestHealthStatus:
             delivery_kv_connected=False,
             redis_runtime_connected=False,
             redis_url="",
-            change_stream_connected=True,
             agent_search_index_ready=False,
             memory_search_index_ready=True,
             search_indexes_ready=False,
@@ -173,7 +146,6 @@ class TestHealthStatus:
             delivery_kv_connected=False,
             redis_runtime_connected=False,
             redis_url="",
-            change_stream_connected=True,
             agent_search_index_ready=True,
             memory_search_index_ready=False,
             search_indexes_ready=True,

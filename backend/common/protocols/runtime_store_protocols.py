@@ -55,9 +55,7 @@ class RuntimeMessageStore(Protocol):
     async def get_room_user_message_by_message_id(
         self, message_id: str
     ) -> RuntimeRoomUserMessage | None: ...
-    async def get_room_user_message_by_message_id_strict(
-        self, message_id: str
-    ) -> RuntimeRoomUserMessage | None: ...
+
     async def get_room_user_messages_by_room_id(
         self,
         room_id: str,
@@ -72,9 +70,7 @@ class RuntimeMessageStore(Protocol):
     async def get_room_agent_messages_by_related_message_id(
         self, related_message_id: str
     ) -> list[RuntimeRoomAgentMessage]: ...
-    async def get_room_agent_messages_by_related_message_id_strict(
-        self, related_message_id: str
-    ) -> list[RuntimeRoomAgentMessage]: ...
+
     async def add_room_agent_message(
         self, room_agent_message: RuntimeRoomAgentMessage
     ) -> bool: ...
@@ -137,17 +133,7 @@ class RuntimeMessageStore(Protocol):
     ) -> bool: ...
     async def update_last_notified_state(self, message_id: str, state: str) -> bool: ...
     async def reset_last_notified_state(self, message_id: str) -> bool: ...
-    async def update_task_state_on_message(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        message_text: str | None = None,
-        artifacts: list[dict] | None = None,
-        task_id: str | None = None,
-        context_id: str | None = None,
-        task_metadata: dict[str, Any] | None = None,
-    ) -> tuple[bool, str | None]: ...
+
     async def update_task_state_on_message_if_not_terminal(
         self,
         message_id: str,
@@ -206,8 +192,7 @@ class RuntimeTaskLifecycleStore(Protocol):
     async def verify_webhook_token_for_task(
         self, message_id: str, token: str
     ) -> tuple[bool, str]: ...
-    async def is_message_cancelled(self, message_id: str) -> bool: ...
-    async def is_message_cancelled_strict(self, message_id: str) -> bool: ...
+
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]: ...
     async def get_stale_task_messages(
         self,

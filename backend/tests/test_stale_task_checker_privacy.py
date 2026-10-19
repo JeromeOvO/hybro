@@ -57,7 +57,6 @@ async def test_polled_stale_task_persists_only_public_terminal_artifacts():
         ),
     )
     store = SimpleNamespace(
-        is_message_cancelled=AsyncMock(return_value=False),
         update_task_on_message=AsyncMock(return_value=True),
         touch_task_message=AsyncMock(),
     )

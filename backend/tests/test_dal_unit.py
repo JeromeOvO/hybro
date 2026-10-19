@@ -173,7 +173,6 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "agent_groups",
         "agents",
         "conversation_content",
-        "cancelled_messages",
         "migration_markers",
         "orchestration_run_events",
         "orchestration_runs",
@@ -242,12 +241,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
             "turn_notes.one_liner": 1,
         },
     )
-    assert _has_create_index(
-        collections["cancelled_messages"],
-        [("reconciliation_status", 1), ("message_id", 1)],
-        unique=False,
-        name="cancellation_reconciliation_message",
-    )
+    assert "cancelled_messages" not in collections
     assert _has_create_index(
         collections["room_agent_messages"],
         [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],

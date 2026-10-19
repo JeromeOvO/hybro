@@ -94,12 +94,6 @@ from delivery.sse.deduplication import TerminalStatusDeduplicator
 from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
 from execution.adapters.canary_metrics import collect_metrics
-from execution.cancellation import (
-    CancellationConfig,
-    CancellationRuntime,
-    CancellationStartupPolicy,
-    RedisCancellationTransport,
-)
 from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
 from execution.repository.active_runs import CanonicalActiveRunRoomReader
 from jobs.cleanup_orphaned_uploads import (
@@ -141,17 +135,20 @@ def check_multi_worker_safety(
     eventing_connected: bool = True,
     delivery_kv_connected: bool,
     redis_service_connected: bool,
-    change_stream_connected: bool,
+    mongo_supports_transactions: bool,
 ) -> None:
-    """Refuse to start under gunicorn without fully connected Redis.
+    """Refuse to start under gunicorn without Redis or Mongo transactions.
 
     Gunicorn workers are separate processes. Without Redis:
     - SSE broadcast is local-only (cross-worker delivery fails)
     - Background jobs run N times (no leader election)
     - Room locks use asyncio.Lock only (no cross-process coordination)
+    Without Mongo transactions (a replica set or mongos), room events fall back
+    to a non-transactional write path that concurrent workers can interleave.
 
     Raises:
         RuntimeError: if gunicorn detected and any Redis service is not connected
+            or MongoDB cannot run transactions
     """
     if not is_gunicorn:
         return
@@ -165,17 +162,20 @@ def check_multi_worker_safety(
         problems.append("Delivery KV not connected")
     if not redis_service_connected:
         problems.append("RedisService (key-value) not connected")
-    if not change_stream_connected:
-        problems.append("Cancellation change stream not connected")
+    if not mongo_supports_transactions:
+        problems.append(
+            "MongoDB does not support transactions "
+            "(not a replica set or mongos, or the probe failed)"
+        )
 
     if problems:
         raise RuntimeError(
-            "Running under gunicorn requires all DAL Redis services. "
-            "Issues: " + "; ".join(problems) + ". "
-            "Fix: set REDIS_URL to a running Redis instance, "
-            "or use 'uvicorn main:app' for single-process mode."
+            "Running under gunicorn requires all DAL Redis services and a "
+            "MongoDB replica set or mongos. Issues: " + "; ".join(problems) + ". "
+            "Fix: set REDIS_URL to a running Redis instance and run MongoDB as a "
+            "replica set, or use 'uvicorn main:app' for single-process mode."
         )
-    logger.info("Multi-worker safety check passed: gunicorn + Redis OK")
+    logger.info("Multi-worker safety check passed: gunicorn + Redis + transactions")
 
 
 @dataclass
@@ -438,7 +438,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     Cleanup is split into two separate paths:
       Startup failure — tears down only what was opened, without entering
           the normal SSE draining path.
-      Normal shutdown — full teardown including draining and change stream
+      Normal shutdown — full teardown including SSE draining
     """
     _redis_runtime = None
     _redis_service = None
@@ -447,7 +447,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
     _agent_deps = None
     _delivery_facade = None
     _delivery_config = None
-    _cancellation_runtime = None
     _eventing_bus = None
     _eventing_deps = None
     _execution_deps = None
@@ -549,7 +548,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "hitl_requests",
                         "hitl_interactions",
                         "hitl_resume_commands",
-                        "cancelled_messages",
                         "orchestrator_runs",
                         "orchestrator_run_events",
                         "orchestrator_agent_tool_bindings",
@@ -591,20 +589,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 conversation_runtime=conversation_runtime,
             )
             _delivery_config = create_delivery_config(runtime.settings)
-            cancellation_startup_policy = create_cancellation_startup_policy(
-                redis_url=runtime.settings.redis_url,
-                multi_worker=runtime.settings.is_gunicorn,
-            )
             runtime_instance_id = get_instance_id()
-            _cancellation_runtime = create_cancellation_runtime(
-                mongo=mongo_dal,
-                redis_url=runtime.settings.redis_url,
-                instance_id=runtime_instance_id,
-                startup_policy=cancellation_startup_policy,
-                app_settings=runtime.settings,
-            )
-            await _cancellation_runtime.start()
-            app.state.cancellation_runtime = _cancellation_runtime
             delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
                 redis_url=runtime.settings.redis_url,
                 config=_delivery_config,
@@ -672,15 +657,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_capability_issue_service = create_agent_capability_issue_service(
                 repository=agent_capability_issue_repository
             )
-            from dal.runtime_store.cancellation_repository import (
-                MongoCancellationMarkerRepository,
-            )
             from delivery.task_notifier import TaskUpdateNotifier
-            from execution.cancellation import (
-                AgentTaskCleanupAdapter,
-                CancellationStateAdapter,
-                HITLMessageCancellationAdapter,
-            )
+            from execution.adapters.hitl import HITLMessageCancellationAdapter
             from execution.client_request_id import SSEClientRequestIdResolver
             from execution.dispatch.task_notifications import (
                 bind_notification_store,
@@ -981,8 +959,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     task_store.get_non_tracked_stale_task_messages
                 ),
                 touch_task_message=task_store.touch_task_message,
-                is_message_cancelled=task_store.is_message_cancelled,
-                is_message_cancelled_strict=task_store.is_message_cancelled_strict,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
@@ -1403,9 +1379,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             conversation_runtime.bind_store(room_runtime_store)
-            conversation_runtime.bind_cancellation_control(
-                cancellation_control=_cancellation_runtime,
-            )
             conversation_runtime.bind_facade(_room_facade)
             conversation_runtime.bind_room_files(file_storage)
             conversation_runtime.bind_user_message_commit(
@@ -1504,24 +1477,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 hitl_manager=hitl_manager,
                 run_lifecycle=run_lifecycle,
                 run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
-                cancellation_state=CancellationStateAdapter(_cancellation_runtime),
-                cancellation_repository=MongoCancellationMarkerRepository(
-                    mongo_dal.collection("cancelled_messages")
-                ),
-                cancellation_message_reader=(
-                    message_store.get_room_user_message_by_message_id_strict
-                ),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
-                agent_task_cleanup=AgentTaskCleanupAdapter(
-                    message_task_store=message_store,
-                    get_agent_card_from_url=a2a_service.get_agent_card_from_url,
-                    cancel_remote_task=a2a_service.cancel_remote_task,
-                    notify_task_update=notify_task_update_with_string_state,
-                ),
                 event_publisher=_delivery_deps.event_publisher,
                 run_event_enabled=run_event_sse_enabled,
                 client_request_id_resolver=execution_client_request_id_resolver,
-                orchestration_run_store=orchestration_run_store,
             )
             _execution_deps = create_execution_deps(execution_facade)
 
@@ -1611,9 +1570,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         check_multi_worker_safety(
             is_gunicorn=runtime.settings.is_gunicorn,
             delivery_pubsub_connected=bool(
-                _delivery_facade
-                and _delivery_facade.delivery_pubsub_connected
-                and _cancellation_runtime.redis_connected
+                _delivery_facade and _delivery_facade.delivery_pubsub_connected
             ),
             eventing_connected=(
                 not bool(runtime.settings.redis_url)
@@ -1623,7 +1580,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 _delivery_facade and _delivery_facade.delivery_kv_connected
             ),
             redis_service_connected=redis_kv_ready,
-            change_stream_connected=bool(_cancellation_runtime.change_stream_connected),
+            mongo_supports_transactions=(
+                await mongo_dal.supports_transactions()
+                if runtime.settings.is_gunicorn
+                else True
+            ),
         )
 
         # ── Phase 2: Background services (only after guard passes) ──
@@ -1642,7 +1603,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             stale_check_minutes=runtime.settings.stale_check_minutes,
             task_expiry_hours=runtime.settings.task_expiry_hours,
             pending_task_warning_hours=runtime.settings.pending_task_warning_hours,
-            orphan_threshold_minutes=runtime.settings.orphan_threshold_minutes,
         )
         stale_task_checker.set_runtime_deps(
             StaleTaskCheckerDeps(
@@ -1653,16 +1613,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
         )
         if _execution_deps is not None:
-            from jobs.stale_task_checker import (
-                StaleCancellationReconciliationDeps,
-                StaleHITLDeps,
-            )
+            from jobs.stale_task_checker import StaleHITLDeps
 
-            stale_task_checker.set_cancellation_reconciliation_deps(
-                StaleCancellationReconciliationDeps(
-                    reconciliation=execution_facade.cancellation_service,
-                )
-            )
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
                     recover_stale_processing=hitl_manager.recover_stale_processing,
@@ -2466,8 +2418,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
         if _delivery_facade is not None:
             startup_steps.append(("delivery", _delivery_facade.stop))
-        if _cancellation_runtime is not None:
-            startup_steps.append(("cancellation", _cancellation_runtime.stop))
         if _mongo_dal is not None:
             startup_steps.append(("mongo", _mongo_dal.close))
         await _run_cleanup_steps(
@@ -2477,7 +2427,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         app.state.eventing_bus = None
         app.state.eventing_connected = False
         app.state.delivery_facade = None
-        app.state.cancellation_runtime = None
         app.state.mongo_dal = None
         app.state.agent_llm_proxy = None
         raise
@@ -2541,8 +2490,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             shutdown_steps.append(("eventing", _eventing_bus.stop))
         if _delivery_facade is not None:
             shutdown_steps.append(("delivery", _delivery_facade.stop))
-        if _cancellation_runtime is not None:
-            shutdown_steps.append(("cancellation", _cancellation_runtime.stop))
         shutdown_steps.append(
             ("redis-runtime", lambda: close_redis_runtime_deps(_redis_runtime))
         )
@@ -2553,7 +2500,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         app.state.eventing_bus = None
         app.state.eventing_connected = False
         app.state.delivery_facade = None
-        app.state.cancellation_runtime = None
         app.state.mongo_dal = None
         app.state.agent_llm_proxy = None
         if cleanup_error is not None and body_error is None:
@@ -2684,7 +2630,6 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_user_message_indexes(mongo)
     await _ensure_room_timeline_indexes(mongo)
     await _ensure_task_tracking_indexes(mongo)
-    await _ensure_cancellation_indexes(mongo)
     await _ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
@@ -3504,15 +3449,6 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
     )
 
 
-async def _ensure_cancellation_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "cancelled_messages",
-        [("reconciliation_status", 1), ("message_id", 1)],
-        name="cancellation_reconciliation_message",
-    )
-
-
 async def _ensure_room_file_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
@@ -3633,72 +3569,6 @@ def create_delivery_config(app_settings: Any = settings) -> DeliveryConfig:
     return DeliveryConfig(**values)
 
 
-def create_cancellation_startup_policy(
-    *,
-    redis_url: str,
-    multi_worker: bool,
-) -> CancellationStartupPolicy:
-    redis_expected = bool(redis_url)
-    return CancellationStartupPolicy(
-        redis_expected=redis_expected,
-        multi_worker=multi_worker,
-        allow_degraded_change_stream=not redis_expected and not multi_worker,
-    )
-
-
-def create_cancellation_config(app_settings: Any = settings) -> CancellationConfig:
-    return CancellationConfig(
-        ttl_seconds=app_settings.cancellation_ttl_seconds,
-        cache_maxsize=app_settings.cancellation_cache_maxsize,
-        redis_channel=app_settings.redis_cancel_channel,
-        redis_key_prefix=app_settings.redis_cancel_key_prefix,
-        redis_reconnect_delay=app_settings.redis_reconnect_delay,
-        redis_reconnect_max_delay=app_settings.redis_reconnect_max_delay,
-        redis_subscription_ready_timeout_seconds=(
-            app_settings.redis_room_subscription_ready_timeout_seconds
-        ),
-        change_stream_backoff_base=app_settings.cs_backoff_base,
-        change_stream_backoff_max=app_settings.cs_backoff_max,
-        change_stream_backoff_factor=app_settings.cs_backoff_factor,
-        change_stream_jitter_fraction=app_settings.cs_jitter_fraction,
-    )
-
-
-def create_cancellation_runtime(
-    *,
-    mongo: MongoDAL,
-    redis_url: str,
-    instance_id: str,
-    startup_policy: CancellationStartupPolicy,
-    app_settings: Any = settings,
-    task_runner: TaskRunner = traced_create_task,
-) -> CancellationRuntime:
-    redis_kv = None
-    transport = None
-    config = create_cancellation_config(app_settings)
-    if redis_url:
-        from dal.redis.kv import RedisKVImpl
-        from dal.redis.pubsub import RedisPubSubImpl
-
-        redis_kv = RedisKVImpl(url=redis_url)
-        transport = RedisCancellationTransport(
-            redis_pubsub=RedisPubSubImpl(
-                url=redis_url,
-                max_connections=app_settings.redis_max_connections,
-            ),
-            config=config,
-            instance_id=instance_id,
-        )
-    return CancellationRuntime(
-        collection=create_cancellation_collection(mongo=mongo),
-        redis_kv=redis_kv,
-        transport=transport,
-        config=config,
-        task_runner=task_runner,
-        allow_degraded_change_stream=startup_policy.allow_degraded_change_stream,
-    )
-
-
 def create_delivery_redis_clients(
     *,
     redis_url: str,
@@ -3771,10 +3641,6 @@ def create_eventing_deps(event_bus: InternalEventBus) -> EventingDeps:
         event_bus=event_bus,
         internal_event_publisher=event_bus,
     )
-
-
-def create_cancellation_collection(*, mongo: MongoDAL) -> MongoCollection:
-    return mongo.collection("cancelled_messages")
 
 
 def create_delivery_facade(

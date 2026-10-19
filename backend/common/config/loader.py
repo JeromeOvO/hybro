@@ -188,7 +188,6 @@ class Settings(BaseModel):
     stale_check_minutes: int = 10  # Poll tasks not updated in this time
     task_expiry_hours: int = 4  # Auto-fail tasks older than this
     pending_task_warning_hours: int = 1  # Warn (log) after this time
-    orphan_threshold_minutes: int = 2  # Recover orphaned messages older than this
 
     # Delivery / SSE settings
     heartbeat_interval_seconds: float = 30.0
@@ -233,27 +232,13 @@ class Settings(BaseModel):
         }
     )
 
-    # Execution cancellation runtime (environment names remain compatible)
-    cancellation_ttl_seconds: int = 3600
-    cancellation_cache_maxsize: int = 10_000
-
-    # Cancellation change stream reconnection backoff
-    cs_backoff_base: float = 1.0  # initial delay in seconds
-    cs_backoff_max: float = 30.0  # ceiling delay in seconds
-    cs_backoff_factor: float = 2.0  # multiplier per retry
-    cs_jitter_fraction: float = 0.25  # +/-25% random jitter
-
-    # Redis transports (Delivery SSE and Execution cancellation use separate clients)
+    # Redis transport for Delivery SSE
     redis_url: str = (
         ""  # e.g. "redis://localhost:6379/0" - empty string disables broker
     )
     redis_sse_channel_prefix: str = "sse:room:"  # per-room channel: sse:room:{room_id}
-    redis_cancel_channel: str = (
-        "cancel:global"  # single channel for all cancellation events
-    )
     redis_reconnect_delay: float = 1.0  # initial reconnect delay (seconds)
     redis_reconnect_max_delay: float = 30.0  # max reconnect delay ceiling (seconds)
-    redis_cancel_key_prefix: str = "cancelled:"
     redis_terminal_key_prefix: str = "terminal:"
 
     # ===========================================
@@ -441,6 +426,15 @@ REMOVED_FIELDS = frozenset(
         "processing_status_expiry_minutes",
         "a2a_inline_file_max_raw_bytes",
         "a2a_inline_message_max_encoded_bytes",
+        "cancellation_ttl_seconds",
+        "cancellation_cache_maxsize",
+        "redis_cancel_channel",
+        "redis_cancel_key_prefix",
+        "cs_backoff_base",
+        "cs_backoff_max",
+        "cs_backoff_factor",
+        "cs_jitter_fraction",
+        "orphan_threshold_minutes",
     }
 )
 ROUTE_FIELDS = frozenset(

@@ -70,11 +70,6 @@ class RoomOwnershipReader(Protocol):
 
 
 @runtime_checkable
-class MessageCancellationReader(Protocol):
-    async def is_message_cancelled(self, message_id: str) -> bool: ...
-
-
-@runtime_checkable
 class RoomMembershipSeedSource(Protocol):
     async def get_saved_group(
         self, group_id: str
@@ -83,7 +78,6 @@ class RoomMembershipSeedSource(Protocol):
 
 
 __all__ = [
-    "MessageCancellationReader",
     "RoomHistoryReader",
     "RoomManagement",
     "RoomMembershipSeedSource",

@@ -84,26 +84,21 @@ def _bind_user_message_commit(
 @pytest.mark.asyncio
 async def test_preflight_token_lifecycle_always_releases_identity_owner():
     svc = object.__new__(ConversationRuntime)
-    svc.cancellation_control = MagicMock()
     token = object()
     context = SimpleNamespace(
         user_message=SimpleNamespace(message_id="msg-1"), token=token
     )
 
     for outcome in ("failed", "canceled", "completed"):
-        svc.cancellation_control.release_token.reset_mock()
         response = SimpleNamespace(preflight_outcome=outcome)
         svc._run_message_preflight_to_room = AsyncMock(return_value=response)
 
         assert await svc.run_message_preflight_to_room(context) is response
-        svc.cancellation_control.release_token.assert_called_once_with("msg-1", token)
 
-    svc.cancellation_control.release_token.reset_mock()
     ready_response = SimpleNamespace(preflight_outcome="ready")
     svc._run_message_preflight_to_room = AsyncMock(return_value=ready_response)
 
     assert await svc.run_message_preflight_to_room(context) is ready_response
-    svc.cancellation_control.release_token.assert_called_once_with("msg-1", token)
 
 
 @pytest.mark.asyncio
@@ -112,7 +107,6 @@ async def test_preflight_token_lifecycle_always_releases_identity_owner():
 )
 async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(failure):
     svc = object.__new__(ConversationRuntime)
-    svc.cancellation_control = MagicMock()
     token = object()
     context = SimpleNamespace(
         user_message=SimpleNamespace(message_id="msg-1"), token=token
@@ -121,8 +115,6 @@ async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(fa
 
     with pytest.raises(type(failure)):
         await svc.run_message_preflight_to_room(context)
-
-    svc.cancellation_control.release_token.assert_called_once_with("msg-1", token)
 
 
 def test_room_services_excludes_dead_compat_helpers_and_stale_wiring():
@@ -419,9 +411,6 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     )
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
-    svc.cancellation_control.create_token.return_value = object()
-    svc.cancellation_control.check_cancelled = AsyncMock(return_value=False)
     svc._validate_send_message_request = MagicMock(return_value=None)
     svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
     svc._resolve_explicit_target_scope = AsyncMock()
@@ -455,7 +444,6 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
 
     assert response.success is True
     assert context is not None
-    svc.cancellation_control.check_cancelled.assert_awaited_once_with("u1")
     event = publisher.internal_events[0]
     assert isinstance(event, MessageCommitted)
     assert event.room_agent_set == {"a1": "Canonical Agent"}
@@ -480,9 +468,6 @@ async def test_canonical_send_sanitizes_server_owned_user_message_fields(
     )
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
-    svc.cancellation_control.create_token.return_value = object()
-    svc.cancellation_control.check_cancelled = AsyncMock(return_value=False)
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = None
     svc.bind_facade(facade)
@@ -579,7 +564,6 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
     svc._store = MagicMock()
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = {
         "room_id": "r1",
@@ -624,7 +608,6 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token():
         "r1", "request-1"
     )
     facade.persist_user_message.assert_not_awaited()
-    svc.cancellation_control.create_token.assert_not_called()
     assert publisher.internal_events == []
 
 
@@ -683,7 +666,6 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
     )
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
     facade = MagicMock()
     facade.get_user_message_by_idempotency_key = AsyncMock(return_value=None)
 
@@ -771,7 +753,6 @@ async def test_claim_release_failure_preserves_determined_idempotency_outcome(
     )
     room_files.commit_references.assert_not_awaited()
     assert publisher.internal_events == []
-    svc.cancellation_control.create_token.assert_not_called()
     svc.run_message_preflight_to_room.assert_not_awaited()
 
 
@@ -862,7 +843,6 @@ async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner():
     )
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = None
     svc.bind_facade(facade)
@@ -908,7 +888,6 @@ async def test_concurrent_loser_deletes_only_its_new_quote_and_returns_winner():
     assert "winner-quote" not in {
         call.args[0] for call in facade.delete_room_quote.await_args_list
     }
-    svc.cancellation_control.create_token.assert_not_called()
 
 
 @pytest.mark.asyncio

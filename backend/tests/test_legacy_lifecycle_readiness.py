@@ -322,7 +322,9 @@ async def test_report_names_each_count_and_the_step_it_gates():
 
 def test_cli_help_runs_without_a_configured_install():
     result = subprocess.run(
-        [sys.executable, "scripts/check_legacy_lifecycle_readiness.py", "--help"],
+        # As documented: a module run from backend/, so imports resolve from the
+        # checkout rather than from an installed package.
+        [sys.executable, "-m", "scripts.check_legacy_lifecycle_readiness", "--help"],
         cwd=BACKEND,
         capture_output=True,
         text=True,

@@ -202,9 +202,6 @@ def _runtime_for_persist() -> tuple[ConversationRuntime, list[dict]]:
     )
     svc._bound = False
     svc._facade = None
-    svc.cancellation_control = MagicMock()
-    svc.cancellation_control.create_token.return_value = object()
-    svc.cancellation_control.check_cancelled = AsyncMock(return_value=False)
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = None
     svc.bind_facade(facade)

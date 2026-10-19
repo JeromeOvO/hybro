@@ -206,3 +206,17 @@ class MongoDALImpl:
             return True
         except Exception:
             return False
+
+    async def supports_transactions(self) -> bool:
+        """Whether the deployment can run transactions; False when unknown.
+
+        Replica-set members report ``setName``; a ``mongos`` router reports
+        ``msg == "isdbgrid"``. A standalone server reports neither.
+        """
+        if self._client is None:
+            return False
+        try:
+            hello = await self._client.admin.command("hello")
+        except Exception:
+            return False
+        return bool(hello.get("setName")) or hello.get("msg") == "isdbgrid"

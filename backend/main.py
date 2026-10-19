@@ -62,7 +62,6 @@ def compute_health_status(
     delivery_kv_connected: bool,
     redis_runtime_connected: bool,
     redis_url: str,
-    change_stream_connected: bool,
     agent_search_index_ready: bool = False,
     memory_search_index_ready: bool = False,
     search_indexes_ready: bool = False,
@@ -74,11 +73,10 @@ def compute_health_status(
         and delivery_kv_connected
         and redis_runtime_connected
     )
-    degraded = redis_degraded or not change_stream_connected or not search_indexes_ready
+    degraded = redis_degraded or not search_indexes_ready
     return {
         "body": {
             "status": "degraded" if degraded else "ok",
-            "change_stream_connected": change_stream_connected,
             "delivery_pubsub_connected": delivery_pubsub_connected,
             "eventing_connected": eventing_connected,
             "delivery_kv_connected": delivery_kv_connected,

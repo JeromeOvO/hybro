@@ -31,6 +31,15 @@ RETIRED = {
     "processing_status_expiry_minutes",
     "a2a_inline_file_max_raw_bytes",
     "a2a_inline_message_max_encoded_bytes",
+    "cancellation_ttl_seconds",
+    "cancellation_cache_maxsize",
+    "redis_cancel_channel",
+    "redis_cancel_key_prefix",
+    "cs_backoff_base",
+    "cs_backoff_max",
+    "cs_backoff_factor",
+    "cs_jitter_fraction",
+    "orphan_threshold_minutes",
 }
 
 

@@ -28,14 +28,12 @@ class TaskLifecycleRuntimeStorePart:
         *,
         room_agent_messages,
         room_user_messages,
-        cancelled_messages,
         runs,
         message_repository,
         message_store,
     ) -> None:
         self._room_agent_messages = room_agent_messages
         self._room_user_messages = room_user_messages
-        self._cancelled_messages = cancelled_messages
         self._runs = runs
         self._message_repository = message_repository
         self._messages = message_store
@@ -301,26 +299,6 @@ class TaskLifecycleRuntimeStorePart:
         except Exception:
             logger.error("Failed to verify webhook token", exc_info=True)
             return False, "verification_error"
-
-    async def is_message_cancelled(self, message_id: str) -> bool:
-        try:
-            reader = getattr(self._message_repository, "is_message_cancelled", None)
-            if callable(reader):
-                return await reader(message_id)
-            return (
-                await self._cancelled_messages.find_one({"message_id": message_id})
-            ) is not None
-        except Exception:
-            logger.error("Failed to check message cancellation", exc_info=True)
-            return False
-
-    async def is_message_cancelled_strict(self, message_id: str) -> bool:
-        reader = getattr(self._message_repository, "is_message_cancelled", None)
-        if callable(reader):
-            return await reader(message_id)
-        return (
-            await self._cancelled_messages.find_one({"message_id": message_id})
-        ) is not None
 
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
         try:

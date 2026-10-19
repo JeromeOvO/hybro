@@ -5,9 +5,6 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from a2a_adapter.client_facade import (
-    cancel_remote_task as adapter_cancel_remote_task,
-)
-from a2a_adapter.client_facade import (
     fetch_agent_card_with_fallback as adapter_fetch_card,
 )
 from a2a_adapter.client_facade import (
@@ -633,39 +630,6 @@ class A2AService:
             },
         )
         return response_data
-
-    async def cancel_remote_task(
-        self,
-        agent_card: AgentCard,
-        task_id: str,
-        *,
-        timeout: float = 5.0,
-    ) -> bool:
-        """Send a best-effort cancel request to a remote A2A agent.
-
-        This is fire-and-forget: if the agent doesn't support cancellation or
-        returns an error, we log and continue — the local cancellation must
-        not depend on the remote agent cooperating.
-
-        Args:
-            agent_card: The agent's card information.
-            task_id: The remote task ID to cancel.
-            timeout: Maximum seconds to wait for the cancel round-trip.
-                Defaults to 5 s — long enough for a healthy agent but short
-                enough to avoid blocking callers.
-
-        Returns True if the cancel request was acknowledged, False otherwise.
-        """
-        acknowledged = await adapter_cancel_remote_task(
-            agent_card,
-            task_id,
-            timeout=timeout,
-        )
-        if acknowledged:
-            logger.info("a2a_service: Remote cancel acknowledged for task %s", task_id)
-        else:
-            logger.debug("a2a_service: Remote cancel failed for task %s", task_id)
-        return acknowledged
 
     # ------------------------------------------------------------------
     # HITL: Reply to an existing task (input_required continuation)

@@ -704,18 +704,6 @@ class ConversationFacade:
     async def verify_room_agent_membership(self, room_id: str, agent_id: str) -> bool:
         return agent_id in await self.get_room_agents(room_id)
 
-    async def is_message_cancelled(self, message_id: str) -> bool:
-        repository_checker = getattr(
-            self._message_repository, "is_message_cancelled", None
-        )
-        if repository_checker is not None:
-            return bool(await repository_checker(message_id))
-        doc = await self._message_repository.get_by_id(message_id)
-        if doc is None:
-            return False
-        status = str(doc.get("status") or doc.get("message_status") or "").lower()
-        return bool(doc.get("is_cancelled")) or status in {"cancelled", "canceled"}
-
     def _validate_create_room_request(self, request: CreateRoomRequest) -> None:
         if not request.owner_id:
             raise ValueError("owner_id is required")

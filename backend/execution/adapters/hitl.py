@@ -465,6 +465,16 @@ def answers_identical(
     return _answer_identity(first) == _answer_identity(second)
 
 
+class HITLMessageCancellationAdapter:
+    """Cancel the open HITL requests of a user message after its Run is claimed."""
+
+    def __init__(self, hitl_manager) -> None:
+        self._hitl_manager = hitl_manager
+
+    async def cancel_requests_for_message(self, message_id: str) -> None:
+        await self._hitl_manager.cancel_requests_for_message(message_id)
+
+
 def _digest_json(value: object) -> str:
     canonical = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -475,6 +485,7 @@ def _digest_json(value: object) -> str:
 __all__ = [
     "DurableHITLApplicationPort",
     "HITLApplicationStore",
+    "HITLMessageCancellationAdapter",
     "InMemoryHITLApplicationStore",
     "StoredHITLInteraction",
     "answers_identical",

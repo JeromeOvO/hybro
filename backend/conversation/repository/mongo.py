@@ -218,7 +218,6 @@ class MessageMongoRepository:
         self._mongo = mongo
         self._user_messages = mongo.collection(user_collection_name)
         self._agent_messages = mongo.collection(agent_collection_name)
-        self._cancelled_messages = None
 
     async def save_user_message(self, message: dict) -> str:
         candidate = normalize_timeline_document(
@@ -338,13 +337,6 @@ class MessageMongoRepository:
         if user_message is not None:
             return user_message
         return await self._agent_messages.find_one({"message_id": message_id})
-
-    async def is_message_cancelled(self, message_id: str) -> bool:
-        if self._cancelled_messages is None:
-            self._cancelled_messages = self._mongo.collection("cancelled_messages")
-        return (
-            await self._cancelled_messages.find_one({"message_id": message_id})
-        ) is not None
 
     async def get_by_ids(self, message_ids: list[str]) -> list[dict]:
         if not message_ids:

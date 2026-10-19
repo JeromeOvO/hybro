@@ -81,7 +81,6 @@ from common.protocols.repository_protocols import (
     RunRepository,
 )
 from common.protocols.room_protocols import (
-    MessageCancellationReader,
     RoomHistoryReader,
     RoomManagement,
     RoomMembershipSeedSource,
@@ -140,7 +139,6 @@ __all__ = [
     "LeaderElector",
     "MongoChangeStream",
     "MemorySearchPort",
-    "MessageCancellationReader",
     "ProjectionPort",
     "MemoryRepository",
     "MessageRepository",

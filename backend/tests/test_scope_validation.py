@@ -33,8 +33,6 @@ def room_center():
     # Backwards compatibility alias
     rc.database_service = rc._store
     rc.openai_service = MagicMock()
-    rc.cancellation_control = MagicMock()
-    rc.cancellation_control.check_cancelled = AsyncMock(return_value=False)
     rc.hitl_coordinator = MagicMock()
     rc.hitl_coordinator.get_pending_requests = AsyncMock(return_value=[])
     return rc
@@ -549,8 +547,6 @@ class TestInlineMentionBehavior:
             )
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.cancellation_control.create_token = MagicMock(return_value=None)
-        room_center.cancellation_control.check_cancelled = AsyncMock(return_value=False)
         prepare_orchestration = AsyncMock(return_value=ParseResult(success=True))
         room_center._prepare_orchestration_envelope = prepare_orchestration
 
@@ -609,8 +605,6 @@ class TestAllAgentsPostPersistMessageId:
             )
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.cancellation_control.create_token = MagicMock()
-        room_center.cancellation_control.check_cancelled = AsyncMock(return_value=False)
 
         # Make _resolve_explicit_target_scope return an error (simulating selector failure)
         error_response = RoomCenterUserMessageResponse(
@@ -681,8 +675,6 @@ class TestClientRequestIdPropagation:
             )
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
-        room_center.cancellation_control.create_token = MagicMock()
-        room_center.cancellation_control.check_cancelled = AsyncMock(return_value=False)
 
         # Make scope resolution return an error so the function returns early.
         error_response = RoomCenterUserMessageResponse(

@@ -309,7 +309,7 @@ Startup has three practical phases:
      runtime adapters.
 
 2. Runtime guard and background services:
-   - Start the Execution cancellation runtime, then Delivery/SSE runtime.
+   - Start the Delivery/SSE runtime.
    - Probe DAL Redis KV and Streams runtime services when `REDIS_URL` is configured.
    - Enforce multi-worker safety with `check_multi_worker_safety`.
    - Start background jobs after the guard passes.
@@ -2297,48 +2297,9 @@ backoff. Pub/Sub iterator
 unsubscribe and close cleanup are bounded so broker shutdown cannot wait
 indefinitely. Redis-free mode remains immediately available.
 
-Cancellation ownership lives in `execution.cancellation`, not Delivery,
-Orchestration, or Jobs. `CancellationService` exclusively owns durable marker
-request/finalize/pending reconciliation through the Execution-defined
-`CancellationMarkerRepositoryPort`; the Mongo adapter uses the existing
-`cancelled_messages` collection and indexes. New markers upsert against the
-deterministic Mongo `_id` `cancellation:{message_id}`, preventing two current
-binaries from inserting duplicate first-request markers without requiring a new
-unique index. Existing markers are detected by `message_id`; request and
-reconciliation updates use `update_many` so historical duplicates converge
-together while all externally consumed marker fields remain unchanged. During a
-rolling mixed-version deployment, an older binary can still race a current
-binary and insert one legacy duplicate because the collection intentionally has
-no unique `message_id` index. Current binaries tolerate and bulk-update those
-documents, and the risk ends after older writers leave service.
-`CancellationRuntime` owns TTL-bounded tombstones and a separate active-token
-registry. Creating a token for an already-active message reuses the same token;
-identity-fenced release prevents an old owner from removing a replacement token.
-The Execution-owned Mongo watcher projects durable marker inserts locally. It
-retains resume tokens across ordinary stream errors and resets one only when
-Mongo labels the error `NonResumableChangeStreamError`. An independent Redis
-KV/Pub/Sub adapter preserves the existing `cancel:global` envelope and
-`cancelled:` key compatibility. Execution starts this runtime before Delivery and
-stops its watcher before Mongo shutdown. Room preflight hydrates cancellation
-state immediately after token creation and identity-releases that token for every
-outcome, including ready. If Execution is canceled or fails after persistence,
-`ExecutionFacade` chooses the cleanup point, calls the conversation runtime's
-synchronous `discard_message_preflight`, and the runtime performs the
-identity-fenced token release. Cleanup failure is logged without replacing the
-original cancellation or execution error. Admitted orchestration independently creates and
-hydrates its own token after winning the processing claim. Execution and continuation owners release their exact token on terminal and
-paused/awaiting-input paths. Resume creates a fresh owner and hydrates Redis, so
-a cancellation tombstone pre-signals it without accumulating dormant active
-tokens. Cancellation signaling reports KV and Pub/Sub propagation separately;
-when configured propagation fails, finalization still performs local terminal,
-HITL, and task cleanup but leaves the durable marker pending for the service job
-to retry broadcast. RMC and queue execution never clear the L1 tombstone;
-finalization clears it only after durable marker reconciliation. Finalization
-captures the active token before propagation and identity-releases only that
-owner, so a concurrent resume token is retained and pre-signaled while a marker
-is pending. A concurrent completion winner does not release an active execution
-token. Shutdown clears the registry after in-flight execution
-is stopped. Terminal status claims store unique owner IDs in
+User cancellation is owned by Execution and runs on the canonical orchestrator
+Run; there is no separate cancellation-marker store or token registry (see the
+cancellation flow below). Terminal status claims store unique owner IDs in
 Redis. Losing instances do not cache the loss locally, and failed-delivery release uses Redis Lua
 compare-and-delete so an expired and subsequently reclaimed reservation cannot
 be deleted by its former owner.
@@ -2461,12 +2422,10 @@ Important Mongo collections include:
 - `room_quotes`
 - `room_memories`
 - `conversation_content`
-- `cancelled_messages`
 - `runs`
 - `room_files`
 - `runs`
 - `run_events`
-- `cancelled_messages`
 - `agent_requests`
 - `agent_capability_issues`
 
@@ -2571,13 +2530,12 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - delegates the write lease, attachment claims, atomic insert, winner/loser
      file-reference effects, and synchronous `message_committed` publication to
      `UserMessageCommitService`,
-   - treats only the service's `created=True` result as permission to create a
-     cancellation token and continue to preflight,
+   - treats only the service's `created=True` result as permission to continue
+     to preflight,
    - compensates a concurrent losing insert by deleting only its newly created
      quote; the commit service releases only the loser's message-scoped claims,
    - returns preflight outcome metadata for Execution-owned processing-status
      emission,
-   - creates a cancellation token,
    - initializes context memory if needed,
    - chooses a dispatch strategy:
      - explicit mentions,
@@ -2840,9 +2798,8 @@ render time. Agent text is stored as-is. Backend
 terminal helpers in `common/utils/a2a_helpers.py`
 (`prepare_terminal_agent_content`, `resolve_terminal_sse_content`,
 `sync_artifact_dicts_to_canonical_text`) resolve canonical text from artifacts
-and align artifact payloads without transforming markdown. Terminal resolution is
-owned by `update_task_state_on_message`; streaming text parts collapse to a
-single canonical text part while file/data parts are preserved. SSE terminal
+and align artifact payloads without transforming markdown. Streaming text parts
+collapse to a single canonical text part while file/data parts are preserved. SSE terminal
 `content` is authoritative for display text; `parts` carries only non-text
 payloads.
 
@@ -2870,28 +2827,27 @@ POST /api/v1/sse/message/{message_id}/cancel
 Cancellation flow:
 
 1. Route verifies the message and room ownership.
-2. `ExecutionFacade.cancel` delegates to `CancellationService`, which persists a
-   pending cancellation marker through `CancellationMarkerRepositoryPort`.
-3. The shared `CancellationFinalizer` in `execution.cancellation` CAS-terminalizes
-   any nonterminal durable run while preserving a concurrently completed result.
-4. The finalizer updates the message projection, signals the Execution-owned
-   cancellation runtime across instances, cancels HITL, emits terminal public
-   lifecycle/SSE, and cleans agent tasks.
-5. After cancellation terminalization succeeds, the active token is released
-   without clearing its tombstone; completion-winning finalization leaves active
-   execution ownership untouched. The marker is marked reconciled only after
-   every idempotent effect succeeds.
-6. The stale-task checker only triggers
-   `CancellationService.reconcile_pending(settle_cutoff=...)`. The service pages
-   pending markers by message ID, resolves room ownership, marks missing-message
-   markers reconciled, and invokes the same typed finalizer after crashes or
-   partial failures. One marker failure remains pending and does not starve later
-   markers; scan failures propagate. Old no-run markers settle only after the
-   orphan threshold, leaving time to catch a late-created run.
-7. Executors observe cancellation tokens at checkpoints and stop gracefully.
+2. `ExecutionFacade.cancel` hands the request to the orchestrator router's
+   `route_cancellation_by_user_message`, which loads the Run for the user message
+   and claims cancellation on it through the orchestrator run store
+   (`canceling`, with a deterministic `cancel:{run_id}:user_requested` command
+   ID). A Run that is already terminal, or already `canceling` under a different
+   command (for example a room deletion), returns its status with
+   `cancellation_applied=False`.
+3. The kernel cancellation coordinator cancels the Run's agent calls, notifying
+   remote agents. If any call is not yet terminal, the response is
+   `cancellation_pending` and recovery finishes the work later.
+4. After the calls settle, the router cancels the Run's HITL requests, runs the
+   facade's post-claim cleanup (cancelling HITL requests for the message), and
+   asks the session host to reconcile the Run to `canceled`. A failure in any of
+   these steps, or a Run that has not reached `canceled`, leaves the durable claim
+   in place and returns `cancellation_pending`. Once the Run is `canceled`, the
+   router signals the in-process session; a failure there is logged and the
+   response is still `canceled`.
 
-In multi-worker mode, Redis Pub/Sub/KV and Mongo change streams are required so
-typed SSE frames and cancellation state cross worker boundaries.
+In multi-worker mode, Redis Pub/Sub/KV are required so typed SSE frames cross
+worker boundaries, and MongoDB must support transactions (a replica set or
+`mongos`).
 
 For turn-correlated execution paths, emitters should include `client_request_id`
 when available and resolve it from message lineage when the event source does not
@@ -3100,14 +3056,18 @@ Single-process development:
 
 - `uvicorn main:app`
 - Redis is optional.
-- SSE and cancellation can operate in local or degraded modes.
+- SSE can operate in local or degraded modes.
 
 Multi-worker production:
 
 - Gunicorn-style multi-worker startup is allowed only when Redis-dependent
   services are connected.
-- `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, DAL
-  Redis runtime, or cancellation change streams are missing.
+- `check_multi_worker_safety` fails startup if Redis Pub/Sub, Redis KV, or the
+  DAL Redis runtime is missing, or if MongoDB cannot run transactions (probed
+  with `hello`: a replica set or `mongos`; room events need transactions).
+- Single-process starts do not probe MongoDB. With a standalone server, room
+  events use their non-transactional fallback, and `/health` does not report
+  it.
 - MongoDB 4.2 or newer is required for atomic aggregation update pipelines
   (`docker-compose.yml` currently pins MongoDB 7.0).
 - The terminal task writer-fencing release requires a coordinated drain: stop or

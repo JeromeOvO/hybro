@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any, Protocol
 
 from a2a_adapter.remote_task import fetch_remote_task
@@ -34,7 +33,6 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import ensure_utc, utcnow
-from execution.cancellation.ports import CancellationReconciliationPort
 from jobs.constants import STALE_TASK_CHECKER
 from models.room import RoomAgentMessage
 
@@ -66,11 +64,6 @@ a2a_service: Any = _UnboundDependency("a2a_service")
 
 async def notify_task_update(**_kwargs) -> Any:
     raise RuntimeError("Stale task checker notification dependency is not bound")
-
-
-@dataclass(frozen=True)
-class StaleCancellationReconciliationDeps:
-    reconciliation: CancellationReconciliationPort
 
 
 @dataclass(frozen=True)
@@ -128,7 +121,6 @@ class StaleTaskChecker:
         task_expiry_hours: int = 4,
         pending_task_warning_hours: int = 1,
         check_interval_minutes: int = 5,
-        orphan_threshold_minutes: int = 2,
     ):
         """
         Initialize the stale task checker.
@@ -138,27 +130,16 @@ class StaleTaskChecker:
             task_expiry_hours: Auto-fail tasks older than this
             pending_task_warning_hours: Warn (log) after this time
             check_interval_minutes: How often to run the check
-            orphan_threshold_minutes: Recover orphaned messages older than this
         """
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
         self.pending_task_warning_hours = pending_task_warning_hours
         self.check_interval_minutes = check_interval_minutes
-        self.orphan_threshold_minutes = orphan_threshold_minutes
         self._running = False
         self._task: asyncio.Task | None = None
         self._leader: LeaderGate | None = None
-        self._cancellation_reconciliation_deps: (
-            StaleCancellationReconciliationDeps | None
-        ) = None
         self._hitl_deps: StaleHITLDeps | None = None
         self._runtime_deps: StaleTaskCheckerDeps | None = None
-
-    def set_cancellation_reconciliation_deps(
-        self,
-        deps: StaleCancellationReconciliationDeps,
-    ) -> None:
-        self._cancellation_reconciliation_deps = deps
 
     def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a leader gate instance for distributed leader gating."""
@@ -170,12 +151,10 @@ class StaleTaskChecker:
         stale_check_minutes: int,
         task_expiry_hours: int,
         pending_task_warning_hours: int,
-        orphan_threshold_minutes: int,
     ) -> None:
         self.stale_check_minutes = stale_check_minutes
         self.task_expiry_hours = task_expiry_hours
         self.pending_task_warning_hours = pending_task_warning_hours
-        self.orphan_threshold_minutes = orphan_threshold_minutes
 
     def set_runtime_deps(self, deps: StaleTaskCheckerDeps) -> None:
         self._runtime_deps = deps
@@ -265,9 +244,6 @@ class StaleTaskChecker:
 
         This is called periodically by the background loop.
         """
-        # Durable user cancellation wins before any polling, expiry, or recovery.
-        await self._reconcile_pending_cancellations()
-
         # Aggregate deadlines, durable applications, and command uncertainty are
         # authoritative and must converge before generic stale-agent handling.
         if self._hitl_deps and self._hitl_deps.reconcile_lifecycle is not None:
@@ -745,22 +721,10 @@ class StaleTaskChecker:
             logger.warning("legacy processing_message_id cleanup failed: %s", e)
 
     async def _is_message_cancelled_for_recovery(self, message_id: str) -> bool:
-        strict_reader = getattr(
-            self._store,
-            "is_message_cancelled_strict",
-            self._store.is_message_cancelled,
-        )
-        return await strict_reader(message_id)
-
-    async def _reconcile_pending_cancellations(self) -> None:
-        """Trigger Execution-owned reconciliation of pending markers."""
-        if self._cancellation_reconciliation_deps is None:
-            logger.warning("Cancellation reconciliation dependency is not bound")
-            return
-        settle_cutoff = utcnow() - timedelta(minutes=self.orphan_threshold_minutes)
-        await self._cancellation_reconciliation_deps.reconciliation.reconcile_pending(
-            settle_cutoff=settle_cutoff
-        )
+        # The cancellation-marker store is retired; live cancellation claims the
+        # canonical Run and never reaches these legacy tracked-task paths.
+        del message_id
+        return False
 
 
 # Singleton instance. Application startup binds runtime dependencies and settings.

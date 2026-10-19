@@ -9,7 +9,6 @@ from common.protocols.context_memory_protocols import (
     ContextAssemblyPort,
     RoomMemoryCleanupPort,
 )
-from common.utils.cancellation import CancellationToken
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from conversation import (
@@ -30,14 +29,12 @@ from conversation.timeline import (
 )
 from conversation.timeline_projection import RoomTimelineProjector
 from conversation.unbound import (
-    UNBOUND_CANCELLATION_CONTROL,
     UNBOUND_RUNTIME_STORE,
 )
 from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
 )
-from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     RoomCenterRoomMessageRequest,
     RoomCenterRoomSettingRequest,
@@ -86,7 +83,6 @@ class RoomMessagePreflightContext:
     pre_resolved_mentions: list[dict] | None
     pre_resolved_scope: ResolvedRoutingScope | None
     pre_resolved_selected_scope: ResolvedRoutingScope | None
-    token: CancellationToken
 
 
 class ConversationRuntime:
@@ -94,7 +90,6 @@ class ConversationRuntime:
         if room_store is None:
             room_store = UNBOUND_RUNTIME_STORE
         self._store = room_store
-        self.cancellation_control = UNBOUND_CANCELLATION_CONTROL
         self._room_files = None
         self._facade = None
         self._bound = False
@@ -109,25 +104,12 @@ class ConversationRuntime:
         """Clear process-global composition state before a new lifespan starts."""
         self.__init__()
 
-    def _release_cancellation_token(
-        self,
-        message_id: str,
-        token: CancellationToken | None,
-    ) -> None:
-        if token is not None:
-            self.cancellation_control.release_token(message_id, token)
-
     def bind_room_files(self, room_files) -> None:
         self._room_files = room_files
 
     def bind_store(self, store) -> None:
         """Inject the room runtime persistence store explicitly at startup."""
         self._store = store
-
-    def bind_cancellation_control(self, *, cancellation_control) -> None:
-        if cancellation_control is None:
-            raise RuntimeError("ConversationRuntime cancellation_control is required")
-        self.cancellation_control = cancellation_control
 
     @property
     def room_files(self):
@@ -168,12 +150,6 @@ class ConversationRuntime:
                 and getattr(self, "_store", None) is not UNBOUND_RUNTIME_STORE,
             ),
             ("facade", getattr(self, "_facade", None) is not None),
-            (
-                "cancellation_control",
-                getattr(self, "cancellation_control", None) is not None
-                and getattr(self, "cancellation_control", None)
-                is not UNBOUND_CANCELLATION_CONTROL,
-            ),
             (
                 "user_message_commit",
                 getattr(self, "_user_message_commit", None) is not None,
@@ -947,18 +923,6 @@ class ConversationRuntime:
                 None,
             )
 
-        # Create a CancellationToken early in the pipeline so the parse step
-        # (and later the queue step) can detect cancels
-        # via the token.  If the user already hit cancel before we got here,
-        # the token is pre-signalled.
-        token = self.cancellation_control.create_token(user_message.message_id)
-        try:
-            # Hydrate an L1 miss before the long post-persistence parse begins.
-            # check_cancelled signals the newly owned token when Redis has a tombstone.
-            await self.cancellation_control.check_cancelled(user_message.message_id)
-        except BaseException:
-            self._release_cancellation_token(user_message.message_id, token)
-            raise
         logger.info(
             "room_send_message_persisted room_id=%s message_id=%s "
             "client_request_id=%s target_group=%s",
@@ -989,7 +953,6 @@ class ConversationRuntime:
                 pre_resolved_mentions=pre_resolved_mentions,
                 pre_resolved_scope=pre_resolved_scope,
                 pre_resolved_selected_scope=pre_resolved_selected_scope,
-                token=token,
             ),
         )
 
@@ -997,21 +960,18 @@ class ConversationRuntime:
         self,
         context: RoomMessagePreflightContext,
     ) -> RoomCenterUserMessageResponse:
-        try:
-            return await self._run_message_preflight_to_room(context)
-        finally:
-            # The preflight token never crosses into orchestration. A ready ack
-            # starts a separate execution which creates and hydrates its own token.
-            self.discard_message_preflight(context)
+        return await self._run_message_preflight_to_room(context)
 
     def discard_message_preflight(
         self,
         context: RoomMessagePreflightContext,
     ) -> None:
-        self._release_cancellation_token(
-            context.user_message.message_id,
-            getattr(context, "token", None),
-        )
+        """Abort hook Execution calls when it drops a persisted preflight.
+
+        Preflight holds no per-message resources today, so there is nothing to
+        release; the hook stays so Execution's abort path has one owner.
+        """
+        del context
 
     async def _run_message_preflight_to_room(
         self,
@@ -1589,52 +1549,6 @@ class ConversationRuntime:
                 error="Failed to retrieve room timeline",
                 status_code=500,
             )
-
-    async def update_user_message_orchestration_status(
-        self,
-        message_id: str,
-        status: str,
-    ) -> bool:
-        """Persist the public orchestration status on a user message."""
-        user_message = await self._store.get_room_user_message_by_message_id(message_id)
-        if user_message is None:
-            return False
-        if not isinstance(user_message.extend_info, dict):
-            return False
-        if not (
-            user_message.extend_info.get("orchestration") is True
-            or user_message.extend_info.get("orchestration_run_id")
-        ):
-            return True
-        terminal = status in {
-            terminal_status.value for terminal_status in TERMINAL_ORCHESTRATION_STATUSES
-        }
-        already_projected = user_message.extend_info.get(
-            "orchestration_status"
-        ) == status and (not terminal or user_message.processing_claimed_at is None)
-        if already_projected:
-            return True
-
-        user_message.extend_info["orchestration_status"] = status
-        if terminal:
-            user_message.processing_claimed_at = None
-        updated = await self._store.update_room_user_message_by_message_id(
-            message_id,
-            user_message,
-        )
-        if updated:
-            return True
-
-        # Mongo reports a no-op write as unmodified. A concurrent or replayed
-        # projection is successful when the persisted envelope is already at
-        # the requested state.
-        persisted = await self._store.get_room_user_message_by_message_id(message_id)
-        return bool(
-            persisted is not None
-            and isinstance(persisted.extend_info, dict)
-            and persisted.extend_info.get("orchestration_status") == status
-            and (not terminal or persisted.processing_claimed_at is None)
-        )
 
 
 # Singleton export

@@ -56,18 +56,6 @@ class MessageRuntimeStorePart:
             logger.error("Failed to get room user message", exc_info=True)
             return None
 
-    async def get_room_user_message_by_message_id_strict(
-        self,
-        message_id: str,
-    ) -> RoomUserMessage | None:
-        doc = await self._message_repository.get_user_message_by_id(message_id)
-        if doc is None:
-            return None
-        message = _safe_parse_user_message(doc)
-        if message is None:
-            raise ValueError(f"invalid user message {message_id}")
-        return message
-
     async def get_room_user_messages_by_room_id(
         self,
         room_id: str,
@@ -123,23 +111,6 @@ class MessageRuntimeStorePart:
         except Exception:
             logger.error("Failed to get related agent messages", exc_info=True)
             return []
-
-    async def get_room_agent_messages_by_related_message_id_strict(
-        self,
-        related_message_id: str,
-    ) -> list[RoomAgentMessage]:
-        docs = await self._message_repository.get_agent_messages_by_related_message_id(
-            related_message_id
-        )
-        messages: list[RoomAgentMessage] = []
-        for doc in docs:
-            if doc is None:
-                continue
-            message = _safe_parse_agent_message(doc)
-            if message is None:
-                raise ValueError("invalid related agent message")
-            messages.append(message)
-        return messages
 
     async def add_room_agent_message(
         self, room_agent_message: RoomAgentMessage
@@ -724,71 +695,6 @@ class MessageRuntimeStorePart:
         except Exception:
             logger.error("Failed to reset last notified state", exc_info=True)
             return False
-
-    async def update_task_state_on_message(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        message_text: str | None = None,
-        artifacts: list[dict] | None = None,
-        task_id: str | None = None,
-        context_id: str | None = None,
-        task_metadata: dict[str, Any] | None = None,
-    ) -> tuple[bool, str | None]:
-        resolved_message_text = message_text
-        try:
-            from common.utils.a2a_helpers import (
-                artifacts_to_dicts,
-                is_terminal_task_state_value,
-                prepare_terminal_agent_content,
-            )
-
-            if is_terminal_task_state_value(state):
-                if artifacts is None:
-                    existing = await self.get_room_agent_message_by_message_id(
-                        message_id
-                    )
-                    task = (
-                        existing.message_content.message_task
-                        if existing and existing.message_content
-                        else None
-                    )
-                    if task and task.artifacts:
-                        artifacts = artifacts_to_dicts(task.artifacts)
-                message_text, artifacts, _ = prepare_terminal_agent_content(
-                    message_text=message_text,
-                    artifacts=artifacts,
-                )
-                resolved_message_text = message_text
-
-            updates: dict[str, Any] = {
-                "message_content.message_task.status.state": state,
-                "task_updated_at": utcnow(),
-            }
-            if message_text is not None:
-                updates["message_content.message_text"] = message_text
-            if artifacts is not None:
-                updates["message_content.message_task.artifacts"] = artifacts
-            if task_id is not None:
-                updates["message_content.message_task.id"] = task_id
-            if context_id is not None:
-                updates["message_content.message_task.contextId"] = context_id
-            if task_metadata is not None:
-                updates["message_content.message_task.metadata"] = task_metadata
-
-            terminal_values = sorted(state.value for state in TERMINAL_STATES)
-            updated = (
-                await self._message_repository.update_agent_message_if_not_terminal(
-                    message_id,
-                    updates,
-                    terminal_values,
-                )
-            )
-            return updated, resolved_message_text
-        except Exception:
-            logger.error("Failed to update task state on message", exc_info=True)
-            return False, resolved_message_text
 
     async def claim_terminal_finalization(
         self,

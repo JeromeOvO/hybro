@@ -178,11 +178,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             )
         )
     )
-    room_services.cancellation_control = SimpleNamespace(
-        create_token=MagicMock(return_value=object()),
-        release_token=MagicMock(return_value=True),
-        check_cancelled=AsyncMock(return_value=False),
-    )
     room_files = _RoomFiles()
     room_services.bind_room_files(room_files)
     room_services.bind_attachment_metadata_reader(
@@ -237,22 +232,8 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
             get_run=AsyncMock(return_value=None),
             get_runs_for_room=AsyncMock(return_value=[]),
         ),
-        cancellation_state=SimpleNamespace(
-            cancel_message_and_broadcast=AsyncMock(),
-            get_active_token=MagicMock(return_value=None),
-            release_active_token=MagicMock(return_value=True),
-            clear_cancellation=MagicMock(),
-        ),
-        cancellation_repository=SimpleNamespace(
-            request=AsyncMock(return_value=True),
-            mark_reconciled=AsyncMock(),
-        ),
-        cancellation_message_reader=AsyncMock(return_value=None),
         hitl_message_cancellation=SimpleNamespace(
             cancel_requests_for_message=AsyncMock(),
-        ),
-        agent_task_cleanup=SimpleNamespace(
-            cleanup_cancelled_message_tasks=AsyncMock(),
         ),
         event_publisher=delivery_publisher,
         run_event_enabled=lambda: False,
@@ -285,7 +266,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     assert len(internal_publisher.internal_events) == 1
     assert run_lifecycle.record_processing_status.await_count == 0
     assert len(delivery_publisher.public_events) == 1
-    assert room_services.cancellation_control.create_token.call_count == 1
     assert len(room_files.claims) == 2
     assert len(set(room_files.claims)) == 2
     assert "same-client-supplied-message-id" not in room_files.claims

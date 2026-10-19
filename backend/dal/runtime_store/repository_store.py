@@ -104,7 +104,6 @@ class RuntimeRepositoryStore:
         self._room_memories = mongo.collection("room_memories")
         self._room_agent_messages = mongo.collection("room_agent_messages")
         self._room_user_messages = mongo.collection("room_user_messages")
-        self._cancelled_messages = mongo.collection("cancelled_messages")
         self._hitl_requests = mongo.collection("hitl_requests")
         self._hitl_interactions = mongo.collection("hitl_interactions")
         self._hitl_resume_commands = mongo.collection("hitl_resume_commands")
@@ -126,7 +125,6 @@ class RuntimeRepositoryStore:
         self._task_lifecycle_part = TaskLifecycleRuntimeStorePart(
             room_agent_messages=self._room_agent_messages,
             room_user_messages=self._room_user_messages,
-            cancelled_messages=self._cancelled_messages,
             runs=self._runs,
             message_repository=self._message_repository,
             message_store=self.messages,
@@ -187,7 +185,6 @@ class RuntimeRepositoryStore:
         return TaskLifecycleRuntimeStorePart(
             room_agent_messages=getattr(self, "_room_agent_messages", None),
             room_user_messages=getattr(self, "_room_user_messages", None),
-            cancelled_messages=getattr(self, "_cancelled_messages", None),
             runs=getattr(self, "_runs", None),
             message_repository=getattr(self, "_message_repository", None),
             message_store=self._message_delegate(),
@@ -294,16 +291,6 @@ class RuntimeRepositoryStore:
         )
         return room_user_message_to_runtime(message) if message is not None else None
 
-    async def get_room_user_message_by_message_id_strict(
-        self,
-        message_id: str,
-    ) -> RuntimeRoomUserMessage | None:
-        return (
-            await self._message_delegate().get_room_user_message_by_message_id_strict(
-                message_id
-            )
-        )
-
     async def get_room_user_messages_by_room_id(
         self,
         room_id: str,
@@ -335,14 +322,6 @@ class RuntimeRepositoryStore:
             await self._message_delegate().get_room_agent_messages_by_related_message_id(
                 related_message_id
             )
-        )
-
-    async def get_room_agent_messages_by_related_message_id_strict(
-        self,
-        related_message_id: str,
-    ) -> list[RuntimeRoomAgentMessage]:
-        return await self._message_delegate().get_room_agent_messages_by_related_message_id_strict(
-            related_message_id
         )
 
     async def add_room_agent_message(
@@ -506,12 +485,6 @@ class RuntimeRepositoryStore:
         return await self._task_delegate().verify_webhook_token_for_task(
             message_id, token
         )
-
-    async def is_message_cancelled(self, message_id: str) -> bool:
-        return await self._task_delegate().is_message_cancelled(message_id)
-
-    async def is_message_cancelled_strict(self, message_id: str) -> bool:
-        return await self._task_delegate().is_message_cancelled_strict(message_id)
 
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
         return await self._task_delegate().get_room_ids_with_non_terminal_runs()
@@ -891,27 +864,6 @@ class RuntimeRepositoryStore:
 
     async def reset_last_notified_state(self, message_id: str) -> bool:
         return await self._message_delegate().reset_last_notified_state(message_id)
-
-    async def update_task_state_on_message(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        message_text: str | None = None,
-        artifacts: list[dict] | None = None,
-        task_id: str | None = None,
-        context_id: str | None = None,
-        task_metadata: dict[str, Any] | None = None,
-    ) -> tuple[bool, str | None]:
-        return await self._message_delegate().update_task_state_on_message(
-            message_id,
-            state,
-            message_text=message_text,
-            artifacts=artifacts,
-            task_id=task_id,
-            context_id=context_id,
-            task_metadata=task_metadata,
-        )
 
     async def terminal_finalization_matches(
         self,

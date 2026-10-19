@@ -404,30 +404,6 @@ class _FakeTransport(_LifecycleComponent):
     def get_room_status(self, room_id: str):
         return {"room_id": room_id}
 
-    def is_cancelled(self, message_id: str):
-        return False
-
-    def cancel_message(self, message_id: str):
-        self.compat_calls.append(("cancel_message", message_id))
-
-    async def cancel_message_and_broadcast(self, message_id: str):
-        self.compat_calls.append(("cancel_message_and_broadcast", message_id))
-
-    async def check_cancelled(self, message_id: str):
-        return False
-
-    def clear_cancellation(self, message_id: str):
-        self.compat_calls.append(("clear_cancellation", message_id))
-
-    def create_token(self, message_id: str):
-        return None
-
-    def get_token(self, message_id: str):
-        return None
-
-    def remove_token(self, message_id: str):
-        self.compat_calls.append(("remove_token", message_id))
-
 
 class _FakePublisher(_LifecycleComponent):
     def __init__(self, calls: list[str]):
