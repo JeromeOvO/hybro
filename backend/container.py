@@ -657,6 +657,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_capability_issue_service = create_agent_capability_issue_service(
                 repository=agent_capability_issue_repository
             )
+            from conversation.attachment_projection import (
+                AttachmentProjectionService,
+            )
             from delivery.task_notifier import TaskUpdateNotifier
             from execution.adapters.hitl import HITLMessageCancellationAdapter
             from execution.client_request_id import SSEClientRequestIdResolver
@@ -675,9 +678,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 A2AHITLContinuationAdapter,
                 HITLDeliveryAdapter,
                 HITLTaskNotificationAdapter,
-            )
-            from execution.orchestration.resources import (
-                AttachmentProjectionService,
             )
             from execution.orchestration.run_store import MongoOrchestrationRunStore
             from execution.run_command_handler import (

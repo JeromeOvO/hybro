@@ -9,6 +9,8 @@ from a2a_adapter.translators import facade_result_to_model, message_to_completed
 from common.a2a_constants import (
     INTERACTIVE_STATES,
     NON_TERMINAL_STATES,
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
     SyntheticTaskId,
     is_interactive_state,
     is_terminal_state,
@@ -39,10 +41,6 @@ from common.utils.artifact_delivery import (
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from execution.dispatch.a2a_interaction import input_observation_from_a2a
-from execution.dispatch.agent_ingress_router import (
-    UNSUPPORTED_INTERACTION_CODE,
-    UNSUPPORTED_INTERACTION_MESSAGE,
-)
 from execution.hitl.delivery import (
     HITLDeliveryDisposition,
     HITLDeliveryError,

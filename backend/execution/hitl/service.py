@@ -19,7 +19,11 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from common.a2a_constants import FAILURE_STATES
+from common.a2a_constants import (
+    FAILURE_STATES,
+    UNSUPPORTED_INTERACTION_CODE,
+    UNSUPPORTED_INTERACTION_MESSAGE,
+)
 from common.dto import (
     HITLApplicationRoute,
     HITLEvidenceOrigin,
@@ -38,10 +42,6 @@ from common.utils.a2a_helpers import (
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from execution.dispatch.agent_ingress_router import (
-    UNSUPPORTED_INTERACTION_CODE,
-    UNSUPPORTED_INTERACTION_MESSAGE,
-)
 from execution.hitl.exceptions import (
     ContinuationLostError,
     HITLConflictError,
