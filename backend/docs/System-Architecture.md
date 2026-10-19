@@ -781,7 +781,10 @@ key listed in `loader.REMOVED_FIELDS`: older files (including ones written by
 `config migrate --from-env`) may still carry it, so it is dropped on read, named
 in one startup warning, and not written back by `config set`; setting it
 explicitly is rejected. The set is removed in the next major release.
-Credentials stay in `auth.json`;
+`auth.json` service keys follow the same rule through
+`runtime_store.RETIRED_SERVICE_KEYS` (`mongodb_password`): accepted on read,
+not offered by `config secret` or migration, and dropped when internal tokens
+are next ensured. Credentials stay in `auth.json`;
 its `services` mapping contains scoped service secrets, separately from Provider
 credentials. Setup edits and OAuth rotations preserve unrelated fields.
 

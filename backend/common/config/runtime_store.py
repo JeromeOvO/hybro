@@ -219,7 +219,6 @@ SERVICE_KEYS = frozenset(
     {
         "clerk_secret_key",
         "clerk_webhook_secret",
-        "mongodb_password",
         "mongodb_url",
         "redis_url",
         "default_agent_registrar_token",
@@ -229,11 +228,18 @@ SERVICE_KEYS = frozenset(
 )
 
 
+# Retired service keys that existing auth.json files may still carry. They are
+# accepted on read, never offered by `config secret` or migration, and dropped
+# the next time ensure_service_credentials rewrites the file. Remove this set in
+# the next major release.
+RETIRED_SERVICE_KEYS = frozenset({"mongodb_password"})
+
+
 def _auth_object(data: bytes | None) -> dict[str, object]:
     value = _json_object(data) if data is not None else {}
     services = value.get("services", {})
     if not isinstance(services, dict) or any(
-        key not in SERVICE_KEYS or not isinstance(secret, str)
+        key not in SERVICE_KEYS | RETIRED_SERVICE_KEYS or not isinstance(secret, str)
         for key, secret in services.items()
     ):
         raise RuntimeConfigurationError("Invalid auth.json service credentials.")
@@ -490,14 +496,19 @@ class RuntimeConfigStore:
         with self._locked():
             data = self._read("auth.json")
             parse_credential(data) if data is not None else None
-            return dict(_auth_object(data).get("services", {}))
+            services = _auth_object(data).get("services", {})
+            return {k: v for k, v in services.items() if k in SERVICE_KEYS}
 
     def ensure_service_credentials(self) -> dict[str, str]:
         with self._locked():
             data = self._read("auth.json")
             credential = parse_credential(data) if data is not None else None
             value = _auth_object(data)
-            services = dict(value.get("services", {}))
+            services = {
+                k: v
+                for k, v in value.get("services", {}).items()
+                if k not in RETIRED_SERVICE_KEYS
+            }
             for key in (
                 "default_agent_registrar_token",
                 "default_agent_llm_token",

@@ -32,7 +32,6 @@ class Settings(BaseModel):
 
     mongodb_url: str = "localhost:27017"
     mongodb_db_name: str = "hybro"
-    mongodb_password: str = ""
 
     openai_api_key: str = ""
     openai_base_url: str = Field(
@@ -418,7 +417,6 @@ PRIVATE_FIELDS = frozenset(
         "google_api_key",
         "gemini_api_key",
         "clerk_secret_key",
-        "mongodb_password",
         "default_agent_registrar_token",
         "default_agent_llm_token",
         "webhook_signing_key",
