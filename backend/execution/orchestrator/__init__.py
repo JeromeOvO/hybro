@@ -78,7 +78,6 @@ from .persistence import (
 )
 from .ports import (
     CancellationSignal,
-    Clock,
     ContextCompactor,
     EventProjector,
     IDFactory,
@@ -193,7 +192,6 @@ __all__ = [
     "BudgetState",
     "AgentToolInput",
     "CancellationSignal",
-    "Clock",
     "ContextCompactor",
     "CandidateAgentSnapshot",
     "CandidateScopeSnapshot",

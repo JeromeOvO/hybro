@@ -103,10 +103,6 @@ class ToolRuntime(Protocol):
     ) -> ParkedInteractionCloseout: ...
 
 
-class Clock(Protocol):
-    def now(self) -> datetime: ...
-
-
 class IDFactory(Protocol):
     def new_id(self, prefix: str) -> str: ...
 
