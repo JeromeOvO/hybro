@@ -13,12 +13,6 @@ class AgentRoutingCandidate(FrozenDTO):
     skills: list[str] = Field(default_factory=list)
 
 
-class ExplicitAgentMention(FrozenDTO):
-    agent_id: str
-    agent_name: str
-    mention_text: str | None = None
-
-
 class RoomMessageSummary(FrozenDTO):
     agent_id: str | None = None
     agent_name: str
@@ -30,19 +24,8 @@ class RoomMemoryGenerationInput(FrozenDTO):
     existing_memory: str | None = None
 
 
-class ParsedUserMessageRequest(FrozenDTO):
-    message_text: str
-    selected_agents: dict[str, str] = Field(default_factory=dict)
-    auto_assign_agents: bool = False
-    agents: list[AgentRoutingCandidate] = Field(default_factory=list)
-    conversation_context: str | None = None
-    explicit_mentions: list[ExplicitAgentMention] = Field(default_factory=list)
-
-
 __all__ = [
     "AgentRoutingCandidate",
-    "ExplicitAgentMention",
-    "ParsedUserMessageRequest",
     "RoomMemoryGenerationInput",
     "RoomMessageSummary",
 ]

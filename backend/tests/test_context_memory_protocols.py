@@ -422,51 +422,6 @@ def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypa
         context_memory_config._setting("context_model_window", 128000)
 
 
-def test_agent_context_assembly_is_canonical_only_and_propagates_failure():
-    from conversation.agent_message_preparation import AgentMessagePreparationService
-    from models.memory import ConversationTurn, RoomMemory, TurnRole
-
-    class FailingAssembly:
-        received_memory = None
-
-        def assemble_agent_execution_context_from_memory(
-            self, room_memory, current_task, **kwargs
-        ):
-            self.received_memory = room_memory
-            raise RuntimeError("canonical assembly failed")
-
-    assembly = FailingAssembly()
-    services = object.__new__(AgentMessagePreparationService)
-    services._context_assembly = assembly
-    room_memory = RoomMemory(
-        room_id="room-1",
-        conversation_history=[
-            ConversationTurn(turn_id="turn-1", role=TurnRole.USER, content="canonical")
-        ],
-        memory_content={
-            "summary": "summary only",
-            "conversation_history": [
-                {"turn_id": "nested", "role": "user", "content": "retired nested"}
-            ],
-        },
-    )
-
-    with pytest.raises(RuntimeError, match="canonical assembly failed"):
-        services._build_agent_execution_context_from_memory(
-            room_memory=room_memory,
-            current_task="task",
-            agent_name="Agent",
-            room_awareness=None,
-            quoted_text=None,
-            agent_task=None,
-        )
-
-    assert assembly.received_memory is room_memory
-    source = inspect.getsource(AgentMessagePreparationService.process_agent_message)
-    assert "build_context_for_agent" not in source
-    assert "room_memory_content" not in source
-
-
 def test_room_delete_has_no_stale_direct_context_memory_cleanup():
     from conversation.deletion import RoomDeletionService
 

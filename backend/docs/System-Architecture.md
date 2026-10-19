@@ -361,10 +361,7 @@ Examples:
   `conversation.membership_source`. From the former compatibility execution-service
   bundle, the runtime retains only the narrow cancellation-control port for
   message token lifecycle; it does not own Delivery, A2A, agent selection, agent
-  compatibility, or remote-task-reader dependencies. Outbound agent-message
-  preparation is owned by
-  `conversation.agent_message_preparation.AgentMessagePreparationService`; the
-  conversation runtime keeps only a signature-preserving delegate. Public room
+  compatibility, or remote-task-reader dependencies. Public room
   timeline projection is owned by `conversation.timeline_projection.RoomTimelineProjector`.
   It receives already-queried timeline pages and uses narrow, room-scoped file
   metadata and HITL readers to produce safe public messages without mutating
@@ -448,7 +445,7 @@ together.
 Execution is intentionally independent from removed-package compatibility
 objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
-`conversation.runtime`, `conversation.agent_message_preparation`, `conversation.deletion`,
+`conversation.runtime`, `conversation.deletion`,
 `conversation.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
 and
 `dal.runtime_store` objects into focused execution ports. Files under
@@ -658,7 +655,7 @@ The providers in `api_gateway.dependencies` construct these small services over
 the container-bound registry/group dependencies. The routes own HTTP translation,
 Agent owns inventory and scope checks, Execution owns the bounded one-shot send,
 and `a2a_adapter` remains the sole SDK/protocol conversion boundary. This path
-does not invoke the room `ExecutionFacade` or `AgentMessageProcessor`.
+does not invoke the room `ExecutionFacade`.
 
 `AgentNetworkAccess` extends the shared `AgentNetworkTargetResolver` contract.
 Execution depends only on target resolution, not on the Agent package or its
@@ -812,13 +809,6 @@ read from the room file store and dispatched as A2A `FileContent.bytes`
 boundary).
 Local filesystem paths and authenticated room-file URLs remain internal to
 Hybro and are never sent to agents.
-
-`A2A_INLINE_FILE_MAX_RAW_BYTES` limits one raw file before base64 encoding.
-`A2A_INLINE_MESSAGE_MAX_ENCODED_BYTES` limits aggregate encoded file bytes in
-one outbound A2A message. Attachment preflight failures create failed agent
-tasks before transport dispatch in both queue and supervisor execution paths,
-so validation failures are persisted and surfaced without attempting direct
-transport.
 
 ### `llm_gateway`
 
@@ -1092,8 +1082,8 @@ OpenAI-backed because DeepSeek does not expose an embeddings API.
 Focused workflow services under `llm_gateway/services/` wrap prompt workflows
 without importing domain models:
 
-- `AgentSelectionLLMService` and `MessageParserLLMService`: DTO-backed
-  workflows used directly by runtime modules.
+- `AgentSelectionLLMService`: a DTO-backed workflow used directly by runtime
+  modules.
 
 `container.py` constructs one `LLMGatewayImpl` during runtime startup and binds
 focused services into production consumers. Runtime modules now depend on
@@ -2582,9 +2572,7 @@ The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
    - creates a cancellation token,
    - initializes context memory if needed,
    - chooses a dispatch strategy:
-     - explicit mentions; deterministic mention fan-out reports failed rather
-       than ready when no agent message is persisted, while a partial durable
-       fan-out remains executable and is logged with failure counts,
+     - explicit mentions,
      - room default/saved group,
      - all-agent matching,
      - supervisor if `room.extend_info.use_supervisor` is true,
@@ -2764,21 +2752,6 @@ Keyset continuation fixes the page boundary at the cursor key: messages appended
 with later keys after page one do not repeat in older pages. A backdated insert
 behind the cursor may appear in a later page. There is intentionally no snapshot
 isolation across HTTP requests.
-
-## Agent Dispatch Workflow
-
-Both queue and supervisor execution use `AgentMessageProcessor`.
-
-1. Load current room memory from the database.
-2. Ask `ConversationRuntime.process_agent_message` to build the outbound A2A message.
-3. Build a `DispatchContext`.
-4. Run pre-dispatch middleware, including health checks for remote agents.
-5. Call the target agent through direct A2A transport.
-6. Run post-dispatch middleware.
-7. Return `ProcessingResult` to the executor.
-
-Direct dispatch can complete synchronously, stream artifacts, or pause for
-webhook continuation depending on the agent/task behavior.
 
 ## A2A Webhook Workflow
 

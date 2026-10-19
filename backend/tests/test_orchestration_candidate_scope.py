@@ -7,7 +7,6 @@ from conversation.candidate_scope import (
     normalize_candidate_scope,
 )
 from models.orchestration import CandidateAgentSnapshot, CandidateScopeSnapshot
-from models.supervisor import AgentProfile
 
 
 def test_normalize_candidate_scope_from_mapping_preserves_order_and_names():
@@ -136,11 +135,11 @@ def test_normalize_candidate_scope_object_snapshot_preserves_all_agent_ids():
     assert scope.agents[1].name is None
 
 
-def test_normalize_candidate_scope_agent_profile_preserves_metadata():
+def test_normalize_candidate_scope_agent_object_preserves_metadata():
     scope = normalize_candidate_scope(
         room_id="room-1",
         source="explicit_selection",
-        selected_agent_set=AgentProfile(
+        selected_agent_set=SimpleNamespace(
             agent_id="agent-1",
             agent_name="Broker",
             description="Handles broker intake.",

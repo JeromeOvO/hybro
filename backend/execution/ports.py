@@ -15,8 +15,6 @@ from models.agent_group import AgentGroup
 from models.agent_network import AgentMessageRequest, AgentMessageResponse
 from models.memory import RoomMemory
 from models.quote import QuotedSnippet
-from models.request import RoomCenterAgentMessageRequest
-from models.response import RoomCenterAgentMessageResponse
 from models.room import (
     CoordinatorAgentId,
     MessageContent,
@@ -663,38 +661,6 @@ class RoomMemoryPort(Protocol):
         synthesis_text: str,
         synthesis_turn_id: str | None = None,
     ) -> bool: ...
-
-
-class RoomRuntimePort(Protocol):
-    def create_agent_message(
-        self,
-        room_id: str,
-        related_message_id: str,
-        agent_id: str,
-        content: str,
-        user_id: str | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        task_content: str | None = None,
-        turn_id: str | None = None,
-        client_request_id: str | None = None,
-    ) -> RoomAgentMessage: ...
-
-    async def process_agent_message(
-        self,
-        request: RoomCenterAgentMessageRequest,
-        room_memory: RoomMemory | None = None,
-        quoted_text: str | None = None,
-        orchestration_user_message_id: str | None = None,
-    ) -> RoomCenterAgentMessageResponse: ...
-
-    async def update_agent_message_by_message_id(
-        self, request: RoomCenterAgentMessageRequest
-    ) -> RoomCenterAgentMessageResponse: ...
-
-    async def inquiry_agent_messages_by_related_message_id(
-        self, related_message_id: str
-    ) -> Any: ...
 
 
 class QuotedSnippetReaderPort(Protocol):

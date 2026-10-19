@@ -899,9 +899,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
-            from conversation.agent_message_preparation import (
-                AgentMessagePreparationService,
-            )
             from conversation.deletion import RoomDeletionService
             from conversation.runtime import (
                 conversation_runtime,
@@ -924,10 +921,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from llm_gateway import LLMGatewayImpl, ModelRegistryImpl
             from llm_gateway.config import LLMGatewayConfig
-            from llm_gateway.services import (
-                AgentSelectionLLMService,
-                MessageParserLLMService,
-            )
+            from llm_gateway.services import AgentSelectionLLMService
             from local_agents import (
                 HostPortScanner,
                 LocalAgentCardProbe,
@@ -1136,7 +1130,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.run_queries import RunQueryAdapter
             from execution.task_tracking import A2ATaskTrackingService
-            from models.quote import QuotedSnippet
 
             _execution_repos = create_execution_repositories(mongo=mongo_dal)
             run_command_handler = RunCommandHandler(
@@ -1190,10 +1183,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_selection_llm_service = AgentSelectionLLMService(
                 llm_provider=llm_provider
             )
-            message_parser_llm_service = MessageParserLLMService(
-                llm_provider=llm_provider
-            )
-            conversation_runtime.bind_message_parser_service(message_parser_llm_service)
             conversation_runtime.bind_capability_issue_reader(
                 agent_capability_issue_service
             )
@@ -1451,14 +1440,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.update_room_user_message_by_message_id
                 ),
             )
-
-            async def get_quoted_snippet_by_id(quote_id: str):
-                quote_doc = await _room_deps.room_quote_repository.get_by_id(quote_id)
-                return (
-                    QuotedSnippet.model_validate(quote_doc)
-                    if quote_doc is not None
-                    else None
-                )
 
             execution_delivery = _delivery_facade
             task_notifier = TaskUpdateNotifier(execution_delivery)
@@ -1864,7 +1845,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
             )
             conversation_runtime.bind_attachment_metadata_reader(file_storage)
-            conversation_runtime.bind_attachment_content_reader(file_storage)
             conversation_runtime.bind_timeline_projector(
                 RoomTimelineProjector(
                     hitl_reader=SimpleNamespace(
@@ -1874,10 +1854,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         get_for_room_file=file_storage.get_for_room_file,
                     ),
                 )
-            )
-            conversation_runtime.bind_a2a_inline_file_limits(
-                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
-                max_encoded_bytes=runtime.settings.a2a_inline_message_max_encoded_bytes,
             )
             chat_service.bind_facade(_room_deps.chat_facade)
             context_memory_facade = create_context_memory_facade(
@@ -1943,42 +1919,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
             chat_service.bind_room_deletion(room_deletion)
-            agent_message_preparation = AgentMessagePreparationService(
-                agent_url_reader=SimpleNamespace(
-                    get_agent_url_by_agent_id=(
-                        agent_compat_service.get_agent_url_by_agent_id
-                    ),
-                ),
-                agent_room_reader=SimpleNamespace(
-                    get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                    get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                ),
-                user_message_reader=SimpleNamespace(
-                    get_room_user_message_by_message_id=(
-                        message_store.get_room_user_message_by_message_id
-                    ),
-                    get_room_user_messages_by_room_id=(
-                        message_store.get_room_user_messages_by_room_id
-                    ),
-                ),
-                quote_reader=SimpleNamespace(
-                    get_quoted_snippet_by_id=get_quoted_snippet_by_id,
-                ),
-                message_lineage_reader=SimpleNamespace(
-                    get_message=_room_facade.get_message,
-                ),
-                attachment_content_reader=SimpleNamespace(
-                    get_bytes=file_storage.get_bytes,
-                ),
-                max_raw_bytes=runtime.settings.a2a_inline_file_max_raw_bytes,
-                max_encoded_bytes=(
-                    runtime.settings.a2a_inline_message_max_encoded_bytes
-                ),
-                context_assembly=context_memory_facade,
-            )
-            conversation_runtime.bind_agent_message_preparation(
-                agent_message_preparation
-            )
 
             execution_facade = create_execution_facade(
                 room_center=conversation_runtime,

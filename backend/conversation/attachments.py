@@ -1,15 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-from common.protocols import AttachmentContentReader, AttachmentMetadataReader
-from common.types import Part, TextPart
-from conversation.a2a_file_parts import (
-    AttachmentDispatchContext,
-    AttachmentPreflightFailure,
-    build_attachment_file_parts,
-)
+from common.protocols import AttachmentMetadataReader
 from models.file_upload import MAX_ATTACHMENTS_PER_MESSAGE
 from models.request import RoomCenterUserMessageRequest
 from models.response import RoomCenterUserMessageResponse
@@ -122,38 +115,3 @@ async def resolve_and_apply_room_attachments(
     user_message.message_content.attachments = resolved.attachments
     user_message.message_content.content_summary = resolved.content_summary
     return None
-
-
-async def build_message_parts(
-    *,
-    text: str,
-    attachments: list[UserAttachment] | None,
-    agent_card: Any,
-    content_reader: AttachmentContentReader | None,
-    max_raw_bytes: int,
-    max_encoded_bytes: int,
-    context: AttachmentDispatchContext | None = None,
-) -> list[Part] | AttachmentPreflightFailure:
-    parts = [Part(root=TextPart(text=text))]
-    if not attachments:
-        return parts
-
-    if content_reader is None:
-        return AttachmentPreflightFailure(
-            code="storage_unavailable",
-            message="Attachment content resolution unavailable.",
-            file_names=tuple(attachment.file_name for attachment in attachments),
-        )
-
-    result = await build_attachment_file_parts(
-        attachments=attachments,
-        agent_card=agent_card,
-        content_reader=content_reader,
-        max_raw_bytes=max_raw_bytes,
-        max_encoded_bytes=max_encoded_bytes,
-        context=context,
-    )
-    if result.failure is not None:
-        return result.failure
-    parts.extend(result.parts)
-    return parts

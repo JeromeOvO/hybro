@@ -1,51 +1,22 @@
 import re
 from dataclasses import dataclass
-from uuid import uuid4
 
 from agent import sanitize_routing_agent_ids
 from common.dto import (
-    AgentRoutingCandidate,
-    ExplicitAgentMention,
-    ParsedUserMessageRequest,
     UserMessageInsertResult,
 )
 from common.protocols.context_memory_protocols import (
     ContextAssemblyPort,
     RoomMemoryCleanupPort,
 )
-from common.types import (
-    Message,
-    Part,
-    Task,
-    TaskState,
-    TaskStatus,
-    TextPart,
-)
-from common.types import (
-    MessageRole as Role,
-)
 from common.utils.cancellation import CancellationToken
-from common.utils.context_utils import build_minimal_context
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
 from conversation import (
     SUPPORTED_CANDIDATE_SCOPE_SOURCES,
     normalize_candidate_scope,
 )
-from conversation.a2a_file_parts import (
-    AttachmentDispatchContext,
-    AttachmentPreflightFailure,
-)
-from conversation.attachments import (
-    ResolvedAttachments as _ResolvedAttachments,
-)
-from conversation.attachments import (
-    build_message_parts as platform_build_message_parts,
-)
-from conversation.attachments import (
-    resolve_and_apply_room_attachments,
-    resolve_room_attachments,
-)
+from conversation.attachments import resolve_and_apply_room_attachments
 from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
@@ -66,9 +37,6 @@ from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
 )
-from llm_gateway import LLMServiceNotBoundError
-from models.agent import AgentStatus
-from models.memory import RoomMemory
 from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES
 from models.request import (
     RoomCenterAgentMessageRequest,
@@ -77,7 +45,6 @@ from models.request import (
     RoomCenterUserMessageRequest,
 )
 from models.response import (
-    RoomAgentRef,
     RoomCenterActiveRunsResponse,
     RoomCenterAgentMessageResponse,
     RoomCenterRoomMessageResponse,
@@ -86,12 +53,8 @@ from models.response import (
 )
 from models.room import (
     MAX_MESSAGE_LENGTH,
-    CoordinatorAgentId,
-    MessageContent,
     Room,
-    RoomAgentMessage,
     RoomUserMessage,
-    UserAttachment,
 )
 from models.room_services_models import ParseResult, ResolvedRoutingScope
 
@@ -128,31 +91,11 @@ class RoomMessagePreflightContext:
     token: CancellationToken
 
 
-def _agent_to_routing_candidate(agent) -> AgentRoutingCandidate:
-    card = agent.agent_card
-    capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
-    skills = []
-    if isinstance(card.skills, list):
-        for skill in card.skills:
-            if isinstance(skill, dict):
-                skills.append(str(skill.get("name") or skill.get("id") or "Unknown"))
-            else:
-                skills.append(str(getattr(skill, "name", None) or skill))
-    return AgentRoutingCandidate(
-        agent_id=str(agent.agent_id),
-        name=str(card.name),
-        description=str(card.description or ""),
-        capabilities=capabilities,
-        skills=skills,
-    )
-
-
 class ConversationRuntime:
     def __init__(self, *, room_store=None):
         if room_store is None:
             room_store = UNBOUND_RUNTIME_STORE
         self._store = room_store
-        self.message_parser_service = None
         self.cancellation_control = UNBOUND_CANCELLATION_CONTROL
         self._room_files = None
         self._facade = None
@@ -160,13 +103,7 @@ class ConversationRuntime:
         self._context_assembly: ContextAssemblyPort | None = None
         self._room_memory_cleanup: RoomMemoryCleanupPort | None = None
         self._attachment_metadata_reader = None
-        self._attachment_content_reader = None
-        self._a2a_inline_file_max_raw_bytes = 5 * 1024 * 1024
-        self._a2a_inline_message_max_encoded_bytes = 6_990_508
-        self._attachment_cleanup = None
-        self._quote_writer = None
         self._capability_issue_reader = None
-        self._agent_message_preparation = None
         self._timeline_projector: RoomTimelineProjector | None = None
         self._user_message_commit: UserMessageCommitService | None = None
 
@@ -215,50 +152,12 @@ class ConversationRuntime:
     ) -> None:
         self._context_assembly = context_assembly
         self._room_memory_cleanup = room_memory_cleanup
-        preparation = getattr(self, "_agent_message_preparation", None)
-        if preparation is not None and context_assembly is not None:
-            preparation.bind_context_assembly(context_assembly)
-
-    def bind_message_parser_service(self, service) -> None:
-        self.message_parser_service = service
 
     def bind_attachment_metadata_reader(self, reader) -> None:
         self._attachment_metadata_reader = reader
 
-    def bind_attachment_content_reader(self, reader) -> None:
-        self._attachment_content_reader = reader
-
-    def bind_a2a_inline_file_limits(
-        self,
-        *,
-        max_raw_bytes: int,
-        max_encoded_bytes: int,
-    ) -> None:
-        self._a2a_inline_file_max_raw_bytes = max_raw_bytes
-        self._a2a_inline_message_max_encoded_bytes = max_encoded_bytes
-
-    def bind_attachment_cleanup(self, cleanup) -> None:
-        self._attachment_cleanup = cleanup
-
-    def bind_quote_writer(self, writer) -> None:
-        self._quote_writer = writer
-
     def bind_capability_issue_reader(self, reader) -> None:
         self._capability_issue_reader = reader
-
-    def bind_agent_message_preparation(self, service) -> None:
-        self._agent_message_preparation = service
-        context_assembly = getattr(self, "_context_assembly", None)
-        if context_assembly is not None:
-            service.bind_context_assembly(context_assembly)
-
-    def _require_agent_message_preparation(self):
-        preparation = getattr(self, "_agent_message_preparation", None)
-        if preparation is None:
-            raise RuntimeError(
-                "ConversationRuntime agent message preparation service has not been bound"
-            )
-        return preparation
 
     def bind_timeline_projector(self, projector: RoomTimelineProjector) -> None:
         self._timeline_projector = projector
@@ -278,20 +177,12 @@ class ConversationRuntime:
                 is not UNBOUND_CANCELLATION_CONTROL,
             ),
             (
-                "message_parser_service",
-                getattr(self, "message_parser_service", None) is not None,
-            ),
-            (
                 "user_message_commit",
                 getattr(self, "_user_message_commit", None) is not None,
             ),
             (
                 "timeline_projector",
                 getattr(self, "_timeline_projector", None) is not None,
-            ),
-            (
-                "agent_message_preparation",
-                getattr(self, "_agent_message_preparation", None) is not None,
             ),
         )
         return [name for name, is_bound in checks if not is_bound]
@@ -343,59 +234,6 @@ class ConversationRuntime:
             )
         return self._facade
 
-    @staticmethod
-    def _assembled_context_text(assembled) -> str:
-        metadata = getattr(assembled, "metadata", {}) or {}
-        return metadata.get("context", "")
-
-    def _build_routing_context_from_memory(
-        self,
-        room_memory: RoomMemory,
-        current_task: str,
-    ) -> str:
-        """Build small pre-routing context from canonical room history."""
-        context_assembly = getattr(self, "_context_assembly", None)
-        if context_assembly is not None:
-            try:
-                assembled = context_assembly.assemble_supervisor_context_from_memory(
-                    room_memory,
-                    current_task,
-                    agent_registry=[],
-                    max_turns=5,
-                )
-                return self._assembled_context_text(assembled)
-            except Exception as exc:
-                logger.warning(
-                    "ConversationRuntime: routing context assembly failed: %s",
-                    exc,
-                )
-
-        # Compatibility helper remains canonical: RoomMemory exposes the top-level
-        # conversation_history expected by build_minimal_context's structural input.
-        return build_minimal_context(
-            room_memory,
-            current_task=current_task,
-            max_turns=5,
-        )
-
-    @staticmethod
-    def _derive_required_input_modes(
-        user_message: RoomUserMessage,
-    ) -> list[str] | None:
-        """Return resolved MIME types if the message has attachments, else None.
-
-        The return value signals binary "has attachments" to AgentMatcher's I/O scoring.
-        A non-None list (even empty after dedup) means attachments are present.
-        """
-        attachments = (
-            user_message.message_content.attachments
-            if user_message.message_content
-            else None
-        )
-        if not attachments:
-            return None
-        return [att.mime_type for att in attachments]
-
     async def inquiry_active_runs(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterActiveRunsResponse:
@@ -446,17 +284,6 @@ class ConversationRuntime:
 
     # --- Attachment resolution helpers ---
 
-    async def _resolve_attachments(
-        self,
-        file_ids: list[str],
-        room_id: str,
-    ) -> "_ResolvedAttachments | RoomCenterUserMessageResponse":
-        return await resolve_room_attachments(
-            file_ids=file_ids,
-            room_id=room_id,
-            attachment_reader=getattr(self, "_attachment_metadata_reader", None),
-        )
-
     async def _resolve_and_apply_attachments(
         self,
         request: RoomCenterUserMessageRequest,
@@ -466,23 +293,6 @@ class ConversationRuntime:
             request=request,
             user_message=user_message,
             attachment_reader=getattr(self, "_attachment_metadata_reader", None),
-        )
-
-    async def _build_message_parts(
-        self,
-        text: str,
-        attachments: list[UserAttachment] | None,
-        agent_card,
-        context: AttachmentDispatchContext | None = None,
-    ) -> list[Part] | AttachmentPreflightFailure:
-        return await platform_build_message_parts(
-            text=text,
-            attachments=attachments,
-            agent_card=agent_card,
-            content_reader=getattr(self, "_attachment_content_reader", None),
-            max_raw_bytes=self._a2a_inline_file_max_raw_bytes,
-            max_encoded_bytes=self._a2a_inline_message_max_encoded_bytes,
-            context=context,
         )
 
     # room user message management
@@ -528,551 +338,6 @@ class ConversationRuntime:
         # Sort by position to maintain order
         mentions.sort(key=lambda x: x["position"])
         return mentions
-
-    def extract_agent_message_content(
-        self,
-        message_text: str,
-        target_agent_id: str,
-        target_agent_name: str,  # kept for signature compatibility
-        all_mentions: list,
-    ) -> str:
-        """
-        Extract message content relevant to a specific agent
-        Remove @mentions and return clean task content
-
-        Args:
-            message_text: Original message text
-            target_agent_id: Target agent ID
-            target_agent_name: Target agent name
-            all_mentions: All parsed mentions from the message
-
-        Returns:
-            str: Clean message content relevant to the target agent
-        """
-        # Find all mentions for this specific agent
-        agent_mentions = [m for m in all_mentions if m["agent_id"] == target_agent_id]
-
-        if not agent_mentions:
-            # No mentions found, remove all mentions and return clean content
-            processed_text = message_text
-            for mention in all_mentions:
-                processed_text = processed_text.replace(mention["mention_text"], "")
-            return re.sub(r"\s+", " ", processed_text).strip()
-
-        # Strategy 1: Extract text around each mention of this agent
-        relevant_parts = []
-
-        for mention in agent_mentions:
-            mention_pos = mention.get("position")
-            mention_text = mention.get("mention_text", "")
-
-            if mention_pos is None:
-                context_clean = message_text
-                for m in all_mentions:
-                    context_clean = context_clean.replace(m.get("mention_text", ""), "")
-                context_clean = re.sub(r"\s+", " ", context_clean).strip()
-                if context_clean and context_clean not in relevant_parts:
-                    relevant_parts.append(context_clean)
-                continue
-
-            start_pos = mention_pos
-            end_pos = mention_pos + len(mention_text)
-
-            # Extend backwards to find sentence start
-            while start_pos > 0 and message_text[start_pos - 1] not in ".!?\n":
-                start_pos -= 1
-
-            # Extend forwards to find sentence end
-            while end_pos < len(message_text) and message_text[end_pos] not in ".!?\n":
-                end_pos += 1
-
-            # Include the sentence ending punctuation
-            if end_pos < len(message_text) and message_text[end_pos] in ".!?\n":
-                end_pos += 1
-
-            # Extract the relevant sentence/context
-            context = message_text[start_pos:end_pos].strip()
-
-            # Remove ALL mentions from this context, not just replace with @agent_name
-            context_clean = context
-            for m in all_mentions:
-                context_clean = context_clean.replace(m["mention_text"], "")
-
-            # Clean up whitespace
-            context_clean = re.sub(r"\s+", " ", context_clean).strip()
-
-            if context_clean and context_clean not in relevant_parts:
-                relevant_parts.append(context_clean)
-
-        # Join all relevant parts
-        if relevant_parts:
-            return " ".join(relevant_parts)
-        else:
-            # Fallback: return original message with all mentions removed
-            processed_text = message_text
-            for mention in all_mentions:
-                processed_text = processed_text.replace(mention["mention_text"], "")
-            return re.sub(r"\s+", " ", processed_text).strip()
-
-    def group_mentions_by_context(self, message_text: str, mentions: list) -> dict:
-        """
-        Group mentions by their shared context/sentence and detect consecutive mentions
-
-        Args:
-            message_text: Original message text
-            mentions: List of parsed mentions
-
-        Returns:
-            dict: {context_text: {"mentions": [mentions], "is_consecutive": bool}}
-        """
-        context_groups = {}
-
-        for mention in mentions:
-            mention_pos = mention.get("position")
-            mention_text = mention.get("mention_text", "")
-
-            if mention_pos is None:
-                context = message_text.strip()
-            else:
-                start_pos = mention_pos
-                end_pos = mention_pos + len(mention_text)
-
-                while start_pos > 0 and message_text[start_pos - 1] not in ".!?\n":
-                    start_pos -= 1
-
-                while (
-                    end_pos < len(message_text) and message_text[end_pos] not in ".!?\n"
-                ):
-                    end_pos += 1
-
-                if end_pos < len(message_text) and message_text[end_pos] in ".!?\n":
-                    end_pos += 1
-
-                context = message_text[start_pos:end_pos].strip()
-
-            # Group mentions by context
-            if context not in context_groups:
-                context_groups[context] = {"mentions": [], "is_consecutive": False}
-            context_groups[context]["mentions"].append(mention)
-
-        # Detect consecutive mentions within each context
-        for _context, group_info in context_groups.items():
-            mentions_in_context = group_info["mentions"]
-            if len(mentions_in_context) > 1:
-                all_have_position = all("position" in m for m in mentions_in_context)
-                if not all_have_position:
-                    continue
-
-                mentions_in_context.sort(key=lambda x: x["position"])
-
-                is_consecutive = True
-                for i in range(len(mentions_in_context) - 1):
-                    current_mention = mentions_in_context[i]
-                    next_mention = mentions_in_context[i + 1]
-
-                    # Get text between mentions
-                    between_start = current_mention["position"] + len(
-                        current_mention["mention_text"]
-                    )
-                    between_end = next_mention["position"]
-                    between_text = message_text[between_start:between_end].strip()
-
-                    # If there's significant text between mentions (more than just spaces/commas),
-                    # they're not consecutive
-                    if len(between_text) > 10 or any(
-                        word in between_text.lower()
-                        for word in [
-                            "and",
-                            "then",
-                            "also",
-                            "but",
-                            "however",
-                            "meanwhile",
-                        ]
-                    ):
-                        is_consecutive = False
-                        break
-
-                group_info["is_consecutive"] = is_consecutive
-
-        return context_groups
-
-    def create_shared_message_content(
-        self, context_text: str, mentions_in_context: list
-    ) -> str:
-        """
-        Create message content for multiple agents sharing the same context
-        Remove all @mentions and return clean task content
-
-        Args:
-            context_text: The shared context/sentence
-            mentions_in_context: List of mentions in this context
-
-        Returns:
-            str: Clean message content without @mentions
-        """
-        processed_text = context_text
-
-        # Remove all mentions (both simple @agent and Slack-style <@id|name>)
-        for mention in mentions_in_context:
-            mention_text = mention["mention_text"]
-            processed_text = processed_text.replace(mention_text, "")
-
-        # Clean up extra spaces and normalize whitespace
-        processed_text = re.sub(r"\s+", " ", processed_text).strip()
-
-        return processed_text
-
-    def create_task_for_agent(
-        self,
-        user_message: RoomUserMessage,
-        agent_id: str,
-        agent_name: str,
-        all_mentions: list,
-    ) -> Task:
-        """
-        Create a2a Task for specific agent with relevant message content only
-
-        Args:
-            user_message: User message
-            agent_id: Target agent ID
-            agent_name: Target agent name
-            all_mentions: All parsed mentions from the message
-
-        Returns:
-            Task: a2a protocol Task object
-        """
-        # Extract relevant message content for this agent
-        original_text = user_message.message_content.message_text
-        agent_relevant_text = self.extract_agent_message_content(
-            original_text, agent_id, agent_name, all_mentions
-        )
-
-        # Create Message
-        message = Message(
-            message_id=user_message.message_id,
-            role=Role.USER,
-            parts=[Part(root=TextPart(text=agent_relevant_text))],
-            context_id=user_message.room_id,
-            metadata={},
-        )
-
-        # Create Task status
-        task_status = TaskStatus(
-            state=TaskState.submitted, timestamp=utcnow().isoformat()
-        )
-
-        # Create Task
-        task = Task(
-            id=str(uuid4()),
-            context_id=user_message.room_id,
-            status=task_status,
-            history=[message],
-        )
-
-        return task
-
-    async def create_task_for_agents_group(
-        self, user_message: RoomUserMessage, mentions_group: list, shared_content: str
-    ) -> list:
-        """
-        Create a2a Tasks for a group of agents sharing the same message content
-
-        Args:
-            user_message: User message
-            mentions_group: List of mentions sharing the same context
-            shared_content: Shared message content
-
-        Returns:
-            list: List of Task objects for each agent
-        """
-        tasks = []
-
-        for mention in mentions_group:
-            agent_id = mention["agent_id"]
-            agent_name = mention["agent_name"]
-
-            # Create Message with shared content
-            message = Message(
-                message_id=f"{user_message.message_id}_{agent_id}",  # Unique ID per agent
-                role=Role.USER,
-                parts=[Part(root=TextPart(text=shared_content))],
-                context_id=user_message.room_id,
-                metadata={},
-            )
-
-            # Create Task status
-            task_status = TaskStatus(
-                state=TaskState.submitted, timestamp=utcnow().isoformat()
-            )
-
-            # Create Task
-            task = Task(
-                id=str(uuid4()),
-                context_id=user_message.room_id,
-                status=task_status,
-                history=[message],
-            )
-
-            tasks.append({"task": task, "agent_id": agent_id, "agent_name": agent_name})
-
-        return tasks
-
-    def _generate_agent_message_content(self, content: str) -> MessageContent:
-        """
-        Generate agent message content based on content.
-        """
-        a2a_message = Message(
-            message_id=str(uuid4()),
-            role=Role.USER,
-            parts=[Part(root=TextPart(text=content))],
-            context_id=str(uuid4()),
-            metadata={},
-        )
-
-        # Create Task status
-        task_status = TaskStatus(
-            state=TaskState.submitted, timestamp=utcnow().isoformat()
-        )
-
-        # Create a2a Task
-        task = Task(
-            id=str(uuid4()),
-            context_id=str(uuid4()),
-            status=task_status,
-            history=[a2a_message],
-        )
-
-        # Store the task; message_text is left empty until the agent produces output
-        # (streaming artifacts or terminal response will populate it).
-        return MessageContent(message_task=task)
-
-    def _generate_new_agent_message(
-        self,
-        room_id: str,
-        related_message_id: str,
-        agent_id: str,
-        content: str,
-        user_id: str | None = None,
-        extend_info: dict | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        task_content: str | None = None,
-        turn_id: str | None = None,
-        client_request_id: str | None = None,
-    ) -> RoomAgentMessage:
-        """
-        Generate a new agent message.
-
-        Args:
-            room_id: The room ID
-            related_message_id: The related message ID (parent in dependency chain)
-            agent_id: The agent ID (can be None for auto-assignment)
-            content: The task content
-            user_id: The user ID
-            extend_info: Additional info
-            step_number: Current step number in the workflow (1-indexed)
-            total_steps: Total number of steps in the workflow
-            task_content: The task description being processed
-        """
-        return RoomAgentMessage(
-            room_id=room_id,
-            related_message_id=related_message_id
-            if related_message_id
-            else str(uuid4()),
-            agent_id=agent_id if agent_id else None,
-            user_id=user_id,
-            message_id=str(uuid4()),
-            message_content=self._generate_agent_message_content(content),
-            message_created_at=utcnow(),
-            extend_info=extend_info if extend_info else None,
-            step_number=step_number,
-            total_steps=total_steps,
-            task_content=task_content
-            or content,  # Use task_content if provided, else content
-            turn_id=turn_id,
-            client_request_id=client_request_id,
-        )
-
-    def create_agent_message(
-        self,
-        room_id: str,
-        related_message_id: str,
-        agent_id: str,
-        content: str,
-        user_id: str | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        task_content: str | None = None,
-        turn_id: str | None = None,
-        client_request_id: str | None = None,
-    ) -> RoomAgentMessage:
-        """Public wrapper around ``_generate_new_agent_message`` for use by
-        the supervisor executor and other external callers that need to create
-        individual agent messages without accessing a private method."""
-        return self._generate_new_agent_message(
-            room_id=room_id,
-            related_message_id=related_message_id,
-            agent_id=agent_id,
-            content=content,
-            user_id=user_id,
-            step_number=step_number,
-            total_steps=total_steps,
-            task_content=task_content,
-            turn_id=turn_id,
-            client_request_id=client_request_id,
-        )
-
-    async def _generate_agent_messages_based_on_parsed_result(
-        self,
-        parsed_result: dict,
-        user_message_id: str,
-        room_id: str,
-        user_id: str | None = None,
-        extend_info: dict | None = None,
-        turn_id: str | None = None,
-        client_request_id: str | None = None,
-    ) -> list[RoomAgentMessage]:
-        """
-        Generate agent messages based on parsed result from LLM.
-        All steps are converted to agent messages, even if agent_id is None.
-
-        Args:
-            parsed_result: Output from parse_user_message_by_llm()
-                {
-                    "message_type": str,
-                    "original_text": str,
-                    "task_steps": [
-                        {
-                            "step_id": str,
-                            "agent_id": str | None,
-                            "agent_name": str | None,
-                            "task_content": str,
-                            "dependencies": [step_id, ...]
-                        }
-                    ]
-                }
-            user_message_id: User message ID (root for dependency chain)
-            room_id: Room ID
-
-        Returns:
-            list[RoomAgentMessage]: Generated agent messages (agent_id may be None)
-        """
-
-        agent_messages = []
-        task_steps = parsed_result.get("task_steps", [])
-
-        if not task_steps:
-            logger.warning("No task steps in parsed result")
-            return agent_messages
-
-        # In direct chat the single step's task_content is the raw user message,
-        # which shouldn't be echoed in the task status bubble.
-        is_direct_chat = parsed_result.get("message_type") == "DIRECT_CHAT"
-
-        original_text = parsed_result.get("original_text", "")
-
-        # Calculate total steps for progress tracking
-        total_steps = len(task_steps)
-
-        # Map step_id to generated agent_message_id for dependency resolution
-        step_to_message_id = {}
-
-        for step_index, step in enumerate(task_steps, start=1):
-            step_id = step.get("step_id")
-            agent_id = step.get("agent_id")  # Can be None
-            task_content = step.get("task_content", "")
-            dependencies = step.get("dependencies", [])
-
-            # Skip only if no task content
-            if not task_content:
-                logger.warning(f"Step {step_id} has no task content, skipping")
-                continue
-
-            # Resolve related_message_id based on dependencies
-            if not dependencies:
-                # No dependencies: relate directly to user message
-                related_message_id = user_message_id
-            else:
-                # Has dependencies: relate to the last dependency's agent message
-                last_dependency_step_id = dependencies[-1]
-                related_message_id = step_to_message_id.get(
-                    last_dependency_step_id,
-                    user_message_id,  # Fallback if dependency not found
-                )
-
-                # Log if dependency not found
-                if last_dependency_step_id not in step_to_message_id:
-                    logger.warning(
-                        f"Step {step_id} depends on {last_dependency_step_id}, "
-                        f"but it's not found. Using user message as fallback."
-                    )
-
-            # Create a2a Message with step tracking info
-            agent_message = self._generate_new_agent_message(
-                room_id,
-                related_message_id,
-                agent_id,
-                task_content,
-                user_id=user_id,
-                extend_info=extend_info,
-                step_number=step_index,
-                total_steps=total_steps,
-                turn_id=turn_id,
-                client_request_id=client_request_id,
-            )
-
-            # In direct chat the task_content equals the user's original message,
-            # which would be redundantly echoed in the task status bubble.
-            # Clear it so the frontend shows a generic "Working on your request…" instead.
-            # Also clear in multi-agent rooms when the LLM simply passed through the
-            # user's message verbatim (no meaningful decomposition).
-            if is_direct_chat or task_content.strip() == original_text.strip():
-                agent_message.task_content = None
-
-            agent_messages.append(agent_message)
-
-            # Store mapping for dependency resolution
-            step_to_message_id[step_id] = agent_message.message_id
-
-            # Save to database
-            agent_message_success = await self._store.add_room_agent_message(
-                agent_message
-            )
-            if not agent_message_success:
-                logger.warning(
-                    f"Failed to add agent message {agent_message.message_id}"
-                )
-
-            logger.info(
-                f"Generated agent message {agent_message.message_id} for step {step_id} ({step_index}/{total_steps})"
-            )
-
-        return agent_messages
-
-    @staticmethod
-    def _build_agent_registry(
-        agents: list | None,
-        selected_agent_set: dict,
-    ) -> list:
-        """Build an ``AgentProfile`` list from resolved agents or the agent set."""
-        from models.supervisor import AgentProfile
-
-        registry: list[AgentProfile] = []
-        if agents:
-            for agent in agents:
-                registry.append(AgentProfile.from_agent(agent))
-        else:
-            for agent_id, agent_name in selected_agent_set.items():
-                registry.append(
-                    AgentProfile(
-                        agent_id=agent_id,
-                        agent_name=agent_name,
-                        description="",
-                        is_healthy=False,
-                    )
-                )
-        return registry
 
     @staticmethod
     def _orchestration_request_info(
@@ -1327,126 +592,6 @@ class ConversationRuntime:
             len(selected_agent_set),
         )
         return ParseResult(success=True)
-
-    async def parse_user_message(
-        self,
-        room_id: str,
-        user_message_id: str,
-        message_text: str,
-        selected_agent_set: dict,
-        user_id: str | None = None,
-        auto_assign_agents: bool = False,
-        target_group: str | None = None,
-        agents: list | None = None,
-        conversation_context: str | None = None,
-        token: CancellationToken | None = None,
-        client_request_id: str | None = None,
-        explicit_mentions: list[dict] | None = None,
-        required_input_modes: list[str] | None = None,
-    ) -> ParseResult:
-        """
-        Parse user message
-
-        Args:
-            room_id: The room ID
-            user_message_id: The user message ID
-            message_text: The message text to parse
-            selected_agent_set: Dict of {agent_id: agent_name} chosen for this request
-            auto_assign_agents: If True (Auto mode), LLM will auto-assign agents
-            agents: Full Agent objects for detailed LLM context (optional)
-            explicit_mentions: Canonical agent mentions to include as routing intent
-
-        Returns:
-            ParseResult with ``success`` and ``canceled`` flags.  The caller
-            is responsible for sending the appropriate SSE terminal status.
-        """
-        # Check for cancellation before parsing
-        if token and token.is_cancelled:
-            logger.info(
-                "ConversationRuntime: Message parsing cancelled for %s, stopping all processing",
-                user_message_id,
-            )
-            return ParseResult(success=False, canceled=True)
-
-        # Direct chat: a single Agent does not require LLM decomposition.
-        direct_chat = len(selected_agent_set) == 1
-
-        if direct_chat:
-            agent_id, agent_name = next(iter(selected_agent_set.items()))
-            parsed_result = {
-                "message_type": "DIRECT_CHAT",
-                "original_text": message_text,
-                "needs_decomposition": False,
-                "task_steps": [
-                    {
-                        "step_id": "step_1",
-                        "agent_id": agent_id,
-                        "agent_name": agent_name,
-                        "task_content": message_text,
-                        "dependencies": [],
-                    }
-                ],
-            }
-            logger.info("Direct chat mode: skipping LLM parsing for single agent")
-        else:
-            # Parse user message with full agent details for better LLM assignment
-            if self.message_parser_service is None:
-                raise LLMServiceNotBoundError("MessageParserLLMService is not bound")
-            parsed_result = await self.message_parser_service.parse_user_message(
-                ParsedUserMessageRequest(
-                    message_text=message_text,
-                    selected_agents=selected_agent_set,
-                    auto_assign_agents=auto_assign_agents,
-                    agents=[_agent_to_routing_candidate(agent) for agent in agents],
-                    conversation_context=conversation_context,
-                    explicit_mentions=[
-                        ExplicitAgentMention(
-                            agent_id=str(mention.get("agent_id", "")),
-                            agent_name=str(mention.get("agent_name", "")),
-                            mention_text=mention.get("mention_text"),
-                        )
-                        for mention in (explicit_mentions or [])
-                    ],
-                )
-            )
-
-        logger.info(
-            "message_parse_completed",
-            extra={
-                "outcome": "success" if parsed_result else "empty",
-                "message_type": (
-                    parsed_result.get("message_type") if parsed_result else None
-                ),
-                "step_count": (
-                    len(parsed_result.get("task_steps", [])) if parsed_result else 0
-                ),
-            },
-        )
-
-        if not parsed_result:
-            logger.warning("No parsed result from LLM")
-            return ParseResult(success=False)
-
-        extend_info = {
-            "allowed_agent_ids": list(selected_agent_set.keys()),
-            "target_group": target_group,
-            "is_direct_chat": direct_chat,
-        }
-        if required_input_modes is not None:
-            extend_info["required_input_modes"] = required_input_modes
-
-        agent_messages = await self._generate_agent_messages_based_on_parsed_result(
-            parsed_result,
-            user_message_id,
-            room_id,
-            user_id=user_id,
-            extend_info=extend_info,
-            client_request_id=client_request_id,
-        )
-
-        return (
-            ParseResult(success=True) if agent_messages else ParseResult(success=False)
-        )
 
     async def get_idempotent_user_message(
         self,
@@ -2162,25 +1307,6 @@ class ConversationRuntime:
             )
         )
 
-    async def _handle_mentions_flow(
-        self,
-        request: RoomCenterUserMessageRequest,
-        user_message: RoomUserMessage,
-        mentions: list[dict],
-    ) -> RoomCenterUserMessageResponse:
-        """Deterministically fan out to mentioned agents and finish.
-
-        Note: Does NOT send processing_status COMPLETED here — the actual agent
-        execution happens in a background task (process_room_user_message) which
-        sends COMPLETED when all agents finish.  Sending it here would prematurely
-        clear the frontend processing state and hide the Stop button.
-        """
-        room = await self._store.get_room_by_room_id(request.room_id)
-        mention_response = await self.parse_user_message_with_mentions(
-            room, user_message, mentions
-        )
-        return mention_response
-
     async def _validate_canonical_mentions(
         self,
         mentioned_agent_ids: list[str],
@@ -2402,274 +1528,6 @@ class ConversationRuntime:
                 message=error_msg,
             ),
             status_code=400,
-        )
-
-    async def _resolve_room_agent_refs(
-        self, agent_set: dict | None, viewer_user_id: str | None = None
-    ) -> tuple[list[RoomAgentRef], str]:
-        """Resolve agent IDs into RoomAgentRef objects and compute room_default_status.
-
-        Args:
-            agent_set: {agent_id: agent_name} dict from the room snapshot.
-            viewer_user_id: The current user requesting the read. When provided,
-                private agents not owned by this user are marked ``inaccessible``.
-
-        Returns (resolved_agents, room_default_status).
-        """
-        if not agent_set:
-            return [], "empty"
-
-        refs: list[RoomAgentRef] = []
-        for agent_id, agent_name in agent_set.items():
-            agent = await self._store.get_agent_by_agent_id(agent_id)
-            if not agent:
-                refs.append(
-                    RoomAgentRef(id=agent_id, name=agent_name, availability="deleted")
-                )
-            elif agent.agent_status != AgentStatus.active:
-                refs.append(
-                    RoomAgentRef(
-                        id=agent_id, name=agent.agent_card.name, availability="inactive"
-                    )
-                )
-            elif (
-                not agent.is_public
-                and viewer_user_id
-                and getattr(agent, "provider_id", None) != viewer_user_id
-            ):
-                refs.append(
-                    RoomAgentRef(
-                        id=agent_id,
-                        name=agent.agent_card.name,
-                        availability="inaccessible",
-                    )
-                )
-            else:
-                refs.append(
-                    RoomAgentRef(
-                        id=agent_id,
-                        name=agent.agent_card.name,
-                        availability="available",
-                    )
-                )
-
-        available_count = sum(1 for r in refs if r.availability == "available")
-        if available_count == len(refs):
-            status = "ok"
-        elif available_count > 0:
-            status = "degraded"
-        else:
-            status = "all_unavailable"
-
-        return refs, status
-
-    async def _handle_no_agents_fallback(
-        self,
-        request: RoomCenterUserMessageRequest,
-        user_message: RoomUserMessage,
-        target_group: str,
-    ) -> RoomCenterUserMessageResponse:
-        """Send a system message when no agents are available."""
-        logger.warning(
-            "No room agents and none found via selection; sending system agent response"
-        )
-
-        fallback_agent_message = self._generate_new_agent_message(
-            room_id=request.room_id,
-            related_message_id=user_message.message_id,
-            agent_id=CoordinatorAgentId.SYSTEM,
-            content=(
-                "I couldn't find any agents for this room or via selection. "
-                "Please choose agents or a group and try again."
-            ),
-            user_id=user_message.user_id,
-            extend_info={
-                "system_fallback": True,
-                "reason": "no_agents_found",
-                "target_group": target_group,
-            },
-            client_request_id=user_message.client_request_id,
-        )
-
-        added = await self._store.add_room_agent_message(fallback_agent_message)
-        if not added:
-            return RoomCenterUserMessageResponse(
-                message_id=user_message.message_id,
-                message=user_message,
-                success=False,
-                error="Failed to add fallback agent message",
-                status_code=500,
-                preflight_outcome="failed",
-                preflight_details="Failed to add fallback agent message",
-            )
-
-        return RoomCenterUserMessageResponse(
-            message_id=user_message.message_id,
-            message=user_message,
-            success=True,
-            error=None,
-            status_code=200,
-            preflight_outcome="completed",
-        )
-
-    async def parse_user_message_with_mentions(
-        self,
-        room: Room,
-        message: RoomUserMessage,
-        mentions: list[dict],
-    ) -> RoomCenterUserMessageResponse:
-        """Create deterministic tasks for inline mentions without LLM routing."""
-        room_id = room.room_id
-
-        # Group mentions by context and detect consecutive patterns
-        context_groups = self.group_mentions_by_context(
-            message.message_content.message_text, mentions
-        )
-
-        created_agent_messages = []
-        failed_message_count = 0
-        failed_context_count = 0
-        for context_text, group_info in context_groups.items():
-            mentions_in_context = group_info["mentions"]
-            is_consecutive = group_info["is_consecutive"]
-
-            try:
-                # Create shared message content for this context
-                shared_content = self.create_shared_message_content(
-                    context_text, mentions_in_context
-                )
-
-                # Create tasks for all agents in this context
-                tasks_group = await self.create_task_for_agents_group(
-                    message, mentions_in_context, shared_content
-                )
-
-                if is_consecutive:
-                    # Consecutive mentions: chain dependencies in order
-                    previous_message_id = (
-                        message.message_id
-                    )  # Start with user message ID
-
-                    for _i, task_info in enumerate(tasks_group):
-                        agent_message = RoomAgentMessage(
-                            room_id=room_id,
-                            message_id=str(uuid4()),
-                            related_message_id=previous_message_id,
-                            agent_id=task_info["agent_id"],
-                            user_id=message.user_id,
-                            client_request_id=message.client_request_id,
-                            message_content=MessageContent(
-                                message_task=task_info["task"]
-                            ),
-                            message_created_at=utcnow(),
-                            task_content=shared_content,
-                        )
-
-                        agent_message_success = (
-                            await self._store.add_room_agent_message(agent_message)
-                        )
-                        if agent_message_success:
-                            created_agent_messages.append(agent_message)
-                            previous_message_id = agent_message.message_id
-                        else:
-                            failed_message_count += 1
-                else:
-                    # Non-consecutive: relate all to the user message
-                    for task_info in tasks_group:
-                        agent_message = RoomAgentMessage(
-                            room_id=room_id,
-                            message_id=str(uuid4()),
-                            related_message_id=message.message_id,
-                            agent_id=task_info["agent_id"],
-                            user_id=message.user_id,
-                            client_request_id=message.client_request_id,
-                            message_content=MessageContent(
-                                message_task=task_info["task"]
-                            ),
-                            message_created_at=utcnow(),
-                            task_content=shared_content,
-                        )
-
-                        agent_message_success = (
-                            await self._store.add_room_agent_message(agent_message)
-                        )
-                        if agent_message_success:
-                            created_agent_messages.append(agent_message)
-                        else:
-                            failed_message_count += 1
-
-            except Exception:
-                failed_context_count += 1
-                logger.warning(
-                    "Mention fan-out context failed room_id=%s message_id=%s",
-                    room_id,
-                    message.message_id,
-                    exc_info=True,
-                )
-
-        if not created_agent_messages:
-            error = "Failed to create agent messages for mentioned agents"
-            logger.error(
-                "Mention fan-out created no agent messages room_id=%s message_id=%s "
-                "failed_messages=%d failed_contexts=%d",
-                room_id,
-                message.message_id,
-                failed_message_count,
-                failed_context_count,
-            )
-            return RoomCenterUserMessageResponse(
-                message_id=message.message_id,
-                message=message,
-                success=False,
-                error=error,
-                status_code=500,
-                preflight_outcome="failed",
-                preflight_details=error,
-            )
-
-        if failed_message_count or failed_context_count:
-            logger.warning(
-                "Mention fan-out partially persisted room_id=%s message_id=%s "
-                "created=%d failed_messages=%d failed_contexts=%d",
-                room_id,
-                message.message_id,
-                len(created_agent_messages),
-                failed_message_count,
-                failed_context_count,
-            )
-
-        return RoomCenterUserMessageResponse(
-            message_id=message.message_id,
-            dispatch_root_message_id=message.message_id,
-            message=message,
-            success=True,
-            error=None,
-            status_code=200,
-            preflight_outcome="ready",
-        )
-
-    async def _build_room_awareness(self, *args, **kwargs):
-        return await self._require_agent_message_preparation()._build_room_awareness(
-            *args, **kwargs
-        )
-
-    def _build_agent_execution_context_from_memory(self, **kwargs) -> str:
-        return self._require_agent_message_preparation()._build_agent_execution_context_from_memory(
-            **kwargs
-        )
-
-    async def process_agent_message(
-        self,
-        request: RoomCenterAgentMessageRequest,
-        room_memory: "RoomMemory | None" = None,
-        quoted_text: str | None = None,
-        orchestration_user_message_id: str | None = None,
-    ) -> RoomCenterAgentMessageResponse:
-        return await self._require_agent_message_preparation().process_agent_message(
-            request,
-            room_memory=room_memory,
-            quoted_text=quoted_text,
-            orchestration_user_message_id=orchestration_user_message_id,
         )
 
     async def update_agent_message_by_message_id(
@@ -2950,6 +1808,5 @@ conversation_runtime = ConversationRuntime()
 __all__ = [
     "ConversationRuntime",
     "RoomMessagePreflightContext",
-    "_ResolvedAttachments",
     "conversation_runtime",
 ]

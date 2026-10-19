@@ -5,7 +5,6 @@ Tests cover:
 - _looks_like_agent_id heuristic
 - _normalize_room_agent_set canonical shape detection
 - parse_agent_mentions extraction
-- extract_agent_message_content per-agent routing
 - _validate_send_message_request input validation
 """
 
@@ -1031,54 +1030,6 @@ class TestParseAgentMentions:
 
         assert result[0]["agent_id"] == "b"
         assert result[1]["agent_id"] == "a"
-
-
-# =============================================================================
-# extract_agent_message_content Tests
-# =============================================================================
-
-
-class TestExtractAgentMessageContent:
-    """Tests for per-agent message content extraction."""
-
-    def test_extracts_content_for_mentioned_agent(self, room_center):
-        text = "<@a1|Alpha> write code. <@a2|Beta> review it."
-        mentions = [
-            {
-                "agent_id": "a1",
-                "agent_name": "Alpha",
-                "mention_text": "<@a1|Alpha>",
-                "position": 0,
-            },
-            {
-                "agent_id": "a2",
-                "agent_name": "Beta",
-                "mention_text": "<@a2|Beta>",
-                "position": 22,
-            },
-        ]
-
-        result = room_center.extract_agent_message_content(
-            text, "a1", "Alpha", mentions
-        )
-        assert "write code" in result
-        assert "<@" not in result
-
-    def test_returns_clean_text_when_agent_not_mentioned(self, room_center):
-        """Agent not in mentions gets full text with all mentions stripped."""
-        text = "<@a1|Alpha> do something"
-        mentions = [
-            {
-                "agent_id": "a1",
-                "agent_name": "Alpha",
-                "mention_text": "<@a1|Alpha>",
-                "position": 0,
-            },
-        ]
-
-        result = room_center.extract_agent_message_content(text, "a2", "Beta", mentions)
-        assert "<@" not in result
-        assert "do something" in result
 
 
 # =============================================================================

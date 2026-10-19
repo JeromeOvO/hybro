@@ -84,8 +84,6 @@ from common.dto.llm import (
 )
 from common.dto.llm_workflows import (
     AgentRoutingCandidate,
-    ExplicitAgentMention,
-    ParsedUserMessageRequest,
     RoomMemoryGenerationInput,
     RoomMessageSummary,
 )
@@ -170,7 +168,6 @@ __all__ = [
     "ExecutionAck",
     "ExecutionRequest",
     "ExecutionResult",
-    "ExplicitAgentMention",
     "FileInfo",
     "FileMetadata",
     "FrozenDTO",
@@ -215,7 +212,6 @@ __all__ = [
     "MessageUpdatePayload",
     "ModelInfo",
     "NotificationPayload",
-    "ParsedUserMessageRequest",
     "ProcessingStatusEvent",
     "RoomCreated",
     "RoomCreationParams",

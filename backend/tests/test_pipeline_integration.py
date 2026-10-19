@@ -24,7 +24,6 @@ from agent.selection_service import AgentSelectionService, RoutingStrategy
 from common.types import AgentCapabilities, AgentCard
 from conversation.runtime import ConversationRuntime
 from models.agent import Agent, AgentStatus
-from models.room import MessageContent, RoomUserMessage, UserAttachment
 from models.room_services_models import ResolvedRoutingScope
 
 # ---- Test Helpers ----
@@ -181,64 +180,6 @@ async def test_all_agents_scope_returns_every_active_agent_without_matching():
         sender_user_id="user123",
         required_input_modes=None,
     )
-
-
-@pytest.mark.asyncio
-async def test_derive_required_input_modes_flows_to_matcher():
-    """End-to-end: verify attachment MIME types flow from RoomUserMessage → AgentMatcher."""
-    # Create RoomUserMessage with attachments
-    attachments = [
-        UserAttachment(
-            file_id="file1",
-            file_name="doc.pdf",
-            mime_type="application/pdf",
-            size_bytes=1024,
-            s3_key="uploads/doc.pdf",
-        ),
-        UserAttachment(
-            file_id="file2",
-            file_name="image.jpg",
-            mime_type="image/jpeg",
-            size_bytes=2048,
-            s3_key="uploads/image.jpg",
-        ),
-    ]
-
-    user_message = RoomUserMessage(
-        room_id="room123",
-        message_id="msg123",
-        message_content=MessageContent(
-            message_text="Analyze these files",
-            attachments=attachments,
-        ),
-        user_id="user123",
-    )
-
-    # Derive required_input_modes
-    conversation_runtime = ConversationRuntime()
-    required_modes = conversation_runtime._derive_required_input_modes(user_message)
-
-    # Verify MIME types extracted
-    assert required_modes == ["application/pdf", "image/jpeg"]
-
-    # Mock AgentMatcher.match to verify it receives required_input_modes
-    with patch(
-        "agent.matcher.AgentMatcher.match", new_callable=AsyncMock
-    ) as mock_match:
-        mock_match.return_value = MatchResult(
-            agents=[], total_candidates=0, filtered_count=0
-        )
-
-        service = AgentSelectionService()
-        await service.select_agents_for_message(
-            message_text="Analyze these files",
-            required_input_modes=required_modes,
-        )
-
-        # Verify required_input_modes reached the matcher
-        mock_match.assert_called_once()
-        call_args = mock_match.call_args
-        assert call_args[1]["required_input_modes"] == ["application/pdf", "image/jpeg"]
 
 
 @pytest.mark.asyncio
