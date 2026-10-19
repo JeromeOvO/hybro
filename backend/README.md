@@ -488,3 +488,17 @@ HYBRO_TEST_REDIS_URL=redis://localhost:6379/0 uv run pytest -m integration
 ```
 
 See [`tests/README.md`](tests/README.md) for test lanes and cleanup conventions.
+
+## Cleanup reports
+
+Both scripts are read-only. Run from `backend/`:
+
+```sh
+uv run python -m scripts.report_orphan_modules
+uv run python -m scripts.check_legacy_lifecycle_readiness
+```
+
+`report_orphan_modules` lists production modules that no entry point imports.
+`check_legacy_lifecycle_readiness` counts the legacy lifecycle data in the
+configured Mongo database (or `--mongo-url`/`--database`) that must reach zero
+before each legacy-removal step; each line names the step it gates.
