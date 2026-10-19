@@ -109,7 +109,10 @@ from execution.orchestrator.models import (
     OrchestratorProfile,
     RecoveryClaim,
 )
-from execution.orchestrator.persistence import SUSPENDED_RUN_STATUSES
+from execution.orchestrator.persistence import (
+    SUSPENDED_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
+)
 from execution.orchestrator.profiles import UnsupportedProviderCapabilities
 from execution.orchestrator.projection import (
     ProjectionListener,
@@ -149,7 +152,7 @@ def _generic_recovery_next_attempt(status: str, *, now: datetime) -> datetime | 
     Terminal Runs need none; suspended Runs stay dormant until a resume re-arms
     them; any other Run is re-driven shortly.
     """
-    if status in {"completed", "failed", "canceled", "budget_exhausted"}:
+    if status in TERMINAL_RUN_STATUSES:
         return None
     if status in SUSPENDED_RUN_STATUSES:
         return dormant_recovery_at(now)

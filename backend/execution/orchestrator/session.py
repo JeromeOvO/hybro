@@ -25,7 +25,7 @@ from .models import (
     ToolObservation,
     UserMessage,
 )
-from .persistence import SUSPENDED_RUN_STATUSES
+from .persistence import SUSPENDED_RUN_STATUSES, TERMINAL_RUN_STATUSES
 from .ports import OrchestratorRunStore, ToolCatalog
 
 # Live execution lease. The in-process driver owns the Run's recovery claim while
@@ -35,9 +35,6 @@ from .ports import OrchestratorRunStore, ToolCatalog
 SESSION_EXECUTION_OWNER_PREFIX = "session:"
 _EXECUTION_LEASE_SECONDS = 60.0
 _EXECUTION_LEASE_RENEW_SECONDS = 20.0
-_TERMINAL_RUN_STATUSES = frozenset(
-    {"completed", "failed", "canceled", "budget_exhausted"}
-)
 
 # A suspended Run has no watchdog while it waits. Its recovery schedule is a
 # finite far-future value rather than None, because None means "due now".
@@ -223,7 +220,7 @@ class RoomAgentSession:
         if self._run_id is None or self._lease_owner is not None:
             return
         run = await self.run_store.load(self._run_id)
-        if run is None or run.status in _TERMINAL_RUN_STATUSES:
+        if run is None or run.status in TERMINAL_RUN_STATUSES:
             return
         now = self.clock.now()
         owner = execution_owner_id(self.config.session_id)
@@ -248,7 +245,7 @@ class RoomAgentSession:
             run = await self.run_store.load(self._run_id)
             if (
                 run is None
-                or run.status in _TERMINAL_RUN_STATUSES
+                or run.status in TERMINAL_RUN_STATUSES
                 or run.recovery_claim.owner_id != owner
             ):
                 return
@@ -288,7 +285,7 @@ class RoomAgentSession:
         typed recoverable failure moves that boundary earlier afterwards
         through ``schedule_run_recovery``.
         """
-        if run.status in _TERMINAL_RUN_STATUSES:
+        if run.status in TERMINAL_RUN_STATUSES:
             return None
         if run.status in SUSPENDED_RUN_STATUSES:
             return dormant_recovery_at(self.clock.now())
@@ -306,12 +303,7 @@ class RoomAgentSession:
         existing = await self.run_store.load(self._run_id)
         if existing is None:
             return False
-        return existing.status not in {
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return existing.status not in TERMINAL_RUN_STATUSES
 
     async def prompt(
         self,
@@ -355,7 +347,7 @@ class RoomAgentSession:
 
     async def continue_run(self) -> KernelRunResult:
         run = await self._current_run()
-        if run.status in {"waiting_external", "awaiting_user"}:
+        if run.status in SUSPENDED_RUN_STATUSES:
             raise SessionConflict("suspended Run requires a new ToolObservation")
         return await self._start_kernel()
 
@@ -449,7 +441,7 @@ class RoomAgentSession:
     async def _terminalize_interrupted_run(self) -> None:
         if self._run_id is not None:
             run = await self.run_store.load(self._run_id)
-            if run is not None and run.status not in _TERMINAL_RUN_STATUSES:
+            if run is not None and run.status not in TERMINAL_RUN_STATUSES:
                 try:
                     await self.kernel.terminalize(
                         self._run_id,
@@ -594,8 +586,7 @@ async def schedule_run_recovery(
         if (
             current is None
             or current.recovery_claim.owner_id is not None
-            or current.status
-            in {"canceling", "completed", "failed", "canceled", "budget_exhausted"}
+            or current.status in {"canceling", *TERMINAL_RUN_STATUSES}
             or current.recovery_claim.quarantined_at is not None
         ):
             return

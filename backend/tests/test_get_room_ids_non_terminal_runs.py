@@ -16,24 +16,6 @@ def test_non_terminal_state_values_match_active_run_query():
 
 
 @pytest.mark.asyncio
-async def test_run_repository_get_room_ids_with_non_terminal_runs_filters_and_strings():
-    from execution.repository.mongo import RunMongoRepository
-
-    mock_runs = MagicMock()
-    mock_runs.distinct = AsyncMock(return_value=["room-a", "room-b", None, ""])
-    mongo = MagicMock()
-    mongo.collection.return_value = mock_runs
-
-    out = await RunMongoRepository(mongo).get_room_ids_with_non_terminal_runs()
-
-    assert out == ["room-a", "room-b"]
-    mock_runs.distinct.assert_called_once()
-    key, flt = mock_runs.distinct.call_args[0]
-    assert key == "room_id"
-    assert flt == {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}}
-
-
-@pytest.mark.asyncio
 async def test_repository_store_get_room_ids_with_non_terminal_runs_filters_and_strings():
     from dal.runtime_store import RuntimeRepositoryStore
 

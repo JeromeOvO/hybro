@@ -46,7 +46,7 @@ from .models import (
     UsageRecord,
     UserMessage,
 )
-from .persistence import SUSPENDED_RUN_STATUSES
+from .persistence import SUSPENDED_RUN_STATUSES, TERMINAL_RUN_STATUSES
 from .ports import (
     CancellationSignal,
     ContextCompactor,
@@ -1021,7 +1021,7 @@ class OrchestratorKernel:
             run = await self._load(run_id)
             if run.status == "canceling":
                 return KernelRunResult("cancellation_pending", run)
-            if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+            if run.status in TERMINAL_RUN_STATUSES:
                 return KernelRunResult(_outcome_for_status(run.status), run)
             overflow = next(
                 (
@@ -1825,11 +1825,11 @@ class OrchestratorKernel:
                 raise ValueError("observation result does not correlate")
         elif observation.outcome.invocation_id != entry.invocation.invocation_id:
             raise ValueError("observation suspension does not correlate")
-        if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+        if run.status in TERMINAL_RUN_STATUSES:
             if observation.observation_id in entry.processed_observation_ids:
                 return KernelRunResult(_outcome_for_status(run.status), run)
             raise KernelConflict("terminal Run cannot accept a new tool observation")
-        if run.status not in {"waiting_external", "awaiting_user"}:
+        if run.status not in SUSPENDED_RUN_STATUSES:
             raise KernelConflict("tool observations require a suspended Run")
         was_awaiting_user = run.status == "awaiting_user"
         if entry.state not in {"waiting_external", "input_required", "auth_required"}:
@@ -5198,7 +5198,7 @@ class OrchestratorKernel:
         current = await self._load(run.run_id)
         if current.status == "canceling" and status != "canceled":
             return KernelRunResult("cancellation_pending", current)
-        if current.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+        if current.status in TERMINAL_RUN_STATUSES:
             return KernelRunResult(_outcome_for_status(current.status), current)
         run = current
         try:

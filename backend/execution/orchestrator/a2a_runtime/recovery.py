@@ -14,6 +14,7 @@ from common.utils.logger import get_logger
 
 from ..kernel import KernelConflict
 from ..models import TextPart, ToolResult
+from ..persistence import TERMINAL_RUN_STATUSES
 from ..ports import InvocationCheckpointReader
 from .cancellation import A2ACancellationCoordinator
 from .errors import (
@@ -542,13 +543,7 @@ class A2ACallRecoveryService:
         if self.run_store is None:
             return False
         run = await self.run_store.load(record.run_id)
-        return run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def _expire(
         self, record: AgentCallLedgerRecord, *, now: datetime, code: str

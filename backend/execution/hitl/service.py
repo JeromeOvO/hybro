@@ -57,6 +57,7 @@ from execution.hitl.validation import (
     validate_exact_member_inventory,
     validate_route_classifications,
 )
+from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
 from models.hitl import (
     HITLEventType,
     HITLInteraction,
@@ -2087,14 +2088,7 @@ class HITLService:
         state = self._canonical_run_state_reader(run_id)
         if inspect.isawaitable(state):
             state = await state
-        return state not in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-            "missing",
-        }
+        return state not in {"canceling", "missing", *TERMINAL_RUN_STATUSES}
 
     async def _is_canonical_run(self, run_id: object) -> bool:
         if (

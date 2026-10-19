@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from ..models import ToolInvocation
+from ..persistence import TERMINAL_RUN_STATUSES
 from ..ports import OrchestratorRunStore
 from .errors import RecoverableCheckpointError
 from .models import AgentCallLedgerRecord, PreparedInvocationSnapshot
@@ -34,13 +35,7 @@ class RunPreparedInvocationSnapshotReader:
         self, invocation: ToolInvocation
     ) -> PreparedInvocationSnapshot | None:
         run = await self.run_store.load(invocation.run_id)
-        if run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }:
+        if run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return None
         binding = await self.binding_store.load(invocation.tool.binding.binding_id)
         if (
@@ -76,13 +71,7 @@ class RunPreparedInvocationSnapshotReader:
         """Reload the exact durable invocation for background dispatch recovery."""
 
         run = await self.run_store.load(run_id)
-        if run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }:
+        if run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return None
         matches = [
             entry.invocation

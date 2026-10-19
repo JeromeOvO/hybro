@@ -17,6 +17,7 @@ from .models import (
     ProjectionIntent,
     ProjectionIntentStatus,
 )
+from .persistence import TERMINAL_RUN_STATUSES
 
 TerminalDecision = Literal[
     "ready",
@@ -100,7 +101,7 @@ def evaluate_terminal_decision(
         return TerminalDecisionEvaluation(
             decision="terminal_conflict", reason="cancellation already won"
         )
-    if run.status in {"completed", "failed", "budget_exhausted"}:
+    if run.status in TERMINAL_RUN_STATUSES:
         return TerminalDecisionEvaluation(
             decision="terminal_conflict", reason="Run is already terminal"
         )
@@ -369,7 +370,7 @@ def commit_terminal_status(
         return TerminalStatusCommitResult(outcome="replayed", run=run)
     if request.expected_state_version != run.state_version:
         return TerminalStatusCommitResult(outcome="conflict", run=run)
-    if run.status in {"completed", "failed", "canceled", "budget_exhausted"}:
+    if run.status in TERMINAL_RUN_STATUSES:
         return TerminalStatusCommitResult(outcome="conflict", run=run)
     if run.status == "canceling" and (
         request.status != "canceled"
@@ -578,13 +579,7 @@ def transition_after_terminal_evaluation(
 
     if expected_state_version != run.state_version:
         return TerminalEvaluationTransitionResult(outcome="conflict", run=run)
-    if run.status in {
-        "canceling",
-        "completed",
-        "failed",
-        "canceled",
-        "budget_exhausted",
-    }:
+    if run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
         return TerminalEvaluationTransitionResult(outcome="conflict", run=run)
     target = {
         "waiting_external": "waiting_external",
@@ -619,7 +614,7 @@ def transition_projection_settlement(
 
     if expected_state_version != run.state_version:
         return ProjectionSettlementResult(outcome="conflict", run=run)
-    if run.status not in {"completed", "failed", "canceled", "budget_exhausted"}:
+    if run.status not in TERMINAL_RUN_STATUSES:
         return ProjectionSettlementResult(outcome="conflict", run=run)
 
     projection_state = (

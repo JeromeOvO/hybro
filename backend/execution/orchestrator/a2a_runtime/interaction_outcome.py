@@ -19,6 +19,7 @@ from common.dto.delivery import (
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer
 
 from ..models import TextPart, ToolResult
+from ..persistence import TERMINAL_RUN_STATUSES
 from .errors import RecoverableCheckpointError
 from .hitl_prompt import (
     prompt_type_for_question,
@@ -473,13 +474,7 @@ async def emit_hitl_resolved_events(
         await _emit_delivery_event(hitl_delivery, event, canonical=canonical)
     if canonical and status == "responded":
         latest = await _load_hitl_run(record, run_store)
-        if latest is None or latest.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }:
+        if latest is None or latest.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return
         assert canonical_control is not None
         await canonical_control(

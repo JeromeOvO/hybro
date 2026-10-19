@@ -67,6 +67,7 @@ from execution.orchestrator.models import (
     TextPart,
     UserMessage,
 )
+from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
 from execution.orchestrator.public_text import sanitize_public_text
 from execution.orchestrator.session import (
     DefaultRunFactory,
@@ -1000,13 +1001,7 @@ class DualRuntimeRouter:
         if route.room_id != room_id:
             raise HITLRoomMismatchError("Room mismatch")
         run = await self._runtime.run_store.load(route.orchestration_run_id)
-        if run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }:
+        if run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return "canceled"
         mapped = _map_legacy_answers(spec, answers)
         try:

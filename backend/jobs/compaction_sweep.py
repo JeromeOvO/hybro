@@ -116,8 +116,9 @@ class CompactionSweep:
     async def sweep(self) -> dict:
         """Scan all rooms with memory and compact where needed.
 
-        Skips rooms with any non-terminal run (queued / processing / awaiting_input)
-        to avoid read-modify-write races with the supervisor loop (§6.9).
+        Skips rooms with a non-terminal canonical orchestrator Run, including
+        suspended ones (``awaiting_user``, ``waiting_external``), to avoid
+        read-modify-write races with the running turn.
 
         Uses a fixed-size worker pool to bound memory usage instead of
         creating one task per room.

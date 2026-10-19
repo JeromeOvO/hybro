@@ -21,6 +21,10 @@ NON_TERMINAL_RUN_STATUSES = (
     "finalizing",
 )
 
+TERMINAL_RUN_STATUSES = frozenset(
+    {"completed", "failed", "canceled", "budget_exhausted"}
+)
+
 # A suspended Run waits for the owner or an external Agent. Its deadline clock
 # is stopped while it waits (``BudgetState.suspended_at``), so it does not end
 # at the profile deadline; it ends on an answer, a late result, a cancel, or a

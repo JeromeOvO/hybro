@@ -18,6 +18,7 @@ from common.dto.hitl import (
 from common.utils.logger import get_logger
 
 from ..models import TextPart, ToolResult
+from ..persistence import TERMINAL_RUN_STATUSES
 from .errors import (
     AgentCardContractError,
     AmbiguousRemoteEffectError,
@@ -1558,13 +1559,7 @@ class A2AContinuationCoordinator:
         if self.run_store is None:
             return False
         run = await self.run_store.load(call.run_id)
-        return run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def _run_fenced_continuation(
         self,

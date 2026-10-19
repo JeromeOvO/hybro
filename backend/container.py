@@ -100,6 +100,8 @@ from execution.cancellation import (
     CancellationStartupPolicy,
     RedisCancellationTransport,
 )
+from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
+from execution.repository.active_runs import CanonicalActiveRunRoomReader
 from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
     orphaned_upload_cleaner,
@@ -1512,10 +1514,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     return
                 if kind == "run_resumed" and run.status in {
                     "canceling",
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "budget_exhausted",
+                    *TERMINAL_RUN_STATUSES,
                 }:
                     return
                 boundary_at = datetime.now(UTC)
@@ -1727,13 +1726,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 run = await orchestrator_runtime.run_store.load(run_id)
                 if run is None:
                     raise ContinuationLostError("orchestration run is missing")
-                if run.status in {
-                    "canceling",
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "budget_exhausted",
-                }:
+                if run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
                     return False
                 try:
                     observation = supervisor_answer_observation(
@@ -2212,15 +2205,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
             )
         compaction_sweep.set_leader_election(_leader)
+        canonical_active_run_rooms = CanonicalActiveRunRoomReader(mongo_dal)
         compaction_sweep.set_sweep_deps(
             CompactionSweepDeps(
                 list_room_ids_with_memory=(
                     context_memory_facade.memory_repository.list_room_ids_with_memory
                 ),
                 get_room_ids_with_non_terminal_runs=(
-                    _execution_repos[
-                        "run_repository"
-                    ].get_room_ids_with_non_terminal_runs
+                    canonical_active_run_rooms.get_room_ids_with_non_terminal_runs
                 ),
                 context_compaction=context_memory_facade,
             )
@@ -2863,12 +2855,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_facade.bind_orchestrator_router(orchestrator_router)
 
             class _CanonicalActiveRunReader:
-                _TERMINAL = [
-                    "completed",
-                    "failed",
-                    "canceled",
-                    "budget_exhausted",
-                ]
+                _TERMINAL = list(TERMINAL_RUN_STATUSES)
 
                 @staticmethod
                 def _to_run_info(document: dict[str, Any]):

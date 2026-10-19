@@ -275,7 +275,7 @@ flowchart TD
 | Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
 | Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, persistence adapters, the A2A SDK boundary, and shared contracts. |
 
-Products depend on core modules; nothing imports `chat` or `session`, and
+Products depend on core modules; no core module imports `chat` or `session`, and
 `session` never imports `chat`. A conversation container records its owning
 product in `rooms.owner_product` (`chat` by default, `session` for session
 containers). Execution imports
@@ -1947,7 +1947,11 @@ Supervisor completion has a related explicit order while the normal
 history, await the incremental structured room-summary update, then await
 `compact_if_needed`. Event-driven message projection similarly appends first and
 calls `run_compaction` only when the projection reports a new turn. The periodic
-compaction sweep is an additional safety path.
+compaction sweep is an additional safety path. It skips every room with a
+non-terminal canonical Run in `orchestrator_runs` (the active-room index
+predicate, read by `CanonicalActiveRunRoomReader`), so a room whose Run is
+`awaiting_user` or `waiting_external` is not compacted by the sweep while it
+waits.
 
 #### Summary, search, and ports
 

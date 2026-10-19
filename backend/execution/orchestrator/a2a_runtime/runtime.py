@@ -22,6 +22,7 @@ from ..models import (
     ToolResult,
     ToolSuspension,
 )
+from ..persistence import TERMINAL_RUN_STATUSES
 from ..ports import (
     CancellationSignal,
     InvalidParkedInteractionTarget,
@@ -264,13 +265,7 @@ class A2AAgentToolRuntime:
         if self.run_store is None:
             return False
         run = await self.run_store.load(run_id)
-        return run is None or run.status in {
-            "canceling",
-            "completed",
-            "failed",
-            "canceled",
-            "budget_exhausted",
-        }
+        return run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def execute(
         self,
@@ -463,10 +458,7 @@ class A2AAgentToolRuntime:
             owning_run = await self.run_store.load(invocation.run_id)
             if owning_run is None or owning_run.status in {
                 "canceling",
-                "completed",
-                "failed",
-                "canceled",
-                "budget_exhausted",
+                *TERMINAL_RUN_STATUSES,
             }:
                 raise ClientCancellationRequested("owning Run is not dispatchable")
         try:

@@ -19,9 +19,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-TERMINAL_RUN_STATUSES = frozenset(
-    {"completed", "failed", "canceled", "budget_exhausted"}
-)
+from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
+
 TERMINAL_AGENT_CALL_STATES = frozenset(
     {"completed", "failed", "canceled", "rejected", "expired"}
 )

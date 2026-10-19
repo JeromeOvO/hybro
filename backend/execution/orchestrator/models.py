@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .persistence import TERMINAL_RUN_STATUSES
+
 
 class ContractModel(BaseModel):
     """Strict base for persisted orchestrator contracts."""
@@ -834,12 +836,7 @@ class OrchestratorRunState(ContractModel):
                 raise ValueError(
                     "canonical public offset must match active text checkpoint"
                 )
-            if self.status in {
-                "completed",
-                "failed",
-                "canceled",
-                "budget_exhausted",
-            }:
+            if self.status in TERMINAL_RUN_STATUSES:
                 if any(
                     (
                         self.active_internal_turn_id,
