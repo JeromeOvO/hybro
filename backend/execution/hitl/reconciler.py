@@ -10,7 +10,6 @@ from models.hitl import (
     HITLResumeCommandStatus,
     HITLStatus,
 )
-from models.orchestration import TERMINAL_ORCHESTRATION_STATUSES, OrchestrationStatus
 
 logger = get_logger(__name__)
 
@@ -28,14 +27,12 @@ class HITLLifecycleReconciler:
         lifecycle,
         service,
         application,
-        orchestration_run_store=None,
         inspect_remote_command=None,
         limit: int = 100,
     ) -> None:
         self._lifecycle = lifecycle
         self._service = service
         self._application = application
-        self._orchestration_run_store = orchestration_run_store
         self._inspect_remote_command = inspect_remote_command
         self._limit = limit
 
@@ -48,7 +45,7 @@ class HITLLifecycleReconciler:
             "commands": 0,
             "terminal_interactions": 0,
             "terminal_requests": 0,
-            "divergence": 0,
+            "open_projections": 0,
             "errors": 0,
         }
         passes = (
@@ -59,7 +56,7 @@ class HITLLifecycleReconciler:
             ("commands", self._reconcile_commands),
             ("terminal_interactions", self._reconcile_terminal_interactions),
             ("terminal_requests", self._reconcile_terminal_requests),
-            ("divergence", self._heal_run_divergence),
+            ("open_projections", self._recover_open_projections),
         )
         for name, operation in passes:
             try:
@@ -405,54 +402,24 @@ class HITLLifecycleReconciler:
                 )
         return repaired
 
-    async def _heal_run_divergence(self) -> int:
-        if self._orchestration_run_store is None:
-            return 0
+    async def _recover_open_projections(self) -> int:
         repaired = 0
         async for interaction in self._lifecycle.iter_active_interactions(
             limit=self._limit
         ):
-            if interaction.get("status") in {
+            if interaction.get("status") not in {
                 HITLInteractionStatus.OPEN.value,
                 HITLInteractionStatus.PARTIALLY_ANSWERED.value,
             }:
-                try:
-                    repaired += await self._service.recover_open_interaction_projection(
-                        interaction
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to recover HITL open projection",
-                        extra={"interaction_id": interaction.get("interaction_id")},
-                        exc_info=True,
-                    )
-            run_id = interaction.get("orchestration_run_id")
-            if not run_id:
                 continue
             try:
-                run = await self._orchestration_run_store.get_run(run_id)
-                if run is None:
-                    continue
-                if run.status in TERMINAL_ORCHESTRATION_STATUSES:
-                    target = (
-                        HITLInteractionStatus.CANCELED.value
-                        if run.status == OrchestrationStatus.CANCELED
-                        else HITLInteractionStatus.FAILED.value
-                    )
-                    updated = await self._lifecycle.terminalize_interaction(
-                        interaction["interaction_id"],
-                        expected_statuses=[interaction["status"]],
-                        status=target,
-                        reason=f"Owning run is already {run.status.value}",
-                    )
-                    repaired += int(updated is not None)
+                repaired += await self._service.recover_open_interaction_projection(
+                    interaction
+                )
             except Exception:
                 logger.warning(
-                    "Failed to reconcile HITL/run divergence",
-                    extra={
-                        "interaction_id": interaction.get("interaction_id"),
-                        "run_id": run_id,
-                    },
+                    "Failed to recover HITL open projection",
+                    extra={"interaction_id": interaction.get("interaction_id")},
                     exc_info=True,
                 )
         return repaired

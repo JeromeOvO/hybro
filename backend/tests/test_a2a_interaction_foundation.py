@@ -20,13 +20,6 @@ from execution.dispatch.a2a_interaction import (
     extract_a2a_interaction_spec,
 )
 from execution.dispatch.agent_event import AgentEvent, AgentInputObservation
-from models.orchestration import (
-    AgentInputObservationRecord,
-    OrchestrationEventType,
-    OrchestrationRunEvent,
-    OrchestrationRunState,
-)
-from models.run import Run, RunEvent, RunEventType
 
 
 def _questions() -> list[dict]:
@@ -238,71 +231,3 @@ def test_metadata_identifiers_never_replace_authoritative_transport_identity():
         observation.interaction_metadata[HYBRO_A2A_INTERACTION_METADATA_KEY][
             "interaction_id"
         ] = "mutated-through-observation"
-
-
-def test_private_durable_observation_round_trips_without_public_run_leak():
-    sentinel = "PRIVATE_A2A_PROMPT_SENTINEL"
-    spec = A2AInteractionSpec.model_validate(_spec_data())
-    record = AgentInputObservationRecord(
-        classification="typed",
-        raw_prompt=sentinel,
-        raw_metadata={HYBRO_A2A_INTERACTION_METADATA_KEY: _spec_data()},
-        interaction_spec=spec,
-        observed_state="input-required",
-        authoritative_task_id="remote-task-1",
-        authoritative_context_id="remote-context-1",
-        agent_id="agent-1",
-        agent_message_id="agent-message-1",
-    )
-    reconstructed = AgentInputObservationRecord.model_validate(record.model_dump())
-    assert reconstructed.observation_id == record.observation_id
-
-    state = OrchestrationRunState(
-        run_id="run-1",
-        room_id="room-1",
-        user_message_id="user-message-1",
-        goal="Plan a trip",
-        candidate_agent_ids=["agent-1"],
-        private_agent_input_observations=[record],
-    )
-    assert sentinel in state.model_dump_json()
-
-    private_event = OrchestrationRunEvent(
-        run_id=state.run_id,
-        room_id=state.room_id,
-        type=OrchestrationEventType.STATE_REDUCED,
-        state_version=state.state_version,
-        payload={"status": state.status.value},
-    )
-    public_run = Run(run_id=state.run_id, room_id=state.room_id)
-    public_event = RunEvent(
-        run_id=state.run_id,
-        room_id=state.room_id,
-        seq=1,
-        type=RunEventType.RUN_STARTED,
-    )
-    for boundary in (private_event, public_run, public_event):
-        serialized = boundary.model_dump_json()
-        assert "private_agent_input_observations" not in serialized
-        assert sentinel not in serialized
-    assert "private_agent_input_observations" not in Run.model_fields
-    assert "private_agent_input_observations" not in RunEvent.model_fields
-
-
-@pytest.mark.parametrize(
-    ("task_id", "context_id"),
-    [("relay-pending-task", "context-1"), ("task-1", "unknown")],
-)
-def test_durable_observation_requires_authoritative_identifiers(
-    task_id: str, context_id: str
-):
-    with pytest.raises(ValidationError, match="authoritative"):
-        AgentInputObservationRecord(
-            classification="untyped",
-            raw_prompt="Question",
-            observed_state="input-required",
-            authoritative_task_id=task_id,
-            authoritative_context_id=context_id,
-            agent_id="agent-1",
-            agent_message_id="message-1",
-        )

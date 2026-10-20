@@ -3,10 +3,11 @@ from types import SimpleNamespace
 import pytest
 
 from conversation.candidate_scope import (
+    CandidateAgentSnapshot,
+    CandidateScopeSnapshot,
     candidate_scope_from_envelope,
     normalize_candidate_scope,
 )
-from models.orchestration import CandidateAgentSnapshot, CandidateScopeSnapshot
 
 
 def test_normalize_candidate_scope_from_mapping_preserves_order_and_names():

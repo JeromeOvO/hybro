@@ -174,8 +174,6 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "agents",
         "conversation_content",
         "migration_markers",
-        "orchestration_run_events",
-        "orchestration_runs",
         "room_agent_messages",
         "room_user_messages",
         "room_memories",
@@ -183,6 +181,7 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "run_events",
         "runs",
     }
+    assert not {"orchestration_runs", "orchestration_run_events"} & set(collections)
     collections["agents"].drop_index.assert_awaited_once_with("unique_normalized_url")
     assert _has_create_index(
         collections["agents"],
@@ -303,8 +302,6 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
 @pytest.mark.parametrize(
     "critical_index_name",
     [
-        "orchestration_run_id_unique",
-        "orchestration_event_id_unique",
         "room_user_message_id_unique",
         "room_user_client_request_id_unique",
         "room_agent_message_id_unique",

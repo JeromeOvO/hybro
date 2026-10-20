@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
 
+from pydantic import BaseModel, Field, field_validator
+
 from common.utils.a2a_file_modes import agent_input_modes, agent_supports_any_file
-from models.orchestration import (
-    AuthorizationBasis,
-    CandidateAgentSnapshot,
-    CandidateScopeSnapshot,
-)
+from common.utils.time import utcnow
 
 AuthorizationKind = Literal[
     "room_member",
@@ -20,6 +19,51 @@ AuthorizationKind = Literal[
     "mention",
     "all_active_agents",
 ]
+
+
+class AuthorizationBasis(BaseModel):
+    kind: AuthorizationKind
+    room_id: str | None = None
+    group_id: str | None = None
+    selected_by_user_id: str | None = None
+    checked_at: datetime = Field(default_factory=utcnow)
+
+
+class CandidateAgentSnapshot(BaseModel):
+    agent_id: str
+    name: str | None = None
+    role: str | None = None
+    capability_summary: str = ""
+    status: str | None = None
+    source: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    input_modes: list[str] = Field(default_factory=lambda: ["text"])
+    output_modes: list[str] = Field(default_factory=list)
+    supports_file_upload: bool = False
+    success_rate: float | None = None
+
+
+class CandidateScopeSnapshot(BaseModel):
+    snapshot_id: str
+    revision: int = 1
+    source: str
+    room_id: str
+    group_id: str | None = None
+    agent_ids: list[str]
+    agents: list[CandidateAgentSnapshot] = Field(default_factory=list)
+    room_membership_version: str | None = None
+    group_version: str | None = None
+    resolved_at: datetime = Field(default_factory=utcnow)
+    authorization_basis: AuthorizationBasis | None = None
+
+    @field_validator("revision")
+    @classmethod
+    def _revision_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("revision must be at least 1")
+        return value
+
+
 _AUTHORIZATION_KIND_BY_SOURCE: dict[str, AuthorizationKind] = {
     "room_default": "room_member",
     "saved_group": "saved_group_member",

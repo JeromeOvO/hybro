@@ -543,8 +543,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "conversation_content",
                         "runs",
                         "run_events",
-                        "orchestration_runs",
-                        "orchestration_run_events",
                         "hitl_requests",
                         "hitl_interactions",
                         "hitl_resume_commands",
@@ -679,7 +677,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 HITLDeliveryAdapter,
                 HITLTaskNotificationAdapter,
             )
-            from execution.orchestration.run_store import MongoOrchestrationRunStore
             from execution.run_command_handler import (
                 RunCommandHandler,
                 run_event_sse_enabled,
@@ -1018,10 +1015,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_client_request_id_resolver = (
                 execution_client_request_id_resolver
             )
-            orchestration_run_store = MongoOrchestrationRunStore(
-                mongo_dal,
-                room_files=file_storage,
-            )
             from execution.hitl.adapters import HITLTerminalLifecycleAdapter
             from execution.hitl.application import HITLApplicationCoordinator
             from execution.hitl.reconciler import HITLLifecycleReconciler
@@ -1315,7 +1308,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     notify_task_update_with_string_state
                 ),
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
-                    orchestration_run_store,
                     run_lifecycle,
                     canonical_terminalizer=terminalize_canonical_hitl_run_port,
                 ),
@@ -1366,7 +1358,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 lifecycle=hitl_lifecycle_store,
                 service=hitl_manager,
                 application=hitl_application,
-                orchestration_run_store=orchestration_run_store,
                 inspect_remote_command=inspect_uncertain_hitl_command,
             )
             route_room_reader = SimpleNamespace(
@@ -2623,7 +2614,6 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     memory_search_index_ready = await _ensure_context_memory_indexes(mongo)
     await _ensure_capability_issue_indexes(mongo)
     await _ensure_run_lifecycle_indexes(mongo)
-    await _ensure_orchestration_run_indexes(mongo)
     await _ensure_orchestrator_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_room_history_indexes(mongo)
@@ -2897,43 +2887,6 @@ async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
         ],
         name="pending_terminal_projection",
         partialFilterExpression={"terminal_projection.pending": True},
-    )
-
-
-async def _ensure_orchestration_run_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "orchestration_runs",
-        [("run_id", 1)],
-        name="orchestration_run_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "orchestration_runs",
-        [("user_message_id", 1), ("created_at", -1)],
-        name="orchestration_user_message_created_at",
-    )
-    await _create_index(
-        mongo,
-        "orchestration_runs",
-        [("status", 1), ("updated_at", 1)],
-        name="orchestration_status_updated_at",
-    )
-    await _create_index(
-        mongo,
-        "orchestration_run_events",
-        [("event_id", 1)],
-        name="orchestration_event_id_unique",
-        unique=True,
-        critical=True,
-    )
-    await _create_index(
-        mongo,
-        "orchestration_run_events",
-        [("run_id", 1), ("created_at", 1)],
-        name="orchestration_run_created_at",
     )
 
 

@@ -1367,13 +1367,12 @@ unique indexes. A focused `(updated_at, run_id)` partial index supports the repa
 scan. Active-Run reads expose `canceling` with the originating message identity so
 clients retain correlation until durable `canceled` settlement.
 
-Execution also defines a durable orchestration run-state foundation. The
-versioned `OrchestrationRunState` model, pure reducer transitions, and
-`OrchestrationRunStore` contract support optimistic state writes, append-only
-events, recovery queries, and envelope reconstruction. Public run lifecycle
-projection accepts an explicit public `RunState` and is idempotent by causation
-id. Public projection is unconditional: `OrchestrationRunState` is the execution
-source of truth, while `runs` and `run_events` are public lifecycle projections.
+The canonical orchestrator's `orchestrator_runs` store is the execution source of
+truth; the first-generation `orchestration_runs` store is retired. Public run
+lifecycle projection accepts an explicit public `RunState` and is idempotent by
+causation id, while `runs` and `run_events` are public lifecycle projections.
+When a HITL interaction terminates and the canonical terminalizer does not own
+its run, Execution projects the public run as `canceled` or `failed` directly.
 A projection with a new causation id records that binding even when the public
 head is already at the requested active state. Processing-status lifecycle writes
 return a typed `accepted`/`replayed`/`conflict`/`error` outcome. Each new terminal

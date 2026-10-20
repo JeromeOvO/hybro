@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -17,7 +16,6 @@ from common.dto import (
 from models.agent import Agent
 from models.agent_group import AgentGroup
 from models.memory import RoomMemory
-from models.orchestration import OrchestrationRunEvent, OrchestrationRunState
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 
@@ -97,30 +95,6 @@ def runtime_to_room_memory(room_memory: RuntimeRoomMemory) -> RoomMemory:
     return RoomMemory.model_validate(_dump_runtime(room_memory))
 
 
-def orchestration_run_state_to_document(
-    state: OrchestrationRunState,
-) -> dict[str, Any]:
-    return _dump_model(state)
-
-
-def orchestration_run_state_from_document(
-    document: dict[str, Any],
-) -> OrchestrationRunState:
-    return OrchestrationRunState.model_validate(document)
-
-
-def orchestration_run_event_to_document(
-    event: OrchestrationRunEvent,
-) -> dict[str, Any]:
-    return _dump_model(event)
-
-
-def orchestration_run_event_from_document(
-    document: dict[str, Any],
-) -> OrchestrationRunEvent:
-    return OrchestrationRunEvent.model_validate(document)
-
-
 def runtime_agents(agents: Iterable[Agent]) -> list[RuntimeAgentRecord]:
     return [agent_to_runtime(agent) for agent in agents]
 
@@ -159,10 +133,6 @@ __all__ = [
     "agent_group_to_runtime",
     "agent_to_runtime",
     "message_content_to_runtime",
-    "orchestration_run_event_from_document",
-    "orchestration_run_event_to_document",
-    "orchestration_run_state_from_document",
-    "orchestration_run_state_to_document",
     "room_agent_message_to_runtime",
     "room_memory_to_runtime",
     "room_to_runtime",

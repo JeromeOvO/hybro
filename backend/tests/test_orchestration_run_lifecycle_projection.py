@@ -251,8 +251,12 @@ async def test_project_run_state_reuses_existing_event_for_same_causation_id(
 async def test_project_run_state_rejects_orchestration_status_before_repository_access(
     monkeypatch,
 ):
+    from enum import StrEnum
+
     from execution.run_command_handler import RunCommandHandler
-    from models.orchestration import OrchestrationStatus
+
+    class OrchestrationStatus(StrEnum):
+        RUNNING = "running"
 
     run_repo = AsyncMock()
     event_repo = AsyncMock()
