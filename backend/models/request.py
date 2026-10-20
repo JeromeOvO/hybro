@@ -120,24 +120,6 @@ class InspectionCenterRequest(BaseModel):
     agent_url: str
 
 
-class OrchestrationRequest(BaseModel):
-    task_id: str | None = None
-    room_id: str | None = None
-    room_user_message_id: str | None = None
-    room_agent_message_id: str | None = None
-    room_related_message_id: str | None = None
-    user_id: str | None = None
-    is_recovery: bool = False
-    reuse_processing_claim: bool = False
-    client_request_id: str | None = None
-    # Live routing inputs carried from the validated API request. When
-    # present they are authoritative for Run creation; the persisted-message
-    # reconstruction in the routing seam remains the recovery/re-entry
-    # fallback when these are absent.
-    mode: str | None = None
-    agent_scope: dict[str, Any] | None = None
-
-
 class DebatationCenterRequest(BaseModel):
     task_id: str
 

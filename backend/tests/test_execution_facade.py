@@ -528,12 +528,9 @@ async def test_schedule_orchestration_carries_live_mode_and_scope():
     facade.schedule_orchestration(request, ack)
     await asyncio.sleep(0)
 
-    routed_request, orchestration_request = facade._route_orchestration.call_args.args
-    assert routed_request is request
-    # The route-validated mode and scope travel with the orchestration
-    # request so routing never depends on the persisted extend_info rewrite.
-    assert orchestration_request.mode == "supervisor"
-    assert orchestration_request.agent_scope == {"source": "all_agents"}
+    # The route-validated request itself reaches routing, so the mode and scope
+    # never depend on the persisted extend_info rewrite.
+    facade._route_orchestration.assert_awaited_once_with(request, "msg-1")
 
 
 @pytest.mark.asyncio
@@ -1040,15 +1037,9 @@ async def test_start_orchestration_tracks_and_awaits_background_task():
 
     await facade.start_orchestration(request, ack)
 
-    orchestration_request = (
-        orchestrator_router.process_room_user_message.call_args.args[0]
+    orchestrator_router.process_room_user_message.assert_awaited_once_with(
+        request, message_id="msg-1"
     )
-    assert orchestration_request.room_id == "room-1"
-    assert orchestration_request.room_user_message_id == "msg-1"
-    assert orchestration_request.user_id == "user-1"
-    assert orchestration_request.client_request_id == "cr-1"
-    assert orchestration_request.room_related_message_id == "parent-1"
-    assert orchestrator_router.process_room_user_message.call_args.kwargs == {}
     assert task_factory.calls == ["execution-orchestrate-msg-1"]
     assert facade._inflight == set()
 

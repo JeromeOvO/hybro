@@ -2,17 +2,17 @@
 
 This module is the *only* orchestrator surface the product entry points
 (``execution/facade.py`` and ``api_gateway/routes``) are allowed to import. It
-owns the ingress concerns that translate between the legacy
-``OrchestrationRequest`` envelope and the orchestrator runtime:
+owns the ingress concerns between ``ExecutionRequest`` and the orchestrator
+runtime:
 
 * **Run-creation** — ``process_room_user_message`` prepares a Run and drives
   the orchestrator ``RoomSessionHost`` prompt for every new user message.
 * **Ingress routing** — webhook observations, HITL answers, and cancellation
   are dispatched to the orchestrator runtime (the only runtime).
 
-The heavy translation between the ``OrchestrationRequest`` envelope and the
-orchestrator's ``RoomSessionHost`` inputs also lives here, so
-``execution/facade.py`` stays orchestrator-import-free.
+Building the orchestrator's ``RoomSessionHost`` inputs from the request and
+the persisted user message also lives here, so ``execution/facade.py`` stays
+orchestrator-import-free.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
-from common.dto.execution import CancellationAck, HITLRequest
+from common.dto.execution import CancellationAck, ExecutionRequest, HITLRequest
 from common.dto.hitl import (
     A2AInteractionSpec,
     HITLAnswerKind,
@@ -74,15 +74,12 @@ from execution.orchestrator.session import (
     RunFactory,
     SessionConflict,
 )
-from models.request import OrchestrationRequest
 from models.response import OrchestrationResponse
 
 logger = get_logger(__name__)
 
 MODE_PROFILE_MAP = {
-    "fast": "fast",
     "direct": "fast",
-    "ultimate": "ultimate",
     "supervisor": "ultimate",
     "passthrough": "passthrough",
 }
@@ -190,7 +187,7 @@ class RoomMessageEnvelope:
 
 class RoomEnvelopeSource(Protocol):
     async def load_envelope(
-        self, request: OrchestrationRequest
+        self, request: ExecutionRequest, *, message_id: str
     ) -> RoomMessageEnvelope: ...
 
 
@@ -201,12 +198,10 @@ class WebhookTokenVerifier(Protocol):
 
 
 class RoomMessageEnvelopeResolver:
-    """Resolve the orchestrator inputs from the persisted legacy user message.
+    """Resolve the orchestrator inputs for one persisted user message.
 
-    ``agent_scope``/``execution_mode`` are written by ``ExecutionFacade`` into
-    the user message ``extend_info`` before orchestration is scheduled, so this
-    reader reconstructs the mode and candidate scope without importing the
-    legacy executor.
+    The route-validated ``ExecutionRequest`` supplies the mode and candidate
+    scope; the persisted message supplies the text and attachments.
     """
 
     def __init__(
@@ -227,12 +222,9 @@ class RoomMessageEnvelopeResolver:
         self._list_all_active_agent_ids = list_all_active_agent_ids
         self._attachment_text_reader = attachment_text_reader
 
-    async def load_envelope(self, request: OrchestrationRequest) -> RoomMessageEnvelope:
-        message_id = request.room_user_message_id
-        if not message_id:
-            raise UnsupportedEnvelopeError(
-                "orchestrator requires a room_user_message_id"
-            )
+    async def load_envelope(
+        self, request: ExecutionRequest, *, message_id: str
+    ) -> RoomMessageEnvelope:
         message = await self._get_user_message(message_id)
         if message is None:
             raise UnsupportedEnvelopeError(
@@ -245,63 +237,10 @@ class RoomMessageEnvelopeResolver:
                 "orchestrator requires a non-empty user message"
             )
 
-        extend_info = getattr(message, "extend_info", None)
-        # The live request carries the route-validated mode and scope; they
-        # are authoritative for Run creation. The persisted extend_info is the
-        # fallback for recovery/re-entry paths without a live request (and for
-        # the legacy supervisor preflight's whitelist rewrite).
-        live_mode = getattr(request, "mode", None)
-        mode = (
-            live_mode
-            if isinstance(live_mode, str) and live_mode.strip()
-            else (
-                extend_info.get("execution_mode")
-                if isinstance(extend_info, dict)
-                else None
-            )
-        )
-        if not isinstance(mode, str) or not mode.strip():
-            raise UnsupportedEnvelopeError(
-                "orchestrator envelope is missing execution_mode"
-            )
-
-        live_scope = getattr(request, "agent_scope", None)
-        scope = (
-            live_scope
-            if isinstance(live_scope, dict)
-            else (
-                extend_info.get("agent_scope")
-                if isinstance(extend_info, dict)
-                else None
-            )
-        )
-        if not isinstance(scope, dict):
-            # The legacy supervisor preflight whitelists extend_info keys and
-            # persists the candidate scope under its own names, so
-            # supervisor-mode messages never carry ``agent_scope``.
-            # Reconstruct the canonical scope from those fields.
-            source = (
-                extend_info.get("candidate_scope_source")
-                if isinstance(extend_info, dict)
-                else None
-            )
-            agent_ids = (
-                extend_info.get("candidate_agent_ids")
-                if isinstance(extend_info, dict)
-                else None
-            )
-            if source in {"mention", "saved_group", "all_agents", "room_default"}:
-                scope = {"source": source}
-                if source == "mention" and isinstance(agent_ids, list):
-                    scope["agent_ids"] = [
-                        str(agent_id) for agent_id in agent_ids if agent_id
-                    ]
-                if source == "saved_group":
-                    group_id = extend_info.get("candidate_scope_group_id")
-                    if isinstance(group_id, str) and group_id.strip():
-                        scope["group_id"] = group_id.strip()
+        mode = request.mode
+        scope = request.agent_scope.model_dump(mode="json")
         candidate_agent_ids = await self._resolve_candidate_agent_ids(
-            request.room_id, scope, user_id=request.user_id
+            request.room_id, scope, user_id=request.sender_id
         )
         scope_source = str(scope.get("source") or "explicit_selection")
         group_id = (
@@ -310,7 +249,7 @@ class RoomMessageEnvelopeResolver:
 
         attachments = _attachments_from_message(content)
         attachment_texts = await self._resolve_attachment_texts(attachments)
-        requesting_subject_id = request.user_id
+        requesting_subject_id = request.sender_id
         model_text, mentions = split_agent_mentions(message_text)
         # Only a mention that survived scope resolution names an Agent this Run
         # can actually call; a mention outside the candidate scope is dropped
@@ -531,7 +470,7 @@ def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _map_legacy_answers(
+def _map_interaction_answers(
     spec: A2AInteractionSpec, answers: list[dict[str, str]]
 ) -> list[HITLQuestionAnswer]:
     questions = {question.question_id: question for question in spec.questions}
@@ -1003,7 +942,7 @@ class DualRuntimeRouter:
         run = await self._runtime.run_store.load(route.orchestration_run_id)
         if run is None or run.status in {"canceling", *TERMINAL_RUN_STATUSES}:
             return "canceled"
-        mapped = _map_legacy_answers(spec, answers)
+        mapped = _map_interaction_answers(spec, answers)
         try:
             state = await self._runtime.continuation.resume(
                 call_record_id=route.call_record_id,
@@ -1365,7 +1304,7 @@ class DualRuntimeRouter:
     # -- Room message adapter ------------------------------------
 
     async def _resolve_envelope_and_profile(
-        self, request: OrchestrationRequest
+        self, request: ExecutionRequest, *, message_id: str
     ) -> tuple[RoomMessageEnvelope, Any]:
         """Resolve and validate the envelope without any orchestrator side effect."""
         if self._runtime is None:
@@ -1374,11 +1313,9 @@ class DualRuntimeRouter:
             raise UnsupportedEnvelopeError(
                 "orchestrator message adapter is not bound to a room envelope source"
             )
-        room_id = request.room_id
-        if not room_id:
-            raise UnsupportedEnvelopeError("orchestrator requires room_id")
-
-        envelope = await self._envelope_source.load_envelope(request)
+        envelope = await self._envelope_source.load_envelope(
+            request, message_id=message_id
+        )
         profile_id = map_mode_to_profile(envelope.mode)
         profile = self._runtime.profiles.get(profile_id)
         if profile is None:
@@ -1395,22 +1332,15 @@ class DualRuntimeRouter:
             )
         return envelope, profile
 
-    async def preflight_room_user_message(self, request: OrchestrationRequest) -> None:
-        """Validate servability before Run assignment side effects.
-
-        Resolves the persisted envelope, profile, and candidate scope without
-        creating a session, epoch, or Run. ``UnsupportedEnvelopeError`` means
-        the legacy engine must serve the message.
-        """
-        await self._resolve_envelope_and_profile(request)
-
     async def process_room_user_message(
-        self, request: OrchestrationRequest
+        self, request: ExecutionRequest, *, message_id: str
     ) -> OrchestrationResponse:
-        envelope, profile = await self._resolve_envelope_and_profile(request)
+        envelope, profile = await self._resolve_envelope_and_profile(
+            request, message_id=message_id
+        )
         room_id = request.room_id
 
-        requesting_subject_id = envelope.requesting_subject_id or request.user_id or ""
+        requesting_subject_id = envelope.requesting_subject_id or request.sender_id
         candidate_scope = _build_candidate_scope(
             room_id=room_id,
             agent_ids=envelope.candidate_agent_ids,
@@ -1426,7 +1356,7 @@ class DualRuntimeRouter:
                 "orchestrator candidate scope resolved to zero agents"
             )
         resource_manifest = _build_resource_manifest(
-            source_message_id=request.room_user_message_id or "",
+            source_message_id=message_id,
             user_text=envelope.message_text,
             attachments=envelope.attachments,
         )
@@ -1461,7 +1391,7 @@ class DualRuntimeRouter:
         )
         conversation_history = await self._load_conversation_history(
             room_id,
-            current_message_id=request.room_user_message_id or "",
+            current_message_id=message_id,
         )
         await session_host.create_session(
             room_id=room_id,
@@ -1475,7 +1405,7 @@ class DualRuntimeRouter:
         )
 
         message = UserMessage(
-            message_id=request.room_user_message_id or f"user-{uuid4().hex}",
+            message_id=message_id,
             content=[
                 *(
                     [TextPart(text=_addressed_agents_note(envelope.addressed_agents))]

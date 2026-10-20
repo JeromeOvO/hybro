@@ -217,13 +217,6 @@ export interface MetaTask {
   } | null;
   extend_info?: unknown;
 }
-export interface OrchestrationRequest {
-  task_id?: string | null;
-  room_id?: string | null;
-  room_user_message_id?: string | null;
-  room_agent_message_id?: string | null;
-  room_related_message_id?: string | null;
-}
 export interface PaginationParams {
   /**
    * Page number (1-indexed)

@@ -40,7 +40,7 @@ from execution.ports import (
 )
 from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
 from execution.translators import room_response_to_execution_ack
-from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
+from models.request import RoomCenterUserMessageRequest
 
 logger = get_logger(__name__)
 
@@ -422,12 +422,12 @@ class ExecutionFacade:
     async def _route_orchestration(
         self,
         request: ExecutionRequest,
-        orchestration_request: OrchestrationRequest,
+        message_id: str,
     ) -> None:
         router = self._orchestrator_router
         if router is None:
             raise OrchestratorRoutingError("orchestrator router is not bound")
-        await router.process_room_user_message(orchestration_request)
+        await router.process_room_user_message(request, message_id=message_id)
 
     async def start_orchestration(
         self,
@@ -436,15 +436,6 @@ class ExecutionFacade:
     ) -> None:
         if not ack.success or not ack.message_id or not ack.should_start_orchestration:
             return
-        orchestration_request = OrchestrationRequest(
-            room_id=request.room_id,
-            room_user_message_id=ack.message_id,
-            room_related_message_id=request.parent_message_id,
-            user_id=request.sender_id,
-            client_request_id=request.client_request_id,
-            mode=request.mode,
-            agent_scope=request.agent_scope.model_dump(mode="json"),
-        )
         with bind_log_context(
             client_request_id=request.client_request_id,
             room_id=request.room_id,
@@ -452,7 +443,7 @@ class ExecutionFacade:
             message_id=ack.message_id,
         ):
             task = self._spawn_orchestration(
-                self._route_orchestration(request, orchestration_request),
+                self._route_orchestration(request, ack.message_id),
                 name=f"execution-orchestrate-{ack.message_id}",
             )
         await task
@@ -464,15 +455,6 @@ class ExecutionFacade:
     ) -> None:
         if not ack.success or not ack.message_id or not ack.should_start_orchestration:
             return
-        orchestration_request = OrchestrationRequest(
-            room_id=request.room_id,
-            room_user_message_id=ack.message_id,
-            room_related_message_id=request.parent_message_id,
-            user_id=request.sender_id,
-            client_request_id=request.client_request_id,
-            mode=request.mode,
-            agent_scope=request.agent_scope.model_dump(mode="json"),
-        )
         with bind_log_context(
             client_request_id=request.client_request_id,
             room_id=request.room_id,
@@ -480,7 +462,7 @@ class ExecutionFacade:
             message_id=ack.message_id,
         ):
             self._spawn_orchestration(
-                self._route_orchestration(request, orchestration_request),
+                self._route_orchestration(request, ack.message_id),
                 name=f"execution-orchestrate-{ack.message_id}",
             )
 

@@ -25,7 +25,7 @@ from execution.orchestrator.a2a_runtime.interaction_outcome import (
     emit_hitl_resolved_events,
 )
 from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
-from execution.orchestrator_routing import DualRuntimeRouter, _map_legacy_answers
+from execution.orchestrator_routing import DualRuntimeRouter, _map_interaction_answers
 
 from ._orchestrator_a2a_helpers import ledger_record
 
@@ -71,12 +71,12 @@ def test_legacy_batch_requires_every_typed_question_with_safe_conflict():
     )
 
     with pytest.raises(HITLConflictError, match="changed before submission"):
-        _map_legacy_answers(
+        _map_interaction_answers(
             spec,
             [{"request_id": "cloud_providers", "user_input": "AWS, Azure"}],
         )
 
-    mapped = _map_legacy_answers(
+    mapped = _map_interaction_answers(
         spec,
         [
             {"request_id": "security_training", "user_input": "Yes"},

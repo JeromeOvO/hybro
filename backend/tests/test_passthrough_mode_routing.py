@@ -29,7 +29,7 @@ from execution.orchestrator_routing import (
     RoomMessageEnvelopeResolver,
     map_mode_to_profile,
 )
-from models.request import OrchestrationRequest, RoomCenterUserMessageRequest
+from models.request import RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage
 from tests.test_execution_facade import _make_facade
 from tests.test_orchestrator_passthrough import passthrough_profile
@@ -101,9 +101,10 @@ async def test_schedule_orchestration_carries_passthrough_mode():
     facade.schedule_orchestration(request, ack)
     await asyncio.sleep(0)
 
-    _routed, orchestration_request = facade._route_orchestration.call_args.args
-    assert orchestration_request.mode == "passthrough"
-    assert orchestration_request.agent_scope == {
+    routed, message_id = facade._route_orchestration.call_args.args
+    assert message_id == "msg-1"
+    assert routed.mode == "passthrough"
+    assert routed.agent_scope.model_dump(mode="json") == {
         "source": "mention",
         "agent_ids": ["agent-1"],
     }
@@ -139,14 +140,14 @@ async def test_router_resolves_passthrough_profile_for_one_agent_mention():
     )
 
     envelope, resolved = await router._resolve_envelope_and_profile(
-        OrchestrationRequest(
+        ExecutionRequest(
             room_id="room-1",
-            room_user_message_id="msg-1",
-            user_id="owner-1",
+            sender_id="owner-1",
             client_request_id="cr-1",
             mode="passthrough",
             agent_scope={"source": "mention", "agent_ids": ["agent-1"]},
-        )
+        ),
+        message_id="msg-1",
     )
 
     assert envelope.mode == "passthrough"
@@ -154,34 +155,6 @@ async def test_router_resolves_passthrough_profile_for_one_agent_mention():
     assert envelope.candidate_agent_ids == ["agent-1"]
     assert resolved is profile
     assert resolved.max_model_turns == 0
-
-
-@pytest.mark.asyncio
-async def test_router_recovery_reads_persisted_passthrough_mode():
-    profile = passthrough_profile()
-    message = _user_message(
-        {
-            "execution_mode": "passthrough",
-            "candidate_scope_source": "mention",
-            "candidate_agent_ids": ["agent-1"],
-        }
-    )
-    router = DualRuntimeRouter(
-        runtime=SimpleNamespace(profiles={"passthrough": profile}),
-        envelope_source=RoomMessageEnvelopeResolver(
-            get_user_message=AsyncMock(return_value=message),
-            list_room_agent_ids=AsyncMock(return_value=["agent-1"]),
-        ),
-    )
-
-    envelope, resolved = await router._resolve_envelope_and_profile(
-        OrchestrationRequest(
-            room_id="room-1", room_user_message_id="msg-1", user_id="owner-1"
-        )
-    )
-
-    assert envelope.mode == "passthrough"
-    assert resolved is profile
 
 
 # -- Persisted mode on the user message -------------------------------------

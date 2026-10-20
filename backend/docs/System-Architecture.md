@@ -2549,12 +2549,12 @@ a publisher failure propagates without rolling back the inserted message or
 committed file references.
 
 6. `ExecutionFacade.start_orchestration` (awaited) or `schedule_orchestration`
-   (background) builds an `OrchestrationRequest` and calls
-   `DualRuntimeRouter.process_room_user_message`.
+   (background) passes the `ExecutionRequest` and the persisted user message
+   id to `DualRuntimeRouter.process_room_user_message`.
 
 7. `DualRuntimeRouter.process_room_user_message`:
-   - reads the persisted orchestration envelope; the request's live mode wins
-     for dispatch,
+   - takes the mode and candidate scope from the `ExecutionRequest` and the
+     text and attachments from the persisted user message,
    - freezes the candidate scope, resource manifest, and Agent tool catalog,
    - creates the canonical Run (at most one non-terminal Run per room) and
      prompts the room's `RoomSessionHost` session with the `fast` or `ultimate`
