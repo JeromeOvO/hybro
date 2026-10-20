@@ -50,7 +50,6 @@ class SessionEvent(ContractModel):
     room_id: str | None = None
     user_message_id: str | None = None
     client_request_id: str | None = None
-    lifecycle_family: Literal["legacy", "canonical"] = "legacy"
 
 
 SessionEventListener = Callable[[SessionEvent], Awaitable[None] | None]
@@ -60,12 +59,10 @@ class LifecycleEmitter:
     def __init__(
         self,
         *,
-        listener_timeout_seconds: float = 1.0,
         settlement_timeout_seconds: float = 5.0,
         error_hook: Callable[[BaseException], None] | None = None,
     ) -> None:
         self._listeners: list[SessionEventListener] = []
-        self._listener_timeout = listener_timeout_seconds
         self._settlement_timeout = settlement_timeout_seconds
         self._error_hook = error_hook or (lambda exc: None)
 
@@ -78,42 +75,28 @@ class LifecycleEmitter:
 
         return unsubscribe
 
-    async def emit(self, event: SessionEvent, *, terminal: bool = False) -> None:
+    async def emit(self, event: SessionEvent) -> None:
+        # Lifecycle publication is part of the state machine: an acknowledged
+        # append must precede the next public state/offset. Listener failures
+        # therefore propagate instead of being converted into process-local
+        # best-effort diagnostics.
         listeners = list(self._listeners)
-        durable = terminal or event.lifecycle_family == "canonical"
-        if durable:
-            # Canonical lifecycle publication is part of the state machine: an
-            # acknowledged append must precede the next public state/offset.
-            # Listener failures therefore propagate instead of being converted
-            # into process-local best-effort diagnostics.
-            async with asyncio.timeout(self._settlement_timeout):
-                await asyncio.gather(
-                    *(
-                        self._invoke(listener, event, required=True)
-                        for listener in listeners
-                    )
-                )
-            return
-        for listener in listeners:
-            asyncio.create_task(self._invoke(listener, event))
+        async with asyncio.timeout(self._settlement_timeout):
+            await asyncio.gather(
+                *(self._invoke(listener, event) for listener in listeners)
+            )
 
     async def _invoke(
-        self,
-        listener: SessionEventListener,
-        event: SessionEvent,
-        *,
-        required: bool = False,
+        self, listener: SessionEventListener, event: SessionEvent
     ) -> None:
         try:
-            timeout = self._settlement_timeout if required else self._listener_timeout
-            async with asyncio.timeout(timeout):
+            async with asyncio.timeout(self._settlement_timeout):
                 result = listener(event)
                 if inspect.isawaitable(result):
                     await result
         except BaseException as exc:
             self._error_hook(exc)
-            if required:
-                raise
+            raise
 
 
 __all__ = [

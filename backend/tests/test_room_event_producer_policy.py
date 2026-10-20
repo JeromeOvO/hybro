@@ -80,7 +80,7 @@ def test_canonical_content_families_are_sanitized_or_explicitly_prohibited():
         "intentional_content",
         "sanitized_text",
         "safe_summary",
-        "private_legacy_only",
+        "private_only",
         "prohibited_canonical",
     }
     content_fields = {

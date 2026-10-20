@@ -25,7 +25,7 @@ FieldPolicy = Literal[
     "sanitized_text",
     "safe_summary",
     "allowlisted_control",
-    "private_legacy_only",
+    "private_only",
     "prohibited_canonical",
 ]
 
@@ -48,8 +48,8 @@ ROOM_EVENT_PRODUCER_POLICY: dict[type, dict[str, FieldPolicy]] = {
             "event_type": "allowlisted_control",
             "message_id": "identity",
             "status": "allowlisted_control",
-            "agent_id": "private_legacy_only",
-            "details": "private_legacy_only",
+            "agent_id": "private_only",
+            "details": "private_only",
             "related_message_id": "identity",
             "client_request_id": "identity",
         },
@@ -72,8 +72,8 @@ ROOM_EVENT_PRODUCER_POLICY: dict[type, dict[str, FieldPolicy]] = {
         {
             "event_type": "prohibited_canonical",
             "message_id": "identity",
-            "agent_id": "private_legacy_only",
-            "content_delta": "private_legacy_only",
+            "agent_id": "private_only",
+            "content_delta": "private_only",
         },
     ),
     AgentMessageFinal: _fields(
@@ -123,10 +123,10 @@ ROOM_EVENT_PRODUCER_POLICY: dict[type, dict[str, FieldPolicy]] = {
         {
             "event_type": "prohibited_canonical",
             "message_id": "identity",
-            "agent_id": "private_legacy_only",
-            "artifact": "private_legacy_only",
-            "append": "private_legacy_only",
-            "last_chunk": "private_legacy_only",
+            "agent_id": "private_only",
+            "artifact": "private_only",
+            "append": "private_only",
+            "last_chunk": "private_only",
             "client_request_id": "identity",
         },
     ),

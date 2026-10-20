@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.models import (
@@ -18,7 +17,6 @@ from execution.orchestrator.session import DefaultRunFactory
 from ._orchestrator_helpers import (
     FixedClock,
     FixedIDs,
-    make_run,
     session_config,
     user_message,
 )
@@ -153,7 +151,6 @@ def test_production_translator_selects_summary_builder_from_run_catalog():
     registry.register_catalog(broad)
     registry.register_catalog(narrow)
     translator = PublicProjectionTranslator(
-        lifecycle_family="canonical",
         summary_registry=registry,
     )
     event = SessionEvent(
@@ -172,7 +169,6 @@ def test_production_translator_selects_summary_builder_from_run_catalog():
         room_id="room-1",
         user_message_id="user-1",
         client_request_id="client-1",
-        lifecycle_family="canonical",
     )
 
     broad_event = translator.translate(event, catalog=broad)
@@ -228,29 +224,3 @@ def test_new_live_run_schedules_generic_recovery_at_watchdog_boundary():
         client_request_id="request-1",
     )
     assert run.recovery_claim.next_attempt_at == run.budget.deadline_at
-
-
-def test_v5_legacy_and_v6_canonical_documents_dual_read():
-    canonical = make_run()
-    assert canonical.schema_version == 6
-    assert canonical.lifecycle_family == "canonical"
-
-    legacy_document = canonical.model_dump(mode="json")
-    legacy_document.update(schema_version=5, lifecycle_family="legacy")
-    for field in (
-        "active_internal_turn_id",
-        "active_assistant_message_id",
-        "active_attempt",
-        "greatest_public_text_offset",
-    ):
-        legacy_document.pop(field, None)
-    legacy = OrchestratorRunState.model_validate(legacy_document)
-    assert legacy.schema_version == 5
-    assert legacy.lifecycle_family == "legacy"
-
-    invalid = canonical.model_dump(mode="json")
-    invalid["schema_version"] = 5
-    with pytest.raises(
-        ValidationError, match="canonical Runs require schema version 6"
-    ):
-        OrchestratorRunState.model_validate(invalid)

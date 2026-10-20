@@ -17,11 +17,15 @@ unsupported interaction.` (`common.a2a_constants`).
 The orchestrator runtime currently remains outside `container.py`, routes,
 and jobs until the production cutover. Contracts pinned before wiring:
 
-- `OrchestratorRunState` (schema version 5) persists an explicit
+- `OrchestratorRunState` accepts only canonical Runs (schema version 6,
+  `lifecycle_family="canonical"`). It persists an explicit
   `runtime_generation` (always `"orchestrator"` in this store) fixed at Run
-  creation and never re-evaluated; legacy-owned Runs are identified by their
-  absence from this store. Production dual routing and recovery must key off
-  this persisted ownership, never off a live feature flag.
+  creation and never re-evaluated. Before upgrading a deployment that still
+  holds v5 or legacy-family documents, run
+  `uv run python -m scripts.delete_legacy_orchestrator_runs` (dry run), then
+  again with `--apply`; it deletes those Runs with their run events, recovery
+  leases, Agent calls, and Agent tool bindings, without an archive. Every
+  lifecycle event awaits its listeners before the Kernel continues.
 - `ProfileConfiguration.initial_routing` and `finalization` are frozen per Run
   but reserved: no code consumes them yet. Production composition pins
   `explicit_agent_first` (API pre-filters the candidate scope) and

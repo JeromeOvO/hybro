@@ -651,7 +651,6 @@ def create_orchestrator_runtime(  # noqa: C901
                         room_id=current.room_id,
                         user_message_id=current.request.user_message_id,
                         client_request_id=current.client_request_id,
-                        lifecycle_family=current.lifecycle_family,
                     )
                 )
                 if hasattr(result, "__await__"):

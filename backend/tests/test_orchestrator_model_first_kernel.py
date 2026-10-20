@@ -259,7 +259,7 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     all_events = [
         (
@@ -282,7 +282,6 @@ async def test_fatal_mixed_batch_terminalizes_suspended_sibling_and_folds():
                 room_id=result.run.room_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -609,7 +608,7 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     assistant_id = result.run.proposed_final_message_id
     assert assistant_id is not None
@@ -630,7 +629,6 @@ async def test_no_tool_answer_closes_parked_children_before_final(parked_count):
                 room_id=result.run.room_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -956,7 +954,7 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
         "active_interaction_id": None,
         "agent_call_message_ids": [],
     }
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     room_sequence = 0
     closeout_started = False
     for sequence, (event_type, payload) in enumerate(events, start=1):
@@ -976,7 +974,6 @@ async def test_successful_finalization_closes_historical_owner_before_final_fold
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -1027,7 +1024,7 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
         tool_runtime=runtime,
     )
     run_id = next(iter(store.runs))
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records: dict[str, dict[str, object]] = {}
     emission_attempts: dict[str, int] = {}
     private_sequence = 0
@@ -1049,7 +1046,6 @@ async def test_no_tool_finalization_replays_across_public_closeout_crashes(
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -1227,7 +1223,7 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     room_sequence = 0
     applied_event_ids: set[str] = set()
@@ -1246,7 +1242,6 @@ async def test_provider_errors_use_generic_bounded_failure_without_hitl():
                 room_id=result.run.room_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )
@@ -1493,7 +1488,7 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
         supervisor_hitl=AsyncMock(),
     )
     run_id = next(iter(store.runs))
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records: dict[str, dict[str, object]] = {}
     private_sequence = 0
     room_sequence = 0
@@ -1513,7 +1508,6 @@ async def test_expired_approval_closes_all_descendants_and_replays_noop(
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -1704,7 +1698,7 @@ async def _terminal_public_tool_replay_fixture(status):
     )
     runtime = InteractionRuntime()
     kernel, store, _, _ = await make_kernel([], run=run, tool_runtime=runtime)
-    projected = PublicProjectionTranslator(lifecycle_family="canonical").translate(
+    projected = PublicProjectionTranslator().translate(
         SessionEvent(
             event_type="tool_execution_completed",
             session_id=run.session_id,
@@ -1727,7 +1721,6 @@ async def _terminal_public_tool_replay_fixture(status):
             room_id=run.room_id,
             user_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
-            lifecycle_family="canonical",
         ),
         catalog=run.tool_catalog,
     )
@@ -1880,7 +1873,7 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
         supervisor_hitl=AsyncMock(),
     )
     run_id = next(iter(store.runs))
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records: dict[str, dict[str, object]] = {}
     emissions: list[tuple[str, dict[str, object]]] = []
     private_sequence = 0
@@ -1902,7 +1895,6 @@ async def test_expiry_reconciles_durable_public_tool_end_without_reemitting():
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -2107,7 +2099,7 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
     )
     runtime = InteractionRuntime()
     kernel, store, _, _ = await make_kernel([], run=run, tool_runtime=runtime)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     projected = translator.translate(
         SessionEvent(
             event_type="tool_execution_completed",
@@ -2131,7 +2123,6 @@ async def test_terminal_preflight_rejects_contradictory_public_tool_end_before_e
             room_id=run.room_id,
             user_message_id=run.request.user_message_id,
             client_request_id=run.client_request_id,
-            lifecycle_family="canonical",
         ),
         catalog=run.tool_catalog,
     )
@@ -2648,7 +2639,7 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
     initial_run = await store.load(run_id)
     assert initial_run is not None
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     records_by_id: dict[str, dict[str, object]] = {}
     emission_attempts: dict[str, int] = {}
     private_sequence = 0
@@ -2683,7 +2674,6 @@ async def test_cross_batch_hitl_answer_restart_closes_latest_message_and_folds()
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )
@@ -3465,7 +3455,7 @@ async def test_rejected_ask_then_surface_forward_accepted():
     from execution.orchestrator.lifecycle import SessionEvent
     from execution.orchestrator.public_projection import PublicProjectionTranslator
 
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     fold = RoomEventFold()
     started = translator.translate(
         SessionEvent(
@@ -3479,7 +3469,6 @@ async def test_rejected_ask_then_surface_forward_accepted():
             room_id=result.run.room_id,
             user_message_id=result.run.request.user_message_id,
             client_request_id=result.run.client_request_id,
-            lifecycle_family="canonical",
         ),
         catalog=result.run.tool_catalog,
     )
@@ -3514,7 +3503,6 @@ async def test_rejected_ask_then_surface_forward_accepted():
                 room_id=result.run.room_id,
                 user_message_id=result.run.request.user_message_id,
                 client_request_id=result.run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=result.run.tool_catalog,
         )

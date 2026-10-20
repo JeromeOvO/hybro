@@ -765,16 +765,12 @@ class A2AContinuationCoordinator:
     ) -> None:
         if self.run_store is not None:
             run = await self.run_store.load(call.run_id)
-            if (
-                run is not None
-                and run.lifecycle_family == "canonical"
-                and any(
-                    entry.surface_for_call_record_id == call.call_record_id
-                    and entry.interaction_id == answer_record.interaction_id
-                    and entry.state == "pending"
-                    for batch in run.tool_batches
-                    for entry in batch.entries
-                )
+            if run is not None and any(
+                entry.surface_for_call_record_id == call.call_record_id
+                and entry.interaction_id == answer_record.interaction_id
+                and entry.state == "pending"
+                for batch in run.tool_batches
+                for entry in batch.entries
             ):
                 # Answers may be captured from REST visibility before the full
                 # request/control prefix is acknowledged. Only its existing

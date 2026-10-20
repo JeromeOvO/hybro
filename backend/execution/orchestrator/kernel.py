@@ -1041,19 +1041,14 @@ class OrchestratorKernel:
                 if isinstance(recovered, KernelRunResult):
                     return recovered
                 continue
-            if run.lifecycle_family == "canonical":
-                for batch_index, batch in enumerate(list(run.tool_batches)):
-                    run = await self._publish_checkpointed_tool_terminals(
-                        run,
-                        batch_index,
-                        lifecycle=lifecycle,
-                        internal_turn_id=_batch_internal_turn_id(batch),
-                    )
-            if (
-                recover_initial_state
-                and run.lifecycle_family == "canonical"
-                and run.active_internal_turn_id
-            ):
+            for batch_index, batch in enumerate(list(run.tool_batches)):
+                run = await self._publish_checkpointed_tool_terminals(
+                    run,
+                    batch_index,
+                    lifecycle=lifecycle,
+                    internal_turn_id=_batch_internal_turn_id(batch),
+                )
+            if recover_initial_state and run.active_internal_turn_id:
                 recover_initial_state = False
                 recovered = await self._recover_active_canonical_attempt(run, lifecycle)
                 if isinstance(recovered, KernelRunResult):
@@ -1077,11 +1072,7 @@ class OrchestratorKernel:
                     )
                 continue
 
-            if (
-                run.lifecycle_family == "canonical"
-                and not _has_visible_input(run)
-                and _has_presentable_interactions(run)
-            ):
+            if not _has_visible_input(run) and _has_presentable_interactions(run):
                 run = await self._present_interactions(run, lifecycle=lifecycle)
                 run = await self._checkpoint(
                     run,
@@ -1138,31 +1129,30 @@ class OrchestratorKernel:
                     continue
                 if recovered is not None:
                     return recovered
-                if run.lifecycle_family == "canonical":
-                    run = await self._load(run_id)
-                    owner = _batch_internal_turn_id(unflushed)
-                    closure = _canonical_turn_closure(run, owner)
-                    if closure is not None:
-                        await self._emit(
-                            lifecycle,
-                            "turn_completed",
-                            run,
-                            {
-                                "internal_turn_id": owner,
-                                "message_id": closure.message_id,
-                                "tool_call_ids": list(closure.public_tool_call_ids),
-                                "status": "completed",
-                            },
-                        )
-                        run = await self._checkpoint(
-                            run,
-                            updates={
-                                "active_internal_turn_id": None,
-                                "active_assistant_message_id": None,
-                                "active_attempt": None,
-                            },
-                            command_id=f"public-turn-end:{owner}",
-                        )
+                run = await self._load(run_id)
+                owner = _batch_internal_turn_id(unflushed)
+                closure = _canonical_turn_closure(run, owner)
+                if closure is not None:
+                    await self._emit(
+                        lifecycle,
+                        "turn_completed",
+                        run,
+                        {
+                            "internal_turn_id": owner,
+                            "message_id": closure.message_id,
+                            "tool_call_ids": list(closure.public_tool_call_ids),
+                            "status": "completed",
+                        },
+                    )
+                    run = await self._checkpoint(
+                        run,
+                        updates={
+                            "active_internal_turn_id": None,
+                            "active_assistant_message_id": None,
+                            "active_attempt": None,
+                        },
+                        command_id=f"public-turn-end:{owner}",
+                    )
                 continue
             torn_assistant = _assistant_missing_tool_batch(run)
             if torn_assistant is not None:
@@ -1233,11 +1223,7 @@ class OrchestratorKernel:
             # The structured ask_user action pauses the Run into the unified
             # Execution HITL service. It is only exposed to canonical Runs so
             # the strict run_waiting_input/run_resumed lifecycle owns it.
-            if (
-                not run.budget.wrap_up_requested
-                and run.lifecycle_family == "canonical"
-                and self.supervisor_hitl is not None
-            ):
+            if not run.budget.wrap_up_requested and self.supervisor_hitl is not None:
                 tools = [*tools, REQUEST_USER_INPUT_TOOL_DEFINITION]
                 # Forwarding an Agent's questions verbatim is only meaningful
                 # while a presented interaction is parked; hide it otherwise.
@@ -1297,11 +1283,9 @@ class OrchestratorKernel:
                 return retry_reserved
             run = retry_reserved
 
-            decision_continuation = (
-                run.lifecycle_family == "canonical"
-                and bool(run.active_internal_turn_id)
-                and _has_presented_interactions(run)
-            )
+            decision_continuation = bool(
+                run.active_internal_turn_id
+            ) and _has_presented_interactions(run)
             if decision_continuation:
                 request = self._model_request(
                     run,
@@ -1316,29 +1300,22 @@ class OrchestratorKernel:
             budget = self.budget_policy.record_provider_attempt(
                 run.budget, run.profile, attempt_key=attempt_key, retry=False
             )
-            if run.lifecycle_family == "canonical":
-                run = await self._checkpoint(
-                    run,
-                    updates={
-                        "budget": budget,
-                        "active_internal_turn_id": request.turn_id,
-                        "active_assistant_message_id": assistant_message_id,
-                        "active_attempt": 1,
-                        "greatest_public_text_offset": 0,
-                        "active_public_text": "",
-                    },
-                    command_id=(
-                        f"public-turn-start:{request.turn_id}:{assistant_message_id}"
-                        if decision_continuation
-                        else f"public-turn-start:{request.turn_id}"
-                    ),
-                )
-            else:
-                run = await self._checkpoint(
-                    run,
-                    updates={"budget": budget},
-                    command_id=f"provider-attempt:{attempt_key}",
-                )
+            run = await self._checkpoint(
+                run,
+                updates={
+                    "budget": budget,
+                    "active_internal_turn_id": request.turn_id,
+                    "active_assistant_message_id": assistant_message_id,
+                    "active_attempt": 1,
+                    "greatest_public_text_offset": 0,
+                    "active_public_text": "",
+                },
+                command_id=(
+                    f"public-turn-start:{request.turn_id}:{assistant_message_id}"
+                    if decision_continuation
+                    else f"public-turn-start:{request.turn_id}"
+                ),
+            )
             if not decision_continuation:
                 await self._emit(
                     lifecycle,
@@ -1633,15 +1610,14 @@ class OrchestratorKernel:
             # A no-tool Assistant message is always final. Canonical final
             # publication is delayed until every parked child and Tool entry
             # has been durably closed and flushed.
-            if run.lifecycle_family == "canonical" and not assistant.tool_calls:
+            if not assistant.tool_calls:
                 return await self._finalize_canonical_answer(
                     run, assistant, lifecycle=lifecycle
                 )
             # Commentary is public only after the complete source-ordered
             # declared Tool batch is durable, so restart recovery never has to
             # guess declarations from public text.
-            if assistant.tool_calls:
-                run = await self._ensure_tool_batch(run, assistant)
+            run = await self._ensure_tool_batch(run, assistant)
             assistant_public_text = _assistant_text(assistant)
             await self._emit(
                 lifecycle,
@@ -1654,61 +1630,36 @@ class OrchestratorKernel:
                     ),
                     "internal_turn_id": request.turn_id,
                     "message_id": assistant.message_id,
-                    "stop_reason": ("tool_use" if assistant.tool_calls else "stop"),
-                    "disposition": ("commentary" if assistant.tool_calls else "final"),
+                    "stop_reason": "tool_use",
+                    "disposition": "commentary",
                     "text": assistant_public_text,
                 },
             )
-            if run.lifecycle_family == "canonical":
-                run = await self._checkpoint(
-                    run,
-                    updates={
-                        "active_assistant_message_id": None,
-                        "active_public_text": "",
-                        "greatest_public_text_offset": 0,
-                    },
-                    command_id=f"public-message-end:{assistant.message_id}",
-                )
-            if assistant.tool_calls:
-                await self._emit(
-                    lifecycle,
-                    "orchestrator_decision",
-                    run,
-                    {
-                        "plan_steps": [
-                            {
-                                "agent": self._tool_label(run, call.tool_name)
-                                or call.tool_name,
-                                "summary": _task_text(call.arguments),
-                            }
-                            for call in assistant.tool_calls
-                        ],
-                        "reason": _assistant_text(assistant),
-                    },
-                )
-            if not assistant.tool_calls:
-                await self._emit(
-                    lifecycle,
-                    "turn_completed",
-                    run,
-                    {
-                        "internal_turn_id": request.turn_id,
-                        "message_id": assistant.message_id,
-                        "tool_call_ids": [],
-                        "status": "completed",
-                    },
-                )
-                if run.lifecycle_family == "canonical":
-                    run = await self._checkpoint(
-                        run,
-                        updates={
-                            "active_internal_turn_id": None,
-                            "active_assistant_message_id": None,
-                            "active_attempt": None,
-                        },
-                        command_id=f"public-turn-end:{request.turn_id}",
-                    )
-                return await self._complete(run, assistant)
+            run = await self._checkpoint(
+                run,
+                updates={
+                    "active_assistant_message_id": None,
+                    "active_public_text": "",
+                    "greatest_public_text_offset": 0,
+                },
+                command_id=f"public-message-end:{assistant.message_id}",
+            )
+            await self._emit(
+                lifecycle,
+                "orchestrator_decision",
+                run,
+                {
+                    "plan_steps": [
+                        {
+                            "agent": self._tool_label(run, call.tool_name)
+                            or call.tool_name,
+                            "summary": _task_text(call.arguments),
+                        }
+                        for call in assistant.tool_calls
+                    ],
+                    "reason": _assistant_text(assistant),
+                },
+            )
             if run.budget.wrap_up_requested:
                 run = await self._reject_grace_tools(run, assistant)
                 continue
@@ -1734,25 +1685,15 @@ class OrchestratorKernel:
             if result is not None:
                 return result
             completed_run = await self._load(run.run_id)
-            closing_message_id = assistant.message_id
-            if completed_run.lifecycle_family == "canonical":
-                closure = _canonical_turn_closure(completed_run, request.turn_id)
-                if closure is None:
-                    # The active internal turn still has open entries (for
-                    # example a presented interaction awaiting a model join
-                    # reply). Defer turn_end; the loop continues to the next
-                    # decision turn within the same internal turn.
-                    continue
-                closing_message_id = closure.message_id
-                turn_public_ids = list(closure.public_tool_call_ids)
-            else:
-                turn_public_ids = [
-                    entry.opaque_public_call_id
-                    for batch in completed_run.tool_batches
-                    if batch.assistant_message_id == assistant.message_id
-                    for entry in batch.entries
-                    if entry.opaque_public_call_id is not None
-                ]
+            closure = _canonical_turn_closure(completed_run, request.turn_id)
+            if closure is None:
+                # The active internal turn still has open entries (for
+                # example a presented interaction awaiting a model join
+                # reply). Defer turn_end; the loop continues to the next
+                # decision turn within the same internal turn.
+                continue
+            closing_message_id = closure.message_id
+            turn_public_ids = list(closure.public_tool_call_ids)
             await self._emit(
                 lifecycle,
                 "turn_completed",
@@ -1764,17 +1705,16 @@ class OrchestratorKernel:
                     "status": "completed",
                 },
             )
-            if completed_run.lifecycle_family == "canonical":
-                run = await self._checkpoint(
-                    completed_run,
-                    updates={
-                        "active_internal_turn_id": None,
-                        "active_assistant_message_id": None,
-                        "active_attempt": None,
-                    },
-                    command_id=f"public-turn-end:{request.turn_id}",
-                )
-                continue
+            run = await self._checkpoint(
+                completed_run,
+                updates={
+                    "active_internal_turn_id": None,
+                    "active_assistant_message_id": None,
+                    "active_attempt": None,
+                },
+                command_id=f"public-turn-end:{request.turn_id}",
+            )
+            continue
 
     async def terminalize(
         self,
@@ -1971,20 +1911,19 @@ class OrchestratorKernel:
                 transcript=transcript,
                 status="running",
             )
-        if run.lifecycle_family == "canonical":
-            # Waiting belongs to the remaining children, not to whichever
-            # surface batch happened to flush during this observation. A later
-            # remote completion can leave only private model decisions behind.
-            if _has_visible_input(run.model_copy(update={"tool_batches": batches})):
-                updates["status"] = "awaiting_user"
-            elif any(
-                item.state in {"executing", "waiting_external"}
-                for pending_batch in batches
-                for item in pending_batch.entries
-            ):
-                updates["status"] = "waiting_external"
-            else:
-                updates["status"] = "running"
+        # Waiting belongs to the remaining children, not to whichever
+        # surface batch happened to flush during this observation. A later
+        # remote completion can leave only private model decisions behind.
+        if _has_visible_input(run.model_copy(update={"tool_batches": batches})):
+            updates["status"] = "awaiting_user"
+        elif any(
+            item.state in {"executing", "waiting_external"}
+            for pending_batch in batches
+            for item in pending_batch.entries
+        ):
+            updates["status"] = "waiting_external"
+        else:
+            updates["status"] = "running"
         run = await self._checkpoint(
             run,
             updates=updates,
@@ -2004,11 +1943,7 @@ class OrchestratorKernel:
                         run.tool_batches[flush_index]
                     ),
                 )
-            if (
-                run.lifecycle_family == "canonical"
-                and run.status == "running"
-                and _has_presentable_interactions(run)
-            ):
+            if run.status == "running" and _has_presentable_interactions(run):
                 # Model-first re-suspension: the Agent asked a NEW question
                 # after a user answer or model join. Present it to the model
                 # rather than auto-publishing to the user.
@@ -2023,11 +1958,7 @@ class OrchestratorKernel:
                     command_id=(f"present-interactions:{observation.observation_id}"),
                 )
                 return await self.run(run_id, signal=signal, lifecycle=lifecycle)
-            if (
-                run.lifecycle_family == "canonical"
-                and run.status == "running"
-                and _has_presented_interactions(run)
-            ):
+            if run.status == "running" and _has_presented_interactions(run):
                 # Answering one surfaced child can leave a previously presented
                 # sibling awaiting a decision, not a worker or another answer.
                 return await self.run(run_id, signal=signal, lifecycle=lifecycle)
@@ -2109,29 +2040,20 @@ class OrchestratorKernel:
                     else None,
                 },
             )
-        accepted_public_ids = [
-            item.opaque_public_call_id
-            for item in batch.entries
-            if item.opaque_public_call_id is not None
-        ]
-        closing_message_id = batch.assistant_message_id
-        if run.lifecycle_family == "canonical":
-            closure = _canonical_turn_closure(run, internal_turn_id)
-            if closure is None:
-                # Other batches can still own a remote or public input wait.
-                # Only private decision work may re-enter the model loop.
-                if run.status != "running":
-                    return KernelRunResult(
-                        "awaiting_user"
-                        if run.status == "awaiting_user"
-                        else "waiting_external",
-                        run,
-                    )
-                return await self.run(run_id, signal=signal, lifecycle=lifecycle)
-            closing_message_id = closure.message_id
-            turn_public_ids = list(closure.public_tool_call_ids)
-        else:
-            turn_public_ids = accepted_public_ids
+        closure = _canonical_turn_closure(run, internal_turn_id)
+        if closure is None:
+            # Other batches can still own a remote or public input wait.
+            # Only private decision work may re-enter the model loop.
+            if run.status != "running":
+                return KernelRunResult(
+                    "awaiting_user"
+                    if run.status == "awaiting_user"
+                    else "waiting_external",
+                    run,
+                )
+            return await self.run(run_id, signal=signal, lifecycle=lifecycle)
+        closing_message_id = closure.message_id
+        turn_public_ids = list(closure.public_tool_call_ids)
         await self._emit(
             lifecycle,
             "turn_completed",
@@ -2146,18 +2068,17 @@ class OrchestratorKernel:
                 "status": "completed",
             },
         )
-        if run.lifecycle_family == "canonical":
-            run = await self._checkpoint(
-                run,
-                updates={
-                    "active_internal_turn_id": None,
-                    "active_assistant_message_id": None,
-                    "active_attempt": None,
-                    "active_public_text": "",
-                    "greatest_public_text_offset": 0,
-                },
-                command_id=f"public-turn-end:{internal_turn_id}",
-            )
+        run = await self._checkpoint(
+            run,
+            updates={
+                "active_internal_turn_id": None,
+                "active_assistant_message_id": None,
+                "active_attempt": None,
+                "active_public_text": "",
+                "greatest_public_text_offset": 0,
+            },
+            command_id=f"public-turn-end:{internal_turn_id}",
+        )
         return await self.run(run_id, signal=signal, lifecycle=lifecycle)
 
     async def _suspend_for_supervisor_input(
@@ -2536,8 +2457,6 @@ class OrchestratorKernel:
         message identity. Only canonical Runs use the model-first flow.
         ``interaction_received`` is emitted only on first presentation.
         """
-        if run.lifecycle_family != "canonical":
-            return run
         now = self.clock.now()
         transcript = list(run.transcript)
         batches = list(run.tool_batches)
@@ -2849,8 +2768,6 @@ class OrchestratorKernel:
             ):
                 join_target = entry.suspended_call_record_id or (
                     _find_join_target(run, entry.tool_name)
-                    if run.lifecycle_family == "canonical"
-                    else None
                 )
                 if join_target is None:
                     run = await self._update_entry(
@@ -2966,10 +2883,7 @@ class OrchestratorKernel:
             if entry.state in {"accepted", "executing"}:
                 if entry.invocation is None or entry.acceptance is None:
                     raise KernelConflict("accepted tool entry is incomplete")
-                if (
-                    run.lifecycle_family == "canonical"
-                    and entry.opaque_public_call_id is None
-                ):
+                if entry.opaque_public_call_id is None:
                     run = await self._update_entry(
                         run,
                         batch_index,
@@ -3075,11 +2989,7 @@ class OrchestratorKernel:
             # Model-first join routing: a re-invocation of the same agent+skill
             # while a presented interaction is parked continues the existing
             # task instead of opening a new one.
-            join_target = (
-                _find_join_target(run, call.tool_name)
-                if run.lifecycle_family == "canonical"
-                else None
-            )
+            join_target = _find_join_target(run, call.tool_name)
             if join_target is not None:
                 if run.consecutive_model_joins >= MAX_CONSECUTIVE_MODEL_JOINS:
                     run = await self._update_entry(
@@ -3485,22 +3395,14 @@ class OrchestratorKernel:
                 )
             if recoverable_declaration_failed:
                 turn_id = run.active_internal_turn_id or assistant.message_id
-                closing_message_id = assistant.message_id
-                if run.lifecycle_family == "canonical":
-                    closure = _canonical_turn_closure(run, turn_id)
-                    if closure is None:
-                        # A parked parent from an earlier batch still owns this
-                        # internal turn. Keep the turn open and return the local
-                        # diagnostic to the model for an in-turn retry.
-                        return "retry"
-                    closing_message_id = closure.message_id
-                    public_ids = list(closure.public_tool_call_ids)
-                else:
-                    public_ids = [
-                        entry.opaque_public_call_id
-                        for entry in batch.entries
-                        if entry.opaque_public_call_id is not None
-                    ]
+                closure = _canonical_turn_closure(run, turn_id)
+                if closure is None:
+                    # A parked parent from an earlier batch still owns this
+                    # internal turn. Keep the turn open and return the local
+                    # diagnostic to the model for an in-turn retry.
+                    return "retry"
+                closing_message_id = closure.message_id
+                public_ids = list(closure.public_tool_call_ids)
                 await self._emit(
                     lifecycle,
                     "turn_completed",
@@ -3512,16 +3414,15 @@ class OrchestratorKernel:
                         "status": "error",
                     },
                 )
-                if run.lifecycle_family == "canonical":
-                    run = await self._checkpoint(
-                        run,
-                        updates={
-                            "active_internal_turn_id": None,
-                            "active_assistant_message_id": None,
-                            "active_attempt": None,
-                        },
-                        command_id=f"public-turn-error:{assistant.message_id}",
-                    )
+                run = await self._checkpoint(
+                    run,
+                    updates={
+                        "active_internal_turn_id": None,
+                        "active_assistant_message_id": None,
+                        "active_attempt": None,
+                    },
+                    command_id=f"public-turn-error:{assistant.message_id}",
+                )
                 # A model-authored declaration can be incompatible with the
                 # frozen Agent Card schema even though the Agent itself is
                 # healthy. Its durable ToolResult becomes a bounded diagnostic
@@ -3552,17 +3453,6 @@ class OrchestratorKernel:
             lifecycle=lifecycle,
             internal_turn_id=run.active_internal_turn_id or assistant.message_id,
         )
-        if run.lifecycle_family == "legacy":
-            await self._emit(
-                lifecycle,
-                "turn_completed",
-                run,
-                {"message_id": assistant.message_id, "status": status},
-            )
-            return KernelRunResult(
-                "awaiting_user" if status == "awaiting_user" else "waiting_external",
-                run,
-            )
         if _has_visible_input(run) or not _has_presentable_interactions(run):
             return KernelRunResult(
                 "awaiting_user" if status == "awaiting_user" else "waiting_external",
@@ -3751,8 +3641,7 @@ class OrchestratorKernel:
                 command_id=f"provider-attempt:{attempt_key}",
             )
         if (
-            run.lifecycle_family == "canonical"
-            and run.active_internal_turn_id is None
+            run.active_internal_turn_id is None
             and self.canonical_event_reader is not None
         ):
             # Closure can commit immediately before the retry append crashes.
@@ -4023,18 +3912,17 @@ class OrchestratorKernel:
                 },
             )
             # Public append acknowledgement precedes this advisory checkpoint.
-            if run.lifecycle_family == "canonical":
-                active_text = f"{run.active_public_text}{delta.delta}"
-                run = await self._checkpoint(
-                    run,
-                    updates={
-                        "greatest_public_text_offset": delta.end_offset,
-                        "active_public_text": active_text,
-                    },
-                    command_id=(
-                        f"public-text-offset:{coalescer.message_id}:{delta.end_offset}"
-                    ),
-                )
+            active_text = f"{run.active_public_text}{delta.delta}"
+            run = await self._checkpoint(
+                run,
+                updates={
+                    "greatest_public_text_offset": delta.end_offset,
+                    "active_public_text": active_text,
+                },
+                command_id=(
+                    f"public-text-offset:{coalescer.message_id}:{delta.end_offset}"
+                ),
+            )
         return run
 
     async def _emit_model_event(
@@ -4053,10 +3941,7 @@ class OrchestratorKernel:
             # Gateway-internal transport attempts do not own independent public
             # Assistant identities. Canonical retry facts are emitted only by
             # the Kernel after closing the public attempt below.
-            if (
-                run.lifecycle_family == "canonical"
-                and event_type == "model_retry_scheduled"
-            ):
+            if event_type == "model_retry_scheduled":
                 return
             payload: dict[str, object] = {
                 "attempt": event.attempt or 0,
@@ -4376,7 +4261,7 @@ class OrchestratorKernel:
     ) -> KernelRunResult:
         """Close unused canonical children before publishing a final answer."""
 
-        if assistant.tool_calls or run.lifecycle_family != "canonical":
+        if assistant.tool_calls:
             raise KernelConflict("canonical finalization requires a no-tool answer")
         if run.proposed_final_message_id != assistant.message_id:
             raise KernelConflict("canonical finalization candidate does not correlate")
@@ -4940,8 +4825,6 @@ class OrchestratorKernel:
         batch's canonical owner, and proves the full terminal inventory.
         """
 
-        if run.lifecycle_family != "canonical":
-            return run, None
         lifecycle = self._lifecycle_context.get()
         active_turn_id = run.active_internal_turn_id
         canonical_records = (

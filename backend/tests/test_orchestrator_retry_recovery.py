@@ -72,7 +72,7 @@ def _restart(kernel):
 async def _public_history(kernel, run):
     """Use the production translator and durable event-ID append semantics."""
     records = {}
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     sequence = 0
 
     async def lifecycle(event_type, current, payload):
@@ -110,7 +110,6 @@ async def _public_history(kernel, run):
                 room_id=current.room_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=current.tool_catalog,
         )

@@ -287,7 +287,6 @@ def test_agent_receives_other_answers_as_text():
 
 def canonical_run() -> SimpleNamespace:
     return SimpleNamespace(
-        lifecycle_family="canonical",
         request=SimpleNamespace(user_message_id="user-1"),
         client_request_id="cr-1",
         tool_batches=[

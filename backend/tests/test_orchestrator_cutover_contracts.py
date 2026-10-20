@@ -45,12 +45,6 @@ def test_run_runtime_generation_is_persisted_and_immutable_by_schema():
     with pytest.raises(ValidationError):
         OrchestratorRunState.model_validate(payload)
 
-    legacy_payload = run.model_dump(mode="json")
-    legacy_payload.update(schema_version=5, lifecycle_family="legacy")
-    legacy = OrchestratorRunState.model_validate(legacy_payload)
-    assert legacy.schema_version == 5
-    assert legacy.lifecycle_family == "legacy"
-
 
 def test_initial_routing_and_finalization_are_reserved_not_consumed():
     # Frozen per Run but not yet consumed by any production code path. The

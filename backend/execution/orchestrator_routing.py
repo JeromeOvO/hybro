@@ -1217,7 +1217,7 @@ class DualRuntimeRouter:
         if self._runtime is None:
             return
         run = await self._runtime.run_store.load(route.orchestration_run_id)
-        canonical = getattr(run, "lifecycle_family", None) == "canonical"
+        canonical = run is not None
         delivery = getattr(self._runtime, "hitl_delivery", None)
         if delivery is None:
             if canonical:

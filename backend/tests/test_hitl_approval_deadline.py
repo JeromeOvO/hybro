@@ -126,7 +126,6 @@ def _orchestrator_runtime(order: list[str], *, run_status: str = "awaiting_user"
         run_id="run-1",
         room_id="room-1",
         status=run_status,
-        lifecycle_family="canonical",
         tool_catalog=object(),
         cancellation_command_id=None,
         client_request_id="request-1",

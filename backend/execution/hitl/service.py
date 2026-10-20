@@ -179,7 +179,6 @@ class HITLService:
         application=None,
         room_files=None,
         canonical_control_publisher=None,
-        lifecycle_family_reader=None,
         canonical_run_state_reader=None,
         supervisor_resume=None,
         canonical_cancellation_requester=None,
@@ -196,7 +195,6 @@ class HITLService:
         self._application = application
         self._room_files = room_files
         self._canonical_control_publisher = canonical_control_publisher
-        self._lifecycle_family_reader = lifecycle_family_reader
         self._canonical_run_state_reader = canonical_run_state_reader
         self._supervisor_resume = supervisor_resume
         self._canonical_cancellation_requester = canonical_cancellation_requester
@@ -1975,35 +1973,32 @@ class HITLService:
         return None
 
     async def canonical_run_allows_resume(self, interaction: dict[str, Any]) -> bool:
-        run_id = interaction.get("orchestration_run_id")
-        if not await self._is_canonical_run(run_id):
-            return True
-        if self._canonical_run_state_reader is None:
-            return True
-        state = self._canonical_run_state_reader(run_id)
-        if inspect.isawaitable(state):
-            state = await state
-        return state not in {"canceling", "missing", *TERMINAL_RUN_STATUSES}
+        state = await self._canonical_run_state(interaction.get("orchestration_run_id"))
+        return state is None or state not in {"canceling", *TERMINAL_RUN_STATUSES}
 
     async def _is_canonical_run(self, run_id: object) -> bool:
+        return await self._canonical_run_state(run_id) is not None
+
+    async def _canonical_run_state(self, run_id: object) -> str | None:
+        """Return the orchestrator Run status, or None when no Run owns run_id."""
         if (
             not isinstance(run_id, str)
             or not run_id
-            or self._lifecycle_family_reader is None
+            or self._canonical_run_state_reader is None
         ):
-            return False
+            return None
         try:
-            family = self._lifecycle_family_reader(run_id)
-            if inspect.isawaitable(family):
-                family = await family
-            return family == "canonical"
+            state = self._canonical_run_state_reader(run_id)
+            if inspect.isawaitable(state):
+                state = await state
         except Exception:
             logger.warning(
-                "Failed to resolve durable HITL lifecycle family",
+                "Failed to resolve durable HITL run state",
                 extra={"run_id": run_id},
                 exc_info=True,
             )
-            return False
+            return None
+        return None if state == "missing" else state
 
     async def _emit_hitl_event(
         self,

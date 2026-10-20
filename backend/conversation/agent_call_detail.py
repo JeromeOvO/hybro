@@ -112,7 +112,7 @@ class CanonicalAgentCallDetailService:
         public_call_id: str,
     ) -> CanonicalAgentCallDetail | None:
         run = await self._run_store.load(run_id)
-        if run is None or run.room_id != room_id or run.lifecycle_family != "canonical":
+        if run is None or run.room_id != room_id:
             return None
         entry = next(
             (

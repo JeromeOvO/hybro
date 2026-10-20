@@ -129,8 +129,6 @@ class DefaultRunFactory:
             ).encode()
         ).hexdigest()
         return OrchestratorRunState(
-            schema_version=6,
-            lifecycle_family="canonical",
             run_id=run_id,
             session_id=config.session_id,
             room_id=config.room_id,
@@ -501,11 +499,11 @@ class RoomAgentSession:
                         "failed": "run_failed",
                     }.get(result.outcome)
                     if terminal_type is not None:
-                        await self._emit(terminal_type, result.run, terminal=True)
+                        await self._emit(terminal_type, result.run)
                     if self._run_id is not None:
                         run = await self.run_store.load(self._run_id)
                         if run is not None:
-                            await self._emit("session_idle", run, terminal=True)
+                            await self._emit("session_idle", run)
                     self._settled_task = task
                     self._idle.set()
             return result
@@ -526,26 +524,13 @@ class RoomAgentSession:
         run: OrchestratorRunState,
         payload: dict[str, object],
     ) -> None:
-        # A completed tool-result message is the durable boundary for the
-        # corresponding agent card. Await listener settlement so its terminal
-        # projection cannot be lost to the short best-effort listener timeout.
-        settle_agent_projection = (
-            event_type == "message_completed"
-            and payload.get("message_kind") == "tool_result"
-        )
-        await self._emit(
-            event_type,
-            run,
-            terminal=settle_agent_projection,
-            payload=payload,
-        )
+        await self._emit(event_type, run, payload=payload)
 
     async def _emit(
         self,
         event_type: str,
         run: OrchestratorRunState,
         *,
-        terminal: bool = False,
         payload: dict[str, object] | None = None,
     ) -> None:
         self._sequence += 1
@@ -561,9 +546,7 @@ class RoomAgentSession:
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family=run.lifecycle_family,
-            ),
-            terminal=terminal,
+            )
         )
 
 

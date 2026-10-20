@@ -40,7 +40,7 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
     )
     room_events = InMemoryRoomEventStore()
     publisher = make_publisher(transport=FakeTransport(), room_events=room_events)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     parent_id: str | None = None
 
     async def publish(notification):
@@ -100,7 +100,6 @@ async def test_recovery_restores_missing_start_boundaries_before_child_terminals
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family=run.lifecycle_family,
             )
         )
         if projected is not None:
@@ -151,7 +150,7 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
     assert run is not None
     room_events = InMemoryRoomEventStore()
     publisher = make_publisher(transport=FakeTransport(), room_events=room_events)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     parent_id: str | None = None
 
     async def publish(notification):
@@ -198,7 +197,6 @@ async def test_recovery_replays_missing_tool_turn_end_after_publication_failure_
                 room_id=current.room_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
-                lifecycle_family=current.lifecycle_family,
             )
         )
         if projected is None:
@@ -291,7 +289,7 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
         transport=FakeTransport(),
         room_events=room_events,
     )
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     parent_id: str | None = None
 
     async def publish_notification(notification):
@@ -336,7 +334,6 @@ async def test_kernel_room_log_final_settlement_snapshot_recovers_crash_boundari
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family=run.lifecycle_family,
             )
         )
         if projected is None:

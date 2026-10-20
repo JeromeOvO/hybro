@@ -207,7 +207,6 @@ def _runs():
     run = SimpleNamespace(
         run_id="run-1",
         room_id="room-1",
-        lifecycle_family="canonical",
         status="awaiting_user",
         state_version=1,
         cancellation_command_id=None,

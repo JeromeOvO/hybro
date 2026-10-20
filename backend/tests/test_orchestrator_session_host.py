@@ -187,21 +187,6 @@ async def test_observation_sink_reenters_without_a_session_object(catalog):
     await asyncio.sleep(0)
     assert len(observed) == 2
     assert observed[-1].event_type == "turn_started"
-    assert observed[-1].lifecycle_family == "canonical"
-
-    legacy = run.model_copy(update={"schema_version": 5, "lifecycle_family": "legacy"})
-    legacy_lifecycle = sink.lifecycle_factory(legacy)
-    assert legacy_lifecycle is not None
-    await legacy_lifecycle("turn_started", legacy, {})
-    assert len(observed) == 2
-    await legacy_lifecycle(
-        "tool_execution_completed",
-        legacy,
-        {"call_id": "call-1", "result_status": "completed"},
-    )
-    assert len(observed) == 3
-    assert observed[-1].event_type == "tool_execution_completed"
-    assert observed[-1].lifecycle_family == "legacy"
 
     # Re-entry requires an existing Run; a missing Run is a KeyError.
     with pytest.raises(KeyError):
@@ -275,7 +260,7 @@ async def test_no_hosted_session_canonical_observation_converges_public_lifecycl
     room_events = InMemoryRoomEventStore()
     epoch_store = InMemoryRoomEpochStore()
     await epoch_store.activate("room-1", "create-1", activated_at=NOW)
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
     published_types: list[str] = []
 
     async def listener(event):

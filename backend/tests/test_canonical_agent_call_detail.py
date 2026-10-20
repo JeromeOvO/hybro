@@ -58,7 +58,6 @@ def canonical_run(*, output=True, artifacts=(), content=None):
     return SimpleNamespace(
         run_id="run-1",
         room_id="room-1",
-        lifecycle_family="canonical",
         tool_batches=[SimpleNamespace(entries=[entry])],
     )
 

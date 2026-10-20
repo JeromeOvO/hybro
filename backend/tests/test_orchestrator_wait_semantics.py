@@ -69,7 +69,7 @@ class PublicHistory:
 
     def __init__(self) -> None:
         self.records: dict[str, dict] = {}
-        self.translator = PublicProjectionTranslator(lifecycle_family="canonical")
+        self.translator = PublicProjectionTranslator()
         self.sequence = 0
 
     async def read(self, _room_id, _run_id):
@@ -89,7 +89,6 @@ class PublicHistory:
                 room_id=run.room_id,
                 user_message_id=run.request.user_message_id,
                 client_request_id=run.client_request_id,
-                lifecycle_family="canonical",
             ),
             catalog=run.tool_catalog,
         )

@@ -711,11 +711,10 @@ RunStatus = Literal[
 
 
 class OrchestratorRunState(ContractModel):
-    # Expand/contract reader accepts v5 legacy documents and v6 canonical
-    # documents. New canonical admission explicitly writes v6; legacy fixtures
-    # and already-running v5 Runs remain pinned and readable.
-    schema_version: Literal[5, 6] = 5
-    lifecycle_family: Literal["legacy", "canonical"] = "legacy"
+    # Only canonical schema-6 Runs exist; scripts/delete_legacy_orchestrator_runs.py
+    # removed the v5 and legacy-family documents.
+    schema_version: Literal[6] = 6
+    lifecycle_family: Literal["canonical"] = "canonical"
     run_id: str
     # Explicit persisted execution-engine ownership, fixed at Run creation and
     # never re-evaluated afterwards (production cutover invariant). Runs owned by
@@ -802,7 +801,7 @@ class OrchestratorRunState(ContractModel):
             if self.recovery_claim.kind != "cancellation":
                 raise ValueError("canceling Runs require cancellation recovery")
         elif self.status == "canceled":
-            if self.lifecycle_family == "canonical" and self.cancellation_cause is None:
+            if self.cancellation_cause is None:
                 raise ValueError("canceled canonical Runs require a cancellation cause")
             if (self.cancellation_command_id is None) != (
                 self.cancellation_requested_at is None
@@ -812,54 +811,40 @@ class OrchestratorRunState(ContractModel):
             raise ValueError(
                 "cancellation metadata is valid only for canceling or canceled Runs"
             )
-        if self.lifecycle_family == "canonical":
-            if self.schema_version != 6:
-                raise ValueError("canonical Runs require schema version 6")
-            for batch in self.tool_batches:
-                for entry in batch.entries:
-                    if entry.acceptance is not None and not entry.opaque_public_call_id:
-                        raise ValueError(
-                            "accepted canonical tool entries require a public call ID"
-                        )
-        elif any(
-            (
-                self.active_internal_turn_id,
-                self.active_assistant_message_id,
-                self.active_attempt,
-                self.greatest_public_text_offset,
-                self.active_public_text,
+        for batch in self.tool_batches:
+            for entry in batch.entries:
+                if entry.acceptance is not None and not entry.opaque_public_call_id:
+                    raise ValueError(
+                        "accepted canonical tool entries require a public call ID"
+                    )
+        if self.greatest_public_text_offset != len(self.active_public_text):
+            raise ValueError(
+                "canonical public offset must match active text checkpoint"
             )
-        ):
-            raise ValueError("legacy Runs cannot carry canonical active stream state")
-        if self.lifecycle_family == "canonical":
-            if self.greatest_public_text_offset != len(self.active_public_text):
-                raise ValueError(
-                    "canonical public offset must match active text checkpoint"
+        if self.status in TERMINAL_RUN_STATUSES:
+            if any(
+                (
+                    self.active_internal_turn_id,
+                    self.active_assistant_message_id,
+                    self.active_attempt,
+                    self.active_public_text,
                 )
-            if self.status in TERMINAL_RUN_STATUSES:
-                if any(
-                    (
-                        self.active_internal_turn_id,
-                        self.active_assistant_message_id,
-                        self.active_attempt,
-                        self.active_public_text,
-                    )
-                ):
-                    raise ValueError(
-                        "terminal canonical Runs cannot retain active lifecycle state"
-                    )
-                if any(
-                    entry.state != "terminal"
-                    for batch in self.tool_batches
-                    for entry in batch.entries
-                ):
-                    raise ValueError(
-                        "terminal canonical Runs cannot retain open declared Tools"
-                    )
-                if any(not batch.results_flushed for batch in self.tool_batches):
-                    raise ValueError(
-                        "terminal canonical Runs require every Tool batch flushed"
-                    )
+            ):
+                raise ValueError(
+                    "terminal canonical Runs cannot retain active lifecycle state"
+                )
+            if any(
+                entry.state != "terminal"
+                for batch in self.tool_batches
+                for entry in batch.entries
+            ):
+                raise ValueError(
+                    "terminal canonical Runs cannot retain open declared Tools"
+                )
+            if any(not batch.results_flushed for batch in self.tool_batches):
+                raise ValueError(
+                    "terminal canonical Runs require every Tool batch flushed"
+                )
         return self
 
 

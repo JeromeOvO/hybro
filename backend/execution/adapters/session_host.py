@@ -202,9 +202,7 @@ class RoomSessionHost:
                     room_id=current.room_id,
                     user_message_id=current.request.user_message_id,
                     client_request_id=current.client_request_id,
-                    lifecycle_family=current.lifecycle_family,
-                ),
-                terminal=True,
+                )
             )
 
         return await self._kernel_factory(run.tool_catalog).terminalize(
@@ -240,9 +238,7 @@ class RoomSessionHost:
                     room_id=current.room_id,
                     user_message_id=current.request.user_message_id,
                     client_request_id=current.client_request_id,
-                    lifecycle_family=current.lifecycle_family,
-                ),
-                terminal=True,
+                )
             )
 
         await self._kernel_factory(run.tool_catalog).terminalize(
@@ -265,18 +261,9 @@ class RoomSessionHost:
             emitter = self._new_lifecycle_emitter()
 
             async def emit(event_type, run, payload):
-                if run.lifecycle_family == "legacy" and not (
-                    (
-                        event_type == "message_completed"
-                        and payload.get("message_kind") == "tool_result"
-                    )
-                    or event_type == "tool_execution_completed"
-                ):
-                    return
-                # Canonical re-entry forwards every lifecycle boundary and
-                # awaits the durable listener before the Kernel checkpoints a
-                # public Tool terminal as emitted. Legacy retains its narrow
-                # compatibility projection.
+                # Re-entry forwards every lifecycle boundary and awaits the
+                # durable listener before the Kernel checkpoints a public Tool
+                # terminal as emitted.
                 # The observation checkpoint version is durable and monotonic.
                 # call_id is also included in downstream delivery identity, so
                 # parallel results at the same version cannot collide.
@@ -292,9 +279,7 @@ class RoomSessionHost:
                         room_id=run.room_id,
                         user_message_id=run.request.user_message_id,
                         client_request_id=run.client_request_id,
-                        lifecycle_family=run.lifecycle_family,
-                    ),
-                    terminal=True,
+                    )
                 )
 
             return emit
@@ -309,9 +294,8 @@ class RoomSessionHost:
 
     def _new_lifecycle_emitter(self) -> LifecycleEmitter:
         # Agent-card terminal projection performs durable Run/binding reads,
-        # Mongo replacement, and room-event append. Keep the short timeout for
-        # ordinary lifecycle noise, but allow this settled boundary to finish
-        # under transient local/replica-set latency.
+        # Mongo replacement, and room-event append. Allow it to finish under
+        # transient local/replica-set latency.
         emitter = LifecycleEmitter(
             settlement_timeout_seconds=30.0,
             error_hook=lambda exc: logger.warning(

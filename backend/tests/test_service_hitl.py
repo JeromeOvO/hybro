@@ -187,7 +187,7 @@ async def test_canonical_interaction_cancel_claims_run_before_hitl_mutation():
 
     service = HITLService(
         lifecycle=lifecycle,
-        lifecycle_family_reader=AsyncMock(return_value="canonical"),
+        canonical_run_state_reader=AsyncMock(return_value="running"),
         canonical_cancellation_requester=request_cancellation,
     )
 
@@ -214,7 +214,7 @@ async def test_canonical_interaction_cancel_loses_to_completed_run():
     lifecycle.terminalize_interaction = AsyncMock()
     service = HITLService(
         lifecycle=lifecycle,
-        lifecycle_family_reader=AsyncMock(return_value="canonical"),
+        canonical_run_state_reader=AsyncMock(return_value="running"),
         canonical_cancellation_requester=AsyncMock(return_value="completed"),
     )
 

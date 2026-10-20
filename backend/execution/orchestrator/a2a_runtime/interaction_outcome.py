@@ -64,7 +64,7 @@ def public_activity_message_id(
 ) -> str:
     call_id = (
         _canonical_public_call_id(record, run)
-        if getattr(run, "lifecycle_family", None) == "canonical"
+        if run is not None
         else record.invocation_id
     )
     return f"orchestrator:{record.run_id}:{call_id}"
@@ -337,7 +337,7 @@ async def emit_hitl_request_events(
     public_secret_values: tuple[str, ...] = (),
 ) -> None:
     run = await _load_hitl_run(record, run_store)
-    canonical = getattr(run, "lifecycle_family", None) == "canonical"
+    canonical = run is not None
     if hitl_delivery is None:
         if canonical:
             raise RuntimeError("canonical HITL delivery is not bound")
@@ -431,7 +431,7 @@ async def emit_hitl_resolved_events(
     public_secret_values: tuple[str, ...] = (),
 ) -> None:
     run = await _load_hitl_run(record, run_store)
-    canonical = getattr(run, "lifecycle_family", None) == "canonical"
+    canonical = run is not None
     if hitl_delivery is None:
         if canonical:
             raise RuntimeError("canonical HITL delivery is not bound")

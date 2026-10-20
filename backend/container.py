@@ -377,7 +377,7 @@ async def terminalize_canonical_hitl_run(
     if orchestrator_runtime is None or not run_id:
         return False
     run = await orchestrator_runtime.run_store.load(run_id)
-    if run is None or run.lifecycle_family != "canonical":
+    if run is None:
         return False
     if run.tool_catalog is None:
         raise RuntimeError("canonical HITL owner has no Tool catalog")
@@ -413,7 +413,6 @@ async def terminalize_canonical_hitl_run(
                 room_id=current.room_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
-                lifecycle_family=current.lifecycle_family,
             )
         )
 
@@ -1035,11 +1034,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 if orchestrator_runtime is None or not isinstance(run_id, str):
                     return
                 run = await orchestrator_runtime.run_store.load(run_id)
-                if (
-                    run is None
-                    or run.lifecycle_family != "canonical"
-                    or not run.client_request_id
-                ):
+                if run is None or not run.client_request_id:
                     return
                 if kind == "run_resumed" and run.status in {
                     "canceling",
@@ -1138,13 +1133,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             hitl_application.bind_run_answer_projector(project_supervisor_run_answer)
 
-            async def read_orchestrator_lifecycle_family(run_id: str) -> str:
-                orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
-                if orchestrator_runtime is None:
-                    return "legacy"
-                run = await orchestrator_runtime.run_store.load(run_id)
-                return run.lifecycle_family if run is not None else "legacy"
-
             async def read_canonical_run_state(run_id: str) -> str:
                 orchestrator_runtime = getattr(app.state, "orchestrator_runtime", None)
                 if orchestrator_runtime is None:
@@ -1157,7 +1145,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 if orchestrator_runtime is None:
                     return "missing"
                 run = await orchestrator_runtime.run_store.load(run_id)
-                if run is None or run.lifecycle_family != "canonical":
+                if run is None:
                     return "missing"
                 command_id = f"cancel:{run_id}:user_requested"
                 for _attempt in range(4):
@@ -1315,7 +1303,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 application=hitl_application,
                 room_files=file_storage,
                 canonical_control_publisher=publish_canonical_hitl_control,
-                lifecycle_family_reader=read_orchestrator_lifecycle_family,
                 canonical_run_state_reader=read_canonical_run_state,
                 supervisor_resume=resume_supervisor_hitl_port,
                 canonical_cancellation_requester=request_canonical_hitl_cancellation,
@@ -1700,7 +1687,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         # The canonical orchestrator is the only execution path. It is built
         # eagerly so a misconfigured model route, prompt asset, or profile
         # parameter fails startup instead of the first request.
-        from common.dto import ProcessingStatusEvent, RunEventNotification
+        from common.dto import RunEventNotification
         from execution.orchestrator.projection import public_terminal_status
         from execution.orchestrator.public_projection import (
             PublicProjectionTranslator,
@@ -1713,12 +1700,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             secret_values=canonical_public_secrets
         )
         canonical_projection_translator = PublicProjectionTranslator(
-            lifecycle_family="canonical",
             summary_registry=canonical_summary_registry,
             secret_values=canonical_public_secrets,
-        )
-        legacy_projection_translator = PublicProjectionTranslator(
-            lifecycle_family="legacy"
         )
         # Causal inspection links for canonical events. Durability and ordering
         # do not rely on this process-local cache; deterministic event IDs and
@@ -1747,78 +1730,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     "canonical stale-browser processing adapter was not persisted"
                 )
 
-        async def _emit_legacy_orchestrator_terminal(run, status: str) -> None:
-            """Publish the terminal frames the legacy conversation surface owns.
-
-            Legacy Runs have no canonical room-event settlement. Without an explicit
-            terminal emission the composer stays in the cancelable processing
-            state forever even though the durable Run is complete.
-            """
-            if _delivery_deps is None:
-                return
-            user_message_id = run.request.user_message_id or run.run_id
-            client_request_id = run.client_request_id
-            run_event_type = {
-                "completed": "run_completed",
-                "canceled": "run_canceled",
-                "failed": "run_failed",
-            }[status]
-            (
-                run_status,
-                run_event_id,
-            ) = await _delivery_deps.event_publisher.emit_checked_identified(
-                RunEventNotification(
-                    room_id=run.room_id,
-                    event_id=f"public:{run.run_id}:terminal:legacy",
-                    delivery_id=f"orchestrator:{run.run_id}:terminal:run_event",
-                    run_id=user_message_id,
-                    seq=run.state_version,
-                    run_event_type=run_event_type,
-                    payload={
-                        "canonical_status": status,
-                        "frontend_message_id": user_message_id,
-                        "lifecycle_message_id": user_message_id,
-                        "client_request_id": client_request_id,
-                        "details": None,
-                        "pending": False,
-                    },
-                    correlation_id=client_request_id,
-                )
-            )
-            if run_event_id is None and run_status not in {
-                DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
-            }:
-                raise RuntimeError(
-                    "legacy terminal run event was not durably persisted"
-                )
-            emitted = await _delivery_deps.event_publisher.emit_checked(
-                ProcessingStatusEvent(
-                    room_id=run.room_id,
-                    message_id=user_message_id,
-                    status=status,
-                    related_message_id=user_message_id,
-                    client_request_id=client_request_id,
-                    delivery_id=(
-                        f"orchestrator:{run.run_id}:terminal:processing_status"
-                    ),
-                )
-            )
-            if emitted not in {
-                DeliveryEmitStatus.DELIVERED,
-                DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
-            }:
-                logger.warning(
-                    "legacy terminal processing_status was not persisted",
-                    extra={
-                        "run_id": run.run_id,
-                        "room_id": run.room_id,
-                        "status": status,
-                        "emitted": emitted.value,
-                    },
-                )
-
         async def publish_orchestrator_projection_status(run, intent) -> None:
             # SSE is non-authoritative: it is published only after the durable
             # public run/processing projection has completed AND the Run
@@ -1829,11 +1740,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             del intent
             status = public_terminal_status(str(run.status or ""))
             if status is None or _delivery_deps is None:
-                return
-            if run.lifecycle_family == "legacy":
-                await _emit_legacy_orchestrator_terminal(run, status)
-                return
-            if run.lifecycle_family != "canonical":
                 return
             payload = canonical_settlement_payload(run)
             settlement_parent_id = _canonical_parent_ids.get(run.run_id)
@@ -1898,7 +1804,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             # Tool lifecycle remains solely in the canonical Run/event fold;
             # no task-backed RoomAgentMessage status projection is created.
             runtime = getattr(app.state, "orchestrator_runtime", None)
-            call_id = (event.payload or {}).get("call_id")
 
             if _delivery_deps is None:
                 return
@@ -1911,54 +1816,17 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 raise RuntimeError(
                     f"canonical lifecycle event has no durable Run for run_id={event.run_id}"
                 )
-            if (
-                event.lifecycle_family != "canonical"
-                or current_run.lifecycle_family != event.lifecycle_family
-            ):
-                raise RuntimeError(
-                    f"canonical lifecycle family mismatch: event={event.lifecycle_family}, "
-                    f"run={current_run.lifecycle_family}"
-                )
-            is_canonical = True
-            mapped = None
-            if mapped is not None:
-                message, turn_phase = mapped
-                await _delivery_deps.event_publisher.emit(
-                    ProcessingStatusEvent(
-                        room_id=event.room_id or "",
-                        message_id=(event.user_message_id or event.causation_id or ""),
-                        status="processing",
-                        client_request_id=event.client_request_id,
-                        details={"message": message, "turn_phase": turn_phase},
-                        delivery_id=(
-                            f"orchestrator:{event.run_id}:"
-                            f"{event.event_type}:{event.sequence}:"
-                            f"{call_id or 'run'}"
-                        ),
-                    )
-                )
-
             # Decision-visibility projection (Room Stream Snapshot plan §6,
             # Phase 1): public run_event payload types for LLM calls, retries,
             # orchestrator decisions, and tool calls. Payloads are produced
             # exclusively by the PublicProjectionTranslator (redaction).
-            if event.room_id and (is_canonical or run_event_sse_enabled()):
-                if is_canonical and current_run.tool_catalog is not None:
+            if event.room_id:
+                if current_run.tool_catalog is not None:
                     canonical_summary_registry.register_catalog(
                         current_run.tool_catalog
                     )
-                translator = (
-                    canonical_projection_translator
-                    if is_canonical
-                    else legacy_projection_translator
-                )
-                public_event = translator.translate(
-                    event,
-                    catalog=(
-                        current_run.tool_catalog
-                        if is_canonical and current_run is not None
-                        else None
-                    ),
+                public_event = canonical_projection_translator.translate(
+                    event, catalog=current_run.tool_catalog
                 )
                 if public_event is not None:
                     notification = RunEventNotification(
@@ -1970,50 +1838,43 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         payload=public_event.payload,
                         correlation_id=public_event.client_request_id,
                     )
-                    if is_canonical:
-                        parent_event_id = _canonical_parent_ids.get(public_event.run_id)
-                        if parent_event_id is None:
-                            records = await _read_canonical_run_events(
-                                public_event.room_id, public_event.run_id
-                            )
-                            parent_event_id = _latest_canonical_parent_id(records)
-                            if parent_event_id is not None:
-                                _canonical_parent_ids[public_event.run_id] = (
-                                    parent_event_id
-                                )
-                        (
-                            status,
-                            room_event_id,
-                        ) = await (
-                            _delivery_deps.event_publisher.emit_checked_identified(
-                                notification,
-                                parent_event_id=(
-                                    None
-                                    if public_event.kind == "run_started"
-                                    else parent_event_id
-                                ),
-                            )
+                    parent_event_id = _canonical_parent_ids.get(public_event.run_id)
+                    if parent_event_id is None:
+                        records = await _read_canonical_run_events(
+                            public_event.room_id, public_event.run_id
                         )
-                        if room_event_id is None and status not in {
-                            DeliveryEmitStatus.ALREADY_DELIVERED,
-                            DeliveryEmitStatus.DEDUPLICATED,
-                        }:
-                            raise RuntimeError(
-                                f"canonical lifecycle event was not durably persisted: status={status}, "
-                                f"event={public_event.kind}, parent={parent_event_id}"
-                            )
-                        if room_event_id is not None:
-                            _canonical_parent_ids[public_event.run_id] = room_event_id
-                        if (
-                            public_event.kind == "run_started"
-                            and current_run is not None
-                            and status == DeliveryEmitStatus.DELIVERED
-                        ):
-                            await _emit_canonical_processing_adapter(
-                                current_run, "processing"
-                            )
-                    else:
-                        await _delivery_deps.event_publisher.emit(notification)
+                        parent_event_id = _latest_canonical_parent_id(records)
+                        if parent_event_id is not None:
+                            _canonical_parent_ids[public_event.run_id] = parent_event_id
+                    (
+                        status,
+                        room_event_id,
+                    ) = await _delivery_deps.event_publisher.emit_checked_identified(
+                        notification,
+                        parent_event_id=(
+                            None
+                            if public_event.kind == "run_started"
+                            else parent_event_id
+                        ),
+                    )
+                    if room_event_id is None and status not in {
+                        DeliveryEmitStatus.ALREADY_DELIVERED,
+                        DeliveryEmitStatus.DEDUPLICATED,
+                    }:
+                        raise RuntimeError(
+                            f"canonical lifecycle event was not durably persisted: status={status}, "
+                            f"event={public_event.kind}, parent={parent_event_id}"
+                        )
+                    if room_event_id is not None:
+                        _canonical_parent_ids[public_event.run_id] = room_event_id
+                    if (
+                        public_event.kind == "run_started"
+                        and current_run is not None
+                        and status == DeliveryEmitStatus.DELIVERED
+                    ):
+                        await _emit_canonical_processing_adapter(
+                            current_run, "processing"
+                        )
 
             if event.event_type == "run_final_answer_ready" and runtime is not None:
                 # Deliver the final answer immediately instead of waiting for
@@ -2046,21 +1907,19 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 final: Any,
                 content: str,
             ) -> bool:
-                final_parent_id = None
-                if run.lifecycle_family == "canonical":
-                    # The final checkpoint is causally owned by its exact
-                    # message_end, never by a process-local latest-event cache
-                    # that may already point at turn_end. Readback also keeps
-                    # this parent stable after restart.
-                    records = await _read_canonical_run_events(run.room_id, run.run_id)
-                    final_parent_id = _canonical_final_message_end_parent_id(
-                        records, final.message_id
+                # The final checkpoint is causally owned by its exact
+                # message_end, never by a process-local latest-event cache
+                # that may already point at turn_end. Readback also keeps
+                # this parent stable after restart.
+                records = await _read_canonical_run_events(run.room_id, run.run_id)
+                final_parent_id = _canonical_final_message_end_parent_id(
+                    records, final.message_id
+                )
+                if final_parent_id is None:
+                    raise RuntimeError(
+                        f"canonical final message_end parent is not durable for message_id={final.message_id}, "
+                        f"records_count={len(records)}"
                     )
-                    if final_parent_id is None:
-                        raise RuntimeError(
-                            f"canonical final message_end parent is not durable for message_id={final.message_id}, "
-                            f"records_count={len(records)}"
-                        )
                 (
                     status,
                     room_event_id,
@@ -2080,28 +1939,25 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     ),
                     parent_event_id=final_parent_id,
                 )
-                if run.lifecycle_family == "canonical":
-                    if room_event_id is None:
-                        records = await _read_canonical_run_events(
-                            run.room_id, run.run_id
+                if room_event_id is None:
+                    records = await _read_canonical_run_events(run.room_id, run.run_id)
+                    persisted = next(
+                        (
+                            record
+                            for record in reversed(records)
+                            if record.get("kind") == "agent_response"
+                            and isinstance(record.get("payload_public"), dict)
+                            and record["payload_public"].get("message_id")
+                            == final.message_id
+                        ),
+                        None,
+                    )
+                    if persisted is not None:
+                        room_event_id = (
+                            str(persisted.get("room_event_id") or "") or None
                         )
-                        persisted = next(
-                            (
-                                record
-                                for record in reversed(records)
-                                if record.get("kind") == "agent_response"
-                                and isinstance(record.get("payload_public"), dict)
-                                and record["payload_public"].get("message_id")
-                                == final.message_id
-                            ),
-                            None,
-                        )
-                        if persisted is not None:
-                            room_event_id = (
-                                str(persisted.get("room_event_id") or "") or None
-                            )
-                    if room_event_id is not None:
-                        _canonical_parent_ids[run.run_id] = room_event_id
+                if room_event_id is not None:
+                    _canonical_parent_ids[run.run_id] = room_event_id
                 # Persisted room-event identity is the durable delivery
                 # boundary. A transient fanout miss self-heals through the
                 # heartbeat watermark/snapshot path and must not duplicate the

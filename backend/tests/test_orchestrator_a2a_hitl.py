@@ -490,7 +490,6 @@ async def test_emit_hitl_request_events_close_the_canonical_turn_contract():
         emit=AsyncMock(side_effect=lambda event: emitted.append(event) or True)
     )
     run = SimpleNamespace(
-        lifecycle_family="canonical",
         request=SimpleNamespace(user_message_id="user-1"),
         client_request_id="cr-1",
         tool_batches=[
@@ -552,7 +551,6 @@ async def test_canonical_hitl_request_stops_before_control_when_delivery_fails()
         emit_checked=AsyncMock(return_value=DeliveryEmitStatus.FAILED)
     )
     run = SimpleNamespace(
-        lifecycle_family="canonical",
         request=SimpleNamespace(user_message_id="user-1"),
         client_request_id="cr-1",
         tool_batches=[
@@ -599,7 +597,6 @@ async def test_emit_hitl_resolved_events_precede_canonical_run_resume():
     )
     run = SimpleNamespace(
         status="running",
-        lifecycle_family="canonical",
         request=SimpleNamespace(user_message_id="user-1"),
         client_request_id="cr-1",
         tool_batches=[
@@ -657,7 +654,6 @@ async def test_router_full_cancellation_claims_run_before_descendant_cleanup():
     run = SimpleNamespace(
         run_id="run-1",
         room_id="room-1",
-        lifecycle_family="canonical",
         status="running",
         state_version=1,
         cancellation_command_id=None,
@@ -750,7 +746,6 @@ async def test_router_direct_hitl_cancellation_aborts_the_owning_run():
     run = SimpleNamespace(
         run_id="run-1",
         room_id="room-1",
-        lifecycle_family="canonical",
         status="running",
         state_version=1,
         cancellation_command_id=None,
@@ -865,7 +860,6 @@ async def test_router_pending_hitl_uses_public_activity_message_id():
         run_store=SimpleNamespace(
             load=AsyncMock(
                 return_value=SimpleNamespace(
-                    lifecycle_family="canonical",
                     request=SimpleNamespace(user_message_id="user-1"),
                     client_request_id="cr-1",
                     tool_batches=[
@@ -987,7 +981,7 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
     kernel.projection_driver = SettlingProjectionDriver(store)
     a2a.run_store = store
     records = []
-    translator = PublicProjectionTranslator(lifecycle_family="canonical")
+    translator = PublicProjectionTranslator()
 
     async def emit_checked(event):
         frame = to_sse_frame(event, timestamp=NOW, room_seq=len(records) + 1)
@@ -1030,7 +1024,6 @@ async def test_hitl_cancel_produces_complete_foldable_canonical_snapshot():
                 room_id=current.room_id,
                 user_message_id=current.request.user_message_id,
                 client_request_id=current.client_request_id,
-                lifecycle_family="canonical",
             )
         )
 

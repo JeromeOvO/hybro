@@ -24,6 +24,13 @@ _CLOSED_INTERACTION_STATUSES = [
 ]
 _NON_TERMINAL_TASK_STATES = sorted(state.value for state in NON_TERMINAL_STATES)
 _TASK_STATE = "message_content.message_task.status.state"
+# Shared with scripts/delete_legacy_orchestrator_runs.py, which removes these rows.
+LEGACY_ORCHESTRATOR_RUN_QUERY: dict[str, Any] = {
+    "$or": [
+        {"lifecycle_family": {"$ne": "canonical"}},
+        {"schema_version": 5},
+    ]
+}
 
 
 @dataclass(frozen=True)
@@ -53,14 +60,9 @@ CHECKS = (
     ),
     _Check(
         name="orchestrator_runs_legacy",
-        gates="C2 step 3 (lifecycle family; archive before deleting branches)",
+        gates="C2 step 3 (lifecycle family; delete_legacy_orchestrator_runs.py)",
         collections=("orchestrator_runs",),
-        query={
-            "$or": [
-                {"lifecycle_family": {"$ne": "canonical"}},
-                {"schema_version": 5},
-            ]
-        },
+        query=LEGACY_ORCHESTRATOR_RUN_QUERY,
         by_status=True,
     ),
     _Check(
