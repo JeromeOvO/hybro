@@ -2936,8 +2936,9 @@ interaction is answered, each `hitl_response` frame also carries
 `answer_text`: the owner's answer as the owner reads it (choice labels, Yes or
 No, Approved or Rejected, Signed in for authorization results, never the
 reference), sanitized and bounded to 1,000 characters. Skipped questions and
-cancellations carry none. The legacy
-`A2A_RESUME` follow-up path still publishes prompt and choices only. The bundled
+cancellations carry none. Unified HITL interactions use only the
+`supervisor_run` application route; the legacy `a2a_resume` reply path is
+retired. The bundled
 Travel Planner asks one question per missing detail with a header, two to four
 suggested choices with descriptions, and `allow_other`.
 

@@ -29,10 +29,7 @@ def test_hitl_contract_enum_values_are_stable():
         "auth_challenge",
         "policy_decision",
     }
-    assert {item.value for item in HITLApplicationRoute} == {
-        "supervisor_run",
-        "a2a_resume",
-    }
+    assert {item.value for item in HITLApplicationRoute} == {"supervisor_run"}
     assert {item.value for item in HITLPublicSource} == {
         "supervisor",
         "agent",
@@ -157,13 +154,6 @@ def test_question_choice_inventory_and_answer_selection_are_validated():
 def test_route_snapshot_requires_route_specific_identifiers():
     with pytest.raises(ValidationError, match="orchestration_run_id"):
         HITLRouteSnapshot(route="supervisor_run")
-    with pytest.raises(ValidationError, match="context_id"):
-        HITLRouteSnapshot(
-            route="a2a_resume",
-            task_id="task-1",
-            continuation_message_id="message-1",
-            agent_id="agent-1",
-        )
 
     with pytest.raises(ValidationError, match="must not include an A2A target"):
         HITLRouteSnapshot(
@@ -171,10 +161,9 @@ def test_route_snapshot_requires_route_specific_identifiers():
             orchestration_run_id="run-1",
             task_id="task-1",
         )
-    with pytest.raises(ValidationError, match="must not include orchestration_run_id"):
+    with pytest.raises(ValidationError):
         HITLRouteSnapshot(
             route="a2a_resume",
-            orchestration_run_id="run-1",
             task_id="task-1",
             context_id="context-1",
             continuation_message_id="message-1",
@@ -193,31 +182,6 @@ def test_route_snapshot_requires_route_specific_identifiers():
         snapshot.fingerprint
         == "b4952cb648d9a380f0ecaddf4d73a5ab3dae7c3da7853f66f8954685bf2837b2"
     )
-
-
-@pytest.mark.parametrize(
-    ("field_name", "field_value"),
-    [
-        ("task_id", "pending-task-1"),
-        ("context_id", "relay-pending-context-1"),
-        ("continuation_message_id", "provisional-message-1"),
-        ("agent_id", "unknown"),
-    ],
-)
-def test_route_snapshot_rejects_provisional_a2a_identifiers(
-    field_name: str,
-    field_value: str,
-):
-    values = {
-        "route": "a2a_resume",
-        "task_id": "task-1",
-        "context_id": "context-1",
-        "continuation_message_id": "message-1",
-        "agent_id": "agent-1",
-        field_name: field_value,
-    }
-    with pytest.raises(ValidationError, match="authoritative"):
-        HITLRouteSnapshot.model_validate(values)
 
 
 def test_cancel_is_a_versioned_command_not_an_answer():

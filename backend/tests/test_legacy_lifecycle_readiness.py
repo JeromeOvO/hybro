@@ -334,3 +334,51 @@ def test_cli_help_runs_without_a_configured_install():
 
     assert result.returncode == 0
     assert "--mongo-url" in result.stdout
+
+
+@pytest.mark.asyncio
+async def test_leftover_a2a_resume_rows_count_where_reconcilers_still_read_them():
+    report = _by_name(
+        await collect_readiness(
+            FakeDatabase(
+                {
+                    "hitl_resume_commands": [
+                        {"kind": "a2a_resume", "status": "delivery_uncertain"},
+                        {"kind": "a2a_resume", "status": "projected"},
+                        {
+                            "kind": "a2a_resume",
+                            "status": "projected",
+                            "aggregate_applied_at": "2026-01-01",
+                        },
+                        {"kind": "supervisor_resume", "status": "retryable_error"},
+                    ],
+                    "hitl_interactions": [
+                        {"application_route": "a2a_resume", "status": "canceled"},
+                        {
+                            "application_route": "a2a_resume",
+                            "status": "expired",
+                            "terminal_reconciled": True,
+                        },
+                        {"application_route": "a2a_resume", "status": "applied"},
+                        {"application_route": "supervisor_run", "status": "failed"},
+                    ],
+                    "hitl_requests": [
+                        {"application_route": "a2a_resume", "status": "canceled"},
+                        {
+                            "application_route": "a2a_resume",
+                            "status": "expired",
+                            "cancellation_reconciled": True,
+                        },
+                        {"application_route": "a2a_resume", "status": "pending"},
+                        {"application_route": "a2a_resume", "status": "responded"},
+                        {"application_route": "supervisor_run", "status": "pending"},
+                    ],
+                }
+            )
+        )
+    )
+
+    assert report["unsettled_a2a_resume_commands"].count == 2
+    assert report["unreconciled_terminal_a2a_resume_interactions"].count == 1
+    assert report["unreconciled_terminal_a2a_resume_requests"].count == 1
+    assert report["open_a2a_resume_requests"].count == 1

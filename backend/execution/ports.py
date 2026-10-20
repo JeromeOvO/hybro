@@ -327,33 +327,6 @@ class HITLLifecyclePersistencePort(Protocol):
     async def ensure_hitl_lifecycle_indexes(self) -> None: ...
 
 
-class HITLContinuationPort(Protocol):
-    async def resume_queue_from_continuation(
-        self,
-        continuation_message_id: str,
-        *,
-        task_result_text: str | None = None,
-        failed: bool = False,
-    ) -> bool: ...
-
-    async def has_pending_queue_continuation(
-        self,
-        continuation_message_id: str,
-    ) -> bool: ...
-
-
-class HITLAgentReplyPort(Protocol):
-    async def reply_to_task(
-        self,
-        *,
-        message_id: str,
-        task_id: str,
-        context_id: str,
-        user_input: str,
-        outbound_message_id: str | None = None,
-    ) -> dict[str, Any]: ...
-
-
 class HITLTerminalLifecyclePort(Protocol):
     async def terminalize_owning_run(
         self,
@@ -362,17 +335,6 @@ class HITLTerminalLifecyclePort(Protocol):
         terminal_status: str,
         reason: str,
     ) -> None: ...
-
-
-class HITLTaskNotificationPort(Protocol):
-    async def notify_task_update(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        room_id: str,
-        user_id: str,
-    ) -> bool: ...
 
 
 class HITLDeliveryPort(Protocol):

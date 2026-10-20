@@ -12,7 +12,6 @@ from common.utils.time import ensure_utc, utcnow
 from execution.hitl.delivery import (
     HITLDeliveryDisposition,
     HITLDeliveryError,
-    HITLDeliveryPhase,
 )
 from execution.hitl.exceptions import (
     HITLConflictError,
@@ -33,7 +32,6 @@ from models.hitl import (
     HITLEventType,
     HITLInteractionStatus,
     HITLRequest,
-    HITLResumeCommand,
     HITLResumeCommandStatus,
     HITLStatus,
     HITLSupervisorEffectCommand,
@@ -53,19 +51,13 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _command_identity(interaction_id: str, revision: int) -> tuple[str, str]:
-    seed = f"{interaction_id}:{revision}:a2a_resume"
-    token = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    return f"hitl-resume-{token}", f"hitl-message-{token}"
-
-
 def _supervisor_command_identity(interaction_id: str, revision: int) -> str:
     seed = f"{interaction_id}:{revision}:supervisor_resume"
     return f"hitl-supervisor-{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
 
 class HITLApplicationCoordinator:
-    """Recoverable answer application across request, aggregate, and A2A journal."""
+    """Recoverable answer application across request, aggregate, and effect journal."""
 
     LEASE_SECONDS = 300
     HEARTBEAT_SECONDS = 15
@@ -536,23 +528,11 @@ class HITLApplicationCoordinator:
         status = interaction.get("status")
         if status == HITLInteractionStatus.APPLIED.value:
             rows = await self._request_rows(service, interaction)
-            recovery_result = None
-            if (
-                interaction.get("application_route")
-                == HITLApplicationRoute.A2A_RESUME.value
-            ):
-                command = (
-                    await self._lifecycle.get_resume_command_for_interaction_strict(
-                        interaction["interaction_id"],
-                        int(interaction["application_revision"]),
-                    )
-                )
-                recovery_result = dict((command or {}).get("response_snapshot") or {})
             interaction = await self._project_run_answers(
                 interaction,
                 rows,
                 self._combined_input(rows),
-                recovery_result,
+                None,
             )
             await self._mark_command_aggregate_applied(interaction)
             responses_projected = await self.finalize_applied(service, interaction)
@@ -614,9 +594,9 @@ class HITLApplicationCoordinator:
         combined_input = self._combined_input(rows)
         route_result: dict[str, Any] = {}
         try:
-            snapshot = validate_route_classifications(claimed)
+            validate_route_classifications(claimed)
             # Public continuation is ordered answer received → run resumed →
-            # route effect for both A2A and supervisor-backed canonical Runs.
+            # supervisor route effect.
             # Fail closed if the durable response projection is incomplete.
             responses_projected = await self.finalize_applied(
                 service,
@@ -630,22 +610,13 @@ class HITLApplicationCoordinator:
             emit_resumed = getattr(service, "emit_canonical_resumed_control", None)
             if callable(emit_resumed):
                 await emit_resumed(claimed)
-            if snapshot.route == HITLApplicationRoute.A2A_RESUME:
-                route_result = await self._apply_agent(
-                    service,
-                    request=request,
-                    interaction=claimed,
-                    claim_id=claim_id,
-                    user_input=combined_input,
-                )
-            elif snapshot.route == HITLApplicationRoute.SUPERVISOR_RUN:
-                route_result = await self._apply_supervisor(
-                    service,
-                    request=request,
-                    interaction=claimed,
-                    claim_id=claim_id,
-                    user_input=combined_input,
-                )
+            route_result = await self._apply_supervisor(
+                service,
+                request=request,
+                interaction=claimed,
+                claim_id=claim_id,
+                user_input=combined_input,
+            )
             claimed = await self._project_run_answers(
                 claimed, rows, combined_input, route_result
             )
@@ -848,196 +819,6 @@ class HITLApplicationCoordinator:
         if projected is None:
             raise HITLRoutingFailedError("Supervisor effect projection remains pending")
         return snapshot
-
-    async def _apply_agent(  # noqa: C901
-        self,
-        service,
-        *,
-        request: HITLRequest,
-        interaction: dict[str, Any],
-        claim_id: str,
-        user_input: str,
-    ) -> dict[str, Any]:
-        revision = int(interaction["application_revision"])
-        command_id, outbound_message_id = _command_identity(
-            interaction["interaction_id"], revision
-        )
-        rows = await self._request_rows(service, interaction)
-        answer_digest = _digest(
-            "\n".join(f"{row['request_id']}:{row['answer_digest']}" for row in rows)
-        )
-        snapshot = validate_route_classifications(interaction)
-        command = HITLResumeCommand(
-            schema_version=3,
-            command_id=command_id,
-            interaction_id=interaction["interaction_id"],
-            application_revision=revision,
-            task_id=snapshot.task_id or "",
-            context_id=snapshot.context_id or "",
-            continuation_message_id=snapshot.continuation_message_id or "",
-            agent_id=snapshot.agent_id or "",
-            display_message_id=request.display_message_id,
-            outbound_message_id=outbound_message_id,
-            answer_request_ids=[row["request_id"] for row in rows],
-            answer_digest=answer_digest,
-        ).model_dump(mode="python")
-        validate_command_route_consistency(interaction, command)
-        durable_command = await self._lifecycle.create_resume_command(command)
-        validate_command_route_consistency(interaction, durable_command)
-        command_status = durable_command.get("status")
-        if command_status in {
-            HITLResumeCommandStatus.ACKNOWLEDGED.value,
-            HITLResumeCommandStatus.PROJECTED.value,
-        }:
-            if command_status == HITLResumeCommandStatus.ACKNOWLEDGED.value:
-                projected = await self._lifecycle.mark_resume_command_state(
-                    command_id,
-                    claim_id=None,
-                    expected_statuses=[HITLResumeCommandStatus.ACKNOWLEDGED.value],
-                    status=HITLResumeCommandStatus.PROJECTED.value,
-                    response_snapshot=durable_command.get("response_snapshot"),
-                )
-                if projected is None:
-                    raise HITLRoutingFailedError(
-                        "Remote result projection remains pending"
-                    )
-                durable_command = projected
-            response_snapshot = dict(durable_command.get("response_snapshot") or {})
-            if response_snapshot.get("reconciled_from_get_task") is True:
-                return await service._project_reconciled_agent_response(
-                    request,
-                    response_snapshot,
-                )
-            return response_snapshot
-        if command_status == HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value:
-            raise TimeoutError("previous delivery remains uncertain")
-        if command_status == HITLResumeCommandStatus.PERMANENT_FAILURE.value:
-            raise HITLDeliveryError(
-                durable_command.get("error_message")
-                or "Remote continuation permanently failed",
-                disposition=HITLDeliveryDisposition.PERMANENT,
-                phase=HITLDeliveryPhase.REMOTE_RESPONSE,
-                error_code=durable_command.get("error_code")
-                or "remote_permanent_failure",
-            )
-        command_claim_id = uuid4().hex
-        claimed_command = await self._lifecycle.claim_resume_command(
-            command_id,
-            claim_id=command_claim_id,
-            lease_seconds=self.LEASE_SECONDS,
-        )
-        if claimed_command is None:
-            raise HITLRoutingFailedError(
-                "Remote continuation is already being delivered"
-            )
-        try:
-            request.a2a_task_id = snapshot.task_id
-            request.a2a_context_id = snapshot.context_id
-            request.continuation_message_id = snapshot.continuation_message_id
-            request.agent_id = snapshot.agent_id
-            route_result = await self._run_fenced_effect(
-                lambda: service._handle_agent_response(
-                    request,
-                    user_input,
-                    outbound_message_id=outbound_message_id,
-                ),
-                interaction_id=interaction["interaction_id"],
-                application_claim_id=claim_id,
-                command_id=command_id,
-                command_claim_id=command_claim_id,
-            )
-        except HITLDeliveryError as exc:
-            command_status = {
-                HITLDeliveryDisposition.RETRYABLE: (
-                    HITLResumeCommandStatus.RETRYABLE_ERROR.value
-                ),
-                HITLDeliveryDisposition.DELIVERY_UNCERTAIN: (
-                    HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value
-                ),
-                HITLDeliveryDisposition.PERMANENT: (
-                    HITLResumeCommandStatus.PERMANENT_FAILURE.value
-                ),
-            }[exc.disposition]
-            await self._lifecycle.mark_resume_command_state(
-                command_id,
-                claim_id=command_claim_id,
-                expected_statuses=[HITLResumeCommandStatus.DELIVERING.value],
-                status=command_status,
-                error_code=exc.error_code,
-                error_message=str(exc),
-                retry_after_seconds=(
-                    5 if exc.disposition == HITLDeliveryDisposition.RETRYABLE else None
-                ),
-            )
-            raise
-        except TimeoutError as exc:
-            await self._lifecycle.mark_resume_command_state(
-                command_id,
-                claim_id=command_claim_id,
-                expected_statuses=[HITLResumeCommandStatus.DELIVERING.value],
-                status=HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
-                error_code="delivery_uncertain",
-                error_message=str(exc),
-            )
-            raise
-        except (ConnectionRefusedError, ConnectionError) as exc:
-            await self._lifecycle.mark_resume_command_state(
-                command_id,
-                claim_id=command_claim_id,
-                expected_statuses=[HITLResumeCommandStatus.DELIVERING.value],
-                status=HITLResumeCommandStatus.RETRYABLE_ERROR.value,
-                error_code="connection_failed",
-                error_message=str(exc),
-                retry_after_seconds=5,
-            )
-            raise
-        except Exception as exc:
-            await self._lifecycle.mark_resume_command_state(
-                command_id,
-                claim_id=command_claim_id,
-                expected_statuses=[HITLResumeCommandStatus.DELIVERING.value],
-                status=HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
-                error_code="post_send_local_failure",
-                error_message=str(exc),
-            )
-            raise HITLDeliveryError(
-                str(exc),
-                disposition=HITLDeliveryDisposition.DELIVERY_UNCERTAIN,
-                phase=HITLDeliveryPhase.POST_SEND_PERSISTENCE,
-                error_code="post_send_local_failure",
-            ) from exc
-        acknowledged = await self._lifecycle.mark_resume_command_state(
-            command_id,
-            claim_id=command_claim_id,
-            expected_statuses=[HITLResumeCommandStatus.DELIVERING.value],
-            status=HITLResumeCommandStatus.ACKNOWLEDGED.value,
-            response_snapshot=route_result,
-        )
-        if acknowledged is None:
-            await self._lifecycle.mark_resume_command_state(
-                command_id,
-                claim_id=command_claim_id,
-                expected_statuses=[HITLResumeCommandStatus.DELIVERING.value],
-                status=HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
-                error_code="ack_persistence_uncertain",
-                error_message="Remote acknowledgement persistence failed",
-            )
-            raise HITLDeliveryError(
-                "Remote acknowledgement persistence failed",
-                disposition=HITLDeliveryDisposition.DELIVERY_UNCERTAIN,
-                phase=HITLDeliveryPhase.POST_SEND_PERSISTENCE,
-                error_code="ack_persistence_uncertain",
-            )
-        projected = await self._lifecycle.mark_resume_command_state(
-            command_id,
-            claim_id=None,
-            expected_statuses=[HITLResumeCommandStatus.ACKNOWLEDGED.value],
-            status=HITLResumeCommandStatus.PROJECTED.value,
-            response_snapshot=route_result,
-        )
-        if projected is None:
-            raise HITLRoutingFailedError("Remote result projection remains pending")
-        return route_result
 
     async def _mark_command_aggregate_applied(
         self, interaction: dict[str, Any]

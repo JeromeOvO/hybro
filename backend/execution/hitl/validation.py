@@ -14,7 +14,6 @@ from common.dto.hitl import (
 from models.hitl import (
     HITLInteraction,
     HITLRequest,
-    HITLResumeCommand,
     HITLSupervisorEffectCommand,
 )
 
@@ -48,10 +47,7 @@ def validate_route_classifications(
         )
     if interaction.get("route_fingerprint") != snapshot.fingerprint:
         raise HITLAggregateCorruptionError("route snapshot fingerprint mismatch")
-    if (
-        snapshot.route == HITLApplicationRoute.SUPERVISOR_RUN
-        and interaction.get("orchestration_run_id") != snapshot.orchestration_run_id
-    ):
+    if interaction.get("orchestration_run_id") != snapshot.orchestration_run_id:
         raise HITLAggregateCorruptionError(
             "supervisor orchestration_run_id does not match route snapshot"
         )
@@ -142,38 +138,20 @@ def validate_command_route_consistency(
     """Require a durable command to target exactly the canonical route snapshot."""
 
     snapshot = validate_route_classifications(interaction)
-    try:
-        kind = command.get("kind")
-        command_model = (
-            HITLSupervisorEffectCommand
-            if kind == "supervisor_resume"
-            else HITLResumeCommand
+    if command.get("kind") != "supervisor_resume":
+        raise HITLAggregateCorruptionError(
+            "command kind does not match supervisor route"
         )
-        command_model.model_validate(_without_mongo_id(command))
+    try:
+        HITLSupervisorEffectCommand.model_validate(_without_mongo_id(command))
     except (TypeError, ValueError) as exc:
         raise HITLAggregateCorruptionError("command schema is invalid") from exc
     if command.get("interaction_id") != interaction.get("interaction_id"):
         raise HITLAggregateCorruptionError("command interaction target mismatch")
     if command.get("answer_request_ids") != interaction.get("request_ids"):
         raise HITLAggregateCorruptionError("command member inventory mismatch")
-    if snapshot.route == HITLApplicationRoute.SUPERVISOR_RUN:
-        if command.get("kind") != "supervisor_resume":
-            raise HITLAggregateCorruptionError(
-                "command kind does not match supervisor route"
-            )
-        if command.get("orchestration_run_id") != snapshot.orchestration_run_id:
-            raise HITLAggregateCorruptionError("supervisor command target mismatch")
-        return
-    if command.get("kind") != "a2a_resume":
-        raise HITLAggregateCorruptionError("command kind does not match A2A route")
-    target = {
-        "task_id": snapshot.task_id,
-        "context_id": snapshot.context_id,
-        "continuation_message_id": snapshot.continuation_message_id,
-        "agent_id": snapshot.agent_id,
-    }
-    if any(command.get(field) != value for field, value in target.items()):
-        raise HITLAggregateCorruptionError("A2A command target mismatch")
+    if command.get("orchestration_run_id") != snapshot.orchestration_run_id:
+        raise HITLAggregateCorruptionError("supervisor command target mismatch")
 
 
 def deterministic_interaction_id(*, event_identity: str, round_identity: str) -> str:

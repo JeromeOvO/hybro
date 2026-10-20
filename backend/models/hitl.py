@@ -270,10 +270,7 @@ class HITLInteraction(BaseModel):
             raise ValueError("application_route must match route_snapshot.route")
         if self.route_fingerprint != self.route_snapshot.fingerprint:
             raise ValueError("route_fingerprint does not match route_snapshot")
-        if (
-            self.application_route == HITLApplicationRoute.SUPERVISOR_RUN
-            and self.orchestration_run_id != self.route_snapshot.orchestration_run_id
-        ):
+        if self.orchestration_run_id != self.route_snapshot.orchestration_run_id:
             raise ValueError(
                 "supervisor orchestration_run_id must match route_snapshot"
             )
@@ -307,65 +304,6 @@ class HITLInteraction(BaseModel):
             and not self.application_claim_id
         ):
             raise ValueError("applying interaction requires an application claim")
-        return self
-
-
-class HITLResumeCommand(BaseModel):
-    """Durable journal entry for one remote continuation application."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    schema_version: Literal[3]
-    command_id: str
-    kind: Literal["a2a_resume"] = "a2a_resume"
-    interaction_id: str
-    application_revision: int = Field(ge=1)
-    task_id: str
-    context_id: str
-    continuation_message_id: str
-    agent_id: str
-    display_message_id: str | None = None
-    outbound_message_id: str
-    answer_request_ids: list[str] = Field(min_length=1)
-    answer_digest: str
-    status: HITLResumeCommandStatus = HITLResumeCommandStatus.PENDING
-    version: int = Field(default=1, ge=1)
-    claim_id: str | None = None
-    lease_expires_at: datetime | None = None
-    attempts: int = Field(default=0, ge=0)
-    inspect_attempts: int = Field(default=0, ge=0)
-    next_attempt_at: datetime | None = None
-    response_snapshot: dict | None = None
-    error_code: str | None = None
-    error_message: str | None = None
-    uncertain_since: datetime | None = None
-    aggregate_applied_at: datetime | None = None
-    created_at: datetime = Field(default_factory=utcnow)
-    updated_at: datetime = Field(default_factory=utcnow)
-
-    @model_validator(mode="after")
-    def validate_continuation(self) -> HITLResumeCommand:
-        for field_name in (
-            "task_id",
-            "context_id",
-            "continuation_message_id",
-            "agent_id",
-            "outbound_message_id",
-        ):
-            value = getattr(self, field_name)
-            if not value.strip():
-                raise ValueError(f"{field_name} must not be blank")
-            if field_name in {"task_id", "context_id"} and value.startswith(
-                ("pending-", "relay-pending-")
-            ):
-                raise ValueError(f"{field_name} must be authoritative")
-        if self.status == HITLResumeCommandStatus.DELIVERING and not self.claim_id:
-            raise ValueError("delivering command requires a claim")
-        if (
-            self.status == HITLResumeCommandStatus.DELIVERY_UNCERTAIN
-            and self.uncertain_since is None
-        ):
-            raise ValueError("delivery-uncertain command requires uncertain_since")
         return self
 
 

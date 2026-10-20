@@ -381,7 +381,7 @@ def _hitl_identity(source: str) -> dict:
         "interaction_id": "interaction-1",
         "question_index": 0,
         "question_count": 1,
-        "application_route": ("a2a_resume" if source == "agent" else "supervisor_run"),
+        "application_route": "supervisor_run",
         "public_source": source,
         "evidence_origin": source,
     }

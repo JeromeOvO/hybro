@@ -17,26 +17,22 @@ from models.hitl import (
     HITLInteraction,
     HITLInteractionStatus,
     HITLRequest,
-    HITLResumeCommand,
     HITLSupervisorEffectCommand,
 )
 
 
 def _aggregate() -> dict:
     snapshot = HITLRouteSnapshot(
-        route=HITLApplicationRoute.A2A_RESUME,
-        task_id="task-1",
-        context_id="context-1",
-        continuation_message_id="message-1",
-        agent_id="agent-1",
+        route=HITLApplicationRoute.SUPERVISOR_RUN,
+        orchestration_run_id="run-1",
     )
     return {
         "schema_version": 3,
         "interaction_id": "interaction-1",
         "room_id": "room-1",
         "user_message_id": "message-1",
-        "orchestration_run_id": None,
-        "application_route": "a2a_resume",
+        "orchestration_run_id": "run-1",
+        "application_route": "supervisor_run",
         "public_source": "agent",
         "evidence_origin": "agent",
         "route_snapshot": snapshot.model_dump(mode="python"),
@@ -66,8 +62,8 @@ def _rows() -> list[dict]:
             "question_count": 2,
             "room_id": "room-1",
             "user_message_id": "message-1",
-            "orchestration_run_id": None,
-            "application_route": "a2a_resume",
+            "orchestration_run_id": "run-1",
+            "application_route": "supervisor_run",
             "public_source": "agent",
             "evidence_origin": "agent",
             "prompt": f"Question {index + 1}?",
@@ -104,20 +100,6 @@ def test_missing_creation_inventory_and_schema_v3_fail_closed():
 
 
 def test_effect_commands_forbid_extra_authority_fields():
-    a2a = {
-        "schema_version": 3,
-        "command_id": "command-1",
-        "interaction_id": "interaction-1",
-        "application_revision": 1,
-        "task_id": "task-1",
-        "context_id": "context-1",
-        "continuation_message_id": "message-1",
-        "agent_id": "agent-1",
-        "outbound_message_id": "outbound-1",
-        "answer_request_ids": ["request-1"],
-        "answer_digest": "digest",
-        "authority_override": "untrusted",
-    }
     supervisor = {
         "schema_version": 3,
         "command_id": "command-2",
@@ -128,8 +110,6 @@ def test_effect_commands_forbid_extra_authority_fields():
         "answer_digest": "digest",
         "authority_override": "untrusted",
     }
-    with pytest.raises(ValidationError, match="Extra inputs"):
-        HITLResumeCommand.model_validate(a2a)
     with pytest.raises(ValidationError, match="Extra inputs"):
         HITLSupervisorEffectCommand.model_validate(supervisor)
 
@@ -144,9 +124,9 @@ def test_route_fingerprint_corruption_fails_closed():
 
 def test_mixed_member_target_fails_before_effect_validation():
     rows = _rows()
-    rows[1]["application_route"] = "supervisor_run"
+    rows[1]["orchestration_run_id"] = "run-other"
 
-    with pytest.raises(HITLAggregateCorruptionError, match="application_route"):
+    with pytest.raises(HITLAggregateCorruptionError, match="orchestration_run_id"):
         validate_exact_member_inventory(_aggregate(), rows)
 
 
@@ -161,13 +141,9 @@ def test_command_target_mismatch_fails_before_effect():
     command = {
         "schema_version": 3,
         "command_id": "command-1",
-        "kind": "a2a_resume",
+        "kind": "supervisor_resume",
         "interaction_id": "interaction-1",
-        "task_id": "corrupt-task",
-        "context_id": "context-1",
-        "continuation_message_id": "message-1",
-        "agent_id": "agent-1",
-        "outbound_message_id": "outbound-1",
+        "orchestration_run_id": "corrupt-run",
         "application_revision": 1,
         "answer_request_ids": ["request-1", "request-2"],
         "answer_digest": "digest",

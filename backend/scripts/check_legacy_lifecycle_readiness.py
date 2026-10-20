@@ -80,6 +80,55 @@ CHECKS = (
             "status": {"$nin": _CLOSED_INTERACTION_STATUSES},
         },
     ),
+    # Closed a2a_resume rows that a reconciler or cancellation cleanup still
+    # reads; strict HITL models reject the retired route after C2 step 5.
+    _Check(
+        name="unsettled_a2a_resume_commands",
+        gates="C2 step 5 (legacy HITL reply path)",
+        collections=("hitl_resume_commands",),
+        query={
+            "kind": "a2a_resume",
+            "$or": [
+                {"status": {"$ne": "projected"}},
+                {"aggregate_applied_at": None},
+            ],
+        },
+    ),
+    _Check(
+        name="unreconciled_terminal_a2a_resume_interactions",
+        gates="C2 step 5 (legacy HITL reply path)",
+        collections=("hitl_interactions",),
+        query={
+            "application_route": "a2a_resume",
+            "status": {
+                "$in": [
+                    HITLInteractionStatus.CANCELED.value,
+                    HITLInteractionStatus.EXPIRED.value,
+                    HITLInteractionStatus.FAILED.value,
+                ]
+            },
+            "terminal_reconciled": {"$ne": True},
+        },
+    ),
+    _Check(
+        name="unreconciled_terminal_a2a_resume_requests",
+        gates="C2 step 5 (legacy HITL reply path)",
+        collections=("hitl_requests",),
+        query={
+            "application_route": "a2a_resume",
+            "status": {"$in": ["canceled", "expired"]},
+            "cancellation_reconciled": {"$ne": True},
+        },
+    ),
+    _Check(
+        name="open_a2a_resume_requests",
+        gates="C2 step 5 (legacy HITL reply path)",
+        collections=("hitl_requests",),
+        query={
+            "application_route": "a2a_resume",
+            "status": {"$in": ["pending", "processing", "answer_recorded"]},
+        },
+    ),
     _Check(
         name="pending_continuation",
         gates="C2 step 6 (pending_continuation field)",

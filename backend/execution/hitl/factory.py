@@ -9,9 +9,6 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
     allowed = {
         "persistence",
         "delivery",
-        "agent_reply",
-        "continuation",
-        "task_notifications",
         "terminal_lifecycle",
         "lifecycle",
         "application",
@@ -36,8 +33,6 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
             raise TypeError(f"create_hitl_service got unexpected argument {name!r}")
 
     service = HITLService(
-        continuation=kwargs.get("continuation"),
-        task_notifications=kwargs.get("task_notifications"),
         terminal_lifecycle=kwargs.get("terminal_lifecycle"),
         lifecycle=kwargs.get("lifecycle"),
         application=kwargs.get("application"),
@@ -51,9 +46,6 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
     )
     service._persistence = kwargs.get("persistence")
     service._delivery = kwargs.get("delivery")
-    service._agent_reply = kwargs.get("agent_reply")
-    service._continuation = kwargs.get("continuation")
-    service._task_notifications = kwargs.get("task_notifications")
     return service
 
 

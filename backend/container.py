@@ -645,7 +645,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 A2ARuntimeConfig,
                 a2a_service,
             )
-            from a2a_adapter.task_status import coerce_task_state
             from execution.hitl.factory import create_hitl_service
 
             agent_capability_issue_repository = (
@@ -671,11 +670,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.events import (
                 emit_room_processing_status as emit_execution_room_processing_status,
             )
-            from execution.hitl.adapters import (
-                A2AHITLContinuationAdapter,
-                HITLDeliveryAdapter,
-                HITLTaskNotificationAdapter,
-            )
+            from execution.hitl.adapters import HITLDeliveryAdapter
             from execution.run_command_handler import (
                 RunCommandHandler,
                 run_event_sse_enabled,
@@ -707,11 +702,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     _execution_repos["run_event_repository"]
                 )
             )
-
-            async def notify_task_update_with_string_state(**kwargs):
-                state = kwargs.get("state")
-                kwargs["state"] = coerce_task_state(state)
-                return await notify_task_update(**kwargs)
 
             run_lifecycle = RunLifecycleAdapter(
                 command_handler=run_command_handler,
@@ -1290,11 +1280,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             hitl_manager = create_hitl_service(
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
-                agent_reply=A2AHITLContinuationAdapter(a2a_service),
-                continuation=A2AHITLContinuationAdapter(a2a_service),
-                task_notifications=HITLTaskNotificationAdapter(
-                    notify_task_update_with_string_state
-                ),
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
                     run_lifecycle,
                     canonical_terminalizer=terminalize_canonical_hitl_run_port,

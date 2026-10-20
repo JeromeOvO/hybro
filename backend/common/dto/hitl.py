@@ -70,7 +70,6 @@ class HITLInteractionKind(StrEnum):
 
 class HITLApplicationRoute(StrEnum):
     SUPERVISOR_RUN = "supervisor_run"
-    A2A_RESUME = "a2a_resume"
 
 
 class HITLPublicSource(StrEnum):
@@ -372,29 +371,10 @@ class HITLRouteSnapshot(_HITLContract):
             "continuation_message_id",
             "agent_id",
         )
-        if self.route == HITLApplicationRoute.SUPERVISOR_RUN:
-            if self.orchestration_run_id is None:
-                raise ValueError("supervisor_run requires orchestration_run_id")
-            if any(getattr(self, field_name) is not None for field_name in a2a_fields):
-                raise ValueError("supervisor_run must not include an A2A target")
-            return self
-
-        if self.orchestration_run_id is not None:
-            raise ValueError("a2a_resume must not include orchestration_run_id")
-        required_a2a_fields = (
-            "task_id",
-            "context_id",
-            "continuation_message_id",
-            "agent_id",
-        )
-        for field_name in required_a2a_fields:
-            value = getattr(self, field_name)
-            if value is None:
-                raise ValueError(f"a2a_resume requires {field_name}")
-            if _is_provisional_identifier(value):
-                raise ValueError(
-                    f"{field_name} must be authoritative and non-provisional"
-                )
+        if self.orchestration_run_id is None:
+            raise ValueError("supervisor_run requires orchestration_run_id")
+        if any(getattr(self, field_name) is not None for field_name in a2a_fields):
+            raise ValueError("supervisor_run must not include an A2A target")
         return self
 
     @property

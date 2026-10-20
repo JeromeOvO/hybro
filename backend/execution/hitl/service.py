@@ -19,11 +19,6 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from common.a2a_constants import (
-    FAILURE_STATES,
-    UNSUPPORTED_INTERACTION_CODE,
-    UNSUPPORTED_INTERACTION_MESSAGE,
-)
 from common.dto import (
     HITLApplicationRoute,
     HITLEvidenceOrigin,
@@ -32,7 +27,6 @@ from common.dto import (
     HITLResolvedEvent,
     HITLRouteSnapshot,
 )
-from common.dto.hitl import A2AInteractionSpec, HITLAnswerKind, HITLInteractionKind
 from common.public_prompt import (
     GENERIC_AGENT_INPUT_PROMPT,
     concrete_agent_input_prompt,
@@ -52,7 +46,6 @@ from execution.hitl.exceptions import (
 )
 from execution.hitl.validation import (
     HITLAggregateCorruptionError,
-    deterministic_interaction_id,
     deterministic_request_id,
     validate_exact_member_inventory,
     validate_route_classifications,
@@ -69,12 +62,9 @@ from models.hitl import (
 
 if TYPE_CHECKING:
     from execution.ports import (
-        HITLAgentReplyPort,
-        HITLContinuationPort,
         HITLDeliveryPort,
         HITLLifecyclePersistencePort,
         HITLPersistencePort,
-        HITLTaskNotificationPort,
         HITLTerminalLifecyclePort,
     )
 
@@ -95,27 +85,8 @@ def _room_write_fenced(method):
     return fenced
 
 
-def _short_prompt_hash(prompt: str | None) -> str:
-    prompt_hash = _prompt_hash(prompt)
-    if prompt_hash is None:
-        return "-"
-    return prompt_hash[:12]
-
-
 def _normalized_prompt(prompt: str | None) -> str:
     return " ".join(str(prompt or "").split()).strip().casefold()
-
-
-def _prompt_type_for_typed_question(question: Any) -> HITLPromptType:
-    if question.interaction_kind == HITLInteractionKind.AUTH_CHALLENGE:
-        return HITLPromptType.AUTHENTICATION
-    if question.interaction_kind == HITLInteractionKind.POLICY_DECISION:
-        return HITLPromptType.APPROVAL
-    return {
-        HITLAnswerKind.SINGLE_CHOICE: HITLPromptType.SINGLE_CHOICE,
-        HITLAnswerKind.MULTI_CHOICE: HITLPromptType.MULTI_CHOICE,
-        HITLAnswerKind.CONFIRMATION: HITLPromptType.CONFIRMATION,
-    }.get(question.answer_kind, HITLPromptType.TEXT)
 
 
 def _prompt_hash(prompt: str | None) -> str | None:
@@ -172,8 +143,6 @@ class HITLService:
     def __init__(
         self,
         *,
-        continuation=None,
-        task_notifications=None,
         terminal_lifecycle=None,
         lifecycle=None,
         application=None,
@@ -187,9 +156,6 @@ class HITLService:
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
-        self._agent_reply: HITLAgentReplyPort | None = None
-        self._continuation: HITLContinuationPort | None = continuation
-        self._task_notifications: HITLTaskNotificationPort | None = task_notifications
         self._terminal_lifecycle: HITLTerminalLifecyclePort | None = terminal_lifecycle
         self._lifecycle: HITLLifecyclePersistencePort | None = lifecycle
         self._application = application
@@ -215,24 +181,6 @@ class HITLService:
         if self._delivery is not None:
             return self._delivery
         raise RuntimeError("HITL delivery port has not been bound")
-
-    @property
-    def agent_reply(self):
-        if self._agent_reply is None:
-            raise RuntimeError("HITL agent reply port has not been bound")
-        return self._agent_reply
-
-    @property
-    def continuation(self):
-        if self._continuation is None:
-            raise RuntimeError("HITL continuation port has not been bound")
-        return self._continuation
-
-    @property
-    def task_notifications(self):
-        if self._task_notifications is None:
-            raise RuntimeError("HITL task notification port has not been bound")
-        return self._task_notifications
 
     # ------------------------------------------------------------------
     # Create HITL request
@@ -900,330 +848,6 @@ class HITLService:
             )
             return False
         return True
-
-    # ------------------------------------------------------------------
-    # Agent response routing
-    # ------------------------------------------------------------------
-
-    async def _handle_agent_response(
-        self,
-        request: HITLRequest,
-        user_input: str,
-        *,
-        outbound_message_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Send user's reply to the waiting A2A agent.
-
-        For push-notification agents the reply is fire-and-forget: the agent
-        will POST a webhook callback that triggers ``resume_queue_from_continuation``.
-
-        For blocking agents (non-push OR push-capable but WEBHOOK_BASE_URL
-        unset) the reply returns synchronously.  We use the response directly
-        (not a DB re-read) and trigger queue resume manually.
-
-        If the blocking reply itself returns ``input_required`` again, we do
-        NOT resume — the agent needs another round of user input, which the
-        next HITL cycle will handle.
-        """
-        # Reset last_notified_state so multi-round input_required works
-        await self.persistence.reset_last_notified_state(
-            request.continuation_message_id
-        )
-
-        reply_result = await self.agent_reply.reply_to_task(
-            message_id=request.continuation_message_id,
-            task_id=request.a2a_task_id,
-            context_id=request.a2a_context_id,
-            user_input=user_input,
-            outbound_message_id=outbound_message_id,
-        )
-
-        # reply_to_task returns {"blocking": bool, "task_state": str|None,
-        # "response_text": str|None}.  When blocking=True the response is
-        # already complete — use it directly instead of re-reading from DB.
-        was_blocking = reply_result.get("blocking", False)
-        raw_task_state = reply_result.get("task_state")
-        authoritative_task_id = reply_result.get("task_id") or request.a2a_task_id
-        authoritative_context_id = (
-            reply_result.get("context_id") or request.a2a_context_id
-        )
-        if not was_blocking and raw_task_state not in {
-            "failed",
-            "canceled",
-            "rejected",
-        }:
-            # Push-notification mode — agent will POST webhook → resume_queue_from_continuation
-            return {
-                "blocking": False,
-                "resume_execution": False,
-                "a2a_task_id": authoritative_task_id,
-                "a2a_context_id": authoritative_context_id,
-            }
-
-        response_text = reply_result.get("response_text") or ""
-        task_state = (
-            str(raw_task_state).strip().lower().replace("_", "-")
-            if raw_task_state
-            else ("completed" if response_text.strip() else "input-required")
-        )
-
-        # If the agent asked for more input, don't resume the queue — create
-        # a new HITL request so the frontend has a pending record for the next
-        # answer.  Without this, multi-round blocking HITL conversations get
-        # stuck after the second prompt.
-        if task_state in ("input-required", "auth-required", "policy-required"):
-            try:
-                interaction_spec = A2AInteractionSpec.model_validate(
-                    reply_result.get("_interaction_spec")
-                )
-            except (TypeError, ValueError):
-                return {
-                    "blocking": True,
-                    "task_state": "failed",
-                    "response_text": UNSUPPORTED_INTERACTION_MESSAGE,
-                    "resume_execution": True,
-                    "routing_failed": True,
-                    "error_code": UNSUPPORTED_INTERACTION_CODE,
-                    "a2a_task_id": authoritative_task_id,
-                    "a2a_context_id": authoritative_context_id,
-                }
-            public_response_text = "\n\n".join(
-                question.prompt for question in interaction_spec.questions
-            )
-            response_prompt_hash = _prompt_hash(public_response_text)
-            same_raw_agent_prompt = bool(
-                request.agent_prompt_hash
-                and response_prompt_hash
-                and request.agent_prompt_hash == response_prompt_hash
-            )
-            same_concrete_public_prompt = bool(
-                request.agent_prompt_hash is None
-                and request.prompt != _GENERIC_AGENT_INPUT_PROMPT
-                and public_response_text != _GENERIC_AGENT_INPUT_PROMPT
-                and _normalized_prompt(public_response_text)
-                == _normalized_prompt(request.prompt)
-            )
-            if (
-                request.orchestration_run_id
-                and task_state == "input-required"
-                and (same_raw_agent_prompt or same_concrete_public_prompt)
-            ):
-                logger.warning(
-                    "hitl_agent_no_progress message_id=%s task_id=%s "
-                    "prompt_hash=%s; returning control to orchestrator",
-                    request.continuation_message_id,
-                    request.a2a_task_id,
-                    _short_prompt_hash(public_response_text),
-                )
-                return {
-                    "blocking": True,
-                    "task_state": task_state,
-                    "response_text": public_response_text,
-                    "resume_execution": True,
-                    "agent_no_progress": True,
-                    "agent_no_progress_code": "agent_repeated_input_required",
-                    "agent_id": request.agent_id,
-                    "agent_name": request.agent_name,
-                    "display_message_id": request.display_message_id,
-                    "continuation_message_id": request.continuation_message_id,
-                    "a2a_task_id": authoritative_task_id,
-                    "a2a_context_id": authoritative_context_id,
-                }
-            if request.orchestration_run_id:
-                return {
-                    "blocking": True,
-                    "task_state": task_state,
-                    "response_text": "Agent requested additional input.",
-                    "resume_execution": True,
-                    "agent_input_required_private": True,
-                    "agent_id": request.agent_id,
-                    "agent_name": request.agent_name,
-                    "display_message_id": request.display_message_id,
-                    "continuation_message_id": request.continuation_message_id,
-                    "a2a_task_id": authoritative_task_id,
-                    "a2a_context_id": authoritative_context_id,
-                }
-            logger.info(
-                "hitl: direct continuation returned typed input_required for %s — "
-                "creating the next interaction",
-                request.continuation_message_id,
-            )
-            followup_interaction_id = deterministic_interaction_id(
-                event_identity=request.continuation_message_id or request.request_id,
-                round_identity=(
-                    f"{request.interaction_id}:followup:{interaction_spec.interaction_id}"
-                ),
-            )
-            new_requests = await self.request_interaction(
-                room_id=request.room_id,
-                user_message_id=request.user_message_id,
-                interaction_id=followup_interaction_id,
-                application_route=HITLApplicationRoute.A2A_RESUME,
-                public_source=HITLPublicSource.AGENT,
-                evidence_origin=HITLEvidenceOrigin.AGENT,
-                route_snapshot=HITLRouteSnapshot(
-                    route=HITLApplicationRoute.A2A_RESUME,
-                    task_id=authoritative_task_id,
-                    context_id=authoritative_context_id,
-                    continuation_message_id=request.continuation_message_id or "",
-                    agent_id=request.agent_id or "",
-                ),
-                questions=[
-                    {
-                        "prompt": question.prompt,
-                        "prompt_type": _prompt_type_for_typed_question(question),
-                        "choices": list(question.choices) if question.choices else None,
-                        "agent_id": request.agent_id,
-                        "agent_name": request.agent_name,
-                        "continuation_message_id": request.continuation_message_id,
-                        "display_message_id": request.display_message_id,
-                    }
-                    for question in interaction_spec.questions
-                ],
-                orchestration_run_id=request.orchestration_run_id,
-            )
-            if new_requests is None:
-                logger.warning(
-                    "hitl: request_interaction failed for %s — keeping original "
-                    "HITL retryable",
-                    request.continuation_message_id,
-                )
-                raise HITLRoutingFailedError(
-                    "failed to create follow-up HITL request; "
-                    "the original HITL request remains pending for retry"
-                )
-            if not new_requests or len(new_requests) != len(interaction_spec.questions):
-                raise HITLRoutingFailedError(
-                    "failed to materialize the complete follow-up HITL interaction"
-                )
-            new_request = new_requests[0]
-            return {
-                "blocking": True,
-                "task_state": task_state,
-                "response_text": response_text,
-                "resume_execution": False,
-                "followup_hitl_request_id": new_request.request_id,
-                "followup_prompt": new_request.prompt,
-                "followup_prompt_type": getattr(
-                    new_request.prompt_type,
-                    "value",
-                    new_request.prompt_type,
-                ),
-                "agent_id": new_request.agent_id,
-                "agent_name": new_request.agent_name,
-                "display_message_id": new_request.display_message_id,
-                "continuation_message_id": new_request.continuation_message_id,
-                "a2a_task_id": new_request.a2a_task_id,
-                "a2a_context_id": new_request.a2a_context_id,
-                "requires_auth": task_state == "auth-required",
-                "requires_policy": (
-                    task_state == "policy-required"
-                    or bool(reply_result.get("requires_policy"))
-                    or bool(reply_result.get("policy_required"))
-                ),
-            }
-
-        # Use the response text from the synchronous reply (authoritative,
-        # no stale-DB risk).
-        task_result_text = reply_result.get("response_text")
-
-        # reply_to_task already persisted the full task + message_text
-        # atomically via update_task_on_message.  We only need to emit the
-        # SSE notification so the frontend shows the updated message.
-        is_failure = task_state in ("failed", "canceled", "rejected")
-        effective_state = task_state or "completed"
-        if request.display_message_id:
-            # Retrieve the agent message to get user_id for notification
-            agent_msg = await self.persistence.get_room_agent_message_by_message_id(
-                request.display_message_id
-            )
-            if agent_msg:
-                state_map = {
-                    "completed": "completed",
-                    "failed": "failed",
-                    "canceled": "canceled",
-                    "rejected": "rejected",
-                }
-                notify_state = state_map.get(effective_state, "completed")
-                await self.task_notifications.notify_task_update(
-                    request.display_message_id,
-                    notify_state,
-                    room_id=request.room_id,
-                    user_id=agent_msg.user_id or "",
-                )
-
-        logger.info(
-            "hitl: blocking reply completed (state=%s) — triggering manual "
-            "queue resume for %s",
-            task_state,
-            request.continuation_message_id,
-        )
-        if request.orchestration_run_id:
-            return {
-                "blocking": True,
-                "task_state": task_state,
-                "response_text": task_result_text,
-                "resume_execution": True,
-                "a2a_task_id": authoritative_task_id,
-                "a2a_context_id": authoritative_context_id,
-            }
-        resumed = await self.continuation.resume_queue_from_continuation(
-            request.continuation_message_id,
-            task_result_text=task_result_text,
-            failed=is_failure,
-        )
-        if not resumed:
-            raise RuntimeError(
-                f"Failed to resume queue for message {request.continuation_message_id} "
-                "— continuation may have been lost or room lock timed out"
-            )
-        return {
-            "blocking": True,
-            "task_state": task_state,
-            "response_text": task_result_text,
-            "resume_execution": False,
-            "queue_resume_triggered": True,
-            "a2a_task_id": authoritative_task_id,
-            "a2a_context_id": authoritative_context_id,
-        }
-
-    async def _project_reconciled_agent_response(
-        self,
-        request: HITLRequest,
-        response_snapshot: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Finish local continuation effects after GetTask confirms delivery.
-
-        The remote send must never be repeated. Queue continuation is destructive
-        but idempotent at this boundary: a missing continuation means another
-        recovery worker already consumed it.
-        """
-
-        projected = dict(response_snapshot)
-        task_state = str(projected.get("task_state") or "completed")
-        task_result_text = projected.get("response_text")
-        if not isinstance(task_result_text, str):
-            task_result_text = ""
-        failed = task_state in {state.value for state in FAILURE_STATES}
-        if request.orchestration_run_id:
-            projected["resume_execution"] = True
-            return projected
-        continuation_message_id = request.continuation_message_id
-        if not continuation_message_id:
-            raise RuntimeError("Reconciled interaction has no continuation identity")
-        resumed = await self.continuation.resume_queue_from_continuation(
-            continuation_message_id,
-            task_result_text=task_result_text,
-            failed=failed,
-        )
-        if not resumed and await self.continuation.has_pending_queue_continuation(
-            continuation_message_id
-        ):
-            raise RuntimeError("Queue continuation remains pending after resume")
-        projected["resume_execution"] = False
-        projected["queue_resume_triggered"] = bool(resumed)
-        projected["queue_resume_already_completed"] = not resumed
-        return projected
 
     # ------------------------------------------------------------------
     # Supervisor response routing

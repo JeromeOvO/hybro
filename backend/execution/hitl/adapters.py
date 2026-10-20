@@ -21,47 +21,6 @@ class HITLDeliveryAdapter:
         await self._event_publisher.emit(event)
 
 
-class A2AHITLContinuationAdapter:
-    def __init__(self, agent_reply_transport) -> None:
-        self._agent_reply_transport = agent_reply_transport
-
-    async def reply_to_task(
-        self,
-        *,
-        message_id: str,
-        task_id: str,
-        context_id: str,
-        user_input: str,
-        outbound_message_id: str | None = None,
-    ) -> dict[str, Any]:
-        kwargs = {
-            "message_id": message_id,
-            "task_id": task_id,
-            "context_id": context_id,
-            "user_input": user_input,
-        }
-        if outbound_message_id is not None:
-            kwargs["outbound_message_id"] = outbound_message_id
-        return await self._agent_reply_transport.reply_to_task(**kwargs)
-
-    async def resume_queue_from_continuation(
-        self,
-        continuation_message_id: str,
-        *,
-        task_result_text: str | None = None,
-        failed: bool = False,
-    ) -> bool:
-        # The legacy queue executor is retired; there is no direct continuation
-        # left to resume. Legacy-owned Runs have drained before this phase.
-        return False
-
-    async def has_pending_queue_continuation(
-        self,
-        continuation_message_id: str,
-    ) -> bool:
-        return False
-
-
 class HITLTerminalLifecycleAdapter:
     """Converge public run state after HITL termination."""
 
@@ -103,30 +62,8 @@ class HITLTerminalLifecycleAdapter:
         )
 
 
-class HITLTaskNotificationAdapter:
-    def __init__(self, notify_task_update) -> None:
-        self._notify_task_update = notify_task_update
-
-    async def notify_task_update(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        room_id: str,
-        user_id: str,
-    ) -> bool:
-        return await self._notify_task_update(
-            message_id=message_id,
-            state=state,
-            room_id=room_id,
-            user_id=user_id,
-        )
-
-
 __all__ = [
-    "A2AHITLContinuationAdapter",
     "HITLPersistenceAdapter",
     "HITLTerminalLifecycleAdapter",
     "HITLDeliveryAdapter",
-    "HITLTaskNotificationAdapter",
 ]
