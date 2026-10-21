@@ -18,12 +18,14 @@ from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 
 class _ConversationStores:
-    """Serve message and room calls from the conversation stores, the rest
-    from what remains of the runtime store aggregate."""
+    """Serve message and room calls from the conversation stores, agent calls
+    from the agent store, the rest from what remains of the runtime store
+    aggregate."""
 
     def __init__(
         self, *, mongo, room_repository, message_repository, agent_repository
     ) -> None:
+        from agent.repository import AgentRuntimeStore
         from conversation.repository import (
             ConversationMessageStore,
             ConversationRoomStore,
@@ -37,11 +39,15 @@ class _ConversationStores:
                 message_repository=message_repository,
             ),
             ConversationRoomStore(room_repository=room_repository),
+            AgentRuntimeStore(
+                agent_groups=mongo.collection("agent_groups"),
+                agents=mongo.collection("agents"),
+                agent_repository=agent_repository,
+            ),
             RuntimeRepositoryStore(
                 mongo=mongo,
                 room_repository=room_repository,
                 message_repository=message_repository,
-                agent_repository=agent_repository,
             ),
         )
 

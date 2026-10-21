@@ -55,15 +55,15 @@ def test_message_document_helpers_live_in_conversation():
         assert not hasattr(dal_parsing, name), name
 
 
-def test_agent_room_part_keeps_only_agent_methods():
-    from dal.runtime_store.parts import AgentRoomRuntimeStorePart
+def test_agent_runtime_store_has_no_room_methods():
+    from agent.repository import AgentRuntimeStore
 
     for name in (
         "get_room_by_room_id",
         "get_rooms_by_room_owner_id",
         "update_room_by_room_id",
     ):
-        assert not hasattr(AgentRoomRuntimeStorePart, name), name
+        assert not hasattr(AgentRuntimeStore, name), name
 
 
 def test_runtime_repository_store_no_longer_serves_conversation_data():

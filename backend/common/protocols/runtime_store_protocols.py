@@ -4,39 +4,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from common.dto import (
-    RuntimeAgentGroup,
-    RuntimeAgentRecord,
-    RuntimeRoomMemory,
-)
-
-
-@runtime_checkable
-class RuntimeAgentRoomStore(Protocol):
-    async def add_agent_group(self, agent_group: RuntimeAgentGroup) -> bool: ...
-    async def get_agent_groups_by_owner(
-        self, owner_id: str
-    ) -> list[RuntimeAgentGroup]: ...
-    async def get_agent_group_by_id(
-        self, group_id: str
-    ) -> RuntimeAgentGroup | None: ...
-    async def update_agent_group(self, group_id: str, updates: dict) -> bool: ...
-    async def delete_agent_group(self, group_id: str) -> bool: ...
-    async def get_all_active_agents(
-        self, user_id: str | None = None
-    ) -> list[RuntimeAgentRecord]: ...
-    async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None: ...
-    async def get_agent_by_agent_id(
-        self, agent_id: str
-    ) -> RuntimeAgentRecord | None: ...
-    async def get_agents_with_conditions(
-        self,
-        query: dict[str, Any] | None = None,
-        limit: int = 0,
-    ) -> list[RuntimeAgentRecord]: ...
-    async def increment_agent_call_count(
-        self, agent_id: str, *, success: bool
-    ) -> None: ...
+from common.dto import RuntimeRoomMemory
 
 
 @runtime_checkable

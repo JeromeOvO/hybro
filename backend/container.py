@@ -757,9 +757,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             runtime_store = create_runtime_repository_store(
                 mongo=mongo_dal,
                 room_deps=_room_deps,
-                agent_deps=_agent_deps,
             )
-            agent_room_store = runtime_store.agent_room
+            from agent.repository import AgentRuntimeStore
+
+            agent_runtime_store = AgentRuntimeStore(
+                agent_groups=mongo_dal.collection("agent_groups"),
+                agents=mongo_dal.collection("agents"),
+                agent_repository=_agent_deps.agent_repository,
+            )
             from conversation.repository import (
                 ClientRequestIdStore,
                 ConversationMessageStore,
@@ -844,9 +849,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             room_runtime_store = SimpleNamespace(
                 add_room_agent_message=message_store.add_room_agent_message,
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
-                get_all_active_agents=agent_room_store.get_all_active_agents,
+                get_agent_by_agent_id=agent_runtime_store.get_agent_by_agent_id,
+                get_agent_group_by_id=agent_runtime_store.get_agent_group_by_id,
+                get_all_active_agents=agent_runtime_store.get_all_active_agents,
                 get_room_by_room_id=room_store.get_room_by_room_id,
                 get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
                 get_room_user_message_by_message_id=(
@@ -857,8 +862,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 ),
             )
 
-            membership_source.bind_store(agent_room_store)
-            a2a_service.bind_call_counter(agent_room_store)
+            membership_source.bind_store(agent_runtime_store)
+            a2a_service.bind_call_counter(agent_runtime_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=client_request_id_store,
             )
@@ -1421,7 +1426,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_matcher=_agent_deps.agent_matcher,
                 capability_issue_service=agent_capability_issue_service,
                 agent_liveness_checker=agent_liveness_checker,
-                agent_group_store=agent_room_store,
+                agent_group_store=agent_runtime_store,
                 file_storage=file_storage,
                 room_ownership_reader=_room_deps.room_registry,
                 hitl_manager=_execution_deps.hitl_manager,
@@ -1810,14 +1815,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 return list((room.room_agent_set or {}).keys()) if room else []
 
             async def _list_group_agent_ids(group_id: str) -> list[str]:
-                group = await agent_room_store.get_agent_group_by_id(group_id)
+                group = await agent_runtime_store.get_agent_group_by_id(group_id)
                 return list(getattr(group, "agents", []) or [])
 
             async def _list_all_active_agent_ids(
                 user_id: str | None = None,
             ) -> list[str]:
                 # Same visibility-filtered listing the all_agents scope uses.
-                agents = await agent_room_store.get_all_active_agents(user_id)
+                agents = await agent_runtime_store.get_all_active_agents(user_id)
                 return [agent.agent_id for agent in agents or []]
 
             # PDF projection reuses the attachment projection service;
@@ -3306,7 +3311,6 @@ def create_runtime_repository_store(
     *,
     mongo: MongoDAL,
     room_deps: RoomDeps,
-    agent_deps: AgentDeps,
 ) -> RuntimeRepositoryStore:
     from dal.runtime_store import RuntimeRepositoryStore
 
@@ -3314,5 +3318,4 @@ def create_runtime_repository_store(
         mongo=mongo,
         room_repository=room_deps.room_repository,
         message_repository=room_deps.message_repository,
-        agent_repository=agent_deps.agent_repository,
     )

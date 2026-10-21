@@ -4,44 +4,25 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
-from common.dto import (
-    RuntimeAgentGroup,
-    RuntimeAgentRecord,
-    RuntimeRoomMemory,
-)
+from common.dto import RuntimeRoomMemory
 from common.protocols import (
-    AgentRepository,
     MessageRepository,
     MongoDAL,
     RoomRepository,
 )
 from common.utils.logger import get_logger
-from dal.runtime_store.contracts import (
-    agent_group_to_runtime,
-    agent_to_runtime,
-    room_memory_to_runtime,
-    runtime_agent_groups,
-    runtime_agents,
-    runtime_to_agent_group,
-)
+from dal.runtime_store.contracts import room_memory_to_runtime
 from dal.runtime_store.parts import (
-    AgentRoomRuntimeStorePart,
     HITLLifecycleRuntimeStorePart,
     HITLRuntimeStorePart,
     MemoryRuntimeStorePart,
 )
-from dal.runtime_store.parts.parsing import (
-    _safe_parse_agent,
-    _safe_parse_agent_group,
-    _safe_parse_room_memory,
-)
+from dal.runtime_store.parts.parsing import _safe_parse_room_memory
 
 logger = get_logger(__name__)
 
 __all__ = [
     "RuntimeRepositoryStore",
-    "_safe_parse_agent",
-    "_safe_parse_agent_group",
     "_safe_parse_room_memory",
 ]
 
@@ -55,10 +36,7 @@ class RuntimeRepositoryStore:
         mongo: MongoDAL,
         room_repository: RoomRepository,
         message_repository: MessageRepository,
-        agent_repository: AgentRepository,
     ) -> None:
-        self._agent_groups = mongo.collection("agent_groups")
-        self._agents = mongo.collection("agents")
         self._room_memories = mongo.collection("room_memories")
         self._room_agent_messages = mongo.collection("room_agent_messages")
         self._room_user_messages = mongo.collection("room_user_messages")
@@ -67,12 +45,6 @@ class RuntimeRepositoryStore:
         self._hitl_resume_commands = mongo.collection("hitl_resume_commands")
         self._room_repository = room_repository
         self._message_repository = message_repository
-        self._agent_repository = agent_repository
-        self._agent_room_part = AgentRoomRuntimeStorePart(
-            agent_groups=self._agent_groups,
-            agents=self._agents,
-            agent_repository=self._agent_repository,
-        )
         self._hitl_part = HITLRuntimeStorePart(
             hitl_requests=self._hitl_requests,
             room_agent_messages=self._room_agent_messages,
@@ -87,10 +59,6 @@ class RuntimeRepositoryStore:
             room_memories=self._room_memories,
             room_repository=self._room_repository,
         )
-
-    @property
-    def agent_room(self) -> AgentRoomRuntimeStorePart:
-        return self._agent_room_part
 
     @property
     def hitl(self) -> HITLRuntimeStorePart:
@@ -131,52 +99,6 @@ class RuntimeRepositoryStore:
         return MemoryRuntimeStorePart(
             room_memories=getattr(self, "_room_memories", None),
             room_repository=getattr(self, "_room_repository", None),
-        )
-
-    async def add_agent_group(self, agent_group: RuntimeAgentGroup) -> bool:
-        return await self.agent_room.add_agent_group(
-            runtime_to_agent_group(agent_group)
-        )
-
-    async def get_agent_groups_by_owner(self, owner_id: str) -> list[RuntimeAgentGroup]:
-        return runtime_agent_groups(
-            await self.agent_room.get_agent_groups_by_owner(owner_id)
-        )
-
-    async def get_agent_group_by_id(self, group_id: str) -> RuntimeAgentGroup | None:
-        agent_group = await self.agent_room.get_agent_group_by_id(group_id)
-        return agent_group_to_runtime(agent_group) if agent_group is not None else None
-
-    async def update_agent_group(self, group_id: str, updates: dict) -> bool:
-        return await self.agent_room.update_agent_group(group_id, updates)
-
-    async def delete_agent_group(self, group_id: str) -> bool:
-        return await self.agent_room.delete_agent_group(group_id)
-
-    async def get_all_active_agents(
-        self, user_id: str | None = None
-    ) -> list[RuntimeAgentRecord]:
-        return runtime_agents(await self.agent_room.get_all_active_agents(user_id))
-
-    async def get_agent_name_by_agent_id(self, agent_id: str) -> str | None:
-        return await self.agent_room.get_agent_name_by_agent_id(agent_id)
-
-    async def get_agent_by_agent_id(self, agent_id: str) -> RuntimeAgentRecord | None:
-        agent = await self.agent_room.get_agent_by_agent_id(agent_id)
-        return agent_to_runtime(agent) if agent is not None else None
-
-    async def get_agents_with_conditions(
-        self,
-        query: dict[str, Any] | None = None,
-        limit: int = 0,
-    ) -> list[RuntimeAgentRecord]:
-        return runtime_agents(
-            await self.agent_room.get_agents_with_conditions(query, limit)
-        )
-
-    async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
-        return await self.agent_room.increment_agent_call_count(
-            agent_id, success=success
         )
 
     async def get_room_memory_by_room_id(

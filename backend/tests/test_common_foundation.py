@@ -742,18 +742,6 @@ def test_protocol_methods_match_design_doc():
             "get_by_id",
             "insert",
         },
-        protocols.RuntimeAgentRoomStore: {
-            "add_agent_group",
-            "delete_agent_group",
-            "get_agent_by_agent_id",
-            "get_agent_group_by_id",
-            "get_agent_groups_by_owner",
-            "get_agent_name_by_agent_id",
-            "get_agents_with_conditions",
-            "get_all_active_agents",
-            "increment_agent_call_count",
-            "update_agent_group",
-        },
         protocols.RuntimeHITLLifecycleStore: {
             "attach_interaction_request",
             "claim_interaction_application",

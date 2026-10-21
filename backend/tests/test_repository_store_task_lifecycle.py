@@ -116,7 +116,6 @@ class _Stores:
                 mongo=mongo,
                 room_repository=object(),
                 message_repository=object(),
-                agent_repository=object(),
             ),
         )
 

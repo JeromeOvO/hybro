@@ -1094,6 +1094,10 @@ compatibility facades.
   agent lifecycle under the local discovery service.
 
 Mongo persistence is implemented by `agent.repository.mongo.AgentMongoRepository`.
+`agent.repository.AgentRuntimeStore` owns the `agent_groups` collection (saved
+group CRUD) and the runtime agent reads used by room membership, mention
+resolution, and call counting; `container.py` constructs it directly over the
+`agent_groups` and `agents` collections and the agent repository.
 Route-facing compatibility, legacy request/response translation, resolver
 selection, health/liveness, capability-issue exclusion, and inspection workflows
 now live under `agent/`. API gateway dependencies receive Agent-owned protocol

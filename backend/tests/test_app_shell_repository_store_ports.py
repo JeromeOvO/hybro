@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import get_type_hints
 
 from common.protocols import (
-    RuntimeAgentRoomStore,
     RuntimeHITLStore,
     RuntimeMemoryStore,
 )
@@ -16,7 +15,6 @@ from common.protocols import (
 def test_runtime_store_protocols_are_exported():
     import common.protocols as protocols
 
-    assert protocols.RuntimeAgentRoomStore is RuntimeAgentRoomStore
     assert protocols.RuntimeHITLStore is RuntimeHITLStore
     assert protocols.RuntimeMemoryStore is RuntimeMemoryStore
 
@@ -26,7 +24,6 @@ def test_runtime_repository_store_declares_runtime_protocol_surface():
 
     store = object.__new__(RuntimeRepositoryStore)
 
-    assert isinstance(store, RuntimeAgentRoomStore)
     assert isinstance(store, RuntimeHITLStore)
     assert isinstance(store, RuntimeMemoryStore)
 
@@ -58,14 +55,12 @@ def test_runtime_store_protocols_do_not_import_legacy_models():
 
 def test_runtime_store_protocol_signatures_match_current_store_surface():
     from common.protocols.runtime_store_protocols import (
-        RuntimeAgentRoomStore,
         RuntimeHITLStore,
         RuntimeMemoryStore,
     )
     from dal.runtime_store import RuntimeRepositoryStore
 
     protocol_types = [
-        RuntimeAgentRoomStore,
         RuntimeHITLStore,
         RuntimeMemoryStore,
     ]
@@ -80,11 +75,11 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
 
 
 def test_runtime_store_protocol_type_hints_are_resolvable():
-    from common.dto import RuntimeAgentGroup
+    from common.dto import RuntimeRoomMemory
 
-    agent_group_hints = get_type_hints(RuntimeAgentRoomStore.add_agent_group)
+    memory_hints = get_type_hints(RuntimeMemoryStore.get_room_memory_by_room_id)
 
-    assert agent_group_hints["agent_group"] is RuntimeAgentGroup
+    assert memory_hints["return"] == RuntimeRoomMemory | None
 
 
 def test_protocol_import_tolerates_json_log_format_without_creating_log_file(
@@ -96,8 +91,8 @@ def test_protocol_import_tolerates_json_log_format_without_creating_log_file(
             sys.executable,
             "-c",
             (
-                "from common.protocols import RuntimeAgentRoomStore; "
-                "print(RuntimeAgentRoomStore.__name__)"
+                "from common.protocols import RuntimeHITLStore; "
+                "print(RuntimeHITLStore.__name__)"
             ),
         ],
         check=False,
@@ -107,7 +102,7 @@ def test_protocol_import_tolerates_json_log_format_without_creating_log_file(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "RuntimeAgentRoomStore" in result.stdout
+    assert "RuntimeHITLStore" in result.stdout
     assert not legacy_log_path.exists()
 
 
@@ -126,7 +121,6 @@ def _make_runtime_store():
         mongo=_FakeMongo(),
         room_repository=object(),
         message_repository=object(),
-        agent_repository=object(),
     )
 
 
@@ -140,18 +134,9 @@ def test_container_runtime_repository_store_factory_resolves_runtime_export():
             room_repository=object(),
             message_repository=object(),
         ),
-        agent_deps=SimpleNamespace(agent_repository=object()),
     )
 
     assert isinstance(store, RuntimeRepositoryStore)
-
-
-def test_runtime_store_wires_agent_room_part():
-    from dal.runtime_store.parts.agent_room_store import AgentRoomRuntimeStorePart
-
-    store = _make_runtime_store()
-
-    assert isinstance(store.agent_room, AgentRoomRuntimeStorePart)
 
 
 def test_runtime_store_wires_hitl_part():
@@ -172,14 +157,12 @@ def test_runtime_store_wires_memory_part():
 
 def test_runtime_store_wires_all_focused_parts():
     from dal.runtime_store.parts import (
-        AgentRoomRuntimeStorePart,
         HITLRuntimeStorePart,
         MemoryRuntimeStorePart,
     )
 
     store = _make_runtime_store()
 
-    assert isinstance(store.agent_room, AgentRoomRuntimeStorePart)
     assert isinstance(store.hitl, HITLRuntimeStorePart)
     assert isinstance(store.memory, MemoryRuntimeStorePart)
 
@@ -187,11 +170,10 @@ def test_runtime_store_wires_all_focused_parts():
 def test_runtime_store_part_properties_do_not_recreate_missing_parts():
     store = _make_runtime_store()
 
-    del store._agent_room_part
     del store._hitl_part
     del store._memory_part
 
-    for attribute in ("agent_room", "hitl", "memory"):
+    for attribute in ("hitl", "memory"):
         try:
             getattr(store, attribute)
         except AttributeError:
@@ -219,7 +201,6 @@ def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
     container_source = Path("container.py").read_text()
     tree = ast.parse(container_source)
     expected_assignments = {
-        "agent_room_store": "agent_room",
         "hitl_store": "hitl",
         "memory_store": "memory",
     }

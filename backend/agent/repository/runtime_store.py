@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from common.utils.logger import get_logger
-from dal.runtime_store.parts.parsing import (
+from agent.repository.documents import (
     _safe_parse_agent,
     _safe_parse_agent_group,
 )
+from common.utils.logger import get_logger
 from models.agent import Agent
 from models.agent_group import AgentGroup
 
 logger = get_logger(__name__)
 
 
-class AgentRoomRuntimeStorePart:
+class AgentRuntimeStore:
     def __init__(self, *, agent_groups, agents, agent_repository) -> None:
         self._agent_groups = agent_groups
         self._agents = agents
