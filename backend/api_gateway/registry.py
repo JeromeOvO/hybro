@@ -60,8 +60,6 @@ def route_group_for_path(path: str) -> str:
         return "session"
     if matches("/sse"):
         return "sse"
-    if matches("/webhooks"):
-        return "webhook"
     return "unknown"
 
 

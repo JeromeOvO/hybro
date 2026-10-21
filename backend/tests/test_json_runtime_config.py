@@ -95,7 +95,7 @@ def test_setup_preserves_application_and_service_settings(tmp_path):
     assert store.read_config().frontend == {"max_message_length": 4321}
     assert store.read_service_credentials() == services
     assert store.ensure_service_credentials() == services
-    assert len(set(services.values())) == 3
+    assert len(set(services.values())) == 2
 
 
 def test_invalid_cli_edit_does_not_write(tmp_path):

@@ -817,7 +817,6 @@ async def test_runtime_store_full_agent_update_preserves_task_tracking_fields():
     assert await store.update_room_agent_message_by_message_id("a1", message)
 
     _, updates = message_repository.update_calls[0]
-    assert "webhook_token_hash" not in updates
     assert "last_notified_state" not in updates
     assert "agent_url" not in updates
     assert "task_created_at" not in updates

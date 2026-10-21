@@ -30,7 +30,7 @@ def _services_on_disk(runtime) -> dict[str, str]:
 
 
 def test_mongodb_password_is_retired_not_a_service_key():
-    assert RETIRED_SERVICE_KEYS == {"mongodb_password"}
+    assert RETIRED_SERVICE_KEYS == {"mongodb_password", "webhook_signing_key"}
     assert not RETIRED_SERVICE_KEYS & SERVICE_KEYS
 
 

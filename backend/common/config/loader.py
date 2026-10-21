@@ -180,12 +180,6 @@ class Settings(BaseModel):
     # Agent Capability Issue Tracking
     capability_issue_threshold: int = 2  # Exclude agents with >= this many open issues
 
-    # A2A Long-Running Tasks Settings
-    webhook_base_url: str = (
-        ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
-    )
-    webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
-
     # Delivery / SSE settings
     heartbeat_interval_seconds: float = 30.0
     sse_connection_queue_maxsize: int = 100
@@ -356,14 +350,6 @@ class Settings(BaseModel):
         except (TypeError, ValueError):
             return 5
 
-    @field_validator("webhook_signing_key", mode="before")
-    @classmethod
-    def validate_webhook_signing_key(cls, value):
-        key = str(value or "").strip()
-        if key and len(key.encode()) < 32:
-            raise ValueError("WEBHOOK_SIGNING_KEY must be at least 32 bytes")
-        return key
-
     @field_validator("feature_run_event_sse", mode="before")
     @classmethod
     def normalize_feature_run_event_sse(cls, value):
@@ -401,7 +387,6 @@ PRIVATE_FIELDS = frozenset(
         "clerk_secret_key",
         "default_agent_registrar_token",
         "default_agent_llm_token",
-        "webhook_signing_key",
     }
 )
 # Retired backend settings. Existing config.json files may still carry them
@@ -435,6 +420,8 @@ REMOVED_FIELDS = frozenset(
         "stale_check_minutes",
         "task_expiry_hours",
         "pending_task_warning_hours",
+        "webhook_base_url",
+        "webhook_signing_key",
     }
 )
 ROUTE_FIELDS = frozenset(

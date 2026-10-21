@@ -1754,67 +1754,6 @@
         }
       }
     },
-    "/api/v1/webhooks/a2a/{message_id}": {
-      "post": {
-        "tags": [
-          "webhooks"
-        ],
-        "summary": "Handle A2A Webhook",
-        "description": "Receive task updates from A2A agents.\n\nPer A2A spec section 4.3.3, payload is StreamResponse format.\nSecurity: Validates token against stored hash.\nIdempotency: Safe to call multiple times with same status.",
-        "operationId": "handle_a2a_webhook_api_v1_webhooks_a2a__message_id__post",
-        "parameters": [
-          {
-            "name": "message_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Message Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Authorization"
-            }
-          },
-          {
-            "name": "X-A2A-Notification-Token",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "X-A2A-Notification-Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/internal/llm/chat/completions": {
       "post": {
         "tags": [

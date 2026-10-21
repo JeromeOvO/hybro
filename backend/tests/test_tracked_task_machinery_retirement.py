@@ -77,13 +77,6 @@ def test_task_lifecycle_store_keeps_only_live_methods():
         "resolve_client_request_id_for_agent_message",
         "resolve_client_request_id_for_message_id",
         "get_room_ids_with_non_terminal_runs",
-        # Webhook token helpers retire with the webhook ingress in C2 step 7.
-        "_get_webhook_signing_key",
-        "hash_webhook_token",
-        "verify_webhook_token",
-        "generate_webhook_token",
-        "verify_webhook_token_on_message",
-        "verify_webhook_token_for_task",
     }
 
 

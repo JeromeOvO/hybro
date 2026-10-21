@@ -730,7 +730,6 @@ def _strip_file_urls(doc: dict) -> None:
 
 def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, Any]:
     task_tracking_fields = {
-        "webhook_token_hash",
         "last_notified_state",
         "agent_url",
         "task_created_at",

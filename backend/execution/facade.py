@@ -134,19 +134,6 @@ class ExecutionFacade:
         """Use the canonical aggregate for public and send-time active Runs."""
         self._active_run_reader = run_reader
 
-    async def route_webhook(
-        self,
-        *,
-        message_id: str,
-        payload: dict[str, Any],
-        token: str,
-    ) -> None:
-        """Record an authenticated orchestrator-owned webhook observation."""
-        router = self._orchestrator_router
-        if router is None:
-            raise OrchestratorRoutingError("orchestrator webhook ingress is not bound")
-        await router.route_webhook(message_id=message_id, payload=payload, token=token)
-
     @staticmethod
     def _prepare_request_idempotency(
         request: ExecutionRequest,

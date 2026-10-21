@@ -507,7 +507,6 @@ def config_command(arguments: list[str]) -> int:
             in {
                 "default_agent_registrar_token",
                 "default_agent_llm_token",
-                "webhook_signing_key",
             }
             and len(value.encode()) < 32
         ):

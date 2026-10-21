@@ -70,13 +70,5 @@
     "tags": [
       "sse"
     ]
-  },
-  "webhook": {
-    "api_key": false,
-    "auth": "bearer-token-route-level",
-    "cors": "default",
-    "tags": [
-      "webhooks"
-    ]
   }
 }

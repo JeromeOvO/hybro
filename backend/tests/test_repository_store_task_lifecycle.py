@@ -167,23 +167,6 @@ async def test_terminal_finalization_without_recovery_id_never_matches():
     assert collection.find_one_calls == []
 
 
-def test_webhook_token_helpers_do_not_require_repository_attributes():
-    store = object.__new__(RuntimeRepositoryStore)
-
-    token = store.generate_webhook_token()
-
-    assert isinstance(token, str)
-    assert len(token) > 0
-
-
-def test_webhook_token_helpers_live_in_shared_module():
-    from dal.runtime_store.parts import webhook_tokens
-
-    assert callable(webhook_tokens.generate_webhook_token)
-    assert callable(webhook_tokens.hash_webhook_token)
-    assert callable(webhook_tokens.verify_webhook_token)
-
-
 class TestRepositoryStoreAccumulateArtifact:
     @pytest.mark.asyncio
     async def test_missing_artifact_id_pushes_new_artifact(self):

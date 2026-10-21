@@ -50,7 +50,7 @@ PORTS_END_MARKER = "      # <<< END default-agent host ports <<<"
 BACKEND_URL = "http://backend:8000"
 API_PREFIX = "${HYBRO_API_PREFIX:-/api/v1}"
 
-# Only these CLI-projected settings are forwarded into default-agent containers. Backend/frontend secrets (Mongo creds, WEBHOOK_SIGNING_KEY,
+# Only these CLI-projected settings are forwarded into default-agent containers. Backend/frontend secrets (Mongo creds,
 # CLERK_SECRET_KEY, etc.) MUST NOT be exposed here — see the
 # comment on the x-agent anchor in docker-compose.yml. Models come from setup.
 AGENT_ENV_INTERPOLATIONS: tuple[tuple[str, str], ...] = (
@@ -119,7 +119,7 @@ def render_region(agents: dict[str, dict]) -> str:
         "",
         "  # One-shot: registers every enabled agent with the backend, then exits.",
         "  # Uses filtered interpolation instead of env_file so backend secrets",
-        "  # (Mongo, Clerk, webhook signing key, ...) never reach this container.",
+        "  # (Mongo, Clerk, ...) never reach this container.",
         "  registrar:",
         "    build:",
         "      context: ./default_agents",

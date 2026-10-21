@@ -642,7 +642,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.eventing_connected = False
 
             from a2a_adapter.runtime_service import (
-                A2ARuntimeConfig,
                 a2a_service,
             )
             from execution.hitl.factory import create_hitl_service
@@ -891,9 +890,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_delivery = _delivery_facade
 
             membership_source.bind_store(agent_room_store)
-            a2a_service.bind_runtime_config(
-                A2ARuntimeConfig(webhook_base_url=runtime.settings.webhook_base_url)
-            )
             a2a_service.bind_call_counter(agent_room_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=task_store,
@@ -1459,15 +1455,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         await stale_task_checker.start()
         await stale_task_checker.check_stale_tasks()
-        if runtime.settings.webhook_signing_key:
-            logger.info(
-                "A2A push-notification support initialized (using room_agent_messages)"
-            )
-        else:
-            logger.warning(
-                "WEBHOOK_SIGNING_KEY not set - A2A push notifications disabled; "
-                "durable orchestration recovery remains enabled"
-            )
 
         await compaction_sweep.start()
         await orphaned_upload_cleaner.start()
@@ -1942,7 +1929,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 runtime=_orchestrator_runtime,
                 envelope_source=envelope_source,
                 run_factory=DefaultRunFactory(),
-                webhook_token_verifier=task_store.verify_webhook_token_for_task,
                 room_memory_reader=(
                     context_memory_facade.memory_repository.get_room_memory
                 ),

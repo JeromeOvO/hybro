@@ -104,7 +104,6 @@ class RuntimeRoomUserMessage(RuntimeRoomMessage):
 
 class RuntimeRoomAgentMessage(RuntimeRoomMessage):
     message_type: Literal["agent"] = "agent"
-    webhook_token_hash: str | None = None
     last_notified_state: str | None = None
     agent_url: str | None = None
     task_created_at: datetime | None = None

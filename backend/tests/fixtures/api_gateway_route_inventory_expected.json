@@ -1064,22 +1064,6 @@
     "include_in_schema": true
   },
   {
-    "path": "/api/v1/webhooks/a2a/{message_id}",
-    "methods": [
-      "POST"
-    ],
-    "name": "handle_a2a_webhook",
-    "endpoint_module": "api_gateway.routes.webhook_routes",
-    "declared_owner": "api_gateway.routes.webhook_routes",
-    "tags": [
-      "webhooks"
-    ],
-    "status_code": null,
-    "dependencies": [],
-    "auth_dependencies": [],
-    "include_in_schema": true
-  },
-  {
     "path": "/health",
     "methods": [
       "GET"

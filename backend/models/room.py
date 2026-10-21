@@ -178,9 +178,7 @@ class RoomAgentMessage(RoomMessage):
         return v
 
     # Task tracking fields (consolidated from a2a_tasks collection)
-    # Note: message_id is used as the primary key for task lookups (webhook URL, etc.)
     # The following fields are set when task tracking is enabled for this message:
-    webhook_token_hash: str | None = None  # Hashed token for webhook auth
     last_notified_state: str | None = (
         None  # Last SSE-notified state (prevents duplicates)
     )

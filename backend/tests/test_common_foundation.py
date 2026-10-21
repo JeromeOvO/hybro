@@ -716,7 +716,6 @@ def test_protocol_methods_match_design_doc():
             "remove_connection",
             "get_room_status",
         },
-        protocols.WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         protocols.RoomDistributedLock: {"acquire", "renew", "release"},
         protocols.RoomMembershipSeedSource: {
             "get_saved_group",
@@ -852,14 +851,9 @@ def test_protocol_methods_match_design_doc():
             "upsert_room_agent_message",
         },
         protocols.RuntimeTaskLifecycleStore: {
-            "generate_webhook_token",
             "get_room_ids_with_non_terminal_runs",
-            "hash_webhook_token",
             "resolve_client_request_id_for_agent_message",
             "resolve_client_request_id_for_message_id",
-            "verify_webhook_token",
-            "verify_webhook_token_for_task",
-            "verify_webhook_token_on_message",
         },
         protocols.AgentCallCounter: {"increment_agent_call_count"},
         protocols.FileStorage: {
@@ -1125,14 +1119,6 @@ def test_protocol_methods_match_design_doc():
     _assert_params(
         protocols.SSERouteTransport.get_room_status,
         ["self", "room_id"],
-    )
-    _assert_params(
-        protocols.WebhookReceiver.authenticate_webhook,
-        ["self", "message_id", "token"],
-    )
-    _assert_params(
-        protocols.WebhookReceiver.handle_webhook,
-        ["self", "message_id", "payload", "token"],
     )
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
     _assert_params(protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"])

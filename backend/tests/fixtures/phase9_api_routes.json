@@ -1186,25 +1186,6 @@
     "auth_dependencies": [],
     "dependencies": [],
     "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.webhook_routes",
-    "name": "handle_a2a_webhook",
-    "openapi_response_codes": [
-      "200",
-      "422"
-    ],
-    "owning_protocol": "common.protocols.WebhookReceiver",
-    "path": "/api/v1/webhooks/a2a/{message_id}",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null
-  },
-  {
-    "auth_dependencies": [],
-    "dependencies": [],
-    "methods": [
       "GET",
       "HEAD"
     ],

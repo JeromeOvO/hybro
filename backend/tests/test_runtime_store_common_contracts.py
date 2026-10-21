@@ -35,13 +35,11 @@ def test_runtime_agent_message_preserves_task_tracking_fields():
         message_created_at=created_at,
         message_content=RuntimeMessageContent(message_text="working"),
         has_task_tracking=True,
-        webhook_token_hash="hash",
         turn_id="u1",
     )
 
     assert message.message_type == "agent"
     assert message.has_task_tracking is True
-    assert message.webhook_token_hash == "hash"
     assert message.turn_id == "u1"
 
 
@@ -208,7 +206,6 @@ def test_room_and_message_conversion_preserves_runtime_fields():
         message_content=message_content,
         related_message_id="u1",
         has_task_tracking=True,
-        webhook_token_hash="hash",
         turn_id="u1",
     )
 
@@ -222,7 +219,6 @@ def test_room_and_message_conversion_preserves_runtime_fields():
     assert runtime_room.pin_order == 2.0
     assert runtime_content.message_text == "hello"
     assert runtime_message.has_task_tracking is True
-    assert runtime_message.webhook_token_hash == "hash"
     assert runtime_message.turn_id == "u1"
     restored_room = runtime_to_room(runtime_room)
     assert restored_room.room_id == "r1"

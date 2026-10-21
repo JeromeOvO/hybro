@@ -44,7 +44,6 @@ from common.protocols.execution_protocols import (
     ExecutionEngine,
     HITLManager,
     RoomDistributedLock,
-    WebhookReceiver,
 )
 from common.protocols.json_types import JsonMap, JsonScalar, JsonValue
 from common.protocols.llm_protocols import (
@@ -175,5 +174,4 @@ __all__ = [
     "SSEUserMessageRecord",
     "SSERouteTransport",
     "SSETransport",
-    "WebhookReceiver",
 ]

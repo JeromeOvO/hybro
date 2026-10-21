@@ -209,8 +209,9 @@ currently present in this repository.
 The backend is a FastAPI monolith that coordinates:
 
 - A web app API for rooms, agents, messages, HITL, files, and SSE.
-- A2A agent communication, including synchronous, streaming, and webhook-based
-  long-running task updates.
+- A2A agent communication over synchronous and streaming transports. The A2A
+  push-notification webhook ingress is retired; dispatch registers no push
+  config.
 - Context memory projection, search, and compaction.
 - Cross-instance SSE delivery, Execution-owned cancellation, and background recovery jobs.
 
@@ -414,8 +415,7 @@ Stream frames are discriminated structurally. A 1.0 frame carries exactly one of
 `task` / `statusUpdate` / `artifactUpdate` / `message`, with no `kind` field and
 no `final` flag; pre-1.0 frames that still carry `kind` remain accepted for
 agents that have not been migrated. `a2a_adapter.webhook_payloads` parses both
-shapes, and the same parser serves direct streaming and webhook ingestion so
-artifact and HITL semantics cannot diverge between them. A status update keeps
+shapes for direct streaming. A status update keeps
 its message on `status.message` and does not synthesize an artifact from that
 text; only a message-only response becomes a response artifact.
 
@@ -433,7 +433,7 @@ objects.
 and
 `dal.runtime_store` objects into focused execution ports. Files under
 `execution/` do not accept broad compatibility-store aggregates. Queue,
-supervisor, dispatch, HITL, cancellation, and webhook resume paths receive only
+supervisor, dispatch, HITL, and cancellation paths receive only
 the methods they call through execution-owned protocols in `execution/ports.py`.
 
 Agent dependency assembly is also container-owned. `container.py` constructs
@@ -480,7 +480,6 @@ Important route groups:
 - `sse_routes.py`: room SSE stream, SSE status, message cancellation.
 - `hitl_routes.py`: human-in-the-loop request and response APIs.
 - `files_routes.py`: file upload for room message attachments.
-- `webhook_routes.py`: A2A task webhook callbacks.
 
 Saved Team creation accepts an optional owner-scoped `preset_key`. The gateway
 maps it to a deterministic `group_id`, returns an existing Team for repeated
@@ -1311,7 +1310,7 @@ pre-observation materialization under the epoch-fenced artifact owner write leas
 (`orchestrator-v3-a2a-artifact`), converting raw binary data to room file content URLs
 (`/api/v1/files/{file_id}/content`) before constructing observations to enforce the
 256KB observation limit, with `BoundedResourceMaterializer` allowing owned content URLs
-to pass through safely. Authenticated direct, webhook, and inspection evidence
+to pass through safely. Authenticated direct and inspection evidence
 converges through an immutable observation inbox before generic `ToolObservation` delivery.
 Typed V2 HITL routes use trusted call-bound auth-reference verification and an answer-applied
 reconciler that closes answer-to-command crash windows; frozen resource manifests and
@@ -2310,9 +2309,8 @@ module boundary.
 - Inbound A2A streaming `artifact-update` control flags treat explicit `null`
   for `append` and `lastChunk` the same as omitted values at the shared
   `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
-  strictly validated. JSON-RPC webhook request IDs provide the durable
-  idempotency key when the update metadata does not provide one.
-- Parse webhook and direct-stream response payloads in both legacy keyed-envelope
+  strictly validated.
+- Parse direct-stream response payloads in both legacy keyed-envelope
   form (`statusUpdate` / `artifactUpdate`) and current JSON-RPC SSE form with
   top-level `kind` values (`task`, `status-update`, `artifact-update`, `message`).
   This preserves remote task/context identity and typed interaction metadata
@@ -2695,32 +2693,11 @@ with later keys after page one do not repeat in older pages. A backdated insert
 behind the cursor may appear in a later page. There is intentionally no snapshot
 isolation across HTTP requests.
 
-## A2A Webhook Workflow
+## A2A Task Data Access
 
-Long-running A2A tasks report back through:
-
-```text
-POST /api/v1/webhooks/a2a/{message_id}
-```
-
-The route:
-
-1. Extracts the notification token from `X-A2A-Notification-Token` or Bearer
-   authorization.
-2. Authenticates the token before reading the request body.
-3. Reads and parses the request JSON under the configured body limit.
-4. Delegates to `WebhookTransport.handle_webhook`.
-5. The transport revalidates the token at the business boundary, parses A2A
-   stream response payloads, and
-   sends normalized `AgentEvent` objects into `AgentResponseHandler`.
-
-This keeps all final task state, artifact persistence, and SSE emission logic
-in one response handler regardless of whether the response came from direct
-transport or webhook.
-
-Task lifecycle data access for webhook token validation, HITL lifecycle, webhook
-response handling, and stale room processing-status cleanup is routed through
-focused runtime-store ports assembled in `container.py`. The runtime-store repository aggregate backs those
+Task lifecycle data access for `client_request_id` correlation, HITL lifecycle,
+and stale room processing-status cleanup is routed through focused runtime-store
+ports assembled in `container.py`. The runtime-store repository aggregate backs those
 ports with module repositories and `MongoDAL` collections, but production
 bindings use scoped `dal.runtime_store.parts` surfaces or focused startup
 adapters wherever a narrower port is sufficient. Remaining runtime-store

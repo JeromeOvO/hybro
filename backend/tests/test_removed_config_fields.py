@@ -43,6 +43,8 @@ RETIRED = {
     "stale_check_minutes",
     "task_expiry_hours",
     "pending_task_warning_hours",
+    "webhook_base_url",
+    "webhook_signing_key",
 }
 
 

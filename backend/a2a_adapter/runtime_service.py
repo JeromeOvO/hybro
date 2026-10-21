@@ -45,7 +45,6 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True)
 class A2ARuntimeConfig:
-    webhook_base_url: str = ""
     agent_card_fetch_timeout: float = 30.0
     default_request_timeout: float = 600.0
 
@@ -58,9 +57,6 @@ class A2AService:
     def __init__(self):
         self._call_counter: Any | None = None
         self._runtime_config = A2ARuntimeConfig()
-
-    def bind_runtime_config(self, config: A2ARuntimeConfig) -> None:
-        self._runtime_config = config
 
     def bind_call_counter(self, call_counter: Any) -> None:
         self._call_counter = call_counter

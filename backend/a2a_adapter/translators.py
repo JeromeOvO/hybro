@@ -318,8 +318,8 @@ def facade_result_to_model(response: dict[str, Any]) -> Message | Task:
     The facade yields one 1.0 ``StreamResponse`` frame per call, tagged with the
     member that was present (``task`` / ``message``) or, for streaming calls,
     the event kind (``status_update`` / ``artifact_update``). Frame parsing is
-    shared with webhook ingestion so both paths agree on artifact semantics,
-    status messages, and HITL metadata.
+    shared with direct-stream parsing in ``webhook_payloads`` so both agree on
+    artifact semantics, status messages, and HITL metadata.
     """
     kind = response.get("kind")
     result = response.get("result") or {}

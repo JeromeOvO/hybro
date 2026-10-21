@@ -24,8 +24,6 @@ FORBIDDEN_API_IMPORT_PREFIXES = (
     "context_memory.repository",
 )
 
-ALLOWLIST_PATH = Path("tests/fixtures/phase9_import_allowlist.json")
-
 
 def _imported_module(node: ast.AST) -> str | None:
     if isinstance(node, ast.Import):
@@ -118,20 +116,11 @@ def test_route_protocol_broad_shape_rules_cover_nested_any_and_bare_containers()
     assert not annotation_is_broad(dict[str, JsonValue])
 
 
-def _load_allowlist() -> set[tuple[str, str]]:
-    raw = json.loads(ALLOWLIST_PATH.read_text())
-    allowed: set[tuple[str, str]] = set()
-    for entry in raw:
-        allowed.add((entry["path"], entry["import"]))
-    return allowed
-
-
 def _gateway_python_files() -> list[Path]:
     return sorted(Path("api_gateway/routes").glob("*.py"))
 
 
 def _api_import_violations() -> list[str]:
-    allowed = _load_allowlist()
     violations: list[str] = []
     for path in _gateway_python_files():
         tree = ast.parse(path.read_text(), filename=str(path))
@@ -139,7 +128,7 @@ def _api_import_violations() -> list[str]:
             if not isinstance(node, ast.Import | ast.ImportFrom):
                 continue
             for imported_name, module in _import_names(node):
-                if _is_forbidden(module) and (str(path), imported_name) not in allowed:
+                if _is_forbidden(module):
                     violations.append(f"{path}:{node.lineno}: {imported_name}")
     return violations
 
@@ -699,7 +688,6 @@ def test_route_owner_protocols_match_handler_calls():
         HealthCheck,
         RoomRouteReader,
         SSEStateReader,
-        WebhookReceiver,
     )
     from execution.ports import DirectAgentMessenger
     from session.protocols import SessionAccess
@@ -751,7 +739,6 @@ def test_route_owner_protocols_match_handler_calls():
             "get_room_by_room_id",
             "get_room_user_message_by_message_id",
         },
-        WebhookReceiver: {"authenticate_webhook", "handle_webhook"},
         HealthCheck: {"check"},
     }
 
@@ -1138,7 +1125,6 @@ def test_route_protocol_surfaces_are_specific():
     from common.protocols import (
         RoomRouteReader,
         SSEStateReader,
-        WebhookReceiver,
     )
 
     for protocol in (
@@ -1146,7 +1132,6 @@ def test_route_protocol_surfaces_are_specific():
         AgentGroupStoreCompatibility,
         RoomRouteReader,
         SSEStateReader,
-        WebhookReceiver,
     ):
         for name, value in protocol.__dict__.items():
             if not callable(value) or name.startswith("_"):

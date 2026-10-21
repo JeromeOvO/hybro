@@ -223,7 +223,6 @@ SERVICE_KEYS = frozenset(
         "redis_url",
         "default_agent_registrar_token",
         "default_agent_llm_token",
-        "webhook_signing_key",
     }
 )
 
@@ -232,7 +231,7 @@ SERVICE_KEYS = frozenset(
 # accepted on read, never offered by `config secret` or migration, and dropped
 # the next time ensure_service_credentials rewrites the file. Remove this set in
 # the next major release.
-RETIRED_SERVICE_KEYS = frozenset({"mongodb_password"})
+RETIRED_SERVICE_KEYS = frozenset({"mongodb_password", "webhook_signing_key"})
 
 
 def _auth_object(data: bytes | None) -> dict[str, object]:
@@ -512,7 +511,6 @@ class RuntimeConfigStore:
             for key in (
                 "default_agent_registrar_token",
                 "default_agent_llm_token",
-                "webhook_signing_key",
             ):
                 if not services.get(key):
                     services[key] = secrets.token_hex(32)

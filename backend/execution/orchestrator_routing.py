@@ -7,7 +7,7 @@ runtime:
 
 * **Run-creation** — ``process_room_user_message`` prepares a Run and drives
   the orchestrator ``RoomSessionHost`` prompt for every new user message.
-* **Ingress routing** — webhook observations, HITL answers, and cancellation
+* **Ingress routing** — HITL answers and cancellation
   are dispatched to the orchestrator runtime (the only runtime).
 
 Building the orchestrator's ``RoomSessionHost`` inputs from the request and
@@ -56,7 +56,6 @@ from execution.orchestrator.a2a_runtime.interaction_outcome import (
     public_agent_label,
 )
 from execution.orchestrator.a2a_runtime.ledger import TERMINAL_AGENT_CALL_STATES
-from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
 from execution.orchestrator.models import (
     AuthorizationBasis,
     CandidateScopeSnapshot,
@@ -142,15 +141,6 @@ class OrchestratorHITLNotOwnedError(OrchestratorRoutingError):
     """
 
 
-class WebhookAuthenticationError(RuntimeError):
-    """Webhook auth failure carrying the HTTP status the legacy route would use."""
-
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
-
-
 @dataclass(frozen=True, slots=True)
 class AttachmentEnvelope:
     file_id: str
@@ -189,12 +179,6 @@ class RoomEnvelopeSource(Protocol):
     async def load_envelope(
         self, request: ExecutionRequest, *, message_id: str
     ) -> RoomMessageEnvelope: ...
-
-
-class WebhookTokenVerifier(Protocol):
-    """Legacy ``verify_webhook_token_for_task``-shaped verifier."""
-
-    async def __call__(self, message_id: str, token: str) -> tuple[bool, str]: ...
 
 
 class RoomMessageEnvelopeResolver:
@@ -538,266 +522,6 @@ def _answer_for_question(question: HITLQuestionSpec, user_input: str) -> Any:
     )
 
 
-def _webhook_event_body(payload: dict[str, Any]) -> dict[str, Any]:
-    result = payload.get("result")
-    return result if isinstance(result, dict) else payload
-
-
-def _first_mapping(*values: Any) -> dict[str, Any] | None:
-    for value in values:
-        if isinstance(value, dict):
-            return value
-    return None
-
-
-def _protocol_message_id_from_mapping(raw: dict[str, Any] | None) -> str | None:
-    if raw is None:
-        return None
-    return _first_str(raw.get("messageId"), raw.get("message_id"))
-
-
-def _webhook_protocol_message_id(
-    payload: dict[str, Any], *, task: Any | None = None
-) -> str | None:
-    """Prefer a protocol messageId over synthetic parser/task IDs."""
-    if task is not None:
-        status_message = getattr(getattr(task, "status", None), "message", None)
-        message_id = getattr(status_message, "message_id", None)
-        if isinstance(message_id, str) and message_id.strip():
-            return message_id.strip()
-
-    body = _webhook_event_body(payload)
-    status = body.get("status") if isinstance(body.get("status"), dict) else {}
-    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
-    status_update_status = (
-        status_update.get("status")
-        if isinstance(status_update, dict)
-        and isinstance(status_update.get("status"), dict)
-        else {}
-    )
-    message = _first_mapping(
-        body if body.get("kind") in {"message", "MESSAGE"} else None,
-        body.get("message"),
-        status.get("message") if isinstance(status, dict) else None,
-        status_update_status.get("message")
-        if isinstance(status_update_status, dict)
-        else None,
-    )
-    return _protocol_message_id_from_mapping(message)
-
-
-def _webhook_protocol_task_id(payload: dict[str, Any]) -> str | None:
-    body = _webhook_event_body(payload)
-    status_update = _first_mapping(body.get("statusUpdate"), body.get("status_update"))
-    task = body.get("task") if isinstance(body.get("task"), dict) else None
-    return _first_str(
-        body.get("taskId"),
-        body.get("task_id"),
-        body.get("id") if body.get("kind") == "task" else None,
-        task.get("id") if isinstance(task, dict) else None,
-        status_update.get("taskId") if isinstance(status_update, dict) else None,
-        status_update.get("task_id") if isinstance(status_update, dict) else None,
-    )
-
-
-def _webhook_event_cursor(payload: dict[str, Any], *, task: Any | None = None) -> str:
-    """Stable per-event discriminator for webhook ingress identity."""
-    message_id = _webhook_protocol_message_id(payload, task=task)
-    if message_id is not None:
-        return f"msg:{message_id}"
-
-    if task is not None:
-        status_message = getattr(getattr(task, "status", None), "message", None)
-        metadata = getattr(status_message, "metadata", None)
-        if isinstance(metadata, dict):
-            interaction = metadata.get("hybro.ai/a2a/interaction")
-            if isinstance(interaction, dict):
-                interaction_id = interaction.get("interaction_id")
-                if isinstance(interaction_id, str) and interaction_id.strip():
-                    return f"interaction:{interaction_id.strip()}"
-
-    body = _webhook_event_body(payload)
-    return f"fp:{_sha256_hex(json.dumps(body, sort_keys=True, default=str))}"
-
-
-def _deterministic_observed_at(cursor: str) -> datetime:
-    """Stable observed_at for webhook event identity / payload digests.
-
-    Wall-clock arrival remains on the inbox ``received_at`` field. Using a
-    cursor-derived timestamp keeps identical webhook replays idempotent.
-    """
-    seconds = int(_sha256_hex(cursor)[:8], 16) % 1_700_000_000
-    return datetime.fromtimestamp(seconds, tz=UTC)
-
-
-def _observation_from_webhook_payload(
-    payload: dict[str, Any], call: Any
-) -> NormalizedA2AObservation:
-    """Normalize orchestrator webhook payloads into durable observations.
-
-    Prefer the shared StreamResponse parser so typed HITL metadata on
-    ``status.message`` survives asynchronous ``status-update`` envelopes.
-    Fall back to the legacy minimal extractor when the payload is not a
-    recognized A2A stream frame.
-    """
-    from a2a_adapter.orchestrator_direct_client import _task_to_observation_kwargs
-    from a2a_adapter.webhook_payloads import parse_stream_response_payload
-
-    message_id = getattr(call, "assistant_message_id", None) or call.call_record_id
-    try:
-        task = parse_stream_response_payload(payload, message_id)
-        # Prefer the ledger-bound task id (and protocol taskId) over parser
-        # UUIDs synthesized for kind=message frames so replays stay idempotent.
-        task_id = (
-            call.a2a_task_id
-            or _webhook_protocol_task_id(payload)
-            or task.id
-            or message_id
-        )
-        context_id = task.context_id or call.a2a_context_id
-        cursor = _webhook_event_cursor(payload, task=task)
-        observation = NormalizedA2AObservation(
-            **_task_to_observation_kwargs(
-                task,
-                source_kind="webhook",
-                call_record_id=call.call_record_id,
-                binding_scope=call.endpoint_scope_digest,
-                agent_id=call.agent_id,
-                task_id=task_id,
-                context_id=context_id,
-                cursor=cursor,
-            )
-        )
-        return observation.model_copy(
-            update={"observed_at": _deterministic_observed_at(cursor)}
-        )
-    except (TypeError, ValueError):
-        pass
-
-    source = _webhook_event_body(payload)
-    task_id, context_id, status, text = _extract_webhook_identity(source)
-    event_kind = _event_kind_for_status(status)
-    content = [TextPart(text=text)] if text else []
-    resolved_task_id = task_id or call.a2a_task_id
-    cursor = _webhook_event_cursor(payload)
-    return NormalizedA2AObservation(
-        observation_id=(
-            f"webhook-{call.call_record_id}-{resolved_task_id or ''}"
-            f"-{event_kind}-{cursor}"
-        ),
-        call_record_id=call.call_record_id,
-        source_kind="webhook",
-        source_identity=(
-            f"webhook:{call.endpoint_scope_digest}:{resolved_task_id or ''}:"
-            f"{event_kind}:{cursor}"
-        ),
-        binding_scope=call.endpoint_scope_digest,
-        event_kind=event_kind,
-        observed_at=_deterministic_observed_at(cursor),
-        task_id=resolved_task_id,
-        context_id=context_id or call.a2a_context_id,
-        agent_id=call.agent_id,
-        status=status if event_kind == "terminal" else None,
-        content=content,
-        artifact_refs=[],
-        interaction_spec=None,
-        error_code=None,
-        error_message=None,
-        cursor=cursor,
-    )
-
-
-def _extract_webhook_identity(
-    source: dict[str, Any],
-) -> tuple[str | None, str | None, str | None, str]:
-    if isinstance(source.get("task"), dict):
-        task = source["task"]
-        status = _status_value(task.get("status"))
-        text = _extract_webhook_text(task)
-        return (
-            _first_str(task.get("id"), task.get("task_id"), task.get("taskId")),
-            _first_str(
-                task.get("context_id"), task.get("contextId"), task.get("contextId")
-            ),
-            status,
-            text,
-        )
-    raw = source.get("statusUpdate") or source.get("status_update")
-    if isinstance(raw, dict):
-        status = _status_value(raw.get("status"))
-        text = _extract_webhook_text(raw.get("status"))
-        return (
-            _first_str(raw.get("task_id"), raw.get("taskId")),
-            _first_str(raw.get("context_id"), raw.get("contextId")),
-            status,
-            text,
-        )
-    message = source.get("message")
-    if isinstance(message, dict):
-        return (
-            _first_str(message.get("task_id"), message.get("taskId")),
-            _first_str(message.get("context_id"), message.get("contextId")),
-            "completed",
-            _extract_webhook_text(message),
-        )
-    return None, None, None, ""
-
-
-def _status_value(status: Any) -> str | None:
-    if not isinstance(status, dict):
-        return None
-    value = status.get("state")
-    if not isinstance(value, str):
-        return None
-    return value
-
-
-def _first_str(*values: Any) -> str | None:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value
-    return None
-
-
-def _extract_webhook_text(value: Any) -> str:  # noqa: C901
-    if not isinstance(value, dict):
-        return ""
-    message = value.get("message")
-    if isinstance(message, dict):
-        parts = message.get("parts") or message.get("content")
-        if isinstance(parts, list):
-            texts = []
-            for part in parts:
-                if isinstance(part, dict):
-                    text = part.get("text")
-                    if isinstance(text, str) and text.strip():
-                        texts.append(text)
-            if texts:
-                return "".join(texts)
-        text = message.get("text")
-        if isinstance(text, str):
-            return text
-    artifacts = value.get("artifacts")
-    if isinstance(artifacts, list):
-        for artifact in artifacts:
-            if not isinstance(artifact, dict):
-                continue
-            text = _extract_webhook_text(artifact)
-            if text:
-                return text
-    return ""
-
-
-def _event_kind_for_status(status: str | None) -> str:
-    if status in {"input-required", "input_required"}:
-        return "input_required"
-    if status in {"auth-required", "auth_required"}:
-        return "auth_required"
-    if status in {"completed", "failed", "canceled", "rejected", "expired"}:
-        return "terminal"
-    return "working"
-
-
 class _PreparedRunFactory:
     """Run factory that pins the Run id the catalog was prepared against."""
 
@@ -822,8 +546,8 @@ class DualRuntimeRouter:
     """Thin orchestrator ingress adapter for the single execution path.
 
     Construction is cheap and non-IO. ``runtime`` is the composed orchestrator
-    runtime; every ingress (message, cancellation, HITL answer, webhook) is
-    served by the orchestrator directly.
+    runtime; every ingress (message, cancellation, HITL answer) is served by
+    the orchestrator directly.
     """
 
     def __init__(
@@ -832,23 +556,14 @@ class DualRuntimeRouter:
         runtime: Any | None = None,
         envelope_source: RoomEnvelopeSource | None = None,
         run_factory: RunFactory | None = None,
-        webhook_token_verifier: WebhookTokenVerifier | None = None,
         room_memory_reader: RoomMemoryReader | None = None,
     ) -> None:
         self._runtime = runtime
         self._envelope_source = envelope_source
         self._run_factory = run_factory or DefaultRunFactory()
-        self._webhook_token_verifier = webhook_token_verifier
         self._room_memory_reader = room_memory_reader
 
     # -- Ingress routing -------------------------------------------------
-
-    async def record_observation(
-        self, observation: NormalizedA2AObservation
-    ) -> tuple[str, Any]:
-        if self._runtime is None:
-            raise OrchestratorRoutingError("orchestrator ingress is not bound")
-        return await self._runtime.observation_ingress.record(observation)
 
     async def route_cancellation_by_user_message(
         self,
@@ -1252,55 +967,6 @@ class DualRuntimeRouter:
                 )
         return requests
 
-    async def _authenticate_webhook(self, message_id: str, token: str) -> None:
-        """Authenticate an orchestrator webhook exactly like the legacy route."""
-        if self._webhook_token_verifier is None:
-            raise OrchestratorRoutingError(
-                "orchestrator webhook token verifier is not bound"
-            )
-        if not token:
-            raise WebhookAuthenticationError(401, "Missing authorization token")
-        is_valid, error_reason = await self._webhook_token_verifier(message_id, token)
-        if not is_valid:
-            if error_reason == "task_not_found":
-                raise WebhookAuthenticationError(
-                    404, "Task not found. The task may not have been created yet."
-                )
-            if error_reason == "invalid_token":
-                raise WebhookAuthenticationError(401, "Invalid token")
-            raise WebhookAuthenticationError(500, "Token verification failed")
-
-    async def _resolve_webhook_call(self, message_id: str) -> Any | None:
-        """Resolve a webhook by A2A task id first, then by call record id."""
-        ledger = self._runtime.call_ledger
-        call = await ledger.find_by_task_id(message_id)
-        if call is None:
-            call = await ledger.load_by_record_id(message_id)
-        return call
-
-    async def route_webhook(
-        self, *, message_id: str, payload: dict[str, Any], token: str
-    ) -> None:
-        """Record an authenticated orchestrator-owned webhook.
-
-        Correlation resolves the A2A ``task_id`` alias first and then falls
-        back to the orchestrator ``call_record_id``. Webhooks authenticate
-        against the call's room-scoped assistant message id through the
-        injected token verifier (``verify_webhook_token_for_task``). A webhook
-        that does not correlate to an orchestrator call is a hard error; there
-        is no legacy executor left to fall back to.
-        """
-        if self._runtime is None:
-            raise OrchestratorRoutingError("orchestrator webhook ingress is not bound")
-        call = await self._resolve_webhook_call(message_id)
-        if call is None:
-            raise WebhookAuthenticationError(
-                404, "Task not found. The task may not have been created yet."
-            )
-        await self._authenticate_webhook(call.assistant_message_id, token)
-        observation = _observation_from_webhook_payload(payload, call)
-        await self._runtime.observation_ingress.record(observation)
-
     # -- Room message adapter ------------------------------------
 
     async def _resolve_envelope_and_profile(
@@ -1488,7 +1154,5 @@ __all__ = [
     "RoomMessageEnvelope",
     "RoomMessageEnvelopeResolver",
     "UnsupportedEnvelopeError",
-    "WebhookAuthenticationError",
-    "WebhookTokenVerifier",
     "map_mode_to_profile",
 ]

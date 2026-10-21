@@ -59,11 +59,6 @@ from dal.runtime_store.parts.parsing import (
     _strip_file_urls,
     _strip_unset_task_tracking_fields,
 )
-from dal.runtime_store.parts.webhook_tokens import (
-    generate_webhook_token,
-    hash_webhook_token,
-    verify_webhook_token,
-)
 
 logger = get_logger(__name__)
 
@@ -379,25 +374,6 @@ class RuntimeRepositoryStore:
     ) -> str | None:
         return await self._task_delegate().resolve_client_request_id_for_message_id(
             message_id
-        )
-
-    def hash_webhook_token(self, token: str) -> str:
-        return hash_webhook_token(token)
-
-    def verify_webhook_token(self, token: str, stored_hash: str) -> bool:
-        return verify_webhook_token(token, stored_hash)
-
-    def generate_webhook_token(self) -> str:
-        return generate_webhook_token()
-
-    async def verify_webhook_token_on_message(self, message_id: str) -> str | None:
-        return await self._task_delegate().verify_webhook_token_on_message(message_id)
-
-    async def verify_webhook_token_for_task(
-        self, message_id: str, token: str
-    ) -> tuple[bool, str]:
-        return await self._task_delegate().verify_webhook_token_for_task(
-            message_id, token
         )
 
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
