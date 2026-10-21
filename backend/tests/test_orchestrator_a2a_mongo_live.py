@@ -8,13 +8,13 @@ from datetime import timedelta
 import pytest
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
+from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
+from execution.orchestrator.persistence import ORCHESTRATOR_RUN_INDEXES
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
     MongoObservationConflictStore,
     MongoRoomEpochStore,
 )
-from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
-from execution.orchestrator.persistence import ORCHESTRATOR_RUN_INDEXES
 
 from ._orchestrator_helpers import NOW, make_run
 

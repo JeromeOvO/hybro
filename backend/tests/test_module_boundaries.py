@@ -58,16 +58,7 @@ DOMAIN_IMPORT_DEBT = frozenset(
 )
 
 # Persistence adapters that still import domain types.
-DAL_IMPORT_DEBT = frozenset(
-    {
-        "dal/orchestrator/artifacts.py",
-        "dal/orchestrator/event_store.py",
-        "dal/orchestrator/hitl.py",
-        "dal/orchestrator/projection.py",
-        "dal/orchestrator/run_store.py",
-        "dal/orchestrator/stores.py",
-    }
-)
+DAL_IMPORT_DEBT: frozenset[str] = frozenset()
 
 
 def _is_module(root: Path, dotted: str) -> bool:

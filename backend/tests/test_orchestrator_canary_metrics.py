@@ -8,16 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 from common.config.loader import Settings
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
-    MongoAgentCallLedgerStore,
-    MongoObservationConflictStore,
-)
 from execution.adapters.canary_metrics import (
     collect_metrics,
     evaluate_canary_thresholds,
 )
 from execution.orchestrator.a2a_runtime.models import A2AObservationConflictRecord
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
+    MongoAgentCallLedgerStore,
+    MongoObservationConflictStore,
+)
 from jobs.constants import ALL_JOB_NAMES, ORCHESTRATOR_CANARY
 from jobs.orchestrator_workers import (
     OrchestratorCanaryDeps,

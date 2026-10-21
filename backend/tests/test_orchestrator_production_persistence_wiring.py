@@ -9,15 +9,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dal.orchestrator.epoch_bindings import (
+from execution.orchestrator.a2a_runtime.persistence import A2A_RUNTIME_COLLECTIONS
+from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+from execution.repository.orchestrator.epoch_bindings import (
     EpochScopedOrchestratorCleanup,
     bind_room_epoch_store,
     require_room_epoch_store,
     reset_room_epoch_store,
 )
-from dal.orchestrator.stores import MongoRoomEpochStore
-from execution.orchestrator.a2a_runtime.persistence import A2A_RUNTIME_COLLECTIONS
-from execution.orchestrator.persistence import ORCHESTRATOR_COLLECTIONS
+from execution.repository.orchestrator.stores import MongoRoomEpochStore
 
 ROOT = Path(__file__).resolve().parents[1]
 

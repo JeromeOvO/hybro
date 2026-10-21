@@ -1597,7 +1597,6 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     from types import SimpleNamespace
 
     import orchestrator_composition as composition
-    from dal.orchestrator.run_store import MongoOrchestratorRunStore
     from delivery.translator import to_sse_frame
     from execution.adapters.hitl import (
         DurableHITLApplicationPort,
@@ -1615,6 +1614,7 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     )
     from execution.orchestrator.session import DefaultRunFactory
     from execution.orchestrator_routing import DualRuntimeRouter
+    from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
     from tests._orchestrator_helpers import FixedIDs, ScriptedModelRuntime, user_message
     from tests.orchestrator_harness.fake_tools import StaticFakeToolCatalog
     from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore

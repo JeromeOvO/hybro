@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from dal.orchestrator.artifacts import GuardedRoomFileArtifactWriter
 from execution.orchestrator.a2a_runtime.errors import StaleRoomEpochError
 from execution.orchestrator.a2a_runtime.in_memory import InMemoryRoomEpochStore
 from execution.orchestrator.a2a_runtime.models import (
@@ -26,6 +25,7 @@ from execution.orchestrator.models import (
     PreparedResourceRef,
     RunResourceManifestSnapshot,
 )
+from execution.repository.orchestrator.artifacts import GuardedRoomFileArtifactWriter
 from room_files import MemoryFileContentStore, RoomFiles
 
 from ._orchestrator_a2a_helpers import binding, ledger_record

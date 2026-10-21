@@ -488,14 +488,16 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             from conversation.timeline_projection import RoomTimelineProjector
             from conversation.user_message_persistence import UserMessageCommitService
-            from dal.orchestrator.epoch_bindings import (
+            from execution.repository.orchestrator.epoch_bindings import (
                 EpochScopedOrchestratorCleanup,
                 bind_room_epoch_store,
                 require_room_epoch_store,
                 reset_room_epoch_store,
             )
-            from dal.orchestrator.event_store import MongoOrchestratorEventStore
-            from dal.orchestrator.stores import (
+            from execution.repository.orchestrator.event_store import (
+                MongoOrchestratorEventStore,
+            )
+            from execution.repository.orchestrator.stores import (
                 MongoAgentCallLedgerStore,
                 MongoAgentToolBindingStore,
                 MongoObservationConflictStore,

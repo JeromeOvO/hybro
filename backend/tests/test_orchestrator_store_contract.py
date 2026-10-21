@@ -5,7 +5,6 @@ from datetime import timedelta
 
 import pytest
 
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
 from execution.orchestrator import (
     AssistantMessage,
     RecoveryClaim,
@@ -17,6 +16,7 @@ from execution.orchestrator import (
     commit_terminal_status,
 )
 from execution.orchestrator.ports import OrchestratorRunStore
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
 from tests.orchestrator_harness.contract_harness import (
     InMemoryOrchestratorContractHarness,
 )

@@ -1,7 +1,7 @@
 """Process-global binding for the orchestrator room epoch store.
 
 The epoch store is a Mongo repository injected at runtime startup. Keeping the
-binding in ``dal.orchestrator`` (rather than the production-unbound
+binding in ``execution.repository.orchestrator`` (rather than the production-unbound
 ``execution.orchestrator`` runtime) lets the runtime package stay free of
 production composition concerns while still exposing a fail-fast dependency
 for consumers that need the durable epoch store.

@@ -7,11 +7,6 @@ from datetime import datetime, timedelta
 
 from pymongo.errors import DuplicateKeyError
 
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from dal.orchestrator.projection import (
-    MongoAppendEventProjector,
-    MongoFinalMessageProjector,
-)
 from delivery.snapshot import RoomEventFold
 from execution.orchestrator.models import (
     AssistantMessage,
@@ -25,6 +20,11 @@ from execution.orchestrator.settlement import (
     TerminalCommitRequest,
     TerminalDecisionFacts,
     commit_terminal_decision,
+)
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
+from execution.repository.orchestrator.projection import (
+    MongoAppendEventProjector,
+    MongoFinalMessageProjector,
 )
 from tests.orchestrator_harness.in_memory import (
     InMemoryOrchestratorEventStore,

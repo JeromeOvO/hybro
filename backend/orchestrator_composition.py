@@ -32,20 +32,6 @@ from a2a_adapter.client_facade import stream_message as sdk_stream_message
 from a2a_adapter.orchestrator_direct_client import OrchestratorDirectA2AClient
 from a2a_adapter.remote_task import fetch_remote_task as sdk_fetch_remote_task
 from common.utils.logger import get_logger
-from dal.orchestrator.artifacts import GuardedRoomFileArtifactWriter
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
-from dal.orchestrator.hitl import MongoHITLApplicationStore
-from dal.orchestrator.projection import (
-    MongoAppendEventProjector,
-    MongoFinalMessageProjector,
-)
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
-    MongoAgentCallLedgerStore,
-    MongoAgentToolBindingStore,
-    MongoObservationConflictStore,
-    MongoObservationInboxStore,
-)
 from execution.adapters.agent_candidates import AgentServiceCandidateSource
 from execution.adapters.authorization import MembershipAuthorizationRefresh
 from execution.adapters.hitl import DurableHITLApplicationPort
@@ -123,6 +109,20 @@ from execution.orchestrator.session import (
     EventCancellationSignal,
     dormant_recovery_at,
     interrupted_run_needs_settlement,
+)
+from execution.repository.orchestrator.artifacts import GuardedRoomFileArtifactWriter
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
+from execution.repository.orchestrator.hitl import MongoHITLApplicationStore
+from execution.repository.orchestrator.projection import (
+    MongoAppendEventProjector,
+    MongoFinalMessageProjector,
+)
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
+    MongoAgentCallLedgerStore,
+    MongoAgentToolBindingStore,
+    MongoObservationConflictStore,
+    MongoObservationInboxStore,
 )
 
 logger = get_logger(__name__)

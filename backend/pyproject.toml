@@ -166,7 +166,7 @@ packages = [
     "dal.redis",
     "dal.runtime_store",
     "dal.runtime_store.parts",
-    "dal.orchestrator",
+    "execution.repository.orchestrator",
     "delivery",
     "delivery.sse",
     "delivery.event_bus",

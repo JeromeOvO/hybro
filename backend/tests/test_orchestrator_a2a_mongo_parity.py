@@ -17,14 +17,6 @@ from common.dto.hitl import (
     HITLRouteSnapshotV2,
     HITLTextAnswer,
 )
-from dal.orchestrator.hitl import MongoHITLApplicationStore
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
-    MongoAgentCallLedgerStore,
-    MongoObservationConflictStore,
-    MongoObservationInboxStore,
-    MongoRoomEpochStore,
-)
 from execution.adapters.hitl import InMemoryHITLApplicationStore
 from execution.orchestrator.a2a_runtime.in_memory import (
     InMemoryAgentCallLedgerStore,
@@ -40,6 +32,14 @@ from execution.orchestrator.a2a_runtime.models import (
     NormalizedA2AObservation,
 )
 from execution.orchestrator.models import ProjectionIntent, RecoveryClaim
+from execution.repository.orchestrator.hitl import MongoHITLApplicationStore
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
+    MongoAgentCallLedgerStore,
+    MongoObservationConflictStore,
+    MongoObservationInboxStore,
+    MongoRoomEpochStore,
+)
 from tests.orchestrator_harness.in_memory import InMemoryOrchestratorRunStore
 
 from ._orchestrator_a2a_helpers import ledger_record

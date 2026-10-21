@@ -8,16 +8,16 @@ from types import SimpleNamespace
 import pytest
 from pymongo.errors import AutoReconnect, ServerSelectionTimeoutError
 
-from dal.orchestrator.run_store import MongoOrchestratorRunStore
-from dal.orchestrator.stores import (
-    MongoAgentCallLedgerStore,
-    MongoObservationInboxStore,
-    MongoRoomEpochStore,
-)
 from execution.orchestrator.a2a_runtime.errors import RecoverableAdapterError
 from execution.orchestrator.a2a_runtime.models import (
     A2AObservationInboxRecord,
     NormalizedA2AObservation,
+)
+from execution.repository.orchestrator.run_store import MongoOrchestratorRunStore
+from execution.repository.orchestrator.stores import (
+    MongoAgentCallLedgerStore,
+    MongoObservationInboxStore,
+    MongoRoomEpochStore,
 )
 
 from ._orchestrator_a2a_helpers import ledger_record

@@ -11,7 +11,7 @@ records. This module provides:
   ``InMemoryHITLApplicationPort`` semantics exactly (route fingerprint,
   authenticated answerer, verified auth references, answer idempotency).
 
-The Mongo-backed store lives in ``dal/orchestrator/hitl.py`` so step 5b only has
+The Mongo-backed store lives in ``execution/repository/orchestrator/hitl.py`` so step 5b only has
 to construct and inject it.
 """
 

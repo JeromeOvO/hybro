@@ -16,11 +16,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dal.orchestrator.artifacts import RoomFilesEpochFencedArtifactOwner
-from dal.orchestrator.event_store import MongoOrchestratorEventStore
 from execution.orchestrator.models import OrchestratorRunState
 from execution.orchestrator.ports import OrchestratorEventStore
 from execution.orchestrator.profiles import ProfileConfiguration
+from execution.repository.orchestrator.artifacts import (
+    RoomFilesEpochFencedArtifactOwner,
+)
+from execution.repository.orchestrator.event_store import MongoOrchestratorEventStore
 from tests.orchestrator_harness.in_memory import InMemoryOrchestratorEventStore
 
 from ._orchestrator_helpers import make_run
@@ -87,7 +89,9 @@ def test_artifact_durable_identity_strings_are_pinned():
     source = inspect.getsource(RoomFilesEpochFencedArtifactOwner)
     assert "orchestrator-v3-a2a-artifact" in source
 
-    artifacts = (ROOT / "dal" / "orchestrator" / "artifacts.py").read_text()
+    artifacts = (
+        ROOT / "execution" / "repository" / "orchestrator" / "artifacts.py"
+    ).read_text()
     assert '"orchestrator-v3-a2a"' in artifacts
 
 
