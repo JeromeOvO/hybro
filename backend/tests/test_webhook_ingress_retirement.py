@@ -64,14 +64,11 @@ def test_webhook_receiver_protocol_is_gone():
 
 
 def test_task_lifecycle_store_keeps_only_correlation():
-    from common.protocols.runtime_store_protocols import RuntimeTaskLifecycleStore
-    from dal.runtime_store.parts.task_lifecycle_store import (
-        TaskLifecycleRuntimeStorePart,
-    )
+    from conversation.repository import ClientRequestIdStore
 
     public = {
         name
-        for name, member in inspect.getmembers(TaskLifecycleRuntimeStorePart)
+        for name, member in inspect.getmembers(ClientRequestIdStore)
         if callable(member) and not name.startswith("__")
     }
 
@@ -86,7 +83,7 @@ def test_task_lifecycle_store_keeps_only_correlation():
         "verify_webhook_token_on_message",
         "verify_webhook_token_for_task",
     ):
-        assert not hasattr(RuntimeTaskLifecycleStore, name), name
+        assert not hasattr(ClientRequestIdStore, name), name
 
 
 def test_messages_no_longer_carry_a_webhook_token_hash():

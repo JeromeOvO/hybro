@@ -7,11 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 from common.dto import (
     RuntimeAgentGroup,
     RuntimeAgentRecord,
-    RuntimeMessageContent,
-    RuntimeRoomAgentMessage,
     RuntimeRoomMemory,
-    RuntimeRoomRecord,
-    RuntimeRoomUserMessage,
 )
 
 
@@ -41,117 +37,6 @@ class RuntimeAgentRoomStore(Protocol):
     async def increment_agent_call_count(
         self, agent_id: str, *, success: bool
     ) -> None: ...
-    async def get_room_by_room_id(self, room_id: str) -> RuntimeRoomRecord | None: ...
-    async def get_rooms_by_room_owner_id(
-        self, room_owner_id: str
-    ) -> list[RuntimeRoomRecord]: ...
-    async def update_room_by_room_id(
-        self, room_id: str, room: RuntimeRoomRecord
-    ) -> bool: ...
-
-
-@runtime_checkable
-class RuntimeMessageStore(Protocol):
-    async def get_room_user_message_by_message_id(
-        self, message_id: str
-    ) -> RuntimeRoomUserMessage | None: ...
-
-    async def get_room_user_messages_by_room_id(
-        self,
-        room_id: str,
-    ) -> list[RuntimeRoomUserMessage]: ...
-    async def get_room_agent_message_by_message_id(
-        self, message_id: str
-    ) -> RuntimeRoomAgentMessage | None: ...
-    async def get_room_agent_messages_by_room_id(
-        self,
-        room_id: str,
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def get_room_agent_messages_by_related_message_id(
-        self, related_message_id: str
-    ) -> list[RuntimeRoomAgentMessage]: ...
-
-    async def add_room_agent_message(
-        self, room_agent_message: RuntimeRoomAgentMessage
-    ) -> bool: ...
-    async def add_room_user_message(
-        self, room_user_message: RuntimeRoomUserMessage
-    ) -> bool: ...
-    async def set_system_task_terminal_state(
-        self, message_id: str, target_state: str, *, event_id: str
-    ) -> str: ...
-    async def update_room_user_message_by_message_id(
-        self, message_id: str, room_user_message: RuntimeRoomUserMessage
-    ) -> bool: ...
-    async def upsert_room_agent_message(
-        self, room_agent_message: RuntimeRoomAgentMessage
-    ) -> None: ...
-    async def delete_room_agent_message_by_message_id(
-        self, message_id: str
-    ) -> bool: ...
-    async def update_room_agent_message_by_message_id(
-        self, message_id: str, room_agent_message: RuntimeRoomAgentMessage
-    ) -> bool: ...
-    async def claim_user_message_for_processing(self, message_id: str) -> bool: ...
-    async def unclaim_user_message(self, message_id: str) -> bool: ...
-    async def claim_or_reclaim_user_message(
-        self,
-        message_id: str,
-        stale_threshold: Any,
-    ) -> bool: ...
-    async def refresh_processing_claim(self, message_id: str) -> bool: ...
-    async def get_stale_claimed_orchestration_messages(
-        self,
-        orphan_threshold_minutes: int,
-        limit: int = 100,
-        after_message_id: str | None = None,
-    ) -> list[RuntimeRoomUserMessage]: ...
-    async def update_orchestration_projection_if_status(
-        self,
-        message_id: str,
-        *,
-        expected_status: str,
-        status: str,
-        clear_processing_claim: bool = False,
-    ) -> bool: ...
-    async def turn_exists(self, room_id: str, turn_id: str) -> bool: ...
-    async def cancel_descendants(self, message_id: str) -> int: ...
-    async def project_descendant_terminal_state(
-        self,
-        message_id: str,
-        *,
-        event_id: str,
-        target_state: str,
-        exclude_message_ids: list[str] | None = None,
-    ) -> list[str]: ...
-    async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int: ...
-    async def update_room_agent_message_with_new_message_content_by_message_id(
-        self, message_id: str, message_content: RuntimeMessageContent
-    ) -> bool: ...
-    async def reset_last_notified_state(self, message_id: str) -> bool: ...
-
-    async def update_task_state_on_message_if_not_terminal(
-        self,
-        message_id: str,
-        state: str,
-    ) -> bool: ...
-    async def accumulate_artifact_on_message(
-        self,
-        message_id: str,
-        artifact: dict,
-        append: bool = False,
-        update_key: str | None = None,
-    ) -> bool: ...
-
-
-@runtime_checkable
-class RuntimeTaskLifecycleStore(Protocol):
-    async def resolve_client_request_id_for_agent_message(
-        self, room_agent_message: RuntimeRoomAgentMessage
-    ) -> str | None: ...
-    async def resolve_client_request_id_for_message_id(
-        self, message_id: str
-    ) -> str | None: ...
 
 
 @runtime_checkable

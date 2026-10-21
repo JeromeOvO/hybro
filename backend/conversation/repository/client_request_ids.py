@@ -6,7 +6,7 @@ from models.room import RoomAgentMessage
 logger = get_logger(__name__)
 
 
-class TaskLifecycleRuntimeStorePart:
+class ClientRequestIdStore:
     def __init__(
         self,
         *,

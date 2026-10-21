@@ -62,13 +62,11 @@ def test_execution_ports_drop_tracked_task_and_continuation_contracts():
 
 
 def test_task_lifecycle_store_keeps_only_live_methods():
-    from dal.runtime_store.parts.task_lifecycle_store import (
-        TaskLifecycleRuntimeStorePart,
-    )
+    from conversation.repository import ClientRequestIdStore
 
     public = {
         name
-        for name, member in inspect.getmembers(TaskLifecycleRuntimeStorePart)
+        for name, member in inspect.getmembers(ClientRequestIdStore)
         if callable(member) and not name.startswith("__")
     }
 
@@ -169,7 +167,7 @@ def test_container_no_longer_wires_tracked_task_notifications():
 def test_tracked_task_only_constants_and_queries_are_gone():
     import common.a2a_constants as constants
     from common.protocols.repository_protocols import MessageRepository
-    from common.protocols.runtime_store_protocols import RuntimeMessageStore
+    from conversation.repository import ConversationMessageStore
 
     assert not hasattr(constants, "UNSUPPORTED_INTERACTION_CODE")
     assert not hasattr(constants, "UNSUPPORTED_INTERACTION_MESSAGE")
@@ -179,4 +177,4 @@ def test_tracked_task_only_constants_and_queries_are_gone():
         "get_pending_task_messages_for_user",
     ):
         assert not hasattr(MessageRepository, name), name
-    assert not hasattr(RuntimeMessageStore, "update_last_notified_state")
+    assert not hasattr(ConversationMessageStore, "update_last_notified_state")

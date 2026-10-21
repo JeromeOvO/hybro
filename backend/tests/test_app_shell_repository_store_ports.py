@@ -10,8 +10,6 @@ from common.protocols import (
     RuntimeAgentRoomStore,
     RuntimeHITLStore,
     RuntimeMemoryStore,
-    RuntimeMessageStore,
-    RuntimeTaskLifecycleStore,
 )
 
 
@@ -19,8 +17,6 @@ def test_runtime_store_protocols_are_exported():
     import common.protocols as protocols
 
     assert protocols.RuntimeAgentRoomStore is RuntimeAgentRoomStore
-    assert protocols.RuntimeMessageStore is RuntimeMessageStore
-    assert protocols.RuntimeTaskLifecycleStore is RuntimeTaskLifecycleStore
     assert protocols.RuntimeHITLStore is RuntimeHITLStore
     assert protocols.RuntimeMemoryStore is RuntimeMemoryStore
 
@@ -31,8 +27,6 @@ def test_runtime_repository_store_declares_runtime_protocol_surface():
     store = object.__new__(RuntimeRepositoryStore)
 
     assert isinstance(store, RuntimeAgentRoomStore)
-    assert isinstance(store, RuntimeMessageStore)
-    assert isinstance(store, RuntimeTaskLifecycleStore)
     assert isinstance(store, RuntimeHITLStore)
     assert isinstance(store, RuntimeMemoryStore)
 
@@ -67,15 +61,11 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
         RuntimeAgentRoomStore,
         RuntimeHITLStore,
         RuntimeMemoryStore,
-        RuntimeMessageStore,
-        RuntimeTaskLifecycleStore,
     )
     from dal.runtime_store import RuntimeRepositoryStore
 
     protocol_types = [
         RuntimeAgentRoomStore,
-        RuntimeMessageStore,
-        RuntimeTaskLifecycleStore,
         RuntimeHITLStore,
         RuntimeMemoryStore,
     ]
@@ -90,15 +80,11 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
 
 
 def test_runtime_store_protocol_type_hints_are_resolvable():
-    from common.dto import RuntimeAgentGroup, RuntimeRoomAgentMessage
+    from common.dto import RuntimeAgentGroup
 
     agent_group_hints = get_type_hints(RuntimeAgentRoomStore.add_agent_group)
-    task_hints = get_type_hints(
-        RuntimeTaskLifecycleStore.resolve_client_request_id_for_agent_message
-    )
 
     assert agent_group_hints["agent_group"] is RuntimeAgentGroup
-    assert task_hints["room_agent_message"] is RuntimeRoomAgentMessage
 
 
 def test_protocol_import_tolerates_json_log_format_without_creating_log_file(
@@ -168,24 +154,6 @@ def test_runtime_store_wires_agent_room_part():
     assert isinstance(store.agent_room, AgentRoomRuntimeStorePart)
 
 
-def test_runtime_store_wires_message_part():
-    from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
-
-    store = _make_runtime_store()
-
-    assert isinstance(store.messages, MessageRuntimeStorePart)
-
-
-def test_runtime_store_wires_task_lifecycle_part():
-    from dal.runtime_store.parts.task_lifecycle_store import (
-        TaskLifecycleRuntimeStorePart,
-    )
-
-    store = _make_runtime_store()
-
-    assert isinstance(store.tasks, TaskLifecycleRuntimeStorePart)
-
-
 def test_runtime_store_wires_hitl_part():
     from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
 
@@ -207,15 +175,11 @@ def test_runtime_store_wires_all_focused_parts():
         AgentRoomRuntimeStorePart,
         HITLRuntimeStorePart,
         MemoryRuntimeStorePart,
-        MessageRuntimeStorePart,
-        TaskLifecycleRuntimeStorePart,
     )
 
     store = _make_runtime_store()
 
     assert isinstance(store.agent_room, AgentRoomRuntimeStorePart)
-    assert isinstance(store.messages, MessageRuntimeStorePart)
-    assert isinstance(store.tasks, TaskLifecycleRuntimeStorePart)
     assert isinstance(store.hitl, HITLRuntimeStorePart)
     assert isinstance(store.memory, MemoryRuntimeStorePart)
 
@@ -224,12 +188,10 @@ def test_runtime_store_part_properties_do_not_recreate_missing_parts():
     store = _make_runtime_store()
 
     del store._agent_room_part
-    del store._message_part
-    del store._task_lifecycle_part
     del store._hitl_part
     del store._memory_part
 
-    for attribute in ("agent_room", "messages", "tasks", "hitl", "memory"):
+    for attribute in ("agent_room", "hitl", "memory"):
         try:
             getattr(store, attribute)
         except AttributeError:
@@ -258,8 +220,6 @@ def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
     tree = ast.parse(container_source)
     expected_assignments = {
         "agent_room_store": "agent_room",
-        "message_store": "messages",
-        "task_store": "tasks",
         "hitl_store": "hitl",
         "memory_store": "memory",
     }

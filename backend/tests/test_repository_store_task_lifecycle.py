@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from common.a2a_constants import TERMINAL_STATES
+from conversation.repository import ConversationMessageStore
 from dal.runtime_store import RuntimeRepositoryStore
 
 
@@ -101,21 +102,43 @@ def _result(modified_count: int):
     return SimpleNamespace(modified_count=modified_count)
 
 
+class _Stores:
+    """Message calls go to the conversation store, HITL calls to the aggregate."""
+
+    def __init__(self, mongo: FakeMongo) -> None:
+        self._targets = (
+            ConversationMessageStore(
+                room_agent_messages=mongo.collection("room_agent_messages"),
+                room_user_messages=mongo.collection("room_user_messages"),
+                message_repository=object(),
+            ),
+            RuntimeRepositoryStore(
+                mongo=mongo,
+                room_repository=object(),
+                message_repository=object(),
+                agent_repository=object(),
+            ),
+        )
+
+    def __getattr__(self, name: str):
+        for target in self._targets:
+            if hasattr(target, name):
+                return getattr(target, name)
+        raise AttributeError(name)
+
+
 def _store(
     collection: RecordingCollection | None = None,
     *,
     hitl_collection: RecordingCollection | None = None,
-) -> RuntimeRepositoryStore:
-    return RuntimeRepositoryStore(
-        mongo=FakeMongo(
+) -> _Stores:
+    return _Stores(
+        FakeMongo(
             {
                 "room_agent_messages": collection or RecordingCollection(),
                 "hitl_requests": hitl_collection or RecordingCollection(),
             }
-        ),
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
+        )
     )
 
 

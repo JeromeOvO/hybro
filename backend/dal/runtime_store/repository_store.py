@@ -7,11 +7,7 @@ from typing import Any
 from common.dto import (
     RuntimeAgentGroup,
     RuntimeAgentRecord,
-    RuntimeMessageContent,
-    RuntimeRoomAgentMessage,
     RuntimeRoomMemory,
-    RuntimeRoomRecord,
-    RuntimeRoomUserMessage,
 )
 from common.protocols import (
     AgentRepository,
@@ -23,58 +19,30 @@ from common.utils.logger import get_logger
 from dal.runtime_store.contracts import (
     agent_group_to_runtime,
     agent_to_runtime,
-    room_agent_message_to_runtime,
     room_memory_to_runtime,
-    room_to_runtime,
-    room_user_message_to_runtime,
     runtime_agent_groups,
-    runtime_agent_messages,
     runtime_agents,
-    runtime_rooms,
     runtime_to_agent_group,
-    runtime_to_message_content,
-    runtime_to_room,
-    runtime_to_room_agent_message,
-    runtime_to_room_user_message,
-    runtime_user_messages,
 )
 from dal.runtime_store.parts import (
     AgentRoomRuntimeStorePart,
     HITLLifecycleRuntimeStorePart,
     HITLRuntimeStorePart,
     MemoryRuntimeStorePart,
-    MessageRuntimeStorePart,
-    TaskLifecycleRuntimeStorePart,
 )
 from dal.runtime_store.parts.parsing import (
-    _extract_text_from_artifact_parts,
-    _modified_count,
-    _mongo_update_succeeded,
     _safe_parse_agent,
     _safe_parse_agent_group,
-    _safe_parse_agent_message,
-    _safe_parse_room,
     _safe_parse_room_memory,
-    _safe_parse_user_message,
-    _strip_file_urls,
-    _strip_unset_task_tracking_fields,
 )
 
 logger = get_logger(__name__)
 
 __all__ = [
     "RuntimeRepositoryStore",
-    "_extract_text_from_artifact_parts",
-    "_modified_count",
-    "_mongo_update_succeeded",
     "_safe_parse_agent",
     "_safe_parse_agent_group",
-    "_safe_parse_agent_message",
-    "_safe_parse_room",
     "_safe_parse_room_memory",
-    "_safe_parse_user_message",
-    "_strip_file_urls",
-    "_strip_unset_task_tracking_fields",
 ]
 
 
@@ -103,16 +71,7 @@ class RuntimeRepositoryStore:
         self._agent_room_part = AgentRoomRuntimeStorePart(
             agent_groups=self._agent_groups,
             agents=self._agents,
-            room_repository=self._room_repository,
             agent_repository=self._agent_repository,
-        )
-        self._message_part = MessageRuntimeStorePart(
-            room_agent_messages=self._room_agent_messages,
-            room_user_messages=self._room_user_messages,
-            message_repository=self._message_repository,
-        )
-        self._task_lifecycle_part = TaskLifecycleRuntimeStorePart(
-            message_store=self.messages,
         )
         self._hitl_part = HITLRuntimeStorePart(
             hitl_requests=self._hitl_requests,
@@ -134,14 +93,6 @@ class RuntimeRepositoryStore:
         return self._agent_room_part
 
     @property
-    def messages(self) -> MessageRuntimeStorePart:
-        return self._message_part
-
-    @property
-    def tasks(self) -> TaskLifecycleRuntimeStorePart:
-        return self._task_lifecycle_part
-
-    @property
     def hitl(self) -> HITLRuntimeStorePart:
         return self._hitl_part
 
@@ -152,24 +103,6 @@ class RuntimeRepositoryStore:
     @property
     def memory(self) -> MemoryRuntimeStorePart:
         return self._memory_part
-
-    def _message_delegate(self) -> MessageRuntimeStorePart:
-        part = getattr(self, "_message_part", None)
-        if part is not None:
-            return part
-        return MessageRuntimeStorePart(
-            room_agent_messages=getattr(self, "_room_agent_messages", None),
-            room_user_messages=getattr(self, "_room_user_messages", None),
-            message_repository=getattr(self, "_message_repository", None),
-        )
-
-    def _task_delegate(self) -> TaskLifecycleRuntimeStorePart:
-        part = getattr(self, "_task_lifecycle_part", None)
-        if part is not None:
-            return part
-        return TaskLifecycleRuntimeStorePart(
-            message_store=self._message_delegate(),
-        )
 
     def _hitl_delegate(self) -> HITLRuntimeStorePart:
         part = getattr(self, "_hitl_part", None)
@@ -244,126 +177,6 @@ class RuntimeRepositoryStore:
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         return await self.agent_room.increment_agent_call_count(
             agent_id, success=success
-        )
-
-    async def get_room_by_room_id(self, room_id: str) -> RuntimeRoomRecord | None:
-        room = await self.agent_room.get_room_by_room_id(room_id)
-        return room_to_runtime(room) if room is not None else None
-
-    async def get_rooms_by_room_owner_id(
-        self, room_owner_id: str
-    ) -> list[RuntimeRoomRecord]:
-        return runtime_rooms(
-            await self.agent_room.get_rooms_by_room_owner_id(room_owner_id)
-        )
-
-    async def update_room_by_room_id(
-        self, room_id: str, room: RuntimeRoomRecord
-    ) -> bool:
-        return await self.agent_room.update_room_by_room_id(
-            room_id, runtime_to_room(room)
-        )
-
-    async def get_room_user_message_by_message_id(
-        self, message_id: str
-    ) -> RuntimeRoomUserMessage | None:
-        message = await self._message_delegate().get_room_user_message_by_message_id(
-            message_id
-        )
-        return room_user_message_to_runtime(message) if message is not None else None
-
-    async def get_room_user_messages_by_room_id(
-        self,
-        room_id: str,
-    ) -> list[RuntimeRoomUserMessage]:
-        return runtime_user_messages(
-            await self._message_delegate().get_room_user_messages_by_room_id(room_id)
-        )
-
-    async def get_room_agent_message_by_message_id(
-        self, message_id: str
-    ) -> RuntimeRoomAgentMessage | None:
-        message = await self._message_delegate().get_room_agent_message_by_message_id(
-            message_id
-        )
-        return room_agent_message_to_runtime(message) if message is not None else None
-
-    async def get_room_agent_messages_by_room_id(
-        self,
-        room_id: str,
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._message_delegate().get_room_agent_messages_by_room_id(room_id)
-        )
-
-    async def get_room_agent_messages_by_related_message_id(
-        self, related_message_id: str
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._message_delegate().get_room_agent_messages_by_related_message_id(
-                related_message_id
-            )
-        )
-
-    async def add_room_agent_message(
-        self, room_agent_message: RuntimeRoomAgentMessage
-    ) -> bool:
-        return await self._message_delegate().add_room_agent_message(
-            runtime_to_room_agent_message(room_agent_message)
-        )
-
-    async def add_room_user_message(
-        self, room_user_message: RuntimeRoomUserMessage
-    ) -> bool:
-        return await self._message_delegate().add_room_user_message(
-            runtime_to_room_user_message(room_user_message)
-        )
-
-    async def set_system_task_terminal_state(
-        self, message_id: str, target_state: str, *, event_id: str
-    ) -> str:
-        return await self._message_delegate().set_system_task_terminal_state(
-            message_id, target_state, event_id=event_id
-        )
-
-    async def update_room_user_message_by_message_id(
-        self, message_id: str, room_user_message: RuntimeRoomUserMessage
-    ) -> bool:
-        return await self._message_delegate().update_room_user_message_by_message_id(
-            message_id, runtime_to_room_user_message(room_user_message)
-        )
-
-    async def upsert_room_agent_message(
-        self, room_agent_message: RuntimeRoomAgentMessage
-    ) -> None:
-        return await self._message_delegate().upsert_room_agent_message(
-            runtime_to_room_agent_message(room_agent_message)
-        )
-
-    async def delete_room_agent_message_by_message_id(self, message_id: str) -> bool:
-        return await self._message_delegate().delete_room_agent_message_by_message_id(
-            message_id
-        )
-
-    async def update_room_agent_message_by_message_id(
-        self, message_id: str, room_agent_message: RuntimeRoomAgentMessage
-    ) -> bool:
-        return await self._message_delegate().update_room_agent_message_by_message_id(
-            message_id, runtime_to_room_agent_message(room_agent_message)
-        )
-
-    async def resolve_client_request_id_for_agent_message(
-        self, room_agent_message: RuntimeRoomAgentMessage
-    ) -> str | None:
-        return await self._task_delegate().resolve_client_request_id_for_agent_message(
-            runtime_to_room_agent_message(room_agent_message)
-        )
-
-    async def resolve_client_request_id_for_message_id(
-        self, message_id: str
-    ) -> str | None:
-        return await self._task_delegate().resolve_client_request_id_for_message_id(
-            message_id
         )
 
     async def get_room_memory_by_room_id(
@@ -581,121 +394,3 @@ class RuntimeRepositoryStore:
 
     async def ensure_hitl_indexes(self) -> None:
         return await self._hitl_delegate().ensure_hitl_indexes()
-
-    async def claim_user_message_for_processing(self, message_id: str) -> bool:
-        return await self._message_delegate().claim_user_message_for_processing(
-            message_id
-        )
-
-    async def unclaim_user_message(self, message_id: str) -> bool:
-        return await self._message_delegate().unclaim_user_message(message_id)
-
-    async def claim_or_reclaim_user_message(
-        self,
-        message_id: str,
-        stale_threshold: Any,
-    ) -> bool:
-        return await self._message_delegate().claim_or_reclaim_user_message(
-            message_id, stale_threshold
-        )
-
-    async def refresh_processing_claim(self, message_id: str) -> bool:
-        return await self._message_delegate().refresh_processing_claim(message_id)
-
-    async def get_stale_claimed_orchestration_messages(
-        self,
-        orphan_threshold_minutes: int,
-        limit: int = 100,
-        after_message_id: str | None = None,
-    ) -> list[RuntimeRoomUserMessage]:
-        return await self._message_delegate().get_stale_claimed_orchestration_messages(
-            orphan_threshold_minutes,
-            limit,
-            after_message_id,
-        )
-
-    async def update_orchestration_projection_if_status(
-        self,
-        message_id: str,
-        *,
-        expected_status: str,
-        status: str,
-        clear_processing_claim: bool = False,
-    ) -> bool:
-        return await self._message_delegate().update_orchestration_projection_if_status(
-            message_id,
-            expected_status=expected_status,
-            status=status,
-            clear_processing_claim=clear_processing_claim,
-        )
-
-    async def turn_exists(self, room_id: str, turn_id: str) -> bool:
-        return await self._message_delegate().turn_exists(room_id, turn_id)
-
-    async def cancel_descendants(self, message_id: str) -> int:
-        return await self._message_delegate().cancel_descendants(message_id)
-
-    async def project_descendant_terminal_state(
-        self,
-        message_id: str,
-        *,
-        event_id: str,
-        target_state: str,
-        exclude_message_ids: list[str] | None = None,
-    ) -> list[str]:
-        return await self._message_delegate().project_descendant_terminal_state(
-            message_id,
-            event_id=event_id,
-            target_state=target_state,
-            exclude_message_ids=exclude_message_ids,
-        )
-
-    async def cancel_agent_messages_by_ids(self, message_ids: list[str]) -> int:
-        return await self._message_delegate().cancel_agent_messages_by_ids(message_ids)
-
-    async def update_room_agent_message_with_new_message_content_by_message_id(
-        self, message_id: str, message_content: RuntimeMessageContent
-    ) -> bool:
-        return await self._message_delegate().update_room_agent_message_with_new_message_content_by_message_id(
-            message_id, runtime_to_message_content(message_content)
-        )
-
-    async def reset_last_notified_state(self, message_id: str) -> bool:
-        return await self._message_delegate().reset_last_notified_state(message_id)
-
-    async def terminal_finalization_matches(
-        self,
-        message_id: str,
-        state: str,
-        *,
-        recovery_source: str,
-        recovery_id: str | None,
-    ) -> bool:
-        return await self._message_delegate().terminal_finalization_matches(
-            message_id,
-            state,
-            recovery_source=recovery_source,
-            recovery_id=recovery_id,
-        )
-
-    async def accumulate_artifact_on_message(
-        self,
-        message_id: str,
-        artifact: dict,
-        append: bool = False,
-        update_key: str | None = None,
-    ) -> bool:
-        return await self._message_delegate().accumulate_artifact_on_message(
-            message_id, artifact, append, update_key
-        )
-
-    async def update_task_state_on_message_if_not_terminal(
-        self,
-        message_id: str,
-        state: str,
-    ) -> bool:
-        return (
-            await self._message_delegate().update_task_state_on_message_if_not_terminal(
-                message_id, state
-            )
-        )

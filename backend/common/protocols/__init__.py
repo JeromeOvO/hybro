@@ -92,8 +92,6 @@ from common.protocols.runtime_store_protocols import (
     RuntimeHITLLifecycleStore,
     RuntimeHITLStore,
     RuntimeMemoryStore,
-    RuntimeMessageStore,
-    RuntimeTaskLifecycleStore,
 )
 
 __all__ = [
@@ -166,8 +164,6 @@ __all__ = [
     "RuntimeHITLLifecycleStore",
     "RuntimeHITLStore",
     "RuntimeMemoryStore",
-    "RuntimeMessageStore",
-    "RuntimeTaskLifecycleStore",
     "RoomRouteReader",
     "SSEConnectionLike",
     "SSEStateReader",

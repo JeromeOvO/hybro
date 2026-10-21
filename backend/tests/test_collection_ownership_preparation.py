@@ -18,10 +18,6 @@ def test_timeline_normalizer_is_exported_from_the_conversation_root():
 
 
 def test_persistence_callers_use_the_conversation_root():
-    for relative in (
-        "dal/orchestrator/projection.py",
-        "dal/runtime_store/parts/message_store.py",
-    ):
-        modules = imported_modules(BACKEND / relative)
-        assert "conversation.timeline" not in modules, relative
-        assert "conversation" in modules, relative
+    modules = imported_modules(BACKEND / "dal/orchestrator/projection.py")
+    assert "conversation.timeline" not in modules
+    assert "conversation" in modules

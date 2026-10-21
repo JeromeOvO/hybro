@@ -760,8 +760,21 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_deps=_agent_deps,
             )
             agent_room_store = runtime_store.agent_room
-            message_store = runtime_store.messages
-            task_store = runtime_store.tasks
+            from conversation.repository import (
+                ClientRequestIdStore,
+                ConversationMessageStore,
+                ConversationRoomStore,
+            )
+
+            message_store = ConversationMessageStore(
+                room_agent_messages=mongo_dal.collection("room_agent_messages"),
+                room_user_messages=mongo_dal.collection("room_user_messages"),
+                message_repository=_room_deps.message_repository,
+            )
+            room_store = ConversationRoomStore(
+                room_repository=_room_deps.room_repository
+            )
+            client_request_id_store = ClientRequestIdStore(message_store=message_store)
             hitl_store = runtime_store.hitl
             hitl_lifecycle_store = runtime_store.hitl_lifecycle
             memory_store = runtime_store.memory
@@ -797,7 +810,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.get_room_user_message_by_message_id
                 ),
                 resolve_client_request_id_for_message_id=(
-                    task_store.resolve_client_request_id_for_message_id
+                    client_request_id_store.resolve_client_request_id_for_message_id
                 ),
                 persist_hitl_user_answer=hitl_store.persist_hitl_user_answer,
                 persist_hitl_interaction_metadata=(
@@ -834,7 +847,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
                 get_agent_group_by_id=agent_room_store.get_agent_group_by_id,
                 get_all_active_agents=agent_room_store.get_all_active_agents,
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_by_room_id=room_store.get_room_by_room_id,
                 get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
@@ -847,7 +860,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             membership_source.bind_store(agent_room_store)
             a2a_service.bind_call_counter(agent_room_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
-                resolver=task_store,
+                resolver=client_request_id_store,
             )
             app.state.execution_client_request_id_resolver = (
                 execution_client_request_id_resolver
@@ -1148,10 +1161,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 application=hitl_application,
             )
             route_room_reader = SimpleNamespace(
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_by_room_id=room_store.get_room_by_room_id,
             )
             sse_state_reader = SimpleNamespace(
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
+                get_room_by_room_id=room_store.get_room_by_room_id,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
@@ -1793,7 +1806,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
             async def _list_room_agent_ids(room_id: str) -> list[str]:
-                room = await agent_room_store.get_room_by_room_id(room_id)
+                room = await room_store.get_room_by_room_id(room_id)
                 return list((room.room_agent_set or {}).keys()) if room else []
 
             async def _list_group_agent_ids(group_id: str) -> list[str]:

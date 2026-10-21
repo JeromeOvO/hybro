@@ -11,7 +11,7 @@ from common.utils.a2a_helpers import (
 from common.utils.a2a_helpers import (
     sanitize_task_dict as _sanitize_task_dict,
 )
-from dal.runtime_store.parts.parsing import _safe_parse_agent_message
+from conversation.repository.message_documents import _safe_parse_agent_message
 
 
 # ---------------------------------------------------------------------------

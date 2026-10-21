@@ -11,8 +11,7 @@ from common.a2a_constants import TERMINAL_STATES, CommonTaskState
 from common.utils.a2a_helpers import sanitize_artifact_parts
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from conversation import normalize_timeline_document
-from dal.runtime_store.parts.parsing import (
+from conversation.repository.message_documents import (
     _extract_text_from_artifact_parts,
     _modified_count,
     _mongo_update_succeeded,
@@ -21,6 +20,7 @@ from dal.runtime_store.parts.parsing import (
     _strip_file_urls,
     _strip_unset_task_tracking_fields,
 )
+from conversation.timeline import normalize_timeline_document
 from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ def _legacy_claim_threshold_text(stale_threshold: Any) -> str:
     return str(stale_threshold)
 
 
-class MessageRuntimeStorePart:
+class ConversationMessageStore:
     def __init__(
         self, *, room_agent_messages, room_user_messages, message_repository
     ) -> None:

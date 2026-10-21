@@ -66,7 +66,6 @@ DAL_IMPORT_DEBT = frozenset(
         "dal/orchestrator/projection.py",
         "dal/orchestrator/run_store.py",
         "dal/orchestrator/stores.py",
-        "dal/runtime_store/parts/message_store.py",
     }
 )
 

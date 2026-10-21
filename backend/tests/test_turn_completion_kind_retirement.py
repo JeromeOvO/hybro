@@ -33,11 +33,10 @@ def test_conversation_no_longer_looks_up_completion_kind():
 
 
 def test_message_store_has_no_completion_kind_writer():
-    from common.protocols.runtime_store_protocols import RuntimeMessageStore
+    from conversation.repository import ConversationMessageStore
     from dal.runtime_store import RuntimeRepositoryStore
-    from dal.runtime_store.parts.message_store import MessageRuntimeStorePart
 
-    for owner in (MessageRuntimeStorePart, RuntimeRepositoryStore, RuntimeMessageStore):
+    for owner in (ConversationMessageStore, RuntimeRepositoryStore):
         assert not hasattr(owner, "set_turn_completion_kind"), owner
 
 

@@ -144,13 +144,11 @@ def test_stale_checker_no_longer_cleans_processing_status():
 
 
 def test_task_lifecycle_store_keeps_only_client_request_id_correlation():
-    from dal.runtime_store.parts.task_lifecycle_store import (
-        TaskLifecycleRuntimeStorePart,
-    )
+    from conversation.repository import ClientRequestIdStore
 
     public = {
         name
-        for name, member in inspect.getmembers(TaskLifecycleRuntimeStorePart)
+        for name, member in inspect.getmembers(ClientRequestIdStore)
         if callable(member) and not name.startswith("__")
     }
 
@@ -158,7 +156,7 @@ def test_task_lifecycle_store_keeps_only_client_request_id_correlation():
         "resolve_client_request_id_for_agent_message",
         "resolve_client_request_id_for_message_id",
     }
-    assert "runs" not in inspect.signature(TaskLifecycleRuntimeStorePart).parameters
+    assert "runs" not in inspect.signature(ClientRequestIdStore).parameters
 
 
 def test_processing_message_id_field_is_gone():

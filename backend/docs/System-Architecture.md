@@ -1115,7 +1115,14 @@ stale threshold. Agent messages stamped with `extend_info.orchestrator_run_id`
 are skipped (orchestrator recovery owns them). Working tasks with no
 `task_updated_at` / `task_created_at` are not treated as stale.
 
-Mongo persistence is implemented by `conversation.repository.mongo`.
+Mongo persistence is implemented by `conversation.repository.mongo`. The
+runtime message, room, and correlation stores also live in
+`conversation.repository`: `ConversationMessageStore` (agent/user message
+writes, claims, artifact accumulation, descendant cancellation),
+`ConversationRoomStore` (room reads and updates), and `ClientRequestIdStore`
+(`client_request_id` resolution). `container.py` constructs them directly over
+the `room_agent_messages` and `room_user_messages` collections and the Room-owned
+repositories.
 `conversation.runtime.ConversationRuntime` holds the message engine methods:
 mention parsing, user-message persistence and preflight, agent-message creation,
 message and timeline reads, and orchestration-status projection.
@@ -2632,9 +2639,9 @@ isolation across HTTP requests.
 
 ## A2A Task Data Access
 
-Task lifecycle data access for `client_request_id` correlation, HITL lifecycle,
-and stale room processing-status cleanup is routed through focused runtime-store
-ports assembled in `container.py`. The runtime-store repository aggregate backs those
+`client_request_id` correlation is served by
+`conversation.repository.ClientRequestIdStore`. HITL lifecycle data access is
+routed through focused runtime-store ports assembled in `container.py`. The runtime-store repository aggregate backs those
 ports with module repositories and `MongoDAL` collections, but production
 bindings use scoped `dal.runtime_store.parts` surfaces or focused startup
 adapters wherever a narrower port is sufficient. Remaining runtime-store
