@@ -127,8 +127,8 @@ export interface MessageEntity {
   // the turn store receiving direct writes (derived-only constraint).
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
 
-  /** Backend-authoritative signal: whether the turn completed via LLM synthesis or deterministic digest. */
-  turnCompletionKind?: 'synthesis' | 'deterministic'
+  /** Frontend stamp set when backend truth confirms a non-synthesis completion. */
+  turnCompletionKind?: 'deterministic'
 
   /** Parsed from backend extend_info.summary_origin for summary-family agents. */
   summaryOrigin?: 'llm' | 'deterministic'
@@ -192,7 +192,7 @@ export interface IncomingMessage {
   quotedSenderName?: string
   quoteId?: string
   turnTerminalStatus?: 'completed' | 'failed' | 'canceled'
-  turnCompletionKind?: 'synthesis' | 'deterministic'
+  turnCompletionKind?: 'deterministic'
   summaryOrigin?: 'llm' | 'deterministic'
   processingStatusLogs?: ProcessingStatusLogEntry[]
 }

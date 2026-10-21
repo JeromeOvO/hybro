@@ -838,7 +838,6 @@ def test_protocol_methods_match_design_doc():
             "refresh_processing_claim",
             "reset_last_notified_state",
             "set_system_task_terminal_state",
-            "set_turn_completion_kind",
             "turn_exists",
             "unclaim_user_message",
             "update_orchestration_projection_if_status",

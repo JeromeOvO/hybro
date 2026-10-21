@@ -225,7 +225,9 @@ class TestRoomLifecycleFlow:
         ]:
             req = MagicMock()
             req.json = AsyncMock(return_value={"room_id": "guarded-room"})
-            kwargs = {"store": mock_db, "center": MagicMock()}
+            kwargs = {"store": mock_db}
+            if endpoint_fn is not inquiry_active_runs:
+                kwargs["center"] = MagicMock()
             if endpoint_fn is not inquiry_room_messages:
                 kwargs["engine"] = MagicMock()
             with pytest.raises(HTTPException) as exc:

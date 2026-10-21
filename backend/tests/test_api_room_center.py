@@ -98,13 +98,11 @@ class TestRoomCenterAdapter:
     async def test_delegates_message_reads_to_the_conversation_runtime(self):
         runtime = MagicMock()
         runtime.inquiry_room_messages_by_room_id = AsyncMock(return_value="messages")
-        runtime.inquiry_active_runs = AsyncMock(return_value="runs")
         center = ChatRouteAdapter(
             chat_service=MagicMock(), conversation_runtime=runtime
         )
 
         assert await center.inquiry_room_messages_by_room_id(MagicMock()) == "messages"
-        assert await center.inquiry_active_runs(MagicMock()) == "runs"
 
 
 class TestVerifyRoomOwnership:
@@ -463,7 +461,6 @@ class TestInquiryActiveRuns:
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
-            center=patch_room_center_deps["room_center"],
         )
 
         assert response.active_runs is not None
@@ -482,7 +479,6 @@ class TestInquiryActiveRuns:
         self, mock_user, sample_room, patch_room_center_deps
     ):
         from common.dto import RunInfo
-        from models.response import RoomCenterActiveRunsResponse
 
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -502,21 +498,11 @@ class TestInquiryActiveRuns:
                 seq=1,
             )
         ]
-        patch_room_center_deps[
-            "room_center"
-        ].inquiry_active_runs.return_value = RoomCenterActiveRunsResponse(
-            success=True,
-            room_id=sample_room.room_id,
-            active_runs=[],
-            turn_completion_kind="synthesis",
-        )
-
         response = await inquiry_active_runs(
             mock_request,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
-            center=patch_room_center_deps["room_center"],
         )
 
         assert response.success is True
@@ -524,137 +510,14 @@ class TestInquiryActiveRuns:
         assert response.active_runs is not None
         assert len(response.active_runs) == 1
         assert response.active_runs[0].trigger_message_id == "msg-active"
-        assert response.turn_completion_kind == "synthesis"
         patch_room_center_deps[
             "execution_engine"
         ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
-        patch_room_center_deps["room_center"].inquiry_active_runs.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_returns_active_runs_without_trigger_without_room_center_lookup(
-        self, mock_user, sample_room, patch_room_center_deps
-    ):
-        from common.dto import RunInfo
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
-
-        patch_room_center_deps[
-            "db_service"
-        ].get_room_by_room_id.return_value = sample_room
-        patch_room_center_deps["execution_engine"].get_runs_for_room.return_value = [
-            RunInfo(
-                run_id="run-1",
-                room_id=sample_room.room_id,
-                state="processing",
-                trigger_message_id="msg-active",
-                agent_id="a1",
-                seq=1,
-            )
-        ]
-
-        response = await inquiry_active_runs(
-            mock_request,
-            mock_user,
-            store=patch_room_center_deps["db_service"],
-            engine=patch_room_center_deps["execution_engine"],
-            center=patch_room_center_deps["room_center"],
-        )
-
-        assert response.success is True
-        assert response.active_runs is not None
-        assert response.active_runs[0].trigger_message_id == "msg-active"
-        assert response.turn_completion_kind is None
-        patch_room_center_deps["room_center"].inquiry_active_runs.assert_not_awaited()
-        patch_room_center_deps[
-            "execution_engine"
-        ].get_runs_for_room.assert_awaited_once_with(sample_room.room_id)
-
-    @pytest.mark.asyncio
-    async def test_suppresses_turn_completion_kind_when_requested_trigger_is_active(
-        self, mock_user, sample_room, patch_room_center_deps
-    ):
-        from common.dto import RunInfo
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={"room_id": sample_room.room_id, "trigger_message_id": "m1"}
-        )
-
-        patch_room_center_deps[
-            "db_service"
-        ].get_room_by_room_id.return_value = sample_room
-        patch_room_center_deps["execution_engine"].get_runs_for_room.return_value = [
-            RunInfo(
-                run_id="run-1",
-                room_id=sample_room.room_id,
-                state="processing",
-                trigger_message_id="m1",
-                agent_id="a1",
-                seq=1,
-            )
-        ]
-
-        response = await inquiry_active_runs(
-            mock_request,
-            mock_user,
-            store=patch_room_center_deps["db_service"],
-            engine=patch_room_center_deps["execution_engine"],
-            center=patch_room_center_deps["room_center"],
-        )
-
-        assert response.success is True
-        assert response.active_runs is not None
-        assert response.active_runs[0].trigger_message_id == "m1"
-        assert response.turn_completion_kind is None
-        patch_room_center_deps["room_center"].inquiry_active_runs.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_inquiry_active_runs_degrades_when_completion_kind_lookup_fails(
-        self, mock_user, sample_room, patch_room_center_deps
-    ):
-        from common.dto import RunInfo
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={"room_id": sample_room.room_id, "trigger_message_id": "m1"}
-        )
-
-        patch_room_center_deps[
-            "db_service"
-        ].get_room_by_room_id.return_value = sample_room
-        patch_room_center_deps["execution_engine"].get_runs_for_room.return_value = [
-            RunInfo(
-                run_id="run-1",
-                room_id=sample_room.room_id,
-                state="processing",
-                trigger_message_id="msg-active",
-                agent_id="a1",
-                seq=1,
-            )
-        ]
-        patch_room_center_deps[
-            "room_center"
-        ].inquiry_active_runs.side_effect = RuntimeError("completion kind unavailable")
-
-        response = await inquiry_active_runs(
-            mock_request,
-            mock_user,
-            store=patch_room_center_deps["db_service"],
-            engine=patch_room_center_deps["execution_engine"],
-            center=patch_room_center_deps["room_center"],
-        )
-
-        assert response.success is True
-        assert response.active_runs is not None
-        assert response.active_runs[0].trigger_message_id == "msg-active"
-        assert response.turn_completion_kind is None
 
     @pytest.mark.asyncio
     async def test_inquiry_active_runs_degrades_when_execution_lookup_fails(
         self, mock_user, sample_room, patch_room_center_deps
     ):
-        from models.response import RoomCenterActiveRunsResponse
 
         mock_request = MagicMock()
         mock_request.json = AsyncMock(
@@ -667,26 +530,15 @@ class TestInquiryActiveRuns:
         patch_room_center_deps[
             "execution_engine"
         ].get_runs_for_room.side_effect = RuntimeError("runs unavailable")
-        patch_room_center_deps[
-            "room_center"
-        ].inquiry_active_runs.return_value = RoomCenterActiveRunsResponse(
-            success=True,
-            room_id=sample_room.room_id,
-            active_runs=[],
-            turn_completion_kind="synthesis",
-        )
-
         response = await inquiry_active_runs(
             mock_request,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
-            center=patch_room_center_deps["room_center"],
         )
 
         assert response.success is True
         assert response.active_runs == []
-        assert response.turn_completion_kind == "synthesis"
 
     @pytest.mark.asyncio
     async def test_raises_403_for_non_owner(
@@ -703,7 +555,6 @@ class TestInquiryActiveRuns:
                 mock_user_2,
                 store=mock_db_service,
                 engine=MagicMock(),
-                center=MagicMock(),
             )
 
         assert exc_info.value.status_code == 403
@@ -865,7 +716,6 @@ class TestInquiryRoomMessages:
             "quoted_text": "Public quoted excerpt",
             "quoted_sender_name": "Agent One",
             "quote_id": "quote-public-001",
-            "turn_completion_kind": "synthesis",
             "orchestration_status": "failed",
         }
         user_message = RoomUserMessage(
@@ -876,6 +726,7 @@ class TestInquiryRoomMessages:
             message_content=MessageContent(message_text="Please review the quote"),
             extend_info={
                 **public_extend_info,
+                "turn_completion_kind": "synthesis",
                 "client_request_id": private_sentinel,
                 "orchestration": True,
                 "orchestration_run_id": private_sentinel,

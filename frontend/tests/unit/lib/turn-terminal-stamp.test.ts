@@ -376,7 +376,6 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
     vi.mocked(inquiryActiveRuns).mockResolvedValue({
       success: true,
       active_runs: [],
-      turn_completion_kind: 'deterministic',
     })
 
     const lifecycle = createProcessingLifecycle(() => {})
@@ -390,7 +389,6 @@ describe('ensureTurnTerminalStampedFromBackendTruth', () => {
         senderName: 'User',
         timestamp: '2026-01-01T00:00:00.000Z',
         clientRequestId: 'cr-1',
-        processingStatusLogs: [{ id: 'l1', message: 'Delegating to 2 agent(s)...', timestamp: '2026-01-01T00:00:01.000Z' }],
       },
       {
         id: 'a1',

@@ -212,12 +212,7 @@ describe('useProcessingRestore', () => {
       expect(reconcileWithDb).toHaveBeenCalledWith('room-1')
       expect(lifecycle.stopProcessing).toHaveBeenCalled()
     })
-    expect(inquiryActiveRuns).toHaveBeenCalledWith(
-      'room-1',
-      getToken,
-      undefined,
-      'msg-live-failed',
-    )
+    expect(inquiryActiveRuns).toHaveBeenCalledWith('room-1', getToken)
     expect(lifecycle.markProcessingResolved).toHaveBeenCalled()
   })
 

@@ -11,11 +11,6 @@ import { deduplicateArtifactsByPart } from '@/lib/artifacts/artifact-identity'
 import { specificPublicAgentName } from '@/lib/agent-display-name'
 import type { ArtifactData, ArtifactPart, IncomingMessage } from './types'
 
-function parseTurnCompletionKind(raw: unknown): 'synthesis' | 'deterministic' | undefined {
-  if (raw === 'synthesis' || raw === 'deterministic') return raw
-  return undefined
-}
-
 function publicTaskError(status: TaskState | undefined): string | undefined {
   switch (status as string | undefined) {
     case TASK_STATE.FAILED:
@@ -275,7 +270,6 @@ export async function convertApiMessageToIncoming(
 
   // ── Build IncomingMessage ────────────────────────────────────
   const summaryOrigin = parseSummaryOrigin(extendInfo?.summary_origin)
-  const turnCompletionKind = parseTurnCompletionKind(extendInfo?.turn_completion_kind)
   const turnTerminalStatus = apiMessage.message_type === 'user'
     ? parseTurnTerminalStatus(extendInfo?.orchestration_status)
     : undefined
@@ -332,7 +326,6 @@ export async function convertApiMessageToIncoming(
     artifacts,
     summaryOrigin,
     turnTerminalStatus,
-    turnCompletionKind,
     quotedText,
     quotedSenderName,
     quoteId,

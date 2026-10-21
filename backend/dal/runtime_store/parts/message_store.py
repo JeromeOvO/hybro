@@ -137,40 +137,6 @@ class MessageRuntimeStorePart:
             logger.error("Failed to add room user message", exc_info=True)
             return False
 
-    async def set_turn_completion_kind(
-        self, message_id: str, completion_kind: str
-    ) -> str:
-        """Atomically set terminal completion metadata without replacing the message."""
-        doc = await self._room_user_messages.find_one({"message_id": message_id})
-        if doc is None:
-            return "missing"
-        current = (doc.get("extend_info") or {}).get("turn_completion_kind")
-        if current == completion_kind:
-            return "already"
-        if current is not None:
-            return "conflict"
-        updated = await self._room_user_messages.update_one(
-            {
-                "message_id": message_id,
-                "$or": [
-                    {"extend_info.turn_completion_kind": {"$exists": False}},
-                    {"extend_info.turn_completion_kind": None},
-                ],
-            },
-            {"$set": {"extend_info.turn_completion_kind": completion_kind}},
-        )
-        if updated:
-            return "updated"
-        reread = await self._room_user_messages.find_one({"message_id": message_id})
-        if reread is None:
-            return "missing"
-        return (
-            "already"
-            if (reread.get("extend_info") or {}).get("turn_completion_kind")
-            == completion_kind
-            else "conflict"
-        )
-
     async def set_system_task_terminal_state(
         self, message_id: str, target_state: str, *, event_id: str
     ) -> str:

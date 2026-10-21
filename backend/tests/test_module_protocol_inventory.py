@@ -55,7 +55,6 @@ EXPECTED_METHODS = {
         "RoomCenterCompatibility": {
             "create_new_room",
             "delete_room_by_room_id",
-            "inquiry_active_runs",
             "inquiry_room_history_by_owner_id",
             "inquiry_room_messages_by_room_id",
             "inquiry_room_setting",

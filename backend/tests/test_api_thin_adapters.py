@@ -533,11 +533,8 @@ def test_room_center_route_inventory_records_live_protocol_owners():
     }
     expected = {
         "inquiry_active_runs": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
-            "supporting": {
-                "common.protocols.ExecutionEngine",
-                "common.protocols.RoomRouteReader",
-            },
+            "owner": "common.protocols.ExecutionEngine",
+            "supporting": {"common.protocols.RoomRouteReader"},
         },
         "inquiry_room_setting": {
             "owner": "chat.protocols.RoomCenterCompatibility",
@@ -592,8 +589,8 @@ def test_room_center_protocol_inventory_matches_handler_calls():
 
     expectations = {
         "inquiry_active_runs": (
-            "chat.protocols.RoomCenterCompatibility",
-            ["inquiry_active_runs"],
+            "common.protocols.ExecutionEngine",
+            ["_active_run_refs_for_room(room_id, engine)"],
         ),
         "send_message": (
             "common.protocols.ExecutionEngine",
@@ -649,16 +646,14 @@ def test_room_active_runs_inventory_records_execution_support():
 
     assert "_require_execution_engine" not in route_source
     assert "runs = await engine.get_runs_for_room(room_id)" in route_source
-    assert (
-        "active_runs = await _active_run_refs_for_room(room_id, engine)" in route_source
+    assert "active_runs=await _active_run_refs_for_room(room_id, engine)" in (
+        route_source
     )
     assert "_read_active_runs_for_room" not in room_runtime_source
     assert "common.protocols.ExecutionEngine" in set(
         room_setting_route.get("supporting_protocols") or []
     )
-    assert "common.protocols.ExecutionEngine" in set(
-        active_runs_route.get("supporting_protocols") or []
-    )
+    assert active_runs_route["owning_protocol"] == "common.protocols.ExecutionEngine"
 
 
 def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup():

@@ -174,9 +174,6 @@ class RoomCenterRoomSettingRequest(BaseModel):
     seed_group_id: str | None = None
     seed_all_current_agents: bool | None = None
 
-    # Active-runs query: optional trigger message for turn_completion_kind lookup
-    trigger_message_id: str | None = None
-
     # Chat history presentation metadata
     is_pinned: bool | None = None
     pin_order: float | None = None

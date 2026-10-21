@@ -5,7 +5,6 @@ from models.request import (
     RoomCenterRoomSettingRequest,
 )
 from models.response import (
-    RoomCenterActiveRunsResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
@@ -27,11 +26,6 @@ class ChatRouteAdapter:
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:
         return await self._chat_service.inquiry_room_setting(request)
-
-    async def inquiry_active_runs(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterActiveRunsResponse:
-        return await self._conversation_runtime.inquiry_active_runs(request)
 
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest

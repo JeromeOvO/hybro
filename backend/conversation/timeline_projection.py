@@ -30,7 +30,6 @@ _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS = (
     "quoted_sender_name",
     "quote_id",
 )
-_PUBLIC_TURN_COMPLETION_KINDS = {"deterministic", "synthesis"}
 _PUBLIC_ORCHESTRATION_STATUS_MAP = {
     "completed": "completed",
     "failed": "failed",
@@ -62,9 +61,6 @@ def _public_user_message_extend_info(extend_info: object) -> dict[str, str] | No
         for key in _PUBLIC_USER_MESSAGE_EXTEND_INFO_STRING_KEYS
         if isinstance((value := extend_info.get(key)), str)
     }
-    turn_completion_kind = extend_info.get("turn_completion_kind")
-    if turn_completion_kind in _PUBLIC_TURN_COMPLETION_KINDS:
-        public_extend_info["turn_completion_kind"] = turn_completion_kind
     orchestration_status = _PUBLIC_ORCHESTRATION_STATUS_MAP.get(
         extend_info.get("orchestration_status")
     )
@@ -286,7 +282,6 @@ class RoomTimelineProjector:
                 "source_user_message_id",
                 "summary_origin",
                 "summary_type",
-                "turn_completion_kind",
             ):
                 value = agent_msg.extend_info.get(key)
                 if value is not None:

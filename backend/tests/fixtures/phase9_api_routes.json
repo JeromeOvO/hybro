@@ -797,7 +797,6 @@
     "dependencies": [
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -808,14 +807,13 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "common.protocols.ExecutionEngine",
     "path": "/api/v1/roomCenter/inquiryActiveRuns",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null,
     "supporting_protocols": [
-      "common.protocols.ExecutionEngine",
       "common.protocols.RoomRouteReader"
     ]
   },

@@ -1446,7 +1446,7 @@ describe('deriveTurnPhase', () => {
   })
 
   it('repairs contentful submitted system:hybro after turn is terminal', () => {
-    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed', turnCompletionKind: 'synthesis' })
+    const user = makeUserEntity({ id: 'u1', turnTerminalStatus: 'completed' })
     const agentA = makeAgentEntity({
       id: 'a1',
       agentId: 'agent-a',

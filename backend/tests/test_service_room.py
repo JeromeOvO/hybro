@@ -19,7 +19,6 @@ import pytest
 
 from common.dto import (
     MessageCommitted,
-    RoomInfo,
     UserMessageInsertResult,
 )
 from conversation.idempotency import (
@@ -31,7 +30,7 @@ from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
 )
-from models.request import RoomCenterRoomSettingRequest, RoomCenterUserMessageRequest
+from models.request import RoomCenterUserMessageRequest
 from models.room import MessageContent, Room, RoomUserMessage, UserAttachment
 
 
@@ -161,56 +160,8 @@ def test_room_services_bind_store_sets_runtime_store():
     assert svc._store is store
 
 
-@pytest.mark.asyncio
-async def test_room_services_active_runs_response_is_room_metadata_only():
-    svc = object.__new__(ConversationRuntime)
-    svc._store = MagicMock()
-    svc._store.get_room_by_room_id = AsyncMock(
-        side_effect=AssertionError("legacy room store should not be used")
-    )
-    svc._store.get_room_user_message_by_message_id = AsyncMock(
-        side_effect=AssertionError("legacy message store should not be used")
-    )
-    svc._store.get_active_runs_by_room_id = AsyncMock(
-        side_effect=AssertionError("legacy active-run store should not be used")
-    )
-    svc._bound = False
-    svc._facade = None
-    facade = AsyncMock()
-    facade.get_room.return_value = RoomInfo(
-        room_id="r1",
-        room_name="Room",
-        owner_id="owner",
-        owner_name="Owner",
-    )
-    facade.get_turn_completion_kind.return_value = "synthesis"
-
-    svc.bind_facade(facade)
-
-    response = await svc.inquiry_active_runs(
-        RoomCenterRoomSettingRequest(
-            room_id="r1",
-            trigger_message_id="trigger-1",
-        )
-    )
-
-    assert response.success is True
-    assert response.room_id == "r1"
-    assert response.active_runs == []
-    assert response.turn_completion_kind == "synthesis"
-    facade.get_room.assert_awaited_once_with("r1")
-    facade.get_turn_completion_kind.assert_awaited_once_with("trigger-1")
-    svc._store.get_room_by_room_id.assert_not_awaited()
-    svc._store.get_room_user_message_by_message_id.assert_not_awaited()
-    svc._store.get_active_runs_by_room_id.assert_not_awaited()
-
-
 def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches():
     forbidden_by_method = {
-        ("conversation/runtime.py", "ConversationRuntime", "inquiry_active_runs"): {
-            "get_room_by_room_id",
-            "get_room_user_message_by_message_id",
-        },
         ("chat/service.py", "ChatService", "inquiry_room_setting"): {
             "get_room_by_room_id",
             "update_room_by_room_id",

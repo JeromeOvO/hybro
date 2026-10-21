@@ -7,7 +7,6 @@ import {
   isMixedTerminalMultiAgentTurn,
   isMultiAgentTurnReadyForDeterministicDone,
   isPreSynthesisGap,
-  isSynthesisKindWithoutActualSynthesis,
   shouldHoldTurnActiveForOpenRoomRun,
   shouldShowSynthesizingPhase,
 } from '@/lib/room-timeline/multi-agent-turn-complete'
@@ -68,18 +67,6 @@ describe('isMultiAgentTurnReadyForDeterministicDone', () => {
       ],
     })
     expect(isMultiAgentTurnReadyForDeterministicDone(turn)).toBe(true)
-  })
-
-  it('returns false when turnTerminalStatus is completed with turnCompletionKind=synthesis', () => {
-    const turn = makeTurn({
-      turnTerminalStatus: 'completed',
-      turnCompletionKind: 'synthesis',
-      agentResults: [
-        makeAgent({ messageId: 'a1', agentId: 'agent-a' }),
-        makeAgent({ messageId: 'a2', agentId: 'agent-b' }),
-      ],
-    })
-    expect(isMultiAgentTurnReadyForDeterministicDone(turn)).toBe(false)
   })
 
   it('returns true when turnTerminalStatus is completed without turnCompletionKind on supervisor turn', () => {
@@ -236,16 +223,6 @@ describe('isDeterministicCompletionExpected', () => {
     expect(isDeterministicCompletionExpected(turn)).toBe(true)
   })
 
-  it('returns false when inquiry reports synthesis kind', () => {
-    const turn = makeTurn({
-      agentResults: [
-        makeAgent({ messageId: 'a1', status: 'completed', content: 'A' }),
-        makeAgent({ messageId: 'a2', status: 'completed', content: 'B' }),
-      ],
-    })
-    expect(isDeterministicCompletionExpected(turn, undefined, 'synthesis')).toBe(false)
-  })
-
   it('returns true for supervisor turn with stamped deterministic completion', () => {
     const turn = makeTurn({
       isSupervisorTurn: true,
@@ -287,16 +264,6 @@ describe('isBackendRunConfirmedNonSynthesisCompletion', () => {
       ],
     })
     expect(isBackendRunConfirmedNonSynthesisCompletion(turn)).toBe(true)
-  })
-
-  it('returns false when inquiry reports synthesis kind', () => {
-    const turn = makeTurn({
-      agentResults: [
-        makeAgent({ messageId: 'a1', status: 'completed', content: 'A' }),
-        makeAgent({ messageId: 'a2', status: 'completed', content: 'B' }),
-      ],
-    })
-    expect(isBackendRunConfirmedNonSynthesisCompletion(turn, undefined, 'synthesis')).toBe(false)
   })
 
   it('returns false when LLM summary entity has substantive content', () => {
@@ -548,19 +515,6 @@ describe('open room run helpers', () => {
       isLatestUserTurn: true,
     })).toBe(true)
     expect(hasLiveRunEvidence({ userMessageId: 'u1' })).toBe(false)
-  })
-
-  it('shouldHoldTurnActiveForOpenRoomRun stays false for synthesis kind without actual synthesis', () => {
-    expect(shouldHoldTurnActiveForOpenRoomRun(agents, {
-      userMessageId: 'u1',
-      turnCompletionKind: 'synthesis',
-      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
-    })).toBe(false)
-    expect(isSynthesisKindWithoutActualSynthesis(agents, {
-      userMessageId: 'u1',
-      turnCompletionKind: 'synthesis',
-      processingStatusLogs: [{ id: 'l1', message: 'Working', timestamp: '2026-01-01T00:00:01.000Z' }],
-    })).toBe(true)
   })
 
   it('shouldHoldTurnActiveForOpenRoomRun stays false once the room run is terminal', () => {

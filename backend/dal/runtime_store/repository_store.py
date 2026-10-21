@@ -319,13 +319,6 @@ class RuntimeRepositoryStore:
             runtime_to_room_user_message(room_user_message)
         )
 
-    async def set_turn_completion_kind(
-        self, message_id: str, completion_kind: str
-    ) -> str:
-        return await self._message_delegate().set_turn_completion_kind(
-            message_id, completion_kind
-        )
-
     async def set_system_task_terminal_state(
         self, message_id: str, target_state: str, *, event_id: str
     ) -> str:

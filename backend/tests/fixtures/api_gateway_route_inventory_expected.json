@@ -677,7 +677,6 @@
     "dependencies": [
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [

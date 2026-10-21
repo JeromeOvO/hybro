@@ -248,44 +248,16 @@ async def inquiry_active_runs(
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
-    center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
     request_data = await request.json()
     room_id = request_data.get("room_id")
-    trigger_message_id = request_data.get("trigger_message_id")
 
     await verify_room_ownership(room_id, user, store)
 
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id,
-        requesting_user_id=user.user_id,
-        trigger_message_id=trigger_message_id,
-    )
-    active_runs = await _active_run_refs_for_room(room_id, engine)
-
-    turn_completion_kind = None
-    trigger_is_active = any(
-        run.trigger_message_id == trigger_message_id for run in active_runs
-    )
-    if trigger_message_id and not trigger_is_active:
-        try:
-            room_side_response = await center.inquiry_active_runs(room_center_request)
-        except Exception:
-            logger.warning(
-                "turn-completion lookup failed for room_id=%s trigger_message_id=%s",
-                room_id,
-                trigger_message_id,
-                exc_info=True,
-            )
-        else:
-            if room_side_response.success:
-                turn_completion_kind = room_side_response.turn_completion_kind
-
     return RoomCenterActiveRunsResponse(
         room_id=room_id,
-        active_runs=active_runs,
-        turn_completion_kind=turn_completion_kind,
+        active_runs=await _active_run_refs_for_room(room_id, engine),
         success=True,
         error=None,
         status_code=200,

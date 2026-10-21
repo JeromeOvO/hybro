@@ -37,11 +37,9 @@ from conversation.user_message_persistence import (
 )
 from models.request import (
     RoomCenterRoomMessageRequest,
-    RoomCenterRoomSettingRequest,
     RoomCenterUserMessageRequest,
 )
 from models.response import (
-    RoomCenterActiveRunsResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterUserMessageResponse,
     ScopeResolutionError,
@@ -207,54 +205,6 @@ class ConversationRuntime:
                 "ConversationRuntime.bind_facade() not called - startup incomplete"
             )
         return self._facade
-
-    async def inquiry_active_runs(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterActiveRunsResponse:
-        """Return non-terminal runs for a room (same run shape as inquiry_room_setting)."""
-        facade = self._require_facade()
-        if request.room_id is None:
-            return RoomCenterActiveRunsResponse(
-                room_id=None,
-                active_runs=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        info = await facade.get_room(room_id)
-        if info is None:
-            return RoomCenterActiveRunsResponse(
-                room_id=None,
-                active_runs=None,
-                success=False,
-                error="Room not found",
-                status_code=404,
-            )
-
-        active_runs: list[dict] = []
-
-        turn_completion_kind: str | None = None
-        trigger_msg_id = request.trigger_message_id
-        if trigger_msg_id and not any(
-            r.get("trigger_message_id") == trigger_msg_id for r in active_runs
-        ):
-            try:
-                turn_completion_kind = await facade.get_turn_completion_kind(
-                    trigger_msg_id
-                )
-            except Exception:
-                pass
-
-        return RoomCenterActiveRunsResponse(
-            room_id=info.room_id,
-            active_runs=active_runs,
-            turn_completion_kind=turn_completion_kind,
-            success=True,
-            error=None,
-            status_code=200,
-        )
 
     # --- Attachment resolution helpers ---
 

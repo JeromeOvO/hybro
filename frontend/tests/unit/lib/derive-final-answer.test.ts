@@ -486,7 +486,6 @@ describe('deriveFinalAnswer', () => {
   it('stays pending after agents finish when synthesis is actively in flight', () => {
     const turn = makeTurn({
       status: 'active',
-      turnCompletionKind: 'synthesis',
       processingStatusLogs: [{ id: 'l1', message: 'Synthesizing responses...', timestamp: '2026-01-01T00:00:03.000Z' }],
       agentResults: [
         makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
@@ -494,18 +493,6 @@ describe('deriveFinalAnswer', () => {
       ],
     })
     expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('pending')
-  })
-
-  it('returns deterministic_done when synthesis kind is set but no synthesis ran', () => {
-    const turn = makeTurn({
-      status: 'active',
-      turnCompletionKind: 'synthesis',
-      agentResults: [
-        makeAgent({ messageId: 'a1', agentId: 'agent-a', status: 'completed', content: 'A' }),
-        makeAgent({ messageId: 'a2', agentId: 'agent-b', status: 'completed', content: 'B' }),
-      ],
-    })
-    expect(deriveFinalAnswer(turn, ['a1', 'a2']).kind).toBe('deterministic_done')
   })
 
   it('returns deterministic_done for supervisor turn after backend stamps deterministic kind', () => {
@@ -602,7 +589,6 @@ describe('deriveFinalAnswer', () => {
     const turn = makeTurn({
       status: 'active',
       turnTerminalStatus: 'completed',
-      turnCompletionKind: 'synthesis',
       agentResults: [
         makeAgent({
           messageId: 'a1',

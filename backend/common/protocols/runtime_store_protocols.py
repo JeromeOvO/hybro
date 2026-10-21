@@ -77,9 +77,6 @@ class RuntimeMessageStore(Protocol):
     async def add_room_user_message(
         self, room_user_message: RuntimeRoomUserMessage
     ) -> bool: ...
-    async def set_turn_completion_kind(
-        self, message_id: str, completion_kind: str
-    ) -> str: ...
     async def set_system_task_terminal_state(
         self, message_id: str, target_state: str, *, event_id: str
     ) -> str: ...

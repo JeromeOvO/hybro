@@ -154,12 +154,8 @@ export async function inquiryActiveRuns(
   room_id: string,
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
-  trigger_message_id?: string,
 ): Promise<RoomCenterActiveRunsResponse> {
-  const requestData: RoomCenterRoomSettingRequest & { trigger_message_id?: string } = {
-    room_id,
-    ...(trigger_message_id ? { trigger_message_id } : {}),
-  }
+  const requestData: RoomCenterRoomSettingRequest = { room_id }
 
   return apiPost<RoomCenterActiveRunsResponse>(
     `${API_BASE_URL}/inquiryActiveRuns`,

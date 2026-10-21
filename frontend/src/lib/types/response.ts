@@ -330,7 +330,6 @@ export interface ActiveRunRefWire {
 export interface RoomCenterActiveRunsResponse {
   room_id?: string | null;
   active_runs?: ActiveRunRefWire[] | null;
-  turn_completion_kind?: string | null;
   success: boolean;
   error?: string | null;
   status_code?: number;

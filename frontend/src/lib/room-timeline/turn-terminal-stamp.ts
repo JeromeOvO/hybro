@@ -37,7 +37,7 @@ export function canStampTurnTerminalFromEntityState(
   real: AgentResultViewModel[] = getStripSourceResults(turn),
   backendRunActive: boolean | null = null,
   options?: { lifecycleActive?: boolean },
-  turnCompletionKind?: 'synthesis' | 'deterministic',
+  turnCompletionKind?: 'deterministic',
 ): boolean {
   if (turn.turnTerminalStatus) return false
   if (turn.status === 'awaiting_input') return false
@@ -114,7 +114,7 @@ function writeTurnTerminalStatus(
   terminalStatus: 'completed' | 'failed' | 'canceled',
   lifecycle: ProcessingLifecycle,
   clientRequestId?: string | null,
-  turnCompletionKind?: 'synthesis' | 'deterministic',
+  turnCompletionKind?: 'deterministic',
 ): void {
   const store = useMessageStore.getState()
   store.upsertMessage({
@@ -170,7 +170,6 @@ export function shouldScheduleTurnTerminalRecovery(
   if (turn) {
     if (turnHasSubstantiveLlmSynthesis(turn)) return false
     if (hasActiveSynthesisGap(turn)) return false
-    if (turn.turnCompletionKind === 'synthesis') return false
   }
 
   if (
@@ -204,7 +203,7 @@ export function stampTurnTerminalFromBackendTruth(
     relatedMessageId?: string | null
   },
   backendRunActive: boolean | null,
-  turnCompletionKind?: 'synthesis' | 'deterministic',
+  turnCompletionKind?: 'deterministic',
 ): boolean {
   const store = useMessageStore.getState()
   if (store.roomId !== roomId) return false
@@ -275,23 +274,18 @@ export async function ensureTurnTerminalStampedFromBackendTruth(
   if (!user || user.turnTerminalStatus) return false
 
   let backendRunActive: boolean | null = null
-  let turnCompletionKind: 'synthesis' | 'deterministic' | undefined
   if (getToken) {
     try {
-      const result = await inquiryActiveRuns(roomId, getToken, undefined, user.id)
+      const result = await inquiryActiveRuns(roomId, getToken)
       if (result.success) {
         backendRunActive = isBackendRunActiveForTurn(result.active_runs, user.id)
-        const kind = result.turn_completion_kind
-        if (kind === 'synthesis' || kind === 'deterministic') {
-          turnCompletionKind = kind
-        }
       }
     } catch {
       backendRunActive = null
     }
   }
 
-  return stampTurnTerminalFromBackendTruth(roomId, lifecycle, hint, backendRunActive, turnCompletionKind)
+  return stampTurnTerminalFromBackendTruth(roomId, lifecycle, hint, backendRunActive)
 }
 
 const pendingBackendTruthChecks = new Map<string, ReturnType<typeof setTimeout>>()

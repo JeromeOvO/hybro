@@ -168,8 +168,6 @@ export function useProcessingRestore(
               const result = await inquiryActiveRuns(
                 roomId,
                 getToken,
-                undefined,
-                liveLifecycleMessage.id,
               )
               const backendRunActive = (result.active_runs ?? []).some(
                 run => run.trigger_message_id === liveLifecycleMessage.id,

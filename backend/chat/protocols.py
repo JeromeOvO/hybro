@@ -7,7 +7,6 @@ from models.request import (
     RoomCenterRoomSettingRequest,
 )
 from models.response import (
-    RoomCenterActiveRunsResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
@@ -30,9 +29,6 @@ class RoomCenterCompatibility(Protocol):
     async def inquiry_room_setting(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
-    async def inquiry_active_runs(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterActiveRunsResponse: ...
     async def delete_room_by_room_id(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse: ...
