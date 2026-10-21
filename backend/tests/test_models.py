@@ -15,13 +15,6 @@ from common.types import Message as InternalMessage
 from common.types import Task, TaskState, TaskStatus, TextPart
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
-from models.memory import (
-    ContentType,
-    ConversationTurn,
-    RoomMemory,
-    TurnRepresentation,
-    TurnRole,
-)
 from models.request import AgentTaskRequest, TaskRequest
 from models.room import (
     CoordinatorAgentId,
@@ -277,96 +270,6 @@ class TestAgentStatus:
         assert AgentStatus.active.value == "active"
         assert AgentStatus.inactive.value == "inactive"
         assert AgentStatus.deleted.value == "deleted"
-
-
-# =============================================================================
-# Memory Model Tests
-# =============================================================================
-
-
-class TestConversationTurnModel:
-    """Tests for ConversationTurn model."""
-
-    def test_creates_user_turn(self):
-        """Should create user conversation turn."""
-        turn = ConversationTurn(
-            turn_id=str(uuid4()),
-            role=TurnRole.USER,
-            content="Hello",
-            content_type=ContentType.TEXT,
-            representation=TurnRepresentation.FULL,
-            timestamp=datetime.now(),
-        )
-
-        assert turn.role == TurnRole.USER
-        assert turn.content == "Hello"
-
-    def test_creates_agent_turn(self):
-        """Should create agent conversation turn."""
-        turn = ConversationTurn(
-            turn_id=str(uuid4()),
-            role=TurnRole.AGENT,
-            agent_id="agent-123",
-            agent_name="TestAgent",
-            content="Response",
-            content_type=ContentType.AGENT_RESPONSE,
-            representation=TurnRepresentation.FULL,
-            timestamp=datetime.now(),
-        )
-
-        assert turn.role == TurnRole.AGENT
-        assert turn.agent_id == "agent-123"
-        assert turn.agent_name == "TestAgent"
-
-    def test_compact_turn_representation(self):
-        """Should support compact representation."""
-        turn = ConversationTurn(
-            turn_id=str(uuid4()),
-            role=TurnRole.USER,
-            content=None,  # Content stored externally
-            representation=TurnRepresentation.COMPACT,
-            brief_summary="User asked about weather",
-            estimated_tokens_full=100,
-            estimated_tokens_compact=20,
-            timestamp=datetime.now(),
-        )
-
-        assert turn.representation == TurnRepresentation.COMPACT
-        assert turn.brief_summary is not None
-
-
-class TestRoomMemoryModel:
-    """Tests for RoomMemory model."""
-
-    def test_creates_room_memory(self):
-        """Should create room memory."""
-        memory = RoomMemory(
-            room_id="room-123",
-            memory_id=str(uuid4()),
-        )
-
-        assert memory.room_id == "room-123"
-        assert memory.total_compactions == 0
-
-    def test_room_memory_with_conversation_history(self):
-        """Should support conversation history."""
-        turns = [
-            ConversationTurn(
-                turn_id=str(uuid4()),
-                role=TurnRole.USER,
-                content="Hello",
-                timestamp=datetime.now(),
-            ),
-        ]
-
-        memory = RoomMemory(
-            room_id="room-123",
-            memory_id=str(uuid4()),
-            conversation_history=turns,
-        )
-
-        history = memory.get_conversation_history()
-        assert len(history) == 1
 
 
 # =============================================================================

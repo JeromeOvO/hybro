@@ -11,6 +11,7 @@ See docs/System-Architecture.md for the current design.
 
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
@@ -21,15 +22,7 @@ from common.types import MessageRole
 from common.utils.context_utils import estimate_tokens, get_context_stats
 from context_memory import search
 from context_memory.config import TokenBudgetConfig
-from context_memory.models import SearchRankingRecord
-from models.memory import (
-    ContentType,
-    ConversationTurn,
-    MemoryContent,
-    RoomMemory,
-    TurnRepresentation,
-    TurnRole,
-)
+from context_memory.models import ConversationTurnData, SearchRankingRecord
 
 # =============================================================================
 # Fixtures
@@ -52,19 +45,19 @@ def mock_compaction_config():
         yield mock
 
 
-def _make_turn(content="Test", role=TurnRole.USER, **kwargs) -> ConversationTurn:
+def _make_turn(content="Test", role="user", **kwargs) -> ConversationTurnData:
     defaults = dict(
         turn_id=str(uuid4()),
         role=role,
         content=content,
-        content_type=ContentType.TEXT,
-        representation=TurnRepresentation.FULL,
+        content_type="text",
+        representation="full",
         estimated_tokens_full=estimate_tokens(content),
         estimated_tokens_compact=20,
         timestamp=datetime(2026, 2, 20),
     )
     defaults.update(kwargs)
-    return ConversationTurn(**defaults)
+    return ConversationTurnData(**defaults)
 
 
 def test_context_stats_use_canonical_history_and_nested_summary_only():
@@ -72,14 +65,13 @@ def test_context_stats_use_canonical_history_and_nested_summary_only():
     canonical_full = _make_turn(content="canonical full", estimated_tokens_full=3)
     canonical_compact = _make_turn(
         content=None,
-        representation=TurnRepresentation.COMPACT,
+        representation="compact",
         brief_summary="canonical compact",
         estimated_tokens_full=50,
         estimated_tokens_compact=12,
     )
-    room_memory = RoomMemory(
-        room_id="room-1",
-        memory_content=MemoryContent(
+    room_memory = SimpleNamespace(
+        memory_content=SimpleNamespace(
             summary=summary,
             conversation_history=[_make_turn(content="nested history is ignored")],
         ),
@@ -558,8 +550,8 @@ class TestLegacyTokenFallback:
 
         selected, truncated = select_turns_within_budget(
             [
-                turn_from_dict(legacy_turn.model_dump(mode="json")),
-                turn_from_dict(recent_turn.model_dump(mode="json")),
+                turn_from_dict(legacy_turn.to_dict()),
+                turn_from_dict(recent_turn.to_dict()),
             ],
             budget_tokens=50,
         )
@@ -607,17 +599,17 @@ class TestSearchToContextIntegration:
             ),
         ]
 
-        room_memory = RoomMemory(
-            room_id="room_1",
-            memory_content=MemoryContent(
-                conversation_history=[
-                    _make_turn(content="Hello"),
-                ],
-            ),
-        )
+        room_memory = {
+            "room_id": "room_1",
+            "memory_id": "memory_1",
+            "memory_content": {
+                "conversation_history": [_make_turn(content="Hello").to_dict()],
+            },
+            "conversation_history": [],
+        }
 
         result = assemble_supervisor_context_from_memory(
-            room_memory.model_dump(mode="json"),
+            room_memory,
             "Deploy the app",
             token_budget=TokenBudgetConfig(
                 model_context_window=32000,

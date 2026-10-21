@@ -36,14 +36,6 @@ from common.auth import ClerkUser
 from common.dto.hitl import HITLApplicationRoute, HITLEvidenceOrigin, HITLPublicSource
 from models.agent import Agent, AgentStatus
 from models.hitl import HITLPromptType, HITLRequest, HITLStatus
-from models.memory import (
-    ContentType,
-    ConversationTurn,
-    MemoryContent,
-    RoomMemory,
-    TurnRepresentation,
-    TurnRole,
-)
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 FROZEN_TIME = datetime(2026, 1, 15, 12, 0, 0)
@@ -342,43 +334,6 @@ def sample_agent_message_with_task(
         has_task_tracking=True,
         task_created_at=FROZEN_TIME,
         task_updated_at=FROZEN_TIME,
-    )
-
-
-@pytest.fixture
-def sample_room_memory(sample_room) -> RoomMemory:
-    """Create a sample room memory with conversation history."""
-    turns = [
-        ConversationTurn(
-            turn_id="test-turn-001",
-            role=TurnRole.USER,
-            content="Hello, can you help me?",
-            content_type=ContentType.TEXT,
-            representation=TurnRepresentation.FULL,
-            estimated_tokens_full=20,
-            estimated_tokens_compact=10,
-            timestamp=FROZEN_TIME,
-        ),
-        ConversationTurn(
-            turn_id="test-turn-002",
-            role=TurnRole.AGENT,
-            agent_id="agent-123",
-            agent_name="TestAgent",
-            content="Of course! How can I assist you today?",
-            content_type=ContentType.AGENT_RESPONSE,
-            representation=TurnRepresentation.FULL,
-            estimated_tokens_full=30,
-            estimated_tokens_compact=15,
-            timestamp=FROZEN_TIME,
-        ),
-    ]
-
-    memory_content = MemoryContent(conversation_history=turns)
-
-    return RoomMemory(
-        room_id=sample_room.room_id,
-        memory_id="test-memory-001",
-        memory_content=memory_content,
     )
 
 
