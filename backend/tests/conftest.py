@@ -160,7 +160,6 @@ def mock_db_service():
     mock.get_room_messages_by_room_id = AsyncMock(return_value=[])
 
     # Memory operations
-    mock.get_room_memory_by_room_id = AsyncMock(return_value=None)
     mock.create_room_memory = AsyncMock(return_value=True)
     mock.update_room_memory = AsyncMock(return_value=True)
     mock.compact_turns_bulk = AsyncMock(return_value=True)

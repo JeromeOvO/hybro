@@ -9,13 +9,11 @@ from common.dto import (
     RuntimeAgentRecord,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
-    RuntimeRoomMemory,
     RuntimeRoomRecord,
     RuntimeRoomUserMessage,
 )
 from models.agent import Agent
 from models.agent_group import AgentGroup
-from models.memory import RoomMemory
 from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 
@@ -87,14 +85,6 @@ def runtime_to_room_agent_message(
     return RoomAgentMessage.model_validate(_dump_runtime(room_agent_message))
 
 
-def room_memory_to_runtime(room_memory: RoomMemory) -> RuntimeRoomMemory:
-    return RuntimeRoomMemory.model_validate(_dump_model(room_memory))
-
-
-def runtime_to_room_memory(room_memory: RuntimeRoomMemory) -> RoomMemory:
-    return RoomMemory.model_validate(_dump_runtime(room_memory))
-
-
 def runtime_agents(agents: Iterable[Agent]) -> list[RuntimeAgentRecord]:
     return [agent_to_runtime(agent) for agent in agents]
 
@@ -134,7 +124,6 @@ __all__ = [
     "agent_to_runtime",
     "message_content_to_runtime",
     "room_agent_message_to_runtime",
-    "room_memory_to_runtime",
     "room_to_runtime",
     "room_user_message_to_runtime",
     "runtime_agent_groups",
@@ -146,7 +135,6 @@ __all__ = [
     "runtime_to_message_content",
     "runtime_to_room",
     "runtime_to_room_agent_message",
-    "runtime_to_room_memory",
     "runtime_to_room_user_message",
     "runtime_user_messages",
 ]

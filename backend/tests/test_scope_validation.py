@@ -513,9 +513,6 @@ class TestInlineMentionBehavior:
         agent = _make_agent("a1", "Alpha")
         room_center.database_service.get_room_by_room_id.return_value = room
         room_center.database_service.get_agent_by_agent_id.return_value = agent
-        room_center.database_service.get_room_memory_by_room_id = AsyncMock(
-            return_value=None
-        )
 
         request = MagicMock()
         request.room_id = "room-1"

@@ -4,27 +4,16 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
-from common.dto import RuntimeRoomMemory
-from common.protocols import (
-    MessageRepository,
-    MongoDAL,
-    RoomRepository,
-)
+from common.protocols import MongoDAL
 from common.utils.logger import get_logger
-from dal.runtime_store.contracts import room_memory_to_runtime
 from dal.runtime_store.parts import (
     HITLLifecycleRuntimeStorePart,
     HITLRuntimeStorePart,
-    MemoryRuntimeStorePart,
 )
-from dal.runtime_store.parts.parsing import _safe_parse_room_memory
 
 logger = get_logger(__name__)
 
-__all__ = [
-    "RuntimeRepositoryStore",
-    "_safe_parse_room_memory",
-]
+__all__ = ["RuntimeRepositoryStore"]
 
 
 class RuntimeRepositoryStore:
@@ -34,17 +23,12 @@ class RuntimeRepositoryStore:
         self,
         *,
         mongo: MongoDAL,
-        room_repository: RoomRepository,
-        message_repository: MessageRepository,
     ) -> None:
-        self._room_memories = mongo.collection("room_memories")
         self._room_agent_messages = mongo.collection("room_agent_messages")
         self._room_user_messages = mongo.collection("room_user_messages")
         self._hitl_requests = mongo.collection("hitl_requests")
         self._hitl_interactions = mongo.collection("hitl_interactions")
         self._hitl_resume_commands = mongo.collection("hitl_resume_commands")
-        self._room_repository = room_repository
-        self._message_repository = message_repository
         self._hitl_part = HITLRuntimeStorePart(
             hitl_requests=self._hitl_requests,
             room_agent_messages=self._room_agent_messages,
@@ -55,10 +39,6 @@ class RuntimeRepositoryStore:
             resume_commands=self._hitl_resume_commands,
             hitl_requests=self._hitl_requests,
         )
-        self._memory_part = MemoryRuntimeStorePart(
-            room_memories=self._room_memories,
-            room_repository=self._room_repository,
-        )
 
     @property
     def hitl(self) -> HITLRuntimeStorePart:
@@ -67,10 +47,6 @@ class RuntimeRepositoryStore:
     @property
     def hitl_lifecycle(self) -> HITLLifecycleRuntimeStorePart:
         return self._hitl_lifecycle_part
-
-    @property
-    def memory(self) -> MemoryRuntimeStorePart:
-        return self._memory_part
 
     def _hitl_delegate(self) -> HITLRuntimeStorePart:
         part = getattr(self, "_hitl_part", None)
@@ -91,21 +67,6 @@ class RuntimeRepositoryStore:
             resume_commands=getattr(self, "_hitl_resume_commands", None),
             hitl_requests=getattr(self, "_hitl_requests", None),
         )
-
-    def _memory_delegate(self) -> MemoryRuntimeStorePart:
-        part = getattr(self, "_memory_part", None)
-        if part is not None:
-            return part
-        return MemoryRuntimeStorePart(
-            room_memories=getattr(self, "_room_memories", None),
-            room_repository=getattr(self, "_room_repository", None),
-        )
-
-    async def get_room_memory_by_room_id(
-        self, room_id: str
-    ) -> RuntimeRoomMemory | None:
-        room_memory = await self._memory_delegate().get_room_memory_by_room_id(room_id)
-        return room_memory_to_runtime(room_memory) if room_memory is not None else None
 
     async def get_pending_hitl_requests_for_message(
         self, user_message_id: str

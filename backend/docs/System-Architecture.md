@@ -1821,6 +1821,10 @@ with `turn_id == "message:{message_id}"`.
 #### Canonical persistence and append order
 
 `room_memories.conversation_history` is the single canonical, unwindowed history.
+`context_memory.repository.MemoryMongoRepository` is the only runtime reader and
+writer of `room_memories`, apart from room-state deletion, which
+`room_files.service` performs with `delete_many({"room_id": ...})` across the
+room-owned collections.
 Its persisted shape is:
 
 ```text

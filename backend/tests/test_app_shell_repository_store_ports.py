@@ -3,20 +3,15 @@ import inspect
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import get_type_hints
 
-from common.protocols import (
-    RuntimeHITLStore,
-    RuntimeMemoryStore,
-)
+from common.protocols import RuntimeHITLStore
 
 
 def test_runtime_store_protocols_are_exported():
     import common.protocols as protocols
 
     assert protocols.RuntimeHITLStore is RuntimeHITLStore
-    assert protocols.RuntimeMemoryStore is RuntimeMemoryStore
 
 
 def test_runtime_repository_store_declares_runtime_protocol_surface():
@@ -25,7 +20,6 @@ def test_runtime_repository_store_declares_runtime_protocol_surface():
     store = object.__new__(RuntimeRepositoryStore)
 
     assert isinstance(store, RuntimeHITLStore)
-    assert isinstance(store, RuntimeMemoryStore)
 
 
 def _signature_text(obj, method_name: str) -> str:
@@ -54,18 +48,10 @@ def test_runtime_store_protocols_do_not_import_legacy_models():
 
 
 def test_runtime_store_protocol_signatures_match_current_store_surface():
-    from common.protocols.runtime_store_protocols import (
-        RuntimeHITLStore,
-        RuntimeMemoryStore,
-    )
+    from common.protocols.runtime_store_protocols import RuntimeHITLStore
     from dal.runtime_store import RuntimeRepositoryStore
 
-    protocol_types = [
-        RuntimeHITLStore,
-        RuntimeMemoryStore,
-    ]
-
-    for protocol_type in protocol_types:
+    for protocol_type in (RuntimeHITLStore,):
         for method_name, method in protocol_type.__dict__.items():
             if method_name.startswith("_") or not inspect.isfunction(method):
                 continue
@@ -75,11 +61,10 @@ def test_runtime_store_protocol_signatures_match_current_store_surface():
 
 
 def test_runtime_store_protocol_type_hints_are_resolvable():
-    from common.dto import RuntimeRoomMemory
-
-    memory_hints = get_type_hints(RuntimeMemoryStore.get_room_memory_by_room_id)
-
-    assert memory_hints["return"] == RuntimeRoomMemory | None
+    for method_name, method in RuntimeHITLStore.__dict__.items():
+        if method_name.startswith("_") or not inspect.isfunction(method):
+            continue
+        assert "return" in get_type_hints(method), method_name
 
 
 def test_protocol_import_tolerates_json_log_format_without_creating_log_file(
@@ -117,24 +102,14 @@ class _FakeMongo:
 def _make_runtime_store():
     from dal.runtime_store import RuntimeRepositoryStore
 
-    return RuntimeRepositoryStore(
-        mongo=_FakeMongo(),
-        room_repository=object(),
-        message_repository=object(),
-    )
+    return RuntimeRepositoryStore(mongo=_FakeMongo())
 
 
 def test_container_runtime_repository_store_factory_resolves_runtime_export():
     from container import create_runtime_repository_store
     from dal.runtime_store import RuntimeRepositoryStore
 
-    store = create_runtime_repository_store(
-        mongo=_FakeMongo(),
-        room_deps=SimpleNamespace(
-            room_repository=object(),
-            message_repository=object(),
-        ),
-    )
+    store = create_runtime_repository_store(mongo=_FakeMongo())
 
     assert isinstance(store, RuntimeRepositoryStore)
 
@@ -147,33 +122,25 @@ def test_runtime_store_wires_hitl_part():
     assert isinstance(store.hitl, HITLRuntimeStorePart)
 
 
-def test_runtime_store_wires_memory_part():
-    from dal.runtime_store.parts.memory_store import MemoryRuntimeStorePart
-
-    store = _make_runtime_store()
-
-    assert isinstance(store.memory, MemoryRuntimeStorePart)
-
-
 def test_runtime_store_wires_all_focused_parts():
     from dal.runtime_store.parts import (
+        HITLLifecycleRuntimeStorePart,
         HITLRuntimeStorePart,
-        MemoryRuntimeStorePart,
     )
 
     store = _make_runtime_store()
 
     assert isinstance(store.hitl, HITLRuntimeStorePart)
-    assert isinstance(store.memory, MemoryRuntimeStorePart)
+    assert isinstance(store.hitl_lifecycle, HITLLifecycleRuntimeStorePart)
 
 
 def test_runtime_store_part_properties_do_not_recreate_missing_parts():
     store = _make_runtime_store()
 
     del store._hitl_part
-    del store._memory_part
+    del store._hitl_lifecycle_part
 
-    for attribute in ("hitl", "memory"):
+    for attribute in ("hitl", "hitl_lifecycle"):
         try:
             getattr(store, attribute)
         except AttributeError:
@@ -202,7 +169,7 @@ def test_container_binds_focused_runtime_store_parts_before_aggregate_shims():
     tree = ast.parse(container_source)
     expected_assignments = {
         "hitl_store": "hitl",
-        "memory_store": "memory",
+        "hitl_lifecycle_store": "hitl_lifecycle",
     }
 
     assignments: dict[str, str] = {}
@@ -296,7 +263,6 @@ def test_container_binds_room_runtime_to_focused_room_store_adapter():
         "get_agent_group_by_id",
         "get_all_active_agents",
         "get_room_by_room_id",
-        "get_room_memory_by_room_id",
         "get_room_user_message_by_message_id",
         "update_room_user_message_by_message_id",
     }

@@ -4,8 +4,6 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from common.dto import RuntimeRoomMemory
-
 
 @runtime_checkable
 class RuntimeHITLStore(Protocol):
@@ -273,10 +271,3 @@ class RuntimeHITLLifecycleStore(Protocol):
         self, now: Any, *, limit: int = 100
     ) -> AsyncIterator[dict[str, Any]]: ...
     async def ensure_hitl_lifecycle_indexes(self) -> None: ...
-
-
-@runtime_checkable
-class RuntimeMemoryStore(Protocol):
-    async def get_room_memory_by_room_id(
-        self, room_id: str
-    ) -> RuntimeRoomMemory | None: ...

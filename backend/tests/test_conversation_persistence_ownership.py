@@ -38,7 +38,6 @@ def test_conversation_repository_exports_the_moved_stores():
 
 
 def test_message_document_helpers_live_in_conversation():
-    import dal.runtime_store.parts.parsing as dal_parsing
     from conversation.repository import message_documents
 
     for name in (
@@ -52,7 +51,6 @@ def test_message_document_helpers_live_in_conversation():
         "_modified_count",
     ):
         assert callable(getattr(message_documents, name)), name
-        assert not hasattr(dal_parsing, name), name
 
 
 def test_agent_runtime_store_has_no_room_methods():

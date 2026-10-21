@@ -110,28 +110,11 @@ class RuntimeRoomAgentMessage(RuntimeRoomMessage):
     turn_id: str | None = None
 
 
-class RuntimeRoomMemory(FrozenDTO):
-    room_id: str
-    memory_id: str
-    memory_content: dict[str, Any] | None = None
-    conversation_history: list[dict[str, Any]] = Field(default_factory=list)
-    max_history_turns: int = 100
-    room_summary: dict[str, Any] = Field(default_factory=dict)
-    room_facts: list[dict[str, Any]] = Field(default_factory=list)
-    agent_success_history: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    memory_created_at: datetime | None = None
-    last_activity_at: datetime | None = None
-    total_messages: int = 0
-    total_compactions: int = 0
-    extend_info: Any | None = None
-
-
 __all__ = [
     "RuntimeAgentGroup",
     "RuntimeAgentRecord",
     "RuntimeMessageContent",
     "RuntimeRoomAgentMessage",
-    "RuntimeRoomMemory",
     "RuntimeRoomMessage",
     "RuntimeRoomRecord",
     "RuntimeRoomUserMessage",

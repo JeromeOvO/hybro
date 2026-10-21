@@ -44,11 +44,7 @@ class _ConversationStores:
                 agents=mongo.collection("agents"),
                 agent_repository=agent_repository,
             ),
-            RuntimeRepositoryStore(
-                mongo=mongo,
-                room_repository=room_repository,
-                message_repository=message_repository,
-            ),
+            RuntimeRepositoryStore(mongo=mongo),
         )
 
     def __getattr__(self, name: str):
@@ -931,9 +927,6 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
             }
         ]
     )
-    room_memories = FakeCollection(
-        [{"memory_id": "mem-1", "room_id": "r1", "room_memory": "summary"}]
-    )
     runs = FakeCollection(
         [
             {
@@ -949,7 +942,6 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     mongo.collections.update(
         {
             "agents": agents,
-            "room_memories": room_memories,
             "runs": runs,
         }
     )
@@ -1002,7 +994,6 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     assert [agent.agent_id for agent in await store.get_agents_with_conditions()] == [
         "agent-1"
     ]
-    assert (await store.get_room_memory_by_room_id("r1")).memory_id == "mem-1"
 
 
 @pytest.mark.asyncio

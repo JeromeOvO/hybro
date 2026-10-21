@@ -801,9 +801,6 @@ def test_protocol_methods_match_design_doc():
             "update_agent_message_task_state",
             "update_hitl_request",
         },
-        protocols.RuntimeMemoryStore: {
-            "get_room_memory_by_room_id",
-        },
         protocols.AgentCallCounter: {"increment_agent_call_count"},
         protocols.FileStorage: {
             "upload",

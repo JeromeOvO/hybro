@@ -754,10 +754,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _room_facade = _room_deps.room_registry
             # Runtime store aggregate: callers below receive focused runtime-store parts.
             # Do not add new broad-store consumers; bind a focused part or protocol instead.
-            runtime_store = create_runtime_repository_store(
-                mongo=mongo_dal,
-                room_deps=_room_deps,
-            )
+            runtime_store = create_runtime_repository_store(mongo=mongo_dal)
             from agent.repository import AgentRuntimeStore
 
             agent_runtime_store = AgentRuntimeStore(
@@ -782,8 +779,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             client_request_id_store = ClientRequestIdStore(message_store=message_store)
             hitl_store = runtime_store.hitl
             hitl_lifecycle_store = runtime_store.hitl_lifecycle
-            memory_store = runtime_store.memory
-
             # P3 runtime adapters keep startup wiring narrow. These SimpleNamespace
             # boundaries are intentionally constrained to container assembly.
             hitl_runtime_store = SimpleNamespace(
@@ -853,7 +848,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_agent_group_by_id=agent_runtime_store.get_agent_group_by_id,
                 get_all_active_agents=agent_runtime_store.get_all_active_agents,
                 get_room_by_room_id=room_store.get_room_by_room_id,
-                get_room_memory_by_room_id=memory_store.get_room_memory_by_room_id,
                 get_room_user_message_by_message_id=(
                     message_store.get_room_user_message_by_message_id
                 ),
@@ -3310,12 +3304,7 @@ def register_context_memory_event_handlers(
 def create_runtime_repository_store(
     *,
     mongo: MongoDAL,
-    room_deps: RoomDeps,
 ) -> RuntimeRepositoryStore:
     from dal.runtime_store import RuntimeRepositoryStore
 
-    return RuntimeRepositoryStore(
-        mongo=mongo,
-        room_repository=room_deps.room_repository,
-        message_repository=room_deps.message_repository,
-    )
+    return RuntimeRepositoryStore(mongo=mongo)

@@ -30,12 +30,10 @@ def test_agent_repository_exports_the_runtime_store():
 
 
 def test_agent_document_parsers_live_in_agent():
-    import dal.runtime_store.parts.parsing as dal_parsing
     from agent.repository import documents
 
     for name in ("_safe_parse_agent", "_safe_parse_agent_group"):
         assert callable(getattr(documents, name)), name
-        assert not hasattr(dal_parsing, name), name
 
 
 def test_runtime_repository_store_no_longer_serves_agent_data():

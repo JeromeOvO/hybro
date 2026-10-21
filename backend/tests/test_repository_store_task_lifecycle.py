@@ -112,11 +112,7 @@ class _Stores:
                 room_user_messages=mongo.collection("room_user_messages"),
                 message_repository=object(),
             ),
-            RuntimeRepositoryStore(
-                mongo=mongo,
-                room_repository=object(),
-                message_repository=object(),
-            ),
+            RuntimeRepositoryStore(mongo=mongo),
         )
 
     def __getattr__(self, name: str):

@@ -90,7 +90,6 @@ from common.protocols.room_protocols import (
 from common.protocols.runtime_store_protocols import (
     RuntimeHITLLifecycleStore,
     RuntimeHITLStore,
-    RuntimeMemoryStore,
 )
 
 __all__ = [
@@ -161,7 +160,6 @@ __all__ = [
     "RunRepository",
     "RuntimeHITLLifecycleStore",
     "RuntimeHITLStore",
-    "RuntimeMemoryStore",
     "RoomRouteReader",
     "SSEConnectionLike",
     "SSEStateReader",

@@ -6,9 +6,7 @@ from common.dto import (
     RuntimeAgentGroup,
     RuntimeMessageContent,
     RuntimeRoomAgentMessage,
-    RuntimeRoomMemory,
 )
-from common.dto.base import FrozenDict
 from common.types import AgentCapabilities, AgentCard
 
 
@@ -43,36 +41,8 @@ def test_runtime_agent_message_preserves_task_tracking_fields():
     assert message.turn_id == "u1"
 
 
-def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():
-    created_at = datetime(2026, 6, 22, tzinfo=UTC)
-    memory = RuntimeRoomMemory(
-        room_id="r1",
-        memory_id="m1",
-        memory_content={"last_seen_at": created_at},
-        conversation_history=[{"role": "user", "created_at": created_at}],
-        room_summary={"last_updated_at": created_at, "key_decisions": ["ship"]},
-        room_facts=[{"content": "fact", "created_at": created_at}],
-        agent_success_history={
-            "agent-1": {"last_called_at": created_at, "total_calls": 1}
-        },
-        extend_info={"checkpoint_at": created_at},
-    )
-
-    assert memory.room_summary["last_updated_at"] == created_at
-    assert isinstance(memory.room_summary, FrozenDict)
-    assert isinstance(memory.room_facts[0], FrozenDict)
-    assert isinstance(memory.agent_success_history["agent-1"], FrozenDict)
-
-    with pytest.raises(TypeError):
-        memory.room_summary["last_updated_at"] = None
-    with pytest.raises(TypeError):
-        memory.room_summary["key_decisions"].append("delay")
-    with pytest.raises(TypeError):
-        memory.room_facts.append({"content": "other"})
-
-
 def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none():
-    from common.dto import RuntimeRoomMemory, RuntimeRoomRecord
+    from common.dto import RuntimeRoomRecord
     from dal.runtime_store.contracts import _dump_runtime, runtime_to_room
 
     room = RuntimeRoomRecord(
@@ -108,14 +78,6 @@ def test_runtime_to_legacy_dump_omits_unset_defaults_and_preserves_explicit_none
         ]
         is None
     )
-
-    memory = RuntimeRoomMemory(room_id="r1", memory_id="mem-1")
-    memory_payload = _dump_runtime(memory)
-
-    assert memory_payload == {"room_id": "r1", "memory_id": "mem-1"}
-    assert "conversation_history" not in memory_payload
-    assert "room_summary" not in memory_payload
-    assert "agent_success_history" not in memory_payload
 
 
 def _agent_card() -> AgentCard:
@@ -226,18 +188,3 @@ def test_room_and_message_conversion_preserves_runtime_fields():
     assert restored_room.pin_order == 2.0
     assert runtime_to_message_content(runtime_content).message_text == "hello"
     assert runtime_to_room_agent_message(runtime_message).message_id == "a1"
-
-
-def test_memory_conversion_preserves_summary():
-    from dal.runtime_store.contracts import (
-        room_memory_to_runtime,
-        runtime_to_room_memory,
-    )
-    from models.memory import RoomMemory
-
-    memory = RoomMemory(room_id="r1", memory_id="mem-1", total_messages=3)
-    runtime_memory = room_memory_to_runtime(memory)
-
-    assert runtime_memory.memory_id == "mem-1"
-    assert runtime_memory.total_messages == 3
-    assert runtime_to_room_memory(runtime_memory).memory_id == "mem-1"
