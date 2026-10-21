@@ -36,7 +36,6 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
         ),
         is_pinned=bool(doc.get("is_pinned", False)),
         pin_order=doc.get("pin_order"),
-        processing_message_id=doc.get("processing_message_id"),
         extend_info=doc.get("extend_info"),
         owner_product=_string_value(doc.get("owner_product")) or "chat",
     )
@@ -54,7 +53,6 @@ def create_room_doc(
     membership_origin_status: str,
     source_group_id: str | None = None,
     source_group_name: str | None = None,
-    processing_message_id: str | None = None,
     extend_info: dict[str, Any] | None = None,
     owner_product: str = "chat",
 ) -> dict[str, Any]:
@@ -72,7 +70,6 @@ def create_room_doc(
         "membership_origin_status": membership_origin_status,
         "source_group_id": source_group_id,
         "source_group_name": source_group_name,
-        "processing_message_id": processing_message_id,
         "lifecycle_state": "active",
         "write_leases": [],
         "owner_product": owner_product,

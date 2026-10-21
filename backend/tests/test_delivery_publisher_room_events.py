@@ -18,16 +18,6 @@ from tests.test_delivery_event_publisher import (
 )
 
 
-class SettlementReader:
-    def __init__(self, result: bool = True) -> None:
-        self.result = result
-        self.checked: list = []
-
-    async def is_terminal_settled(self, event):
-        self.checked.append(event)
-        return self.result
-
-
 @pytest.mark.asyncio
 async def test_delta_emit_persists_before_broadcast_and_threads_seq():
     store = InMemoryRoomEventStore()
@@ -128,73 +118,6 @@ async def test_failed_final_fanout_still_returns_persisted_identity():
     assert status == DeliveryEmitStatus.FAILED
     assert room_event_id is not None
     assert await store.latest_seq("room-1") == 1
-
-
-@pytest.mark.asyncio
-async def test_terminal_frame_waits_for_projection_settlement():
-    store = InMemoryRoomEventStore()
-    reader = SettlementReader(result=False)
-    publisher = make_publisher(
-        transport=FakeTransport(),
-        room_events=store,
-        projection_settlement=reader,
-    )
-
-    status, room_event_id = await publisher.emit_checked_identified(
-        ProcessingStatusEvent(
-            room_id="room-1",
-            message_id="msg-1",
-            status="completed",
-            delivery_id="terminal:evt-1:processing",
-        )
-    )
-
-    assert status == DeliveryEmitStatus.FAILED
-    assert room_event_id is None
-    assert reader.checked
-    # Nothing persisted, nothing delivered: the finalizer retries later.
-    assert await store.latest_seq("room-1") == 0
-
-    reader.result = True
-    status, room_event_id = await publisher.emit_checked_identified(
-        ProcessingStatusEvent(
-            room_id="room-1",
-            message_id="msg-1",
-            status="completed",
-            delivery_id="terminal:evt-1:processing",
-        )
-    )
-    assert status == DeliveryEmitStatus.DELIVERED
-    assert room_event_id is not None
-    records = await store.read_range("room-1")
-    assert records[0]["persist_state"] == "settled"
-    assert records[0]["room_seq"] == 1
-
-
-@pytest.mark.asyncio
-async def test_terminal_task_update_not_gated_by_settlement_reader():
-    # Terminal task_update frames (descendant_cleanup / system_task_delivery)
-    # are gated by their per-step dependencies, NOT by the settlement reader.
-    reader = SettlementReader(result=False)
-    publisher = make_publisher(
-        transport=FakeTransport(),
-        room_events=InMemoryRoomEventStore(),
-        projection_settlement=reader,
-    )
-
-    from common.dto import TaskUpdateEvent
-
-    status, _ = await publisher.emit_checked_identified(
-        TaskUpdateEvent(
-            room_id="room-1",
-            message_id="child-1",
-            status="failed",
-            delivery_id="terminal:evt-1:child:child-1",
-        )
-    )
-
-    assert status == DeliveryEmitStatus.DELIVERED
-    assert reader.checked  # consulted for the persist_state label only
 
 
 @pytest.mark.asyncio

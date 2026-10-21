@@ -177,7 +177,6 @@ packages = [
     "execution.orchestrator",
     "execution.orchestrator.a2a_runtime",
     "execution.repository",
-    "execution.state",
     "execution.hitl",
     "local_agents",
     "api_gateway",

@@ -253,7 +253,6 @@ def sample_room(mock_user, sample_agent) -> Room:
             "debateMode": False,
             "use_supervisor": False,
         },
-        processing_message_id=None,
     )
 
 

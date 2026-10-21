@@ -214,7 +214,7 @@ async def test_room_repository_create_update_update_fields_set_membership_and_de
 
     created_id = await repo.create({"room_id": "r2", "room_name": "New"})
     updated = await repo.update("r1", {"room_name": "Changed"})
-    updated_doc = await repo.update_fields("r1", {"processing_message_id": "m1"})
+    updated_doc = await repo.update_fields("r1", {"pin_order": 2.0})
     membership_doc = await repo.set_membership(
         "r1",
         agent_set={"a1": "Agent One"},
@@ -227,7 +227,7 @@ async def test_room_repository_create_update_update_fields_set_membership_and_de
 
     assert created_id == "r2"
     assert updated is True
-    assert updated_doc["processing_message_id"] == "m1"
+    assert updated_doc["pin_order"] == 2.0
     assert membership_doc["room_agent_set"] == {"a1": "Agent One"}
     assert membership_doc["membership_origin"] == "saved_group"
     assert membership_doc["membership_origin_status"] == "seeded_never_edited"

@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from common.config.loader import Settings
 
 RUNTIME_CONFIG_ENV_VARS = (
-    "FEATURE_RUN_EVENT_SSE",
     "ORCHESTRATOR_WORKER_INTERVAL_SECONDS",
     "AGENT_HEALTH_CHECK_INTERVAL",
     "COMPACTION_CONCURRENCY",
@@ -59,33 +58,6 @@ def test_local_agent_discovery_excluded_ports_parses_compose_projection():
         {7001, 6002, 7002, 7003}
     )
     assert Settings().local_agent_discovery_excluded_ports == frozenset()
-
-
-def test_feature_run_event_sse_defaults_on(monkeypatch):
-    monkeypatch.delenv("FEATURE_RUN_EVENT_SSE", raising=False)
-    settings = Settings()
-    assert settings.feature_run_event_sse is True
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("", False),
-        ("0", False),
-        ("false", False),
-        ("no", False),
-        ("off", False),
-        ("1", True),
-        ("true", True),
-        ("yes", True),
-        ("on", True),
-        ("garbage", False),
-    ],
-)
-def test_feature_run_event_sse_parses_legacy_values(raw: str, expected: bool) -> None:
-    settings = Settings(feature_run_event_sse=raw)
-
-    assert settings.feature_run_event_sse is expected
 
 
 @pytest.mark.parametrize("raw", [None, "", "   "])

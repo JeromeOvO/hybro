@@ -195,7 +195,6 @@ def test_room_and_message_conversion_preserves_runtime_fields():
         last_activity_at=created_at,
         is_pinned=True,
         pin_order=2.0,
-        processing_message_id="u1",
     )
     message_content = MessageContent(message_text="hello")
     agent_message = RoomAgentMessage(

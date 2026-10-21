@@ -102,7 +102,6 @@ def make_publisher(
     metrics=None,
     config=None,
     room_events=None,
-    projection_settlement=None,
 ):
     return EventPublisherImpl(
         sse_transport=transport or FakeTransport(),
@@ -113,7 +112,6 @@ def make_publisher(
         instance_id="worker-1",
         metrics=metrics,
         room_events=room_events,
-        projection_settlement=projection_settlement,
     )
 
 

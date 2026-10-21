@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from common.utils.logger import get_logger
 from models.room import RoomAgentMessage
-from models.run import NON_TERMINAL_RUN_STATE_VALUES
 
 logger = get_logger(__name__)
 
@@ -11,10 +10,8 @@ class TaskLifecycleRuntimeStorePart:
     def __init__(
         self,
         *,
-        runs,
         message_store,
     ) -> None:
-        self._runs = runs
         self._messages = message_store
 
     async def resolve_client_request_id_for_agent_message(
@@ -71,14 +68,3 @@ class TaskLifecycleRuntimeStorePart:
             return await self.resolve_client_request_id_for_agent_message(agent_message)
 
         return None
-
-    async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
-        try:
-            ids = await self._runs.distinct(
-                "room_id",
-                {"state": {"$in": list(NON_TERMINAL_RUN_STATE_VALUES)}},
-            )
-            return [str(room_id) for room_id in ids if room_id]
-        except Exception:
-            logger.error("Failed to get rooms with non-terminal runs", exc_info=True)
-            return []

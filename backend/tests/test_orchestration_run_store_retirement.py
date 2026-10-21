@@ -9,18 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from models.run import RunState
-
-
-def _request(run_id: str | None = "run-legacy") -> SimpleNamespace:
-    return SimpleNamespace(
-        orchestration_run_id=run_id,
-        request_id="request-1",
-        room_id="room-1",
-        user_message_id="user-1",
-        client_request_id="client-1",
-    )
-
 
 @pytest.mark.parametrize(
     "module",
@@ -40,66 +28,6 @@ def test_terminal_lifecycle_adapter_takes_no_orchestration_run_store():
     parameters = inspect.signature(HITLTerminalLifecycleAdapter).parameters
 
     assert "orchestration_run_store" not in parameters
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("terminal_status", "target"),
-    [("canceled", RunState.CANCELED), ("expired", RunState.FAILED)],
-)
-async def test_unhandled_hitl_termination_projects_the_public_run(
-    terminal_status, target
-):
-    from execution.hitl.adapters import HITLTerminalLifecycleAdapter
-
-    lifecycle = MagicMock(project_run_state=AsyncMock())
-    adapter = HITLTerminalLifecycleAdapter(
-        lifecycle, canonical_terminalizer=AsyncMock(return_value=False)
-    )
-
-    await adapter.terminalize_owning_run(
-        _request(), terminal_status=terminal_status, reason="why"
-    )
-
-    lifecycle.project_run_state.assert_awaited_once_with(
-        room_id="room-1",
-        run_id="run-legacy",
-        trigger_message_id="user-1",
-        target_state=target,
-        terminal_reason="why",
-        causation_id=f"hitl-terminal:request-1:{terminal_status}",
-        client_request_id="client-1",
-    )
-
-
-@pytest.mark.asyncio
-async def test_hitl_termination_without_a_run_uses_the_user_message_id():
-    from execution.hitl.adapters import HITLTerminalLifecycleAdapter
-
-    lifecycle = MagicMock(project_run_state=AsyncMock())
-    adapter = HITLTerminalLifecycleAdapter(lifecycle)
-
-    await adapter.terminalize_owning_run(
-        _request(run_id=None), terminal_status="canceled", reason="why"
-    )
-
-    assert lifecycle.project_run_state.await_args.kwargs["run_id"] == "user-1"
-
-
-@pytest.mark.asyncio
-async def test_canonical_hitl_termination_skips_the_public_projection():
-    from execution.hitl.adapters import HITLTerminalLifecycleAdapter
-
-    lifecycle = MagicMock(project_run_state=AsyncMock())
-    adapter = HITLTerminalLifecycleAdapter(
-        lifecycle, canonical_terminalizer=AsyncMock(return_value=True)
-    )
-
-    await adapter.terminalize_owning_run(
-        _request(), terminal_status="canceled", reason="why"
-    )
-
-    lifecycle.project_run_state.assert_not_awaited()
 
 
 def test_reconciler_takes_no_orchestration_run_store():

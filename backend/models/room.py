@@ -61,7 +61,6 @@ class Room(BaseModel):
     source_group_name: str | None = None
 
     extend_info: Any | None = None
-    processing_message_id: str | None = None
     lifecycle_state: str = "active"
     deletion_id: str | None = None
     deletion_started_at: datetime | None = None

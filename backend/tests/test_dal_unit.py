@@ -178,9 +178,8 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         "room_user_messages",
         "room_memories",
         "room_quotes",
-        "run_events",
-        "runs",
     }
+    assert not {"runs", "run_events"} & set(collections)
     assert not {"orchestration_runs", "orchestration_run_events"} & set(collections)
     collections["agents"].drop_index.assert_awaited_once_with("unique_normalized_url")
     assert _has_create_index(

@@ -7,7 +7,6 @@ from common.observability.logging import (
     safe_exception_metadata,
 )
 from common.observability.metrics import MetricsCollector, NoopMetricsCollector
-from common.observability.run_metrics import increment_counter, snapshot_counters
 from common.observability.tracing import (
     NoopTracingProvider,
     TracingProvider,
@@ -27,9 +26,7 @@ __all__ = [
     "get_instance_id",
     "get_log_context",
     "get_logger",
-    "increment_counter",
     "safe_exception_metadata",
-    "snapshot_counters",
     "trace_id_context",
     "traced_create_task",
 ]

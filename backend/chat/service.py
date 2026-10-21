@@ -75,7 +75,6 @@ class ChatService:
             source_group_id=info.source_group_id,
             source_group_name=info.source_group_name,
             extend_info=info.extend_info,
-            processing_message_id=info.processing_message_id,
         )
 
     @staticmethod

@@ -105,7 +105,6 @@ class TestRoomModel:
         assert room.room_name == "Test Room"
         assert room.room_owner_id == "user-123"
         assert room.room_agent_set == {}
-        assert room.processing_message_id is None
 
     def test_creates_room_with_agents(self):
         """Should create room with agent set."""

@@ -70,7 +70,6 @@ class RoomInfo(FrozenDTO):
     last_activity_at: datetime | None = None
     is_pinned: bool = False
     pin_order: float | None = None
-    processing_message_id: str | None = None
     extend_info: dict[str, Any] | None = None
     owner_product: str = "chat"
 

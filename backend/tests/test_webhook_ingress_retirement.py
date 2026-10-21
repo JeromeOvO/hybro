@@ -63,7 +63,7 @@ def test_webhook_receiver_protocol_is_gone():
     assert not hasattr(protocols, "WebhookReceiver")
 
 
-def test_task_lifecycle_store_keeps_only_correlation_and_active_rooms():
+def test_task_lifecycle_store_keeps_only_correlation():
     from common.protocols.runtime_store_protocols import RuntimeTaskLifecycleStore
     from dal.runtime_store.parts.task_lifecycle_store import (
         TaskLifecycleRuntimeStorePart,
@@ -78,7 +78,6 @@ def test_task_lifecycle_store_keeps_only_correlation_and_active_rooms():
     assert public == {
         "resolve_client_request_id_for_agent_message",
         "resolve_client_request_id_for_message_id",
-        "get_room_ids_with_non_terminal_runs",
     }
     for name in (
         "hash_webhook_token",

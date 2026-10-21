@@ -14,46 +14,6 @@ from api_gateway.routes.room_routes import (
 from common.auth import ClerkUser
 from conversation.facade import ConversationFacade
 from conversation.repository.mongo import RoomMongoRepository
-from execution.repository.mongo import RunMongoRepository
-
-
-@pytest.mark.asyncio
-async def test_bulk_room_status_uses_one_priority_aggregation():
-    rows = [
-        {"run_id": "working-old", "room_id": "r1", "state": "processing"},
-        {"run_id": "failed-new", "room_id": "r2", "state": "failed"},
-        {"run_id": "waiting-old", "room_id": "r3", "state": "awaiting_input"},
-    ]
-    collection = SimpleNamespace(aggregate=AsyncMock(return_value=rows))
-    mongo = SimpleNamespace(collection=lambda _name: collection)
-    repository = RunMongoRepository(mongo)
-
-    result = await repository.get_latest_for_rooms(["r1", "r2", "r3"])
-
-    assert result == rows
-    collection.aggregate.assert_awaited_once()
-    pipeline = collection.aggregate.await_args.args[0]
-    assert pipeline[0] == {
-        "$match": {
-            "room_id": {"$in": ["r1", "r2", "r3"]},
-            "state": {"$in": ["queued", "processing", "awaiting_input"]},
-        }
-    }
-    branches = pipeline[1]["$addFields"]["_history_status_priority"]["$switch"][
-        "branches"
-    ]
-    assert [(branch["case"]["$eq"][1], branch["then"]) for branch in branches] == [
-        ("awaiting_input", 3),
-        ("processing", 2),
-        ("queued", 1),
-    ]
-    assert pipeline[2] == {
-        "$sort": {
-            "room_id": 1,
-            "_history_status_priority": -1,
-            "updated_at": -1,
-        }
-    }
 
 
 @pytest.mark.asyncio

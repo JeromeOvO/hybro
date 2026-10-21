@@ -4,7 +4,7 @@ import json
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from common.dto import (
     AgentMessageFinal,
@@ -35,20 +35,6 @@ from delivery.sse.manager import SSETransportImpl
 from delivery.translator import to_sse_frame
 
 
-class ProjectionSettlementReader(Protocol):
-    """Reads terminal-fact settlement from the private run fact log.
-
-    Defense-in-depth for the Room Stream Snapshot plan's terminal gating
-    (§4 / §5): the publisher asks this reader whether the fact behind a
-    terminal frame still has durable side-effect steps in ``{pending,
-    running}`` before persisting/emitting it. The primary gate remains the
-    two-phase ``TerminalProjectionFinalizer``; this reader only blocks when
-    the projection has not settled.
-    """
-
-    async def is_terminal_settled(self, event: DeliveryEvent) -> bool: ...
-
-
 def _frame_data_digest(frame_data: dict[str, Any]) -> str:
     canonical = json.dumps(frame_data, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -66,7 +52,6 @@ class EventPublisherImpl:
         instance_id: str,
         metrics: MetricsCollector | None = None,
         room_events: RoomEventStore | None = None,
-        projection_settlement: ProjectionSettlementReader | None = None,
     ) -> None:
         self.sse_transport = sse_transport
         self.event_bus = event_bus
@@ -76,7 +61,6 @@ class EventPublisherImpl:
         self.instance_id = instance_id
         self._metrics = metrics or NoopMetricsCollector()
         self.room_events = room_events
-        self.projection_settlement = projection_settlement
         # Publisher-maintained per-stream monotonic counters used to build
         # deterministic idempotency keys for non-terminal events (plan §5).
         # Keyed by entity/stream identity, never a DTO field or caller kwarg.
@@ -128,18 +112,6 @@ class EventPublisherImpl:
 
             timestamp = event.timestamp or self._now()
 
-            # ── Terminal settlement gate (defense-in-depth) ──────────────
-            # A terminal run_event/processing_status frame is only emitted once
-            # every durable side-effect step of its fact is completed or
-            # blocked. The two-phase finalizer is the primary gate; a blocked
-            # emit here returns FAILED so the finalizer retries the step.
-            settlement_state = await self._settlement_state(event)
-            if settlement_state == "pending" and self._settlement_gate_blocked(event):
-                if reservation is not None:
-                    await self._release_typed_delivery(event, reservation)
-                    reservation = None
-                return DeliveryEmitStatus.FAILED, None
-
             frame = to_sse_frame(event, timestamp=timestamp)
             trace_id = getattr(event, "trace_id", None) or get_current_trace_id()
             frame, room_seq, room_event_id = await self._persist_frame(
@@ -147,7 +119,6 @@ class EventPublisherImpl:
                 frame,
                 trace_id=trace_id,
                 parent_event_id=parent_event_id,
-                settlement_state=settlement_state,
                 timestamp=timestamp,
             )
         except Exception as exc:
@@ -194,7 +165,6 @@ class EventPublisherImpl:
         *,
         trace_id: str | None,
         parent_event_id: str | None,
-        settlement_state: str | None,
         timestamp: datetime,
     ) -> tuple[dict[str, Any], int | None, str | None]:
         """Persist-before-broadcast (§5): write the room_events doc BEFORE the
@@ -208,7 +178,6 @@ class EventPublisherImpl:
         if self.room_events is None:
             return frame, None, None
         frame_data = dict(frame["data"])
-        persist_state = settlement_state or "settled"
         append = await self.room_events.append(
             room_id=event.room_id,
             kind=frame["type"],
@@ -217,7 +186,7 @@ class EventPublisherImpl:
             idempotency_key=self._idempotency_key(event, frame_data),
             parent_event_id=parent_event_id,
             run_id=getattr(event, "run_id", None),
-            persist_state=persist_state,
+            persist_state="settled",
             ts=timestamp,
         )
         if not append.persisted:
@@ -231,42 +200,6 @@ class EventPublisherImpl:
         )
         self._inject_typed_trace_id(frame, trace_id)
         return frame, append.room_seq, append.room_event_id
-
-    async def _settlement_state(self, event: DeliveryEvent) -> str | None:
-        """Resolve the persist_state label for terminal-typed events.
-
-        Returns ``"settled"`` / ``"pending"`` when a settlement reader is
-        bound and the event is terminal-typed; ``None`` otherwise (persistence
-        then defaults to ``settled``).
-        """
-
-        if self.projection_settlement is None:
-            return None
-        if not self._is_terminal_typed(event):
-            return None
-        try:
-            settled = await self.projection_settlement.is_terminal_settled(event)
-        except Exception:
-            # Reader failures must never dead-letter the emit: fall back to
-            # the settled label and let the finalizer gate hold.
-            return "settled"
-        return "settled" if settled else "pending"
-
-    def _settlement_gate_blocked(self, event: DeliveryEvent) -> bool:
-        """True when a terminal run_event/processing_status frame must wait.
-
-        Only the two gated kinds are blocked here; terminal task_update frames
-        (descendant_cleanup / system_task_delivery) remain gated by their
-        per-step dependencies, not by this check.
-        """
-
-        if self.projection_settlement is None:
-            return False
-        if isinstance(event, RunEventNotification) and self._is_terminal_typed(event):
-            return True
-        if isinstance(event, ProcessingStatusEvent) and self._is_terminal_typed(event):
-            return True
-        return False
 
     async def _deliver_with_reservation(
         self,
@@ -555,4 +488,4 @@ class EventPublisherImpl:
             return
 
 
-__all__ = ["EventPublisherImpl", "ProjectionSettlementReader"]
+__all__ = ["EventPublisherImpl"]

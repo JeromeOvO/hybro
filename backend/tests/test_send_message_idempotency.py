@@ -222,26 +222,22 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
 
     room_services.run_message_preflight_to_room = AsyncMock(side_effect=preflight)
     orchestrator_router = SimpleNamespace(process_room_user_message=AsyncMock())
-    run_lifecycle = SimpleNamespace(record_processing_status=AsyncMock())
     engine = ExecutionFacade(
         room_center=room_services,
         orchestrator_router=orchestrator_router,
         hitl_manager=SimpleNamespace(get_pending_requests=AsyncMock(return_value=[])),
-        run_lifecycle=run_lifecycle,
-        run_reader=SimpleNamespace(
-            get_run=AsyncMock(return_value=None),
-            get_runs_for_room=AsyncMock(return_value=[]),
-        ),
         hitl_message_cancellation=SimpleNamespace(
             cancel_requests_for_message=AsyncMock(),
         ),
         event_publisher=delivery_publisher,
-        run_event_enabled=lambda: False,
         client_request_id_resolver=SimpleNamespace(
             resolve_client_request_id=AsyncMock(
                 side_effect=lambda _message_id, provided: provided
             )
         ),
+    )
+    engine.bind_active_run_reader(
+        SimpleNamespace(get_runs_for_room=AsyncMock(return_value=[]))
     )
 
     first_ack, second_ack = await asyncio.gather(
@@ -264,7 +260,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
     assert room_services.run_message_preflight_to_room.await_count == 1
     assert orchestrator_router.process_room_user_message.await_count == 1
     assert len(internal_publisher.internal_events) == 1
-    assert run_lifecycle.record_processing_status.await_count == 0
     assert len(delivery_publisher.public_events) == 1
     assert len(room_files.claims) == 2
     assert len(set(room_files.claims)) == 2
@@ -277,7 +272,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         len(user_messages.docs),
         preflight_count,
         len(internal_publisher.internal_events),
-        run_lifecycle.record_processing_status.await_count,
         orchestrator_router.process_room_user_message.await_count,
         len(room_files.claims),
         len(room_files.commits),
@@ -292,7 +286,6 @@ async def test_concurrent_send_requests_create_one_message_and_one_effect_chain(
         len(user_messages.docs),
         preflight_count,
         len(internal_publisher.internal_events),
-        run_lifecycle.record_processing_status.await_count,
         orchestrator_router.process_room_user_message.await_count,
         len(room_files.claims),
         len(room_files.commits),

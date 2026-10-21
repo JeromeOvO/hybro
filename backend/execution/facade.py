@@ -33,9 +33,6 @@ from execution.orchestrator_routing import (
 from execution.ports import (
     ClientRequestIdResolver,
     HITLMessageCancellationPort,
-    RunEventEnabled,
-    RunLifecyclePort,
-    RunReadPort,
     TaskFactory,
 )
 from execution.shutdown import GRACEFUL_SHUTDOWN_CANCEL_REASON
@@ -104,11 +101,8 @@ class ExecutionFacade:
         *,
         room_center: RoomCenterPort,
         hitl_manager: HITLServicePort,
-        run_lifecycle: RunLifecyclePort,
-        run_reader: RunReadPort,
         hitl_message_cancellation: HITLMessageCancellationPort,
         event_publisher: EventPublisher,
-        run_event_enabled: RunEventEnabled,
         client_request_id_resolver: ClientRequestIdResolver,
         task_factory: TaskFactory = traced_create_task,
         orchestrator_router: Any | None = None,
@@ -116,12 +110,9 @@ class ExecutionFacade:
         self._room_center = room_center
         self._orchestrator_router = orchestrator_router
         self._hitl_manager = hitl_manager
-        self._run_lifecycle = run_lifecycle
-        self._run_reader = run_reader
-        self._active_run_reader = run_reader
+        self._active_run_reader: Any | None = None
         self._hitl_message_cancellation = hitl_message_cancellation
         self._event_publisher = event_publisher
-        self._run_event_enabled = run_event_enabled
         self._client_request_id_resolver = client_request_id_resolver
         self._task_factory = task_factory
         self._inflight: set[asyncio.Task] = set()
@@ -214,7 +205,7 @@ class ExecutionFacade:
         request: ExecutionRequest,
     ) -> ExecutionAck | None:
         try:
-            active_runs = await self._active_run_reader.get_runs_for_room(
+            active_runs = await self._require_active_run_reader().get_runs_for_room(
                 request.room_id
             )
         except Exception:
@@ -245,11 +236,8 @@ class ExecutionFacade:
             status=SSEProcessingStatus.PROCESSING,
             message_id=ack.message_id,
             lifecycle_message_id=lifecycle_message_id,
-            run_lifecycle=self._run_lifecycle,
             event_publisher=self._event_publisher,
-            run_event_enabled=self._run_event_enabled,
             client_request_id_resolver=self._client_request_id_resolver,
-            record_lifecycle=False,
             client_request_id=request.client_request_id,
         )
 
@@ -284,11 +272,8 @@ class ExecutionFacade:
             status=status,
             message_id=ack.message_id,
             lifecycle_message_id=lifecycle_message_id,
-            run_lifecycle=self._run_lifecycle,
             event_publisher=self._event_publisher,
-            run_event_enabled=self._run_event_enabled,
             client_request_id_resolver=self._client_request_id_resolver,
-            record_lifecycle=False,
             client_request_id=request.client_request_id,
             details=ack.preflight_details or ack.error,
         )
@@ -494,20 +479,20 @@ class ExecutionFacade:
             ),
         )
 
-    async def get_run(self, run_id: str) -> RunInfo | None:
-        return await self._run_reader.get_run(run_id)
+    def _require_active_run_reader(self) -> Any:
+        if self._active_run_reader is None:
+            raise RuntimeError("Execution active-run reader is not bound")
+        return self._active_run_reader
 
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
-        return await self._active_run_reader.get_runs_for_room(room_id)
+        return await self._require_active_run_reader().get_runs_for_room(room_id)
 
     async def get_latest_runs_for_rooms(
         self, room_ids: list[str]
     ) -> dict[str, RunInfo]:
-        reader = self._active_run_reader
-        bulk = getattr(reader, "get_latest_runs_for_rooms", None)
-        if bulk is not None:
-            return await bulk(room_ids)
-        return await self._run_reader.get_latest_runs_for_rooms(room_ids)
+        return await self._require_active_run_reader().get_latest_runs_for_rooms(
+            room_ids
+        )
 
     async def cancel_inflight_tasks(self) -> int:
         """Interrupt local execution without terminalizing durable runs.
@@ -523,9 +508,6 @@ class ExecutionFacade:
             await asyncio.gather(*tasks, return_exceptions=True)
 
         return sum(task.cancelled() for task in tasks)
-
-    async def heal_diverged_runs(self, limit: int = 500) -> int:
-        return await self._run_lifecycle.heal_diverged_runs(limit=limit)
 
     async def resolve_hitl_batch(
         self,

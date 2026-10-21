@@ -123,20 +123,6 @@ def test_pinned_delta_frame_type_strings(event_type):
     assert frame["type"] == event_type
 
 
-def test_pinned_terminal_projection_step_keys():
-    from execution.terminal_projection import _STEP_ORDER
-
-    assert _STEP_ORDER == (
-        "descendant_cleanup",
-        "run_event_sse",
-        "processing_sse",
-        "system_task",
-        "system_task_delivery",
-        "completion_metadata",
-        "turn_event",
-    )
-
-
 def test_room_events_schema_pinned_fields():
     """The room_events doc shape (§5) is a durable contract."""
 

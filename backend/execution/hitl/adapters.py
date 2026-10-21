@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from models.run import RunState
-
 
 class HITLPersistenceAdapter:
     def __init__(self, persistence) -> None:
@@ -22,15 +20,9 @@ class HITLDeliveryAdapter:
 
 
 class HITLTerminalLifecycleAdapter:
-    """Converge public run state after HITL termination."""
+    """Terminalize the canonical Run that owns a terminated HITL interaction."""
 
-    def __init__(
-        self,
-        run_lifecycle,
-        *,
-        canonical_terminalizer=None,
-    ) -> None:
-        self._run_lifecycle = run_lifecycle
+    def __init__(self, *, canonical_terminalizer=None) -> None:
         self._canonical_terminalizer = canonical_terminalizer
 
     async def terminalize_owning_run(
@@ -40,26 +32,14 @@ class HITLTerminalLifecycleAdapter:
         terminal_status: str,
         reason: str,
     ) -> None:
-        run_id = request.orchestration_run_id
-        if run_id and self._canonical_terminalizer is not None:
-            handled = await self._canonical_terminalizer(
+        # A run the canonical terminalizer does not own has no public mirror
+        # left to project; there is nothing further to converge.
+        if request.orchestration_run_id and self._canonical_terminalizer is not None:
+            await self._canonical_terminalizer(
                 request,
                 terminal_status=terminal_status,
                 reason=reason,
             )
-            if handled:
-                return
-        await self._run_lifecycle.project_run_state(
-            room_id=request.room_id,
-            run_id=run_id or request.user_message_id,
-            trigger_message_id=request.user_message_id,
-            target_state=(
-                RunState.CANCELED if terminal_status == "canceled" else RunState.FAILED
-            ),
-            terminal_reason=reason,
-            causation_id=f"hitl-terminal:{request.request_id}:{terminal_status}",
-            client_request_id=request.client_request_id,
-        )
 
 
 __all__ = [

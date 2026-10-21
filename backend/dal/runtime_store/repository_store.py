@@ -97,7 +97,6 @@ class RuntimeRepositoryStore:
         self._hitl_requests = mongo.collection("hitl_requests")
         self._hitl_interactions = mongo.collection("hitl_interactions")
         self._hitl_resume_commands = mongo.collection("hitl_resume_commands")
-        self._runs = mongo.collection("runs")
         self._room_repository = room_repository
         self._message_repository = message_repository
         self._agent_repository = agent_repository
@@ -113,7 +112,6 @@ class RuntimeRepositoryStore:
             message_repository=self._message_repository,
         )
         self._task_lifecycle_part = TaskLifecycleRuntimeStorePart(
-            runs=self._runs,
             message_store=self.messages,
         )
         self._hitl_part = HITLRuntimeStorePart(
@@ -170,7 +168,6 @@ class RuntimeRepositoryStore:
         if part is not None:
             return part
         return TaskLifecycleRuntimeStorePart(
-            runs=getattr(self, "_runs", None),
             message_store=self._message_delegate(),
         )
 
@@ -375,9 +372,6 @@ class RuntimeRepositoryStore:
         return await self._task_delegate().resolve_client_request_id_for_message_id(
             message_id
         )
-
-    async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
-        return await self._task_delegate().get_room_ids_with_non_terminal_runs()
 
     async def get_room_memory_by_room_id(
         self, room_id: str

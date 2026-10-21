@@ -141,7 +141,6 @@ async def test_create_room_validates_required_fields_and_manual_seed():
         "membership_origin_status": "manual",
         "source_group_id": None,
         "source_group_name": None,
-        "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
         "owner_product": "chat",

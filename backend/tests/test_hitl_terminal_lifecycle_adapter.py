@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -7,14 +7,9 @@ from execution.hitl.adapters import HITLTerminalLifecycleAdapter
 
 
 @pytest.mark.asyncio
-async def test_canonical_hitl_owner_skips_the_public_projection():
-    legacy_projection = MagicMock()
-    legacy_projection.project_run_state = AsyncMock()
+async def test_canonical_hitl_owner_terminalizes_through_the_canonical_port():
     canonical = AsyncMock(return_value=True)
-    adapter = HITLTerminalLifecycleAdapter(
-        legacy_projection,
-        canonical_terminalizer=canonical,
-    )
+    adapter = HITLTerminalLifecycleAdapter(canonical_terminalizer=canonical)
     request = SimpleNamespace(
         orchestration_run_id="run-canonical",
         request_id="request-1",
@@ -34,4 +29,3 @@ async def test_canonical_hitl_owner_skips_the_public_projection():
         terminal_status="failed",
         reason="expired",
     )
-    legacy_projection.project_run_state.assert_not_awaited()

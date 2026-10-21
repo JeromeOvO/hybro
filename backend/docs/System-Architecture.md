@@ -1259,8 +1259,7 @@ Key components:
   observations.
 - `execution.events.emit_room_processing_status`: compatibility entrypoint for
   room-message processing status. It normalizes legacy string `details` into the
-  typed processing-status payload before lifecycle recording and Delivery
-  emission.
+  typed processing-status payload before Delivery emission.
 - `execution.ports`: owns the narrow type contracts used inside Execution for
   room runtime, delivery/SSE, rate limit, memory, resolver, and health
   collaborators. Where execution invokes a collaborator method,
@@ -1356,58 +1355,17 @@ scan. Active-Run reads expose `canceling` with the originating message identity 
 clients retain correlation until durable `canceled` settlement.
 
 The canonical orchestrator's `orchestrator_runs` store is the execution source of
-truth; the first-generation `orchestration_runs` store is retired. Public run
-lifecycle projection accepts an explicit public `RunState` and is idempotent by
-causation id, while `runs` and `run_events` are public lifecycle projections.
-When a HITL interaction terminates and the canonical terminalizer does not own
-its run, Execution projects the public run as `canceled` or `failed` directly.
-A projection with a new causation id records that binding even when the public
-head is already at the requested active state. Processing-status lifecycle writes
-return a typed `accepted`/`replayed`/`conflict`/`error` outcome. Each new terminal
-`run_events` fact stores an optional, versioned `terminal_projection` intent before
-any SSE, system-task, or completion-metadata side effect runs. The retired turn
-journal has no production appender, so production intents omit a turn-event step
-rather than pretending to recover one; a future re-enable must bind a persistent
-appender with the terminal event id as its idempotency key. `run_events` is the
-only authority for this intent; `runs` heads no longer copy it, and head repair
-removes a legacy copied field while continuing to read old heads. A same-terminal
-replay atomically enriches the canonical Mongo fact with only absent intent fields
-and absent steps. It never changes canonical status or replaces an existing
-completed, blocked, or claimed step, and immediate finalization uses the enriched
-canonical document. Legacy terminal events with no stored intent are never
-backfilled from a replay request—even for failed subtypes such as `rejected`—as
-that request cannot prove the original side-effect targets. An opposing terminal
-winner remains a conflict and emits nothing. Each projection
-step is independently leased and completed, so a child or delivery failure leaves
-only that step pending and never blocks or rewrites the root terminal state.
-Failed and canceled intents also include durable descendant cleanup rooted at the
-turn message; traversal crosses terminal intermediates and stale recovery closes
-crashes between root commit and cleanup. The cleanup tags the winner-owned child
-set durably and emits a stable-ID terminal `task_update` for every affected child;
-a retry reconstructs the same IDs after a DB-before-SSE crash. The dedicated
-system task is excluded from descendant cleanup and remains owned exclusively by
-its system-task DB/delivery steps. Terminal task projections atomically write a
-winner event marker with task state. All full-content, status, HITL, and
-finalization persistence paths use a non-terminal Mongo CAS, so a late
-completion or opposing terminal writer cannot overwrite the durable marked
-winner. Queue execution retries creation of its system task and refuses all agent
-dispatch if the create remains unacknowledged; the resulting root failure omits
-system-task projection intent because no recoverable target exists. Queue and room
-orchestration never mutate children before the root CAS—including attachment
-preflight failures—and do not run imperative cleanup after an opposing
-winner; only the canonical fact's projection owns cleanup. Retryable failures receive bounded
-exponential backoff; irreparable missing or
-opposing child targets become durable `blocked` steps and no longer occupy the due
-queue. Schedule refresh is one MongoDB aggregation update pipeline that derives
-`pending` and `next_attempt_at` from the then-current persisted step object; it
-cannot clear a step concurrently added by richer replay. Recovery isolates each
-fact; malformed steps are skipped from scheduling and unknown forward-schema
-steps are durably blocked so one poison record cannot abort or starve the batch.
-The stale-task checker scans only due, pending markers and can rebuild work directly from
-the terminal event after a crash, including an event/head divergence window.
-Terminal processing, system-task, and run-event SSE use stable delivery IDs in
-both the frame and Redis/local dedup key. Dedup is two phase: an expiring
-reservation is `in_flight`, while only post-transport confirmation becomes
+truth and the only Run store. The first-generation `orchestration_runs` store and
+the public `runs`/`run_events` mirror are retired: active-Run reads come from the
+canonical aggregate bound through `ExecutionFacade.bind_active_run_reader`, and a
+HITL interaction whose Run the canonical terminalizer does not own has no public
+mirror left to project. Processing-status emits publish the public
+`ProcessingStatusEvent` directly; terminal Run lifecycle is owned by canonical
+settlement.
+
+Terminal processing and run-event SSE use stable delivery IDs in both the frame
+and Redis/local dedup key. Dedup is two phase: an expiring reservation is
+`in_flight`, while only post-transport confirmation becomes
 `already_delivered`. Reservations use a short configurable lease; confirmed
 markers retain the longer dedup TTL. Active fanout heartbeats renew owned L1/L2
 reservations until confirmation and fail safely if ownership is lost. L1-only
@@ -1419,27 +1377,17 @@ and accepted-marker Redis commands use the configurable
 `terminal_redis_io_timeout_seconds` bound and owned background tasks, so a hung
 connected Redis command cannot delay an accepted result. Redis write failure or
 timeout cannot change that result. Per-key local locks make Redis-error fallback
-reservation atomic, so concurrent coroutines
-produce one provisional owner. The compatibility `should_deliver` API retains its
-historical one-stage behavior by confirming immediately with the long TTL; checked
-publishers use explicit reserve/confirm. Local SSE
-broadcast reports an actual delivery count; zero local subscribers plus failed
-Redis fanout stays pending and never confirms the global marker. Cross-instance
-publish returns explicit broker acceptance; disabled/no-op brokers return false.
-A projector completes only confirmed fresh
-delivery or an already-confirmed replay; an in-flight reservation remains pending
-and is retried after its lease expires. Old documents without the optional intent remain readable and are not
-replayed or migrated. If an event append succeeds but head projection fails, the
-writer repairs the head from that exact event before returning `accepted`; failed
-repair returns `error`. Repeated processing projections
-use `RUN_RESUMED` rather than emitting another start event. Mapping
-orchestration-specific statuses into public run states is performed by the
-single state-driven supervisor loop. Graceful process shutdown is treated as an
-infrastructure interruption rather than a user cancellation: local execution
-tasks stop without emitting terminal public state or terminalizing the durable
-run, and stale recovery resumes them after restart. Explicit user cancellation
-remains the only path that permanently marks both durable and public run state
-as canceled.
+reservation atomic, so concurrent coroutines produce one provisional owner. The
+compatibility `should_deliver` API retains its historical one-stage behavior by
+confirming immediately with the long TTL; checked publishers use explicit
+reserve/confirm. Local SSE broadcast reports an actual delivery count; zero local
+subscribers plus failed Redis fanout stays pending and never confirms the global
+marker. Cross-instance publish returns explicit broker acceptance; disabled/no-op
+brokers return false. Graceful process shutdown is treated as an infrastructure
+interruption rather than a user cancellation: local execution tasks stop without
+emitting terminal public state or terminalizing the durable run, and canonical
+recovery resumes them after restart. Explicit user cancellation remains the only
+path that permanently marks durable run state as canceled.
 
 Supervisor requests carry an explicit candidate scope from
 the API boundary into a lightweight orchestration envelope. Scope normalization
@@ -2176,10 +2124,7 @@ progress/results. A later catalog therefore cannot inherit a broader prior
 allowlist for the same Tool name.
 Accepted Tool
 calls persist an opaque public call ID; provider/A2A call IDs remain private.
-Terminal `run_event`/legacy `processing_status` frames are gated: the two-phase
-`TerminalProjectionFinalizer` runs every durable side-effect step before the
-SSE emission steps, and `EventPublisherImpl` backs that up with a
-`ProjectionSettlementReader` over the private `run_events` log. Every connect
+Terminal canonical frames are published by canonical settlement. Every connect
 yields a `snapshot` frame right after `connected`, folded from the event log
 by `SnapshotService` (incrementally materialized; `?snapshot=1` forces a fresh
 fold). Builds are serialized per room and replace checkpoints monotonically;
@@ -2282,10 +2227,7 @@ Delivery is exposed to SSE routes as `common.protocols.SSERouteTransport`
 through `APIGatewayDeps.sse_transport` and the `get_sse_transport` FastAPI
 provider. Routes call the delivery transport, while the runtime implementation
 lives in `delivery`. Delivery never calls back into Execution or removed-package
-business services; lifecycle recording happens before typed delivery events are
-emitted. Queue-owned `system:hybro` completed task publication is delayed until
-the root lifecycle writer wins durable `COMPLETED`, preventing cancellation during
-a child task-update await from leaving a conflicting completed child projection.
+business services.
 
 ### `room_files`
 
@@ -2395,10 +2337,7 @@ Important Mongo collections include:
 - `room_quotes`
 - `room_memories`
 - `conversation_content`
-- `runs`
 - `room_files`
-- `runs`
-- `run_events`
 - `agent_requests`
 - `agent_capability_issues`
 
@@ -2438,9 +2377,8 @@ SSE status and cancellation lookup.
 Background jobs start only after infrastructure and multi-worker safety checks
 pass:
 
-- `stale_task_checker`: runs the HITL lifecycle reconciliation passes, recovers
-  HITL requests stuck in processing, and clears stale legacy room processing
-  status.
+- `stale_task_checker`: runs the HITL lifecycle reconciliation passes and
+  recovers HITL requests stuck in processing.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
 - `agent.health.AgentHealthService`: periodic health/liveness support for
@@ -2990,8 +2928,8 @@ Background jobs are initialized by the container runtime after Redis/leader
 election setup.
 
 - `agent_health_service`: health/liveness checks.
-- `stale_task_checker`: reconciles HITL lifecycle state, recovers stale HITL
-  processing, and clears stale legacy room processing status.
+- `stale_task_checker`: reconciles HITL lifecycle state and recovers stale HITL
+  processing.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: deletes unused uploads from the local content store.
 
@@ -3038,8 +2976,8 @@ The codebase uses several recovery mechanisms:
 - Per-room locks prevent concurrent room execution.
 - Queue cleanup cancels remaining descendants when execution exits early.
 - Cancellation state is persisted and broadcast.
-- `runs` and `run_events` provide lifecycle tracking and startup healing.
-- Stale task checker reconciles HITL state and clears stuck room processing status.
+- The canonical `orchestrator_runs` aggregate provides lifecycle tracking and recovery.
+- Stale task checker reconciles HITL state.
 
 The normal terminal states seen by clients are:
 

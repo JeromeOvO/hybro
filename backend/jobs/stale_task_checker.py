@@ -3,8 +3,7 @@ Stale Task Checker Background Job
 
 This module provides a leader-gated background job that:
 1. Runs the durable HITL lifecycle reconciliation passes
-2. Cleans up stuck legacy room processing status
-3. Recovers HITL requests stuck in "processing"
+2. Recovers HITL requests stuck in "processing"
 """
 
 from __future__ import annotations
@@ -33,14 +32,8 @@ class StaleHITLDeps:
     reconcile_lifecycle: Callable[[], Awaitable[Any]] | None = None
 
 
-@dataclass(frozen=True)
-class StaleTaskCheckerDeps:
-    store: Any
-    rooms_collection: Any
-
-
 class StaleTaskChecker:
-    """Background job for HITL reconciliation and legacy room-status cleanup.
+    """Background job for durable HITL reconciliation.
 
     Canonical Run recovery and projection are owned exclusively by the
     mandatory orchestrator workers; this checker never creates a second
@@ -53,27 +46,10 @@ class StaleTaskChecker:
         self._task: asyncio.Task | None = None
         self._leader: LeaderGate | None = None
         self._hitl_deps: StaleHITLDeps | None = None
-        self._runtime_deps: StaleTaskCheckerDeps | None = None
 
     def set_leader_election(self, leader: LeaderGate | None) -> None:
         """Attach a leader gate instance for distributed leader gating."""
         self._leader = leader
-
-    def set_runtime_deps(self, deps: StaleTaskCheckerDeps) -> None:
-        self._runtime_deps = deps
-
-    def _deps(self) -> StaleTaskCheckerDeps:
-        if self._runtime_deps is None:
-            raise RuntimeError("Stale task checker runtime deps are not bound")
-        return self._runtime_deps
-
-    @property
-    def _store(self) -> Any:
-        return self._deps().store
-
-    @property
-    def _rooms_collection(self) -> Any:
-        return self._deps().rooms_collection
 
     def set_hitl_deps(self, deps: StaleHITLDeps) -> None:
         self._hitl_deps = deps
@@ -139,8 +115,6 @@ class StaleTaskChecker:
             except Exception:
                 logger.exception("HITL lifecycle reconciliation failed")
 
-        await self._cleanup_stuck_processing_status()
-
         # Recover HITL requests stuck in "processing" (worker crashed between
         # CAS claim and finalization).
         try:
@@ -152,42 +126,6 @@ class StaleTaskChecker:
                 await self._hitl_deps.recover_stale_processing()
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
-
-    async def _cleanup_stuck_processing_status(self) -> None:
-        """
-        Null legacy rooms.processing_message_id when there are no non-terminal runs.
-
-        Mirrors are no longer written on the lifecycle path; this job clears stale
-        Mongo values when the legacy ``runs`` mirror has no non-terminal run for
-        the room.
-        """
-        try:
-            busy_ids = await self._store.get_room_ids_with_non_terminal_runs()
-        except Exception as e:
-            logger.warning(
-                "legacy processing_message_id cleanup: could not list active rooms: %s",
-                e,
-            )
-            return
-
-        busy = list({rid for rid in busy_ids if rid})
-        flt: dict = {"processing_message_id": {"$ne": None}}
-        if busy:
-            flt["room_id"] = {"$nin": busy}
-        try:
-            coll = self._rooms_collection
-            if coll is None:
-                raise RuntimeError("rooms_collection is not bound")
-            res = await coll.update_many(flt, {"$set": {"processing_message_id": None}})
-            modified_count = getattr(res, "modified_count", res)
-            if modified_count:
-                logger.info(
-                    "legacy processing_message_id cleanup: nulled field on %d rooms "
-                    "(no non-terminal runs)",
-                    modified_count,
-                )
-        except Exception as e:
-            logger.warning("legacy processing_message_id cleanup failed: %s", e)
 
 
 # Singleton instance. Application startup binds runtime dependencies.

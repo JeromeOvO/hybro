@@ -156,8 +156,6 @@ class RuntimeTaskLifecycleStore(Protocol):
         self, message_id: str
     ) -> str | None: ...
 
-    async def get_room_ids_with_non_terminal_runs(self) -> list[str]: ...
-
 
 @runtime_checkable
 class RuntimeHITLStore(Protocol):

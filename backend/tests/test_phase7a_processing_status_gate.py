@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -279,10 +278,10 @@ def _assert_lifecycle_helper_matches(
     entry: dict[str, Any],
 ) -> None:
     if item.emitter_kind in EXECUTION_STATUS_HELPERS:
-        record_lifecycle = _keyword(item.call, "record_lifecycle")
-        assert record_lifecycle is None or _expr_equal(
-            _unparse(record_lifecycle), "True"
-        ), f"{entry['call_id']} disables lifecycle recording"
+        for retired in ("record_lifecycle", "run_lifecycle", "run_event_enabled"):
+            assert _keyword(item.call, retired) is None, (
+                f"{entry['call_id']} passes retired {retired}"
+            )
         assert _expr_equal(
             _unparse(_keyword(item.call, "lifecycle_message_id")),
             entry["lifecycle_message_id_expression"],
@@ -293,48 +292,8 @@ def _assert_lifecycle_helper_matches(
         )
         return
 
-    helper = _find_prior_awaited_helper(item, "record_and_maybe_emit_run_event")
-    if (
-        helper is None
-        and item.path == "conversation/runtime.py"
-        and item.function_or_method
-        == "ConversationRuntime._emit_processing_status_event"
-    ):
-        for stmt in reversed(_prior_statements(item)):
-            if not isinstance(stmt, ast.If) or not _expr_equal(
-                _unparse(stmt.test), "record_lifecycle"
-            ):
-                continue
-            for child in stmt.body:
-                helper = _direct_awaited_call(
-                    child,
-                    name="record_and_maybe_emit_run_event",
-                )
-                if helper is not None:
-                    break
-            if helper is not None:
-                break
-    assert helper is not None, f"{entry['call_id']} missing awaited lifecycle helper"
-    assert _expr_equal(
-        _unparse(_arg_or_kw(helper, 0, "room_id")), entry["room_id_expression"]
-    )
-    assert _expr_equal(
-        _unparse(_arg_or_kw(helper, 1, "status")), entry["status_expression"]
-    )
-    assert _expr_equal(
-        _unparse(_arg_or_kw(helper, 2, "message_id")),
-        entry["lifecycle_message_id_expression"],
-    )
-    assert _expr_equal(
-        _unparse(_keyword(helper, "details")), entry["details_expression"]
-    )
-    assert _expr_equal(
-        _unparse(_keyword(helper, "client_request_id")),
-        entry["client_request_id_expression"],
-    )
-    assert _expr_equal(
-        _unparse(_keyword(helper, "event_publisher")),
-        entry["run_event_delivery_expression"],
+    raise AssertionError(
+        f"{entry['call_id']} emits processing status outside the execution helper"
     )
 
 
@@ -478,20 +437,3 @@ def test_manifest_paths_do_not_reference_deleted_packages() -> None:
     ]
 
     assert not deleted_paths
-
-
-def test_delivery_facade_does_not_import_run_lifecycle() -> None:
-    if os.environ.get("PHASE7A_ALLOW_LEGACY_SSE_MANAGER") == "1":
-        return
-
-    path = ROOT / "delivery" / "facade.py"
-    tree = ast.parse(path.read_text(), filename=str(path))
-    forbidden_imports: list[str] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module == "execution.run_command_handler"
-        ):
-            forbidden_imports.extend(alias.name for alias in node.names)
-    assert "run_command_handler" not in forbidden_imports
-    assert "run_event_sse_enabled" not in forbidden_imports

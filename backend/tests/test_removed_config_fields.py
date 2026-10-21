@@ -45,6 +45,7 @@ RETIRED = {
     "pending_task_warning_hours",
     "webhook_base_url",
     "webhook_signing_key",
+    "feature_run_event_sse",
 }
 
 

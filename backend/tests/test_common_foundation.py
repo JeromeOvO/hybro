@@ -690,11 +690,9 @@ def test_protocol_methods_match_design_doc():
             "start_orchestration",
             "schedule_orchestration",
             "cancel",
-            "get_run",
             "get_runs_for_room",
             "get_latest_runs_for_rooms",
             "cancel_inflight_tasks",
-            "heal_diverged_runs",
         },
         protocols.HITLManager: {
             "resolve_hitl_batch",
@@ -851,7 +849,6 @@ def test_protocol_methods_match_design_doc():
             "upsert_room_agent_message",
         },
         protocols.RuntimeTaskLifecycleStore: {
-            "get_room_ids_with_non_terminal_runs",
             "resolve_client_request_id_for_agent_message",
             "resolve_client_request_id_for_message_id",
         },

@@ -57,13 +57,7 @@ def _make_facade(**overrides):
         cancel_request=AsyncMock(return_value=None),
         cancel_interaction_by_user=AsyncMock(return_value=6),
     )
-    run_lifecycle = SimpleNamespace(
-        heal_diverged_runs=AsyncMock(return_value=2),
-        record_processing_status=AsyncMock(return_value=None),
-        project_run_state=AsyncMock(return_value={"event_id": "cancel-event"}),
-    )
     run_reader = SimpleNamespace(
-        get_run=AsyncMock(return_value=None),
         get_runs_for_room=AsyncMock(return_value=[]),
     )
     hitl_message_cancellation = SimpleNamespace(
@@ -76,16 +70,16 @@ def _make_facade(**overrides):
     deps = {
         "room_center": room_center,
         "hitl_manager": hitl_manager,
-        "run_lifecycle": run_lifecycle,
-        "run_reader": run_reader,
         "hitl_message_cancellation": hitl_message_cancellation,
         "event_publisher": event_publisher,
-        "run_event_enabled": lambda: False,
         "client_request_id_resolver": client_request_id_resolver,
         "task_factory": RecordingTaskFactory(),
     }
     deps.update(overrides)
     facade = ExecutionFacade(**deps)
+    # The canonical active-run reader is bound after construction in production.
+    facade.bind_active_run_reader(run_reader)
+    deps["run_reader"] = run_reader
     return facade, deps
 
 
@@ -205,9 +199,7 @@ async def test_execute_rejects_pending_hitl_before_room_persist():
     assert "waiting for your input" in ack.error
     deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["room_center"].persist_user_message.assert_not_awaited()
-    deps["run_reader"].get_run.assert_not_awaited()
     deps["run_reader"].get_runs_for_room.assert_not_awaited()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_not_awaited()
 
 
@@ -238,7 +230,6 @@ async def test_execute_rejects_active_run_before_room_persist():
     deps["hitl_manager"].get_pending_requests.assert_awaited_once_with("room-1")
     deps["run_reader"].get_runs_for_room.assert_awaited_once_with("room-1")
     deps["room_center"].persist_user_message.assert_not_awaited()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_not_awaited()
 
 
@@ -291,7 +282,6 @@ async def test_execute_replay_lookup_precedes_busy_guards_and_bypasses_them():
     deps["run_reader"].get_runs_for_room.assert_not_awaited()
     deps["room_center"].persist_message_to_room.assert_not_awaited()
     deps["room_center"].run_message_preflight_to_room.assert_not_awaited()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_not_awaited()
 
 
@@ -334,7 +324,6 @@ async def test_execute_rechecks_idempotency_when_winner_appears_during_busy_guar
     assert deps["room_center"].get_idempotent_user_message.await_count == 2
     deps["room_center"].persist_message_to_room.assert_not_awaited()
     deps["room_center"].run_message_preflight_to_room.assert_not_awaited()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_not_awaited()
 
 
@@ -422,7 +411,6 @@ async def test_execute_concurrent_insert_loser_skips_preflight_and_all_sse():
     assert ack.message_id == "winner-message"
     assert ack.should_start_orchestration is False
     room_center.run_message_preflight_to_room.assert_not_awaited()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_not_awaited()
 
 
@@ -584,13 +572,9 @@ async def test_execute_emits_processing_for_ready_room_preflight():
     )
     order: list[tuple[str, str]] = []
 
-    async def record_status(_room_id, status, _message_id, **_kwargs):
-        order.append(("record", status))
-
     async def emit_event(event):
         order.append(("emit", event.status))
 
-    deps["run_lifecycle"].record_processing_status.side_effect = record_status
     deps["event_publisher"].emit.side_effect = emit_event
 
     ack = await facade.execute(
@@ -599,7 +583,6 @@ async def test_execute_emits_processing_for_ready_room_preflight():
 
     assert ack.should_start_orchestration is True
     assert order == [("emit", "processing")]
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     deps["event_publisher"].emit.assert_awaited_once()
     event = deps["event_publisher"].emit.await_args.args[0]
     _assert_processing_status_event(
@@ -639,9 +622,6 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
     facade, deps = _make_facade(room_center=room_center)
     order: list[str] = []
 
-    async def record_status(_room_id, status, _message_id, **_kwargs):
-        order.append(f"record:{status}")
-
     async def emit_event(event):
         order.append(f"emit:{event.status}")
 
@@ -656,7 +636,6 @@ async def test_execute_emits_processing_before_room_preflight_continuation():
             preflight_outcome="ready",
         )
 
-    deps["run_lifecycle"].record_processing_status.side_effect = record_status
     deps["event_publisher"].emit.side_effect = emit_event
     room_center.run_message_preflight_to_room.side_effect = continue_preflight
 
@@ -853,7 +832,6 @@ async def test_execute_does_not_emit_completed_for_success_without_preflight_out
 
     assert ack.success is True
     assert ack.should_start_orchestration is False
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     event = deps["event_publisher"].emit.await_args.args[0]
     assert event.status == "processing"
 
@@ -861,7 +839,6 @@ async def test_execute_does_not_emit_completed_for_success_without_preflight_out
 @pytest.mark.asyncio
 async def test_execute_emits_completed_for_completed_room_preflight():
     facade, deps = _make_facade()
-    deps["run_lifecycle"].record_processing_status.return_value = {"accepted": True}
     deps[
         "room_center"
     ].persist_user_message.return_value = _room_response_with_preflight(
@@ -878,7 +855,6 @@ async def test_execute_emits_completed_for_completed_room_preflight():
 
     assert ack.success is True
     assert ack.should_start_orchestration is False
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     assert [
         await_call.args[0].status
         for await_call in deps["event_publisher"].emit.await_args_list
@@ -900,9 +876,7 @@ async def test_execute_returns_ack_when_post_persist_status_emit_fails():
         success=True,
         preflight_outcome="ready",
     )
-    deps["run_lifecycle"].record_processing_status.side_effect = RuntimeError(
-        "sse down"
-    )
+    deps["event_publisher"].emit.side_effect = RuntimeError("sse down")
 
     ack = await facade.execute(
         ExecutionRequest(room_id="room-1", sender_id="user-1", client_request_id="cr-1")
@@ -930,14 +904,9 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
     )
     order: list[tuple[str, str]] = []
 
-    async def record_status(_room_id, status, _message_id, **_kwargs):
-        order.append(("record", status))
-        return {"accepted": True}
-
     async def emit_event(event):
         order.append(("emit", event.status))
 
-    deps["run_lifecycle"].record_processing_status.side_effect = record_status
     deps["event_publisher"].emit.side_effect = emit_event
 
     ack = await facade.execute(
@@ -952,7 +921,6 @@ async def test_execute_emits_processing_then_failed_for_persisted_preflight_fail
         ("emit", "processing"),
         ("emit", "failed"),
     ]
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     events = [
         await_call.args[0]
         for await_call in deps["event_publisher"].emit.await_args_list
@@ -983,14 +951,9 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
     )
     order: list[tuple[str, str]] = []
 
-    async def record_status(_room_id, status, _message_id, **_kwargs):
-        order.append(("record", status))
-        return {"accepted": True}
-
     async def emit_event(event):
         order.append(("emit", event.status))
 
-    deps["run_lifecycle"].record_processing_status.side_effect = record_status
     deps["event_publisher"].emit.side_effect = emit_event
 
     ack = await facade.execute(
@@ -1003,7 +966,6 @@ async def test_execute_emits_canceled_for_canceled_room_preflight():
         ("emit", "processing"),
         ("emit", "canceled"),
     ]
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
     events = [
         await_call.args[0]
         for await_call in deps["event_publisher"].emit.await_args_list
@@ -1104,11 +1066,8 @@ async def test_run_methods_delegate_to_ports():
         SimpleNamespace(trigger_message_id="user-msg-1")
     ]
 
-    assert await facade.get_run("run-1") is None
     runs = await facade.get_runs_for_room("room-1")
     assert runs[0].trigger_message_id == "user-msg-1"
-    assert await facade.heal_diverged_runs(limit=123) == 2
-    deps["run_lifecycle"].heal_diverged_runs.assert_awaited_once_with(limit=123)
 
 
 @pytest.mark.asyncio
@@ -1136,7 +1095,6 @@ async def test_cancel_inflight_tasks_interrupts_without_public_cancellation():
     assert marker == ["cleanup"]
     assert cancellation_reasons == [(GRACEFUL_SHUTDOWN_CANCEL_REASON,)]
     assert facade._inflight == set()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1152,7 +1110,6 @@ async def test_cancel_inflight_tasks_does_not_mark_task_that_completes_during_sh
     assert await facade.cancel_inflight_tasks() == 0
     assert task.done()
     assert not task.cancelled()
-    deps["run_lifecycle"].record_processing_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio

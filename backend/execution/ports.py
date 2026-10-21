@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable
 from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol
 
-from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
-from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
+from common.dto import HITLRequestEvent, HITLResolvedEvent
 from models.agent_network import AgentMessageRequest, AgentMessageResponse
-from models.run import RunState
 
 ProcessingStatusLike = str | Enum
 
@@ -25,10 +23,6 @@ class TaskFactory(Protocol):
         *,
         name: str | None = None,
     ) -> asyncio.Task[Any]: ...
-
-
-RunEventEnabled = Callable[[], bool]
-ProcessingStatusEmitter = Callable[..., Awaitable[dict[str, Any] | None]]
 
 
 class HITLPersistencePort(Protocol):
@@ -323,15 +317,6 @@ class HITLDeliveryPort(Protocol):
     async def emit(self, event: HITLRequestEvent | HITLResolvedEvent) -> None: ...
 
 
-class RunReadPort(Protocol):
-    async def get_run(self, run_id: str) -> RunInfo | None: ...
-    async def get_run_strict(self, run_id: str) -> RunInfo | None: ...
-    async def get_runs_for_room(self, room_id: str) -> list[RunInfo]: ...
-    async def get_latest_runs_for_rooms(
-        self, room_ids: list[str]
-    ) -> dict[str, RunInfo]: ...
-
-
 class HITLMessageCancellationPort(Protocol):
     async def cancel_requests_for_message(self, message_id: str) -> None: ...
 
@@ -342,44 +327,3 @@ class ClientRequestIdResolver(Protocol):
         message_id: str | None,
         provided_client_request_id: str | None,
     ) -> str | None: ...
-
-
-class RunLifecyclePort(Protocol):
-    async def write_processing_status(
-        self,
-        room_id: str,
-        status: ProcessingStatusLike,
-        message_id: str | None,
-        *,
-        client_request_id: str | None = None,
-        details: dict[str, Any] | None = None,
-        error_message: str | None = None,
-        terminal_projection: dict[str, Any] | None = None,
-    ) -> RunLifecycleWriteOutcome: ...
-
-    async def record_processing_status(
-        self,
-        room_id: str,
-        status: ProcessingStatusLike,
-        message_id: str | None,
-        *,
-        client_request_id: str | None = None,
-        details: dict[str, Any] | None = None,
-        error_message: str | None = None,
-        terminal_projection: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None: ...
-
-    async def project_run_state(
-        self,
-        *,
-        room_id: str,
-        run_id: str,
-        trigger_message_id: str,
-        target_state: RunState,
-        terminal_reason: str | None,
-        causation_id: str,
-        client_request_id: str | None = None,
-        terminal_summary: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None: ...
-
-    async def heal_diverged_runs(self, limit: int = 500) -> int: ...

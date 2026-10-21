@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from dataclasses import fields
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -76,12 +75,11 @@ def test_task_lifecycle_store_keeps_only_live_methods():
     assert public == {
         "resolve_client_request_id_for_agent_message",
         "resolve_client_request_id_for_message_id",
-        "get_room_ids_with_non_terminal_runs",
     }
 
 
-def test_stale_checker_keeps_only_hitl_and_processing_cleanup():
-    from jobs.stale_task_checker import StaleTaskChecker, StaleTaskCheckerDeps
+def test_stale_checker_keeps_only_hitl_reconciliation():
+    from jobs.stale_task_checker import StaleTaskChecker
 
     for name in (
         "_process_stale_task",
@@ -94,37 +92,25 @@ def test_stale_checker_keeps_only_hitl_and_processing_cleanup():
         "configure_timing",
     ):
         assert not hasattr(StaleTaskChecker, name), name
-    assert {field.name for field in fields(StaleTaskCheckerDeps)} == {
-        "store",
-        "rooms_collection",
-    }
     for name in RETIRED_TASK_SETTINGS:
         assert name not in inspect.signature(StaleTaskChecker).parameters
 
 
 @pytest.mark.asyncio
-async def test_stale_checker_iteration_runs_hitl_reconcile_and_cleanup():
-    from jobs.stale_task_checker import (
-        StaleHITLDeps,
-        StaleTaskChecker,
-        StaleTaskCheckerDeps,
-    )
+async def test_stale_checker_iteration_runs_hitl_reconcile_and_recovery():
+    from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
 
-    store = MagicMock(get_room_ids_with_non_terminal_runs=AsyncMock(return_value=[]))
-    rooms = MagicMock(update_many=AsyncMock(return_value=MagicMock(modified_count=0)))
     hitl = StaleHITLDeps(
         recover_stale_processing=AsyncMock(),
         reconcile_lifecycle=AsyncMock(),
     )
     checker = StaleTaskChecker()
-    checker.set_runtime_deps(StaleTaskCheckerDeps(store=store, rooms_collection=rooms))
     checker.set_hitl_deps(hitl)
 
     await checker.check_stale_tasks()
 
     hitl.reconcile_lifecycle.assert_awaited_once()
     hitl.recover_stale_processing.assert_awaited_once()
-    rooms.update_many.assert_awaited_once()
 
 
 def test_conversation_facade_has_no_stale_card_auto_fail():

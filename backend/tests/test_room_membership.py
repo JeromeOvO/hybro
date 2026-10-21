@@ -38,7 +38,6 @@ def test_room_translator_maps_legacy_fields_and_defaults_provenance():
             "room_owner_name": "Owner",
             "room_created_at": created,
             "room_agent_set": {"a1": "Agent One"},
-            "processing_message_id": "m1",
         }
     )
 
@@ -50,7 +49,6 @@ def test_room_translator_maps_legacy_fields_and_defaults_provenance():
     assert dict(info.agent_set) == {"a1": "Agent One"}
     assert info.membership_origin == "manual"
     assert info.membership_origin_status == "manual"
-    assert info.processing_message_id == "m1"
 
 
 def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
@@ -83,7 +81,6 @@ def test_create_room_doc_preserves_room_fields_without_legacy_model_imports():
         "membership_origin_status": "seeded_never_edited",
         "source_group_id": "g1",
         "source_group_name": "Group",
-        "processing_message_id": None,
         "lifecycle_state": "active",
         "write_leases": [],
         "owner_product": "chat",

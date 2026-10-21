@@ -52,7 +52,6 @@ _ALLOWED_ROOM_UPDATE_KEYS = frozenset(
     {
         "room_name",
         "extend_info",
-        "processing_message_id",
         "last_activity_at",
         "is_pinned",
         "pin_order",

@@ -110,7 +110,7 @@ from jobs.orchestrator_workers import (
     orchestrator_projection_job,
     orchestrator_recovery_job,
 )
-from jobs.stale_task_checker import StaleTaskCheckerDeps, stale_task_checker
+from jobs.stale_task_checker import stale_task_checker
 from models.room import UserAttachment
 from orchestrator_composition import (
     OrchestratorCompositionError,
@@ -540,8 +540,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                         "room_quotes",
                         "room_memories",
                         "conversation_content",
-                        "runs",
-                        "run_events",
                         "hitl_requests",
                         "hitl_interactions",
                         "hitl_resume_commands",
@@ -658,42 +656,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.adapters.hitl import HITLMessageCancellationAdapter
             from execution.client_request_id import SSEClientRequestIdResolver
             from execution.hitl.adapters import HITLDeliveryAdapter
-            from execution.run_command_handler import (
-                RunCommandHandler,
-                run_event_sse_enabled,
-            )
-            from execution.run_lifecycle import RunLifecycleAdapter
-            from execution.run_lifecycle_service import bind_run_lifecycle_service
-            from execution.run_queries import RunQueryAdapter
-
-            _execution_repos = create_execution_repositories(mongo=mongo_dal)
-            run_command_handler = RunCommandHandler(
-                run_repository=_execution_repos["run_repository"],
-                run_event_repository=_execution_repos["run_event_repository"],
-                room_files=file_storage,
-            )
-            bind_run_lifecycle_service(run_command_handler)
-
-            # ── Terminal settlement reader (defense-in-depth) ────────────
-            # The publisher consults the private run_events fact log before
-            # emitting terminal run_event/processing_status frames (Room
-            # Stream Snapshot plan §4 rule 4). Bound here because the fact
-            # repository only exists after execution composition.
-            from execution.terminal_projection import (
-                RunEventProjectionSettlementReader,
-            )
-
-            _delivery_facade.event_publisher.projection_settlement = (
-                RunEventProjectionSettlementReader(
-                    _execution_repos["run_event_repository"]
-                )
-            )
-
-            run_lifecycle = RunLifecycleAdapter(
-                command_handler=run_command_handler,
-                run_repository=_execution_repos["run_repository"],
-            )
-            app.state.execution_run_lifecycle = run_lifecycle
 
             llm_gateway_config = LLMGatewayConfig.from_settings(runtime.settings)
             model_registry = ModelRegistryImpl(
@@ -867,11 +829,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     hitl_store.iter_stale_processing_hitl_requests
                 ),
             )
-            stale_task_store = SimpleNamespace(
-                get_room_ids_with_non_terminal_runs=(
-                    task_store.get_room_ids_with_non_terminal_runs
-                ),
-            )
             room_runtime_store = SimpleNamespace(
                 add_room_agent_message=message_store.add_room_agent_message,
                 get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
@@ -886,8 +843,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     message_store.update_room_user_message_by_message_id
                 ),
             )
-
-            execution_delivery = _delivery_facade
 
             membership_source.bind_store(agent_room_store)
             a2a_service.bind_call_counter(agent_room_store)
@@ -1174,7 +1129,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 persistence=hitl_runtime_store,
                 delivery=HITLDeliveryAdapter(_delivery_deps.event_publisher),
                 terminal_lifecycle=HITLTerminalLifecycleAdapter(
-                    run_lifecycle,
                     canonical_terminalizer=terminalize_canonical_hitl_run_port,
                 ),
                 lifecycle=hitl_lifecycle_store,
@@ -1299,27 +1253,11 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             execution_facade = create_execution_facade(
                 room_center=conversation_runtime,
                 hitl_manager=hitl_manager,
-                run_lifecycle=run_lifecycle,
-                run_reader=RunQueryAdapter(_execution_repos["run_repository"]),
                 hitl_message_cancellation=HITLMessageCancellationAdapter(hitl_manager),
                 event_publisher=_delivery_deps.event_publisher,
-                run_event_enabled=run_event_sse_enabled,
                 client_request_id_resolver=execution_client_request_id_resolver,
             )
             _execution_deps = create_execution_deps(execution_facade)
-
-            from execution.terminal_projection import TerminalProjectionFinalizer
-
-            terminal_projection_finalizer = TerminalProjectionFinalizer(
-                lifecycle=run_lifecycle,
-                event_publisher=_delivery_deps.event_publisher,
-                message_store=message_store,
-                delivery=execution_delivery,
-                run_event_enabled=run_event_sse_enabled,
-                # Turn journaling is retired; no synthetic recoverable step is wired.
-                head_healer=run_command_handler.heal_head_from_events,
-            )
-            run_lifecycle.bind_terminal_finalizer(terminal_projection_finalizer)
 
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
@@ -1341,15 +1279,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
         if _execution_deps is None:
             raise RuntimeError("ExecutionDeps have not been bound")
-        try:
-            healed = await _execution_deps.execution_engine.heal_diverged_runs(
-                limit=500
-            )
-        except Exception:
-            logger.warning("startup heal: failed; continuing startup", exc_info=True)
-        else:
-            if healed:
-                logger.info("startup heal: healed %s diverged run(s)", healed)
         await hitl_store.ensure_hitl_indexes()
         await hitl_lifecycle_store.ensure_hitl_lifecycle_indexes()
 
@@ -1413,12 +1342,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _leader, lock_name=AGENT_HEALTH_CHECKER
         )
         stale_task_checker.set_leader_election(_leader)
-        stale_task_checker.set_runtime_deps(
-            StaleTaskCheckerDeps(
-                store=stale_task_store,
-                rooms_collection=mongo_dal.collection("rooms"),
-            )
-        )
         if _execution_deps is not None:
             from jobs.stale_task_checker import StaleHITLDeps
 
@@ -2171,15 +2094,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             raise cleanup_error
 
 
-def create_execution_repositories(*, mongo: MongoDAL):
-    from execution.repository.mongo import RunEventMongoRepository, RunMongoRepository
-
-    return {
-        "run_repository": RunMongoRepository(mongo),
-        "run_event_repository": RunEventMongoRepository(mongo),
-    }
-
-
 @dataclass(frozen=True)
 class AgentDeps:
     agent_registry: AgentRegistry
@@ -2287,7 +2201,6 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_agent_group_indexes(mongo)
     memory_search_index_ready = await _ensure_context_memory_indexes(mongo)
     await _ensure_capability_issue_indexes(mongo)
-    await _ensure_run_lifecycle_indexes(mongo)
     await _ensure_orchestrator_indexes(mongo)
     await _ensure_room_quote_indexes(mongo)
     await _ensure_room_history_indexes(mongo)
@@ -2495,72 +2408,6 @@ async def _ensure_capability_issue_indexes(mongo: MongoDAL) -> None:
         [("issue_id", 1)],
         name="issue_id_unique",
         unique=True,
-    )
-
-
-async def _ensure_run_lifecycle_indexes(mongo: MongoDAL) -> None:
-    await _create_index(
-        mongo,
-        "runs",
-        [("run_id", 1)],
-        name="run_id_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "runs",
-        [("room_id", 1), ("state", 1), ("updated_at", -1)],
-        name="room_state_updated_at",
-    )
-    await _create_index(
-        mongo,
-        "runs",
-        [("room_id", 1), ("client_request_id", 1), ("agent_id", 1)],
-        name="room_client_agent_idempotency",
-        unique=True,
-        partialFilterExpression={
-            "client_request_id": {"$type": "string"},
-            "agent_id": {"$type": "string"},
-        },
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("event_id", 1)],
-        name="event_id_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("run_id", 1), ("seq", 1)],
-        name="run_seq_unique",
-        unique=True,
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("run_id", 1), ("type", 1), ("causation_id", 1)],
-        name="run_type_causation_unique",
-        unique=True,
-        partialFilterExpression={"causation_id": {"$type": "string"}},
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [("room_id", 1), ("ts", -1)],
-        name="room_ts",
-    )
-    await _create_index(
-        mongo,
-        "run_events",
-        [
-            ("terminal_projection.pending", 1),
-            ("terminal_projection.next_attempt_at", 1),
-            ("ts", 1),
-        ],
-        name="pending_terminal_projection",
-        partialFilterExpression={"terminal_projection.pending": True},
     )
 
 

@@ -140,9 +140,6 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     log_format: str = "auto"
 
-    # Feature Flags (runtime-toggleable behavior gates)
-    feature_run_event_sse: bool = True
-
     # Agent Health
     agent_health_check_interval: int = 3600
 
@@ -350,15 +347,6 @@ class Settings(BaseModel):
         except (TypeError, ValueError):
             return 5
 
-    @field_validator("feature_run_event_sse", mode="before")
-    @classmethod
-    def normalize_feature_run_event_sse(cls, value):
-        if value is None or str(value).strip() == "":
-            return False
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
     @field_validator(
         "orchestrator_canary_enabled",
         mode="before",
@@ -422,6 +410,7 @@ REMOVED_FIELDS = frozenset(
         "pending_task_warning_hours",
         "webhook_base_url",
         "webhook_signing_key",
+        "feature_run_event_sse",
     }
 )
 ROUTE_FIELDS = frozenset(

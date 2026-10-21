@@ -62,7 +62,6 @@ def _make_room(room_id="room-1", owner_id="user-1", agent_set=None, extend_info=
     room.room_agent_set = agent_set or {}
     room.extend_info = extend_info or {"debateMode": False, "use_supervisor": False}
     room.room_name = "Test Room"
-    room.processing_message_id = None
     return room
 
 

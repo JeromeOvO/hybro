@@ -292,16 +292,10 @@ class FakeEngine:
     async def get_runs_for_room(self, room_id: str) -> list[RunInfo]:
         return [run for run in self.runs if run.room_id == room_id]
 
-    async def get_run(self, run_id):
-        return None
-
     async def get_latest_runs_for_rooms(self, room_ids):
         return {run.room_id: run for run in self.runs if run.room_id in room_ids}
 
     async def cancel_inflight_tasks(self) -> int:
-        return 0
-
-    async def heal_diverged_runs(self, limit: int = 500) -> int:
         return 0
 
 
