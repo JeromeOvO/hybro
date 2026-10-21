@@ -14,6 +14,7 @@ from conversation.repository import (
     RoomQuoteMongoRepository,
 )
 from conversation.runtime import ConversationRuntime, conversation_runtime
+from conversation.timeline import normalize_timeline_document
 from conversation.translators import room_info_from_doc
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "candidate_scope_from_envelope",
     "conversation_runtime",
     "normalize_candidate_scope",
+    "normalize_timeline_document",
     "room_info_from_doc",
 ]

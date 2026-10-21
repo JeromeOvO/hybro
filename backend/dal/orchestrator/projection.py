@@ -12,7 +12,7 @@ from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
-from conversation.timeline import normalize_timeline_document
+from conversation import normalize_timeline_document
 from execution.orchestrator.models import (
     AssistantMessage,
     OrchestratorEvent,

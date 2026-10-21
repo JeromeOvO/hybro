@@ -266,11 +266,10 @@ Products depend on core modules; no core module imports `chat` or `session`, and
 product in `rooms.owner_product` (`chat` by default, `session` for session
 containers). Execution imports
 Conversation only through the `conversation` package exports. Execution's
-`RoomCenterPort` (persist, preflight, discard, idempotent replay, send, and
-orchestration-status projection) is bound to `conversation_runtime`; the chat
+`RoomCenterPort` (persist, preflight, discard, and idempotent replay) is bound to `conversation_runtime`; the chat
 routes receive `ChatRouteAdapter`, which serves room settings from
-`chat_service` and room message and active-run reads from
-`conversation_runtime`. `container.py` and `orchestrator_composition.py` are
+`chat_service` and room message reads from `conversation_runtime`; active runs
+come from the execution engine. `container.py` and `orchestrator_composition.py` are
 the composition root. Startup binding validation reports missing bindings as
 `conversation.<name>` and `chat.<name>`.
 

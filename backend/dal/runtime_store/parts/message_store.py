@@ -11,7 +11,7 @@ from common.a2a_constants import TERMINAL_STATES, CommonTaskState
 from common.utils.a2a_helpers import sanitize_artifact_parts
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from conversation.timeline import normalize_timeline_document
+from conversation import normalize_timeline_document
 from dal.runtime_store.parts.parsing import (
     _extract_text_from_artifact_parts,
     _modified_count,
