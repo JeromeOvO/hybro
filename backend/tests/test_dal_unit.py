@@ -241,13 +241,17 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         },
     )
     assert "cancelled_messages" not in collections
-    assert _has_create_index(
-        collections["room_agent_messages"],
-        [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
-        unique=False,
-        name="room_task_created_sparse",
-        sparse=True,
-    )
+    task_index_names = {
+        call.kwargs.get("name")
+        for call in collections["room_agent_messages"].create_index.call_args_list
+    }
+    assert not task_index_names & {
+        "has_task_tracking_sparse",
+        "task_updated_state_sparse",
+        "task_created_state_sparse",
+        "user_task_state_sparse",
+        "room_task_created_sparse",
+    }
     assert _has_create_index(
         collections["room_agent_messages"],
         [("message_id", 1)],

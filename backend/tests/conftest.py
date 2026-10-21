@@ -158,8 +158,6 @@ def mock_db_service():
     mock.create_room_user_message = AsyncMock(return_value=True)
     mock.create_room_agent_message = AsyncMock(return_value=True)
     mock.get_room_messages_by_room_id = AsyncMock(return_value=[])
-    mock.get_task_messages_for_room = AsyncMock(return_value=[])
-    mock.get_pending_task_messages_for_user = AsyncMock(return_value=[])
 
     # Memory operations
     mock.get_room_memory_by_room_id = AsyncMock(return_value=None)

@@ -18,8 +18,6 @@ async def test_cleanup_stuck_processing_status_nulls_when_no_busy_rooms():
         StaleTaskCheckerDeps(
             store=mock_store,
             rooms_collection=mock_coll,
-            notify_task_update=AsyncMock(),
-            a2a_service=MagicMock(),
         )
     )
     await checker._cleanup_stuck_processing_status()
@@ -42,8 +40,6 @@ async def test_cleanup_stuck_processing_status_excludes_busy_room_ids():
         StaleTaskCheckerDeps(
             store=mock_store,
             rooms_collection=mock_coll,
-            notify_task_update=AsyncMock(),
-            a2a_service=MagicMock(),
         )
     )
     await checker._cleanup_stuck_processing_status()

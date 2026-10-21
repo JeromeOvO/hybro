@@ -1,25 +1,13 @@
-from dataclasses import asdict
-
 import pytest
 from pydantic import ValidationError
 
-from common.a2a_constants import HYBRO_A2A_INTERACTION_METADATA_KEY
 from common.dto.hitl import A2AInteractionSpec
 from common.types import (
     Message,
     MessageRole,
     Part,
-    Task,
-    TaskState,
-    TaskStatus,
-    TaskStatusUpdateEvent,
     TextPart,
 )
-from execution.dispatch.a2a_interaction import (
-    A2AInteractionDisposition,
-    extract_a2a_interaction_spec,
-)
-from execution.dispatch.agent_event import AgentEvent, AgentInputObservation
 
 
 def _questions() -> list[dict]:
@@ -82,18 +70,6 @@ def _message(metadata: dict | None) -> Message:
     )
 
 
-def _task(*, message_metadata=None, task_metadata=None) -> Task:
-    return Task(
-        id="authoritative-task",
-        contextId="authoritative-context",
-        status=TaskStatus(
-            state=TaskState.input_required,
-            message=_message(message_metadata),
-        ),
-        metadata=task_metadata,
-    )
-
-
 def test_a2a_interaction_spec_accepts_all_question_kinds_and_is_strict():
     spec = A2AInteractionSpec.model_validate(_spec_data())
     assert len(spec.questions) == 6
@@ -142,92 +118,3 @@ def test_a2a_interaction_spec_rejects_duplicate_question_ids():
     questions[1]["question_id"] = questions[0]["question_id"]
     with pytest.raises(ValidationError, match="unique"):
         A2AInteractionSpec.model_validate({**_spec_data(), "questions": questions})
-
-
-def test_extractor_accepts_only_status_message_metadata_for_task_and_event():
-    metadata = {HYBRO_A2A_INTERACTION_METADATA_KEY: _spec_data()}
-    task_result = extract_a2a_interaction_spec(_task(message_metadata=metadata))
-    event_result = extract_a2a_interaction_spec(
-        TaskStatusUpdateEvent(
-            taskId="authoritative-task",
-            contextId="authoritative-context",
-            status=TaskStatus(
-                state=TaskState.input_required,
-                message=_message(metadata),
-            ),
-            metadata={HYBRO_A2A_INTERACTION_METADATA_KEY: {"invalid": "ignored"}},
-        )
-    )
-    assert task_result.disposition == A2AInteractionDisposition.TYPED
-    assert event_result.disposition == A2AInteractionDisposition.TYPED
-    assert task_result.spec == event_result.spec
-
-    alternate_only = _task(
-        task_metadata={HYBRO_A2A_INTERACTION_METADATA_KEY: _spec_data()}
-    )
-    assert (
-        extract_a2a_interaction_spec(alternate_only).disposition
-        == A2AInteractionDisposition.UNTYPED
-    )
-    with pytest.raises(TypeError):
-        extract_a2a_interaction_spec({"status": {}})  # type: ignore[arg-type]
-
-
-def test_extractor_distinguishes_absent_and_invalid_namespace():
-    absent = extract_a2a_interaction_spec(_task(message_metadata={"other": True}))
-    invalid = extract_a2a_interaction_spec(
-        _task(
-            message_metadata={
-                HYBRO_A2A_INTERACTION_METADATA_KEY: {
-                    **_spec_data(),
-                    "unexpected": True,
-                }
-            }
-        )
-    )
-    assert absent.disposition == A2AInteractionDisposition.UNTYPED
-    assert absent.validation_error is None
-    assert invalid.disposition == A2AInteractionDisposition.INVALID
-    assert invalid.spec is None
-    assert invalid.validation_error
-
-
-def test_metadata_identifiers_never_replace_authoritative_transport_identity():
-    metadata = {
-        "task_id": "spoofed-task",
-        "context_id": "spoofed-context",
-        HYBRO_A2A_INTERACTION_METADATA_KEY: _spec_data(),
-    }
-    parsed = extract_a2a_interaction_spec(_task(message_metadata=metadata))
-    observation = AgentInputObservation(
-        raw_prompt="Please answer",
-        interaction_metadata=parsed.raw_metadata,
-        interaction_spec=parsed.spec,
-        parser_disposition=parsed.disposition,
-        task_id="authoritative-task",
-        context_id="authoritative-context",
-        observed_state="input-required",
-    )
-    event = AgentEvent(
-        kind="interactive",
-        message_id="local-agent-message",
-        room_id="room-1",
-        agent_id="agent-1",
-        details={"classification": "typed"},
-        input_observation=observation,
-    )
-    assert event.private_input_observation is observation
-    assert observation.task_id == "authoritative-task"
-    assert observation.context_id == "authoritative-context"
-    assert "input_observation" not in asdict(event)
-    metadata[HYBRO_A2A_INTERACTION_METADATA_KEY]["interaction_id"] = "mutated"
-    assert (
-        observation.interaction_metadata[HYBRO_A2A_INTERACTION_METADATA_KEY][
-            "interaction_id"
-        ]
-        == "remote-interaction-1"
-    )
-    with pytest.raises(TypeError):
-        observation.interaction_metadata[HYBRO_A2A_INTERACTION_METADATA_KEY][
-            "interaction_id"
-        ] = "mutated-through-observation"

@@ -6,8 +6,6 @@ from inspect import isawaitable
 from typing import Any
 from uuid import uuid4
 
-from common.a2a_constants import is_terminal_state
-from common.a2a_task_projection import public_persisted_task_data
 from common.dto import (
     AgentInfo,
     AgentMessageInput,
@@ -31,11 +29,8 @@ from common.protocols import (
     RoomMembershipSeedSource,
     RoomRepository,
 )
-from common.types import Message, Part, Task, TaskState, TaskStatus, TextPart
-from common.types import MessageRole as Role
 from common.utils.a2a_helpers import sanitize_task_dict
 from common.utils.logger import get_logger
-from common.utils.time import ensure_utc, utcnow
 from conversation.idempotency import (
     IdempotencyConflictError,
     UserMessagePersistenceError,
@@ -431,7 +426,6 @@ class ConversationFacade:
                 for doc in docs
                 if (message := _safe_parse_agent_message(doc)) is not None
             ]
-            await self._auto_fail_stale_agent_messages(messages)
             return messages
         except Exception:
             logger.error("Failed to get room agent messages", exc_info=True)
@@ -450,7 +444,6 @@ class ConversationFacade:
             before=before,
         )
         entries: list[RoomTimelineEntry] = []
-        selected_agents: list[RoomAgentMessage] = []
         for entry in page.entries:
             try:
                 if entry.source == "user":
@@ -469,10 +462,7 @@ class ConversationFacade:
                     message_id,
                 )
                 raise ValueError("Invalid stored room timeline message") from None
-            if isinstance(message, RoomAgentMessage):
-                selected_agents.append(message)
             entries.append(RoomTimelineEntry(source=entry.source, message=message))
-        await self._auto_fail_stale_agent_messages(selected_agents)
         return RoomTimelinePage(
             entries=entries,
             has_more=page.has_more,
@@ -623,78 +613,6 @@ class ConversationFacade:
         user_message.quote = None
         return None
 
-    @staticmethod
-    def _is_orchestrator_managed_agent_message(msg: RoomAgentMessage) -> bool:
-        # Orchestrator recovery owns these cards; room hydrate must not
-        # auto-fail them as legacy stale tasks.
-        extend_info = msg.extend_info if isinstance(msg.extend_info, dict) else {}
-        run_id = extend_info.get("orchestrator_run_id")
-        return isinstance(run_id, str) and bool(run_id.strip())
-
-    async def _auto_fail_stale_agent_messages(  # noqa: C901
-        self,
-        messages: list[RoomAgentMessage],
-    ) -> None:
-        stale_task_threshold = 10 * 60
-
-        def is_task_stale(msg: RoomAgentMessage) -> bool:
-            timestamp = msg.task_updated_at or msg.task_created_at
-            # Missing timestamps are not treated as stale — avoids false-failing
-            # working tasks before task timestamps are stamped.
-            if timestamp is None:
-                return False
-            return (
-                utcnow() - ensure_utc(timestamp)
-            ).total_seconds() > stale_task_threshold
-
-        def mark_failed(msg: RoomAgentMessage, error_text: str) -> None:
-            task = msg.message_content.message_task if msg.message_content else None
-            if task:
-                public_task = Task.model_validate(public_persisted_task_data(task))
-                public_task.status = TaskStatus(
-                    state=TaskState.failed,
-                    message=Message(
-                        message_id=self._id_factory(),
-                        role=Role.AGENT,
-                        parts=[Part(root=TextPart(text=error_text))],
-                    ),
-                )
-                msg.message_content.message_task = public_task
-            msg.task_updated_at = utcnow()
-
-        for msg in messages:
-            if self._is_orchestrator_managed_agent_message(msg):
-                continue
-            task = msg.message_content.message_task if msg.message_content else None
-            if task is None:
-                continue
-            current_state = task.status.state
-            if is_terminal_state(current_state):
-                continue
-            extend_info = msg.extend_info if isinstance(msg.extend_info, dict) else {}
-            if extend_info.get("orchestrator_run_id"):
-                # The durable orchestrator lifecycle owns this projection. Its
-                # compatibility card has no legacy webhook tracker and must not
-                # be terminalized by the legacy orphan detector.
-                continue
-            if not msg.has_task_tracking:
-                if current_state == TaskState.working and is_task_stale(msg):
-                    mark_failed(
-                        msg,
-                        "Task did not complete — the connection was lost, "
-                        "possibly due to a server restart.",
-                    )
-                    await self.update_agent_message(msg.message_id, msg)
-                continue
-            if is_task_stale(msg):
-                mark_failed(
-                    msg,
-                    "Task did not complete — no progress was received within "
-                    "the expected timeframe. This may have been caused by "
-                    "a server restart or agent failure.",
-                )
-                await self.update_agent_message(msg.message_id, msg)
-
     async def get_message_thread(self, parent_message_id: str) -> list[RoomMessageInfo]:
         return [
             message_info_from_doc(doc)
@@ -813,7 +731,6 @@ def _strip_file_urls(doc: dict) -> None:
 def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, Any]:
     task_tracking_fields = {
         "webhook_token_hash",
-        "pending_continuation",
         "last_notified_state",
         "agent_url",
         "task_created_at",

@@ -70,7 +70,6 @@ def _safe_parse_agent_message(doc: dict | None) -> RoomAgentMessage | None:
 def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, Any]:
     task_tracking_fields = {
         "webhook_token_hash",
-        "pending_continuation",
         "last_notified_state",
         "agent_url",
         "task_created_at",
@@ -83,24 +82,6 @@ def _strip_unset_task_tracking_fields(update_data: dict[str, Any]) -> dict[str, 
     if update_data.get("has_task_tracking") is False:
         update_data.pop("has_task_tracking", None)
     return update_data
-
-
-def _task_tracking_matches(
-    doc: dict | None,
-    *,
-    webhook_token_hash: str,
-    agent_url: str,
-    task_data: dict,
-) -> bool:
-    if not doc:
-        return False
-    message_content = doc.get("message_content") or {}
-    return (
-        doc.get("has_task_tracking") is True
-        and doc.get("webhook_token_hash") == webhook_token_hash
-        and doc.get("agent_url") == agent_url
-        and message_content.get("message_task") == task_data
-    )
 
 
 def _extract_text_from_artifact_parts(parts: list[dict]) -> str:

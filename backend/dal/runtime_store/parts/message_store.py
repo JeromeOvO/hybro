@@ -676,16 +676,6 @@ class MessageRuntimeStorePart:
             logger.error("Failed to update room agent message content", exc_info=True)
             return False
 
-    async def update_last_notified_state(self, message_id: str, state: str) -> bool:
-        try:
-            return await self._room_agent_messages.update_one(
-                {"message_id": message_id, "last_notified_state": {"$ne": state}},
-                {"$set": {"last_notified_state": state}},
-            )
-        except Exception:
-            logger.error("Failed to update last notified state", exc_info=True)
-            return False
-
     async def reset_last_notified_state(self, message_id: str) -> bool:
         try:
             return await self._room_agent_messages.update_one(

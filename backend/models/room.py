@@ -181,9 +181,6 @@ class RoomAgentMessage(RoomMessage):
     # Note: message_id is used as the primary key for task lookups (webhook URL, etc.)
     # The following fields are set when task tracking is enabled for this message:
     webhook_token_hash: str | None = None  # Hashed token for webhook auth
-    pending_continuation: dict | None = (
-        None  # Queue state for resuming after push notification
-    )
     last_notified_state: str | None = (
         None  # Last SSE-notified state (prevents duplicates)
     )

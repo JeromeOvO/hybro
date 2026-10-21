@@ -40,6 +40,9 @@ RETIRED = {
     "cs_backoff_factor",
     "cs_jitter_fraction",
     "orphan_threshold_minutes",
+    "stale_check_minutes",
+    "task_expiry_hours",
+    "pending_task_warning_hours",
 }
 
 

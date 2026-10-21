@@ -1,12 +1,10 @@
 """
 Stale Task Checker Background Job
 
-This module provides a background job that:
-1. Polls agents for tasks that haven't received webhook updates
-2. Auto-fails tasks that have been pending too long
-3. Handles tasks that were never acknowledged by agents
-4. Recovers orphaned agent messages that were never processed
-5. Cleans up stuck room processing status
+This module provides a leader-gated background job that:
+1. Runs the durable HITL lifecycle reconciliation passes
+2. Cleans up stuck legacy room processing status
+3. Recovers HITL requests stuck in "processing"
 """
 
 from __future__ import annotations
@@ -16,25 +14,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from a2a_adapter.remote_task import fetch_remote_task
-from a2a_adapter.task_status import build_failed_text_task
-from common.a2a_constants import (
-    INTERACTIVE_STATES,
-    NON_TERMINAL_STATES,
-    CommonTaskState,
-    is_terminal_state,
-)
-from common.a2a_task_projection import public_persisted_task_data
-from common.observability import safe_exception_metadata, traced_create_task
-from common.types import Task
-from common.utils.a2a_helpers import (
-    extract_text_from_artifacts,
-    materialize_artifacts,
-)
+from common.observability import traced_create_task
 from common.utils.logger import get_logger
-from common.utils.time import ensure_utc, utcnow
 from jobs.constants import STALE_TASK_CHECKER
-from models.room import RoomAgentMessage
 
 logger = get_logger(__name__)
 
@@ -45,31 +27,9 @@ class LeaderGate(Protocol):
     async def release(self, name: str) -> None: ...
 
 
-class _UnboundDependency:
-    def __init__(self, name: str) -> None:
-        self._name = name
-
-    def __getattr__(self, attr: str):
-        async def _missing(*_args, **_kwargs):
-            raise RuntimeError(
-                f"Stale task checker dependency {self._name} is not bound"
-            )
-
-        return _missing
-
-
-store: Any = _UnboundDependency("store")
-a2a_service: Any = _UnboundDependency("a2a_service")
-
-
-async def notify_task_update(**_kwargs) -> Any:
-    raise RuntimeError("Stale task checker notification dependency is not bound")
-
-
 @dataclass(frozen=True)
 class StaleHITLDeps:
     recover_stale_processing: Callable[[], Awaitable[Any]]
-    cancel_requests_for_message: Callable[..., Awaitable[Any]]
     reconcile_lifecycle: Callable[[], Awaitable[Any]] | None = None
 
 
@@ -77,63 +37,17 @@ class StaleHITLDeps:
 class StaleTaskCheckerDeps:
     store: Any
     rooms_collection: Any
-    notify_task_update: Callable[..., Awaitable[Any]]
-    a2a_service: Any
-
-
-async def _best_effort_materialize_artifacts(
-    artifacts: list,
-    *,
-    room_id: str,
-    message_id: str,
-) -> None:
-    try:
-        await materialize_artifacts(
-            artifacts,
-            room_id=room_id,
-            message_id=message_id,
-        )
-    except Exception:
-        logger.warning(
-            "Stale task checker artifact conversion failed for message %s; "
-            "continuing with public projection",
-            message_id,
-            exc_info=True,
-        )
 
 
 class StaleTaskChecker:
-    """
-    Background job that checks for stale and expired tasks.
+    """Background job for HITL reconciliation and legacy room-status cleanup.
 
-    This provides a fallback mechanism when webhooks fail:
-    1. Stale tasks: Poll agent for current status
-    2. Expired tasks: Auto-fail tasks that have been pending too long
-    3. Never-acknowledged tasks: Fail tasks where agent never responded
-    4. Orphaned messages: Recover agent messages that were never processed
-    5. Legacy room mirror: null rooms.processing_message_id when the room has
-       no non-terminal runs (runs are source of truth)
+    Canonical Run recovery and projection are owned exclusively by the
+    mandatory orchestrator workers; this checker never creates a second
+    Run/Task lifecycle.
     """
 
-    def __init__(
-        self,
-        stale_check_minutes: int = 10,
-        task_expiry_hours: int = 4,
-        pending_task_warning_hours: int = 1,
-        check_interval_minutes: int = 5,
-    ):
-        """
-        Initialize the stale task checker.
-
-        Args:
-            stale_check_minutes: Poll tasks not updated in this time
-            task_expiry_hours: Auto-fail tasks older than this
-            pending_task_warning_hours: Warn (log) after this time
-            check_interval_minutes: How often to run the check
-        """
-        self.stale_check_minutes = stale_check_minutes
-        self.task_expiry_hours = task_expiry_hours
-        self.pending_task_warning_hours = pending_task_warning_hours
+    def __init__(self, check_interval_minutes: int = 5):
         self.check_interval_minutes = check_interval_minutes
         self._running = False
         self._task: asyncio.Task | None = None
@@ -145,29 +59,13 @@ class StaleTaskChecker:
         """Attach a leader gate instance for distributed leader gating."""
         self._leader = leader
 
-    def configure_timing(
-        self,
-        *,
-        stale_check_minutes: int,
-        task_expiry_hours: int,
-        pending_task_warning_hours: int,
-    ) -> None:
-        self.stale_check_minutes = stale_check_minutes
-        self.task_expiry_hours = task_expiry_hours
-        self.pending_task_warning_hours = pending_task_warning_hours
-
     def set_runtime_deps(self, deps: StaleTaskCheckerDeps) -> None:
         self._runtime_deps = deps
 
     def _deps(self) -> StaleTaskCheckerDeps:
-        if self._runtime_deps is not None:
-            return self._runtime_deps
-        return StaleTaskCheckerDeps(
-            store=store,
-            rooms_collection=None,
-            notify_task_update=notify_task_update,
-            a2a_service=a2a_service,
-        )
+        if self._runtime_deps is None:
+            raise RuntimeError("Stale task checker runtime deps are not bound")
+        return self._runtime_deps
 
     @property
     def _store(self) -> Any:
@@ -176,13 +74,6 @@ class StaleTaskChecker:
     @property
     def _rooms_collection(self) -> Any:
         return self._deps().rooms_collection
-
-    @property
-    def _a2a_service(self) -> Any:
-        return self._deps().a2a_service
-
-    async def _notify_task_update(self, **kwargs) -> Any:
-        return await self._deps().notify_task_update(**kwargs)
 
     def set_hitl_deps(self, deps: StaleHITLDeps) -> None:
         self._hitl_deps = deps
@@ -239,83 +130,19 @@ class StaleTaskChecker:
             await self.check_stale_tasks()
 
     async def check_stale_tasks(self) -> None:
-        """
-        Main check function that handles stale, expired, and orphaned tasks.
-
-        This is called periodically by the background loop.
-        """
+        """Run one reconciliation pass; called periodically by the loop."""
         # Aggregate deadlines, durable applications, and command uncertainty are
-        # authoritative and must converge before generic stale-agent handling.
+        # authoritative and converge first.
         if self._hitl_deps and self._hitl_deps.reconcile_lifecycle is not None:
             try:
                 await self._hitl_deps.reconcile_lifecycle()
             except Exception:
                 logger.exception("HITL lifecycle reconciliation failed")
 
-        # Get non-terminal state values for queries
-        non_terminal_state_values = [s.value for s in NON_TERMINAL_STATES]
-
-        # 1. Check stale tasks (not updated recently)
-        stale_messages = await self._store.get_stale_task_messages(
-            self.stale_check_minutes, non_terminal_state_values
-        )
-        stale_log = logger.info if stale_messages else logger.debug
-        stale_log(
-            "stale_task_scan_completed",
-            extra={"result_count": len(stale_messages)},
-        )
-
-        for msg in stale_messages:
-            await self._process_stale_task(msg)
-
-        # 2. Auto-fail expired tasks (been pending too long)
-        expired_messages = await self._store.get_expired_task_messages(
-            self.task_expiry_hours, non_terminal_state_values
-        )
-        expired_log = logger.info if expired_messages else logger.debug
-        expired_log(
-            "expired_task_scan_completed",
-            extra={"result_count": len(expired_messages)},
-        )
-
-        for msg in expired_messages:
-            await self._auto_fail_expired_task(msg)
-
-        # 3. Clean up stuck room processing status
         await self._cleanup_stuck_processing_status()
 
-        # 5. Auto-fail non-tracked tasks stuck in submitted/working state too long.
-        #    These are typically queued pipeline steps that were never picked up
-        #    (e.g., server restarted before the pipeline got to them and orphan
-        #    recovery didn't re-trigger them).  We use the same expiry threshold
-        #    as tracked tasks to be consistent.
-        #    We intentionally exclude interactive states (input_required,
-        #    auth_required) since non-tracked tasks should never reach those.
-        non_tracked_state_values = [
-            CommonTaskState.SUBMITTED.value,
-            CommonTaskState.WORKING.value,
-        ]
-        non_tracked_stale = await self._store.get_non_tracked_stale_task_messages(
-            self.task_expiry_hours, non_tracked_state_values
-        )
-        if non_tracked_stale:
-            logger.info(
-                f"Found {len(non_tracked_stale)} non-tracked stale tasks to auto-fail"
-            )
-        for msg in non_tracked_stale:
-            try:
-                await self._auto_fail_non_tracked_task(msg)
-            except Exception as exc:
-                logger.error(
-                    "non_tracked_task_auto_fail_failed",
-                    extra={
-                        "message_id": msg.message_id,
-                        **safe_exception_metadata(exc),
-                    },
-                )
-
-        # 6. Recover HITL requests stuck in "processing" (worker crashed
-        #    between CAS claim and finalization).
+        # Recover HITL requests stuck in "processing" (worker crashed between
+        # CAS claim and finalization).
         try:
             if self._hitl_deps is None:
                 logger.warning(
@@ -325,364 +152,6 @@ class StaleTaskChecker:
                 await self._hitl_deps.recover_stale_processing()
         except Exception as e:
             logger.error("Failed to recover stale HITL processing requests: %s", e)
-
-        # Canonical Run recovery and projection are owned exclusively by the
-        # mandatory orchestrator workers. This legacy checker never creates a
-        # second Run/Task lifecycle for canonical requests.
-
-    async def _message_or_parent_cancelled(self, msg: RoomAgentMessage) -> bool:
-        if await self._is_message_cancelled_for_recovery(msg.message_id):
-            return True
-        if msg.related_message_id:
-            return await self._is_message_cancelled_for_recovery(msg.related_message_id)
-        return False
-
-    async def _process_stale_task(
-        self,
-        msg: RoomAgentMessage,
-    ) -> None:
-        """Process a single stale task."""
-        message_id = msg.message_id
-        if not msg.has_task_tracking:
-            return
-
-        agent_url = msg.agent_url
-        task = msg.message_content.message_task if msg.message_content else None
-        if not task:
-            return
-
-        finalization = msg.terminal_finalization or {}
-        if (
-            finalization.get("state") == "finalizing"
-            and finalization.get("recovery_source") == "journal"
-        ):
-            return
-        if await self._message_or_parent_cancelled(msg):
-            await self._notify_task_update(
-                message_id=message_id,
-                state=CommonTaskState.CANCELED,
-                room_id=msg.room_id,
-                user_id=msg.user_id or "",
-            )
-            return
-
-        agent_task_id = task.id
-        if agent_task_id.startswith(("pending-", "relay-pending-")):
-            metadata = task.metadata if isinstance(task.metadata, dict) else {}
-            continuation = (
-                msg.pending_continuation
-                if isinstance(msg.pending_continuation, dict)
-                else {}
-            )
-            recovered_task_id = metadata.get("hitl_a2a_task_id") or continuation.get(
-                "a2a_task_id"
-            )
-            recovered_context_id = metadata.get(
-                "hitl_a2a_context_id"
-            ) or continuation.get("a2a_context_id")
-            if (
-                isinstance(recovered_task_id, str)
-                and recovered_task_id
-                and not recovered_task_id.startswith(("pending-", "relay-pending-"))
-                and isinstance(recovered_context_id, str)
-                and recovered_context_id
-            ):
-                logger.warning(
-                    "Recovered authoritative A2A continuation IDs for stale message %s",
-                    message_id,
-                )
-                agent_task_id = recovered_task_id
-
-        created_at = (
-            ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
-        )
-
-        # Log warning for long-running tasks
-        age_hours = (utcnow() - created_at).total_seconds() / 3600
-        if age_hours > self.pending_task_warning_hours:
-            logger.warning(
-                f"Task for message {message_id} has been pending for {age_hours:.1f} hours"
-            )
-
-        # Task was never acknowledged by agent
-        if agent_task_id.startswith("pending") or agent_task_id.startswith(
-            "relay-pending"
-        ):
-            logger.warning(
-                f"Task for message {message_id} never acknowledged, marking failed"
-            )
-            await self._mark_task_failed(
-                message_id=message_id,
-                msg=msg,
-                error="Agent did not acknowledge the task",
-            )
-            return
-
-        if not agent_url:
-            logger.warning(
-                f"Task for message {message_id} has no agent_url, touching timestamp"
-            )
-            await self._store.touch_task_message(message_id)
-            return
-
-        try:
-            # Check if the message was cancelled while the agent was processing
-            is_cancelled = await self._is_message_cancelled_for_recovery(message_id)
-            if not is_cancelled and msg.related_message_id:
-                is_cancelled = await self._is_message_cancelled_for_recovery(
-                    msg.related_message_id
-                )
-            if is_cancelled:
-                logger.info(
-                    "Stale task for message %s was cancelled — notifying as canceled",
-                    message_id,
-                )
-                await self._notify_task_update(
-                    message_id=message_id,
-                    state=CommonTaskState.CANCELED,
-                    room_id=msg.room_id,
-                    user_id=msg.user_id or "",
-                )
-                return
-
-            # Poll agent for current status
-            agent_card = await self._a2a_service.get_agent_card_from_url(agent_url)
-            current_task = await self._get_task_from_agent(agent_card, agent_task_id)
-
-            if current_task is None:
-                # Agent doesn't have this task anymore
-                logger.warning(
-                    f"Task for message {message_id} not found on agent, touching timestamp"
-                )
-                await self._store.touch_task_message(message_id)
-                return
-
-            if current_task.artifacts:
-                await _best_effort_materialize_artifacts(
-                    current_task.artifacts,
-                    room_id=msg.room_id,
-                    message_id=message_id,
-                )
-
-            # Update our record using the same public projection as the normal
-            # task completion path; stale recovery must not persist raw remote
-            # task metadata or inline file bytes.
-            projected_task_data = public_persisted_task_data(current_task)
-            projected_task = Task.model_validate(projected_task_data)
-            task_text = None
-            state_value = getattr(
-                current_task.status.state,
-                "value",
-                current_task.status.state,
-            )
-            if (
-                is_terminal_state(current_task.status.state)
-                and state_value == CommonTaskState.COMPLETED.value
-                and projected_task.artifacts
-            ):
-                task_text = (
-                    extract_text_from_artifacts(projected_task.artifacts) or None
-                )
-            await self._store.update_task_on_message(
-                message_id,
-                projected_task_data,
-                message_text=task_text,
-            )
-
-            # Notify if terminal or interactive state changed
-            new_state = current_task.status.state
-            if is_terminal_state(new_state) or new_state in INTERACTIVE_STATES:
-                # Re-check cancellation — user may have cancelled between poll and now
-                re_cancelled = await self._is_message_cancelled_for_recovery(message_id)
-                if not re_cancelled and msg.related_message_id:
-                    re_cancelled = await self._is_message_cancelled_for_recovery(
-                        msg.related_message_id
-                    )
-                if re_cancelled:
-                    new_state = CommonTaskState.CANCELED
-                await self._notify_task_update(
-                    message_id=message_id,
-                    state=new_state,
-                    room_id=msg.room_id,
-                    user_id=msg.user_id or "",
-                )
-            else:
-                # Still working - timestamp already touched by update_task_on_message
-                logger.debug(
-                    f"Task for message {message_id} still in state: {new_state}"
-                )
-
-        except Exception as exc:
-            logger.warning(
-                "stale_task_poll_failed",
-                extra={
-                    "message_id": message_id,
-                    "error_type": type(exc).__name__,
-                },
-            )
-            # Don't fail the task yet - might be transient network issue
-            # Touch timestamp to prevent immediate re-check
-            await self._store.touch_task_message(message_id)
-
-    async def _get_task_from_agent(self, agent_card, task_id: str) -> Any | None:
-        """Get task status from agent."""
-        try:
-            return await fetch_remote_task(agent_card, task_id)
-        except Exception as exc:
-            logger.error(
-                "remote_task_fetch_failed",
-                extra={"error_type": type(exc).__name__},
-            )
-            return None
-
-    HITL_EXPIRY_HOURS = 24
-
-    async def _auto_fail_expired_task(
-        self,
-        msg: RoomAgentMessage,
-    ) -> None:
-        """Auto-fail a task that has been pending too long."""
-        message_id = msg.message_id
-        if not msg.has_task_tracking:
-            return
-        if await self._message_or_parent_cancelled(msg):
-            return
-
-        task_state = (
-            msg.message_content.message_task.status.state
-            if msg.message_content
-            and msg.message_content.message_task
-            and msg.message_content.message_task.status
-            else None
-        )
-
-        is_interactive = task_state and task_state in INTERACTIVE_STATES
-        created_at = (
-            ensure_utc(msg.task_created_at) if msg.task_created_at else utcnow()
-        )
-        age_hours = (utcnow() - created_at).total_seconds() / 3600
-
-        if is_interactive:
-            if age_hours < self.HITL_EXPIRY_HOURS:
-                return
-            logger.warning(
-                "Auto-failing HITL task for message %s after %.1f hours "
-                "(HITL threshold: %dh)",
-                message_id,
-                age_hours,
-                self.HITL_EXPIRY_HOURS,
-            )
-
-        threshold = self.HITL_EXPIRY_HOURS if is_interactive else self.task_expiry_hours
-        logger.error(
-            f"Auto-failing task for message {message_id} after {age_hours:.1f} hours "
-            f"(threshold: {threshold}h)"
-        )
-
-        await self._mark_task_failed(
-            message_id=message_id,
-            msg=msg,
-            error=f"Task expired after {threshold} hours without completion. "
-            "The agent may be unresponsive.",
-        )
-
-    async def _auto_fail_non_tracked_task(
-        self,
-        msg: RoomAgentMessage,
-    ) -> None:
-        """Auto-fail a non-tracked task that has been stuck in non-terminal state too long.
-
-        These are typically queued pipeline steps that were created but never
-        picked up for processing (e.g., server restarted before the pipeline
-        reached them, and orphan recovery did not re-trigger them).
-        """
-        message_id = msg.message_id
-        if await self._message_or_parent_cancelled(msg):
-            return
-        created_at = msg.message_created_at
-        age_hours = (
-            (utcnow() - ensure_utc(created_at)).total_seconds() / 3600
-            if created_at
-            else 0
-        )
-
-        current_state = (
-            msg.message_content.message_task.status.state
-            if msg.message_content and msg.message_content.message_task
-            else "unknown"
-        )
-
-        logger.warning(
-            f"Auto-failing non-tracked task for message {message_id} "
-            f"(state: {current_state}, age: {age_hours:.1f}h, "
-            f"threshold: {self.task_expiry_hours}h)"
-        )
-
-        await self._mark_task_failed(
-            message_id=message_id,
-            msg=msg,
-            error="Task was never processed — it may have been orphaned "
-            "due to a server restart or processing failure.",
-        )
-
-    async def _mark_task_failed(
-        self,
-        message_id: str,
-        msg: RoomAgentMessage,
-        error: str,
-    ) -> None:
-        """Mark a task as failed and notify the user."""
-        task = msg.message_content.message_task if msg.message_content else None
-        task_id = task.id if task else "unknown"
-        context_id = task.context_id if task else ""
-
-        failed_task = build_failed_text_task(
-            task_id=task_id,
-            context_id=context_id,
-            error_text=error,
-        )
-
-        await self._store.update_task_on_message(
-            message_id,
-            public_persisted_task_data(failed_task),
-        )
-
-        # Clear any orphaned continuation (on both agent and user messages)
-        await self._store.get_and_clear_continuation_on_message(message_id)
-        if msg.related_message_id:
-            await self._store.get_and_clear_continuation_on_user_message(
-                msg.related_message_id
-            )
-
-        # Cancel any pending HITL request for this message
-        try:
-            # HITL requests are keyed by user_message_id, not agent message_id.
-            # related_message_id on the agent message points to the user message.
-            user_msg_id = msg.related_message_id or message_id
-            if self._hitl_deps is None:
-                logger.warning(
-                    "stale_task_checker: HITL deps are not bound; cannot cancel "
-                    "requests for %s",
-                    user_msg_id,
-                )
-            else:
-                await self._hitl_deps.cancel_requests_for_message(
-                    user_msg_id,
-                    failure_reason=error,
-                )
-        except Exception as e:
-            logger.warning(
-                "stale_task_checker: Failed to cancel HITL requests for %s: %s",
-                message_id,
-                e,
-            )
-
-        await self._notify_task_update(
-            message_id=message_id,
-            state=CommonTaskState.FAILED,
-            room_id=msg.room_id,
-            user_id=msg.user_id or "",
-        )
 
     async def _cleanup_stuck_processing_status(self) -> None:
         """
@@ -720,12 +189,6 @@ class StaleTaskChecker:
         except Exception as e:
             logger.warning("legacy processing_message_id cleanup failed: %s", e)
 
-    async def _is_message_cancelled_for_recovery(self, message_id: str) -> bool:
-        # The cancellation-marker store is retired; live cancellation claims the
-        # canonical Run and never reaches these legacy tracked-task paths.
-        del message_id
-        return False
 
-
-# Singleton instance. Application startup binds runtime dependencies and settings.
+# Singleton instance. Application startup binds runtime dependencies.
 stale_task_checker = StaleTaskChecker()

@@ -43,10 +43,6 @@ def _persistence_mock():
     persistence.get_hitl_request = AsyncMock(return_value=None)
     persistence.cas_update_hitl_request = AsyncMock(return_value=True)
     persistence.update_hitl_request = AsyncMock(return_value=True)
-    persistence.get_and_clear_continuation_on_message = AsyncMock(return_value=None)
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock(
-        return_value=None
-    )
     return persistence
 
 

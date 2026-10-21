@@ -13,8 +13,6 @@ HYBRO_A2A_ORCHESTRATOR_INSTRUCTION_ROLE = "orchestrator_instruction"
 HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE = "durable_user_context"
 
 # Error reported when an agent asks for an interaction Hybro cannot route.
-UNSUPPORTED_INTERACTION_CODE = "unsupported_interaction"
-UNSUPPORTED_INTERACTION_MESSAGE = "The agent requested an unsupported interaction."
 
 
 class TaskStateCategory(Enum):
@@ -155,8 +153,6 @@ __all__ = [
     "SyntheticTaskId",
     "TERMINAL_STATES",
     "TaskStateCategory",
-    "UNSUPPORTED_INTERACTION_CODE",
-    "UNSUPPORTED_INTERACTION_MESSAGE",
     "get_retry_after_seconds",
     "get_state_category",
     "is_failure_state",

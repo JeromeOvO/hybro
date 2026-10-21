@@ -13,10 +13,6 @@ from models.hitl import (
 
 logger = get_logger(__name__)
 
-# Failed remote inspections of an uncertain delivery before the owning
-# interaction fails terminally instead of staying DELIVERY_UNCERTAIN forever.
-_MAX_UNCERTAIN_INSPECT_ATTEMPTS = 3
-
 
 class HITLLifecycleReconciler:
     """Bounded, independently-fenced repair passes for durable HITL state."""
@@ -27,13 +23,11 @@ class HITLLifecycleReconciler:
         lifecycle,
         service,
         application,
-        inspect_remote_command=None,
         limit: int = 100,
     ) -> None:
         self._lifecycle = lifecycle
         self._service = service
         self._application = application
-        self._inspect_remote_command = inspect_remote_command
         self._limit = limit
 
     async def reconcile_lifecycle(self) -> dict[str, int]:
@@ -210,10 +204,7 @@ class HITLLifecycleReconciler:
                 )
                 validate_command_route_consistency(interaction, command)
                 status = command.get("status")
-                if (
-                    status == HITLResumeCommandStatus.DELIVERING.value
-                    and command.get("kind") == "supervisor_resume"
-                ):
+                if status == HITLResumeCommandStatus.DELIVERING.value:
                     retryable = await self._lifecycle.reclaim_stale_resume_command(
                         command["command_id"],
                         observed_claim_id=command.get("claim_id"),
@@ -226,27 +217,6 @@ class HITLLifecycleReconciler:
                         retry_after_seconds=0,
                     )
                     if retryable is not None:
-                        repaired += 1
-                    continue
-                if status == HITLResumeCommandStatus.DELIVERING.value:
-                    uncertain = await self._lifecycle.reclaim_stale_resume_command(
-                        command["command_id"],
-                        observed_claim_id=command.get("claim_id"),
-                        observed_version=int(command["version"]),
-                        observed_lease_expires_at=command["lease_expires_at"],
-                        now=utcnow(),
-                        status=HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value,
-                        error_code="worker_lost_after_delivery_started",
-                        error_message="Delivery acknowledgement was not persisted",
-                    )
-                    if uncertain is not None:
-                        if interaction.get("application_claim_id"):
-                            await self._lifecycle.mark_interaction_application_state(
-                                interaction["interaction_id"],
-                                claim_id=interaction["application_claim_id"],
-                                status=HITLInteractionStatus.DELIVERY_UNCERTAIN.value,
-                                error="Remote continuation delivery is uncertain",
-                            )
                         repaired += 1
                     continue
                 if status in {
@@ -285,75 +255,6 @@ class HITLLifecycleReconciler:
                     )
                     repaired += 1
                     continue
-                if (
-                    status == HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value
-                    and self._inspect_remote_command is not None
-                ):
-                    snapshot = await self._inspect_remote_command(command)
-                    if snapshot and snapshot.get("advanced") is True:
-                        acknowledged = await self._lifecycle.mark_resume_command_state(
-                            command["command_id"],
-                            claim_id=None,
-                            expected_statuses=[status],
-                            status=HITLResumeCommandStatus.ACKNOWLEDGED.value,
-                            response_snapshot=snapshot,
-                        )
-                        if acknowledged is not None:
-                            projected = await self._lifecycle.mark_resume_command_state(
-                                command["command_id"],
-                                claim_id=None,
-                                expected_statuses=[
-                                    HITLResumeCommandStatus.ACKNOWLEDGED.value
-                                ],
-                                status=HITLResumeCommandStatus.PROJECTED.value,
-                                response_snapshot=snapshot,
-                            )
-                            if projected is not None:
-                                await self._finish_confirmed_command(projected)
-                                repaired += 1
-                        continue
-                    if snapshot is None:
-                        # Remote state could not be inspected at all (missing
-                        # agent URL or fetch failure). Count the failure so an
-                        # unreachable agent cannot leave the command stuck in
-                        # DELIVERY_UNCERTAIN forever: after a bounded number
-                        # of failed inspects the interaction fails terminally.
-                        recorded = (
-                            await self._lifecycle.record_uncertain_inspect_failure(
-                                command["command_id"]
-                            )
-                        )
-                        if (
-                            recorded is not None
-                            and int(recorded.get("inspect_attempts") or 0)
-                            >= _MAX_UNCERTAIN_INSPECT_ATTEMPTS
-                        ):
-                            failed = await self._lifecycle.mark_resume_command_state(
-                                command["command_id"],
-                                claim_id=None,
-                                expected_statuses=[
-                                    HITLResumeCommandStatus.DELIVERY_UNCERTAIN.value
-                                ],
-                                status=HITLResumeCommandStatus.PERMANENT_FAILURE.value,
-                                error_code="uncertain_inspect_exhausted",
-                                error_message=(
-                                    "Remote delivery could not be confirmed after "
-                                    "repeated inspections"
-                                ),
-                            )
-                            if failed is not None:
-                                await self._application.fail_interaction(
-                                    self._service,
-                                    interaction,
-                                    reason=(
-                                        "Remote continuation delivery could not be "
-                                        "confirmed"
-                                    ),
-                                    application_claim_id=interaction.get(
-                                        "application_claim_id"
-                                    ),
-                                )
-                                repaired += 1
             except Exception:
                 logger.warning(
                     "HITL resume command remains pending",

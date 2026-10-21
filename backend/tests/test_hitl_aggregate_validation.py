@@ -174,8 +174,6 @@ def _cancellation_service(
 
     persistence.get_hitl_request = AsyncMock(side_effect=get_request)
     persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
 
     async def update_request(request_id, **updates):
         row = next(row for row in rows if row["request_id"] == request_id)
@@ -430,8 +428,6 @@ async def test_terminal_retry_converges_after_per_member_crash(
     persistence.get_hitl_request = AsyncMock(side_effect=get_request)
     persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
     persistence.update_hitl_request = AsyncMock(side_effect=update_request)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
     lifecycle = MagicMock()
     lifecycle.get_interaction_strict = AsyncMock(return_value=aggregate)
     lifecycle.mark_interaction_terminal_reconciled = AsyncMock(return_value=True)
@@ -493,8 +489,6 @@ async def test_multi_question_terminal_order_closes_all_hitl_before_run(
     persistence.get_hitl_request = AsyncMock(side_effect=get_request)
     persistence.cas_update_hitl_request_strict = AsyncMock(side_effect=cas_request)
     persistence.update_hitl_request = AsyncMock(side_effect=update_request)
-    persistence.get_and_clear_continuation_on_message = AsyncMock()
-    persistence.get_and_clear_continuation_on_user_message = AsyncMock()
     lifecycle = MagicMock()
     lifecycle.get_interaction_strict = AsyncMock(return_value=aggregate)
     lifecycle.mark_interaction_terminal_reconciled = AsyncMock(

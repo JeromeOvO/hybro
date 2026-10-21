@@ -1,3 +1,5 @@
+"""A2A task builders for tests that need realistic remote task payloads."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -7,19 +9,9 @@ from common.types import Message, MessageRole, Task, TaskState, TaskStatus, Text
 from common.utils.time import utcnow
 
 
-def build_task_status(state: Any, *, error_text: str | None = None) -> TaskStatus:
-    status = TaskStatus(state=coerce_task_state(state))
-    if error_text:
-        status.message = Message(
-            role=MessageRole.AGENT,
-            parts=[TextPart(text=error_text)],
-            message_id=str(uuid4()),
-        )
-    return status
-
-
-def build_failed_task_status(error_text: str) -> TaskStatus:
-    return build_task_status(TaskState.failed, error_text=error_text)
+def build_task_status(state: Any) -> TaskStatus:
+    value = getattr(state, "value", state)
+    return TaskStatus(state=TaskState(value) if isinstance(value, str) else state)
 
 
 def build_completed_text_task(
@@ -37,15 +29,14 @@ def build_completed_text_task(
         context_id=task_context_id,
         metadata=metadata or {},
     )
-    status = TaskStatus(
-        state=TaskState.completed,
-        timestamp=utcnow().isoformat(),
-        message=message,
-    )
     return Task(
         id=task_id,
         context_id=task_context_id,
-        status=status,
+        status=TaskStatus(
+            state=TaskState.completed,
+            timestamp=utcnow().isoformat(),
+            message=message,
+        ),
         history=[message],
     )
 
@@ -65,29 +56,12 @@ def build_failed_text_task(
         context_id=task_context_id,
         metadata=metadata or {},
     )
-    status = TaskStatus(
-        state=TaskState.failed,
-        timestamp=utcnow().isoformat(),
-        message=message,
-    )
     return Task(
         id=task_id,
         context_id=task_context_id,
-        status=status,
+        status=TaskStatus(
+            state=TaskState.failed,
+            timestamp=utcnow().isoformat(),
+            message=message,
+        ),
     )
-
-
-def coerce_task_state(state: Any) -> Any:
-    val = getattr(state, "value", state)
-    if isinstance(val, str):
-        return TaskState(val)
-    return state
-
-
-__all__ = [
-    "build_completed_text_task",
-    "build_failed_task_status",
-    "build_failed_text_task",
-    "build_task_status",
-    "coerce_task_state",
-]

@@ -58,7 +58,6 @@ from dal.runtime_store.parts.parsing import (
     _safe_parse_user_message,
     _strip_file_urls,
     _strip_unset_task_tracking_fields,
-    _task_tracking_matches,
 )
 from dal.runtime_store.parts.webhook_tokens import (
     generate_webhook_token,
@@ -81,15 +80,11 @@ __all__ = [
     "_safe_parse_user_message",
     "_strip_file_urls",
     "_strip_unset_task_tracking_fields",
-    "_task_tracking_matches",
 ]
 
 
 class RuntimeRepositoryStore:
     """Compatibility store backed by DAL repositories during runtime-store migration."""
-
-    MAX_TASKS_PER_USER = 100
-    MAX_TASKS_PER_ROOM = 50
 
     def __init__(
         self,
@@ -123,10 +118,7 @@ class RuntimeRepositoryStore:
             message_repository=self._message_repository,
         )
         self._task_lifecycle_part = TaskLifecycleRuntimeStorePart(
-            room_agent_messages=self._room_agent_messages,
-            room_user_messages=self._room_user_messages,
             runs=self._runs,
-            message_repository=self._message_repository,
             message_store=self.messages,
         )
         self._hitl_part = HITLRuntimeStorePart(
@@ -183,10 +175,7 @@ class RuntimeRepositoryStore:
         if part is not None:
             return part
         return TaskLifecycleRuntimeStorePart(
-            room_agent_messages=getattr(self, "_room_agent_messages", None),
-            room_user_messages=getattr(self, "_room_user_messages", None),
             runs=getattr(self, "_runs", None),
-            message_repository=getattr(self, "_message_repository", None),
             message_store=self._message_delegate(),
         )
 
@@ -378,18 +367,6 @@ class RuntimeRepositoryStore:
             message_id, runtime_to_room_agent_message(room_agent_message)
         )
 
-    async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]:
-        return await self._task_delegate().get_active_runs_by_room_id(room_id)
-
-    async def save_continuation_on_message(
-        self,
-        message_id: str,
-        continuation_data: dict,
-    ) -> bool:
-        return await self._task_delegate().save_continuation_on_message(
-            message_id, continuation_data
-        )
-
     async def resolve_client_request_id_for_agent_message(
         self, room_agent_message: RuntimeRoomAgentMessage
     ) -> str | None:
@@ -404,22 +381,6 @@ class RuntimeRepositoryStore:
             message_id
         )
 
-    async def get_task_messages_for_room(
-        self, room_id: str, *, limit: int = 50
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._task_delegate().get_task_messages_for_room(room_id, limit=limit)
-        )
-
-    async def get_pending_task_messages_for_user(
-        self, user_id: str, states: list[str]
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._task_delegate().get_pending_task_messages_for_user(
-                user_id, states
-            )
-        )
-
     def hash_webhook_token(self, token: str) -> str:
         return hash_webhook_token(token)
 
@@ -428,53 +389,6 @@ class RuntimeRepositoryStore:
 
     def generate_webhook_token(self) -> str:
         return generate_webhook_token()
-
-    async def check_task_limits(
-        self, user_id: str, room_id: str, non_terminal_states: list[str]
-    ) -> None:
-        return await self._task_delegate().check_task_limits(
-            user_id,
-            room_id,
-            non_terminal_states,
-            max_tasks_per_user=self.MAX_TASKS_PER_USER,
-            max_tasks_per_room=self.MAX_TASKS_PER_ROOM,
-        )
-
-    async def enable_task_tracking_on_message(
-        self,
-        *,
-        message_id: str,
-        webhook_token_hash: str,
-        agent_url: str,
-        task_created_at: Any,
-        task_updated_at: Any,
-        task_data: dict,
-    ) -> bool:
-        return await self._task_delegate().enable_task_tracking_on_message(
-            message_id=message_id,
-            webhook_token_hash=webhook_token_hash,
-            agent_url=agent_url,
-            task_created_at=task_created_at,
-            task_updated_at=task_updated_at,
-            task_data=task_data,
-        )
-
-    async def update_task_on_message(
-        self,
-        message_id: str,
-        task_data: dict,
-        message_text: str | None = None,
-    ) -> bool:
-        return await self._task_delegate().update_task_on_message(
-            message_id, task_data, message_text
-        )
-
-    async def update_webhook_token_hash_on_message(
-        self, message_id: str, webhook_token_hash: str
-    ) -> bool:
-        return await self._task_delegate().update_webhook_token_hash_on_message(
-            message_id, webhook_token_hash
-        )
 
     async def verify_webhook_token_on_message(self, message_id: str) -> str | None:
         return await self._task_delegate().verify_webhook_token_on_message(message_id)
@@ -488,80 +402,6 @@ class RuntimeRepositoryStore:
 
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]:
         return await self._task_delegate().get_room_ids_with_non_terminal_runs()
-
-    async def get_stale_task_messages(
-        self,
-        stale_minutes: int,
-        non_terminal_states: list[str],
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._task_delegate().get_stale_task_messages(
-                stale_minutes, non_terminal_states
-            )
-        )
-
-    async def get_expired_task_messages(
-        self,
-        max_age_hours: int,
-        non_terminal_states: list[str],
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._task_delegate().get_expired_task_messages(
-                max_age_hours, non_terminal_states
-            )
-        )
-
-    async def get_non_tracked_stale_task_messages(
-        self,
-        max_age_hours: int,
-        non_terminal_states: list[str],
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._task_delegate().get_non_tracked_stale_task_messages(
-                max_age_hours, non_terminal_states
-            )
-        )
-
-    async def get_orphaned_agent_messages(
-        self,
-        orphan_threshold_minutes: int,
-    ) -> list[RuntimeRoomAgentMessage]:
-        return runtime_agent_messages(
-            await self._task_delegate().get_orphaned_agent_messages(
-                orphan_threshold_minutes
-            )
-        )
-
-    async def touch_task_message(self, message_id: str) -> bool:
-        return await self._task_delegate().touch_task_message(message_id)
-
-    async def get_and_clear_continuation_on_message(
-        self, message_id: str
-    ) -> dict | None:
-        return await self._task_delegate().get_and_clear_continuation_on_message(
-            message_id
-        )
-
-    async def get_pending_continuation_on_message(self, message_id: str) -> dict | None:
-        return await self._task_delegate().get_pending_continuation_on_message(
-            message_id
-        )
-
-    async def get_and_clear_continuation_on_user_message(
-        self, message_id: str
-    ) -> dict | None:
-        return await self._task_delegate().get_and_clear_continuation_on_user_message(
-            message_id
-        )
-
-    async def save_continuation_on_user_message(
-        self,
-        message_id: str,
-        continuation_data: dict,
-    ) -> bool:
-        return await self._task_delegate().save_continuation_on_user_message(
-            message_id, continuation_data
-        )
 
     async def get_room_memory_by_room_id(
         self, room_id: str
@@ -855,11 +695,6 @@ class RuntimeRepositoryStore:
     ) -> bool:
         return await self._message_delegate().update_room_agent_message_with_new_message_content_by_message_id(
             message_id, runtime_to_message_content(message_content)
-        )
-
-    async def update_last_notified_state(self, message_id: str, state: str) -> bool:
-        return await self._message_delegate().update_last_notified_state(
-            message_id, state
         )
 
     async def reset_last_notified_state(self, message_id: str) -> bool:

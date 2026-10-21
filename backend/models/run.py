@@ -26,7 +26,7 @@ TERMINAL_RUN_STATES = {
 }
 
 # Persisted `state` values for runs that are not terminal — keep in sync with
-# `get_active_runs_by_room_id` and the legacy processing-status cleanup.
+# the legacy processing-status cleanup.
 NON_TERMINAL_RUN_STATE_VALUES: tuple[str, ...] = (
     RunState.QUEUED.value,
     RunState.PROCESSING.value,

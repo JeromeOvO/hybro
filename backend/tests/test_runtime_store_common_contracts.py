@@ -36,15 +36,13 @@ def test_runtime_agent_message_preserves_task_tracking_fields():
         message_content=RuntimeMessageContent(message_text="working"),
         has_task_tracking=True,
         webhook_token_hash="hash",
-        pending_continuation={"step": "resume"},
         turn_id="u1",
     )
 
     assert message.message_type == "agent"
-    assert message.pending_continuation == {"step": "resume"}
-    assert isinstance(message.pending_continuation, FrozenDict)
-    with pytest.raises(TypeError):
-        message.pending_continuation["step"] = "changed"
+    assert message.has_task_tracking is True
+    assert message.webhook_token_hash == "hash"
+    assert message.turn_id == "u1"
 
 
 def test_runtime_room_memory_accepts_python_metadata_and_freezes_containers():

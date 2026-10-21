@@ -1,10 +1,6 @@
-from dataclasses import asdict
-from datetime import UTC, datetime
-
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from common.dto.delivery import TaskUpdateEvent
 from common.dto.hitl import (
     HITLAnswer,
     HITLAnswerKind,
@@ -19,8 +15,6 @@ from common.dto.hitl import (
     HITLQuestionSpec,
     HITLRouteSnapshot,
 )
-from delivery.translator import to_sse_frame
-from execution.dispatch.agent_event import AgentEvent, AgentInputObservation
 
 
 def test_hitl_contract_enum_values_are_stable():
@@ -199,35 +193,3 @@ def test_cancel_is_a_versioned_command_not_an_answer():
         reason="No longer needed",
     )
     assert command.expected_interaction_version == 1
-
-
-def test_private_agent_observation_is_absent_from_public_delivery_translation():
-    observation = AgentInputObservation(
-        raw_prompt="private raw prompt",
-        interaction_metadata={"auth_hint": "private metadata"},
-        task_id="task-1",
-        context_id="context-1",
-        observed_state="auth-required",
-    )
-    event = AgentEvent(
-        kind="interactive",
-        message_id="message-1",
-        room_id="room-1",
-        agent_id="agent-1",
-        input_observation=observation,
-    )
-    assert event.private_input_observation is observation
-    assert "input_observation" not in asdict(event)
-    assert "private raw prompt" not in str(asdict(event))
-    assert "_input_observation" not in TaskUpdateEvent.model_fields
-
-    public_event = TaskUpdateEvent(
-        room_id=event.room_id,
-        message_id=event.message_id,
-        status="input-required",
-        agent_id=event.agent_id,
-    )
-    frame = to_sse_frame(public_event, timestamp=datetime(2025, 1, 1, tzinfo=UTC))
-    assert "_input_observation" not in frame["data"]
-    assert "private raw prompt" not in str(frame)
-    assert "private metadata" not in str(frame)

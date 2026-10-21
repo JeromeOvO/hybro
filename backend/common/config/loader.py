@@ -185,9 +185,6 @@ class Settings(BaseModel):
         ""  # Public URL where agents send webhooks (e.g., https://api.example.com)
     )
     webhook_signing_key: str = ""  # Secret key for HMAC token hashing (min 32 chars)
-    stale_check_minutes: int = 10  # Poll tasks not updated in this time
-    task_expiry_hours: int = 4  # Auto-fail tasks older than this
-    pending_task_warning_hours: int = 1  # Warn (log) after this time
 
     # Delivery / SSE settings
     heartbeat_interval_seconds: float = 30.0
@@ -435,6 +432,9 @@ REMOVED_FIELDS = frozenset(
         "cs_backoff_factor",
         "cs_jitter_fraction",
         "orphan_threshold_minutes",
+        "stale_check_minutes",
+        "task_expiry_hours",
+        "pending_task_warning_hours",
     }
 )
 ROUTE_FIELDS = frozenset(

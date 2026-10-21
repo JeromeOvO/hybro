@@ -12,7 +12,6 @@ from a2a_adapter.orchestrator_direct_client import (
     OrchestratorDirectA2AClient,
     endpoint_scope_digest,
 )
-from a2a_adapter.task_status import build_completed_text_task
 from common.dto.hitl import A2AInteractionSpec
 from execution.orchestrator.a2a_runtime.dispatch import DirectA2ADispatchAdapter
 from execution.orchestrator.a2a_runtime.errors import (
@@ -62,6 +61,7 @@ from execution.orchestrator.a2a_runtime.terminal_interactions import (
 )
 from execution.orchestrator.models import TextPart, ToolResult, ToolSuspension
 from execution.orchestrator.ports import InvalidParkedInteractionTarget
+from tests._a2a_task_builders import build_completed_text_task
 
 from ._orchestrator_a2a_helpers import invocation, ledger_record, prepared
 from ._orchestrator_helpers import NOW, NeverCancelled

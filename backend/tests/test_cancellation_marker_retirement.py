@@ -233,14 +233,13 @@ async def test_hitl_message_cancellation_adapter_forwards_to_hitl_manager():
     manager.cancel_requests_for_message.assert_awaited_once_with("m-1")
 
 
-@pytest.mark.asyncio
-async def test_stale_checker_no_longer_reconciles_cancellation_markers():
+def test_stale_checker_no_longer_reconciles_cancellation_markers():
     from jobs.stale_task_checker import StaleTaskChecker
 
     checker = StaleTaskChecker()
 
     assert not hasattr(checker, "set_cancellation_reconciliation_deps")
-    assert await checker._is_message_cancelled_for_recovery("message-1") is False
+    assert not hasattr(checker, "_is_message_cancelled_for_recovery")
 
 
 def test_room_state_deletion_no_longer_lists_cancelled_messages():

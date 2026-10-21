@@ -37,22 +37,3 @@ def test_processing_status_values_are_shared_strings():
     assert SSEProcessingStatus.COMPLETED.value == "completed"
     assert SSEProcessingStatus.AWAITING_INPUT.value == "awaiting_input"
     assert SSEProcessingStatus.QUEUED not in PROCESSING_DONE_STATUSES
-
-
-def test_unsupported_interaction_constants_live_in_common():
-    import importlib
-
-    import pytest
-
-    from common.a2a_constants import (
-        UNSUPPORTED_INTERACTION_CODE,
-        UNSUPPORTED_INTERACTION_MESSAGE,
-    )
-
-    assert UNSUPPORTED_INTERACTION_CODE == "unsupported_interaction"
-    assert (
-        UNSUPPORTED_INTERACTION_MESSAGE
-        == "The agent requested an unsupported interaction."
-    )
-    with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("execution.dispatch.agent_ingress_router")

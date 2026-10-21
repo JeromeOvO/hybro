@@ -1013,38 +1013,17 @@ class HITLService:
             for row in rows
         ]
 
-    async def _clear_hitl_continuation_once(
-        self,
-        request: HITLRequest,
-        cleared_continuation_ids: set[str],
-    ) -> None:
-        if not request.continuation_message_id:
-            return
-        if request.continuation_message_id in cleared_continuation_ids:
-            return
-        cleared_continuation_ids.add(request.continuation_message_id)
-        await self.persistence.get_and_clear_continuation_on_message(
-            request.continuation_message_id
-        )
-        await self.persistence.get_and_clear_continuation_on_user_message(
-            request.continuation_message_id
-        )
-
     async def _reconcile_terminal_members(
         self,
         members: list[tuple[dict[str, Any], HITLRequest]],
         *,
         event_type: HITLEventType,
     ) -> None:
-        cleared_continuation_ids: set[str] = set()
         errors: list[Exception] = []
         for row, member in members:
             if row.get("cancellation_reconciled") is True:
                 continue
             try:
-                await self._clear_hitl_continuation_once(
-                    member, cleared_continuation_ids
-                )
                 await self._emit_hitl_event(
                     room_id=member.room_id,
                     event_type=event_type,

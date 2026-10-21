@@ -663,47 +663,6 @@ async def test_same_terminal_state_can_backfill_final_agent_response():
 
 
 @pytest.mark.asyncio
-async def test_enable_task_tracking_whole_task_update_respects_terminal_cas():
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    terminal = {
-        "message_id": "a1",
-        "room_id": "r1",
-        "terminal_projection_event_id": "evt-cancel",
-        "has_task_tracking": False,
-        "message_content": {"message_task": {"status": {"state": "canceled"}}},
-    }
-    mongo = FakeMongo(
-        {
-            "room_user_messages": FakeCollection([]),
-            "room_agent_messages": FakeCollection([terminal]),
-        }
-    )
-    repository = MessageMongoRepository(mongo=mongo)
-    store = RuntimeRepositoryStore(
-        mongo=mongo,
-        room_repository=object(),
-        message_repository=repository,
-        agent_repository=object(),
-    )
-
-    updated = await store.enable_task_tracking_on_message(
-        message_id="a1",
-        webhook_token_hash="hash",
-        agent_url="https://agent.invalid",
-        task_created_at="2026-01-01T00:00:00Z",
-        task_updated_at="2026-01-01T00:00:00Z",
-        task_data={"status": {"state": "submitted"}},
-    )
-
-    assert updated is False
-    durable = mongo.collections["room_agent_messages"].docs[0]
-    assert durable == terminal
-    query = mongo.collections["room_agent_messages"].update_one_calls[-1][0]
-    assert "completed" in query["message_content.message_task.status.state"]["$nin"]
-
-
-@pytest.mark.asyncio
 async def test_message_repository_get_by_id_searches_user_first_then_agent():
     repo, _, user_messages, agent_messages = _message_repo(
         user_docs=[{"message_id": "u1", "message_type": "user"}],
@@ -755,117 +714,6 @@ async def test_message_repository_direct_room_history_methods_pass_limits():
         {"room_id": "r1"},
         {"sort": expected_sort, "limit": 4},
     )
-
-
-@pytest.mark.asyncio
-async def test_message_repository_task_room_query_filters_sorts_and_limits():
-    older = datetime(2026, 5, 10, tzinfo=UTC)
-    newer = datetime(2026, 5, 11, tzinfo=UTC)
-    repo, _, _, agent_messages = _message_repo(
-        agent_docs=[
-            {
-                "message_id": "tracked-old",
-                "room_id": "r1",
-                "has_task_tracking": True,
-                "task_created_at": older,
-            },
-            {
-                "message_id": "tracked-new",
-                "room_id": "r1",
-                "has_task_tracking": True,
-                "task_created_at": newer,
-            },
-            {
-                "message_id": "untracked",
-                "room_id": "r1",
-                "has_task_tracking": False,
-                "task_created_at": newer,
-            },
-            {
-                "message_id": "other-room",
-                "room_id": "r2",
-                "has_task_tracking": True,
-                "task_created_at": newer,
-            },
-        ]
-    )
-
-    docs = await repo.get_task_messages_for_room("r1", limit=1)
-
-    assert [doc["message_id"] for doc in docs] == ["tracked-new"]
-    assert agent_messages.find_calls[-1] == (
-        {"room_id": "r1", "has_task_tracking": True},
-        {"sort": [("task_created_at", -1)], "limit": 1},
-    )
-
-
-@pytest.mark.asyncio
-async def test_message_repository_pending_user_tasks_filters_and_sorts():
-    older = datetime(2026, 5, 10, tzinfo=UTC)
-    newer = datetime(2026, 5, 11, tzinfo=UTC)
-    repo, _, _, agent_messages = _message_repo(
-        agent_docs=[
-            {
-                "message_id": "old",
-                "user_id": "u1",
-                "has_task_tracking": True,
-                "task_created_at": older,
-                "message_content": {"message_task": {"status": {"state": "working"}}},
-            },
-            {
-                "message_id": "new",
-                "user_id": "u1",
-                "has_task_tracking": True,
-                "task_created_at": newer,
-                "message_content": {"message_task": {"status": {"state": "working"}}},
-            },
-            {
-                "message_id": "done",
-                "user_id": "u1",
-                "has_task_tracking": True,
-                "task_created_at": newer,
-                "message_content": {"message_task": {"status": {"state": "completed"}}},
-            },
-        ]
-    )
-
-    docs = await repo.get_pending_task_messages_for_user("u1", ["working"])
-
-    assert [doc["message_id"] for doc in docs] == ["new", "old"]
-    assert agent_messages.find_calls[-1] == (
-        {
-            "user_id": "u1",
-            "has_task_tracking": True,
-            "message_content.message_task.status.state": {"$in": ["working"]},
-        },
-        {"sort": [("task_created_at", -1)]},
-    )
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_updates_last_notified_state_atomically():
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    agent_messages = FakeCollection(
-        [{"message_id": "a1", "last_notified_state": "working"}]
-    )
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo({"room_agent_messages": agent_messages}),
-        room_repository=object(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-
-    assert await store.update_last_notified_state("a1", "completed") is True
-    assert agent_messages.docs[0]["last_notified_state"] == "completed"
-    assert agent_messages.update_one_calls == [
-        (
-            {"message_id": "a1", "last_notified_state": {"$ne": "completed"}},
-            {"$set": {"last_notified_state": "completed"}},
-            {},
-        )
-    ]
-    assert await store.update_last_notified_state("a1", "completed") is False
 
 
 @pytest.mark.asyncio
@@ -970,7 +818,6 @@ async def test_runtime_store_full_agent_update_preserves_task_tracking_fields():
 
     _, updates = message_repository.update_calls[0]
     assert "webhook_token_hash" not in updates
-    assert "pending_continuation" not in updates
     assert "last_notified_state" not in updates
     assert "agent_url" not in updates
     assert "task_created_at" not in updates
@@ -1018,76 +865,6 @@ async def test_runtime_store_generates_agent_message_id_when_empty():
     assert await store.add_room_agent_message(message)
     assert message.message_id == ""
     assert message_repository.saved_docs[0]["message_id"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_task_tracking_writes_return_false_on_repository_error():
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    class FailingMessageRepository:
-        async def update_agent_message(self, *args, **kwargs):
-            raise RuntimeError("database down")
-
-        async def update_agent_message_if_not_terminal(self, *args, **kwargs):
-            raise RuntimeError("database down")
-
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=object(),
-        message_repository=FailingMessageRepository(),
-        agent_repository=object(),
-    )
-
-    assert (
-        await store.enable_task_tracking_on_message(
-            message_id="a1",
-            webhook_token_hash="hash",
-            agent_url="https://agent.example",
-            task_created_at=datetime(2026, 5, 11, tzinfo=UTC),
-            task_updated_at=datetime(2026, 5, 11, tzinfo=UTC),
-            task_data={"id": "task-1"},
-        )
-        is False
-    )
-    assert await store.update_task_on_message("a1", {"id": "task-1"}) is False
-    assert await store.update_webhook_token_hash_on_message("a1", "hash") is False
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_task_tracking_noop_successes_by_readback():
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    class NoopTrackedMessageRepository:
-        async def update_agent_message(self, message_id, updates):
-            return False
-
-        async def get_agent_message_by_id(self, message_id):
-            return {
-                "message_id": message_id,
-                "has_task_tracking": True,
-                "webhook_token_hash": "hash",
-                "agent_url": "https://agent.example",
-                "message_content": {"message_task": {"id": "task-1"}},
-            }
-
-    store = RuntimeRepositoryStore(
-        mongo=FakeMongo(),
-        room_repository=object(),
-        message_repository=NoopTrackedMessageRepository(),
-        agent_repository=object(),
-    )
-
-    assert (
-        await store.enable_task_tracking_on_message(
-            message_id="a1",
-            webhook_token_hash="hash",
-            agent_url="https://agent.example",
-            task_created_at=datetime(2026, 5, 11, tzinfo=UTC),
-            task_updated_at=datetime(2026, 5, 11, tzinfo=UTC),
-            task_data={"id": "task-1"},
-        )
-        is True
-    )
 
 
 @pytest.mark.asyncio
@@ -1197,10 +974,6 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
         "agent-1"
     ]
     assert (await store.get_room_memory_by_room_id("r1")).memory_id == "mem-1"
-    assert [run["run_id"] for run in await store.get_active_runs_by_room_id("r1")] == [
-        "new",
-        "old",
-    ]
 
 
 @pytest.mark.asyncio
@@ -1766,8 +1539,6 @@ async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
     assert await store.refresh_processing_claim("u1") is True
     assert await store.unclaim_user_message("u1") is True
     assert user_messages.docs[0]["processing_claimed_at"] is None
-    assert await store.save_continuation_on_message("a1", {"next": "step"}) is True
-    assert agent_messages.docs[0]["pending_continuation"] == {"next": "step"}
     assert await store.turn_exists("r1", "missing") is False
 
     assert await store.cancel_descendants("u1") == 3

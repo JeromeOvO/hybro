@@ -656,20 +656,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from conversation.attachment_projection import (
                 AttachmentProjectionService,
             )
-            from delivery.task_notifier import TaskUpdateNotifier
             from execution.adapters.hitl import HITLMessageCancellationAdapter
             from execution.client_request_id import SSEClientRequestIdResolver
-            from execution.dispatch.task_notifications import (
-                bind_notification_store,
-                bind_task_notification_runtime,
-                notify_task_update,
-            )
-            from execution.dispatch.task_notifications import (
-                bind_processing_status_emitter as bind_task_processing_status_emitter,
-            )
-            from execution.events import (
-                emit_room_processing_status as emit_execution_room_processing_status,
-            )
             from execution.hitl.adapters import HITLDeliveryAdapter
             from execution.run_command_handler import (
                 RunCommandHandler,
@@ -678,7 +666,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from execution.run_lifecycle import RunLifecycleAdapter
             from execution.run_lifecycle_service import bind_run_lifecycle_service
             from execution.run_queries import RunQueryAdapter
-            from execution.task_tracking import A2ATaskTrackingService
 
             _execution_repos = create_execution_repositories(mongo=mongo_dal)
             run_command_handler = RunCommandHandler(
@@ -817,54 +804,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             hitl_store = runtime_store.hitl
             hitl_lifecycle_store = runtime_store.hitl_lifecycle
             memory_store = runtime_store.memory
-            max_tasks_per_user = runtime_store.MAX_TASKS_PER_USER
-            max_tasks_per_room = runtime_store.MAX_TASKS_PER_ROOM
 
             # P3 runtime adapters keep startup wiring narrow. These SimpleNamespace
             # boundaries are intentionally constrained to container assembly.
-            async def check_task_limits(
-                user_id: str,
-                room_id: str,
-                non_terminal_states: list[str],
-            ) -> None:
-                await task_store.check_task_limits(
-                    user_id,
-                    room_id,
-                    non_terminal_states,
-                    max_tasks_per_user=max_tasks_per_user,
-                    max_tasks_per_room=max_tasks_per_room,
-                )
-
-            task_notification_store = SimpleNamespace(
-                update_last_notified_state=message_store.update_last_notified_state,
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                update_room_agent_message_by_message_id=(
-                    message_store.update_room_agent_message_by_message_id
-                ),
-                get_room_by_room_id=agent_room_store.get_room_by_room_id,
-                resolve_client_request_id_for_agent_message=(
-                    task_store.resolve_client_request_id_for_agent_message
-                ),
-            )
-            a2a_task_tracking_store = SimpleNamespace(
-                check_task_limits=check_task_limits,
-                generate_webhook_token=task_store.generate_webhook_token,
-                hash_webhook_token=task_store.hash_webhook_token,
-                enable_task_tracking_on_message=(
-                    task_store.enable_task_tracking_on_message
-                ),
-                get_room_agent_message_by_message_id=(
-                    message_store.get_room_agent_message_by_message_id
-                ),
-                update_webhook_token_hash_on_message=(
-                    task_store.update_webhook_token_hash_on_message
-                ),
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
-                get_hitl_request=hitl_store.get_hitl_request,
-                update_task_on_message=task_store.update_task_on_message,
-            )
             hitl_runtime_store = SimpleNamespace(
                 count_hitl_requests_for_message=(
                     hitl_store.count_hitl_requests_for_message
@@ -908,12 +850,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 get_room_agent_message_by_message_id=(
                     message_store.get_room_agent_message_by_message_id
                 ),
-                get_pending_continuation_on_message=(
-                    task_store.get_pending_continuation_on_message
-                ),
-                save_continuation_on_user_message=(
-                    task_store.save_continuation_on_user_message
-                ),
                 get_pending_hitl_requests=hitl_store.get_pending_hitl_requests,
                 get_pending_hitl_requests_strict=(
                     hitl_store.get_pending_hitl_requests_strict
@@ -928,44 +864,14 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 cas_update_hitl_request_strict=(
                     hitl_store.cas_update_hitl_request_strict
                 ),
-                get_and_clear_continuation_on_message=(
-                    task_store.get_and_clear_continuation_on_message
-                ),
-                get_and_clear_continuation_on_user_message=(
-                    task_store.get_and_clear_continuation_on_user_message
-                ),
                 iter_stale_processing_hitl_requests=(
                     hitl_store.iter_stale_processing_hitl_requests
                 ),
             )
             stale_task_store = SimpleNamespace(
-                get_stale_task_messages=task_store.get_stale_task_messages,
-                get_expired_task_messages=task_store.get_expired_task_messages,
-                get_non_tracked_stale_task_messages=(
-                    task_store.get_non_tracked_stale_task_messages
-                ),
-                touch_task_message=task_store.touch_task_message,
-                get_room_user_message_by_message_id=(
-                    message_store.get_room_user_message_by_message_id
-                ),
-                update_task_on_message=task_store.update_task_on_message,
-                get_and_clear_continuation_on_message=(
-                    task_store.get_and_clear_continuation_on_message
-                ),
-                get_and_clear_continuation_on_user_message=(
-                    task_store.get_and_clear_continuation_on_user_message
-                ),
                 get_room_ids_with_non_terminal_runs=(
                     task_store.get_room_ids_with_non_terminal_runs
                 ),
-                get_orphaned_agent_messages=task_store.get_orphaned_agent_messages,
-                get_stale_claimed_orchestration_messages=(
-                    message_store.get_stale_claimed_orchestration_messages
-                ),
-                update_orchestration_projection_if_status=(
-                    message_store.update_orchestration_projection_if_status
-                ),
-                get_agent_by_agent_id=agent_room_store.get_agent_by_agent_id,
             )
             room_runtime_store = SimpleNamespace(
                 add_room_agent_message=message_store.add_room_agent_message,
@@ -983,19 +889,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
             execution_delivery = _delivery_facade
-            task_notifier = TaskUpdateNotifier(execution_delivery)
 
             membership_source.bind_store(agent_room_store)
-            bind_notification_store(task_notification_store)
-            bind_task_notification_runtime(
-                task_notifier=task_notifier,
-                delivery=execution_delivery,
-            )
             a2a_service.bind_runtime_config(
                 A2ARuntimeConfig(webhook_base_url=runtime.settings.webhook_base_url)
-            )
-            a2a_service.bind_task_tracking(
-                A2ATaskTrackingService(a2a_task_tracking_store)
             )
             a2a_service.bind_call_counter(agent_room_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
@@ -1295,42 +1192,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 approval_deadline_hours=runtime.settings.approval_deadline_hours,
             )
 
-            async def inspect_uncertain_hitl_command(command: dict) -> dict | None:
-                from a2a_adapter.remote_task import fetch_remote_task
-                from common.a2a_constants import TERMINAL_STATES
-                from common.a2a_task_projection import (
-                    extract_public_completed_status_text,
-                )
-
-                message = await message_store.get_room_agent_message_by_message_id(
-                    command.get("continuation_message_id")
-                )
-                agent_url = getattr(message, "agent_url", None) if message else None
-                if not agent_url:
-                    return None
-                card = await a2a_service.get_agent_card_from_url(agent_url)
-                task = await fetch_remote_task(card, command["task_id"])
-                if task is None or getattr(task, "status", None) is None:
-                    return None
-                state = getattr(task.status.state, "value", task.status.state)
-                terminal_values = {item.value for item in TERMINAL_STATES}
-                if state not in terminal_values:
-                    return {"advanced": False}
-                return {
-                    "advanced": True,
-                    "reconciled_from_get_task": True,
-                    "blocking": True,
-                    "task_id": task.id,
-                    "context_id": task.context_id,
-                    "task_state": state,
-                    "response_text": extract_public_completed_status_text(task) or "",
-                }
-
             hitl_reconciler = HITLLifecycleReconciler(
                 lifecycle=hitl_lifecycle_store,
                 service=hitl_manager,
                 application=hitl_application,
-                inspect_remote_command=inspect_uncertain_hitl_command,
             )
             route_room_reader = SimpleNamespace(
                 get_room_by_room_id=agent_room_store.get_room_by_room_id,
@@ -1460,16 +1325,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             run_lifecycle.bind_terminal_finalizer(terminal_projection_finalizer)
 
-            async def emit_room_processing_status(**kwargs):
-                return await emit_execution_room_processing_status(
-                    **kwargs,
-                    run_lifecycle=run_lifecycle,
-                    event_publisher=_delivery_deps.event_publisher,
-                    run_event_enabled=run_event_sse_enabled,
-                    client_request_id_resolver=execution_client_request_id_resolver,
-                )
-
-            bind_task_processing_status_emitter(emit_room_processing_status)
             app.state.execution_facade = execution_facade
             app.state.execution_deps = _execution_deps
 
@@ -1562,17 +1417,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             _leader, lock_name=AGENT_HEALTH_CHECKER
         )
         stale_task_checker.set_leader_election(_leader)
-        stale_task_checker.configure_timing(
-            stale_check_minutes=runtime.settings.stale_check_minutes,
-            task_expiry_hours=runtime.settings.task_expiry_hours,
-            pending_task_warning_hours=runtime.settings.pending_task_warning_hours,
-        )
         stale_task_checker.set_runtime_deps(
             StaleTaskCheckerDeps(
                 store=stale_task_store,
                 rooms_collection=mongo_dal.collection("rooms"),
-                notify_task_update=notify_task_update,
-                a2a_service=a2a_service,
             )
         )
         if _execution_deps is not None:
@@ -1581,7 +1429,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
                     recover_stale_processing=hitl_manager.recover_stale_processing,
-                    cancel_requests_for_message=hitl_manager.cancel_requests_for_message,
                     reconcile_lifecycle=hitl_reconciler.reconcile_lifecycle,
                 )
             )
@@ -2460,7 +2307,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await _ensure_room_history_indexes(mongo)
     await _ensure_user_message_indexes(mongo)
     await _ensure_room_timeline_indexes(mongo)
-    await _ensure_task_tracking_indexes(mongo)
+    await _ensure_room_agent_message_indexes(mongo)
     await _ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
@@ -3187,7 +3034,7 @@ async def _user_message_index_readiness_issues(
     return issues
 
 
-async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
+async def _ensure_room_agent_message_indexes(mongo: MongoDAL) -> None:
     await _create_index(
         mongo,
         "room_agent_messages",
@@ -3195,51 +3042,6 @@ async def _ensure_task_tracking_indexes(mongo: MongoDAL) -> None:
         name="room_agent_message_id_unique",
         unique=True,
         critical=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [("has_task_tracking", 1)],
-        name="has_task_tracking_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [
-            ("task_updated_at", 1),
-            ("message_content.message_task.status.state", 1),
-        ],
-        name="task_updated_state_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [
-            ("task_created_at", 1),
-            ("message_content.message_task.status.state", 1),
-        ],
-        name="task_created_state_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [
-            ("user_id", 1),
-            ("message_content.message_task.status.state", 1),
-            ("has_task_tracking", 1),
-        ],
-        name="user_task_state_sparse",
-        sparse=True,
-    )
-    await _create_index(
-        mongo,
-        "room_agent_messages",
-        [("room_id", 1), ("has_task_tracking", 1), ("task_created_at", -1)],
-        name="room_task_created_sparse",
-        sparse=True,
     )
 
 

@@ -1,17 +1,5 @@
 # System Architecture
 
-## Typed interactive agent ingress
-
-Remote `input-required`/interactive events are captured privately as an
-`AgentInputObservation` directly from an authoritative A2A `Task` or
-`TaskStatusUpdateEvent`; only
-`status.message.metadata["hybro.ai/a2a/interaction"]` is parsed as the typed
-contract (`execution.dispatch.a2a_interaction`). The remote prompt is never
-exposed before that parse. Absent or invalid typed metadata fails with
-`unsupported_interaction` and the fixed public message `The agent requested an
-unsupported interaction.` (`common.a2a_constants`).
-
-
 ## Orchestrator A2A runtime
 
 The orchestrator runtime currently remains outside `container.py`, routes,
@@ -372,10 +360,8 @@ Examples:
   over `agent.AgentFacade`.
 - A2A compatibility-shaped runtime behavior lives in
   `a2a_adapter.runtime_service`. A2A SDK transport/coercion work stays in
-  `a2a_adapter`, while task-tracking behavior and persistence remain
-  Execution-owned. `container.py` constructs `A2ATaskTrackingService` and injects
-  it through the adapter-owned `A2ATaskTrackingPort`; `a2a_adapter` does not
-  import `execution`, so the package dependency remains one-way.
+  `a2a_adapter`; `a2a_adapter` does not import `execution`, so the package
+  dependency remains one-way.
 
 #### A2A protocol boundary (SDK 1.x / protocol 1.0)
 
@@ -1277,13 +1263,12 @@ Key components:
   typed processing-status payload before lifecycle recording and Delivery
   emission.
 - `execution.ports`: owns the narrow type contracts used inside Execution for
-  room runtime, delivery/SSE, rate limit, memory, resolver, health, and
-  notification collaborators. Where execution invokes a collaborator method,
+  room runtime, delivery/SSE, rate limit, memory, resolver, and health
+  collaborators. Where execution invokes a collaborator method,
   the port must use named parameters and execution-owned result protocols
   instead of `*args`/`**kwargs` catch-all signatures.
-- Legacy tracked-task components (`execution.task_tracking`,
-  `jobs.stale_task_checker`) remain for
-  compatibility paths; canonical Runs do not create tracked tasks.
+- Canonical Runs do not create tracked tasks; the legacy tracked-task
+  machinery and the `pending_continuation` message field are retired.
 
 A2A response ingestion and finalization are Execution-owned: the orchestrator
 A2A runtime records every observation in its inbox and the kernel settles the
@@ -1591,11 +1576,7 @@ sibling while retaining its own run linkage metadata.
 versioned run state before the next side effect. The loop recovers persisted
 delegations and grouped HITL waits, enforces cancellation and step budgets, and
 projects terminal outcomes without duplicating dispatch or HITL creation.
-Durable run-store queries and the stale-task checker can claim and resume stale
-runs after process interruption. The checker also recovers old unclaimed or
-stale claimed Supervisor envelopes that were interrupted before durable run
-creation; terminal envelopes are excluded before the bounded query limit, and
-terminal projection clears the processing claim. Newly created projection steps
+Terminal projection clears the processing claim. Newly created projection steps
 with a null per-step retry timestamp are immediately claimable; this guarantees
 that terminal processing SSE and the HYBRO system-task terminal state are emitted
 inline instead of waiting for stale recovery. Same-terminal Agent response
@@ -2085,8 +2066,6 @@ It is composed from:
 - `SSETransportImpl`: local room connection management.
 - `EventPublisherImpl`: emits typed public Delivery events, handles terminal
   deduplication, and records public delivery dead letters.
-- `TaskUpdateNotifier`: execution-facing task update publisher that resolves
-  final agent display fields and delegates to `DeliveryFacade.send_task_update`.
 - `CrossInstanceEventBus`: Redis Pub/Sub SSE room fan-out when Redis is enabled;
   it has no cancellation or internal-domain-event API.
 - `TerminalStatusDeduplicator`: prevents duplicate terminal status frames.
@@ -2461,8 +2440,9 @@ SSE status and cancellation lookup.
 Background jobs start only after infrastructure and multi-worker safety checks
 pass:
 
-- `stale_task_checker`: recovers stale tasks, orphaned messages, and stale
-  HITL.
+- `stale_task_checker`: runs the HITL lifecycle reconciliation passes, recovers
+  HITL requests stuck in processing, and clears stale legacy room processing
+  status.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
 - `agent.health.AgentHealthService`: periodic health/liveness support for
@@ -2738,20 +2718,14 @@ This keeps all final task state, artifact persistence, and SSE emission logic
 in one response handler regardless of whether the response came from direct
 transport or webhook.
 
-Task lifecycle data access for A2A task submission, webhook token validation,
-cancellation persistence, HITL lifecycle, task notification persistence, webhook
-response handling, and stale-task cleanup is routed through focused runtime-store
-ports assembled in `container.py`. The runtime-store repository aggregate backs those
+Task lifecycle data access for webhook token validation, HITL lifecycle, webhook
+response handling, and stale room processing-status cleanup is routed through
+focused runtime-store ports assembled in `container.py`. The runtime-store repository aggregate backs those
 ports with module repositories and `MongoDAL` collections, but production
 bindings use scoped `dal.runtime_store.parts` surfaces or focused startup
 adapters wherever a narrower port is sufficient. Remaining runtime-store
 aggregate use is limited to documented compatibility shims rather
 than new production business owners.
-
-Task notification persistence is a distinct execution port. `ResponseTaskWriter`
-remains limited to task-state writes, while `TaskNotificationStorePort` supplies
-the idempotency update plus message, room, and client-request-id reads needed by
-`execution.dispatch.task_notifications`.
 
 **Agent display text:** Public A2A task projections never expose remote
 `Task.history`. For a completed task, agent-role `TextPart` content from
@@ -3039,8 +3013,8 @@ Background jobs are initialized by the container runtime after Redis/leader
 election setup.
 
 - `agent_health_service`: health/liveness checks.
-- `stale_task_checker`: expires stale task messages, recovers orphaned
-  processing, and handles stale HITL.
+- `stale_task_checker`: reconciles HITL lifecycle state, recovers stale HITL
+  processing, and clears stale legacy room processing status.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: deletes unused uploads from the local content store.
 
@@ -3088,7 +3062,7 @@ The codebase uses several recovery mechanisms:
 - Queue cleanup cancels remaining descendants when execution exits early.
 - Cancellation state is persisted and broadcast.
 - `runs` and `run_events` provide lifecycle tracking and startup healing.
-- Stale task checker handles expired, orphaned, and stuck task states.
+- Stale task checker reconciles HITL state and clears stuck room processing status.
 
 The normal terminal states seen by clients are:
 

@@ -131,7 +131,6 @@ class RuntimeMessageStore(Protocol):
     async def update_room_agent_message_with_new_message_content_by_message_id(
         self, message_id: str, message_content: RuntimeMessageContent
     ) -> bool: ...
-    async def update_last_notified_state(self, message_id: str, state: str) -> bool: ...
     async def reset_last_notified_state(self, message_id: str) -> bool: ...
 
     async def update_task_state_on_message_if_not_terminal(
@@ -153,86 +152,18 @@ class RuntimeTaskLifecycleStore(Protocol):
     def hash_webhook_token(self, token: str) -> str: ...
     def verify_webhook_token(self, token: str, stored_hash: str) -> bool: ...
     def generate_webhook_token(self) -> str: ...
-    async def get_active_runs_by_room_id(self, room_id: str) -> list[dict]: ...
     async def resolve_client_request_id_for_agent_message(
         self, room_agent_message: RuntimeRoomAgentMessage
     ) -> str | None: ...
     async def resolve_client_request_id_for_message_id(
         self, message_id: str
     ) -> str | None: ...
-    async def get_task_messages_for_room(
-        self, room_id: str, *, limit: int = 50
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def get_pending_task_messages_for_user(
-        self, user_id: str, states: list[str]
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def check_task_limits(
-        self, user_id: str, room_id: str, non_terminal_states: list[str]
-    ) -> None: ...
-    async def enable_task_tracking_on_message(
-        self,
-        *,
-        message_id: str,
-        webhook_token_hash: str,
-        agent_url: str,
-        task_created_at: Any,
-        task_updated_at: Any,
-        task_data: dict,
-    ) -> bool: ...
-    async def update_task_on_message(
-        self,
-        message_id: str,
-        task_data: dict,
-        message_text: str | None = None,
-    ) -> bool: ...
-    async def update_webhook_token_hash_on_message(
-        self, message_id: str, webhook_token_hash: str
-    ) -> bool: ...
     async def verify_webhook_token_on_message(self, message_id: str) -> str | None: ...
     async def verify_webhook_token_for_task(
         self, message_id: str, token: str
     ) -> tuple[bool, str]: ...
 
     async def get_room_ids_with_non_terminal_runs(self) -> list[str]: ...
-    async def get_stale_task_messages(
-        self,
-        stale_minutes: int,
-        non_terminal_states: list[str],
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def get_expired_task_messages(
-        self,
-        max_age_hours: int,
-        non_terminal_states: list[str],
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def get_non_tracked_stale_task_messages(
-        self,
-        max_age_hours: int,
-        non_terminal_states: list[str],
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def get_orphaned_agent_messages(
-        self,
-        orphan_threshold_minutes: int,
-    ) -> list[RuntimeRoomAgentMessage]: ...
-    async def touch_task_message(self, message_id: str) -> bool: ...
-    async def get_and_clear_continuation_on_message(
-        self, message_id: str
-    ) -> dict | None: ...
-    async def get_pending_continuation_on_message(
-        self, message_id: str
-    ) -> dict | None: ...
-    async def get_and_clear_continuation_on_user_message(
-        self, message_id: str
-    ) -> dict | None: ...
-    async def save_continuation_on_message(
-        self,
-        message_id: str,
-        continuation_data: dict,
-    ) -> bool: ...
-    async def save_continuation_on_user_message(
-        self,
-        message_id: str,
-        continuation_data: dict,
-    ) -> bool: ...
 
 
 @runtime_checkable

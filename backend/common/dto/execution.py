@@ -194,8 +194,7 @@ class HITLResponse(FrozenDTO):
 
 
 class AgentEvent(FrozenDTO):
-    # Deprecated Common compatibility DTO. Phase 7b runtime-normalized agent
-    # events live in execution.dispatch.agent_event.
+    # Deprecated Common compatibility DTO.
     room_id: str
     agent_id: str
     message_id: str

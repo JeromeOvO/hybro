@@ -69,10 +69,6 @@ def mock_hitl_db_service():
     mock.complete_hitl_open_projection = AsyncMock(return_value=None)
     mock.release_hitl_open_projection = AsyncMock(return_value=True)
     mock.reset_last_notified_state = AsyncMock()
-    mock.get_pending_continuation_on_message = AsyncMock(return_value=None)
-    mock.save_continuation_on_user_message = AsyncMock(return_value=True)
-    mock.get_and_clear_continuation_on_message = AsyncMock()
-    mock.get_and_clear_continuation_on_user_message = AsyncMock()
     mock.iter_stale_processing_hitl_requests = MagicMock(return_value=_iter_docs([]))
     return mock
 

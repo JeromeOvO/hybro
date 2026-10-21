@@ -311,48 +311,6 @@ async def test_agent_card_health_keeps_healthy_invalid_card_nonfatal():
     assert client.urls == ["https://agent.example" + AGENT_CARD_WELL_KNOWN_PATH]
 
 
-def test_completed_text_task_factory_builds_sdk_task_payload():
-    from a2a_adapter.task_status import build_completed_text_task
-    from common.types import TaskState
-
-    task = build_completed_text_task(
-        task_id="summary-1",
-        text="summary text",
-        context_id="ctx-1",
-    )
-
-    assert task.id == "summary-1"
-    assert task.context_id == "ctx-1"
-    assert task.status.state == TaskState.completed
-    assert task.status.message.message_id == "summary-1"
-    assert task.status.message.parts[0].model_dump(mode="json") == {
-        "kind": "text",
-        "metadata": None,
-        "text": "summary text",
-    }
-    assert task.history == [task.status.message]
-
-
-def test_failed_text_task_factory_builds_sdk_task_payload():
-    from a2a_adapter.task_status import build_failed_text_task
-    from common.types import TaskState
-
-    task = build_failed_text_task(
-        task_id="task-1",
-        context_id="ctx-1",
-        error_text="failed",
-    )
-
-    assert task.id == "task-1"
-    assert task.context_id == "ctx-1"
-    assert task.status.state == TaskState.failed
-    assert task.status.message.parts[0].model_dump(mode="json") == {
-        "kind": "text",
-        "metadata": None,
-        "text": "failed",
-    }
-
-
 def test_get_task_request_helpers_keep_sdk_details_in_adapter():
     from a2a.types import GetTaskRequest
 

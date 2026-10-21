@@ -14,11 +14,6 @@ from a2a_adapter.orchestrator_direct_client import (
     OrchestratorDirectA2AClient,
     endpoint_scope_digest,
 )
-from a2a_adapter.task_status import (
-    build_completed_text_task,
-    build_failed_text_task,
-    build_task_status,
-)
 from common.a2a_constants import (
     HYBRO_A2A_DURABLE_USER_CONTEXT_ROLE,
     HYBRO_A2A_INTERACTION_ANSWER_METADATA_KEY,
@@ -65,6 +60,11 @@ from execution.orchestrator.a2a_runtime.models import (
     NormalizedA2AObservation,
 )
 from execution.orchestrator.models import ToolResult
+from tests._a2a_task_builders import (
+    build_completed_text_task,
+    build_failed_text_task,
+    build_task_status,
+)
 
 NOW = datetime.now(UTC)
 

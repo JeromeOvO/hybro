@@ -7,14 +7,8 @@ from enum import Enum
 from typing import Any, Protocol
 
 from common.dto import HITLRequestEvent, HITLResolvedEvent, RunInfo
-from common.types import AgentCard
 from execution.run_lifecycle_outcome import RunLifecycleWriteOutcome
-from models.agent import Agent
 from models.agent_network import AgentMessageRequest, AgentMessageResponse
-from models.room import (
-    Room,
-    RoomAgentMessage,
-)
 from models.run import RunState
 
 ProcessingStatusLike = str | Enum
@@ -129,18 +123,6 @@ class HITLPersistencePort(Protocol):
     async def get_room_agent_message_by_message_id(
         self, message_id: str
     ) -> Any | None: ...
-    async def get_pending_continuation_on_message(
-        self, message_id: str
-    ) -> dict[str, Any] | None: ...
-    async def save_continuation_on_user_message(
-        self, message_id: str, continuation: dict[str, Any]
-    ) -> bool: ...
-    async def get_and_clear_continuation_on_message(
-        self, message_id: str
-    ) -> dict[str, Any] | None: ...
-    async def get_and_clear_continuation_on_user_message(
-        self, message_id: str
-    ) -> dict[str, Any] | None: ...
     async def get_room_user_message_by_message_id(
         self, message_id: str
     ) -> Any | None: ...
@@ -339,182 +321,6 @@ class HITLTerminalLifecyclePort(Protocol):
 
 class HITLDeliveryPort(Protocol):
     async def emit(self, event: HITLRequestEvent | HITLResolvedEvent) -> None: ...
-
-
-class A2ATransportPort(Protocol):
-    def has_streaming_capability(self, *, agent_card: AgentCard) -> bool: ...
-
-    def send_message_streaming(
-        self,
-        agent_card: AgentCard,
-        message: Any,
-        *,
-        agent_id: str | None = None,
-    ) -> AsyncIterator[Any]: ...
-
-    async def send_message_sync(
-        self,
-        *,
-        agent_card: AgentCard,
-        message: Any,
-        agent_id: str | None = None,
-    ) -> Any: ...
-
-    async def send_message_to_tracked_agent(
-        self,
-        *,
-        agent_card: AgentCard,
-        message: Any,
-        message_id: str,
-        webhook_token: str,
-        context_id: str,
-        agent_id: str | None = None,
-    ) -> dict[str, Any]: ...
-
-    async def create_task_for_tracking(
-        self,
-        current_message: RoomAgentMessage,
-        agent_card: AgentCard,
-        prepared_message: Any,
-        *,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-    ) -> dict[str, Any]: ...
-
-    async def cancel_remote_task(
-        self,
-        agent_card: AgentCard,
-        remote_task_id: str,
-    ) -> None: ...
-
-    def has_push_notification_capability(self, agent_card: AgentCard) -> bool: ...
-
-
-class A2ATaskTrackingStorePort(Protocol):
-    async def check_task_limits(
-        self,
-        user_id: str,
-        room_id: str,
-        non_terminal_state_values: list[str],
-    ) -> None: ...
-
-    def generate_webhook_token(self) -> str: ...
-    def hash_webhook_token(self, token: str) -> str: ...
-
-    async def enable_task_tracking_on_message(
-        self,
-        *,
-        message_id: str,
-        webhook_token_hash: str,
-        agent_url: str,
-        task_created_at: Any,
-        task_updated_at: Any,
-        task_data: dict[str, Any],
-    ) -> bool: ...
-
-    async def get_room_agent_message_by_message_id(
-        self, message_id: str
-    ) -> RoomAgentMessage | None: ...
-
-    async def update_webhook_token_hash_on_message(
-        self,
-        message_id: str,
-        webhook_token_hash: str,
-    ) -> bool: ...
-
-    async def get_agent_by_agent_id(self, agent_id: str) -> Agent | None: ...
-
-    async def get_hitl_request(self, request_id: str) -> dict[str, Any] | None: ...
-
-    async def update_task_on_message(
-        self,
-        message_id: str,
-        task_data: dict[str, Any],
-        message_text: str | None = None,
-    ) -> bool: ...
-
-
-class NotificationServicePort(Protocol):
-    async def send_task_update(
-        self,
-        *,
-        room_id: str,
-        message_id: str | None,
-        status: ProcessingStatusLike,
-        agent_card: AgentCard | None = None,
-        agent_name: str | None = None,
-        agent_id: str | None = None,
-        created_at: str | None = None,
-        content: str | None = None,
-        error: str | None = None,
-        requires_input: bool | None = None,
-        requires_auth: bool | None = None,
-        status_message: str | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        task_content: str | None = None,
-        related_message_id: str | None = None,
-        parts: list[dict[str, Any]] | None = None,
-        client_request_id: str | None = None,
-    ) -> None: ...
-
-
-class TaskNotificationStorePort(Protocol):
-    async def update_last_notified_state(self, message_id: str, state: str) -> bool: ...
-
-    async def get_room_agent_message_by_message_id(
-        self, message_id: str
-    ) -> RoomAgentMessage | None: ...
-
-    async def update_room_agent_message_by_message_id(
-        self, message_id: str, room_agent_message: Any
-    ) -> bool: ...
-
-    async def get_room_by_room_id(self, room_id: str) -> Room | None: ...
-
-    async def resolve_client_request_id_for_agent_message(
-        self, room_agent_message: Any
-    ) -> str | None: ...
-
-
-class ExecutionDeliveryPort(Protocol):
-    async def send_task_submitted(
-        self,
-        room_id: str,
-        message_id: str,
-        task_id: str,
-        agent_name: str,
-        agent_id: str | None = None,
-        status: ProcessingStatusLike = "working",
-        related_message_id: str | None = None,
-        created_at: str | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        task_content: str | None = None,
-        client_request_id: str | None = None,
-    ) -> None: ...
-
-    async def send_task_update(
-        self,
-        room_id: str,
-        message_id: str,
-        status: ProcessingStatusLike,
-        content: str | None = None,
-        error: str | None = None,
-        requires_input: bool = False,
-        requires_auth: bool = False,
-        status_message: str | None = None,
-        agent_name: str | None = None,
-        agent_id: str | None = None,
-        related_message_id: str | None = None,
-        created_at: str | None = None,
-        step_number: int | None = None,
-        total_steps: int | None = None,
-        task_content: str | None = None,
-        parts: list[dict[str, Any]] | None = None,
-        client_request_id: str | None = None,
-        delivery_id: str | None = None,
-    ) -> bool | None: ...
 
 
 class RunReadPort(Protocol):

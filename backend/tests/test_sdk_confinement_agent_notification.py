@@ -15,7 +15,3 @@ def _assert_no_a2a_sdk_imports(path: str) -> None:
 
 def test_agent_service_has_no_a2a_sdk_imports():
     _assert_no_a2a_sdk_imports("agent/service.py")
-
-
-def test_task_notifier_has_no_a2a_sdk_imports():
-    _assert_no_a2a_sdk_imports("delivery/task_notifier.py")
