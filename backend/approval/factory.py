@@ -21,15 +21,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         "approval_deadline_hours",
         "public_text_sanitizer",
     }
-    legacy_aliases = {
-        "store",
-        "database" + "_service",
-        "db" + "_service",
-        "a2a" + "_" + "service",
-    }
     for name in kwargs:
-        if name in legacy_aliases:
-            raise TypeError(f"create_hitl_service no longer accepts {name!r}")
         if name not in allowed:
             raise TypeError(f"create_hitl_service got unexpected argument {name!r}")
 

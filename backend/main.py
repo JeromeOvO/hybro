@@ -86,7 +86,6 @@ def compute_health_status(
             "broker_connected": delivery_pubsub_connected,
             "broker_expected": redis_expected,
             "redis_service_connected": redis_runtime_connected,
-            "legacy_redis_service_connected": redis_runtime_connected,
             "agent_search_index_ready": agent_search_index_ready,
             "memory_search_index_ready": memory_search_index_ready,
             "search_indexes_ready": search_indexes_ready,
