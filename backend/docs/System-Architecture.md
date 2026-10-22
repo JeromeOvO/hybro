@@ -797,7 +797,7 @@ consumers and implementations sit in the owner's package.
 | `AgentMessageMatcher` | `agent.matcher` | `agent.facade.AgentFacade` | internal to `agent` |
 | `AgentCapabilityIssueStore` | `agent.protocols` | `agent.capability_issue.AgentCapabilityIssueService` | crosses to `api_gateway` |
 | `AgentCenterCompatibility` | `agent.protocols` | `agent.route_adapter.AgentRouteAdapter` | crosses to `api_gateway` |
-| `AgentGroupStoreCompatibility` | `agent.protocols` | `agent.repository.runtime_store.AgentRuntimeStore` | crosses to `api_gateway` |
+| `AgentGroupStore` | `agent.protocols` | `agent.repository.runtime_store.AgentRuntimeStore` | crosses to `api_gateway` |
 | `AgentInspection` | `agent.protocols` | `agent.inspection.AgentInspectionService` | crosses to `api_gateway` |
 | `AgentLivenessChecker` | `agent.protocols` | `agent.liveness.AgentLivenessService` | crosses to `api_gateway` |
 | `AgentNetworkAccess` | `agent.protocols` | `agent.network.AgentNetworkService` | crosses to `api_gateway` |

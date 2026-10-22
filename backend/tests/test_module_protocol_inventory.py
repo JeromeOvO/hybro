@@ -31,7 +31,7 @@ EXPECTED_METHODS = {
             "list_visible_agents_for_route",
             "register_agent_from_route",
         },
-        "AgentGroupStoreCompatibility": {
+        "AgentGroupStore": {
             "add_agent_group",
             "delete_agent_group",
             "get_agent_group_by_id",

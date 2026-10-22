@@ -241,7 +241,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
+    "owning_protocol": "agent.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -264,7 +264,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
+    "owning_protocol": "agent.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups",
     "response_class": null,
     "response_model": null,
@@ -288,7 +288,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
+    "owning_protocol": "agent.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -312,7 +312,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
+    "owning_protocol": "agent.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,
@@ -336,7 +336,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "agent.protocols.AgentGroupStoreCompatibility",
+    "owning_protocol": "agent.protocols.AgentGroupStore",
     "path": "/api/v1/agentGroups/{group_id}",
     "response_class": null,
     "response_model": null,

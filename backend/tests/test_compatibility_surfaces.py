@@ -83,3 +83,20 @@ def test_event_envelope_requires_a_timestamp():
         EventEnvelope.model_validate(
             {"origin": "o", "event_type": "t", "event": {"timestamp": "x"}}
         )
+
+
+def test_agent_group_store_is_a_plain_repository_port():
+    import agent.protocols as protocols
+    from agent.repository import AgentRuntimeStore
+
+    assert not hasattr(protocols, "AgentGroup" + "StoreCompatibility")
+    assert "AgentGroupStore" in protocols.__all__
+    for method in (
+        "add_agent_group",
+        "delete_agent_group",
+        "get_agent_group_by_id",
+        "get_agent_groups_by_owner",
+        "update_agent_group",
+    ):
+        assert hasattr(protocols.AgentGroupStore, method), method
+        assert hasattr(AgentRuntimeStore, method), method

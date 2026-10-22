@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from agent.protocols import AgentGroupStoreCompatibility
+from agent.protocols import AgentGroupStore
 from common.dto import AgentInfo
 from common.errors import AppError, ConflictError, NotFoundError, ValidationError
 from common.protocols import AgentMatcher, AgentRegistry
@@ -29,7 +29,7 @@ class AgentNetworkService:
     def __init__(
         self,
         registry: AgentRegistry,
-        groups: AgentGroupStoreCompatibility,
+        groups: AgentGroupStore,
         matcher: AgentMatcher,
         *,
         requesting_user_id: str,

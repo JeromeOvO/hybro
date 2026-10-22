@@ -673,7 +673,7 @@ def test_route_owner_protocols_match_handler_calls():
     from agent.protocols import (
         AgentCapabilityIssueStore,
         AgentCenterCompatibility,
-        AgentGroupStoreCompatibility,
+        AgentGroupStore,
         AgentInspection,
         AgentLivenessChecker,
         AgentNetworkAccess,
@@ -713,7 +713,7 @@ def test_route_owner_protocols_match_handler_calls():
             "inspect_a2a_connection",
             "inspect_agent_card",
         },
-        AgentGroupStoreCompatibility: {
+        AgentGroupStore: {
             "add_agent_group",
             "delete_agent_group",
             "get_agent_group_by_id",
@@ -1116,7 +1116,7 @@ async def test_health_check_service_fails_closed_when_index_state_is_missing():
 
 
 def test_route_protocol_surfaces_are_specific():
-    from agent.protocols import AgentGroupStoreCompatibility, AgentInspection
+    from agent.protocols import AgentGroupStore, AgentInspection
     from common.protocols import (
         RoomRouteReader,
         SSEStateReader,
@@ -1124,7 +1124,7 @@ def test_route_protocol_surfaces_are_specific():
 
     for protocol in (
         AgentInspection,
-        AgentGroupStoreCompatibility,
+        AgentGroupStore,
         RoomRouteReader,
         SSEStateReader,
     ):
@@ -1145,13 +1145,13 @@ def test_route_protocol_surfaces_are_specific():
 def test_route_owner_protocols_do_not_expose_any_annotations():
     from typing import Any
 
-    from agent.protocols import AgentGroupStoreCompatibility
+    from agent.protocols import AgentGroupStore
     from common.protocols import RoomRouteReader, SSEStateReader
 
     protocols = (
         RoomRouteReader,
         SSEStateReader,
-        AgentGroupStoreCompatibility,
+        AgentGroupStore,
     )
     violations: list[str] = []
 
@@ -1174,7 +1174,7 @@ def test_route_owner_protocols_do_not_expose_any_annotations():
 def test_route_protocols_do_not_expose_broad_annotations():
     import agent.protocols as agent_protocols
     import chat.protocols as room_protocols
-    from agent.protocols import AgentGroupStoreCompatibility
+    from agent.protocols import AgentGroupStore
     from common.protocols import (
         HealthCheck,
         RoomRouteReader,
@@ -1188,7 +1188,7 @@ def test_route_protocols_do_not_expose_broad_annotations():
         if isinstance(getattr(module, name, None), type)
     ]
     protocols.extend([RoomRouteReader, SSEStateReader])
-    protocols.append(AgentGroupStoreCompatibility)
+    protocols.append(AgentGroupStore)
     protocols.append(HealthCheck)
     violations: list[str] = []
 

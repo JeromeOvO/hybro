@@ -70,7 +70,7 @@ class AgentCapabilityIssueStore(Protocol):
 
 
 @runtime_checkable
-class AgentGroupStoreCompatibility(Protocol):
+class AgentGroupStore(Protocol):
     async def add_agent_group(self, group: AgentGroup) -> bool: ...
     async def delete_agent_group(self, group_id: str) -> bool: ...
     async def get_agent_group_by_id(self, group_id: str) -> AgentGroup | None: ...
@@ -150,7 +150,7 @@ class AgentInspection(Protocol):
 __all__ = [
     "AgentCapabilityIssueStore",
     "AgentCenterCompatibility",
-    "AgentGroupStoreCompatibility",
+    "AgentGroupStore",
     "AgentInspection",
     "AgentLivenessChecker",
     "AgentNetworkAccess",
