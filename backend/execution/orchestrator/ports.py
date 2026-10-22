@@ -12,7 +12,6 @@ from .models import (
     CompactionResult,
     ModelStreamEvent,
     ModelTurnRequest,
-    OrchestratorEvent,
     OrchestratorRunState,
     ProjectionIntent,
     ResolvedTool,
@@ -236,14 +235,6 @@ class OrchestratorRunStore(Protocol):
     ) -> list[tuple[str, ProjectionIntent]]: ...
 
 
-class OrchestratorEventStore(Protocol):
-    async def append(self, event: OrchestratorEvent) -> StoreOutcome: ...
-
-    async def read(
-        self, run_id: str, *, after_sequence: int = 0
-    ) -> list[OrchestratorEvent]: ...
-
-
 class InvocationCheckpointReader(Protocol):
     async def is_acceptance_checkpointed(
         self,
@@ -260,7 +251,3 @@ class InvocationCheckpointReader(Protocol):
         invocation_id: str,
         status: str,
     ) -> bool: ...
-
-
-class EventProjector(Protocol):
-    async def project(self, intent: ProjectionIntent) -> StoreOutcome: ...

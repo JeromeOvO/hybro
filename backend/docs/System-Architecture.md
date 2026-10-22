@@ -19,8 +19,9 @@ and jobs until the production cutover. Contracts pinned before wiring:
   `explicit_agent_first` (API pre-filters the candidate scope) and
   `pass_through` (final assistant message delivered unchanged);
   `model_select` and `synthesize` are deferred product capabilities.
-- The `orchestrator_run_events` inventory now has both an in-memory and a
-  Mongo `OrchestratorEventStore` implementation behind the pure
+- The `orchestrator_run_events` inventory has the production
+  `MongoOrchestratorEventStore` and the test harness's
+  `InMemoryOrchestratorEventStore`, both behind the pure
   `evaluate_event_append` ordering/idempotency evaluation; the Mongo store
   relies on the `(event_id)` and `(run_id, sequence)` unique indexes to
   classify concurrent insert losers as replay or conflict. Event persistence
@@ -760,6 +761,177 @@ concrete runtime singletons.
   write, and `container.py` builds each one directly over `mongo.collection(...)`.
   `dal/` keeps connection management and the generic Mongo and Redis clients.
   New common protocols should stay DTO-shaped.
+
+#### Protocol inventory
+
+A Protocol exists only if it crosses a module boundary or has two production
+implementations; a Protocol with one consumer lives beside that consumer, and a
+Protocol that only typed a `container.py` field is replaced by the concrete type.
+The table lists every Protocol in production code (`tests/test_protocol_inventory_doc.py`
+keeps the set of rows in sync). **Owner** is the defining module.
+**Implementations** are the production objects wired where the Protocol is used:
+classes that name it as a base or are passed to a parameter, field, or variable
+annotated with it (found by static analysis of constructor calls and composition),
+plus hand-verified entries where the wiring goes through FastAPI dependencies,
+attributes, tuples, or module singletons. "Callable shape" Protocols are satisfied
+by functions or callables, and "attribute shape" Protocols describe records read
+by attribute. **Boundary** names the top-level packages, other than the owner's,
+that consume or implement the Protocol; "composition root" is `container.py`,
+`orchestrator_composition.py`, or `main.py`. "Internal" Protocols are seams whose
+consumers and implementations sit in the owner's package.
+
+| Protocol | Owner | Implementations | Boundary |
+|---|---|---|---|
+| `CallResolver` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `CancelRemoteTaskFn` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `ExceptionFactory` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `FetchAgentCardFn` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `FetchRemoteTaskFn` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `SendMessageFn` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `StreamMessageFn` | `a2a_adapter.orchestrator_direct_client` | callable shape (functions or callables) | internal to `a2a_adapter` |
+| `_CancellationCommand` | `a2a_adapter.orchestrator_direct_client` | attribute shape (records read by attribute) | internal to `a2a_adapter` |
+| `_ContinuationCommand` | `a2a_adapter.orchestrator_direct_client` | attribute shape (records read by attribute) | internal to `a2a_adapter` |
+| `_DispatchCommand` | `a2a_adapter.orchestrator_direct_client` | attribute shape (records read by attribute) | internal to `a2a_adapter` |
+| `_ModelReplyCommand` | `a2a_adapter.orchestrator_direct_client` | attribute shape (records read by attribute) | internal to `a2a_adapter` |
+| `AgentHealthRepositoryPort` | `agent.health` | `agent.repository.mongo.AgentMongoRepository` | internal to `agent` |
+| `AgentMessageMatcher` | `agent.matcher` | `agent.facade.AgentFacade` | internal to `agent` |
+| `AgentCapabilityIssueStore` | `agent.protocols` | `agent.capability_issue.AgentCapabilityIssueService` | crosses to `api_gateway` |
+| `AgentCenterCompatibility` | `agent.protocols` | `agent.route_adapter.AgentRouteAdapter` | crosses to `api_gateway` |
+| `AgentGroupStoreCompatibility` | `agent.protocols` | `agent.repository.runtime_store.AgentRuntimeStore` | crosses to `api_gateway` |
+| `AgentInspection` | `agent.protocols` | `agent.inspection.AgentInspectionService` | crosses to `api_gateway` |
+| `AgentLivenessChecker` | `agent.protocols` | `agent.liveness.AgentLivenessService` | crosses to `api_gateway` |
+| `AgentNetworkAccess` | `agent.protocols` | `agent.network.AgentNetworkService` | crosses to `api_gateway` |
+| `AgentSuggestionService` | `agent.protocols` | `agent.selection_service.AgentSelectionService` | crosses to `api_gateway` |
+| `RoomCenterCompatibility` | `chat.protocols` | `chat.route_adapter.ChatRouteAdapter` | crosses to `api_gateway` |
+| `InternalEventBus` | `common.eventing.protocols` | `common.eventing.bus.BoundedInternalEventBus` | crosses to composition root |
+| `InternalEventPublisher` | `common.eventing.protocols` | `common.eventing.bus.BoundedInternalEventBus` | crosses to composition root; `conversation` |
+| `InternalEventTransport` | `common.eventing.protocols` | `dal.redis.internal_eventing.RedisInternalEventTransport` | crosses to `dal` |
+| `MetricsCollector` | `common.observability.metrics` | `common.observability.metrics.NoopMetricsCollector` | crosses to composition root; `delivery` |
+| `AgentCardResolver` | `common.protocols.a2a_protocols` | `a2a_adapter.card_resolver.AgentCardResolverImpl` | crosses to `a2a_adapter`; `agent`; composition root; `local_agents` |
+| `RoomRouteReader` | `common.protocols.a2a_protocols` | SimpleNamespace port in `container` | crosses to `api_gateway`; composition root |
+| `RoomRouteRecord` | `common.protocols.a2a_protocols` | attribute shape (records read by attribute) | internal to `common` |
+| `SSEStateReader` | `common.protocols.a2a_protocols` | SimpleNamespace port in `container` | crosses to `api_gateway`; composition root |
+| `SSEUserMessageRecord` | `common.protocols.a2a_protocols` | attribute shape (records read by attribute) | internal to `common` |
+| `AgentCallCounter` | `common.protocols.agent_protocols` | `agent.facade.AgentFacade` | crosses to `agent`; composition root; `execution` |
+| `AgentExclusionReader` | `common.protocols.agent_protocols` | `agent.capability_issue.CapabilityIssueExclusionReader` | crosses to `agent`; composition root; `execution` |
+| `AgentMatcher` | `common.protocols.agent_protocols` | `agent.facade.AgentFacade` | crosses to `agent`; `api_gateway` |
+| `AgentNetworkTargetResolver` | `common.protocols.agent_protocols` | `agent.network.AgentNetworkService` | crosses to `agent`; `execution`; `session` |
+| `AgentRegistry` | `common.protocols.agent_protocols` | `agent.facade.AgentFacade` | crosses to `agent`; `api_gateway`; composition root; `conversation`; `execution` |
+| `ContextAssemblyPort` | `common.protocols.context_memory_protocols` | `context_memory.facade.ContextMemoryFacade` | crosses to `context_memory`; `conversation` |
+| `RoomMemoryCleanupPort` | `common.protocols.context_memory_protocols` | `context_memory.facade.ContextMemoryFacade` | crosses to `context_memory`; `conversation` |
+| `LeaderElector` | `common.protocols.dal_protocols` | `dal.redis.lock.LeaderElectorImpl` | crosses to `agent`; composition root; `dal` |
+| `MongoChangeStream` | `common.protocols.dal_protocols` | the Motor change stream returned by `dal.mongo.client.MongoCollectionAdapter.watch` (third-party) | crosses to `dal` |
+| `MongoCollection` | `common.protocols.dal_protocols` | `dal.mongo.client.MongoCollectionAdapter` | crosses to composition root; `context_memory`; `conversation`; `dal` |
+| `MongoDAL` | `common.protocols.dal_protocols` | `dal.mongo.client.MongoDALImpl` | crosses to `agent`; composition root; `context_memory`; `conversation`; `dal`; `execution`; `room_files`; `session` |
+| `RedisKV` | `common.protocols.dal_protocols` | `dal.redis.kv.RedisKVImpl` | crosses to composition root; `dal`; `delivery` |
+| `RedisPubSub` | `common.protocols.dal_protocols` | `dal.redis.pubsub.RedisPubSubImpl` | crosses to composition root; `dal`; `delivery` |
+| `DeliveryEventPublisher` | `common.protocols.delivery_protocols` | `delivery.event_publisher.EventPublisherImpl` | crosses to composition root; `delivery`; `execution` |
+| `SSEConnectionLike` | `common.protocols.delivery_protocols` | `delivery.sse.connection.SSEConnection` | crosses to `delivery` |
+| `SSERouteTransport` | `common.protocols.delivery_protocols` | `delivery.facade.DeliveryFacade` | crosses to `api_gateway`; `delivery` |
+| `SSETransport` | `common.protocols.delivery_protocols` | `delivery.sse.manager.SSETransportImpl` | crosses to composition root; `delivery` |
+| `ExecutionEngine` | `common.protocols.execution_protocols` | `execution.facade.ExecutionFacade` | crosses to `api_gateway`; composition root; `execution`; `session` |
+| `HITLManager` | `common.protocols.execution_protocols` | `execution.facade.ExecutionFacade` | crosses to `api_gateway`; composition root; `execution`; `session` |
+| `RoomDistributedLock` | `common.protocols.execution_protocols` | `dal.redis.lock.RoomRedisDistributedLock` | crosses to composition root; `dal` |
+| `LLMEmbeddingGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
+| `LLMGateway` | `common.protocols.llm_protocols` | attribute shape (records read by attribute) | crosses to composition root; `context_memory` |
+| `LLMProviderAdapter` | `common.protocols.llm_protocols` | `llm_gateway.providers.anthropic_provider.AnthropicProvider`, `llm_gateway.providers.deepseek_provider.DeepSeekProvider`, `llm_gateway.providers.openai_codex.OpenAICodexProvider`, `llm_gateway.providers.openai_provider.OpenAIProvider` | crosses to `llm_gateway` |
+| `LLMStreamGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
+| `LLMStructuredGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `context_memory`; `llm_gateway` |
+| `LLMTextGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
+| `AttachmentMetadataReader` | `common.protocols.platform_protocols` | SimpleNamespace port in `container` | crosses to composition root; `conversation` |
+| `FileStorage` | `common.protocols.platform_protocols` | `room_files.service.RoomFiles` | crosses to `api_gateway`; composition root; `room_files` |
+| `HealthCheck` | `common.protocols.platform_protocols` | `common.health_check.RuntimeHealthCheck` | crosses to composition root |
+| `PreparedFileStream` | `common.protocols.platform_protocols` | `room_files.content_store._LocalPreparedStream`, `room_files.content_store._MemoryPreparedStream` | crosses to `api_gateway`; `room_files` |
+| `AgentRepository` | `common.protocols.repository_protocols` | `agent.repository.mongo.AgentMongoRepository` | crosses to `agent`; composition root |
+| `ContentStorageRepository` | `common.protocols.repository_protocols` | `context_memory.repository.mongo.ContentStorageMongoRepository` | crosses to composition root; `context_memory` |
+| `MemoryRepository` | `common.protocols.repository_protocols` | `context_memory.repository.mongo.MemoryMongoRepository` | crosses to composition root; `context_memory` |
+| `MessageRepository` | `common.protocols.repository_protocols` | `conversation.repository.mongo.MessageMongoRepository` | crosses to `conversation` |
+| `RoomRepository` | `common.protocols.repository_protocols` | `conversation.repository.mongo.RoomMongoRepository` | crosses to `chat`; `conversation` |
+| `RoomHistoryReader` | `common.protocols.room_protocols` | `conversation.facade.ConversationFacade` | crosses to composition root; `context_memory`; `conversation`; `session` |
+| `RoomManagement` | `common.protocols.room_protocols` | `conversation.facade.ConversationFacade` | crosses to composition root; `conversation`; `session` |
+| `RoomMembershipSeedSource` | `common.protocols.room_protocols` | `conversation.membership_source.RepositoryRoomMembershipSeedSource` | crosses to composition root; `conversation` |
+| `RoomMessageStore` | `common.protocols.room_protocols` | `conversation.facade.ConversationFacade` | crosses to composition root; `conversation`; `session` |
+| `RoomOwnershipReader` | `common.protocols.room_protocols` | `conversation.facade.ConversationFacade` | crosses to `api_gateway`; composition root; `conversation`; `execution` |
+| `RoomRegistry` | `common.protocols.room_protocols` | `conversation.facade.ConversationFacade` | crosses to composition root; `conversation`; `session` |
+| `RoomStateOwner` | `common.protocols.room_protocols` | `approval.repository.hitl_lifecycle_store.HITLLifecycleStore`, `approval.repository.hitl_store.HITLRequestStore`, `context_memory.repository.mongo.ContentStorageMongoRepository`, `context_memory.repository.mongo.MemoryMongoRepository`, `conversation.repository.mongo.MessageMongoRepository`, `conversation.repository.quote_mongo.RoomQuoteMongoRepository` | crosses to `approval`; `context_memory`; `conversation`; `room_files` |
+| `A2AArtifactFiles` | `common.utils.a2a_helpers` | the `a2a_adapter.artifact_storage` module | crosses to `a2a_adapter` |
+| `MemoryContentLike` | `common.utils.context_utils` | attribute shape (records read by attribute) | internal to `common` |
+| `RoomMemoryLike` | `common.utils.context_utils` | attribute shape (records read by attribute) | internal to `common` |
+| `TurnNotesLLMProvider` | `common.utils.context_utils` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
+| `ProjectionPort` | `context_memory.events` | `context_memory.facade.ContextMemoryFacade` | internal to `context_memory` |
+| `OrchestratorEpochCleanupPort` | `conversation.deletion` | `execution.repository.orchestrator.epoch_bindings.EpochScopedOrchestratorCleanup` | crosses to `execution` |
+| `RoomDeletionLifecycle` | `conversation.deletion` | SimpleNamespace port in `container` | crosses to composition root |
+| `RoomEpochDeactivationPort` | `conversation.deletion` | `execution.repository.orchestrator.stores.MongoRoomEpochStore` | crosses to `execution` |
+| `RoomFileDeletionLifecycle` | `conversation.deletion` | SimpleNamespace port in `container` | crosses to composition root |
+| `ClientRequestIdResolver` | `conversation.protocols` | `conversation.repository.client_request_ids.ClientRequestIdStore` | crosses to `execution` |
+| `ConversationMessageWriter` | `conversation.protocols` | `conversation.repository.messages.ConversationMessageStore` | crosses to `approval`; composition root; `execution` |
+| `HITLProjectionReader` | `conversation.timeline_projection` | SimpleNamespace port in `container` | crosses to composition root |
+| `UserMessageFileLifecycle` | `conversation.user_message_persistence` | SimpleNamespace port in `container` | crosses to composition root |
+| `UserMessageWriter` | `conversation.user_message_persistence` | SimpleNamespace port in `container` | crosses to composition root |
+| `RoomEventStore` | `delivery.room_events` | `delivery.room_events.MongoRoomEventStore` | internal to `delivery` |
+| `TaskRunner` | `delivery.types` | callable shape (functions or callables) | crosses to composition root |
+| `HITLApplicationStore` | `execution.adapters.hitl` | `execution.repository.orchestrator.hitl.MongoHITLApplicationStore` | internal to `execution` |
+| `InboundArtifactWriter` | `execution.adapters.resources` | `execution.repository.orchestrator.artifacts.GuardedRoomFileArtifactWriter` | internal to `execution` |
+| `InlineArtifactReader` | `execution.adapters.resources` | `execution.repository.orchestrator.stores.MongoObservationInboxStore` | internal to `execution` |
+| `RoomFileReader` | `execution.adapters.resources` | `room_files.service.RoomFiles` | crosses to `room_files` |
+| `HITLServicePort` | `execution.facade` | `execution.hitl.service.HITLService` | internal to `execution` |
+| `RoomCenterPort` | `execution.facade` | `conversation.runtime.ConversationRuntime` | crosses to `conversation` |
+| `AgentToolCandidateSource` | `execution.orchestrator.a2a_runtime.catalog_assembler` | `execution.adapters.agent_candidates.AgentServiceCandidateSource` | internal to `execution` |
+| `DirectA2AClient` | `execution.orchestrator.a2a_runtime.dispatch` | `a2a_adapter.orchestrator_direct_client.OrchestratorDirectA2AClient` | crosses to `a2a_adapter` |
+| `DirectA2AStream` | `execution.orchestrator.a2a_runtime.dispatch` | `a2a_adapter.orchestrator_direct_client.DirectA2AStream` | crosses to `a2a_adapter` |
+| `AuthReferenceVerificationPort` | `execution.orchestrator.a2a_runtime.hitl` | `FailingAuthReferenceVerification`, local to `orchestrator_composition.create_orchestrator_runtime` (always refuses) | crosses to composition root |
+| `InvocationOutcomeCheckpointReader` | `execution.orchestrator.a2a_runtime.ingress` | `execution.orchestrator.a2a_runtime.in_memory.RunCheckpointReader` | internal to `execution` |
+| `A2ADispatchPort` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.dispatch.DirectA2ADispatchAdapter` | internal to `execution` |
+| `AgentCallLedgerStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoAgentCallLedgerStore` | internal to `execution` |
+| `AgentToolBindingStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoAgentToolBindingStore` | internal to `execution` |
+| `AuthorizationRefreshPort` | `execution.orchestrator.a2a_runtime.ports` | `execution.adapters.authorization.MembershipAuthorizationRefresh` | internal to `execution` |
+| `HITLApplicationPort` | `execution.orchestrator.a2a_runtime.ports` | `execution.adapters.hitl.DurableHITLApplicationPort` | internal to `execution` |
+| `NormalizedObservationRecorder` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.ingress.A2AObservationIngress` | internal to `execution` |
+| `ObservationConflictStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoObservationConflictStore` | internal to `execution` |
+| `ObservationInboxStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoObservationInboxStore` | internal to `execution` |
+| `ObservationIngressAuthenticator` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.ingress.RejectExternalIngressAuthenticator` | internal to `execution` |
+| `PreparedInvocationSnapshotReader` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.preparation.RunPreparedInvocationSnapshotReader` | internal to `execution` |
+| `ResourceMaterializerPort` | `execution.orchestrator.a2a_runtime.ports` | `execution.adapters.resources.RoomFilesResourceMaterializer` | internal to `execution` |
+| `RoomEpochStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoRoomEpochStore` | internal to `execution` |
+| `ToolObservationSink` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.observations.RunAddressedToolObservationSink` | internal to `execution` |
+| `AcceptedCallRecoveryRuntime` | `execution.orchestrator.a2a_runtime.preparation` | `execution.orchestrator.a2a_runtime.runtime.A2AAgentToolRuntime` | internal to `execution` |
+| `IDFactory` | `execution.orchestrator.kernel` | `execution.orchestrator.kernel.UUIDFactory` | internal to `execution` |
+| `CancellationSignal` | `execution.orchestrator.ports` | `execution.orchestrator.a2a_runtime.runtime._RecoveryCancellationSignal`, `execution.orchestrator.session.EventCancellationSignal` | internal to `execution` |
+| `ContextCompactor` | `execution.orchestrator.ports` | none wired; `OrchestratorKernel` runs without a compactor (`context_compactor=None`) | internal to `execution` |
+| `InvocationCheckpointReader` | `execution.orchestrator.ports` | `execution.orchestrator.a2a_runtime.in_memory.RunCheckpointReader` | internal to `execution` |
+| `ModelRuntime` | `execution.orchestrator.ports` | `execution.orchestrator.model_runtime.GatewayModelRuntime` | internal to `execution` |
+| `OrchestratorRunStore` | `execution.orchestrator.ports` | `execution.repository.orchestrator.run_store.MongoOrchestratorRunStore` | internal to `execution` |
+| `ProjectionDriver` | `execution.orchestrator.ports` | `execution.orchestrator.projection.SettlingProjectionDriver` | internal to `execution` |
+| `RunStoreResult` | `execution.orchestrator.ports` | `execution.repository.orchestrator.run_store.MongoRunStoreResult` | internal to `execution` |
+| `ToolCatalog` | `execution.orchestrator.ports` | `execution.orchestrator.a2a_runtime.catalog.FrozenToolCatalog` | internal to `execution` |
+| `ToolRuntime` | `execution.orchestrator.ports` | `execution.orchestrator.a2a_runtime.runtime.A2AAgentToolRuntime` | internal to `execution` |
+| `RunFactory` | `execution.orchestrator.session` | `execution.orchestrator.session.DefaultRunFactory`, `execution.orchestrator_routing._PreparedRunFactory` | internal to `execution` |
+| `RoomEnvelopeSource` | `execution.orchestrator_routing` | `execution.orchestrator_routing.RoomMessageEnvelopeResolver` | internal to `execution` |
+| `ClientRequestIdResolver` | `execution.ports` | `execution.client_request_id.SSEClientRequestIdResolver` | internal to `execution` |
+| `DirectAgentMessenger` | `execution.ports` | `execution.direct_agent.DirectAgentExecution` | crosses to `api_gateway` |
+| `HITLDeliveryPort` | `execution.ports` | `execution.hitl.adapters.HITLDeliveryAdapter` | internal to `execution` |
+| `HITLLifecyclePersistencePort` | `execution.ports` | `approval.repository.hitl_lifecycle_store.HITLLifecycleStore` | crosses to `approval` |
+| `HITLMessageCancellationPort` | `execution.ports` | `execution.adapters.hitl.HITLMessageCancellationAdapter` | internal to `execution` |
+| `HITLPersistencePort` | `execution.ports` | the `hitl_runtime_store` `SimpleNamespace` port in `container.py` | crosses to composition root |
+| `HITLTerminalLifecyclePort` | `execution.ports` | `execution.hitl.adapters.HITLTerminalLifecycleAdapter` | internal to `execution` |
+| `TaskFactory` | `execution.ports` | callable shape (functions or callables) | internal to `execution` |
+| `EpochFencedRoomArtifactOwner` | `execution.repository.orchestrator.artifacts` | `execution.repository.orchestrator.artifacts.RoomFilesEpochFencedArtifactOwner` | internal to `execution` |
+| `RoomFileArtifactOwner` | `execution.repository.orchestrator.artifacts` | `room_files.service.RoomFiles` | crosses to `room_files` |
+| `AsyncMongoCollection` | `execution.repository.orchestrator.stores` | the raw Motor collection (`MongoCollectionAdapter.raw_collection`, third-party) | crosses to `dal` |
+| `LeaderGate` | `jobs.cleanup_orphaned_uploads` | `dal.redis.lock.LeaderElectorImpl` | crosses to `dal` |
+| `CompactionPort` | `jobs.compaction_sweep` | `context_memory.facade.ContextMemoryFacade` | crosses to `context_memory` |
+| `LeaderGate` | `jobs.compaction_sweep` | `dal.redis.lock.LeaderElectorImpl` | crosses to `dal` |
+| `LeaderGate` | `jobs.orchestrator_workers` | `dal.redis.lock.LeaderElectorImpl` | crosses to `dal` |
+| `LeaderGate` | `jobs.stale_task_checker` | `dal.redis.lock.LeaderElectorImpl` | crosses to `dal` |
+| `_AgentLLMProxyPort` | `llm_gateway.agent_proxy` | `llm_gateway.agent_proxy.AgentLLMProxy` | crosses to `api_gateway` |
+| `LLMTurnGateway` | `llm_gateway.gateway` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `execution` |
+| `LocalAgentDiscovery` | `local_agents.protocols` | `local_agents.service.LocalAgentService` | crosses to `api_gateway` |
+| `LocalAgentWriter` | `local_agents.protocols` | `agent.facade.AgentFacade` | crosses to `agent` |
+| `FileContentStore` | `room_files.content_store` | `room_files.content_store.LocalFileContentStore` | internal to `room_files` |
+| `ConversationEventsPort` | `session.protocols` | `delivery.room_events.MongoRoomEventStore` | crosses to `delivery` |
+| `SessionAccess` | `session.protocols` | `session.access.BoundSessionAccess` | crosses to `api_gateway` |
+| `SessionService` | `session.protocols` | `session.facade.SessionFacade` | crosses to `api_gateway` |
+| `SessionStore` | `session.protocols` | `session.repository.mongo.MongoSessionRepository` | internal to `session` |
 
 #### Runtime Configuration
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Literal, Protocol
+from typing import Literal
 
 ResourceKind = Literal["context", "artifact", "attachment"]
 
@@ -55,14 +55,6 @@ class ResourceCatalogSource:
     user_text: str | None = None
     attachments: Sequence[AttachmentResource] = field(default_factory=tuple)
     artifact_refs: Sequence[str] = field(default_factory=tuple)
-
-
-class ResourceCatalogPort(Protocol):
-    """Per-turn live resource listing consumed by the orchestrator."""
-
-    async def list_resources(
-        self, *, room_id: str, room_epoch: int
-    ) -> list[ResourceCatalogEntry]: ...
 
 
 def user_text_ref_id(user_message_id: str) -> str:
@@ -132,7 +124,6 @@ def assemble_resource_catalog(
 __all__ = [
     "AttachmentResource",
     "ResourceCatalogEntry",
-    "ResourceCatalogPort",
     "ResourceCatalogSource",
     "ResourceKind",
     "assemble_resource_catalog",

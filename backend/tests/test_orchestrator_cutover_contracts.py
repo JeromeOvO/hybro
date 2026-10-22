@@ -17,7 +17,6 @@ import pytest
 from pydantic import ValidationError
 
 from execution.orchestrator.models import OrchestratorRunState
-from execution.orchestrator.ports import OrchestratorEventStore
 from execution.orchestrator.profiles import ProfileConfiguration
 from execution.repository.orchestrator.artifacts import (
     RoomFilesEpochFencedArtifactOwner,
@@ -106,9 +105,3 @@ def test_event_store_port_has_memory_and_mongo_implementations():
             for name, member in implementation.__dict__.items()
             if inspect.isfunction(member) and not name.startswith("_")
         }
-    port_methods = {
-        name
-        for name, member in OrchestratorEventStore.__dict__.items()
-        if inspect.isfunction(member) and not name.startswith("_")
-    }
-    assert port_methods == {"append", "read"}

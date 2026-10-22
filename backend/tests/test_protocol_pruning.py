@@ -122,3 +122,24 @@ def test_composition_root_only_protocols_are_inlined():
     assert "AgentRegistryWriter" not in str(hints["agent_registry_writer"])
     redis_hints = inspect.get_annotations(container.RedisRuntimeDeps)
     assert "RedisStreamsImpl" in str(redis_hints["streams_client"])
+
+
+def test_unconsumed_orchestrator_ports_are_gone():
+    import execution.orchestrator as orchestrator
+    import execution.orchestrator.ports as ports
+
+    for name in ("EventProjector", "OrchestratorEventStore"):
+        assert not hasattr(ports, name), name
+        assert name not in orchestrator.__all__, name
+
+
+def test_other_unconsumed_protocols_are_gone():
+    import common.observability as observability
+    import common.observability.tracing as tracing
+    import context_memory.resources as resources
+    import delivery.types as delivery_types
+
+    assert not hasattr(tracing, "TracingProvider")
+    assert "TracingProvider" not in observability.__all__
+    assert not hasattr(resources, "ResourceCatalogPort")
+    assert not hasattr(delivery_types, "SSEFrameCallback")
