@@ -13,7 +13,7 @@ from conversation.repository import (
     RoomMongoRepository,
     RoomQuoteMongoRepository,
 )
-from conversation.runtime import ConversationRuntime, conversation_runtime
+from conversation.runtime import ConversationRuntime
 from conversation.timeline import normalize_timeline_document
 from conversation.translators import room_info_from_doc
 
@@ -27,7 +27,6 @@ __all__ = [
     "RoomMongoRepository",
     "RoomQuoteMongoRepository",
     "candidate_scope_from_envelope",
-    "conversation_runtime",
     "normalize_candidate_scope",
     "normalize_timeline_document",
     "room_info_from_doc",

@@ -100,3 +100,23 @@ def test_agent_group_store_is_a_plain_repository_port():
     ):
         assert hasattr(protocols.AgentGroupStore, method), method
         assert hasattr(AgentRuntimeStore, method), method
+
+
+def test_conversation_runtime_is_built_per_application_not_a_singleton():
+    import conversation
+    import conversation.runtime as runtime_module
+    from conversation.runtime import ConversationRuntime
+
+    assert not hasattr(runtime_module, "conversation_runtime")
+    assert "conversation_runtime" not in conversation.__all__
+    assert not hasattr(ConversationRuntime, "reset_bindings")
+
+
+def test_container_validates_the_lifespan_runtime_from_app_state():
+    from types import SimpleNamespace
+
+    import container
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    with pytest.raises(RuntimeError, match="app.state.conversation_runtime"):
+        container.validate_runtime_bindings(app)

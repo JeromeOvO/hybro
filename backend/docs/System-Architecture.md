@@ -257,7 +257,7 @@ flowchart TD
 |---|---|---|
 | Product | `chat` | The owner's rooms as a product: create, read settings, list, history, rename, pin, membership, default mode, delete. `ChatService` (process singleton `chat_service`), `ChatFacade`, `ChatRouteAdapter`, and the route contract `chat.protocols.RoomCenterCompatibility`. |
 | Product | `session` | A client's conversation with the owner's agents, opened through `POST /sessions/messages` or MCP: the session record (collection `sessions`), the bounded event-based wait, and the client projection. `SessionFacade`, `BoundSessionAccess`, `MongoSessionRepository`, and the route contract `session.protocols.SessionAccess`. |
-| Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, agent-message preparation, quotes, deletion, candidate scope, and turn context. `ConversationRuntime` (process singleton `conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
+| Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, quotes, deletion, and candidate scope. `ConversationRuntime` (one instance per application lifespan, built by `container.py` and kept on `app.state.conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
 | Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. Its Mongo persistence adapters (run, event, call-ledger, epoch, HITL-application, artifact, and projection stores) live in `execution.repository.orchestrator`. |
 | Core | `approval` | Human-in-the-loop: `HITLService` (request creation, answers, resume, cancellation, reconciliation; built by `approval.factory.create_hitl_service`), the HITL application coordinator, and HITL persistence (`approval.repository.HITLRequestStore` and `HITLLifecycleStore`). Its own dependency ports are in `approval.protocols`; Execution reaches it through the `approval` root, and the engine-side continuation coordinator stays in Execution. |
 | Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
@@ -268,12 +268,14 @@ Products depend on core modules; no core module imports `chat` or `session`, and
 product in `rooms.owner_product` (`chat` by default, `session` for session
 containers). Execution imports
 Conversation only through the `conversation` package exports. Execution's
-`RoomCenterPort` (persist, preflight, discard, and idempotent replay) is bound to `conversation_runtime`; the chat
-routes receive `ChatRouteAdapter`, which serves room settings from
-`chat_service` and room message reads from `conversation_runtime`; active runs
+`RoomCenterPort` (persist, preflight, discard, and idempotent replay) is bound to the
+lifespan's `ConversationRuntime`; the chat routes receive `ChatRouteAdapter`, which
+serves room settings from `chat_service` and room message reads from that same
+runtime; active runs
 come from the execution engine. `container.py` and `orchestrator_composition.py` are
-the composition root. Startup binding validation reports missing bindings as
-`conversation.<name>` and `chat.<name>`.
+the composition root. Startup binding validation reports a missing runtime as
+`app.state.conversation_runtime` and missing bindings as `conversation.<name>` and
+`chat.<name>`.
 
 ## Runtime Entry Point
 

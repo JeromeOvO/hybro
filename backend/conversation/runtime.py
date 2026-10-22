@@ -98,10 +98,6 @@ class ConversationRuntime:
         self._timeline_projector: RoomTimelineProjector | None = None
         self._user_message_commit: UserMessageCommitService | None = None
 
-    def reset_bindings(self) -> None:
-        """Clear process-global composition state before a new lifespan starts."""
-        self.__init__()
-
     def bind_room_files(self, room_files) -> None:
         self._room_files = room_files
 
@@ -1501,12 +1497,7 @@ class ConversationRuntime:
             )
 
 
-# Singleton export
-conversation_runtime = ConversationRuntime()
-
-
 __all__ = [
     "ConversationRuntime",
     "RoomMessagePreflightContext",
-    "conversation_runtime",
 ]

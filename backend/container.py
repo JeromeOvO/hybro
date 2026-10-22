@@ -279,10 +279,13 @@ def validate_runtime_bindings(
     errors: list[str] = []
 
     from chat.service import chat_service
-    from conversation.runtime import conversation_runtime
 
-    for missing in conversation_runtime.missing_required_bindings():
-        errors.append(f"conversation.{missing}")
+    conversation_runtime = getattr(app.state, "conversation_runtime", None)
+    if conversation_runtime is None:
+        errors.append("app.state.conversation_runtime")
+    else:
+        for missing in conversation_runtime.missing_required_bindings():
+            errors.append(f"conversation.{missing}")
     for missing in chat_service.missing_required_bindings():
         errors.append(f"chat.{missing}")
 
@@ -475,9 +478,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
             from conversation.deletion import RoomDeletionService
-            from conversation.runtime import (
-                conversation_runtime,
-            )
+            from conversation.runtime import ConversationRuntime
             from conversation.timeline_projection import RoomTimelineProjector
             from conversation.user_message_persistence import UserMessageCommitService
             from execution.repository.orchestrator.epoch_bindings import (
@@ -506,9 +507,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 LocalAgentService,
             )
 
-            # The compatibility runtime is process-global. Clear bindings from a
-            # previous failed or completed lifespan before composing this one.
-            conversation_runtime.reset_bindings()
+            # Each lifespan builds its own conversation runtime. The chat service
+            # is still process-global, so clear bindings from a previous lifespan.
+            conversation_runtime = ConversationRuntime()
+            app.state.conversation_runtime = conversation_runtime
             chat_service.reset_bindings()
             reset_room_epoch_store()
 
