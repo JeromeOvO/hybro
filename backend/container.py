@@ -86,6 +86,7 @@ from delivery.sse.manager import SSETransportImpl
 from delivery.types import TaskRunner
 from execution.adapters.canary_metrics import collect_metrics
 from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
+from execution.orchestrator.public_text import sanitize_public_text
 from execution.repository.active_runs import CanonicalActiveRunRoomReader
 from jobs.cleanup_orphaned_uploads import (
     OrphanedUploadCleanerDeps,
@@ -606,7 +607,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from a2a_adapter.runtime_service import (
                 a2a_service,
             )
-            from execution.hitl.factory import create_hitl_service
+            from approval.factory import create_hitl_service
 
             agent_capability_issue_repository = (
                 create_agent_capability_issue_repository(mongo_dal)
@@ -614,12 +615,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_capability_issue_service = create_agent_capability_issue_service(
                 repository=agent_capability_issue_repository
             )
+            from approval.adapters import HITLDeliveryAdapter
             from conversation.attachment_projection import (
                 AttachmentProjectionService,
             )
             from execution.adapters.hitl import HITLMessageCancellationAdapter
             from execution.client_request_id import SSEClientRequestIdResolver
-            from execution.hitl.adapters import HITLDeliveryAdapter
 
             llm_gateway_config = LLMGatewayConfig.from_settings(runtime.settings)
             model_registry = ModelRegistryImpl(
@@ -848,9 +849,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.execution_client_request_id_resolver = (
                 execution_client_request_id_resolver
             )
-            from execution.hitl.adapters import HITLTerminalLifecycleAdapter
-            from execution.hitl.application import HITLApplicationCoordinator
-            from execution.hitl.reconciler import HITLLifecycleReconciler
+            from approval.adapters import HITLTerminalLifecycleAdapter
+            from approval.application import HITLApplicationCoordinator
+            from approval.reconciler import HITLLifecycleReconciler
 
             hitl_application = HITLApplicationCoordinator(
                 lifecycle=hitl_lifecycle_store,
@@ -1066,7 +1067,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 answers,
             ):
                 """HITL-facing port: recorded answer → suspended kernel Run."""
-                from execution.hitl.service import ContinuationLostError
+                from approval.service import ContinuationLostError
                 from execution.orchestrator.kernel import (
                     supervisor_answer_observation,
                 )
@@ -1135,6 +1136,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 supervisor_resume=resume_supervisor_hitl_port,
                 canonical_cancellation_requester=request_canonical_hitl_cancellation,
                 public_secret_values=configured_public_secret_values(runtime.settings),
+                public_text_sanitizer=sanitize_public_text,
                 approval_deadline_hours=runtime.settings.approval_deadline_hours,
             )
 

@@ -1148,7 +1148,7 @@ async def test_hitl_pending_and_cancel_delegate_and_translate():
 
 @pytest.mark.asyncio
 async def test_orchestrator_hitl_answer_falls_back_only_for_missing_interaction():
-    from execution.hitl.exceptions import HITLDeliveryUncertainError
+    from approval.exceptions import HITLDeliveryUncertainError
 
     facade, deps = _make_facade()
     router = SimpleNamespace(

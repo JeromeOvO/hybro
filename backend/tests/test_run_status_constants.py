@@ -1,4 +1,6 @@
-"""Run status sets are named once in ``execution.orchestrator.persistence``."""
+"""Run status sets are named once: the terminal set in ``common.run_status``
+(re-exported by ``execution.orchestrator.persistence``), the others in
+``execution.orchestrator.persistence``."""
 
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from execution.orchestrator.persistence import (
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_DIRS = {"tests", "build", ".venv", "__pycache__"}
 # The one place the terminal set is spelled out.
-DEFINITION = ROOT / "execution" / "orchestrator" / "persistence.py"
+DEFINITION = ROOT / "common" / "run_status.py"
 
 TERMINAL = {"completed", "failed", "canceled", "budget_exhausted"}
 # A run-status set may add these to the terminal set and still be a copy.

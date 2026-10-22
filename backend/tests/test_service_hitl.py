@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.exceptions import HITLConflictError
+from approval.service import HITLService
 from common.dto.hitl import HITLPublicSource
-from execution.hitl.exceptions import HITLConflictError
-from execution.hitl.service import HITLService
 from models.hitl import (
     HITLEventType,
     HITLPromptType,
@@ -101,7 +101,7 @@ def test_agent_pending_hydration_preserves_typed_controls(
     prompt_type,
     choices,
 ):
-    from execution.hitl.service import _public_hitl_request_from_doc
+    from approval.service import _public_hitl_request_from_doc
 
     doc = sample_hitl_request.model_copy(
         update={
@@ -119,7 +119,7 @@ def test_agent_pending_hydration_preserves_typed_controls(
 
 
 def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request):
-    from execution.hitl.translators import model_hitl_request_to_common
+    from approval.translators import model_hitl_request_to_common
 
     sample_hitl_request.display_message_id = "display-msg-1"
     sample_hitl_request.interaction_id = "group-1"
@@ -138,7 +138,7 @@ def test_hitl_request_translator_preserves_pending_api_shape(sample_hitl_request
 
 
 def test_hitl_response_translator_preserves_route_dict_shape():
-    from execution.hitl.translators import hitl_response_dict_to_common
+    from approval.translators import hitl_response_dict_to_common
 
     response = hitl_response_dict_to_common(
         {

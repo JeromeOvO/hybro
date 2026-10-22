@@ -127,7 +127,7 @@ ignore = ["E501"]
 "context_memory/compaction.py" = ["C901"]
 "context_memory/models.py" = ["UP042"]
 "delivery/translator.py" = ["C901"]
-"execution/hitl/service.py" = ["C901"]
+"approval/service.py" = ["C901"]
 "execution/orchestrator/kernel.py" = ["C901"]
 "execution/orchestrator/model_runtime.py" = ["C901"]
 "execution/orchestrator/transcript.py" = ["C901"]
@@ -175,7 +175,6 @@ packages = [
     "execution.orchestrator",
     "execution.orchestrator.a2a_runtime",
     "execution.repository",
-    "execution.hitl",
     "local_agents",
     "api_gateway",
     "api_gateway.routes",

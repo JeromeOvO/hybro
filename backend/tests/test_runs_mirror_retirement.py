@@ -112,7 +112,7 @@ def test_delivery_publisher_has_no_projection_settlement_seam():
 
 
 def test_hitl_terminal_adapter_has_no_mirror_dependency():
-    from execution.hitl.adapters import HITLTerminalLifecycleAdapter
+    from approval.adapters import HITLTerminalLifecycleAdapter
 
     parameters = inspect.signature(HITLTerminalLifecycleAdapter).parameters
 
@@ -121,7 +121,7 @@ def test_hitl_terminal_adapter_has_no_mirror_dependency():
 
 @pytest.mark.asyncio
 async def test_unhandled_hitl_termination_no_longer_writes_a_mirror_run():
-    from execution.hitl.adapters import HITLTerminalLifecycleAdapter
+    from approval.adapters import HITLTerminalLifecycleAdapter
 
     terminalizer = AsyncMock(return_value=False)
     adapter = HITLTerminalLifecycleAdapter(canonical_terminalizer=terminalizer)

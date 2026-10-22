@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from execution.hitl.adapters import HITLTerminalLifecycleAdapter
+from approval.adapters import HITLTerminalLifecycleAdapter
 
 
 @pytest.mark.asyncio

@@ -6,14 +6,11 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from common.dto.hitl import HITLApplicationRoute
-from common.utils.logger import get_logger
-from common.utils.time import ensure_utc, utcnow
-from execution.hitl.delivery import (
+from approval.delivery import (
     HITLDeliveryDisposition,
     HITLDeliveryError,
 )
-from execution.hitl.exceptions import (
+from approval.exceptions import (
     HITLConflictError,
     HITLDeliveryUncertainError,
     HITLError,
@@ -22,12 +19,15 @@ from execution.hitl.exceptions import (
     HITLRoomMismatchError,
     HITLRoutingFailedError,
 )
-from execution.hitl.validation import (
+from approval.validation import (
     HITLAggregateCorruptionError,
     validate_command_route_consistency,
     validate_exact_member_inventory,
     validate_route_classifications,
 )
+from common.dto.hitl import HITLApplicationRoute
+from common.utils.logger import get_logger
+from common.utils.time import ensure_utc, utcnow
 from models.hitl import (
     HITLEventType,
     HITLInteractionStatus,

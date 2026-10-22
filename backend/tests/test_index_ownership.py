@@ -82,7 +82,7 @@ def test_hitl_stores_use_the_common_method_name():
 
 
 def test_hitl_lifecycle_port_declares_the_common_method_name():
-    from execution.ports import HITLLifecyclePersistencePort
+    from approval.protocols import HITLLifecyclePersistencePort
 
     assert hasattr(HITLLifecyclePersistencePort, "ensure_indexes")
     assert not hasattr(HITLLifecyclePersistencePort, "ensure_hitl_lifecycle_indexes")

@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.factory import create_hitl_service
 from approval.repository import HITLLifecycleStore
+from approval.service import HITLService
 from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
-from execution.hitl.factory import create_hitl_service
-from execution.hitl.service import HITLService
 
 
 def _service(**kwargs) -> tuple[HITLService, dict, dict]:

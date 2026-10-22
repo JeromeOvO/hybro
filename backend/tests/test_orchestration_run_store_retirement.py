@@ -23,7 +23,7 @@ def test_first_generation_run_modules_are_gone(module):
 
 
 def test_terminal_lifecycle_adapter_takes_no_orchestration_run_store():
-    from execution.hitl.adapters import HITLTerminalLifecycleAdapter
+    from approval.adapters import HITLTerminalLifecycleAdapter
 
     parameters = inspect.signature(HITLTerminalLifecycleAdapter).parameters
 
@@ -31,7 +31,7 @@ def test_terminal_lifecycle_adapter_takes_no_orchestration_run_store():
 
 
 def test_reconciler_takes_no_orchestration_run_store():
-    from execution.hitl.reconciler import HITLLifecycleReconciler
+    from approval.reconciler import HITLLifecycleReconciler
 
     parameters = inspect.signature(HITLLifecycleReconciler).parameters
 
@@ -40,7 +40,7 @@ def test_reconciler_takes_no_orchestration_run_store():
 
 @pytest.mark.asyncio
 async def test_reconciler_still_recovers_open_interaction_projections():
-    from execution.hitl.reconciler import HITLLifecycleReconciler
+    from approval.reconciler import HITLLifecycleReconciler
 
     interactions = [
         {"interaction_id": "i-open", "status": "open"},

@@ -259,7 +259,7 @@ flowchart TD
 | Product | `session` | A client's conversation with the owner's agents, opened through `POST /sessions/messages` or MCP: the session record (collection `sessions`), the bounded event-based wait, and the client projection. `SessionFacade`, `BoundSessionAccess`, `MongoSessionRepository`, and the route contract `session.protocols.SessionAccess`. |
 | Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, agent-message preparation, quotes, deletion, candidate scope, and turn context. `ConversationRuntime` (process singleton `conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
 | Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. Its Mongo persistence adapters (run, event, call-ledger, epoch, HITL-application, artifact, and projection stores) live in `execution.repository.orchestrator`. |
-| Core | `approval` | HITL request, interaction, and resume-command persistence: `approval.repository.HITLRequestStore` and `HITLLifecycleStore`. The HITL service itself is still `execution.hitl`. |
+| Core | `approval` | Human-in-the-loop: `HITLService` (request creation, answers, resume, cancellation, reconciliation; built by `approval.factory.create_hitl_service`), the HITL application coordinator, and HITL persistence (`approval.repository.HITLRequestStore` and `HITLLifecycleStore`). Its own dependency ports are in `approval.protocols`; Execution reaches it through the `approval` root, and the engine-side continuation coordinator stays in Execution. |
 | Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
 | Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, Mongo/Redis connections and generic clients, the A2A SDK boundary, and shared contracts. |
 
@@ -802,6 +802,10 @@ consumers and implementations sit in the owner's package.
 | `AgentLivenessChecker` | `agent.protocols` | `agent.liveness.AgentLivenessService` | crosses to `api_gateway` |
 | `AgentNetworkAccess` | `agent.protocols` | `agent.network.AgentNetworkService` | crosses to `api_gateway` |
 | `AgentSuggestionService` | `agent.protocols` | `agent.selection_service.AgentSelectionService` | crosses to `api_gateway` |
+| `HITLDeliveryPort` | `approval.protocols` | `approval.adapters.HITLDeliveryAdapter` | internal to `approval` |
+| `HITLLifecyclePersistencePort` | `approval.protocols` | `approval.repository.hitl_lifecycle_store.HITLLifecycleStore` | internal to `approval` |
+| `HITLPersistencePort` | `approval.protocols` | the `hitl_runtime_store` `SimpleNamespace` port in `container.py` | crosses to composition root |
+| `HITLTerminalLifecyclePort` | `approval.protocols` | `approval.adapters.HITLTerminalLifecycleAdapter` | internal to `approval` |
 | `RoomCenterCompatibility` | `chat.protocols` | `chat.route_adapter.ChatRouteAdapter` | crosses to `api_gateway` |
 | `InternalEventBus` | `common.eventing.protocols` | `common.eventing.bus.BoundedInternalEventBus` | crosses to composition root |
 | `InternalEventPublisher` | `common.eventing.protocols` | `common.eventing.bus.BoundedInternalEventBus` | crosses to composition root; `conversation` |
@@ -874,7 +878,7 @@ consumers and implementations sit in the owner's package.
 | `InboundArtifactWriter` | `execution.adapters.resources` | `execution.repository.orchestrator.artifacts.GuardedRoomFileArtifactWriter` | internal to `execution` |
 | `InlineArtifactReader` | `execution.adapters.resources` | `execution.repository.orchestrator.stores.MongoObservationInboxStore` | internal to `execution` |
 | `RoomFileReader` | `execution.adapters.resources` | `room_files.service.RoomFiles` | crosses to `room_files` |
-| `HITLServicePort` | `execution.facade` | `execution.hitl.service.HITLService` | internal to `execution` |
+| `HITLServicePort` | `execution.facade` | `approval.service.HITLService` | crosses to `approval` |
 | `RoomCenterPort` | `execution.facade` | `conversation.runtime.ConversationRuntime` | crosses to `conversation` |
 | `AgentToolCandidateSource` | `execution.orchestrator.a2a_runtime.catalog_assembler` | `execution.adapters.agent_candidates.AgentServiceCandidateSource` | internal to `execution` |
 | `DirectA2AClient` | `execution.orchestrator.a2a_runtime.dispatch` | `a2a_adapter.orchestrator_direct_client.OrchestratorDirectA2AClient` | crosses to `a2a_adapter` |
@@ -909,11 +913,7 @@ consumers and implementations sit in the owner's package.
 | `RoomEnvelopeSource` | `execution.orchestrator_routing` | `execution.orchestrator_routing.RoomMessageEnvelopeResolver` | internal to `execution` |
 | `ClientRequestIdResolver` | `execution.ports` | `execution.client_request_id.SSEClientRequestIdResolver` | internal to `execution` |
 | `DirectAgentMessenger` | `execution.ports` | `execution.direct_agent.DirectAgentExecution` | crosses to `api_gateway` |
-| `HITLDeliveryPort` | `execution.ports` | `execution.hitl.adapters.HITLDeliveryAdapter` | internal to `execution` |
-| `HITLLifecyclePersistencePort` | `execution.ports` | `approval.repository.hitl_lifecycle_store.HITLLifecycleStore` | crosses to `approval` |
 | `HITLMessageCancellationPort` | `execution.ports` | `execution.adapters.hitl.HITLMessageCancellationAdapter` | internal to `execution` |
-| `HITLPersistencePort` | `execution.ports` | the `hitl_runtime_store` `SimpleNamespace` port in `container.py` | crosses to composition root |
-| `HITLTerminalLifecyclePort` | `execution.ports` | `execution.hitl.adapters.HITLTerminalLifecycleAdapter` | internal to `execution` |
 | `TaskFactory` | `execution.ports` | callable shape (functions or callables) | internal to `execution` |
 | `EpochFencedRoomArtifactOwner` | `execution.repository.orchestrator.artifacts` | `execution.repository.orchestrator.artifacts.RoomFilesEpochFencedArtifactOwner` | internal to `execution` |
 | `RoomFileArtifactOwner` | `execution.repository.orchestrator.artifacts` | `room_files.service.RoomFiles` | crosses to `room_files` |
@@ -2963,8 +2963,8 @@ timers, no correlation buffers, and no polling safety net.
 
 HITL is used when an agent or supervisor needs user input before continuing.
 
-Main responsibilities live in `execution.hitl.service`, constructed by
-`execution.hitl.factory.create_hitl_service` and passed through Execution
+Main responsibilities live in `approval.service`, constructed by
+`approval.factory.create_hitl_service` and passed through Execution
 facade/port wiring:
 
 - Create HITL requests.

@@ -25,6 +25,11 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
+from approval import (
+    HITLConflictError,
+    HITLDeliveryUncertainError,
+    HITLRoomMismatchError,
+)
 from common.dto.execution import CancellationAck, ExecutionRequest, HITLRequest
 from common.dto.hitl import (
     A2AInteractionSpec,
@@ -41,11 +46,6 @@ from common.dto.hitl import (
 from common.utils.context_utils import split_agent_mentions
 from common.utils.logger import get_logger
 from context_memory.translators import normalize_room_memory
-from execution.hitl.exceptions import (
-    HITLConflictError,
-    HITLDeliveryUncertainError,
-    HITLRoomMismatchError,
-)
 from execution.orchestrator.a2a_runtime.hitl_prompt import (
     prompt_type_for_question,
     public_question_fields,

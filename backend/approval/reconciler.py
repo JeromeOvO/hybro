@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from approval.validation import validate_command_route_consistency
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from execution.hitl.validation import validate_command_route_consistency
 from models.hitl import (
     HITLEventType,
     HITLInteractionStatus,

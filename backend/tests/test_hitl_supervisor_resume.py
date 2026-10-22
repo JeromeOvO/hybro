@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from approval.service import ContinuationLostError, HITLService
 from common.dto.execution import HITLRequest
-from execution.hitl.service import ContinuationLostError, HITLService
 
 
 def _request(**overrides) -> HITLRequest:

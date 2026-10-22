@@ -267,8 +267,8 @@ def test_projection_translator_has_no_lifecycle_family():
 
 
 def test_hitl_service_has_no_lifecycle_family_reader():
-    from execution.hitl.factory import create_hitl_service
-    from execution.hitl.service import HITLService
+    from approval.factory import create_hitl_service
+    from approval.service import HITLService
 
     assert "lifecycle_family_reader" not in inspect.signature(HITLService).parameters
     with pytest.raises(TypeError, match="lifecycle_family_reader"):
@@ -288,7 +288,7 @@ def test_hitl_service_has_no_lifecycle_family_reader():
 async def test_hitl_service_reads_canonical_ownership_from_run_state(
     state, canonical, allows_resume
 ):
-    from execution.hitl.service import HITLService
+    from approval.service import HITLService
 
     service = HITLService(canonical_run_state_reader=AsyncMock(return_value=state))
     interaction = {"orchestration_run_id": "run-1"}

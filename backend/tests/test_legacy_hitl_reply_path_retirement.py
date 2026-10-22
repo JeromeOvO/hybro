@@ -7,17 +7,17 @@ import inspect
 import pytest
 from pydantic import ValidationError
 
-import execution.hitl.adapters as hitl_adapters
+import approval.adapters as hitl_adapters
 import execution.ports as execution_ports
 import models.hitl as hitl_models
-from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
-from execution.hitl.application import HITLApplicationCoordinator
-from execution.hitl.factory import create_hitl_service
-from execution.hitl.service import HITLService
-from execution.hitl.validation import (
+from approval.application import HITLApplicationCoordinator
+from approval.factory import create_hitl_service
+from approval.service import HITLService
+from approval.validation import (
     HITLAggregateCorruptionError,
     validate_command_route_consistency,
 )
+from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 
 
 def test_application_route_is_supervisor_only():

@@ -4,6 +4,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from approval import (
+    hitl_response_dict_to_common,
+    model_hitl_request_to_common,
+)
 from common.a2a_constants import SSEProcessingStatus
 from common.dto import (
     CancellationAck,
@@ -17,10 +21,6 @@ from common.observability import bind_log_context, traced_create_task
 from common.protocols import EventPublisher
 from common.utils.logger import get_logger
 from execution.events import emit_room_processing_status
-from execution.hitl.translators import (
-    hitl_response_dict_to_common,
-    model_hitl_request_to_common,
-)
 from execution.idempotency import (
     IDEMPOTENCY_FINGERPRINT_VERSION,
     build_execution_request_fingerprint,

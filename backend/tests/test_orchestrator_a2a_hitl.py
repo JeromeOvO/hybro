@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from approval.exceptions import HITLConflictError
 from common.dto.delivery import DeliveryEmitStatus
 from common.dto.hitl import (
     A2AInteractionSpec,
@@ -15,7 +16,6 @@ from common.dto.hitl import (
     HITLRouteSnapshotUnion,
     HITLRouteSnapshotV2,
 )
-from execution.hitl.exceptions import HITLConflictError
 from execution.orchestrator.a2a_runtime.hitl import (
     A2AContinuationCoordinator,
     InMemoryHITLApplicationPort,
@@ -243,7 +243,7 @@ async def test_follow_up_challenge_proves_continuation_delivery(
 
 
 async def test_unproven_continuation_still_reports_delivery_uncertain():
-    from execution.hitl.exceptions import HITLDeliveryUncertainError
+    from approval.exceptions import HITLDeliveryUncertainError
 
     spec = interaction()
     route = HITLRouteSnapshotV2(

@@ -19,9 +19,9 @@ from api_gateway.routes.hitl_routes import (
     get_pending_hitl_requests,
     respond_to_hitl_interaction,
 )
+from approval.exceptions import HITLConflictError, HITLRoomMismatchError
 from common.dto import HITLCancelCommand
 from common.dto import HITLRequest as CommonHITLRequest
-from execution.hitl.exceptions import HITLConflictError, HITLRoomMismatchError
 from models.hitl import HITLBatchResponseRequest
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from execution.hitl.service import HITLService
+from approval.service import HITLService
 
 
 def create_hitl_service(**kwargs: Any) -> HITLService:
@@ -19,6 +19,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         "canonical_cancellation_requester",
         "public_secret_values",
         "approval_deadline_hours",
+        "public_text_sanitizer",
     }
     legacy_aliases = {
         "store",
@@ -43,6 +44,7 @@ def create_hitl_service(**kwargs: Any) -> HITLService:
         canonical_cancellation_requester=kwargs.get("canonical_cancellation_requester"),
         public_secret_values=kwargs.get("public_secret_values", ()),
         approval_deadline_hours=kwargs.get("approval_deadline_hours"),
+        public_text_sanitizer=kwargs.get("public_text_sanitizer"),
     )
     service._persistence = kwargs.get("persistence")
     service._delivery = kwargs.get("delivery")

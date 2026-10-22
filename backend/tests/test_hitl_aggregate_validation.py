@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
-from execution.hitl.exceptions import HITLRoutingFailedError
-from execution.hitl.service import HITLService
-from execution.hitl.validation import (
+from approval.exceptions import HITLRoutingFailedError
+from approval.service import HITLService
+from approval.validation import (
     HITLAggregateCorruptionError,
     validate_command_route_consistency,
     validate_exact_member_inventory,
     validate_route_classifications,
 )
+from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from models.hitl import (
     HITLInteraction,
     HITLInteractionStatus,

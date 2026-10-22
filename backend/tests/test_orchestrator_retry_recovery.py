@@ -1597,13 +1597,13 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
     from types import SimpleNamespace
 
     import orchestrator_composition as composition
+    from approval.exceptions import HITLDeliveryUncertainError
     from delivery.translator import to_sse_frame
     from execution.adapters.hitl import (
         DurableHITLApplicationPort,
         InMemoryHITLApplicationStore,
     )
     from execution.adapters.session_host import RoomSessionHost
-    from execution.hitl.exceptions import HITLDeliveryUncertainError
     from execution.orchestrator.a2a_runtime.errors import RecoverableCheckpointError
     from execution.orchestrator.a2a_runtime.models import NormalizedA2AObservation
     from execution.orchestrator.models import (

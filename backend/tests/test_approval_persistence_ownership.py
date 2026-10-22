@@ -37,7 +37,7 @@ def test_approval_is_a_registered_domain_module():
     assert "approval" in DOMAIN_MODULES
     assert {"approval", "approval.repository"} <= packages
     assert not {name for name in packages if name.startswith("dal.runtime_store")}
-    assert EXPECTED_METHODS["approval.protocols"] == {}
+    assert "approval.protocols" in EXPECTED_METHODS
 
 
 def test_approval_repository_exports_the_hitl_stores():

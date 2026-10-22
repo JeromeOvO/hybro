@@ -17,9 +17,9 @@ from pydantic import ValidationError
 
 from a2a_adapter.orchestrator_direct_client import _continuation_text
 from api_gateway.routes.hitl_routes import _pending_hitl_public_payload
+from approval.exceptions import HITLConflictError
 from common.dto.hitl import A2AInteractionSpec, HITLQuestionAnswer, HITLQuestionSpec
 from delivery.translator import to_sse_frame
-from execution.hitl.exceptions import HITLConflictError
 from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 from execution.orchestrator.a2a_runtime.interaction_outcome import (
     emit_hitl_request_events,

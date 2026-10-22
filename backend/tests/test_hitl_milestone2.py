@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
+from approval.application import HITLApplicationCoordinator
+from approval.exceptions import HITLRoutingFailedError
 from approval.repository import HITLRequestStore
+from approval.service import HITLService
 from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
-from execution.hitl.application import HITLApplicationCoordinator
-from execution.hitl.exceptions import HITLRoutingFailedError
-from execution.hitl.service import HITLService
 from models.hitl import (
     HITLInteraction,
     HITLInteractionStatus,

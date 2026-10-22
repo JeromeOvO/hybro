@@ -49,6 +49,7 @@ def test_a2a_service_has_no_tracked_task_surface():
 
 def test_execution_ports_drop_tracked_task_and_continuation_contracts():
     import execution.ports as ports
+    from approval.protocols import HITLPersistencePort
 
     assert not hasattr(ports, "A2ATransportPort")
     assert not hasattr(ports, "A2ATaskTrackingStorePort")
@@ -58,7 +59,7 @@ def test_execution_ports_drop_tracked_task_and_continuation_contracts():
         "get_and_clear_continuation_on_message",
         "get_and_clear_continuation_on_user_message",
     ):
-        assert not hasattr(ports.HITLPersistencePort, name), name
+        assert not hasattr(HITLPersistencePort, name), name
 
 
 def test_task_lifecycle_store_keeps_only_live_methods():
@@ -125,7 +126,7 @@ def test_pending_continuation_field_is_gone():
 
 
 def test_hitl_service_no_longer_clears_continuations():
-    from execution.hitl.service import HITLService
+    from approval.service import HITLService
 
     assert not hasattr(HITLService, "_clear_hitl_continuation_once")
 
@@ -138,7 +139,7 @@ def test_task_timing_settings_are_retired():
 
 
 def test_hitl_reconciler_has_no_remote_command_inspection():
-    from execution.hitl.reconciler import HITLLifecycleReconciler
+    from approval.reconciler import HITLLifecycleReconciler
 
     parameters = inspect.signature(HITLLifecycleReconciler).parameters
 

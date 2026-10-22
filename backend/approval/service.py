@@ -14,11 +14,26 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+from collections.abc import Callable
 from datetime import timedelta
 from functools import wraps
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from approval.exceptions import (
+    ContinuationLostError,
+    HITLConflictError,
+    HITLNotFoundError,
+    HITLRequestProjectionError,
+    HITLRoomMismatchError,
+    HITLRoutingFailedError,
+)
+from approval.validation import (
+    HITLAggregateCorruptionError,
+    deterministic_request_id,
+    validate_exact_member_inventory,
+    validate_route_classifications,
+)
 from common.dto import (
     HITLApplicationRoute,
     HITLEvidenceOrigin,
@@ -31,26 +46,12 @@ from common.public_prompt import (
     GENERIC_AGENT_INPUT_PROMPT,
     concrete_agent_input_prompt,
 )
+from common.run_status import TERMINAL_RUN_STATUSES
 from common.utils.a2a_helpers import (
     is_authoritative_a2a_id as _is_authoritative_a2a_id,
 )
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from execution.hitl.exceptions import (
-    ContinuationLostError,
-    HITLConflictError,
-    HITLNotFoundError,
-    HITLRequestProjectionError,
-    HITLRoomMismatchError,
-    HITLRoutingFailedError,
-)
-from execution.hitl.validation import (
-    HITLAggregateCorruptionError,
-    deterministic_request_id,
-    validate_exact_member_inventory,
-    validate_route_classifications,
-)
-from execution.orchestrator.persistence import TERMINAL_RUN_STATUSES
 from models.hitl import (
     HITLEventType,
     HITLInteraction,
@@ -61,7 +62,7 @@ from models.hitl import (
 )
 
 if TYPE_CHECKING:
-    from execution.ports import (
+    from approval.protocols import (
         HITLDeliveryPort,
         HITLLifecyclePersistencePort,
         HITLPersistencePort,
@@ -153,6 +154,7 @@ class HITLService:
         canonical_cancellation_requester=None,
         public_secret_values=(),
         approval_deadline_hours: float | None = None,
+        public_text_sanitizer: Callable[..., str] | None = None,
     ) -> None:
         self._persistence: HITLPersistencePort | None = None
         self._delivery: HITLDeliveryPort | None = None
@@ -169,6 +171,12 @@ class HITLService:
         )
         # None means interactions wait for the owner without a deadline.
         self._approval_deadline_hours = approval_deadline_hours
+        self._public_text_sanitizer = public_text_sanitizer
+
+    def _require_public_text_sanitizer(self) -> Callable[..., str]:
+        if self._public_text_sanitizer is None:
+            raise RuntimeError("HITL public text sanitizer has not been bound")
+        return self._public_text_sanitizer
 
     @property
     def persistence(self):
@@ -1641,8 +1649,7 @@ class HITLService:
         )
         if event_type == HITLEventType.INPUT_REQUESTED:
             if canonical_run_id:
-                from execution.orchestrator.public_text import sanitize_public_text
-
+                sanitize_public_text = self._require_public_text_sanitizer()
                 public_prompt = sanitize_public_text(
                     request.prompt, secret_values=self._public_secret_values
                 )[:4000]
