@@ -1126,7 +1126,8 @@ the `room_agent_messages` and `room_user_messages` collections and the Room-owne
 repositories. `conversation.protocols` publishes two ports over them:
 `ConversationMessageWriter`, the guarded agent-message writes other modules make
 (task-state, HITL request id, pending-HITL projection, user answer, interaction
-metadata), implemented by `ConversationMessageStore`; and
+metadata, and the orchestrator's final message), implemented by
+`ConversationMessageStore`; and
 `ClientRequestIdResolver`, implemented by `ClientRequestIdStore` and consumed by
 the SSE `client_request_id` resolver.
 `conversation.runtime.ConversationRuntime` holds the message engine methods:
@@ -2209,7 +2210,11 @@ responses before descendant cleanup and abort the owning Run. Recovery replays
 the same boundaries idempotently. Terminal Run outbox replay repairs card state
 from durable tool results. The `deliver_final_message` outbox step is complete
 only after both the final `system:hybro` message is in Mongo and an idempotent
-`agent_response` has entered `room_events`. That event always parents to the
+`agent_response` has entered `room_events`. The projector writes the message
+through `ConversationMessageWriter.persist_final_agent_message`, which normalizes
+the timeline document and returns `accepted`, `replayed` (same room), or
+`conflict` (another room); the projector keeps the delivery and memory steps and
+the outbox outcome. That event always parents to the
 exact final `message_end` by durable readback (not the cached latest `turn_end`),
 and `run_settled` parents to the durable final response after restart. If an
 `orchestrator_run_events` insert wins but the outbox completion CAS is lost, the

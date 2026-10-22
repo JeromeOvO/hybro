@@ -12,6 +12,7 @@ from common.a2a_constants import FAILURE_STATES, TERMINAL_STATES, CommonTaskStat
 from common.utils.a2a_helpers import sanitize_artifact_parts
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from conversation.protocols import FinalMessageWriteOutcome
 from conversation.repository.message_documents import (
     _extract_text_from_artifact_parts,
     _modified_count,
@@ -1575,3 +1576,29 @@ class ConversationMessageStore:
         except Exception:
             logger.error("Failed to persist HITL interaction metadata", exc_info=True)
             return False
+
+    async def persist_final_agent_message(
+        self, document: dict[str, Any]
+    ) -> FinalMessageWriteOutcome:
+        """Insert a terminal agent message once, keyed by ``message_id``.
+
+        A document already stored for the same room is a replay; one stored for
+        another room is a conflict.
+        """
+        message_id = document["message_id"]
+        room_id = document["room_id"]
+        existing = await self._room_agent_messages.find_one({"message_id": message_id})
+        if existing is not None:
+            return "replayed" if existing.get("room_id") == room_id else "conflict"
+        try:
+            await self._room_agent_messages.insert_one(
+                normalize_timeline_document(document)
+            )
+        except DuplicateKeyError:
+            existing = await self._room_agent_messages.find_one(
+                {"message_id": message_id}
+            )
+            if existing is None or existing.get("room_id") != room_id:
+                return "conflict"
+            return "replayed"
+        return "accepted"

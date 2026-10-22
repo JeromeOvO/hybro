@@ -1,17 +1,21 @@
 """Conversation ports.
 
-``ConversationMessageWriter`` is the write surface other modules use to update
+``ConversationMessageWriter`` is the write surface other modules use to write
 agent-message documents in ``room_agent_messages``; Conversation owns the
-collection and the projection guards. ``ClientRequestIdResolver`` resolves the
-``client_request_id`` that correlates a message with its originating request.
+collection, the timeline normalization, and the projection guards. It writes;
+callers keep their own finalization decisions. ``ClientRequestIdResolver``
+resolves the ``client_request_id`` that correlates a message with its
+originating request.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from models.room import RoomAgentMessage
+
+FinalMessageWriteOutcome = Literal["accepted", "replayed", "conflict"]
 
 
 @runtime_checkable
@@ -54,6 +58,10 @@ class ConversationMessageWriter(Protocol):
         question_index: int | None,
     ) -> bool: ...
 
+    async def persist_final_agent_message(
+        self, document: dict[str, Any]
+    ) -> FinalMessageWriteOutcome: ...
+
 
 @runtime_checkable
 class ClientRequestIdResolver(Protocol):
@@ -66,4 +74,8 @@ class ClientRequestIdResolver(Protocol):
     ) -> str | None: ...
 
 
-__all__ = ["ClientRequestIdResolver", "ConversationMessageWriter"]
+__all__ = [
+    "ClientRequestIdResolver",
+    "ConversationMessageWriter",
+    "FinalMessageWriteOutcome",
+]

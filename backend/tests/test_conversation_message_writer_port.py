@@ -13,6 +13,7 @@ from tests.test_module_protocol_inventory import EXPECTED_METHODS
 
 BACKEND = Path(__file__).resolve().parents[1]
 WRITER_METHODS = {
+    "persist_final_agent_message",
     "persist_hitl_interaction_metadata",
     "persist_hitl_request_id_on_message",
     "persist_hitl_user_answer",
@@ -34,6 +35,7 @@ def test_conversation_protocols_publish_the_writer_and_resolver_ports():
     assert set(protocols.__all__) == {
         "ClientRequestIdResolver",
         "ConversationMessageWriter",
+        "FinalMessageWriteOutcome",
     }
 
 

@@ -8,6 +8,7 @@ acknowledged remote call keeps being polled until its own wait ceiling.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -355,6 +356,7 @@ async def _composed(monkeypatch, model):
         room_ownership_reader=deps.room_ownership_reader,
         epoch_store=epochs,
         room_files=deps.room_files,
+        message_writer=MagicMock(),
         session_listener=listener,
         canonical_event_reader=history.read,
     )
@@ -650,6 +652,7 @@ def test_composition_injects_the_configured_wait_ceiling():
             room_ownership_reader=deps.room_ownership_reader,
             epoch_store=deps.epoch_store,
             room_files=deps.room_files,
+            message_writer=MagicMock(),
         )
 
     assert captured["call_wait_ceiling"] == timedelta(hours=12.5)

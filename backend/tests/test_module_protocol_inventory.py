@@ -58,6 +58,7 @@ EXPECTED_METHODS = {
             "resolve_client_request_id_for_message_id",
         },
         "ConversationMessageWriter": {
+            "persist_final_agent_message",
             "persist_hitl_interaction_metadata",
             "persist_hitl_request_id_on_message",
             "persist_hitl_user_answer",

@@ -1768,6 +1768,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_ownership_reader=_room_deps.room_registry,
                 epoch_store=require_room_epoch_store(),
                 room_files=file_storage,
+                message_writer=message_store,
                 projection_listener=publish_orchestrator_projection_status,
                 session_listener=_orchestrator_session_listener,
                 user_message_text_reader=_orchestrator_user_message_text,

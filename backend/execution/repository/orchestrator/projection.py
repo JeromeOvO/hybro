@@ -10,9 +10,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pymongo.errors import DuplicateKeyError
-
-from conversation import normalize_timeline_document
+from conversation.protocols import ConversationMessageWriter
 from execution.orchestrator.models import (
     AssistantMessage,
     OrchestratorEvent,
@@ -48,11 +46,11 @@ class MongoFinalMessageProjector:
 
     def __init__(
         self,
-        messages: Any,
+        message_writer: ConversationMessageWriter,
         delivery: FinalMessageDelivery | None = None,
         memory_projection: FinalMessageMemoryProjection | None = None,
     ) -> None:
-        self.messages = messages
+        self.message_writer = message_writer
         self.delivery = delivery
         self.memory_projection = memory_projection
 
@@ -69,21 +67,11 @@ class MongoFinalMessageProjector:
         # (message_text + run correlation). Step 7's E2E must verify the
         # frontend/terminal-state consumers read this shape; enrich with the
         # full message_task surface only if a consumer requires it.
-        document = _final_message_document(run, final)
-        outcome: StoreOutcome = "accepted"
-        existing = await self.messages.find_one({"message_id": message_id})
-        if existing is not None:
-            if existing.get("room_id") != run.room_id:
-                return "conflict"
-            outcome = "replayed"
-        else:
-            try:
-                await self.messages.insert_one(document)
-            except DuplicateKeyError:
-                existing = await self.messages.find_one({"message_id": message_id})
-                if existing is None or existing.get("room_id") != run.room_id:
-                    return "conflict"
-                outcome = "replayed"
+        outcome: StoreOutcome = await self.message_writer.persist_final_agent_message(
+            _final_message_document(run, final)
+        )
+        if outcome == "conflict":
+            return outcome
         if self.delivery is not None:
             delivered = await self.delivery(run, final, _assistant_text(final))
             if not delivered:
@@ -127,23 +115,21 @@ def _assistant_text(message: AssistantMessage) -> str:
 def _final_message_document(
     run: OrchestratorRunState, final: AssistantMessage
 ) -> dict[str, Any]:
-    return normalize_timeline_document(
-        {
-            "room_id": run.room_id,
-            "message_id": final.message_id,
-            "message_type": "agent",
-            "agent_id": CoordinatorAgentId.SYSTEM_HYBRO.value,
-            "message_content": {"message_text": _assistant_text(final)},
-            "message_created_at": final.created_at,
-            "client_request_id": run.client_request_id,
-            "related_message_id": run.request.user_message_id,
-            "run_id": run.run_id,
-            "extend_info": {
-                "orchestrator_run_id": run.run_id,
-                "terminal_reason": run.terminal_reason,
-            },
-        }
-    )
+    return {
+        "room_id": run.room_id,
+        "message_id": final.message_id,
+        "message_type": "agent",
+        "agent_id": CoordinatorAgentId.SYSTEM_HYBRO.value,
+        "message_content": {"message_text": _assistant_text(final)},
+        "message_created_at": final.created_at,
+        "client_request_id": run.client_request_id,
+        "related_message_id": run.request.user_message_id,
+        "run_id": run.run_id,
+        "extend_info": {
+            "orchestrator_run_id": run.run_id,
+            "terminal_reason": run.terminal_reason,
+        },
+    }
 
 
 __all__ = [

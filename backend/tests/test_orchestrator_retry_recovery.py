@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1809,6 +1809,7 @@ async def test_host_schedules_partial_publication_and_drivers_apply_queued_answe
         room_ownership_reader=deps.room_ownership_reader,
         epoch_store=coordinator.room_epochs,
         room_files=deps.room_files,
+        message_writer=MagicMock(),
         session_listener=listener,
         canonical_event_reader=kernel.canonical_event_reader,
         hitl_delivery=SimpleNamespace(emit=deliver),

@@ -73,6 +73,7 @@ def test_composition_binds_the_full_graph_without_io():
         room_ownership_reader=deps.room_ownership_reader,
         epoch_store=deps.epoch_store,
         room_files=deps.room_files,
+        message_writer=MagicMock(),
     )
 
     assert validate_orchestrator_runtime(runtime) == []
@@ -104,6 +105,7 @@ def test_profile_resolution_failure_degrades_to_composition_error():
             room_ownership_reader=deps.room_ownership_reader,
             epoch_store=deps.epoch_store,
             room_files=deps.room_files,
+            message_writer=MagicMock(),
         )
 
 

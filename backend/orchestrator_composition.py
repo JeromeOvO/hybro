@@ -32,6 +32,7 @@ from a2a_adapter.client_facade import stream_message as sdk_stream_message
 from a2a_adapter.orchestrator_direct_client import OrchestratorDirectA2AClient
 from a2a_adapter.remote_task import fetch_remote_task as sdk_fetch_remote_task
 from common.utils.logger import get_logger
+from conversation.protocols import ConversationMessageWriter
 from execution.adapters.agent_candidates import AgentServiceCandidateSource
 from execution.adapters.authorization import MembershipAuthorizationRefresh
 from execution.adapters.hitl import DurableHITLApplicationPort
@@ -340,6 +341,7 @@ def create_orchestrator_runtime(  # noqa: C901
     room_ownership_reader: Any,
     epoch_store: Any,
     room_files: Any,
+    message_writer: ConversationMessageWriter,
     observation_authenticator: Any | None = None,
     session_listener: Any | None = None,
     projection_listener: ProjectionListener | None = None,
@@ -546,7 +548,7 @@ def create_orchestrator_runtime(  # noqa: C901
     projectors = {
         "append_orchestrator_event": MongoAppendEventProjector(event_store).project,
         "deliver_final_message": MongoFinalMessageProjector(
-            mongo.collection("room_agent_messages"),
+            message_writer,
             final_message_delivery,
             final_message_memory_projection,
         ).project,

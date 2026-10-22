@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from pymongo.errors import DuplicateKeyError
 
+from conversation.repository import ConversationMessageStore
 from delivery.snapshot import RoomEventFold
 from execution.orchestrator.models import (
     AssistantMessage,
@@ -263,7 +264,7 @@ async def test_final_message_projector_dedupes_on_message_id():
         if item.kind == "deliver_final_message"
     )
     messages = _FakeMessageCollection()
-    projector = MongoFinalMessageProjector(messages)
+    projector = MongoFinalMessageProjector(_message_writer(messages))
     assert await projector.project(intent, stored) == "accepted"
     assert await projector.project(intent, stored) == "replayed"
     assert len(messages.documents) == 1
@@ -284,7 +285,7 @@ async def test_final_message_projector_delivers_on_insert_and_replay():
         deliveries.append((current_run.run_id, final.message_id, content))
         return True
 
-    projector = MongoFinalMessageProjector(messages, deliver)
+    projector = MongoFinalMessageProjector(_message_writer(messages), deliver)
     assert await projector.project(intent, stored) == "accepted"
     assert await projector.project(intent, stored) == "replayed"
     assert deliveries == [
@@ -308,7 +309,7 @@ async def test_final_message_projector_projects_assistant_into_room_memory():
         return {"projected": True}
 
     projector = MongoFinalMessageProjector(
-        _FakeMessageCollection(), memory_projection=project_memory
+        _message_writer(_FakeMessageCollection()), memory_projection=project_memory
     )
     assert await projector.project(intent, stored) == "accepted"
     assert projected == [(stored.room_id, intent.payload["message_id"])]
@@ -332,7 +333,7 @@ async def test_final_message_projector_retries_until_room_memory_exists():
         return {"projected": True}
 
     projector = MongoFinalMessageProjector(
-        _FakeMessageCollection(), memory_projection=project_memory
+        _message_writer(_FakeMessageCollection()), memory_projection=project_memory
     )
     assert await projector.project(intent, stored) == "error"
     assert await projector.project(intent, stored) == "replayed"
@@ -353,7 +354,9 @@ async def test_final_message_projector_retries_failed_room_delivery():
         attempts += 1
         return attempts > 1
 
-    projector = MongoFinalMessageProjector(_FakeMessageCollection(), deliver)
+    projector = MongoFinalMessageProjector(
+        _message_writer(_FakeMessageCollection()), deliver
+    )
     assert await projector.project(intent, stored) == "error"
     assert await projector.project(intent, stored) == "replayed"
 
@@ -603,6 +606,14 @@ class _BsonMillisCollection(FakeCollection):
 async def _noop_projector(intent, run):
     del intent, run
     return "accepted"
+
+
+def _message_writer(collection):
+    return ConversationMessageStore(
+        room_agent_messages=collection,
+        room_user_messages=object(),
+        message_repository=object(),
+    )
 
 
 class _FakeMessageCollection:
