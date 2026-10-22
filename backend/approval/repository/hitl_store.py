@@ -59,7 +59,7 @@ def _duplicate_key_mentions_index(error: DuplicateKeyError, index_name: str) -> 
     )
 
 
-class HITLRuntimeStorePart:
+class HITLRequestStore:
     def __init__(
         self, *, hitl_requests, room_agent_messages, room_user_messages
     ) -> None:

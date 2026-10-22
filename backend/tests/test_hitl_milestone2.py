@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
+from approval.repository import HITLRequestStore
 from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
-from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
 from execution.hitl.application import HITLApplicationCoordinator
 from execution.hitl.exceptions import HITLRoutingFailedError
 from execution.hitl.service import HITLService
@@ -135,7 +135,7 @@ async def test_deadline_is_part_of_claim_and_pending_queries_without_truncation(
     collection = MagicMock()
     collection.find_one_and_update = AsyncMock(return_value=None)
     collection.find = AsyncMock(return_value=[])
-    part = HITLRuntimeStorePart(
+    part = HITLRequestStore(
         hitl_requests=collection,
         room_agent_messages=MagicMock(),
         room_user_messages=MagicMock(),

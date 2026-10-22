@@ -10,7 +10,7 @@ import pytest
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
-from dal.runtime_store.parts.hitl_store import HITLRuntimeStorePart
+from approval.repository import HITLRequestStore
 from models.hitl import HITLPromptType
 
 
@@ -117,8 +117,8 @@ def _store(
     *,
     hitl_requests: _FakeCollection | None = None,
     room_agent_messages: _FakeCollection | None = None,
-) -> HITLRuntimeStorePart:
-    return HITLRuntimeStorePart(
+) -> HITLRequestStore:
+    return HITLRequestStore(
         hitl_requests=hitl_requests or _FakeCollection(),
         room_agent_messages=room_agent_messages or _FakeCollection(),
         room_user_messages=_FakeCollection(),

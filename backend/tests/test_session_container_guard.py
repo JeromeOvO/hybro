@@ -34,10 +34,8 @@ from common.dto import (
     MembershipSeed,
     RoomInfo,
 )
-from common.dto.runtime_store import RuntimeRoomRecord
 from conversation.repository.mongo import RoomMongoRepository
 from conversation.translators import create_room_doc, room_info_from_doc
-from dal.runtime_store.contracts import room_to_runtime
 from models.room import MessageContent, Room, RoomUserMessage
 from tests.test_room_facade import NOW, _facade
 
@@ -64,7 +62,7 @@ def _room(owner_product: str = "session", **overrides) -> Room:
 
 def _store(room: Room) -> MagicMock:
     store = MagicMock()
-    store.get_room_by_room_id = AsyncMock(return_value=room_to_runtime(room))
+    store.get_room_by_room_id = AsyncMock(return_value=room)
     return store
 
 
@@ -96,17 +94,6 @@ def test_models_default_to_chat_product():
         == "chat"
     )
     assert RoomInfo(room_id="r", room_name="r", owner_id="o").owner_product == "chat"
-    assert (
-        RuntimeRoomRecord(
-            room_id="r", room_name="r", room_owner_id="o", room_owner_name="O"
-        ).owner_product
-        == "chat"
-    )
-
-
-def test_room_to_runtime_preserves_owner_product():
-    assert room_to_runtime(_room("session")).owner_product == "session"
-    assert room_to_runtime(_room("chat")).owner_product == "chat"
 
 
 def test_create_room_doc_and_room_info_thread_owner_product():
@@ -286,7 +273,7 @@ async def test_sse_cancel_refuses_session_container():
             message_content=MessageContent(message_text="hi"),
         )
     )
-    db.get_room_by_room_id = AsyncMock(return_value=room_to_runtime(_room()))
+    db.get_room_by_room_id = AsyncMock(return_value=_room())
     engine = MagicMock()
     engine.cancel = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:

@@ -13,10 +13,6 @@ def test_agent_room_part_left_dal():
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("dal.runtime_store.parts.agent_room_store")
 
-    import dal.runtime_store.parts as parts
-
-    assert not hasattr(parts, "AgentRoomRuntimeStorePart")
-
 
 def test_agent_repository_exports_the_runtime_store():
     from agent.repository import AgentRuntimeStore
@@ -34,25 +30,6 @@ def test_agent_document_parsers_live_in_agent():
 
     for name in ("_safe_parse_agent", "_safe_parse_agent_group"):
         assert callable(getattr(documents, name)), name
-
-
-def test_runtime_repository_store_no_longer_serves_agent_data():
-    from common.protocols import runtime_store_protocols as protocols
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    for name in (
-        "agent_room",
-        "add_agent_group",
-        "get_agent_group_by_id",
-        "get_all_active_agents",
-        "get_agents_with_conditions",
-        "increment_agent_call_count",
-    ):
-        assert not hasattr(RuntimeRepositoryStore, name), name
-    assert (
-        "agent_repository" not in inspect.signature(RuntimeRepositoryStore).parameters
-    )
-    assert not hasattr(protocols, "RuntimeAgentRoomStore")
 
 
 class _Collection:

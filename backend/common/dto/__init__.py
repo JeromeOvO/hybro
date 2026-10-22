@@ -107,16 +107,6 @@ from common.dto.room import (
     UserMessageInput,
     UserMessageInsertResult,
 )
-from common.dto.runtime_store import (
-    RuntimeAgentGroup,
-    RuntimeAgentRecord,
-    RuntimeMessageContent,
-    RuntimeRoomAgentMessage,
-    RuntimeRoomMessage,
-    RuntimeRoomRecord,
-    RuntimeRoomUserMessage,
-    RuntimeUserAttachment,
-)
 from common.dto.turn_lifecycle import (
     CANONICAL_RUN_EVENT_KINDS,
     CanonicalRunEventPayload,
@@ -222,14 +212,6 @@ __all__ = [
     "RoomSummary",
     "RoomTimelineEntry",
     "RoomTimelinePage",
-    "RuntimeAgentGroup",
-    "RuntimeAgentRecord",
-    "RuntimeMessageContent",
-    "RuntimeRoomAgentMessage",
-    "RuntimeRoomMessage",
-    "RuntimeRoomRecord",
-    "RuntimeRoomUserMessage",
-    "RuntimeUserAttachment",
     "RetryScheduledPayload",
     "RunEventNotification",
     "RunInfo",

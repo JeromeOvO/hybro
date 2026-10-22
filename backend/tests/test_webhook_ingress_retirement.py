@@ -87,11 +87,9 @@ def test_task_lifecycle_store_keeps_only_correlation():
 
 
 def test_messages_no_longer_carry_a_webhook_token_hash():
-    from common.dto.runtime_store import RuntimeRoomAgentMessage
     from models.room import RoomAgentMessage
 
     assert "webhook_token_hash" not in RoomAgentMessage.model_fields
-    assert "webhook_token_hash" not in RuntimeRoomAgentMessage.model_fields
 
 
 def test_a2a_adapter_has_no_push_configuration():

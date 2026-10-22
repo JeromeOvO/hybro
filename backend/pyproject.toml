@@ -152,6 +152,8 @@ docstring-code-format = true
 py-modules = ["main", "container", "configuration_cli", "cli_stack", "cli_upgrade", "cli_mcp"]
 packages = [
     "agent",
+    "approval",
+    "approval.repository",
     "agent.repository",
     "chat",
     "conversation",
@@ -164,8 +166,6 @@ packages = [
     "dal",
     "dal.mongo",
     "dal.redis",
-    "dal.runtime_store",
-    "dal.runtime_store.parts",
     "execution.repository.orchestrator",
     "delivery",
     "delivery.sse",

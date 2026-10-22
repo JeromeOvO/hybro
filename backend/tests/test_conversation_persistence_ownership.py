@@ -64,22 +64,6 @@ def test_agent_runtime_store_has_no_room_methods():
         assert not hasattr(AgentRuntimeStore, name), name
 
 
-def test_runtime_repository_store_no_longer_serves_conversation_data():
-    from common.protocols import runtime_store_protocols as protocols
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    for name in (
-        "messages",
-        "tasks",
-        "get_room_by_room_id",
-        "upsert_room_agent_message",
-        "resolve_client_request_id_for_message_id",
-    ):
-        assert not hasattr(RuntimeRepositoryStore, name), name
-    assert not hasattr(protocols, "RuntimeMessageStore")
-    assert not hasattr(protocols, "RuntimeTaskLifecycleStore")
-
-
 def test_message_store_debt_entry_is_gone():
     assert "dal/runtime_store/parts/message_store.py" not in DAL_IMPORT_DEBT
 

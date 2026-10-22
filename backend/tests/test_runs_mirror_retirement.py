@@ -161,10 +161,9 @@ def test_task_lifecycle_store_keeps_only_client_request_id_correlation():
 
 def test_processing_message_id_field_is_gone():
     from common.dto.room import RoomInfo
-    from common.dto.runtime_store import RuntimeRoomRecord
     from models.room import Room
 
-    for model in (Room, RoomInfo, RuntimeRoomRecord):
+    for model in (Room, RoomInfo):
         assert "processing_message_id" not in model.model_fields, model
 
 

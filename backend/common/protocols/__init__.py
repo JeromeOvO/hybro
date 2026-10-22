@@ -87,10 +87,6 @@ from common.protocols.room_protocols import (
     RoomOwnershipReader,
     RoomRegistry,
 )
-from common.protocols.runtime_store_protocols import (
-    RuntimeHITLLifecycleStore,
-    RuntimeHITLStore,
-)
 
 __all__ = [
     "AgentCallCounter",
@@ -158,8 +154,6 @@ __all__ = [
     "RoomRouteRecord",
     "RunEventRepository",
     "RunRepository",
-    "RuntimeHITLLifecycleStore",
-    "RuntimeHITLStore",
     "RoomRouteReader",
     "SSEConnectionLike",
     "SSEStateReader",

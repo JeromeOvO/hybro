@@ -25,7 +25,7 @@ _COMMAND_CLAIMABLE = {
 }
 
 
-class HITLLifecycleRuntimeStorePart:
+class HITLLifecycleStore:
     """CAS/fenced persistence for HITL aggregates and remote commands."""
 
     def __init__(self, *, interactions, resume_commands, hitl_requests) -> None:

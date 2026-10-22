@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
+from approval.repository import HITLLifecycleStore, HITLRequestStore
 from common.a2a_constants import TERMINAL_STATES
 from conversation.repository import ConversationMessageStore
-from dal.runtime_store import RuntimeRepositoryStore
 
 
 class FakeMongo:
@@ -103,7 +103,7 @@ def _result(modified_count: int):
 
 
 class _Stores:
-    """Message calls go to the conversation store, HITL calls to the aggregate."""
+    """Message calls go to the conversation store, HITL calls to the approval stores."""
 
     def __init__(self, mongo: FakeMongo) -> None:
         self._targets = (
@@ -112,7 +112,16 @@ class _Stores:
                 room_user_messages=mongo.collection("room_user_messages"),
                 message_repository=object(),
             ),
-            RuntimeRepositoryStore(mongo=mongo),
+            HITLRequestStore(
+                hitl_requests=mongo.collection("hitl_requests"),
+                room_agent_messages=mongo.collection("room_agent_messages"),
+                room_user_messages=mongo.collection("room_user_messages"),
+            ),
+            HITLLifecycleStore(
+                interactions=mongo.collection("hitl_interactions"),
+                resume_commands=mongo.collection("hitl_resume_commands"),
+                hitl_requests=mongo.collection("hitl_requests"),
+            ),
         )
 
     def __getattr__(self, name: str):

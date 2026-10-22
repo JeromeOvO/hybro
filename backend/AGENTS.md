@@ -6,7 +6,7 @@ These rules apply to `backend/` in addition to the repository-root `AGENTS.md`.
 
 - This is the canonical Python 3.12 FastAPI backend.
 - Keep HTTP routes in `api_gateway/` thin; put business behavior in existing domain, service, facade, repository, translator, or orchestration modules.
-- Shared contracts live in `common/`, persistence adapters in `dal/`, remote A2A protocol and transport adapters in `a2a_adapter/`, and tests in `tests/`.
+- Shared contracts live in `common/`, connection management and generic Mongo/Redis clients in `dal/`, each module's persistence in its own `repository/` package, remote A2A protocol and transport adapters in `a2a_adapter/`, and tests in `tests/`.
 - A2A response ingestion and finalization remain owned by `execution/`.
 - Use explicit type hints and async I/O. Follow Ruff's configured 88-character line length and existing naming conventions.
 

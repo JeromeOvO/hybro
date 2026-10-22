@@ -258,8 +258,9 @@ flowchart TD
 | Product | `session` | A client's conversation with the owner's agents, opened through `POST /sessions/messages` or MCP: the session record (collection `sessions`), the bounded event-based wait, and the client projection. `SessionFacade`, `BoundSessionAccess`, `MongoSessionRepository`, and the route contract `session.protocols.SessionAccess`. |
 | Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, agent-message preparation, quotes, deletion, candidate scope, and turn context. `ConversationRuntime` (process singleton `conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
 | Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. Its Mongo persistence adapters (run, event, call-ledger, epoch, HITL-application, artifact, and projection stores) live in `execution.repository.orchestrator`. |
+| Core | `approval` | HITL request, interaction, and resume-command persistence: `approval.repository.HITLRequestStore` and `HITLLifecycleStore`. The HITL service itself is still `execution.hitl`. |
 | Support | `agent`, `local_agents`, `delivery`, `context_memory`, `room_files`, `llm_gateway` | Agent directory, local discovery, SSE delivery, room memory, files, and model access. |
-| Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, persistence adapters, the A2A SDK boundary, and shared contracts. |
+| Infrastructure | `api_gateway`, `jobs`, `dal`, `a2a_adapter`, `common`, `models` | Routes, workers, Mongo/Redis connections and generic clients, the A2A SDK boundary, and shared contracts. |
 
 Products depend on core modules; no core module imports `chat` or `session`, and
 `session` never imports `chat`. A conversation container records its owning
@@ -429,8 +430,8 @@ objects.
 `container.py` wires owner modules such as `a2a_adapter.runtime_service`,
 `conversation.runtime`, `conversation.deletion`,
 `conversation.timeline_projection`, Delivery/SSE, room memory, Delivery task notifier,
-and
-`dal.runtime_store` objects into focused execution ports. Files under
+and the module-owned stores (`conversation.repository`, `agent.repository`,
+`approval.repository`) into focused execution ports. Files under
 `execution/` do not accept broad compatibility-store aggregates. Queue,
 supervisor, dispatch, HITL, and cancellation paths receive only
 the methods they call through execution-owned protocols in `execution/ports.py`.
@@ -739,13 +740,9 @@ and runs `uv run --project MCP --frozen --no-env-file pytest MCP/tests` from the
 When adding new boundaries, prefer using `common.protocols` instead of importing
 concrete runtime singletons.
 
-- `common.protocols.runtime_store_protocols` is now a leaf-package contract
-  surface. It exposes common-owned runtime DTOs from
-  `common.dto.runtime_store`; runtime-store adapters convert those DTOs to
-  legacy `models.*` instances before calling focused persistence stores, so
-  legacy models no longer cross the `common.protocols` boundary.
-- Runtime-store aggregate ports are assembled in `container.py` and remain
-  legacy-model shaped where production consumers still require those models.
+- Persistence stores are owned by the module whose collections they read and
+  write, and `container.py` builds each one directly over `mongo.collection(...)`.
+  `dal/` keeps connection management and the generic Mongo and Redis clients.
   New common protocols should stay DTO-shaped.
 
 #### Runtime Configuration
@@ -2648,13 +2645,11 @@ isolation across HTTP requests.
 ## A2A Task Data Access
 
 `client_request_id` correlation is served by
-`conversation.repository.ClientRequestIdStore`. HITL lifecycle data access is
-routed through focused runtime-store ports assembled in `container.py`. The runtime-store repository aggregate backs those
-ports with module repositories and `MongoDAL` collections, but production
-bindings use scoped `dal.runtime_store.parts` surfaces or focused startup
-adapters wherever a narrower port is sufficient. Remaining runtime-store
-aggregate use is limited to documented compatibility shims rather
-than new production business owners.
+`conversation.repository.ClientRequestIdStore`. HITL request and lifecycle data
+access is served by `approval.repository.HITLRequestStore` (`hitl_requests`, plus
+its writes to the room message collections) and
+`approval.repository.HITLLifecycleStore` (`hitl_interactions`,
+`hitl_resume_commands`), bound into focused ports in `container.py`.
 
 **Agent display text:** Public A2A task projections never expose remote
 `Task.history`. For a completed task, agent-role `TextPart` content from
@@ -2789,9 +2784,9 @@ Supervisor `ask_user` interactions take their deadline from
 expires the interaction after that many hours and fails its Run. Canonical Agent
 interactions in `orchestrator_hitl_interactions` carry no expiry.
 
-HITL storage is exposed through a focused startup adapter over the HITL, message,
-and task lifecycle runtime-store parts instead of raw `database_service`, Mongo
-access, or the full repository-store aggregate. `HITLService` uses store ports
+HITL storage is exposed through a focused startup adapter over the
+`approval.repository` HITL stores, the conversation message store, and the
+`client_request_id` store instead of raw `database_service` or Mongo access. `HITLService` uses store ports
 for request creation, CAS/fenced updates, group routing claims, continuation
 persistence, and stale processing iteration.
 
@@ -3212,7 +3207,7 @@ fenced application. Retrying a partially recorded batch repairs the same aggrega
 and retrying an applied batch only replays idempotent projections. Individual
 `/respond` remains for compatibility and single-question clients.
 
-`GET /rooms/{room_id}/hitl/pending` uses the strict runtime-store read. Persistence
+`GET /rooms/{room_id}/hitl/pending` uses the strict HITL store read. Persistence
 failures propagate as an HTTP failure rather than an authoritative empty list, which
 prevents clients from hiding unresolved interactions during degraded hydration.
 Prompt schemas include text, textarea, single/multi choice, confirmation/approval,

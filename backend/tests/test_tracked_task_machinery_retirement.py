@@ -118,10 +118,9 @@ def test_conversation_facade_has_no_stale_card_auto_fail():
 
 
 def test_pending_continuation_field_is_gone():
-    from common.dto.runtime_store import RuntimeRoomAgentMessage
     from models.room import RoomAgentMessage, RoomUserMessage
 
-    for model in (RoomAgentMessage, RoomUserMessage, RuntimeRoomAgentMessage):
+    for model in (RoomAgentMessage, RoomUserMessage):
         assert "pending_continuation" not in model.model_fields, model
 
 

@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from approval.repository import HITLLifecycleStore
 from common.dto.hitl import HITLApplicationRoute, HITLRouteSnapshot
 from common.utils.time import utcnow
-from dal.runtime_store.parts.hitl_lifecycle_store import HITLLifecycleRuntimeStorePart
 from execution.hitl.factory import create_hitl_service
 from execution.hitl.service import HITLService
 
@@ -105,7 +105,7 @@ def test_service_constructor_accepts_the_deadline_directly():
 async def test_undated_interactions_are_never_due_for_expiry():
     interactions = MagicMock()
     interactions.find = AsyncMock(return_value=[])
-    store = HITLLifecycleRuntimeStorePart(
+    store = HITLLifecycleStore(
         interactions=interactions,
         resume_commands=MagicMock(),
         hitl_requests=MagicMock(),

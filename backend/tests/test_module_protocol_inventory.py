@@ -43,6 +43,7 @@ EXPECTED_METHODS = {
         "AgentNetworkAccess": {"discover", "get_profile", "list_groups", "search"},
         "AgentSuggestionService": {"suggest_agents"},
     },
+    "approval.protocols": {},
     "local_agents.protocols": {
         "LocalAgentDiscovery": {"request_discovery"},
         "LocalAgentWriter": {

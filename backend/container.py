@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
@@ -122,9 +122,6 @@ from room_files import LocalFileContentStore, RoomFiles
 from session import MongoSessionRepository, SessionFacade, SessionWaiter
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    from dal.runtime_store import RuntimeRepositoryStore
 
 
 # Pure function — trivially testable without lifespan/DB
@@ -754,9 +751,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 epoch_store=require_room_epoch_store(),
             )
             _room_facade = _room_deps.room_registry
-            # Runtime store aggregate: callers below receive focused runtime-store parts.
-            # Do not add new broad-store consumers; bind a focused part or protocol instead.
-            runtime_store = create_runtime_repository_store(mongo=mongo_dal)
+            # Module-owned stores: each is built over its own collections and bound
+            # below through focused SimpleNamespace ports.
             from agent.repository import AgentRuntimeStore
 
             agent_runtime_store = AgentRuntimeStore(
@@ -779,8 +775,18 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_repository=_room_deps.room_repository
             )
             client_request_id_store = ClientRequestIdStore(message_store=message_store)
-            hitl_store = runtime_store.hitl
-            hitl_lifecycle_store = runtime_store.hitl_lifecycle
+            from approval.repository import HITLLifecycleStore, HITLRequestStore
+
+            hitl_store = HITLRequestStore(
+                hitl_requests=mongo_dal.collection("hitl_requests"),
+                room_agent_messages=mongo_dal.collection("room_agent_messages"),
+                room_user_messages=mongo_dal.collection("room_user_messages"),
+            )
+            hitl_lifecycle_store = HITLLifecycleStore(
+                interactions=mongo_dal.collection("hitl_interactions"),
+                resume_commands=mongo_dal.collection("hitl_resume_commands"),
+                hitl_requests=mongo_dal.collection("hitl_requests"),
+            )
             # P3 runtime adapters keep startup wiring narrow. These SimpleNamespace
             # boundaries are intentionally constrained to container assembly.
             hitl_runtime_store = SimpleNamespace(
@@ -3301,12 +3307,3 @@ def register_context_memory_event_handlers(
         handler.handle_message_committed,
     )
     return handler
-
-
-def create_runtime_repository_store(
-    *,
-    mongo: MongoDAL,
-) -> RuntimeRepositoryStore:
-    from dal.runtime_store import RuntimeRepositoryStore
-
-    return RuntimeRepositoryStore(mongo=mongo)

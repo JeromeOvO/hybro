@@ -19,18 +19,17 @@ from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
 
 class _ConversationStores:
     """Serve message and room calls from the conversation stores, agent calls
-    from the agent store, the rest from what remains of the runtime store
-    aggregate."""
+    from the agent store, and HITL calls from the approval stores."""
 
     def __init__(
         self, *, mongo, room_repository, message_repository, agent_repository
     ) -> None:
         from agent.repository import AgentRuntimeStore
+        from approval.repository import HITLLifecycleStore, HITLRequestStore
         from conversation.repository import (
             ConversationMessageStore,
             ConversationRoomStore,
         )
-        from dal.runtime_store import RuntimeRepositoryStore
 
         self._targets = (
             ConversationMessageStore(
@@ -44,7 +43,16 @@ class _ConversationStores:
                 agents=mongo.collection("agents"),
                 agent_repository=agent_repository,
             ),
-            RuntimeRepositoryStore(mongo=mongo),
+            HITLRequestStore(
+                hitl_requests=mongo.collection("hitl_requests"),
+                room_agent_messages=mongo.collection("room_agent_messages"),
+                room_user_messages=mongo.collection("room_user_messages"),
+            ),
+            HITLLifecycleStore(
+                interactions=mongo.collection("hitl_interactions"),
+                resume_commands=mongo.collection("hitl_resume_commands"),
+                hitl_requests=mongo.collection("hitl_requests"),
+            ),
         )
 
     def __getattr__(self, name: str):

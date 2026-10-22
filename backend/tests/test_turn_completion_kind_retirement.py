@@ -34,10 +34,8 @@ def test_conversation_no_longer_looks_up_completion_kind():
 
 def test_message_store_has_no_completion_kind_writer():
     from conversation.repository import ConversationMessageStore
-    from dal.runtime_store import RuntimeRepositoryStore
 
-    for owner in (ConversationMessageStore, RuntimeRepositoryStore):
-        assert not hasattr(owner, "set_turn_completion_kind"), owner
+    assert not hasattr(ConversationMessageStore, "set_turn_completion_kind")
 
 
 def test_public_user_extend_info_never_exposes_completion_kind():
