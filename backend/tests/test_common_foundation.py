@@ -666,6 +666,7 @@ def test_protocol_methods_match_design_doc():
             "get_messages_by_ids",
             "get_message_thread",
         },
+        protocols.RoomStateOwner: {"delete_room_state"},
         protocols.RoomOwnershipReader: {
             "get_room_owner",
             "verify_room_agent_membership",

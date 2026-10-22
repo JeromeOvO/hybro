@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -525,35 +525,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_agent_messages_collection=mongo_dal.collection(
                     "room_agent_messages"
                 ),
-                room_owned_collections=[
-                    mongo_dal.collection(name)
-                    for name in (
-                        "room_user_messages",
-                        "room_agent_messages",
-                        "room_quotes",
-                        "room_memories",
-                        "conversation_content",
-                        "hitl_requests",
-                        "hitl_interactions",
-                        "hitl_resume_commands",
-                        "orchestrator_runs",
-                        "orchestrator_run_events",
-                        "orchestrator_agent_tool_bindings",
-                        "orchestrator_agent_calls",
-                        "orchestrator_a2a_observations",
-                        "orchestrator_a2a_observation_conflicts",
-                        "orchestrator_room_epochs",
-                    )
-                ],
-                excluded_from_room_state_delete=(
-                    "orchestrator_room_epochs",
-                    "orchestrator_run_events",
-                    "orchestrator_runs",
-                    "orchestrator_agent_tool_bindings",
-                    "orchestrator_agent_calls",
-                    "orchestrator_a2a_observations",
-                    "orchestrator_a2a_observation_conflicts",
-                ),
                 file_dir=runtime.settings.hybro_file_dir,
                 content_url_prefix=f"{runtime.settings.api_prefix.rstrip('/')}/files",
             )
@@ -779,6 +750,18 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 interactions=mongo_dal.collection("hitl_interactions"),
                 resume_commands=mongo_dal.collection("hitl_resume_commands"),
                 hitl_requests=mongo_dal.collection("hitl_requests"),
+            )
+            # Room deletion asks each owning module to delete its own rows.
+            # Orchestrator collections are cleaned per room epoch instead.
+            file_storage.bind_room_state_owners(
+                (
+                    _room_deps.message_repository,
+                    RoomQuoteMongoRepository(mongo_dal),
+                    MemoryMongoRepository(mongo=mongo_dal),
+                    ContentStorageMongoRepository(mongo=mongo_dal),
+                    hitl_store,
+                    hitl_lifecycle_store,
+                )
             )
             # P3 runtime adapters keep startup wiring narrow. These SimpleNamespace
             # boundaries are intentionally constrained to container assembly.
@@ -2261,8 +2244,6 @@ def create_file_storage(
     rooms_collection: MongoCollection,
     room_messages_collection: MongoCollection,
     room_agent_messages_collection: MongoCollection,
-    room_owned_collections: list[MongoCollection],
-    excluded_from_room_state_delete: Iterable[str] = (),
     file_dir: str = "",
     max_upload_bytes: int = 5 * 1024 * 1024,
     content_url_prefix: str = "/api/v1/files",
@@ -2276,8 +2257,6 @@ def create_file_storage(
         rooms=rooms_collection,
         messages=room_messages_collection,
         agent_messages=room_agent_messages_collection,
-        room_owned_collections=room_owned_collections,
-        excluded_from_room_state_delete=excluded_from_room_state_delete,
         lease_writes=True,
         max_upload_bytes=max_upload_bytes,
         content_url_prefix=content_url_prefix,

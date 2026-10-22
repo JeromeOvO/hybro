@@ -6,6 +6,7 @@ from typing import Any
 from common.protocols import MongoCollection, MongoDAL
 from common.utils.logger import get_logger
 from common.utils.mongo_indexes import create_index, ensure_text_index
+from common.utils.room_state import delete_room_rows
 from common.utils.time import utcnow
 
 logger = get_logger(__name__)
@@ -19,6 +20,9 @@ class MemoryMongoRepository:
         collection_name: str = "room_memories",
     ) -> None:
         self._memories = mongo.collection(collection_name)
+
+    async def delete_room_state(self, room_id: str) -> bool:
+        return await delete_room_rows((self._memories,), room_id)
 
     async def ensure_indexes(self) -> None:
         await create_index(
@@ -246,6 +250,9 @@ class ContentStorageMongoRepository:
         collection_name: str = "conversation_content",
     ) -> None:
         self._content: MongoCollection = mongo.collection(collection_name)
+
+    async def delete_room_state(self, room_id: str) -> bool:
+        return await delete_room_rows((self._content,), room_id)
 
     async def ensure_indexes(self) -> bool:
         """Create the content indexes; return turn-notes search readiness."""

@@ -16,7 +16,7 @@ from common.errors import (
     FileStoragePlatformError,
     RetryableFileStoragePlatformError,
 )
-from common.protocols import PreparedFileStream
+from common.protocols import PreparedFileStream, RoomStateOwner
 from common.utils.time import ensure_utc, utcnow
 from room_files.content_store import FileContentStore
 from room_files.errors import FileConflictError, FileOperationError, FileStorageError
@@ -37,8 +37,6 @@ class RoomFiles:
         rooms: Any | None = None,
         messages: Any | None = None,
         agent_messages: Any | None = None,
-        room_owned_collections: Iterable[Any] = (),
-        excluded_from_room_state_delete: Iterable[str] = (),
         lease_writes: bool = False,
         file_id_factory: Callable[[], str] | None = None,
         now: Callable[[], datetime] = utcnow,
@@ -50,10 +48,7 @@ class RoomFiles:
         self._rooms = rooms
         self._messages = messages
         self._agent_messages = agent_messages
-        self._room_owned_collections = tuple(room_owned_collections)
-        self._excluded_from_room_state_delete = frozenset(
-            excluded_from_room_state_delete
-        )
+        self._room_state_owners: tuple[RoomStateOwner, ...] = ()
         self._leases = (
             RoomWriteLeases(rooms, now=now)
             if rooms is not None and lease_writes
@@ -763,18 +758,20 @@ class RoomFiles:
         )
         return _changed(result)
 
+    def bind_room_state_owners(self, owners: Iterable[RoomStateOwner]) -> None:
+        """Bind the modules whose room rows go with a deleted room."""
+        self._room_state_owners = tuple(owners)
+
     async def delete_room_state(self, room_id: str) -> bool:
-        collections = [
-            collection
-            for collection in self._room_owned_collections
-            if _collection_name(collection) not in self._excluded_from_room_state_delete
+        """Ask every owner to delete its room rows; succeed only if all did."""
+        if not self._room_state_owners:
+            # Fail closed: an unbound lifecycle would let recovery delete the
+            # room row while every owner's rows remain.
+            raise RuntimeError("Room-state owners have not been bound")
+        results = [
+            await owner.delete_room_state(room_id) for owner in self._room_state_owners
         ]
-        for collection in collections:
-            await collection.delete_many({"room_id": room_id})
-        for collection in collections:
-            if await collection.count({"room_id": room_id}):
-                return False
-        return True
+        return all(results)
 
     async def recover(self, *, max_age_hours: int = 24) -> int:
         """Idempotently recover stale writes and remove unreferenced uploads."""
@@ -1125,8 +1122,3 @@ def _changed(result: Any, *, attribute: str = "modified_count") -> bool:
     if isinstance(result, bool):
         return result
     return bool(getattr(result, attribute, 0))
-
-
-def _collection_name(collection: Any) -> str | None:
-    name = getattr(collection, "name", None)
-    return str(name) if name else None

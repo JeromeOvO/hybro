@@ -86,6 +86,7 @@ from common.protocols.room_protocols import (
     RoomMessageStore,
     RoomOwnershipReader,
     RoomRegistry,
+    RoomStateOwner,
 )
 
 __all__ = [
@@ -150,6 +151,7 @@ __all__ = [
     "RoomMessageStore",
     "RoomOwnershipReader",
     "RoomRegistry",
+    "RoomStateOwner",
     "RoomRepository",
     "RoomRouteRecord",
     "RunEventRepository",

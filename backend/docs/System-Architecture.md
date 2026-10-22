@@ -356,6 +356,22 @@ Examples:
   `conversation.deletion.RoomDeletionService`, bound to `ChatService`, which preserves the compatibility response
   contract while coordinating owner validation, file write draining, phased
   cleanup, Context Memory cleanup, and final deletion through narrow ports.
+  Room-state deletion is per owner: `RoomFiles.delete_room_state` calls every
+  bound `common.protocols.RoomStateOwner` and succeeds only if all report that no
+  rows remain. `container.py` binds `MessageMongoRepository`
+  (`room_user_messages`, `room_agent_messages`), `RoomQuoteMongoRepository`
+  (`room_quotes`), `MemoryMongoRepository` (`room_memories`),
+  `ContentStorageMongoRepository` (`conversation_content`), `HITLRequestStore`
+  (`hitl_requests`), and `HITLLifecycleStore` (`hitl_interactions`,
+  `hitl_resume_commands`). Retention for collections room-state deletion does
+  not touch: `orchestrator_runs`, `orchestrator_run_events`,
+  `orchestrator_agent_tool_bindings`, `orchestrator_agent_calls`,
+  `orchestrator_a2a_observations`, and `orchestrator_a2a_observation_conflicts`
+  are deleted per room epoch by the orchestrator epoch cleanup;
+  `orchestrator_room_epochs` keeps the deactivated epoch record; and
+  `orchestrator_hitl_interactions`, `orchestrator_recovery_leases`,
+  `room_events`, `room_event_seq`, `sessions`, `migration_markers`, and
+  `agent_capability_issues` are retained, with no deletion or TTL.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
   over `agent.AgentFacade`.
@@ -1825,9 +1841,7 @@ with `turn_id == "message:{message_id}"`.
 
 `room_memories.conversation_history` is the single canonical, unwindowed history.
 `context_memory.repository.MemoryMongoRepository` is the only runtime reader and
-writer of `room_memories`, apart from room-state deletion, which
-`room_files.service` performs with `delete_many({"room_id": ...})` across the
-room-owned collections.
+writer of `room_memories`, including its room-state deletion.
 Its persisted shape is:
 
 ```text

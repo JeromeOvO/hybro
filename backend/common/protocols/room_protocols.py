@@ -70,6 +70,13 @@ class RoomOwnershipReader(Protocol):
 
 
 @runtime_checkable
+class RoomStateOwner(Protocol):
+    """A module that deletes, and verifies deleted, its own rows for a room."""
+
+    async def delete_room_state(self, room_id: str) -> bool: ...
+
+
+@runtime_checkable
 class RoomMembershipSeedSource(Protocol):
     async def get_saved_group(
         self, group_id: str
@@ -84,4 +91,5 @@ __all__ = [
     "RoomMessageStore",
     "RoomOwnershipReader",
     "RoomRegistry",
+    "RoomStateOwner",
 ]

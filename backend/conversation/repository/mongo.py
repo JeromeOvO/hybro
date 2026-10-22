@@ -20,6 +20,7 @@ from common.idempotency import (
 from common.protocols import MongoDAL
 from common.utils.logger import get_logger
 from common.utils.mongo_indexes import create_index
+from common.utils.room_state import delete_room_rows
 from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
@@ -237,6 +238,11 @@ class MessageMongoRepository:
         self._mongo = mongo
         self._user_messages = mongo.collection(user_collection_name)
         self._agent_messages = mongo.collection(agent_collection_name)
+
+    async def delete_room_state(self, room_id: str) -> bool:
+        return await delete_room_rows(
+            (self._user_messages, self._agent_messages), room_id
+        )
 
     async def ensure_indexes(self) -> None:
         """Audit history, then create the user, timeline, and agent indexes."""

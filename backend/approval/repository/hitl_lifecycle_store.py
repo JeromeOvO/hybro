@@ -8,6 +8,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from common.utils.logger import get_logger
+from common.utils.room_state import delete_room_rows
 from common.utils.time import ensure_utc, utcnow
 from models.hitl import HITLInteractionStatus, HITLResumeCommandStatus
 
@@ -32,6 +33,11 @@ class HITLLifecycleStore:
         self._interactions = interactions
         self._resume_commands = resume_commands
         self._hitl_requests = hitl_requests
+
+    async def delete_room_state(self, room_id: str) -> bool:
+        return await delete_room_rows(
+            (self._interactions, self._resume_commands), room_id
+        )
 
     async def materialize_interaction(
         self, interaction_data: dict[str, Any]

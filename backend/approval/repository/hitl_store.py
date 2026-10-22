@@ -8,6 +8,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from common.utils.logger import get_logger
+from common.utils.room_state import delete_room_rows
 from common.utils.time import utcnow
 from conversation.protocols import ConversationMessageWriter
 
@@ -63,6 +64,9 @@ class HITLRequestStore:
     ) -> None:
         self._hitl_requests = hitl_requests
         self._messages = message_writer
+
+    async def delete_room_state(self, room_id: str) -> bool:
+        return await delete_room_rows((self._hitl_requests,), room_id)
 
     async def get_pending_hitl_requests_for_message(
         self, user_message_id: str

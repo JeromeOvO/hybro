@@ -4,11 +4,15 @@ from typing import Any
 
 from common.protocols import MongoDAL
 from common.utils.mongo_indexes import create_index
+from common.utils.room_state import delete_room_rows
 
 
 class RoomQuoteMongoRepository:
     def __init__(self, mongo: MongoDAL, collection_name: str = "room_quotes") -> None:
         self._quotes = mongo.collection(collection_name)
+
+    async def delete_room_state(self, room_id: str) -> bool:
+        return await delete_room_rows((self._quotes,), room_id)
 
     async def ensure_indexes(self) -> None:
         await create_index(
