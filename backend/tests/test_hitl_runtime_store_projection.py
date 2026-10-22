@@ -1089,7 +1089,7 @@ async def test_persist_pending_hitl_rejects_delayed_cross_interaction_projection
         "uq_pending_hitl_continuation_message",
     ],
 )
-async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
+async def test_ensure_indexes_raises_when_critical_unique_index_fails(
     index_name,
 ):
     error = RuntimeError(f"{index_name} failed")
@@ -1099,7 +1099,7 @@ async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
     store = _store(hitl_requests=hitl_requests)
 
     with pytest.raises(RuntimeError, match=f"{index_name} failed"):
-        await store.ensure_hitl_indexes()
+        await store.ensure_indexes()
 
     assert any(
         kwargs.get("name") == index_name
@@ -1115,7 +1115,7 @@ async def test_ensure_hitl_indexes_raises_when_critical_unique_index_fails(
         "uq_pending_hitl_continuation_message",
     ],
 )
-async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflict(
+async def test_ensure_indexes_recreates_critical_index_when_options_conflict(
     index_name,
 ):
     error = OperationFailure(
@@ -1127,7 +1127,7 @@ async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflic
     )
     store = _store(hitl_requests=hitl_requests)
 
-    await store.ensure_hitl_indexes()
+    await store.ensure_indexes()
 
     matching_calls = [
         kwargs
@@ -1139,7 +1139,7 @@ async def test_ensure_hitl_indexes_recreates_critical_index_when_options_conflic
 
 
 @pytest.mark.asyncio
-async def test_ensure_hitl_indexes_recreates_noncritical_index_when_options_conflict():
+async def test_ensure_indexes_recreates_noncritical_index_when_options_conflict():
     index_name = "uq_hitl_interaction_question"
     error = OperationFailure(
         f"Index with name: {index_name} already exists with different options",
@@ -1150,7 +1150,7 @@ async def test_ensure_hitl_indexes_recreates_noncritical_index_when_options_conf
     )
     store = _store(hitl_requests=hitl_requests)
 
-    await store.ensure_hitl_indexes()
+    await store.ensure_indexes()
 
     matching_calls = [
         kwargs

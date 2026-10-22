@@ -19,12 +19,17 @@ from common.idempotency import (
 )
 from common.protocols import MongoDAL
 from common.utils.logger import get_logger
+from common.utils.mongo_indexes import create_index
 from conversation.idempotency import (
     IdempotencyConflictError,
     UnexpectedUserMessageDuplicateError,
     stored_fingerprint_matches,
 )
 from conversation.message_graph import normalize_history_rows, status_update_payload
+from conversation.repository.indexes import (
+    ensure_room_timeline_indexes,
+    ensure_user_message_indexes,
+)
 from conversation.timeline import (
     SOURCE_RANK,
     normalize_timeline_document,
@@ -78,6 +83,20 @@ def _canonical_user_message_document(message: dict) -> dict:
 class RoomMongoRepository:
     def __init__(self, mongo: MongoDAL, collection_name: str = "rooms") -> None:
         self._rooms = mongo.collection(collection_name)
+
+    async def ensure_indexes(self) -> None:
+        await create_index(
+            self._rooms,
+            "rooms",
+            [
+                ("room_owner_id", 1),
+                ("lifecycle_state", 1),
+                ("is_pinned", -1),
+                ("pin_order", 1),
+                ("last_activity_at", -1),
+            ],
+            name="owner_history_order",
+        )
 
     async def get_by_id(self, room_id: str) -> dict | None:
         return await self._rooms.find_one({"room_id": room_id})
@@ -218,6 +237,19 @@ class MessageMongoRepository:
         self._mongo = mongo
         self._user_messages = mongo.collection(user_collection_name)
         self._agent_messages = mongo.collection(agent_collection_name)
+
+    async def ensure_indexes(self) -> None:
+        """Audit history, then create the user, timeline, and agent indexes."""
+        await ensure_user_message_indexes(self._mongo)
+        await ensure_room_timeline_indexes(self._mongo)
+        await create_index(
+            self._agent_messages,
+            "room_agent_messages",
+            [("message_id", 1)],
+            name="room_agent_message_id_unique",
+            unique=True,
+            critical=True,
+        )
 
     async def save_user_message(self, message: dict) -> str:
         candidate = normalize_timeline_document(

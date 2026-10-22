@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agent.url_utils import normalize_agent_url
 from common.protocols import MongoDAL
+from common.utils.mongo_indexes import ensure_text_index
 
 _LEGACY_NORMALIZED_URL_SCAN_LIMIT = 500
 
@@ -9,6 +10,36 @@ _LEGACY_NORMALIZED_URL_SCAN_LIMIT = 500
 class AgentMongoRepository:
     def __init__(self, mongo: MongoDAL, collection_name: str = "agents") -> None:
         self._agents = mongo.collection(collection_name)
+
+    async def ensure_indexes(self) -> bool:
+        """Create the URL uniqueness index; return lexical search readiness."""
+        existing = await self._agents.index_information()
+        index = existing.get("unique_normalized_url")
+        needs_recreate = index is None or index.get("partialFilterExpression") != {
+            "normalized_url": {"$type": "string"}
+        }
+        if needs_recreate:
+            try:
+                await self._agents.drop_index("unique_normalized_url")
+            except Exception:
+                pass
+            await self._agents.create_index(
+                [("normalized_url", 1)],
+                unique=True,
+                name="unique_normalized_url",
+                partialFilterExpression={"normalized_url": {"$type": "string"}},
+            )
+        return await ensure_text_index(
+            self._agents,
+            name="agent_lexical_text",
+            weights={
+                "agent_card.name": 10,
+                "agent_card.skills.name": 8,
+                "agent_card.skills.tags": 6,
+                "agent_card.description": 3,
+                "agent_card.skills.description": 3,
+            },
+        )
 
     async def get_by_id(self, agent_id: str) -> dict | None:
         return await self._agents.find_one({"agent_id": agent_id})

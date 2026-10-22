@@ -41,7 +41,9 @@ def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
 
 @pytest.mark.asyncio
 async def test_ensure_orchestrator_indexes_registers_exact_metadata_inventory():
-    from container import _ensure_orchestrator_indexes
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes as _ensure_orchestrator_indexes,
+    )
 
     collections: dict[str, MagicMock] = {}
 
@@ -83,7 +85,9 @@ async def test_ensure_orchestrator_indexes_registers_exact_metadata_inventory():
 
 @pytest.mark.asyncio
 async def test_ensure_orchestrator_indexes_removes_obsolete_active_room_index():
-    from container import _ensure_orchestrator_indexes
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes as _ensure_orchestrator_indexes,
+    )
 
     collections: dict[str, MagicMock] = {}
 
@@ -131,7 +135,9 @@ async def test_ensure_orchestrator_indexes_removes_obsolete_active_room_index():
 
 @pytest.mark.asyncio
 async def test_ensure_orchestrator_indexes_fails_if_obsolete_index_cannot_be_removed():
-    from container import _ensure_orchestrator_indexes
+    from execution.repository.orchestrator.indexes import (
+        ensure_orchestrator_indexes as _ensure_orchestrator_indexes,
+    )
 
     runs = MagicMock()
     runs.index_information = AsyncMock(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pymongo import ReturnDocument
 
 from common.protocols import MongoDAL
+from common.utils.mongo_indexes import create_index
 
 
 class AgentCapabilityIssueMongoRepository:
@@ -12,6 +13,21 @@ class AgentCapabilityIssueMongoRepository:
         collection_name: str = "agent_capability_issues",
     ) -> None:
         self._issues = mongo.collection(collection_name)
+
+    async def ensure_indexes(self) -> None:
+        for keys, name, unique in (
+            ([("agent_id", 1), ("status", 1)], "agent_id_status", False),
+            ([("status", 1), ("agent_id", 1)], "status_agent_id", False),
+            ([("created_at", 1)], "created_at", False),
+            ([("issue_id", 1)], "issue_id_unique", True),
+        ):
+            await create_index(
+                self._issues,
+                "agent_capability_issues",
+                keys,
+                name=name,
+                unique=unique,
+            )
 
     async def insert(self, issue: dict) -> str:
         inserted = await self._issues.insert_one(dict(issue))

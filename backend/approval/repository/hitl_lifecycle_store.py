@@ -843,7 +843,7 @@ class HITLLifecycleStore:
         for row in rows:
             yield row
 
-    async def ensure_hitl_lifecycle_indexes(self) -> None:
+    async def ensure_indexes(self) -> None:
         interaction_indexes = [
             ([("interaction_id", 1)], {"unique": True}),
             ([("room_id", 1), ("status", 1), ("expires_at", 1)], {}),

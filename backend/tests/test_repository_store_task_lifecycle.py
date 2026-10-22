@@ -398,7 +398,7 @@ class TestRepositoryStoreHITL:
             doc
             async for doc in store.iter_stale_processing_hitl_requests("cutoff-time")
         ]
-        await store.ensure_hitl_indexes()
+        await store.ensure_indexes()
 
         assert result == docs
         assert hitl_requests.find_calls == [

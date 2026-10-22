@@ -7,6 +7,7 @@ from agent.repository.documents import (
     _safe_parse_agent_group,
 )
 from common.utils.logger import get_logger
+from common.utils.mongo_indexes import create_index
 from models.agent import Agent
 from models.agent_group import AgentGroup
 
@@ -18,6 +19,16 @@ class AgentRuntimeStore:
         self._agent_groups = agent_groups
         self._agents = agents
         self._agent_repository = agent_repository
+
+    async def ensure_indexes(self) -> None:
+        await create_index(
+            self._agent_groups,
+            "agent_groups",
+            [("group_id", 1)],
+            name="agent_group_id_unique",
+            unique=True,
+            critical=True,
+        )
 
     async def add_agent_group(self, agent_group: AgentGroup) -> bool:
         try:

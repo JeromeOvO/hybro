@@ -2,7 +2,8 @@
 
 Collection: ``orchestrator_hitl_interactions``. Index provisioning is owned by
 ``execution/orchestrator/a2a_runtime/persistence.py`` (consumed by
-``_ensure_orchestrator_indexes``); constructing and injecting this store is
+``execution.repository.orchestrator.indexes.ensure_orchestrator_indexes``);
+constructing and injecting this store is
 deferred to step 5b (container wiring).
 """
 

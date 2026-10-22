@@ -5,6 +5,7 @@ from typing import Any
 
 from common.protocols import MongoCollection, MongoDAL
 from common.utils.logger import get_logger
+from common.utils.mongo_indexes import create_index, ensure_text_index
 from common.utils.time import utcnow
 
 logger = get_logger(__name__)
@@ -18,6 +19,16 @@ class MemoryMongoRepository:
         collection_name: str = "room_memories",
     ) -> None:
         self._memories = mongo.collection(collection_name)
+
+    async def ensure_indexes(self) -> None:
+        await create_index(
+            self._memories,
+            "room_memories",
+            [("room_id", 1)],
+            name="room_id_unique",
+            unique=True,
+            critical=True,
+        )
 
     async def get_room_memory(self, room_id: str) -> dict | None:
         return await self._memories.find_one({"room_id": room_id})
@@ -235,6 +246,51 @@ class ContentStorageMongoRepository:
         collection_name: str = "conversation_content",
     ) -> None:
         self._content: MongoCollection = mongo.collection(collection_name)
+
+    async def ensure_indexes(self) -> bool:
+        """Create the content indexes; return turn-notes search readiness."""
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("room_id", 1), ("turn_id", 1)],
+            name="room_turn_unique",
+            unique=True,
+            critical=True,
+        )
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("document_id", 1)],
+            name="document_id_unique",
+            unique=True,
+            partialFilterExpression={"document_id": {"$exists": True}},
+        )
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("room_id", 1), ("stored_at", -1)],
+            name="room_stored_at",
+        )
+        memory_search_ready = await ensure_text_index(
+            self._content,
+            name="turn_notes_text",
+            weights={
+                "content": 1,
+                "turn_notes.keywords": 1,
+                "turn_notes.entities": 1,
+                "turn_notes.tags": 1,
+                "turn_notes.one_liner": 1,
+            },
+        )
+        await create_index(
+            self._content,
+            "conversation_content",
+            [("expires_at", 1)],
+            name="content_ttl",
+            expireAfterSeconds=0,
+            sparse=True,
+        )
+        return memory_search_ready
 
     async def upsert_full_content(
         self,

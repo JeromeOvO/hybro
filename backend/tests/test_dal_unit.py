@@ -359,7 +359,9 @@ async def test_user_message_index_readiness_blocks_historical_conflicts(
     failed_check_index: int,
     expected_error: str,
 ):
-    from container import _ensure_user_message_indexes
+    from conversation.repository.indexes import (
+        ensure_user_message_indexes as _ensure_user_message_indexes,
+    )
 
     collection = MagicMock()
     responses = [[], [], [], [], []]
@@ -385,7 +387,9 @@ async def test_user_message_index_readiness_blocks_historical_conflicts(
 
 @pytest.mark.asyncio
 async def test_user_message_index_readiness_passes_then_creates_both_indexes():
-    from container import _ensure_user_message_indexes
+    from conversation.repository.indexes import (
+        ensure_user_message_indexes as _ensure_user_message_indexes,
+    )
 
     collection = MagicMock()
     collection.aggregate = AsyncMock(return_value=[])
@@ -416,7 +420,9 @@ async def test_user_message_index_readiness_passes_then_creates_both_indexes():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_blocks_invalid_rows_before_indexes():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(
@@ -446,7 +452,9 @@ async def test_room_timeline_readiness_blocks_invalid_rows_before_indexes():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_requires_final_audit_marker_for_existing_rows():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(return_value=[])
@@ -475,7 +483,9 @@ async def test_room_timeline_readiness_requires_final_audit_marker_for_existing_
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_rejects_legacy_marker_id_only_row():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(return_value=[])
@@ -514,7 +524,9 @@ async def test_room_timeline_readiness_rejects_legacy_marker_id_only_row():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_accepts_valid_final_audit_marker():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(return_value=[])
@@ -562,7 +574,9 @@ async def test_room_timeline_readiness_accepts_valid_final_audit_marker():
 
 @pytest.mark.asyncio
 async def test_room_timeline_readiness_requires_manual_identity_repair():
-    from container import _ensure_room_timeline_indexes
+    from conversation.repository.indexes import (
+        ensure_room_timeline_indexes as _ensure_room_timeline_indexes,
+    )
 
     user_collection = MagicMock()
     user_collection.aggregate = AsyncMock(side_effect=[[{"message_id": None}], []])
@@ -594,7 +608,7 @@ def _has_create_index(collection: MagicMock, keys, **kwargs) -> bool:
 
 @pytest.mark.asyncio
 async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current():
-    from container import _ensure_agent_indexes
+    from agent.repository import AgentMongoRepository
 
     collection = MagicMock()
     collection.index_information = AsyncMock(
@@ -609,7 +623,7 @@ async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current(
     mongo = MagicMock()
     mongo.collection.return_value = collection
 
-    assert await _ensure_agent_indexes(mongo) is True
+    assert await AgentMongoRepository(mongo).ensure_indexes() is True
     collection.drop_index.assert_not_awaited()
     assert any(
         call.kwargs.get("name") == "agent_lexical_text"
@@ -619,7 +633,7 @@ async def test_agent_text_index_is_ensured_when_normalized_url_index_is_current(
 
 @pytest.mark.asyncio
 async def test_text_index_with_scalar_prefix_is_rebuilt_even_when_weights_match():
-    from container import _ensure_text_index
+    from common.utils.mongo_indexes import ensure_text_index as _ensure_text_index
 
     collection = MagicMock()
     collection.index_information = AsyncMock(

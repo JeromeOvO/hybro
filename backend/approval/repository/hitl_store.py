@@ -566,7 +566,7 @@ class HITLRequestStore:
         for doc in docs:
             yield doc
 
-    async def ensure_hitl_indexes(self) -> None:
+    async def ensure_indexes(self) -> None:
         noncritical_indexes = [
             ((("request_id", 1),), {"unique": True}),
             ((("room_id", 1), ("status", 1)), {}),

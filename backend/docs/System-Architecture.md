@@ -2368,6 +2368,18 @@ not use lexical matching; it evaluates the complete authorized candidate scope.
 Room file metadata lives in MongoDB and file bytes live in the local file
 directory.
 
+Each repository declares the indexes for the collections it owns in an
+`ensure_indexes` method (`AgentMongoRepository`, `AgentRuntimeStore`,
+`AgentCapabilityIssueMongoRepository`, `ContentStorageMongoRepository`,
+`MemoryMongoRepository`, `RoomQuoteMongoRepository`, `RoomMongoRepository`,
+`MessageMongoRepository`, and the two `approval.repository` HITL stores); the
+orchestrator and room-file collections use
+`execution.repository.orchestrator.indexes.ensure_orchestrator_indexes` and
+`room_files.ensure_room_file_indexes`. Shared `create_index` (critical indexes
+abort startup) and `ensure_text_index` live in `common.utils.mongo_indexes`.
+`container.py::ensure_runtime_indexes` only calls each owner in order and
+reports search-index readiness.
+
 At startup, each search index is compared with its required keys and weights.
 Because MongoDB permits only one text index per collection, a mismatched index
 is dropped before its replacement is created. The starting instance does not
