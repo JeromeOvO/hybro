@@ -101,13 +101,6 @@ class RedisStreams(Protocol):
 
 
 @runtime_checkable
-class DistributedLock(Protocol):
-    async def acquire(self, key: str, owner: str, ttl: int = 60) -> bool: ...
-    async def release(self, key: str, owner: str) -> bool: ...
-    async def renew(self, key: str, owner: str, ttl: int = 60) -> bool: ...
-
-
-@runtime_checkable
 class LeaderElector(Protocol):
     async def try_acquire(
         self, job_name: str, ttl: int = 60, *, ttl_seconds: int | None = None
@@ -120,7 +113,6 @@ class LeaderElector(Protocol):
 
 
 __all__ = [
-    "DistributedLock",
     "LeaderElector",
     "MongoChangeStream",
     "MongoCollection",

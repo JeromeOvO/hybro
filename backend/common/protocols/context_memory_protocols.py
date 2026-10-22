@@ -30,16 +30,6 @@ class ContextAssemblyPort(Protocol):
 
 
 @runtime_checkable
-class MemorySearchPort(Protocol):
-    async def search_memory(
-        self,
-        room_id: str,
-        query: str,
-        limit: int = 10,
-    ) -> list[MemorySearchResult]: ...
-
-
-@runtime_checkable
 class ProjectionPort(Protocol):
     async def project_message_for_event(
         self,
@@ -73,7 +63,6 @@ class RoomMemoryCleanupPort(Protocol):
 __all__ = [
     "CompactionPort",
     "ContextAssemblyPort",
-    "MemorySearchPort",
     "ProjectionPort",
     "RoomMemoryCleanupPort",
 ]

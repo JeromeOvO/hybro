@@ -9,7 +9,6 @@ from common.protocols import (
     AgentCardResolver,
     LLMGateway,
     LLMProviderAdapter,
-    ModelRegistry,
 )
 
 
@@ -25,7 +24,6 @@ def test_adapter_implementations_satisfy_runtime_protocols():
         LLMGatewayImpl(model_registry=registry, providers={"openai": MagicMock()}),
         LLMGateway,
     )
-    assert isinstance(registry, ModelRegistry)
 
 
 def test_adapter_top_level_exports_are_explicit():

@@ -675,7 +675,6 @@ def test_protocol_methods_match_design_doc():
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
         },
-        protocols.MemorySearchPort: {"search_memory"},
         protocols.ProjectionPort: {
             "project_message_for_event",
             "run_compaction",
@@ -720,28 +719,16 @@ def test_protocol_methods_match_design_doc():
             "get_saved_group",
             "list_current_agents",
         },
-        protocols.AttachmentCleanupPort: {"delete_for_room"},
         protocols.AttachmentMetadataReader: {"get_for_room_file"},
-        protocols.AttachmentContentReader: {"get_bytes"},
-        protocols.EmbeddingServiceProtocol: {"get_embedding"},
-        protocols.RequiredEmbeddingServiceProtocol: {"get_embedding"},
-        protocols.ModelSelectableEmbeddingServiceProtocol: {"get_embedding"},
         protocols.LLMTextGateway: {"generate"},
         protocols.LLMStructuredGateway: {"generate_structured"},
         protocols.LLMEmbeddingGateway: {"embed", "embed_batch"},
         protocols.LLMStreamGateway: {"generate_stream"},
-        protocols.LLMStreamingProvider: {"generate_stream"},
         protocols.LLMProviderAdapter: {
             "embed",
             "embed_batch",
             "generate",
             "generate_structured",
-        },
-        protocols.QuoteRepository: {
-            "delete_by_id",
-            "delete_for_room",
-            "get_by_id",
-            "insert",
         },
         protocols.AgentCallCounter: {"increment_agent_call_count"},
         protocols.FileStorage: {
@@ -754,22 +741,10 @@ def test_protocol_methods_match_design_doc():
             "stream",
         },
         protocols.PreparedFileStream: {"aclose"},
-        protocols.AgentTransport: {"send_message", "stream_message"},
         protocols.AgentCardResolver: {
             "resolve_card",
             "supports_push_notifications",
             "supports_streaming",
-        },
-        protocols.LLMProvider: {
-            "generate",
-            "generate_structured",
-            "embed",
-            "embed_batch",
-        },
-        protocols.ModelRegistry: {
-            "get_model",
-            "supports_capability",
-            "list_models",
         },
         protocols.MongoDAL: {
             "collection",
@@ -814,7 +789,6 @@ def test_protocol_methods_match_design_doc():
         },
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
         protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
-        protocols.DistributedLock: {"acquire", "release", "renew"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
         protocols.AgentRepository: {
             "get_by_id",
@@ -867,34 +841,6 @@ def test_protocol_methods_match_design_doc():
             "get_user_messages_for_room",
             "get_agent_messages_for_room",
             "get_agent_messages_by_related_message_id",
-        },
-        protocols.RunRepository: {
-            "find",
-            "find_one",
-            "create",
-            "get_by_id",
-            "get_for_room",
-            "get_latest_for_rooms",
-            "insert_one",
-            "update_one",
-            "update_state",
-            "get_diverged",
-        },
-        protocols.RunEventRepository: {
-            "find",
-            "find_one",
-            "find_one_and_update",
-            "insert_one",
-            "update_one",
-            "append",
-            "get_for_run",
-            "get_latest",
-        },
-        protocols.HITLRepository: {
-            "create",
-            "get_by_id",
-            "get_pending_for_room",
-            "resolve",
         },
         protocols.MemoryRepository: {
             "get_room_memory",
@@ -1009,7 +955,6 @@ def test_protocol_methods_match_design_doc():
         ["self", "room_id"],
     )
     _assert_params(protocols.MongoCollection.find, ["self", "query", "kwargs"])
-    _assert_params(protocols.DistributedLock.acquire, ["self", "key", "owner", "ttl"])
 
 
 def test_run_state_contract_matches_persisted_values():

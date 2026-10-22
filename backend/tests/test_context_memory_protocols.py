@@ -13,7 +13,6 @@ from common.protocols import (
     CompactionPort,
     ContextAssemblyPort,
     MemoryRepository,
-    MemorySearchPort,
     ProjectionPort,
     RoomMemoryCleanupPort,
 )
@@ -207,7 +206,6 @@ def test_context_memory_port_conformance():
     facade = _facade()
 
     assert isinstance(facade, ContextAssemblyPort)
-    assert isinstance(facade, MemorySearchPort)
     assert isinstance(facade, ProjectionPort)
     assert isinstance(facade, CompactionPort)
     assert isinstance(facade, RoomMemoryCleanupPort)

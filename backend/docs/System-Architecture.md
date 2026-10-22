@@ -1907,7 +1907,7 @@ calling the LLM. Merge semantics are incremental:
 - new `room_facts` append with case-insensitive deduplication and the bounded fact
   retention policy; an empty list preserves existing facts.
 
-Search returns `list[common.dto.MemorySearchResult]` through `MemorySearchPort`.
+`ContextMemoryFacade.search_memory` returns `list[common.dto.MemorySearchResult]`.
 Mongo keyword search ranks at most `MEMORY_SEARCH_MAX_CANDIDATES` lightweight
 records using explicit keyword/relevance/temporal-decay scores, then hydrates
 content in bounded batches. Execution consumes the search DTOs without parsing
@@ -1915,7 +1915,7 @@ legacy dictionaries; Room receives only context assembly and memory cleanup
 capabilities.
 
 The facade satisfies caller-specific leaf protocols from `common.protocols`:
-`ContextAssemblyPort`, `MemorySearchPort`, `ProjectionPort`, `CompactionPort`, and
+`ContextAssemblyPort`, `ProjectionPort`, `CompactionPort`, and
 `RoomMemoryCleanupPort`. `container.py` injects only the narrow port each Room,
 Execution, event, or job consumer needs, even though one facade implements them.
 All production assembly goes through `context_memory.assembly`. Agent assembly is

@@ -11,6 +11,7 @@ from common.config.loader import settings
 
 import api_gateway
 from common.auth import bind_auth_config
+from common.protocols import HealthCheck
 from common.middleware.request_concurrency import RequestConcurrencyLimitMiddleware
 from common.middleware.request_logging import RequestLoggingMiddleware
 from common.middleware.request_size import RequestBodyLimitMiddleware
@@ -100,7 +101,7 @@ health_check_service = create_health_check_service(
 )
 
 
-def get_health_check():
+def get_health_check() -> HealthCheck:
     return health_check_service
 
 
@@ -177,7 +178,7 @@ def create_app(
     @app.get("/health")
     async def health_check(
         request: Request,
-        health=Depends(get_health_check),
+        health: HealthCheck = Depends(get_health_check),
     ):
         return await health.check(request)
 

@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from common.protocols import (
-    DistributedLock,
     LeaderElector,
     MongoChangeStream,
     MongoCollection,
@@ -18,7 +17,6 @@ from common.protocols import (
 
 def test_dal_implementations_satisfy_runtime_protocols():
     from dal import (
-        DistributedLockImpl,
         LeaderElectorImpl,
         MongoCollectionAdapter,
         MongoDALImpl,
@@ -32,7 +30,6 @@ def test_dal_implementations_satisfy_runtime_protocols():
     assert isinstance(RedisKVImpl(client=MagicMock()), RedisKV)
     assert isinstance(RedisPubSubImpl(client=MagicMock()), RedisPubSub)
     assert isinstance(RedisStreamsImpl(client=MagicMock()), RedisStreams)
-    assert isinstance(DistributedLockImpl(client=MagicMock()), DistributedLock)
     assert isinstance(
         LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector
     )

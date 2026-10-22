@@ -1,11 +1,7 @@
-from collections.abc import AsyncIterator, Sequence
 from typing import Protocol, runtime_checkable
 
 from common.dto import (
     AgentCardSnapshot,
-    AgentStreamEvent,
-    AgentTaskResult,
-    InternalAgentMessage,
 )
 
 
@@ -17,27 +13,6 @@ class RoomRouteRecord(Protocol):
 @runtime_checkable
 class SSEUserMessageRecord(Protocol):
     pass
-
-
-@runtime_checkable
-class AgentTransport(Protocol):
-    async def send_message(
-        self,
-        agent_url: str,
-        message: InternalAgentMessage,
-        *,
-        user_id: str | None = None,
-        accepted_output_modes: Sequence[str] | None = None,
-    ) -> AgentTaskResult: ...
-
-    async def stream_message(
-        self,
-        agent_url: str,
-        message: InternalAgentMessage,
-        *,
-        user_id: str | None = None,
-        accepted_output_modes: Sequence[str] | None = None,
-    ) -> AsyncIterator[AgentStreamEvent]: ...
 
 
 @runtime_checkable
@@ -61,7 +36,6 @@ class SSEStateReader(RoomRouteReader, Protocol):
 
 __all__ = [
     "AgentCardResolver",
-    "AgentTransport",
     "RoomRouteRecord",
     "RoomRouteReader",
     "SSEStateReader",
