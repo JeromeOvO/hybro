@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from conversation.protocols import ClientRequestIdResolver
+
 
 class SSEClientRequestIdResolver:
-    def __init__(self, resolver) -> None:
+    def __init__(self, resolver: ClientRequestIdResolver) -> None:
         self._resolver = resolver
 
     async def resolve_client_request_id(

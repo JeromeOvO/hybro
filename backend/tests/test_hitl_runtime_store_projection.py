@@ -11,6 +11,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from approval.repository import HITLRequestStore
+from conversation.repository import ConversationMessageStore
 from models.hitl import HITLPromptType
 
 
@@ -120,8 +121,11 @@ def _store(
 ) -> HITLRequestStore:
     return HITLRequestStore(
         hitl_requests=hitl_requests or _FakeCollection(),
-        room_agent_messages=room_agent_messages or _FakeCollection(),
-        room_user_messages=_FakeCollection(),
+        message_writer=ConversationMessageStore(
+            room_agent_messages=room_agent_messages or _FakeCollection(),
+            room_user_messages=_FakeCollection(),
+            message_repository=object(),
+        ),
     )
 
 

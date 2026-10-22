@@ -52,6 +52,19 @@ EXPECTED_METHODS = {
             "upsert_local_agent",
         },
     },
+    "conversation.protocols": {
+        "ClientRequestIdResolver": {
+            "resolve_client_request_id_for_agent_message",
+            "resolve_client_request_id_for_message_id",
+        },
+        "ConversationMessageWriter": {
+            "persist_hitl_interaction_metadata",
+            "persist_hitl_request_id_on_message",
+            "persist_hitl_user_answer",
+            "persist_pending_hitl_on_agent_message",
+            "update_agent_message_task_state",
+        },
+    },
     "chat.protocols": {
         "RoomCenterCompatibility": {
             "create_new_room",

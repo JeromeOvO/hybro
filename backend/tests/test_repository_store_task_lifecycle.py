@@ -106,16 +106,16 @@ class _Stores:
     """Message calls go to the conversation store, HITL calls to the approval stores."""
 
     def __init__(self, mongo: FakeMongo) -> None:
+        message_store = ConversationMessageStore(
+            room_agent_messages=mongo.collection("room_agent_messages"),
+            room_user_messages=mongo.collection("room_user_messages"),
+            message_repository=object(),
+        )
         self._targets = (
-            ConversationMessageStore(
-                room_agent_messages=mongo.collection("room_agent_messages"),
-                room_user_messages=mongo.collection("room_user_messages"),
-                message_repository=object(),
-            ),
+            message_store,
             HITLRequestStore(
                 hitl_requests=mongo.collection("hitl_requests"),
-                room_agent_messages=mongo.collection("room_agent_messages"),
-                room_user_messages=mongo.collection("room_user_messages"),
+                message_writer=message_store,
             ),
             HITLLifecycleStore(
                 interactions=mongo.collection("hitl_interactions"),

@@ -31,12 +31,13 @@ class _ConversationStores:
             ConversationRoomStore,
         )
 
+        message_store = ConversationMessageStore(
+            room_agent_messages=mongo.collection("room_agent_messages"),
+            room_user_messages=mongo.collection("room_user_messages"),
+            message_repository=message_repository,
+        )
         self._targets = (
-            ConversationMessageStore(
-                room_agent_messages=mongo.collection("room_agent_messages"),
-                room_user_messages=mongo.collection("room_user_messages"),
-                message_repository=message_repository,
-            ),
+            message_store,
             ConversationRoomStore(room_repository=room_repository),
             AgentRuntimeStore(
                 agent_groups=mongo.collection("agent_groups"),
@@ -45,8 +46,7 @@ class _ConversationStores:
             ),
             HITLRequestStore(
                 hitl_requests=mongo.collection("hitl_requests"),
-                room_agent_messages=mongo.collection("room_agent_messages"),
-                room_user_messages=mongo.collection("room_user_messages"),
+                message_writer=message_store,
             ),
             HITLLifecycleStore(
                 interactions=mongo.collection("hitl_interactions"),

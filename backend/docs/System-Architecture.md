@@ -1123,7 +1123,12 @@ writes, claims, artifact accumulation, descendant cancellation),
 `ConversationRoomStore` (room reads and updates), and `ClientRequestIdStore`
 (`client_request_id` resolution). `container.py` constructs them directly over
 the `room_agent_messages` and `room_user_messages` collections and the Room-owned
-repositories.
+repositories. `conversation.protocols` publishes two ports over them:
+`ConversationMessageWriter`, the guarded agent-message writes other modules make
+(task-state, HITL request id, pending-HITL projection, user answer, interaction
+metadata), implemented by `ConversationMessageStore`; and
+`ClientRequestIdResolver`, implemented by `ClientRequestIdStore` and consumed by
+the SSE `client_request_id` resolver.
 `conversation.runtime.ConversationRuntime` holds the message engine methods:
 mention parsing, user-message persistence and preflight, agent-message creation,
 message and timeline reads, and orchestration-status projection.
@@ -2646,8 +2651,8 @@ isolation across HTTP requests.
 
 `client_request_id` correlation is served by
 `conversation.repository.ClientRequestIdStore`. HITL request and lifecycle data
-access is served by `approval.repository.HITLRequestStore` (`hitl_requests`, plus
-its writes to the room message collections) and
+access is served by `approval.repository.HITLRequestStore` (`hitl_requests`; its
+agent-message writes go through the `ConversationMessageWriter` port) and
 `approval.repository.HITLLifecycleStore` (`hitl_interactions`,
 `hitl_resume_commands`), bound into focused ports in `container.py`.
 

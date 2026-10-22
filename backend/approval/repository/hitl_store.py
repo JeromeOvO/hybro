@@ -7,13 +7,11 @@ from typing import Any
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
-from common.a2a_constants import FAILURE_STATES, TERMINAL_STATES
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
+from conversation.protocols import ConversationMessageWriter
 
 logger = get_logger(__name__)
-_TERMINAL_TASK_STATES = sorted(state.value for state in TERMINAL_STATES)
-_UNRESUMABLE_TASK_STATES = sorted(state.value for state in FAILURE_STATES)
 
 _PENDING_HITL_DISPLAY_INDEX = "uq_pending_hitl_display_message"
 _PENDING_HITL_CONTINUATION_INDEX = "uq_pending_hitl_continuation_message"
@@ -61,11 +59,10 @@ def _duplicate_key_mentions_index(error: DuplicateKeyError, index_name: str) -> 
 
 class HITLRequestStore:
     def __init__(
-        self, *, hitl_requests, room_agent_messages, room_user_messages
+        self, *, hitl_requests, message_writer: ConversationMessageWriter
     ) -> None:
         self._hitl_requests = hitl_requests
-        self._room_agent_messages = room_agent_messages
-        self._room_user_messages = room_user_messages
+        self._messages = message_writer
 
     async def get_pending_hitl_requests_for_message(
         self, user_message_id: str
@@ -215,70 +212,16 @@ class HITLRequestStore:
         message_id: str,
         state: str,
     ) -> bool:
-        try:
-            allowed_terminal_guard = (
-                _UNRESUMABLE_TASK_STATES
-                if state in {"input-required", "completed"}
-                else _TERMINAL_TASK_STATES
-            )
-            query: dict[str, Any] = {
-                "message_id": message_id,
-                "message_content.message_task.status.state": {
-                    "$nin": allowed_terminal_guard
-                },
-            }
-            if state == "input-required":
-                query["$or"] = [
-                    {"terminal_projection_event_id": {"$exists": False}},
-                    {"terminal_projection_event_id": None},
-                ]
-
-            projected = await self._room_agent_messages.find_one_and_update(
-                query,
-                {"$set": {"message_content.message_task.status.state": state}},
-                return_document=ReturnDocument.AFTER,
-            )
-            if not isinstance(projected, dict):
-                return False
-            message_task = projected.get("message_content", {}).get("message_task", {})
-            return (message_task.get("status") or {}).get("state") == state
-        except Exception:
-            logger.error("Failed to update agent message task state", exc_info=True)
-            return False
+        return await self._messages.update_agent_message_task_state(message_id, state)
 
     async def persist_hitl_request_id_on_message(
         self,
         message_id: str,
         request_id: str | None,
     ) -> bool:
-        try:
-            await self._ensure_message_task_metadata(message_id)
-            metadata_path = "message_content.message_task.metadata.hitl_request_id"
-            update = (
-                {"$set": {metadata_path: request_id}}
-                if request_id is not None
-                else {"$unset": {metadata_path: ""}}
-            )
-            projected = await self._room_agent_messages.find_one_and_update(
-                {"message_id": message_id},
-                update,
-                return_document=ReturnDocument.AFTER,
-            )
-            if not isinstance(projected, dict):
-                return False
-            metadata = (
-                projected.get("message_content", {})
-                .get("message_task", {})
-                .get("metadata")
-                or {}
-            )
-            return metadata.get("hitl_request_id") == request_id
-        except Exception:
-            logger.error(
-                "Failed to persist HITL request id on agent message",
-                exc_info=True,
-            )
-            return False
+        return await self._messages.persist_hitl_request_id_on_message(
+            message_id, request_id
+        )
 
     async def find_pending_hitl_request_for_agent_message(
         self,
@@ -570,141 +513,19 @@ class HITLRequestStore:
         expected_request_id: str | None = None,
         projection_at: datetime | None = None,
     ) -> bool:
-        try:
-            projection_timestamp = projection_at or utcnow()
-            projection_at_iso = projection_timestamp.isoformat()
-            metadata: dict[str, Any] = {
-                "hitl_request_id": request_id,
-                "hitl_prompt": prompt,
-                "hitl_prompt_type": getattr(prompt_type, "value", prompt_type),
-                "user_answer": None,
-            }
-            if choices is not None:
-                metadata["hitl_choices"] = choices
-            optional_metadata = {
-                "hitl_a2a_task_id": a2a_task_id,
-                "hitl_a2a_context_id": a2a_context_id,
-                "hitl_interaction_id": interaction_id,
-                "hitl_question_count": question_count,
-                "hitl_question_index": question_index,
-                "hitl_projection_at": projection_at_iso,
-            }
-            metadata.update(
-                {
-                    key: value
-                    for key, value in optional_metadata.items()
-                    if value is not None
-                }
-            )
-            updates: dict[str, Any] = {
-                "message_content.message_task.status.state": "input-required",
-                "message_content.message_task.metadata": metadata,
-                "task_updated_at": utcnow(),
-            }
-
-            query: dict[str, Any] = {
-                "message_id": message_id,
-                "$or": [
-                    {"terminal_projection_event_id": {"$exists": False}},
-                    {"terminal_projection_event_id": None},
-                ],
-                "message_content.message_task.status.state": {
-                    "$nin": _UNRESUMABLE_TASK_STATES
-                },
-            }
-
-            if expected_request_id is not None:
-                query["message_content.message_task.metadata.hitl_request_id"] = (
-                    expected_request_id
-                )
-            else:
-                query["$and"] = [
-                    {
-                        "$or": [
-                            {
-                                "message_content.message_task.status.state": {
-                                    "$ne": "completed"
-                                }
-                            },
-                            {
-                                "$and": [
-                                    {
-                                        "message_content.message_task.metadata.hitl_request_id": {
-                                            "$ne": request_id
-                                        }
-                                    },
-                                    {
-                                        "$or": [
-                                            {
-                                                "message_content.message_task.metadata.hitl_projection_at": {
-                                                    "$exists": False
-                                                }
-                                            },
-                                            {
-                                                "message_content.message_task.metadata.hitl_projection_at": None
-                                            },
-                                            {
-                                                "message_content.message_task.metadata.hitl_projection_at": {
-                                                    "$lt": projection_at_iso
-                                                }
-                                            },
-                                        ]
-                                    },
-                                ]
-                            },
-                        ]
-                    },
-                    {
-                        "$or": [
-                            {
-                                "message_content.message_task.metadata.hitl_question_index": {
-                                    "$exists": False
-                                }
-                            },
-                            {
-                                "message_content.message_task.metadata.hitl_question_index": None
-                            },
-                            {
-                                "message_content.message_task.metadata.hitl_question_index": {
-                                    "$lte": question_index
-                                }
-                            },
-                        ]
-                    },
-                ]
-
-            projected = await self._room_agent_messages.find_one_and_update(
-                query,
-                {"$set": updates},
-                return_document=ReturnDocument.AFTER,
-            )
-            if not projected:
-                return False
-
-            message_task = (
-                projected.get("message_content", {}).get("message_task", {})
-                if isinstance(projected, dict)
-                else {}
-            )
-            metadata = message_task.get("metadata") or {}
-            state = (message_task.get("status") or {}).get("state")
-            return (
-                state == "input-required"
-                and metadata.get("hitl_request_id") == request_id
-            )
-        except Exception:
-            logger.error(
-                "Failed to persist pending HITL on agent message", exc_info=True
-            )
-            return False
-
-    async def _ensure_message_task_metadata(self, message_id: str) -> None:
-        await self._room_agent_messages.update_one(
-            {
-                "message_id": message_id,
-                "message_content.message_task.metadata": None,
-            },
-            {"$set": {"message_content.message_task.metadata": {}}},
+        return await self._messages.persist_pending_hitl_on_agent_message(
+            message_id,
+            request_id=request_id,
+            prompt=prompt,
+            prompt_type=prompt_type,
+            choices=choices,
+            a2a_task_id=a2a_task_id,
+            a2a_context_id=a2a_context_id,
+            interaction_id=interaction_id,
+            question_count=question_count,
+            question_index=question_index,
+            expected_request_id=expected_request_id,
+            projection_at=projection_at,
         )
 
     async def persist_hitl_user_answer(
@@ -712,19 +533,7 @@ class HITLRequestStore:
         message_id: str,
         user_input: str | None,
     ) -> bool:
-        try:
-            await self._ensure_message_task_metadata(message_id)
-            return await self._room_agent_messages.update_one(
-                {"message_id": message_id},
-                {
-                    "$set": {
-                        "message_content.message_task.metadata.user_answer": user_input
-                    }
-                },
-            )
-        except Exception:
-            logger.error("Failed to persist HITL user answer", exc_info=True)
-            return False
+        return await self._messages.persist_hitl_user_answer(message_id, user_input)
 
     async def persist_hitl_interaction_metadata(
         self,
@@ -734,24 +543,12 @@ class HITLRequestStore:
         question_count: int | None,
         question_index: int | None,
     ) -> bool:
-        try:
-            await self._ensure_message_task_metadata(message_id)
-            if interaction_id is None:
-                return False
-            updates: dict[str, Any] = {
-                "message_content.message_task.metadata.hitl_interaction_id": interaction_id,
-                "message_content.message_task.metadata.hitl_question_count": question_count
-                or 1,
-                "message_content.message_task.metadata.hitl_question_index": question_index
-                or 0,
-            }
-            return await self._room_agent_messages.update_one(
-                {"message_id": message_id},
-                {"$set": updates},
-            )
-        except Exception:
-            logger.error("Failed to persist HITL interaction metadata", exc_info=True)
-            return False
+        return await self._messages.persist_hitl_interaction_metadata(
+            message_id,
+            interaction_id=interaction_id,
+            question_count=question_count,
+            question_index=question_index,
+        )
 
     async def iter_stale_processing_hitl_requests(
         self,

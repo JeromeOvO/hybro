@@ -779,8 +779,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             hitl_store = HITLRequestStore(
                 hitl_requests=mongo_dal.collection("hitl_requests"),
-                room_agent_messages=mongo_dal.collection("room_agent_messages"),
-                room_user_messages=mongo_dal.collection("room_user_messages"),
+                message_writer=message_store,
             )
             hitl_lifecycle_store = HITLLifecycleStore(
                 interactions=mongo_dal.collection("hitl_interactions"),

@@ -47,8 +47,7 @@ def test_approval_repository_exports_the_hitl_stores():
     assert HITLLifecycleStore.__module__ == ("approval.repository.hitl_lifecycle_store")
     assert set(inspect.signature(HITLRequestStore).parameters) == {
         "hitl_requests",
-        "room_agent_messages",
-        "room_user_messages",
+        "message_writer",
     }
     assert set(inspect.signature(HITLLifecycleStore).parameters) == {
         "interactions",

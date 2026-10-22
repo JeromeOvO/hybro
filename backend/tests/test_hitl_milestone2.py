@@ -135,11 +135,7 @@ async def test_deadline_is_part_of_claim_and_pending_queries_without_truncation(
     collection = MagicMock()
     collection.find_one_and_update = AsyncMock(return_value=None)
     collection.find = AsyncMock(return_value=[])
-    part = HITLRequestStore(
-        hitl_requests=collection,
-        room_agent_messages=MagicMock(),
-        room_user_messages=MagicMock(),
-    )
+    part = HITLRequestStore(hitl_requests=collection, message_writer=MagicMock())
 
     await part.claim_hitl_request("request-1", status="answer_recorded")
     claim_query = collection.find_one_and_update.await_args.args[0]
