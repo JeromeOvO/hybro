@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from pymongo import ReturnDocument
@@ -29,16 +29,6 @@ logger = get_logger(__name__)
 ARTIFACT_MATERIALIZATION_WAIT_SECONDS = 20 * 60 + 60
 _TERMINAL_TASK_STATES = sorted(state.value for state in TERMINAL_STATES)
 _UNRESUMABLE_TASK_STATES = sorted(state.value for state in FAILURE_STATES)
-
-
-def _legacy_claim_threshold_text(stale_threshold: Any) -> str:
-    if isinstance(stale_threshold, datetime):
-        return (
-            stale_threshold.astimezone(UTC)
-            .replace(tzinfo=None)
-            .isoformat(timespec="microseconds")
-        )
-    return str(stale_threshold)
 
 
 class ConversationMessageStore:
@@ -342,54 +332,6 @@ class ConversationMessageStore:
             logger.error("Failed to update room agent message", exc_info=True)
             return False
 
-    async def claim_user_message_for_processing(self, message_id: str) -> bool:
-        try:
-            doc = await self._room_user_messages.find_one_and_update(
-                {"message_id": message_id, "processing_claimed_at": None},
-                {"$set": {"processing_claimed_at": utcnow()}},
-            )
-            return doc is not None
-        except Exception:
-            logger.error("Failed to claim user message", exc_info=True)
-            return False
-
-    async def unclaim_user_message(self, message_id: str) -> bool:
-        try:
-            return await self._room_user_messages.update_one(
-                {"message_id": message_id},
-                {"$set": {"processing_claimed_at": None}},
-            )
-        except Exception:
-            logger.error("Failed to unclaim user message", exc_info=True)
-            return False
-
-    async def claim_or_reclaim_user_message(
-        self,
-        message_id: str,
-        stale_threshold: Any,
-    ) -> bool:
-        try:
-            doc = await self._room_user_messages.find_one_and_update(
-                {
-                    "message_id": message_id,
-                    "$or": [
-                        {"processing_claimed_at": None},
-                        {"processing_claimed_at": {"$lt": stale_threshold}},
-                        {
-                            "processing_claimed_at": {
-                                "$type": "string",
-                                "$lt": _legacy_claim_threshold_text(stale_threshold),
-                            }
-                        },
-                    ],
-                },
-                {"$set": {"processing_claimed_at": utcnow()}},
-            )
-            return doc is not None
-        except Exception:
-            logger.error("Failed to claim or reclaim user message", exc_info=True)
-            return False
-
     async def refresh_processing_claim(self, message_id: str) -> bool:
         try:
             return await self._room_user_messages.update_one(
@@ -399,70 +341,6 @@ class ConversationMessageStore:
         except Exception:
             logger.error("Failed to refresh processing claim", exc_info=True)
             return False
-
-    async def get_stale_claimed_orchestration_messages(
-        self,
-        orphan_threshold_minutes: int,
-        limit: int = 100,
-        after_message_id: str | None = None,
-    ) -> list[RoomUserMessage]:
-        threshold = utcnow() - timedelta(minutes=orphan_threshold_minutes)
-        legacy_threshold = _legacy_claim_threshold_text(threshold)
-        try:
-            query: dict[str, Any] = {
-                "extend_info.orchestration": True,
-                "extend_info.orchestration_status": "created",
-                "$or": [
-                    {
-                        "processing_claimed_at": None,
-                        "$or": [
-                            {"message_created_at": {"$lt": threshold}},
-                            {
-                                "message_created_at": {
-                                    "$type": "string",
-                                    "$lt": legacy_threshold,
-                                }
-                            },
-                        ],
-                    },
-                    {"processing_claimed_at": {"$lt": threshold}},
-                    {
-                        "processing_claimed_at": {
-                            "$type": "string",
-                            "$lt": legacy_threshold,
-                        }
-                    },
-                ],
-            }
-            messages: list[RoomUserMessage] = []
-            cursor = after_message_id
-            while len(messages) < limit:
-                message_id_filter: dict[str, Any] = {"$type": "string"}
-                if cursor is not None:
-                    message_id_filter["$gt"] = cursor
-                query["message_id"] = message_id_filter
-                raw_limit = limit - len(messages)
-                docs = await self._room_user_messages.find(
-                    query,
-                    sort=[("message_id", 1)],
-                    limit=raw_limit,
-                )
-                if not docs:
-                    break
-                for doc in docs:
-                    message = _safe_parse_user_message(doc)
-                    if message is not None:
-                        messages.append(message)
-                cursor = docs[-1]["message_id"]
-                if len(docs) < raw_limit:
-                    break
-            return messages
-        except Exception:
-            logger.error(
-                "Failed to get stale claimed orchestration messages",
-                exc_info=True,
-            )
-            return []
 
     async def update_orchestration_projection_if_status(
         self,

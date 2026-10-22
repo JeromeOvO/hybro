@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from agent.url_utils import normalize_agent_url
 from common.protocols import MongoDAL
 from common.utils.mongo_indexes import ensure_text_index
-
-_LEGACY_NORMALIZED_URL_SCAN_LIMIT = 500
 
 
 class AgentMongoRepository:
@@ -73,22 +70,7 @@ class AgentMongoRepository:
         exact_query: dict = {"normalized_url": normalized_url}
         if provider_id is not None:
             exact_query["provider_id"] = provider_id
-        exact = await self._agents.find_one(exact_query)
-        if exact is not None:
-            return exact
-
-        legacy_query: dict = {"normalized_url": {"$exists": False}}
-        if provider_id is not None:
-            legacy_query["provider_id"] = provider_id
-        legacy_docs = await self._agents.find(
-            legacy_query,
-            limit=_LEGACY_NORMALIZED_URL_SCAN_LIMIT,
-        )
-        for doc in legacy_docs:
-            card_url = (doc.get("agent_card") or {}).get("url")
-            if card_url and normalize_agent_url(card_url) == normalized_url:
-                return doc
-        return None
+        return await self._agents.find_one(exact_query)
 
     async def list_visible(
         self,

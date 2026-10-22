@@ -1538,11 +1538,10 @@ async def test_runtime_store_room_orchestration_claim_cancel_and_continuation():
         agent_repository=object(),
     )
 
-    assert await store.claim_user_message_for_processing("u1") is True
-    assert user_messages.docs[0]["processing_claimed_at"] is not None
+    claimed_at = datetime(2026, 1, 1, tzinfo=UTC)
+    user_messages.docs[0]["processing_claimed_at"] = claimed_at
     assert await store.refresh_processing_claim("u1") is True
-    assert await store.unclaim_user_message("u1") is True
-    assert user_messages.docs[0]["processing_claimed_at"] is None
+    assert user_messages.docs[0]["processing_claimed_at"] != claimed_at
     assert await store.turn_exists("r1", "missing") is False
 
     assert await store.cancel_descendants("u1") == 3

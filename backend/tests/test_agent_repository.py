@@ -233,7 +233,7 @@ async def test_list_visible_honors_explicit_finite_limit():
 
 
 @pytest.mark.asyncio
-async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
+async def test_find_by_normalized_url_reads_only_the_indexed_field():
     repo, collection = _repo(
         [
             {
@@ -250,15 +250,15 @@ async def test_find_by_normalized_url_checks_field_then_legacy_card_url():
     )
 
     exact = await repo.find_by_normalized_url("https://example.com")
-    legacy = await repo.find_by_normalized_url("http://localhost", provider_id="u1")
+    missing = await repo.find_by_normalized_url("http://localhost", provider_id="u1")
 
     assert exact["agent_id"] == "exact"
-    assert legacy["agent_id"] == "legacy"
-    assert collection.find_one_calls[0] == {"normalized_url": "https://example.com"}
-    assert collection.find_calls[-1][0] == {
-        "normalized_url": {"$exists": False},
-        "provider_id": "u1",
-    }
+    assert missing is None
+    assert collection.find_one_calls == [
+        {"normalized_url": "https://example.com"},
+        {"normalized_url": "http://localhost", "provider_id": "u1"},
+    ]
+    assert collection.find_calls == []
 
 
 @pytest.mark.asyncio
@@ -291,29 +291,6 @@ async def test_public_url_exists_update_delete_and_health():
     assert (await repo.get_by_id("a1"))["agent_status"] == "active"
     assert await repo.delete("a1") is True
     assert await repo.delete("a1") is False
-
-
-@pytest.mark.asyncio
-async def test_find_by_normalized_url_limits_legacy_fallback_scan():
-    repo, collection = _repo(
-        [
-            {
-                "agent_id": "legacy",
-                "provider_id": "u1",
-                "agent_card": {"url": "https://legacy.example/.well-known/agent.json"},
-            }
-        ]
-    )
-
-    found = await repo.find_by_normalized_url(
-        "https://legacy.example", provider_id="u1"
-    )
-
-    assert found["agent_id"] == "legacy"
-    assert collection.find_calls[-1] == (
-        {"normalized_url": {"$exists": False}, "provider_id": "u1"},
-        {"limit": 500},
-    )
 
 
 @pytest.mark.asyncio

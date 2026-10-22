@@ -1,7 +1,6 @@
 import asyncio
 import gc
 import inspect
-import json
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -988,32 +987,6 @@ async def test_many_malicious_handlers_and_auxiliary_tasks_share_shutdown_deadli
         await asyncio.sleep(0)
     assert bus.worker_tasks == ()
     assert bus._auxiliary_tasks == {}
-
-
-def test_event_envelope_accepts_legacy_missing_timestamp():
-    internal_timestamp = "2025-01-02T03:04:05Z"
-    envelope = EventEnvelope.model_validate(
-        {
-            "origin": "legacy-worker",
-            "event_type": "example",
-            "event": {
-                "event_type": "example",
-                "value": 1,
-                "timestamp": internal_timestamp,
-            },
-        }
-    )
-    assert envelope.timestamp == datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
-    assert "timestamp" in json.loads(envelope.model_dump_json())
-
-    fallback = EventEnvelope.model_validate(
-        {
-            "origin": "older-worker",
-            "event_type": "example",
-            "event": {"event_type": "example", "value": 2},
-        }
-    )
-    assert fallback.timestamp.tzinfo is not None
 
 
 @pytest.mark.asyncio
