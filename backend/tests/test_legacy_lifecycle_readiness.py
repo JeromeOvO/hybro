@@ -24,7 +24,19 @@ def _get(document: dict[str, Any], path: str) -> Any:
     return value
 
 
+def _present(document: dict[str, Any], path: str) -> bool:
+    value: Any = document
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return False
+        value = value[part]
+    return True
+
+
 def _operator_holds(value: Any, operator: str, operand: Any) -> bool:
+    if operator == "$type":
+        assert operand == "string", "fake supports only $type string"
+        return isinstance(value, str)
     if operator == "$ne":
         return value != operand
     if operator == "$in":
@@ -46,9 +58,15 @@ def _matches(document: dict[str, Any], query: dict[str, Any]) -> bool:
             continue
         value = _get(document, key)
         if isinstance(condition, dict):
+            if (
+                "$exists" in condition
+                and _present(document, key) != condition["$exists"]
+            ):
+                return False
             if not all(
                 _operator_holds(value, operator, operand)
                 for operator, operand in condition.items()
+                if operator != "$exists"
             ):
                 return False
         elif value != condition:
@@ -382,3 +400,22 @@ async def test_leftover_a2a_resume_rows_count_where_reconcilers_still_read_them(
     assert report["unreconciled_terminal_a2a_resume_interactions"].count == 1
     assert report["unreconciled_terminal_a2a_resume_requests"].count == 1
     assert report["open_a2a_resume_requests"].count == 1
+
+
+@pytest.mark.asyncio
+async def test_agents_without_a_normalized_url_count():
+    report = _by_name(
+        await collect_readiness(
+            FakeDatabase(
+                {
+                    "agents": [
+                        {"agent_id": "a1"},
+                        {"agent_id": "a2", "normalized_url": None},
+                        {"agent_id": "a3", "normalized_url": "https://a"},
+                    ]
+                }
+            )
+        )
+    )
+
+    assert report["agents_missing_normalized_url"].count == 1

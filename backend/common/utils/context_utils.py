@@ -357,14 +357,6 @@ async def _generate_turn_notes_json(
         if isinstance(response, dict):
             return response
         return response.data
-
-    legacy_json = getattr(provider, "call_supervisor_llm_json", None)
-    if legacy_json is not None:
-        return await legacy_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            model="context_memory_json_model",
-        )
     return None
 
 

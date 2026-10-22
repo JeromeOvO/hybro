@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count the legacy lifecycle data that gates each C2 cleanup step. Read-only.
+"""Count the legacy data that gates each C2 and C8 cleanup step. Read-only.
 
 Each count must be zero (or migrated) before the plan step it names deletes the
 code that reads that data. The script only runs ``count_documents`` and
@@ -165,6 +165,12 @@ CHECKS = (
         gates="C2 step 8 (turn_completion_kind readers)",
         collections=("room_user_messages",),
         query={"extend_info.turn_completion_kind": {"$ne": None}},
+    ),
+    _Check(
+        name="agents_missing_normalized_url",
+        gates="C8 (normalized-url scan in AgentMongoRepository)",
+        collections=("agents",),
+        query={"normalized_url": {"$exists": False}},
     ),
 )
 

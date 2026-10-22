@@ -33,3 +33,9 @@ def test_hitl_factory_rejects_retired_arguments_without_an_alias_list(name):
     with pytest.raises(TypeError, match="unexpected argument"):
         factory.create_hitl_service(**{name: object()})
     assert "legacy" not in inspect.getsource(factory)
+
+
+def test_turn_notes_json_has_no_retired_provider_fallback():
+    from common.utils import context_utils
+
+    assert "call_supervisor_llm_json" not in inspect.getsource(context_utils)

@@ -499,6 +499,7 @@ uv run python -m scripts.check_legacy_lifecycle_readiness
 ```
 
 `report_orphan_modules` lists production modules that no entry point imports.
-`check_legacy_lifecycle_readiness` counts the legacy lifecycle data in the
-configured Mongo database (or `--mongo-url`/`--database`) that must reach zero
-before each legacy-removal step; each line names the step it gates.
+`check_legacy_lifecycle_readiness` counts the legacy lifecycle and data-shape
+records in the configured Mongo database (or `--mongo-url`/`--database`) that
+must reach zero before each legacy-removal step; each line names the step it
+gates.
