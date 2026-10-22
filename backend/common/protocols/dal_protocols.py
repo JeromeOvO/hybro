@@ -87,20 +87,6 @@ class RedisPubSub(Protocol):
 
 
 @runtime_checkable
-class RedisStreams(Protocol):
-    @property
-    def is_connected(self) -> bool: ...
-    async def xadd(
-        self, stream: str, fields: dict, maxlen: int | None = None
-    ) -> str: ...
-    async def xread(
-        self, streams: dict, block: int = 0, count: int = 100
-    ) -> list[dict]: ...
-    async def ping(self) -> bool: ...
-    async def close(self) -> None: ...
-
-
-@runtime_checkable
 class LeaderElector(Protocol):
     async def try_acquire(
         self, job_name: str, ttl: int = 60, *, ttl_seconds: int | None = None
@@ -119,5 +105,4 @@ __all__ = [
     "MongoDAL",
     "RedisKV",
     "RedisPubSub",
-    "RedisStreams",
 ]

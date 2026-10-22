@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Literal
+from typing import Literal, Protocol
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -50,7 +50,6 @@ from .persistence import SUSPENDED_RUN_STATUSES, TERMINAL_RUN_STATUSES
 from .ports import (
     CancellationSignal,
     ContextCompactor,
-    IDFactory,
     InvalidParkedInteractionTarget,
     ModelRuntime,
     OrchestratorRunStore,
@@ -91,6 +90,10 @@ KernelOutcome = Literal[
     "aborted",
     "failed",
 ]
+
+
+class IDFactory(Protocol):
+    def new_id(self, prefix: str) -> str: ...
 
 
 class KernelConflict(RuntimeError):

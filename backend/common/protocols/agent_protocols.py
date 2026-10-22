@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from common.dto import (
     AgentCardSnapshot,
     AgentInfo,
     AgentMatchResult,
-    LocalAgentUpsertResult,
 )
 from common.protocols.json_types import JsonValue
 
@@ -53,45 +52,8 @@ class AgentMatcher(Protocol):
 
 
 @runtime_checkable
-class AgentMessageMatcher(Protocol):
-    async def match_for_message(
-        self,
-        query: str,
-        *,
-        limit: int = 5,
-        filter_ids: list[str] | None = None,
-        requesting_user_id: str | None = None,
-        required_input_modes: list[str] | None = None,
-    ) -> list[dict[str, Any]]: ...
-
-
-@runtime_checkable
 class AgentExclusionReader(Protocol):
     async def get_excluded_agent_ids(self) -> frozenset[str]: ...
-
-
-@runtime_checkable
-class AgentManagement(Protocol):
-    async def register_agent(
-        self, url: str, provider_id: str, **kwargs
-    ) -> AgentInfo: ...
-    async def delete_agent(self, agent_id: str, provider_id: str) -> bool: ...
-    async def update_agent(self, agent_id: str, updates: dict) -> AgentInfo | None: ...
-    async def list_agents(self, provider_id: str) -> list[AgentInfo]: ...
-    async def list_public_agents(self, limit: int = 50) -> list[AgentInfo]: ...
-
-
-@runtime_checkable
-class AgentRegistryWriter(Protocol):
-    async def upsert_local_agent(
-        self,
-        discovery_url: str,
-        card: AgentCardSnapshot,
-    ) -> LocalAgentUpsertResult: ...
-
-    async def list_local_agent_ids(self) -> list[str]: ...
-
-    async def mark_local_agents_inactive(self, agent_ids: list[str]) -> int: ...
 
 
 @runtime_checkable
@@ -103,11 +65,8 @@ class AgentCallCounter(Protocol):
 
 __all__ = [
     "AgentCallCounter",
-    "AgentManagement",
     "AgentExclusionReader",
     "AgentMatcher",
-    "AgentMessageMatcher",
     "AgentNetworkTargetResolver",
     "AgentRegistry",
-    "AgentRegistryWriter",
 ]

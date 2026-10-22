@@ -10,12 +10,12 @@ from typing import get_type_hints
 import pytest
 
 from common.protocols import (
-    CompactionPort,
     ContextAssemblyPort,
     MemoryRepository,
-    ProjectionPort,
     RoomMemoryCleanupPort,
 )
+from context_memory.events import ProjectionPort
+from jobs.compaction_sweep import CompactionPort
 
 REMOVED_RUNTIME_PACKAGE = "app_" + "shell"
 

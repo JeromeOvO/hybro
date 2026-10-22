@@ -633,21 +633,8 @@ def test_protocol_methods_match_design_doc():
             "is_directly_callable",
         },
         protocols.AgentMatcher: {"match_agents"},
-        protocols.AgentMessageMatcher: {"match_for_message"},
         protocols.AgentNetworkTargetResolver: {"resolve_target"},
         protocols.AgentExclusionReader: {"get_excluded_agent_ids"},
-        protocols.AgentManagement: {
-            "register_agent",
-            "delete_agent",
-            "update_agent",
-            "list_agents",
-            "list_public_agents",
-        },
-        protocols.AgentRegistryWriter: {
-            "upsert_local_agent",
-            "list_local_agent_ids",
-            "mark_local_agents_inactive",
-        },
         protocols.RoomRegistry: {"get_room", "get_room_agents", "get_room_owner"},
         protocols.RoomManagement: {
             "create_room",
@@ -674,15 +661,6 @@ def test_protocol_methods_match_design_doc():
         protocols.ContextAssemblyPort: {
             "assemble_supervisor_context_from_memory",
             "assemble_agent_execution_context_from_memory",
-        },
-        protocols.ProjectionPort: {
-            "project_message_for_event",
-            "run_compaction",
-        },
-        protocols.CompactionPort: {
-            "should_compact",
-            "compact_if_needed",
-            "compact_room_memory",
         },
         protocols.RoomMemoryCleanupPort: {"delete_room_memory"},
         protocols.ExecutionEngine: {
@@ -788,7 +766,6 @@ def test_protocol_methods_match_design_doc():
             "close",
         },
         protocols.RedisPubSub: {"publish", "subscribe", "ping", "close"},
-        protocols.RedisStreams: {"xadd", "xread", "ping", "close"},
         protocols.LeaderElector: {"try_acquire", "renew", "release", "release_all"},
         protocols.AgentRepository: {
             "get_by_id",
@@ -923,17 +900,6 @@ def test_protocol_methods_match_design_doc():
             "filter_ids",
             "respect_visibility",
             "requesting_user_id",
-        ],
-    )
-    _assert_params(
-        protocols.AgentMessageMatcher.match_for_message,
-        [
-            "self",
-            "query",
-            "limit",
-            "filter_ids",
-            "requesting_user_id",
-            "required_input_modes",
         ],
     )
     _assert_params(protocols.RoomManagement.create_room, ["self", "request"])

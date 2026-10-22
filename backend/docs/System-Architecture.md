@@ -1914,9 +1914,10 @@ content in bounded batches. Execution consumes the search DTOs without parsing
 legacy dictionaries; Room receives only context assembly and memory cleanup
 capabilities.
 
-The facade satisfies caller-specific leaf protocols from `common.protocols`:
-`ContextAssemblyPort`, `ProjectionPort`, `CompactionPort`, and
-`RoomMemoryCleanupPort`. `container.py` injects only the narrow port each Room,
+The facade satisfies caller-specific leaf protocols: `ContextAssemblyPort` and
+`RoomMemoryCleanupPort` from `common.protocols`, `ProjectionPort` declared beside
+its consumer in `context_memory.events`, and `CompactionPort` declared beside its
+consumer in `jobs.compaction_sweep`. `container.py` injects only the narrow port each Room,
 Execution, event, or job consumer needs, even though one facade implements them.
 All production assembly goes through `context_memory.assembly`. Agent assembly is
 canonical-only: a failure is logged and leaves the outbound message unchanged; it

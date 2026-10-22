@@ -11,7 +11,6 @@ from common.protocols import (
     MongoDAL,
     RedisKV,
     RedisPubSub,
-    RedisStreams,
 )
 
 
@@ -22,14 +21,12 @@ def test_dal_implementations_satisfy_runtime_protocols():
         MongoDALImpl,
         RedisKVImpl,
         RedisPubSubImpl,
-        RedisStreamsImpl,
     )
 
     assert isinstance(MongoDALImpl(database=MagicMock()), MongoDAL)
     assert isinstance(MongoCollectionAdapter(MagicMock()), MongoCollection)
     assert isinstance(RedisKVImpl(client=MagicMock()), RedisKV)
     assert isinstance(RedisPubSubImpl(client=MagicMock()), RedisPubSub)
-    assert isinstance(RedisStreamsImpl(client=MagicMock()), RedisStreams)
     assert isinstance(
         LeaderElectorImpl(client=MagicMock(), instance_id="i1"), LeaderElector
     )
@@ -72,7 +69,6 @@ def test_mongo_change_stream_protocol_is_exported():
 
 def test_redis_protocols_expose_health_properties():
     assert isinstance(RedisKV.__dict__["is_connected"], property)
-    assert isinstance(RedisStreams.__dict__["is_connected"], property)
 
 
 def test_redis_kv_compare_delete_protocol_signature_matches_implementation():

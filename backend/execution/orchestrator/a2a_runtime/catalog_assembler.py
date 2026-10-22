@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
+from typing import Protocol
 
 from ..models import (
     CandidateScopeSnapshot,
@@ -15,9 +16,21 @@ from ..models import (
     ToolBindingRef,
     ToolDefinition,
 )
-from .models import AgentToolBindingRecord
-from .ports import AgentToolBindingStore, AgentToolCandidateSource, RoomEpochStore
+from .models import AgentToolBindingRecord, AgentToolCandidate
+from .ports import AgentToolBindingStore, RoomEpochStore
 from .resources import resource_is_compatible
+
+
+class AgentToolCandidateSource(Protocol):
+    async def list_candidates(
+        self,
+        *,
+        run_id: str,
+        room_id: str,
+        room_epoch: int,
+        requesting_subject_id: str,
+        candidate_agent_ids: list[str],
+    ) -> list[AgentToolCandidate]: ...
 
 
 @dataclass(frozen=True, slots=True)

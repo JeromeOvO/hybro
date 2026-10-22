@@ -22,7 +22,6 @@ from .models import (
     A2AObservationInboxRecord,
     AgentCallLedgerRecord,
     AgentToolBindingRecord,
-    AgentToolCandidate,
     DurableHITLAnswerRecord,
     FrozenCallResourceManifest,
     MaterializedResourcePart,
@@ -34,18 +33,6 @@ from .models import (
 
 StoreOutcome = Literal["accepted", "replayed", "conflict", "error"]
 HITLAbandonOutcome = Literal["accepted", "replayed", "absent", "conflict", "error"]
-
-
-class AgentToolCandidateSource(Protocol):
-    async def list_candidates(
-        self,
-        *,
-        run_id: str,
-        room_id: str,
-        room_epoch: int,
-        requesting_subject_id: str,
-        candidate_agent_ids: list[str],
-    ) -> list[AgentToolCandidate]: ...
 
 
 class AuthorizationRefreshPort(Protocol):
@@ -259,27 +246,6 @@ class ResourceMaterializerPort(Protocol):
         artifact_refs: list[str],
         observation_id: str,
     ) -> list[str]: ...
-
-
-class AuthReferenceVerificationPort(Protocol):
-    async def verify(
-        self,
-        authorization_reference: str,
-        *,
-        authenticated_answerer_id: str,
-        call_record_id: str,
-        binding_id: str,
-        binding_digest: str,
-        room_id: str,
-        room_epoch: int,
-        interaction_id: str,
-        interaction_revision: int,
-        route_fingerprint: str,
-        interaction_fingerprint: str,
-        question_id: str,
-        challenge_digest: str,
-        answer_digest: str,
-    ) -> str: ...
 
 
 class HITLApplicationPort(Protocol):

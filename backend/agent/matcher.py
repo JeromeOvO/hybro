@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
 
 from agent.matching import (
     accepts_input_modes as _accepts_input_modes,
@@ -10,8 +11,20 @@ from agent.matching import (
     supports_files,
 )
 from agent.service import _agent_info_to_legacy_agent
-from common.protocols import AgentMessageMatcher
 from models.agent import Agent
+
+
+@runtime_checkable
+class AgentMessageMatcher(Protocol):
+    async def match_for_message(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        filter_ids: list[str] | None = None,
+        requesting_user_id: str | None = None,
+        required_input_modes: list[str] | None = None,
+    ) -> list[dict[str, Any]]: ...
 
 
 def _agent_to_dict(agent: Agent) -> dict:

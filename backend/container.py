@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from agent import AgentFacade, AgentMongoRepository
@@ -37,10 +37,8 @@ from common.protocols import (
     AgentCallCounter,
     AgentCardResolver,
     AgentExclusionReader,
-    AgentManagement,
     AgentMatcher,
     AgentRegistry,
-    AgentRegistryWriter,
     AgentRepository,
     AttachmentMetadataReader,
     ContentStorageRepository,
@@ -55,7 +53,6 @@ from common.protocols import (
     MongoDAL,
     RedisKV,
     RedisPubSub,
-    RedisStreams,
     RoomDistributedLock,
     RoomHistoryReader,
     RoomManagement,
@@ -114,6 +111,9 @@ from orchestrator_composition import (
 )
 from room_files import LocalFileContentStore, RoomFiles
 from session import MongoSessionRepository, SessionFacade, SessionWaiter
+
+if TYPE_CHECKING:
+    from dal.redis.streams import RedisStreamsImpl
 
 logger = get_logger(__name__)
 
@@ -2095,8 +2095,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 class AgentDeps:
     agent_registry: AgentRegistry
     agent_matcher: AgentMatcher
-    agent_management: AgentManagement
-    agent_registry_writer: AgentRegistryWriter
+    agent_management: AgentFacade
+    agent_registry_writer: AgentFacade
     agent_call_counter: AgentCallCounter
     agent_repository: AgentRepository
 
@@ -2135,7 +2135,7 @@ class ExecutionDeps:
 @dataclass(frozen=True)
 class RedisRuntimeDeps:
     command_client: RedisKV | None
-    streams_client: RedisStreams | None
+    streams_client: RedisStreamsImpl | None
     leader: LeaderElector | None
     room_lock: RoomDistributedLock | None
 

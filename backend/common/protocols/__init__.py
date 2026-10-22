@@ -8,17 +8,12 @@ from common.protocols.a2a_protocols import (
 from common.protocols.agent_protocols import (
     AgentCallCounter,
     AgentExclusionReader,
-    AgentManagement,
     AgentMatcher,
-    AgentMessageMatcher,
     AgentNetworkTargetResolver,
     AgentRegistry,
-    AgentRegistryWriter,
 )
 from common.protocols.context_memory_protocols import (
-    CompactionPort,
     ContextAssemblyPort,
-    ProjectionPort,
     RoomMemoryCleanupPort,
 )
 from common.protocols.dal_protocols import (
@@ -28,7 +23,6 @@ from common.protocols.dal_protocols import (
     MongoDAL,
     RedisKV,
     RedisPubSub,
-    RedisStreams,
 )
 from common.protocols.delivery_protocols import (
     DeliveryEventPublisher,
@@ -78,15 +72,11 @@ __all__ = [
     "AgentCallCounter",
     "AgentCardResolver",
     "AgentExclusionReader",
-    "AgentManagement",
     "AgentMatcher",
-    "AgentMessageMatcher",
     "AgentNetworkTargetResolver",
     "AgentRegistry",
-    "AgentRegistryWriter",
     "AgentRepository",
     "AttachmentMetadataReader",
-    "CompactionPort",
     "ContextAssemblyPort",
     "ContentStorageRepository",
     "DeliveryEventPublisher",
@@ -107,14 +97,12 @@ __all__ = [
     "LLMTextGateway",
     "LeaderElector",
     "MongoChangeStream",
-    "ProjectionPort",
     "MemoryRepository",
     "MessageRepository",
     "MongoCollection",
     "MongoDAL",
     "RedisKV",
     "RedisPubSub",
-    "RedisStreams",
     "RoomHistoryReader",
     "RoomDistributedLock",
     "RoomManagement",

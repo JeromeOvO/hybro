@@ -7,7 +7,7 @@ import json
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, Protocol
 
 from common.dto.hitl import (
     A2AInteractionSpec,
@@ -50,7 +50,6 @@ from .ports import (
     AgentCallLedgerStore,
     AgentToolBindingStore,
     AuthorizationRefreshPort,
-    AuthReferenceVerificationPort,
     HITLAbandonOutcome,
     HITLApplicationPort,
     NormalizedObservationRecorder,
@@ -60,6 +59,27 @@ from .ports import (
 from .terminal_interactions import TerminalInteractionFinalizer
 
 logger = get_logger(__name__)
+
+
+class AuthReferenceVerificationPort(Protocol):
+    async def verify(
+        self,
+        authorization_reference: str,
+        *,
+        authenticated_answerer_id: str,
+        call_record_id: str,
+        binding_id: str,
+        binding_digest: str,
+        room_id: str,
+        room_epoch: int,
+        interaction_id: str,
+        interaction_revision: int,
+        route_fingerprint: str,
+        interaction_fingerprint: str,
+        question_id: str,
+        challenge_digest: str,
+        answer_digest: str,
+    ) -> str: ...
 
 
 class InMemoryHITLApplicationPort:

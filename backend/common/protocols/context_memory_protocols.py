@@ -1,6 +1,6 @@
 from typing import Any, Protocol, runtime_checkable
 
-from common.dto import AssembledContext, CompactionResult, MemorySearchResult
+from common.dto import AssembledContext, MemorySearchResult
 
 
 @runtime_checkable
@@ -30,39 +30,11 @@ class ContextAssemblyPort(Protocol):
 
 
 @runtime_checkable
-class ProjectionPort(Protocol):
-    async def project_message_for_event(
-        self,
-        room_id: str,
-        message_id: str,
-        *,
-        room_agent_set: dict[str, str] | None = None,
-        agent_name: str | None = None,
-        was_successful: bool | None = None,
-    ) -> dict[str, Any]: ...
-
-    async def run_compaction(self, room_id: str) -> CompactionResult: ...
-
-
-@runtime_checkable
-class CompactionPort(Protocol):
-    async def should_compact(self, room_id: str) -> bool: ...
-    async def compact_if_needed(self, room_id: str) -> CompactionResult | None: ...
-    async def compact_room_memory(
-        self,
-        room_id: str,
-        room_memory_doc: Any | None = None,
-    ) -> CompactionResult: ...
-
-
-@runtime_checkable
 class RoomMemoryCleanupPort(Protocol):
     async def delete_room_memory(self, room_id: str) -> bool: ...
 
 
 __all__ = [
-    "CompactionPort",
     "ContextAssemblyPort",
-    "ProjectionPort",
     "RoomMemoryCleanupPort",
 ]

@@ -61,3 +61,64 @@ def test_live_types_named_beside_dead_protocols_stay():
         "LLMStreamGateway",
     ):
         assert hasattr(package, name), name
+
+
+MOVED_TO_CONSUMER = {
+    # Protocol name: (old module, consumer module that now defines it)
+    "IDFactory": (
+        "execution.orchestrator.ports",
+        "execution.orchestrator.kernel",
+    ),
+    "InvocationOutcomeCheckpointReader": (
+        "execution.orchestrator.ports",
+        "execution.orchestrator.a2a_runtime.ingress",
+    ),
+    "AgentToolCandidateSource": (
+        "execution.orchestrator.a2a_runtime.ports",
+        "execution.orchestrator.a2a_runtime.catalog_assembler",
+    ),
+    "AuthReferenceVerificationPort": (
+        "execution.orchestrator.a2a_runtime.ports",
+        "execution.orchestrator.a2a_runtime.hitl",
+    ),
+    "AgentMessageMatcher": ("common.protocols.agent_protocols", "agent.matcher"),
+    "ProjectionPort": (
+        "common.protocols.context_memory_protocols",
+        "context_memory.events",
+    ),
+    "CompactionPort": (
+        "common.protocols.context_memory_protocols",
+        "jobs.compaction_sweep",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(MOVED_TO_CONSUMER))
+def test_single_consumer_protocols_live_with_their_consumer(name):
+    import common.protocols as package
+    import execution.orchestrator as orchestrator
+
+    old_module, consumer_module = MOVED_TO_CONSUMER[name]
+    consumer = importlib.import_module(consumer_module)
+
+    assert not hasattr(importlib.import_module(old_module), name)
+    assert not hasattr(package, name)
+    assert name not in orchestrator.__all__
+    protocol = getattr(consumer, name)
+    assert getattr(protocol, "_is_protocol", False)
+    assert protocol.__module__ == consumer_module
+
+
+def test_composition_root_only_protocols_are_inlined():
+    import inspect
+
+    import common.protocols as package
+    import container
+
+    for name in ("AgentManagement", "AgentRegistryWriter", "RedisStreams"):
+        assert not hasattr(package, name), name
+    hints = inspect.get_annotations(container.AgentDeps)
+    assert "AgentManagement" not in str(hints["agent_management"])
+    assert "AgentRegistryWriter" not in str(hints["agent_registry_writer"])
+    redis_hints = inspect.get_annotations(container.RedisRuntimeDeps)
+    assert "RedisStreamsImpl" in str(redis_hints["streams_client"])

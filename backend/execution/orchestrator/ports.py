@@ -103,10 +103,6 @@ class ToolRuntime(Protocol):
     ) -> ParkedInteractionCloseout: ...
 
 
-class IDFactory(Protocol):
-    def new_id(self, prefix: str) -> str: ...
-
-
 class ProjectionDriver(Protocol):
     async def settle(self, run_id: str) -> OrchestratorRunState: ...
 
@@ -263,24 +259,6 @@ class InvocationCheckpointReader(Protocol):
         run_id: str,
         invocation_id: str,
         status: str,
-    ) -> bool: ...
-
-
-class InvocationOutcomeCheckpointReader(Protocol):
-    async def is_run_terminal(self, run_id: str) -> bool: ...
-
-    async def is_outcome_checkpointed(
-        self,
-        run_id: str,
-        invocation_id: str,
-        outcome_digest: str,
-    ) -> bool: ...
-
-    async def has_processed_observation(
-        self,
-        run_id: str,
-        invocation_id: str,
-        observation_id: str,
     ) -> bool: ...
 
 

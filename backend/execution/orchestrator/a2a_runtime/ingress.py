@@ -7,6 +7,7 @@ import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from typing import Protocol
 
 from pydantic import ValidationError
 
@@ -19,7 +20,7 @@ from ..models import (
     ToolObservation,
     ToolSuspension,
 )
-from ..ports import InvocationCheckpointReader, InvocationOutcomeCheckpointReader
+from ..ports import InvocationCheckpointReader
 from .errors import RecoverableAdapterError, RecoverableCheckpointError
 from .ledger import (
     TERMINAL_AGENT_CALL_STATES,
@@ -50,6 +51,24 @@ from .terminal_interactions import TerminalInteractionFinalizer
 ObservationNormalizer = Callable[
     [bytes], NormalizedA2AObservation | Awaitable[NormalizedA2AObservation]
 ]
+
+
+class InvocationOutcomeCheckpointReader(Protocol):
+    async def is_run_terminal(self, run_id: str) -> bool: ...
+
+    async def is_outcome_checkpointed(
+        self,
+        run_id: str,
+        invocation_id: str,
+        outcome_digest: str,
+    ) -> bool: ...
+
+    async def has_processed_observation(
+        self,
+        run_id: str,
+        invocation_id: str,
+        observation_id: str,
+    ) -> bool: ...
 
 
 class ObservationIngressError(ValueError):

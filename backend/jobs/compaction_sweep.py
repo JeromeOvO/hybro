@@ -16,11 +16,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from common.config import settings
+from common.dto import CompactionResult
 from common.observability import traced_create_task
-from common.protocols import CompactionPort
 from common.utils.logger import get_logger
 from jobs.constants import COMPACTION_SWEEP
 
@@ -28,6 +28,17 @@ logger = get_logger(__name__)
 
 DEFAULT_INTERVAL_MINUTES = 30
 MAX_CONCURRENT_COMPACTIONS = 5
+
+
+@runtime_checkable
+class CompactionPort(Protocol):
+    async def should_compact(self, room_id: str) -> bool: ...
+    async def compact_if_needed(self, room_id: str) -> CompactionResult | None: ...
+    async def compact_room_memory(
+        self,
+        room_id: str,
+        room_memory_doc: Any | None = None,
+    ) -> CompactionResult: ...
 
 
 class LeaderGate(Protocol):

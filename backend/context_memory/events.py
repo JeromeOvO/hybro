@@ -1,10 +1,26 @@
 from __future__ import annotations
 
-from common.dto import MessageCommitted
-from common.protocols import ProjectionPort
+from typing import Any, Protocol, runtime_checkable
+
+from common.dto import CompactionResult, MessageCommitted
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@runtime_checkable
+class ProjectionPort(Protocol):
+    async def project_message_for_event(
+        self,
+        room_id: str,
+        message_id: str,
+        *,
+        room_agent_set: dict[str, str] | None = None,
+        agent_name: str | None = None,
+        was_successful: bool | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def run_compaction(self, room_id: str) -> CompactionResult: ...
 
 
 class ContextMemoryEventHandler:
