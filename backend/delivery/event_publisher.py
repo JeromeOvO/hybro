@@ -70,7 +70,7 @@ class EventPublisherImpl:
         )
 
     async def emit(self, event: DeliveryEvent) -> bool:
-        """Compatibility API: only a fresh confirmed delivery returns ``True``."""
+        """Return ``True`` only for a fresh, transport-accepted delivery."""
         status, _ = await self.emit_checked_identified(event)
         return status == DeliveryEmitStatus.DELIVERED
 
@@ -101,14 +101,6 @@ class EventPublisherImpl:
                     {"event_type": event.event_type},
                 )
                 return DeliveryEmitStatus.ALREADY_DELIVERED, None
-            if reservation_status is None and not await self._should_deliver_typed(
-                event
-            ):
-                self._increment(
-                    "hybro_delivery_events_deduplicated_total",
-                    {"event_type": event.event_type},
-                )
-                return DeliveryEmitStatus.DEDUPLICATED, None
 
             timestamp = event.timestamp or self._now()
 
@@ -280,35 +272,13 @@ class EventPublisherImpl:
     ) -> tuple[DeliveryReservationStatus | None, DeliveryReservation | None]:
         if not self._is_terminal_typed(event):
             return None, None
-        reserve = getattr(self.deduplicator, "reserve", None)
-        if not callable(reserve):
-            return None, None
-        reservation = await reserve(
+        reservation = await self.deduplicator.reserve(
             room_id=event.room_id,
             message_id=self._dedup_message_id(event),
             status=self._dedup_status(event),
             delivery_id=getattr(event, "delivery_id", None),
         )
         return reservation.status, reservation
-
-    async def _should_deliver_typed(self, event: DeliveryEvent) -> bool:
-        if self._is_terminal_typed(event):
-            try:
-                return await self.deduplicator.should_deliver(
-                    room_id=event.room_id,
-                    message_id=self._dedup_message_id(event),
-                    status=self._dedup_status(event),
-                    delivery_id=getattr(event, "delivery_id", None),
-                )
-            except TypeError as exc:
-                if "delivery_id" not in str(exc):
-                    raise
-                return await self.deduplicator.should_deliver(
-                    room_id=event.room_id,
-                    message_id=self._dedup_message_id(event),
-                    status=self._dedup_status(event),
-                )
-        return True
 
     async def _release_typed_delivery(
         self,
@@ -317,25 +287,13 @@ class EventPublisherImpl:
     ) -> None:
         if not self._is_terminal_typed(event):
             return
-        release = getattr(self.deduplicator, "release", None)
-        if release is None:
-            return
-        try:
-            await release(
-                room_id=event.room_id,
-                message_id=self._dedup_message_id(event),
-                status=self._dedup_status(event),
-                delivery_id=getattr(event, "delivery_id", None),
-                reservation=reservation,
-            )
-        except TypeError as exc:
-            if "delivery_id" not in str(exc) and "reservation" not in str(exc):
-                raise
-            await release(
-                room_id=event.room_id,
-                message_id=self._dedup_message_id(event),
-                status=self._dedup_status(event),
-            )
+        await self.deduplicator.release(
+            room_id=event.room_id,
+            message_id=self._dedup_message_id(event),
+            status=self._dedup_status(event),
+            delivery_id=getattr(event, "delivery_id", None),
+            reservation=reservation,
+        )
 
     def _is_terminal_typed(self, event: DeliveryEvent) -> bool:
         return (

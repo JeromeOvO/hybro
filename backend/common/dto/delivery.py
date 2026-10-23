@@ -20,7 +20,6 @@ class DeliveryEmitStatus(StrEnum):
     DELIVERED = "delivered"
     ALREADY_DELIVERED = "already_delivered"
     IN_FLIGHT = "in_flight"
-    DEDUPLICATED = "deduplicated"  # Legacy publisher/deduplicator compatibility.
     FAILED = "failed"
 
 
@@ -78,9 +77,9 @@ class ProcessingStatusEvent(DeliveryEventBase):
 class RunEventNotification(DeliveryEventBase):
     """Run event with strict canonical payload validation.
 
-    Legacy-pinned runs retain their historical dictionary payloads during the
-    expand/contract window. Canonical kinds can only cross this boundary as the
-    matching closed DTO and require complete Turn-root correlation.
+    Non-canonical run event kinds carry dictionary payloads. Canonical kinds
+    can only cross this boundary as the matching closed DTO and require
+    complete Turn-root correlation.
     """
 
     event_type: Literal["run_event"] = "run_event"

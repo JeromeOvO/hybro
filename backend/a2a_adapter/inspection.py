@@ -97,8 +97,8 @@ def _to_internal_card(card_data: Any, agent_url: str) -> AgentCard:
 def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:
     """Validate an SDK-free adapter response payload.
 
-    Returns ``(errors, is_transport_error)`` so former compatibility callers
-    can preserve their existing response model/status behavior.
+    Returns ``(errors, is_transport_error)`` so callers can distinguish a
+    transport error from an invalid response payload.
     """
     if result.get("kind") == "error":
         return [str(result.get("error"))], True

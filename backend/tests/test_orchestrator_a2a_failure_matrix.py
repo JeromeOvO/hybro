@@ -648,6 +648,7 @@ async def test_overlapping_call_recovery_has_one_leased_owner():
         observations=ingress,
         recover_dispatch=recover_dispatch,
         worker_id="worker-a",
+        hitl=InMemoryHITLApplicationPort(),
     )
     second = A2ACallRecoveryService(
         ledger=ledger,
@@ -657,6 +658,7 @@ async def test_overlapping_call_recovery_has_one_leased_owner():
         observations=ingress,
         recover_dispatch=recover_dispatch,
         worker_id="worker-b",
+        hitl=InMemoryHITLApplicationPort(),
     )
     await asyncio.gather(
         first.recover_call(record, now=NOW),
@@ -783,6 +785,7 @@ async def test_working_poll_does_not_consume_uncertainty_budget():
         dispatch=Dispatch(),
         observations=ingress,
         recover_dispatch=lambda _: None,
+        hitl=InMemoryHITLApplicationPort(),
     )
     await service.recover_call(record, now=NOW)
     persisted = await ledger.load_by_record_id(record.call_record_id)

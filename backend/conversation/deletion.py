@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Protocol
-from uuid import uuid4
 
 from common.protocols import RoomMemoryCleanupPort
 from common.utils.logger import get_logger
@@ -62,7 +61,7 @@ class RoomDeletionService:
         *,
         room_lifecycle: RoomDeletionLifecycle,
         memory_cleanup: RoomMemoryCleanupPort | None,
-        file_lifecycle: RoomFileDeletionLifecycle | None = None,
+        file_lifecycle: RoomFileDeletionLifecycle,
         epoch_store: RoomEpochDeactivationPort | None = None,
         orchestrator_epoch_cleanup: OrchestratorEpochCleanupPort | None = None,
     ) -> None:
@@ -104,33 +103,6 @@ class RoomDeletionService:
                 success=False,
                 error="Forbidden",
                 status_code=403,
-            )
-
-        if self._file_lifecycle is None:
-            # The fenced deletion path requires the epoch deactivation fence
-            # even when the file lifecycle is unbound, so a Room can never be
-            # deleted without first deactivating its epoch.
-            if self._epoch_store is not None:
-                deactivation_ok, _ = await self._deactivate_room_epoch(
-                    room_id, f"legacy-{uuid4().hex}"
-                )
-                if not deactivation_ok:
-                    return RoomCenterRoomSettingResponse(
-                        room_id=room_id,
-                        room=None,
-                        success=False,
-                        error="Room epoch deactivation failed",
-                        status_code=409,
-                    )
-            success = await self._room_lifecycle.delete_room(room_id, actual_owner_id)
-            if success:
-                await self._cleanup_context_memory_for_room(room_id)
-            return RoomCenterRoomSettingResponse(
-                room_id=room_id,
-                room=None,
-                success=bool(success),
-                error=None if success else "Failed to delete room",
-                status_code=200 if success else 500,
             )
 
         return await self._delete_room_with_file_lifecycle(room_id, actual_owner_id)
@@ -265,9 +237,6 @@ class RoomDeletionService:
         self, room_id: str, *, deletion_id: str, epoch: int | None
     ) -> bool:
         file_lifecycle = self._file_lifecycle
-        if file_lifecycle is None:
-            return True
-
         ok = True
         try:
             await file_lifecycle.delete_for_room(room_id, deletion_id=deletion_id)

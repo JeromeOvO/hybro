@@ -15,7 +15,11 @@ from common.dto import (
 from common.observability import get_current_trace_id, trace_id_context
 from delivery.config import DeliveryConfig
 from delivery.event_publisher import EventPublisherImpl
-from delivery.sse.deduplication import TerminalStatusDeduplicator
+from delivery.sse.deduplication import (
+    DeliveryReservation,
+    DeliveryReservationStatus,
+    TerminalStatusDeduplicator,
+)
 
 NOW = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
 
@@ -70,13 +74,34 @@ class FakeBus:
 
 
 class FakeDeduplicator:
+    """Two-phase deduplicator double; ``result=False`` reports a duplicate."""
+
+    reservation_ttl_seconds = 30
+
     def __init__(self, result=True):
         self.result = result
         self.calls = []
 
-    async def should_deliver(self, *, room_id, message_id, status):
+    async def reserve(self, *, room_id, message_id, status, delivery_id=None):
         self.calls.append((room_id, message_id, status))
-        return self.result
+        status_value = (
+            DeliveryReservationStatus.RESERVED
+            if self.result
+            else DeliveryReservationStatus.ALREADY_DELIVERED
+        )
+        return DeliveryReservation(status_value, f"{room_id}:{message_id}")
+
+    async def renew(self, reservation):
+        return True
+
+    async def confirm(self, reservation):
+        return True
+
+    async def mark_delivered_after_acceptance(self, reservation, *, status):
+        return None
+
+    async def release(self, **_kwargs):
+        return None
 
 
 class FakeMetrics:

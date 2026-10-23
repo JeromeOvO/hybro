@@ -124,7 +124,7 @@ describe('RoomPageShell agent detail pane', () => {
     }])
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-research', public_call_id: 'inv_research_0001', status: 'completed',
-      output: '# Report\n\nA2A findings.', artifacts: [],
+      parts: [{ kind: 'text', text: '# Report\n\nA2A findings.' }], artifacts: [],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
   })
 
@@ -200,7 +200,6 @@ describe('RoomPageShell agent detail pane', () => {
     }])
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-1', public_call_id: 'inv_weather_0001', status: 'completed',
-      output: 'FLATTENED OUTPUT MUST NOT RENDER',
       parts: [
         { kind: 'data', data: { temperature: 27, unit: 'C' } },
         { kind: 'text', text: '# Private weather output\n\nSunny.' },
@@ -213,7 +212,6 @@ describe('RoomPageShell agent detail pane', () => {
     act(() => useRoomUiStore.getState().openAgentDetail('room-1', messageId))
 
     expect(await screen.findByRole('heading', { name: 'Private weather output' })).toBeInTheDocument()
-    expect(screen.queryByText('FLATTENED OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
     const jsonToggle = screen.getByRole('button', { name: /json.*lines/i })
     expect(jsonToggle).toHaveAttribute('aria-expanded', 'false')
     await userEvent.click(jsonToggle)
@@ -289,7 +287,7 @@ describe('RoomPageShell agent detail pane', () => {
       ))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         run_id: 'run-1', public_call_id: 'inv_pending_0001', status: 'completed',
-        output: 'Projection is ready.', artifacts: [],
+        parts: [{ kind: 'text', text: 'Projection is ready.' }], artifacts: [],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -314,7 +312,7 @@ describe('RoomPageShell agent detail pane', () => {
     }), 'sse')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       run_id: 'run-1', public_call_id: 'inv_artifact_0001', status: 'completed',
-      output: '',
+      parts: [],
       artifacts: [{
         artifact_ref: '/api/v1/files/af011190aaba4f97b459e7656bba7f7e/content',
         file_id: 'af011190aaba4f97b459e7656bba7f7e',
@@ -365,7 +363,6 @@ describe('RoomPageShell agent detail pane', () => {
       if (url.includes('/agent-calls/')) {
         return new Response(JSON.stringify({
           run_id: 'run-image', public_call_id: 'inv_image_0001', status: 'completed',
-          output: 'FLATTENED IMAGE OUTPUT MUST NOT RENDER',
           parts: [{ kind: 'text', text: 'Generated image response.' }],
           artifacts: [{
             artifact_ref: `/api/v1/files/${fileId}/content`,
@@ -400,7 +397,6 @@ describe('RoomPageShell agent detail pane', () => {
     expect(await screen.findByTestId('agent-response-detail-pane')).toBeInTheDocument()
     expect((await screen.findAllByRole('img', { name: 'shared-image.png' }))).toHaveLength(2)
     expect(screen.getByText('Generated image response.')).toBeInTheDocument()
-    expect(screen.queryByText('FLATTENED IMAGE OUTPUT MUST NOT RENDER')).not.toBeInTheDocument()
 
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
     expect(urls.filter((url) => url.includes('/agent-calls/'))).toHaveLength(1)

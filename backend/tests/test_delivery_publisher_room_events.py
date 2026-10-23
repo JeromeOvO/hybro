@@ -122,7 +122,7 @@ async def test_failed_final_fanout_still_returns_persisted_identity():
 
 @pytest.mark.asyncio
 async def test_dedup_short_circuits_skip_persistence():
-    # IN_FLIGHT / ALREADY_DELIVERED / DEDUPLICATED outcomes must not append
+    # IN_FLIGHT / ALREADY_DELIVERED outcomes must not append
     # room_events docs: those events already have their persisted doc.
     store = InMemoryRoomEventStore()
     publisher = make_publisher(
@@ -140,7 +140,7 @@ async def test_dedup_short_circuits_skip_persistence():
         )
     )
 
-    assert status == DeliveryEmitStatus.DEDUPLICATED
+    assert status == DeliveryEmitStatus.ALREADY_DELIVERED
     assert await store.latest_seq("room-1") == 0
 
 

@@ -309,34 +309,6 @@ class TerminalStatusDeduplicator:
         except Exception:
             return
 
-    async def should_deliver(
-        self,
-        *,
-        room_id: str,
-        message_id: str | None,
-        status: str,
-        delivery_id: str | None = None,
-    ) -> bool:
-        """Compatibility preflight API; new publishers must use two phases."""
-        normalized_status = status.strip().lower()
-        if (
-            not message_id
-            or normalized_status not in self.config.terminal_processing_statuses
-        ):
-            return True
-        reservation = await self.reserve(
-            room_id=room_id,
-            message_id=message_id,
-            status=status,
-            delivery_id=delivery_id,
-        )
-        if reservation.status != DeliveryReservationStatus.RESERVED:
-            return False
-        # Historical callers use this as a one-stage "mark delivered" API and
-        # never call confirm. Preserve that long-TTL behavior while the checked
-        # publisher uses reserve/confirm directly.
-        return await self.confirm(reservation)
-
     async def release(
         self,
         *,

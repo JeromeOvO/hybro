@@ -192,18 +192,7 @@ class HITLResponse(FrozenDTO):
     client_request_id: str | None = None
 
 
-class AgentEvent(FrozenDTO):
-    # Deprecated Common compatibility DTO.
-    room_id: str
-    agent_id: str
-    message_id: str
-    event_type: Literal["partial", "final", "status_update", "error", "input_required"]
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
-    hub_id: str | None = None
-
-
 __all__ = [
-    "AgentEvent",
     "AgentScopeInput",
     "AllAgentsScope",
     "ExecutionAck",

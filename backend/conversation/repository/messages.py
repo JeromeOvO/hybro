@@ -263,7 +263,7 @@ class ConversationMessageStore:
                     "Existing agent message has incomplete timeline identity"
                 )
             # Validate the persisted position before carrying it into the full
-            # replacement. This prevents a legacy/corrupt key from being blessed.
+            # replacement. This prevents a corrupt key from being blessed.
             normalize_timeline_document(existing)
             immutable = {field: existing[field] for field in immutable_fields}
             candidate.update(immutable)

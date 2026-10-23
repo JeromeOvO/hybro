@@ -82,10 +82,9 @@ class MongoRoomEventStore:
         self._skip_grace = skip_grace
 
     async def ensure_indexes(self) -> None:
-        # Keep the legacy non-unique index migration-safe, but establish a
-        # distinct unique index before accepting writes. Existing ambiguous
-        # rows make startup fail instead of allowing a tombstone and delayed
-        # original to coexist at one room sequence.
+        # Establish the unique room sequence index before accepting writes.
+        # Existing ambiguous rows make startup fail instead of allowing a
+        # tombstone and delayed original to coexist at one room sequence.
         await self._events.create_index(
             [("room_id", 1), ("room_seq", 1)],
             name="room_id_seq_unique",

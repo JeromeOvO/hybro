@@ -31,6 +31,6 @@ class AgentGroup(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
-# Legacy built-in group IDs (kept for backward compatibility)
+# Built-in agent group IDs.
 BUILTIN_GROUP_ALL_AGENTS = "all_agents"
 BUILTIN_GROUP_ROOM_TEAM = "room_team"

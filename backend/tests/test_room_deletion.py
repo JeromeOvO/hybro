@@ -45,7 +45,7 @@ def _memory_cleanup(*, result=True):
 def _service(*, room=None, files=None, memory=None):
     return RoomDeletionService(
         room_lifecycle=room or _room_lifecycle(),
-        file_lifecycle=files,
+        file_lifecycle=files or _file_lifecycle(),
         memory_cleanup=memory if memory is not None else _memory_cleanup(),
     )
 
@@ -80,69 +80,6 @@ async def test_request_and_owner_validation(room_request, owner, status, error):
     assert response.error == error
     room.delete_room.assert_not_awaited()
     room.cleanup_room_owned_data.assert_not_awaited()
-
-
-async def test_compatibility_fallback_deletes_room_then_best_effort_memory_cleanup():
-    events: list[str] = []
-    room = _room_lifecycle()
-    memory = _memory_cleanup(result=False)
-    room.delete_room.side_effect = lambda *_: events.append("delete-room") or True
-    memory.delete_room_memory.side_effect = lambda *_: (
-        events.append("memory-cleanup") or False
-    )
-
-    response = await _service(room=room, memory=memory).delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
-
-    assert response.success is True
-    assert response.status_code == 200
-    assert events == ["delete-room", "memory-cleanup"]
-    room.cleanup_room_owned_data.assert_not_awaited()
-
-
-async def test_fallback_without_file_lifecycle_still_fences_epoch_before_delete():
-    epoch_store = InMemoryRoomEpochStore()
-    await epoch_store.activate("room-1", "create-1", activated_at=NOW)
-    room = _room_lifecycle()
-
-    service = RoomDeletionService(
-        room_lifecycle=room,
-        file_lifecycle=None,
-        memory_cleanup=_memory_cleanup(),
-        epoch_store=epoch_store,
-    )
-    response = await service.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
-
-    assert response.success is True
-    assert await epoch_store.read_active("room-1") is None
-    room.delete_room.assert_awaited_once_with("room-1", "owner")
-
-
-async def test_fallback_epoch_deactivation_failure_returns_409_without_delete():
-    class FailingEpochStore(InMemoryRoomEpochStore):
-        async def deactivate(self, room_id, epoch, deletion_id, *, deactivated_at):
-            return "conflict", None
-
-    epoch_store = FailingEpochStore()
-    await epoch_store.activate("room-1", "create-1", activated_at=NOW)
-    room = _room_lifecycle()
-
-    service = RoomDeletionService(
-        room_lifecycle=room,
-        file_lifecycle=None,
-        memory_cleanup=_memory_cleanup(),
-        epoch_store=epoch_store,
-    )
-    response = await service.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="room-1", requesting_user_id="owner")
-    )
-
-    assert response.success is False
-    assert response.status_code == 409
-    room.delete_room.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

@@ -186,7 +186,7 @@ def get_message_from_task(task: Any) -> Any | None:
 
     Per A2A spec, task outputs should be in artifacts. We check:
     1. task.artifacts - A2A-compliant location for task outputs
-    2. task.status.message - status messages (for compatibility)
+    2. task.status.message - for agents that reply in the status message
     3. task.history - conversation history (fallback)
     """
     # Check task.artifacts first (A2A-compliant: task outputs go in artifacts)
@@ -224,14 +224,14 @@ def get_message_from_task(task: Any) -> Any | None:
 
 
 def get_text_from_message(message: Any | None) -> str:
-    """Extract text from a Message object. Backward-compatible wrapper."""
+    """Extract text from a Message object via ``extract_parts``."""
     if message is None:
         return ""
     return extract_parts(message.parts).text
 
 
 def extract_text_from_artifacts(artifacts: list) -> str | None:
-    """Extract text content from A2A artifacts. Backward-compatible wrapper."""
+    """Extract text content from A2A artifacts via ``extract_parts``."""
     text = extract_parts_from_artifacts(artifacts).text
     return text if text else None
 
@@ -242,8 +242,8 @@ def extract_agent_text_from_room_message(msg: object) -> str | None:
     Checks storage locations in canonical-output priority order:
     1. ``message_content.message_task.artifacts`` (A2A-compliant task output).
     2. ``message_content.message_text`` (the backend's canonical display text).
-    3. ``message_content.message_task.status.message`` (compatibility fallback
-       for agents that put completed output in status.message).
+    3. ``message_content.message_task.status.message`` (fallback for agents
+       that put completed output in status.message).
     4. Agent-role entries in ``message_content.message_task.history`` (last
        fallback; history can contain intermediate status/progress messages).
 

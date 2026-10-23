@@ -20,7 +20,6 @@ def test_agent_repository_exports_the_runtime_store():
     assert AgentRuntimeStore.__module__ == "agent.repository.runtime_store"
     assert set(inspect.signature(AgentRuntimeStore).parameters) == {
         "agent_groups",
-        "agents",
         "agent_repository",
     }
 
@@ -75,9 +74,7 @@ async def test_runtime_store_reads_and_writes_agent_groups():
             },
         ]
     )
-    store = AgentRuntimeStore(
-        agent_groups=groups, agents=_Collection([]), agent_repository=MagicMock()
-    )
+    store = AgentRuntimeStore(agent_groups=groups, agent_repository=MagicMock())
 
     owned = await store.get_agent_groups_by_owner("o1")
     assert [group.group_id for group in owned] == ["g1"]
@@ -99,7 +96,6 @@ async def test_runtime_store_reads_agents_through_the_agent_repository():
     agent_repository.increment_agent_call_count = AsyncMock()
     store = AgentRuntimeStore(
         agent_groups=_Collection([]),
-        agents=_Collection([]),
         agent_repository=agent_repository,
     )
 

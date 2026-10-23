@@ -536,8 +536,7 @@ def create_orchestrator_runtime(  # noqa: C901
 
     async def project_terminal_run_status(intent, run):
         # Canonical Run state remains in the orchestrator aggregate. This
-        # outbox intent publishes run_settled but never mirrors status into the
-        # removed compatibility `runs`/task-card projection.
+        # outbox intent only publishes run_settled.
         if projection_listener is not None:
             # run_settled is part of this durable dependent intent. A failure
             # leaves the intent claimed/pending for lease-based retry; an append

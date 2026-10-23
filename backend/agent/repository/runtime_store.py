@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from agent.repository.documents import (
     _safe_parse_agent,
     _safe_parse_agent_group,
@@ -15,9 +13,8 @@ logger = get_logger(__name__)
 
 
 class AgentRuntimeStore:
-    def __init__(self, *, agent_groups, agents, agent_repository) -> None:
+    def __init__(self, *, agent_groups, agent_repository) -> None:
         self._agent_groups = agent_groups
-        self._agents = agents
         self._agent_repository = agent_repository
 
     async def ensure_indexes(self) -> None:
@@ -103,22 +100,6 @@ class AgentRuntimeStore:
         except Exception:
             logger.error("Failed to get agent", exc_info=True)
             return None
-
-    async def get_agents_with_conditions(
-        self,
-        query: dict[str, Any] | None = None,
-        limit: int = 0,
-    ) -> list[Agent]:
-        try:
-            # Legacy room selection accepts arbitrary agent predicates; use the
-            # DAL collection directly to preserve that query surface during
-            # migration instead of applying AgentRepository visibility filters.
-            docs = await self._agents.find(dict(query or {}), limit=limit or None)
-            agents = [_safe_parse_agent(doc) for doc in docs if doc is not None]
-            return [agent for agent in agents if agent is not None]
-        except Exception:
-            logger.error("Failed to get agents with conditions", exc_info=True)
-            return []
 
     async def increment_agent_call_count(self, agent_id: str, *, success: bool) -> None:
         try:

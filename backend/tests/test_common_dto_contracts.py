@@ -5,7 +5,6 @@ from pydantic import ValidationError as PydanticValidationError
 
 from common.dto import (
     AgentCardSnapshot,
-    AgentEvent,
     AgentInfo,
     AgentMessageFinal,
     AgentMessagePartial,
@@ -37,7 +36,6 @@ from common.dto import (
     NotificationPayload,
     ProcessingStatusEvent,
     RoomCreated,
-    RoomCreationParams,
     RoomInfo,
     RoomMembership,
     RoomSummary,
@@ -88,12 +86,6 @@ def test_common_dtos_can_be_instantiated():
         room_name="Room",
         membership_seed=seed,
     )
-    RoomCreationParams(
-        owner_id="u1",
-        owner_name="User",
-        room_name="Room",
-        membership_seed=seed,
-    )
     SavedUserMessage(
         room_id="r1",
         message_id="m1",
@@ -122,7 +114,6 @@ def test_common_dtos_can_be_instantiated():
         source="agent",
     )
     HITLResponse(request_id="hitl1", response_text="yes", responder_id="u1")
-    AgentEvent(room_id="r1", agent_id="a1", message_id="m1", event_type="partial")
     ContextBlock(block_id="b1", room_id="r1", content="context", token_count=3)
     CompactionResult(room_id="r1", compacted_count=1, tokens_saved=10)
     MemorySearchResult(
@@ -219,35 +210,7 @@ def test_removed_gateway_discovery_and_rate_limit_dtos_are_not_exported():
     assert dto.FileMetadata
 
 
-def test_room_creation_params_default_seed_does_not_weaken_create_request():
-    params = RoomCreationParams(owner_id="u1", owner_name="User", room_name="Room")
-
-    assert isinstance(params, CreateRoomRequest)
-    assert params.membership_seed == MembershipSeed(mode="manual")
-    assert "membership_seed" in params.model_dump(exclude_unset=True)
-    with pytest.raises(PydanticValidationError) as exc_info:
-        CreateRoomRequest(owner_id="u1", owner_name="User", room_name="Room")
-    assert exc_info.value.errors()[0]["loc"] == ("membership_seed",)
-
-
-def test_room_creation_params_compare_like_create_request_payloads():
-    seed = MembershipSeed(mode="manual")
-    params = RoomCreationParams(
-        owner_id="u1", owner_name="User", room_name="Room", membership_seed=seed
-    )
-    request = CreateRoomRequest(
-        owner_id="u1", owner_name="User", room_name="Room", membership_seed=seed
-    )
-
-    assert params == request
-    assert request == params
-    with pytest.raises(TypeError):
-        hash(params)
-    with pytest.raises(TypeError):
-        hash(request)
-
-
-def test_room_creation_params_and_create_request_export_room_creation_contracts():
+def test_create_room_request_requires_membership_seed():
     seed = MembershipSeed(mode="manual")
     request = CreateRoomRequest(
         owner_id="u1",
@@ -255,12 +218,11 @@ def test_room_creation_params_and_create_request_export_room_creation_contracts(
         room_name="Room",
         membership_seed=seed,
     )
-    params = RoomCreationParams(owner_id="u1", owner_name="User", room_name="Room")
 
     assert request.membership_seed == seed
-    assert params.membership_seed == MembershipSeed(mode="manual")
-    assert "membership_seed" in CreateRoomRequest.model_fields
-    assert "membership_seed" in RoomCreationParams.model_fields
+    with pytest.raises(PydanticValidationError) as exc_info:
+        CreateRoomRequest(owner_id="u1", owner_name="User", room_name="Room")
+    assert exc_info.value.errors()[0]["loc"] == ("membership_seed",)
 
 
 def test_create_room_request_is_unhashable_to_avoid_any_payload_hash_contract():

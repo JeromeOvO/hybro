@@ -13,6 +13,16 @@ from conversation import RoomDeletionService
 from models.request import RoomCenterRoomSettingRequest
 
 
+def _file_lifecycle():
+    return SimpleNamespace(
+        begin_room_deletion=AsyncMock(return_value="deletion-1"),
+        wait_for_room_writes=AsyncMock(return_value=True),
+        set_deletion_phase=AsyncMock(return_value=True),
+        delete_for_room=AsyncMock(return_value=0),
+        delete_room_state=AsyncMock(return_value=True),
+    )
+
+
 @pytest.mark.asyncio
 async def test_chat_service_delegated_methods_fail_before_bind():
     svc = ChatService()
@@ -48,6 +58,7 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     svc.bind_room_deletion(
         RoomDeletionService(
             room_lifecycle=facade,
+            file_lifecycle=_file_lifecycle(),
             memory_cleanup=memory_cleanup,
         )
     )
@@ -130,6 +141,7 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     svc.bind_room_deletion(
         RoomDeletionService(
             room_lifecycle=facade,
+            file_lifecycle=_file_lifecycle(),
             memory_cleanup=memory_cleanup,
         )
     )
@@ -143,31 +155,6 @@ async def test_delete_room_does_not_cleanup_when_requester_is_not_owner():
     assert response.error == "Forbidden"
     facade.delete_room.assert_not_awaited()
     memory_cleanup.delete_room_memory.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails():
-    svc = ChatService()
-    facade = AsyncMock()
-    facade.get_room_owner.return_value = "owner"
-    facade.delete_room.return_value = True
-    svc.bind_facade(facade)
-    memory_cleanup = SimpleNamespace(delete_room_memory=AsyncMock(return_value=False))
-    svc.bind_room_deletion(
-        RoomDeletionService(
-            room_lifecycle=facade,
-            memory_cleanup=memory_cleanup,
-        )
-    )
-
-    response = await svc.delete_room_by_room_id(
-        RoomCenterRoomSettingRequest(room_id="r1", requesting_user_id="owner")
-    )
-
-    assert response.success is True
-    assert response.status_code == 200
-    assert response.error is None
-    facade.delete_room.assert_awaited_once_with("r1", "owner")
 
 
 @pytest.mark.asyncio

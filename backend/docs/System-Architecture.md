@@ -1633,9 +1633,8 @@ and accepted-marker Redis commands use the configurable
 connected Redis command cannot delay an accepted result. Redis write failure or
 timeout cannot change that result. Per-key local locks make Redis-error fallback
 reservation atomic, so concurrent coroutines produce one provisional owner. The
-compatibility `should_deliver` API retains its historical one-stage behavior by
-confirming immediately with the long TTL; checked publishers use explicit
-reserve/confirm. Local SSE broadcast reports an actual delivery count; zero local
+publisher uses explicit reserve/confirm for every terminal event; a duplicate
+reports `ALREADY_DELIVERED` or `IN_FLIGHT`. Local SSE broadcast reports an actual delivery count; zero local
 subscribers plus failed Redis fanout stays pending and never confirms the global
 marker. Cross-instance publish returns explicit broker acceptance; disabled/no-op
 brokers return false. Graceful process shutdown is treated as an infrastructure
@@ -2395,11 +2394,11 @@ and folds canonical `turns` with exact run/client/User
 root binding, offset-checked Assistant text, opaque Tool identity, child closure,
 and exact provisional-final/`agent_response` commitment. Legacy messages,
 processing logs, and diagnostic trace remain readable in their separate
-sections and never become canonical Turn activity. During the bounded stale-tab
-window canonical roots additionally emit only the exact content-free
-`processing_status` adapter (allowlisted status, exact nonempty User/client
-roots, `details: null`, and no Agent/free-text fields); canonical clients ignore
-it. Settled terminal frames also
+sections and never become canonical Turn activity. Canonical roots additionally
+emit only the exact content-free `processing_status` event (allowlisted status,
+exact nonempty User/client roots, `details: null`, and no Agent/free-text
+fields); the room snapshot folds it into the User message status, and live
+clients drop it once the root's canonical Turn is known. Settled terminal frames also
 force a boundary snapshot fanout. A
 fallback read path `GET /sse/room/{room_id}/events?after=<seq>&limit=N`
 replays persisted events; auth matches the stream route.
@@ -2437,9 +2436,8 @@ room-authorized canonical Agent-call detail reader accepts only an exact
 display name, MIME type, and size alongside private Tool output. The detail
 projection preserves the accepted A2A content sequence as a discriminated
 `parts` list: `TextPart` remains `{kind: "text", text}` and `DataPart` remains
-`{kind: "data", data}`. Private A2A part metadata is omitted. The legacy
-flattened `output` string remains temporarily for rolling-deploy compatibility,
-but typed clients treat `parts` as authoritative; room-owned files continue
+`{kind: "data", data}`. Private A2A part metadata is omitted. `parts` is the
+only output field; room-owned files continue
 through the separately authorized artifact descriptor channel. External URLs
 that merely contain a local-looking `/files/…/content` suffix are never remapped.
 This keeps artifact identity out of public lifecycle events while giving the

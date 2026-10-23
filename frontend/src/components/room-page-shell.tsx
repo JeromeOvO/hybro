@@ -248,13 +248,11 @@ export function RoomPageShell({ adapter }: RoomPageShellProps) {
       }
     }
     const response = privateDetailQuery.data
-    const parts = canonicalAgentCallParts(response?.parts)
     return {
       ...effectiveBaseDetail,
-      // New backends preserve A2A part boundaries. ``output`` remains only as
-      // a rolling-deploy fallback for an older detail response.
-      content: parts === undefined ? response?.output ?? '' : '',
-      parts,
+      // Typed A2A parts carry the private output.
+      content: '',
+      parts: response ? canonicalAgentCallParts(response.parts) : undefined,
       artifacts: canonicalArtifactData(response?.artifacts ?? []),
       isStreaming: false,
     }

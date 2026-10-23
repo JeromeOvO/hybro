@@ -124,7 +124,6 @@ class RoomMessage(Message):
     parent_message_id: str | None = None
     run_id: str | None = None
     # Canonical frontend correlation key for turn identity.
-    # For legacy rows this is backfilled to message_id via migration.
     client_request_id: str | None = None
     related_message_id: str | None = None
     message_content: MessageContent

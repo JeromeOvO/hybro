@@ -71,7 +71,7 @@ async def test_private_detail_service_returns_output_without_private_call_identi
     )
     assert detail is not None
     payload = detail.model_dump(mode="json")
-    assert payload["output"] == "private full output"
+    assert "output" not in payload
     assert payload["parts"] == [{"kind": "text", "text": "private full output"}]
     assert "private-call-id" not in str(payload)
     assert "private-tool-name" not in str(payload)
@@ -108,12 +108,6 @@ async def test_private_detail_preserves_a2a_text_and_data_part_boundaries():
         {"kind": "data", "data": [{"quote": 37_200}]},
     ]
     assert "must-not-leak" not in str(payload)
-    assert payload["output"] == (
-        '{"client": {"name": "Acme SaaS Inc."}}\n'
-        "Submission prepared.\n"
-        '{"declared":"text"}\n'
-        '[{"quote": 37200}]'
-    )
 
 
 @pytest.mark.asyncio
@@ -227,7 +221,6 @@ async def test_private_detail_route_authorizes_room_and_handles_missing_output()
         user,
         RoomStore("owner"),
     )
-    assert detail.output == "private full output"
     assert [part.model_dump(mode="json") for part in detail.parts] == [
         {"kind": "text", "text": "private full output"}
     ]

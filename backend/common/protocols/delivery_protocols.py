@@ -10,7 +10,7 @@ class DeliveryEventPublisher(Protocol):
     async def emit(self, event: DeliveryEvent) -> bool | None: ...
 
 
-# Compatibility name for the public delivery-only contract.
+# Short alias for the public delivery-only contract.
 EventPublisher = DeliveryEventPublisher
 
 

@@ -38,7 +38,6 @@ from common.dto.delivery import (
     TaskUpdateEvent,
 )
 from common.dto.execution import (
-    AgentEvent,
     CancellationAck,
     ExecutionAck,
     ExecutionRequest,
@@ -99,7 +98,6 @@ from common.dto.room import (
     MembershipSeed,
     MembershipUpdateRequest,
     MessageRecord,
-    RoomCreationParams,
     RoomInfo,
     RoomMembership,
     RoomMessageInfo,
@@ -134,7 +132,6 @@ from common.dto.turn_lifecycle import (
 __all__ = [
     "AgentCardInterface",
     "AgentCardSnapshot",
-    "AgentEvent",
     "AgentInfo",
     "AgentView",
     "AgentSkillView",
@@ -213,7 +210,6 @@ __all__ = [
     "NotificationPayload",
     "ProcessingStatusEvent",
     "RoomCreated",
-    "RoomCreationParams",
     "RoomInfo",
     "RoomMemoryGenerationInput",
     "RoomMembership",

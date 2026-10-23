@@ -724,7 +724,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             agent_runtime_store = AgentRuntimeStore(
                 agent_groups=mongo_dal.collection("agent_groups"),
-                agents=mongo_dal.collection("agents"),
                 agent_repository=_agent_deps.agent_repository,
             )
             from conversation.repository import (
@@ -910,7 +909,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
                 if room_event_id is None and status not in {
                     DeliveryEmitStatus.ALREADY_DELIVERED,
-                    DeliveryEmitStatus.DEDUPLICATED,
                 }:
                     raise RuntimeError(
                         f"canonical HITL control event {kind} was not persisted"
@@ -1455,10 +1453,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             if emitted not in {
                 DeliveryEmitStatus.DELIVERED,
                 DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
             }:
                 raise RuntimeError(
-                    "canonical stale-browser processing adapter was not persisted"
+                    "canonical processing_status event was not persisted"
                 )
 
         async def publish_orchestrator_projection_status(run, intent) -> None:
@@ -1510,16 +1507,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             if settlement_event_id is None and settlement_status not in {
                 DeliveryEmitStatus.ALREADY_DELIVERED,
-                DeliveryEmitStatus.DEDUPLICATED,
             }:
                 raise RuntimeError("canonical run_settled was not durably persisted")
             await _emit_canonical_processing_adapter(
                 run,
                 "failed" if run.status == "budget_exhausted" else run.status,
             )
-
-        # Canonical lifecycle events are re-serialized per Run before durable
-        # room-event publication. No compatibility work-log stream is emitted.
 
         # Lifecycle events are dispatched concurrently, so a per-run lock
         # re-serializes canonical room-event publication into durable order.
@@ -1590,7 +1583,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                     )
                     if room_event_id is None and status not in {
                         DeliveryEmitStatus.ALREADY_DELIVERED,
-                        DeliveryEmitStatus.DEDUPLICATED,
                     }:
                         raise RuntimeError(
                             f"canonical lifecycle event was not durably persisted: status={status}, "
@@ -1698,7 +1690,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 return status in {
                     DeliveryEmitStatus.DELIVERED,
                     DeliveryEmitStatus.ALREADY_DELIVERED,
-                    DeliveryEmitStatus.DEDUPLICATED,
                 }
 
             async def _read_canonical_run_events(
@@ -2198,7 +2189,6 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     agent_search_index_ready = await agent_repository.ensure_indexes()
     await AgentRuntimeStore(
         agent_groups=mongo.collection("agent_groups"),
-        agents=mongo.collection("agents"),
         agent_repository=agent_repository,
     ).ensure_indexes()
     memory_search_index_ready = await ContentStorageMongoRepository(

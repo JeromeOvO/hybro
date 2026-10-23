@@ -1,4 +1,4 @@
-"""Compatibility forwarding layer for application logging."""
+"""Shared import path for application logging."""
 
 from common.observability.logging import get_logger
 

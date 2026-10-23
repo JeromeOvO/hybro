@@ -93,8 +93,8 @@ class MemoryMongoRepository:
             room_id, turn, max_turns, summary_stub, max_summary_chars
         )
         matched = doc is not None
-        # The append pipeline always changes a matched room by adding the new turn.
-        # That keeps the legacy modified/matched tuple semantics equivalent here.
+        # Returns (matched, modified). The append pipeline always changes a
+        # matched room by adding the new turn, so both values are equal.
         return matched, matched
 
     async def push_and_trim_conversation_turn_if_absent(

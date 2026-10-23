@@ -1,8 +1,8 @@
 """
-Agent Selection Service for Auto Room Mode
+Agent selection for explicit target scopes and agent suggestions.
 
-Thin facade over AgentMatcher. Provides backward-compatible API
-for agent selection with legacy RoutingStrategy and AgentSelectionResult types.
+Wraps AgentMatcher with optional LLM reranking and returns ranked agents as
+AgentSelectionResult, plus the route-facing AgentSuggestionResult.
 """
 
 from dataclasses import dataclass
@@ -46,10 +46,10 @@ class AgentSelectionResult:
 
 class AgentSelectionService:
     """
-    Facade over AgentMatcher for backward compatibility.
+    Rank agents for a message through AgentMatcher.
 
-    Delegates to AgentMatcher.match() and converts results to legacy
-    AgentSelectionResult format.
+    Delegates to AgentMatcher.match(), optionally reranks the top candidates,
+    and returns an AgentSelectionResult.
     """
 
     def __init__(self, matcher=None, llm_reranker=None):
@@ -92,7 +92,7 @@ class AgentSelectionService:
             required_input_modes=required_input_modes,
         )
 
-        # Convert MatchResult to AgentSelectionResult for backward compatibility
+        # Convert MatchResult to AgentSelectionResult.
         if not match_result.agents:
             logger.warning("AgentSelectionService: No agents matched")
             return AgentSelectionResult(
@@ -121,7 +121,7 @@ class AgentSelectionService:
             for matched in ranked_agents[:top_k]
         ]
 
-        # Backward-compat strategy: SINGLE if 1 agent, PARALLEL if >1
+        # Reported strategy: SINGLE for one agent, PARALLEL for more.
         strategy = (
             RoutingStrategy.SINGLE
             if len(agent_selections) == 1
@@ -140,7 +140,7 @@ class AgentSelectionService:
             strategy=strategy,
             agents=agent_selections,
             reasoning=reasoning,
-            needs_debate=False,  # Backward-compat: always False
+            needs_debate=False,  # Selection never requests a debate.
         )
 
     async def suggest_agents(

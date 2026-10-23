@@ -125,7 +125,7 @@ async def request_run_cancellation(
 
 
 class UnsupportedEnvelopeError(ValueError):
-    """The legacy envelope requests something the orchestrator cannot serve yet."""
+    """The request envelope asks for something the orchestrator cannot serve."""
 
 
 class OrchestratorRoutingError(RuntimeError):
@@ -136,7 +136,7 @@ class OrchestratorHITLNotOwnedError(OrchestratorRoutingError):
     """The interaction is not owned by the orchestrator A2A ingress.
 
     Supervisor ``ask_user`` interactions materialize through the unified
-    Execution HITL service and must fall back to the legacy manager instead
+    Execution HITL service and must fall back to its HITL manager instead
     of the orchestrator call-ledger ingress.
     """
 
@@ -1015,9 +1015,8 @@ class DualRuntimeRouter:
             requesting_subject_id=requesting_subject_id,
         )
         if not candidate_scope.agent_ids:
-            # An empty scope cannot produce a meaningful kernel run; keep the
-            # legacy executor's empty-scope behavior until the seam grows a
-            # zero-candidate synthesis path.
+            # An empty scope cannot produce a meaningful kernel run; reject it
+            # until the seam grows a zero-candidate synthesis path.
             raise UnsupportedEnvelopeError(
                 "orchestrator candidate scope resolved to zero agents"
             )

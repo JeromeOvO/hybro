@@ -468,7 +468,7 @@ def get_context_stats(room_memory: RoomMemoryLike) -> dict:
             else:
                 compact_turns += 1
         else:
-            # Legacy turn
+            # Turn without a representation counts as full.
             full_turns += 1
             if turn.content:
                 total_chars += len(turn.content)

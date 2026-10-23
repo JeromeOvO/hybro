@@ -14,7 +14,7 @@ from conversation.idempotency import (
     UnexpectedUserMessageDuplicateError,
 )
 from conversation.repository import MessageMongoRepository, RoomMongoRepository
-from models.room import MessageContent, Room, RoomAgentMessage, RoomUserMessage
+from models.room import MessageContent, RoomAgentMessage, RoomUserMessage
 
 
 class _ConversationStores:
@@ -41,7 +41,6 @@ class _ConversationStores:
             ConversationRoomStore(room_repository=room_repository),
             AgentRuntimeStore(
                 agent_groups=mongo.collection("agent_groups"),
-                agents=mongo.collection("agents"),
                 agent_repository=agent_repository,
             ),
             HITLRequestStore(
@@ -962,14 +961,6 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
     assert [
         room.room_id for room in await store.get_rooms_by_room_owner_id("owner-1")
     ] == ["r1"]
-    room = Room(
-        room_id="r1",
-        room_owner_id="owner-1",
-        room_owner_name="Owner",
-        room_name="Renamed",
-    )
-    assert await store.update_room_by_room_id("r1", room) is True
-    assert rooms.docs[0]["room_name"] == "Renamed"
     user_message = RoomUserMessage(
         room_id="r1",
         message_id="u1",
@@ -998,118 +989,6 @@ async def test_runtime_store_room_runtime_methods_use_repositories_and_dal():
         ]
         == "updated"
     )
-    assert [agent.agent_id for agent in await store.get_agents_with_conditions()] == [
-        "agent-1"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_room_update_noop_succeeds_when_room_exists():
-
-    class NoopRoomRepository:
-        async def update(self, room_id: str, updates: dict) -> bool:
-            return False
-
-        async def get_by_id(self, room_id: str) -> dict | None:
-            return {
-                "room_id": room_id,
-                "room_owner_id": "owner-1",
-                "room_owner_name": "Owner",
-                "room_name": "Room",
-            }
-
-    store = _ConversationStores(
-        mongo=FakeMongo(),
-        room_repository=NoopRoomRepository(),
-        message_repository=object(),
-        agent_repository=object(),
-    )
-
-    assert await store.update_room_by_room_id(
-        "r1",
-        Room(
-            room_id="r1",
-            room_owner_id="owner-1",
-            room_owner_name="Owner",
-            room_name="Room",
-        ),
-    )
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_sparse_room_update_preserves_membership():
-
-    room_repo, _, rooms = _room_repo(
-        [
-            {
-                "room_id": "r1",
-                "room_owner_id": "owner-1",
-                "room_owner_name": "Owner",
-                "room_name": "Old",
-                "room_agent_set": {"agent-1": "Agent One"},
-            }
-        ]
-    )
-    store = _ConversationStores(
-        mongo=FakeMongo(),
-        room_repository=room_repo,
-        message_repository=object(),
-        agent_repository=object(),
-    )
-
-    update = Room(
-        room_id="r1",
-        room_owner_id="owner-1",
-        room_owner_name="Owner",
-        room_name="Renamed",
-    )
-
-    assert await store.update_room_by_room_id("r1", update) is True
-    assert rooms.docs[0]["room_name"] == "Renamed"
-    assert rooms.docs[0]["room_agent_set"] == {"agent-1": "Agent One"}
-
-    _, update_doc, _ = rooms.update_one_calls[-1]
-    assert "room_agent_set" not in update_doc["$set"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_store_hydrated_room_update_preserves_active_write_lease():
-    from models.room import Room
-
-    lease = {
-        "lease_id": "lease-1",
-        "owner": "agent-artifact",
-        "acquired_at": datetime(2026, 5, 11, tzinfo=UTC),
-        "expires_at": datetime(2026, 5, 11, 0, 1, tzinfo=UTC),
-    }
-    room_repo, _, rooms = _room_repo(
-        [
-            {
-                "room_id": "r1",
-                "room_owner_id": "owner-1",
-                "room_owner_name": "Owner",
-                "room_name": "Old",
-                "lifecycle_state": "active",
-                "write_leases": [lease],
-            }
-        ]
-    )
-    store = _ConversationStores(
-        mongo=FakeMongo(),
-        room_repository=room_repo,
-        message_repository=object(),
-        agent_repository=object(),
-    )
-    renamed = Room.model_validate(rooms.docs[0]).model_copy(
-        update={"room_name": "Renamed"}
-    )
-
-    assert await store.update_room_by_room_id("r1", renamed) is True
-    assert rooms.docs[0]["write_leases"] == [lease]
-    assert rooms.docs[0]["lifecycle_state"] == "active"
-    _, update_doc, _ = rooms.update_one_calls[-1]
-    assert "write_leases" not in update_doc["$set"]
-    assert "lifecycle_state" not in update_doc["$set"]
 
 
 @pytest.mark.asyncio

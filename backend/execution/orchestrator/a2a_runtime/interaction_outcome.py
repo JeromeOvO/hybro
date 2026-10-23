@@ -126,7 +126,6 @@ async def _emit_delivery_event(
         if status not in {
             DeliveryEmitStatus.DELIVERED,
             DeliveryEmitStatus.ALREADY_DELIVERED,
-            DeliveryEmitStatus.DEDUPLICATED,
         }:
             raise RuntimeError(
                 f"canonical {event.event_type} was not durably delivered"

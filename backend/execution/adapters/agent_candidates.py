@@ -176,7 +176,7 @@ class AgentServiceCandidateSource:
                 )
 
             # Skill-bearing cards expose only their explicit skill tools. A
-            # skill-less legacy card (including one with no usable entries)
+            # skill-less card (including one with no usable entries)
             # retains a single whole-Agent fallback.
             if not usable_skills:
                 identity = (info.agent_id, None)

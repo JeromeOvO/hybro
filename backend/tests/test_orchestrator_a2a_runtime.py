@@ -440,6 +440,7 @@ async def _run_production_recovery_cycle(
         dispatch=runtime.dispatch,
         observations=runtime.observations,
         recover_dispatch=recover_dispatch,
+        hitl=InMemoryHITLApplicationPort(),
     )
 
     async def noop():

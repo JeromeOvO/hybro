@@ -45,8 +45,9 @@ class OpenAIProvider:
         if client:
             self._client = client
             return
-        # Explicit setup credentials/endpoints must not load unrelated app .env.
-        # Legacy callers that omit them retain the settings-backed defaults.
+        # Explicit credentials and endpoints skip the settings snapshot. The
+        # gateway builds its default OpenAI provider with empty values when
+        # OpenAI is not configured, so those fall back to the settings defaults.
         if not api_key or not base_url:
             from common.config.loader import settings
 
@@ -80,17 +81,12 @@ class OpenAIProvider:
     async def generate_structured(
         self,
         messages: list[dict],
-        *args,
-        model: str | None = None,
+        *,
+        model: str,
         schema: dict | None = None,
         json_mode: bool = False,
         **kwargs,
     ) -> LLMStructuredResponse:
-        model, schema = _normalize_structured_args(
-            args,
-            model,
-            schema,
-        )
         if schema is None and json_mode:
             response_format = {"type": "json_object"}
         else:
@@ -777,28 +773,6 @@ def _normalize_finish_reason(reason: str) -> str:
 
 
 __all__ = ["OpenAIProvider"]
-
-
-def _normalize_structured_args(
-    args: tuple[Any, ...],
-    model: str | None,
-    schema: dict | str | None,
-) -> tuple[str, dict | None]:
-    if len(args) == 2:
-        legacy_schema, legacy_model = args
-        return str(legacy_model), legacy_schema if isinstance(
-            legacy_schema, dict
-        ) else None
-    if len(args) == 1:
-        first = args[0]
-        if isinstance(first, dict):
-            if model is None:
-                raise TypeError("model is required")
-            return model, first
-        return str(first), schema if isinstance(schema, dict) else None
-    if model is None:
-        raise TypeError("model is required")
-    return model, schema if isinstance(schema, dict) else None
 
 
 def _chat_options(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:

@@ -121,7 +121,7 @@ describe('canonical Turn renderer', () => {
       run_id: 'run-1',
       public_call_id: 'inv_image_0001',
       status: 'completed',
-      output: '[Generated file]',
+      parts: [{ kind: 'text', text: '[Generated file]' }],
       artifacts: [{
         artifact_ref: '/api/v1/files/af011190aaba4f97b459e7656bba7f7e/content',
         file_id: 'af011190aaba4f97b459e7656bba7f7e',
@@ -168,7 +168,7 @@ describe('canonical Turn renderer', () => {
         run_id: 'run-1',
         public_call_id: 'inv_retry_image_0001',
         status: 'completed',
-        output: '',
+        parts: [],
         artifacts: [{
           artifact_ref: '/api/v1/files/af011190aaba4f97b459e7656bba7f7e/content',
           file_id: 'af011190aaba4f97b459e7656bba7f7e',

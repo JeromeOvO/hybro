@@ -11,6 +11,7 @@ from execution.orchestrator.a2a_runtime.errors import (
     RecoverableCheckpointError,
     RecoverableTransportError,
 )
+from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 from execution.orchestrator.a2a_runtime.in_memory import (
     InMemoryAgentCallLedgerStore,
     InMemoryObservationConflictStore,
@@ -290,7 +291,7 @@ async def service(
         dispatch=dispatch or Dispatch(),
         observations=observations,
         recover_dispatch=recover_dispatch,
-        hitl=hitl,
+        hitl=hitl or InMemoryHITLApplicationPort(),
     )
     return runtime, ledger, recovered
 
@@ -393,7 +394,6 @@ async def test_uncheckpointed_acceptance_schedules_once_at_orphan_ttl():
 
 
 async def test_call_recovery_typed_interaction_parks_instead_of_completing():
-    from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 
     record = transition_call(
         ledger_record(), to_state="ready_to_dispatch", updated_at=NOW
@@ -445,7 +445,6 @@ async def test_call_recovery_typed_interaction_parks_instead_of_completing():
 
 
 async def test_call_recovery_does_not_checkpoint_losing_typed_interaction():
-    from execution.orchestrator.a2a_runtime.hitl import InMemoryHITLApplicationPort
 
     record = transition_call(
         ledger_record(), to_state="ready_to_dispatch", updated_at=NOW

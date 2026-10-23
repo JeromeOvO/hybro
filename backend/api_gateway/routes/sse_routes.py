@@ -63,8 +63,8 @@ async def stream_room_messages(  # noqa: C901
     ``connected`` handshake carries the room's latest contiguous ``room_seq``
     and a ``snapshot`` frame follows as the first frame. ``?snapshot=1``
     forces a fresh fold from the authoritative room event log (gap recovery).
-    Without a bound snapshot service the stream degrades to the legacy
-    notification-driven behavior with an unchanged envelope.
+    Without a bound snapshot service, or when the snapshot build fails, the
+    stream continues delta-only with an unchanged envelope.
 
     Args:
         room_id: room ID

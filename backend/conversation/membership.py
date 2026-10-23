@@ -146,7 +146,7 @@ def _is_visible(agent: AgentInfo, user_id: str | None) -> bool:
 
 
 def _looks_like_agent_id(value: object) -> bool:
-    # Keep this local to avoid coupling the pure room package back to legacy ConversationRuntime.
+    # Kept local so this pure membership module has no runtime dependencies.
     if not isinstance(value, str):
         return False
     try:

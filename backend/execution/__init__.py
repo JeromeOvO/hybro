@@ -1,4 +1,4 @@
-"""Execution module public compatibility exports."""
+"""Execution module public API: the ``ExecutionFacade`` entry point."""
 
 from execution.facade import ExecutionFacade
 

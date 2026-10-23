@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Annotated, Any, Literal
 
@@ -51,9 +50,7 @@ class CanonicalAgentCallDetail(BaseModel):
     run_id: str
     public_call_id: str
     status: str
-    # Rolling-deploy compatibility for clients predating typed ``parts``.
-    output: str
-    parts: list[CanonicalAgentCallPart] = Field(default_factory=list)
+    parts: list[CanonicalAgentCallPart]
     artifacts: list[CanonicalArtifactDescriptor] = Field(default_factory=list)
 
 
@@ -126,7 +123,6 @@ class CanonicalAgentCallDetailService:
         if entry is None or entry.buffered_terminal_result is None:
             return None
         result = entry.buffered_terminal_result
-        output_parts: list[str] = []
         typed_parts: list[CanonicalAgentCallPart] = []
         for part in result.content:
             kind = getattr(part, "kind", None)
@@ -134,15 +130,10 @@ class CanonicalAgentCallDetailService:
                 text = getattr(part, "text", None)
                 if isinstance(text, str):
                     typed_parts.append(CanonicalTextPart(text=text))
-                    if text:
-                        output_parts.append(text)
             elif kind == "data":
                 data = getattr(part, "data", None)
                 if isinstance(data, (dict, list)):
                     typed_parts.append(CanonicalDataPart(data=data))
-                    output_parts.append(
-                        json.dumps(data, ensure_ascii=False, default=str)
-                    )
         artifacts = [
             await self._artifact_descriptor(
                 room_id=room_id,
@@ -154,7 +145,6 @@ class CanonicalAgentCallDetailService:
             run_id=run.run_id,
             public_call_id=public_call_id,
             status=result.status,
-            output="\n".join(output_parts),
             parts=typed_parts,
             artifacts=artifacts,
         )

@@ -195,7 +195,12 @@ def canonical_processing_status_adapter(
     client_request_id: str,
     status: str,
 ) -> ProcessingStatusEvent:
-    """Build the sole content-free stale-browser canonical compatibility DTO."""
+    """Build the content-free turn-level ``processing_status`` event.
+
+    The room snapshot folds it into the User message status. Live SSE clients
+    drop it once the root's canonical Turn is known, and otherwise route it
+    through the ``client_request_id``-correlated processing-status handler.
+    """
 
     if not room_id or not user_message_id or not client_request_id:
         raise ValueError("canonical processing adapter requires exact nonempty roots")

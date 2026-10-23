@@ -531,8 +531,7 @@ without JSON inference, while declared `DataPart` values render as collapsed JSO
 disclosures. The detail pane groups all Text Parts first, Data Parts second, and
 authorized file parts last, preserving source order within each type. This keeps
 type boundaries explicit instead of showing a flattened JSON-plus-text string.
-An absent `parts` field alone enables the
-legacy `output` fallback during a rolling deploy. Descriptors carry the durable room-file ID,
+`parts` is required in the detail response. Descriptors carry the durable room-file ID,
 MIME type, size, and display name and are mapped into the standard authenticated
 `ArtifactList`/`useRoomFile` preview path, including responses with no text.
 Room-file Blob reads use a user/file-keyed promise cache so simultaneous Final

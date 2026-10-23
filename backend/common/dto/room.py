@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from common.dto.base import FrozenDTO
 
@@ -90,22 +90,6 @@ class CreateRoomRequest(FrozenDTO):
     __hash__ = None
 
 
-class RoomCreationParams(CreateRoomRequest):
-    """Defaulted room creation DTO for compatibility with legacy creation inputs."""
-
-    membership_seed: MembershipSeed = Field(
-        default_factory=lambda: MembershipSeed(mode="manual")
-    )
-    __hash__ = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def materialize_default_membership_seed(cls, data):
-        if isinstance(data, dict) and "membership_seed" not in data:
-            return {**data, "membership_seed": MembershipSeed(mode="manual")}
-        return data
-
-
 class UserMessageInput(FrozenDTO):
     room_id: str
     message_text: str
@@ -171,7 +155,6 @@ __all__ = [
     "MembershipSeed",
     "MembershipUpdateRequest",
     "MessageRecord",
-    "RoomCreationParams",
     "RoomInfo",
     "RoomMembership",
     "RoomMessageInfo",

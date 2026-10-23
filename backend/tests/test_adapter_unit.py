@@ -1098,20 +1098,14 @@ async def test_openai_provider_generates_structured_responses_and_embeddings():
     text = await provider.generate([{"role": "user", "content": "hello"}], "gpt-test")
     structured = await provider.generate_structured(
         [{"role": "user", "content": "hello"}],
-        {"type": "object"},
-        "gpt-test",
-    )
-    keyword_structured = await provider.generate_structured(
-        [{"role": "user", "content": "hello"}],
-        {"type": "object"},
         model="gpt-test",
+        schema={"type": "object"},
     )
     embeddings = await provider.embed_batch(["a", "b"], "embed-test")
 
     assert text.content == '{"ok": true}'
     assert text.usage == LLMUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7)
     assert structured.data == {"ok": True}
-    assert keyword_structured.data == {"ok": True}
     assert embeddings == [[0.1, 0.2], [0.3, 0.4]]
     structured_call = client.chat.completions.create.await_args_list[1].kwargs
     assert structured_call["response_format"]["type"] == "json_schema"
@@ -1141,8 +1135,8 @@ async def test_openai_provider_generate_structured_propagates_invalid_json():
     with pytest.raises(json.JSONDecodeError):
         await provider.generate_structured(
             [{"role": "user", "content": "hello"}],
-            {"type": "object"},
-            "gpt-test",
+            model="gpt-test",
+            schema={"type": "object"},
         )
 
 
@@ -1163,10 +1157,10 @@ async def test_openai_provider_schema_only_structured_call_requires_model():
     )
     provider = OpenAIProvider(client=client)
 
-    with pytest.raises(TypeError, match="model is required"):
-        await provider.generate_structured(
+    with pytest.raises(TypeError, match="keyword-only argument: 'model'"):
+        await provider.generate_structured(  # type: ignore[call-arg]
             [{"role": "user", "content": "hello"}],
-            {"type": "object"},
+            schema={"type": "object"},
         )
 
     client.chat.completions.create.assert_not_awaited()

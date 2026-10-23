@@ -567,8 +567,8 @@ class ExecutionFacade:
             orchestrator_requests = await self._orchestrator_router.get_pending_hitl(
                 room_id
             )
-            # Prefer orchestrator rows when legacy and orchestrator both surface
-            # the same question during dual-runtime overlap.
+            # Prefer orchestrator rows when the Execution HITL manager and the
+            # orchestrator both surface the same question.
             merged: dict[tuple[str, str], HITLRequest] = {
                 (item.interaction_id or "", item.request_id): item
                 for item in public_requests

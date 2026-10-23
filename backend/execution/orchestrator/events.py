@@ -20,7 +20,7 @@ def canonicalize_orchestrator_event(
 
     BSON dates have millisecond precision. Event replay therefore compares and
     stores UTC timestamps truncated to milliseconds while leaving every other
-    identity field exact. This also lets legacy outbox payloads carrying Python
+    identity field exact. This also lets an outbox payload carrying Python
     microseconds replay the event already inserted before a worker crash.
     """
 
