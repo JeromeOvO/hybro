@@ -15,15 +15,15 @@ pytestmark = [pytest.mark.functional]
 
 
 @pytest.mark.asyncio
-async def test_mention_scope_validation_and_rejection_of_legacy_fields(
+async def test_mention_scope_validation(
     functional_client: httpx.AsyncClient,
     test_room_payload,
     travel_planner_agent_id: str,
 ):
-    """Verifies that modern agent_scope is validated and legacy fields are cleanly rejected."""
+    """Verifies that agent_scope is validated and a valid mention scope is accepted."""
     # Create room
     room_resp = await functional_client.post(
-        "/roomCenter/createNewRoom",
+        "/rooms",
         json=test_room_payload(
             "Scope Validation Room", agent_ids=[travel_planner_agent_id]
         ),
@@ -31,29 +31,10 @@ async def test_mention_scope_validation_and_rejection_of_legacy_fields(
     assert room_resp.status_code == 200
     room_id = room_resp.json().get("room_id")
 
-    # 1. Test legacy field rejection (e.g., target_agent_ids)
-    legacy_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
-        json={
-            "room_id": room_id,
-            "message": "Hello",
-            "mode": "supervisor",
-            "client_request_id": str(uuid.uuid4()),
-            "target_agent_ids": [travel_planner_agent_id],
-        },
-    )
-    assert legacy_resp.status_code == 200
-    legacy_data = legacy_resp.json()
-    assert legacy_data.get("success") is False
-    assert "legacy targeting fields are no longer supported" in legacy_data.get(
-        "error", ""
-    )
-
-    # 2. Test invalid scope source
+    # 1. Test invalid scope source
     invalid_scope_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "message": "Hello",
             "mode": "supervisor",
             "client_request_id": str(uuid.uuid4()),
@@ -65,11 +46,10 @@ async def test_mention_scope_validation_and_rejection_of_legacy_fields(
     assert invalid_data.get("success") is False
     assert "agent_scope.source must be one of" in invalid_data.get("error", "")
 
-    # 3. Test valid mention scope
+    # 2. Test valid mention scope
     valid_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "user_input": "Hello",
             "message": {
                 "room_id": room_id,

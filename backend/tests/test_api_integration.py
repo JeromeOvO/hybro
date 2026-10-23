@@ -111,7 +111,7 @@ class TestRoomCenterHTTPIntegration:
         integration_app,
         integration_user,
     ):
-        """POST /roomCenter/createNewRoom should return well-formed JSON."""
+        """POST /rooms should return well-formed JSON."""
         mock_rc = MagicMock()
         mock_rc.create_new_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(
@@ -124,11 +124,11 @@ class TestRoomCenterHTTPIntegration:
         integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
         try:
             resp = await http_client.post(
-                "/api/v1/roomCenter/createNewRoom",
+                "/api/v1/rooms",
                 json={
                     "room_name": "HTTP Test Room",
                     "room_owner_name": "Tester",
-                    "room_agent_set": {},
+                    "room_agent_ids": [],
                 },
             )
         finally:
@@ -143,7 +143,7 @@ class TestRoomCenterHTTPIntegration:
     @pytest.mark.parametrize(
         "pagination",
         [
-            {"limit": True},
+            {"limit": 0},
             {"cursor": "not+base64"},
         ],
     )
@@ -174,9 +174,9 @@ class TestRoomCenterHTTPIntegration:
             ConversationRuntime
         )
         try:
-            resp = await http_client.post(
-                "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
-                json={"room_id": mock_room.room_id, **pagination},
+            resp = await http_client.get(
+                f"/api/v1/rooms/{mock_room.room_id}/messages",
+                params=pagination,
             )
         finally:
             integration_app.dependency_overrides.pop(room_api.get_room_store, None)
@@ -194,7 +194,7 @@ class TestRoomCenterHTTPIntegration:
         integration_app,
         integration_user,
     ):
-        """POST /roomCenter/inquiryRoomMessagesByRoomId via HTTP."""
+        """GET /rooms/{room_id}/messages via HTTP."""
         from models.room import Room
 
         mock_room = Room(
@@ -218,10 +218,7 @@ class TestRoomCenterHTTPIntegration:
         integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
         integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
         try:
-            resp = await http_client.post(
-                "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
-                json={"room_id": "room-http-002"},
-            )
+            resp = await http_client.get("/api/v1/rooms/room-http-002/messages")
         finally:
             integration_app.dependency_overrides.pop(room_api.get_room_store, None)
             integration_app.dependency_overrides.pop(room_api.get_room_center, None)

@@ -5,7 +5,6 @@ Tests cover:
 - Room creation
 - Room settings inquiry
 - Room ownership verification
-- Room updates (agent set and name)
 - Message creation and retrieval
 - Authorization checks
 """
@@ -20,12 +19,13 @@ from fastapi import HTTPException
 
 from agent.protocols import AgentSuggestion, AgentSuggestionResult
 from api_gateway.routes.room_routes import (
+    AgentSuggestionBody,
+    CreateRoomBody,
     create_new_room,
     inquiry_active_runs,
     inquiry_room_messages,
     inquiry_room_setting,
     suggest_agents,
-    update_room_agent_set,
     verify_room_ownership,
 )
 from chat import ChatRouteAdapter, ChatService
@@ -166,14 +166,11 @@ class TestCreateNewRoom:
     @pytest.mark.asyncio
     async def test_creates_room_with_user_as_owner(self, mock_user, mock_room_center):
         """Should create room with authenticated user as owner."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "room_name": "Test Room",
-                "room_owner_name": "Test User",
-                "room_agent_set": {"agent-1": "Agent One"},
-                "extend_info": {"debateMode": True, "use_supervisor": True},
-            }
+        payload = CreateRoomBody(
+            room_name="Test Room",
+            room_owner_name="Test User",
+            room_agent_ids=["agent-1"],
+            extend_info={"debateMode": True, "use_supervisor": True},
         )
 
         expected_response = RoomCenterRoomSettingResponse(
@@ -183,9 +180,7 @@ class TestCreateNewRoom:
         )
         mock_room_center.create_new_room.return_value = expected_response
 
-        response = await create_new_room(
-            mock_request, mock_user, center=mock_room_center
-        )
+        response = await create_new_room(payload, mock_user, center=mock_room_center)
 
         assert response.success is True
         assert response.room_id == "new-room-id"
@@ -193,19 +188,17 @@ class TestCreateNewRoom:
         # Verify the request was made with user's ID as owner
         call_args = mock_room_center.create_new_room.call_args[0][0]
         assert call_args.room_owner_id == mock_user.user_id
+        assert call_args.requesting_user_id == mock_user.user_id
+        assert call_args.room_agent_ids == ["agent-1"]
         assert call_args.extend_info == {"debateMode": True, "use_supervisor": True}
 
     @pytest.mark.asyncio
-    async def test_creates_room_with_agent_group(self, mock_user, mock_room_center):
-        """Should create room with applied_from_group when specified."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "room_name": "Group Room",
-                "room_owner_name": "Test User",
-                "room_agent_set": {},
-                "applied_from_group": "group-123",
-            }
+    async def test_creates_room_with_seed_group(self, mock_user, mock_room_center):
+        """Should forward seed_group_id when specified."""
+        payload = CreateRoomBody(
+            room_name="Group Room",
+            room_owner_name="Test User",
+            seed_group_id="group-123",
         )
 
         expected_response = RoomCenterRoomSettingResponse(
@@ -213,10 +206,10 @@ class TestCreateNewRoom:
         )
         mock_room_center.create_new_room.return_value = expected_response
 
-        await create_new_room(mock_request, mock_user, center=mock_room_center)
+        await create_new_room(payload, mock_user, center=mock_room_center)
 
         call_args = mock_room_center.create_new_room.call_args[0][0]
-        assert call_args.applied_from_group == "group-123"
+        assert call_args.seed_group_id == "group-123"
 
 
 # =============================================================================
@@ -233,9 +226,6 @@ class TestInquiryRoomSetting:
     ):
         from common.dto import RunInfo
         from models.response import ActiveRunRef
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         patch_room_center_deps[
             "db_service"
@@ -260,7 +250,7 @@ class TestInquiryRoomSetting:
         ]
 
         response = await inquiry_room_setting(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -284,8 +274,6 @@ class TestInquiryRoomSetting:
     async def test_inquiry_room_setting_degrades_when_active_run_lookup_fails(
         self, mock_user, sample_room, patch_room_center_deps
     ):
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         patch_room_center_deps[
             "db_service"
@@ -302,7 +290,7 @@ class TestInquiryRoomSetting:
         ].get_runs_for_room.side_effect = RuntimeError("runs unavailable")
 
         response = await inquiry_room_setting(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -318,9 +306,6 @@ class TestInquiryRoomSetting:
         self, mock_user, sample_room, patch_room_center_deps
     ):
         from common.dto import RunInfo
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         patch_room_center_deps[
             "db_service"
@@ -343,7 +328,7 @@ class TestInquiryRoomSetting:
         ]
 
         response = await inquiry_room_setting(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -362,9 +347,6 @@ class TestInquiryRoomSetting:
         self, mock_user, sample_room, patch_room_center_deps
     ):
         from common.dto import RunInfo
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         patch_room_center_deps[
             "db_service"
@@ -388,7 +370,7 @@ class TestInquiryRoomSetting:
         ]
 
         response = await inquiry_room_setting(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -407,14 +389,12 @@ class TestInquiryRoomSetting:
         self, mock_user_2, mock_db_service, sample_room
     ):
         """Should raise 403 when user is not the owner."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         with pytest.raises(HTTPException) as exc_info:
             await inquiry_room_setting(
-                mock_request,
+                sample_room.room_id,
                 mock_user_2,
                 store=mock_db_service,
                 engine=MagicMock(),
@@ -438,9 +418,6 @@ class TestInquiryActiveRuns:
     ):
         from common.dto import RunInfo
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
-
         patch_room_center_deps[
             "db_service"
         ].get_room_by_room_id.return_value = sample_room
@@ -457,7 +434,7 @@ class TestInquiryActiveRuns:
         ]
 
         response = await inquiry_active_runs(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -480,11 +457,6 @@ class TestInquiryActiveRuns:
     ):
         from common.dto import RunInfo
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={"room_id": sample_room.room_id, "trigger_message_id": "m1"}
-        )
-
         patch_room_center_deps[
             "db_service"
         ].get_room_by_room_id.return_value = sample_room
@@ -499,7 +471,7 @@ class TestInquiryActiveRuns:
             )
         ]
         response = await inquiry_active_runs(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -519,11 +491,6 @@ class TestInquiryActiveRuns:
         self, mock_user, sample_room, patch_room_center_deps
     ):
 
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={"room_id": sample_room.room_id, "trigger_message_id": "m1"}
-        )
-
         patch_room_center_deps[
             "db_service"
         ].get_room_by_room_id.return_value = sample_room
@@ -531,7 +498,7 @@ class TestInquiryActiveRuns:
             "execution_engine"
         ].get_runs_for_room.side_effect = RuntimeError("runs unavailable")
         response = await inquiry_active_runs(
-            mock_request,
+            sample_room.room_id,
             mock_user,
             store=patch_room_center_deps["db_service"],
             engine=patch_room_center_deps["execution_engine"],
@@ -544,93 +511,15 @@ class TestInquiryActiveRuns:
     async def test_raises_403_for_non_owner(
         self, mock_user_2, mock_db_service, sample_room
     ):
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         mock_db_service.get_room_by_room_id.return_value = sample_room
 
         with pytest.raises(HTTPException) as exc_info:
             await inquiry_active_runs(
-                mock_request,
+                sample_room.room_id,
                 mock_user_2,
                 store=mock_db_service,
                 engine=MagicMock(),
-            )
-
-        assert exc_info.value.status_code == 403
-
-
-# =============================================================================
-# Room Update Tests
-# =============================================================================
-
-
-class TestUpdateRoomAgentSet:
-    """Tests for update_room_agent_set endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_updates_agent_set_for_owner(
-        self, mock_user, sample_room, patch_room_center_deps
-    ):
-        """Should update agent set when user is owner."""
-        new_agent_set = {"agent-2": "Agent Two", "agent-3": "Agent Three"}
-
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "room_id": sample_room.room_id,
-                "room_agent_set": new_agent_set,
-            }
-        )
-
-        patch_room_center_deps[
-            "db_service"
-        ].get_room_by_room_id.return_value = sample_room
-        expected_response = RoomCenterRoomSettingResponse(success=True)
-        patch_room_center_deps[
-            "room_center"
-        ].update_room_agent_set.return_value = expected_response
-
-        response = await update_room_agent_set(
-            mock_request,
-            mock_user,
-            store=patch_room_center_deps["db_service"],
-            center=patch_room_center_deps["room_center"],
-        )
-
-        assert response.success is True
-
-        # Verify requesting_user_id is passed for visibility validation
-        call_args = patch_room_center_deps[
-            "room_center"
-        ].update_room_agent_set.call_args[0][0]
-        assert call_args.requesting_user_id == mock_user.user_id
-
-
-class TestUpdateEndpointsRejectNonOwner:
-    """Non-owner is rejected for all update endpoints."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "endpoint_fn,payload",
-        [
-            (update_room_agent_set, {"room_id": "test-room-001", "room_agent_set": {}}),
-        ],
-    )
-    async def test_rejects_non_owner(
-        self, mock_user_2, mock_db_service, sample_room, endpoint_fn, payload
-    ):
-        """All update endpoints should raise 403 for non-owners."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value=payload)
-        mock_db_service.get_room_by_room_id.return_value = sample_room
-
-        with pytest.raises(HTTPException) as exc_info:
-            await endpoint_fn(
-                mock_request,
-                mock_user_2,
-                store=mock_db_service,
-                center=MagicMock(),
             )
 
         assert exc_info.value.status_code == 403
@@ -648,17 +537,14 @@ class TestInquiryRoomMessages:
     async def test_ownership_precedes_invalid_cursor_validation(
         self, mock_user_2, sample_room, mock_db_service
     ):
-        request = MagicMock()
-        request.json = AsyncMock(
-            return_value={"room_id": sample_room.room_id, "cursor": "not-valid"}
-        )
         mock_db_service.get_room_by_room_id.return_value = sample_room
         center = MagicMock()
 
         with pytest.raises(HTTPException) as exc_info:
             await inquiry_room_messages(
-                request,
-                mock_user_2,
+                sample_room.room_id,
+                cursor="not-valid",
+                user=mock_user_2,
                 store=mock_db_service,
                 center=center,
             )
@@ -671,14 +557,6 @@ class TestInquiryRoomMessages:
         self, mock_user, sample_room, patch_room_center_deps
     ):
         """Should return messages when user is owner."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "room_id": sample_room.room_id,
-                "limit": 37,
-                "cursor": "opaque-cursor",
-            }
-        )
 
         patch_room_center_deps[
             "db_service"
@@ -692,8 +570,10 @@ class TestInquiryRoomMessages:
         ].inquiry_room_messages_by_room_id.return_value = expected_response
 
         response = await inquiry_room_messages(
-            mock_request,
-            mock_user,
+            sample_room.room_id,
+            limit=37,
+            cursor="opaque-cursor",
+            user=mock_user,
             store=patch_room_center_deps["db_service"],
             center=patch_room_center_deps["room_center"],
         )
@@ -709,8 +589,6 @@ class TestInquiryRoomMessages:
     async def test_returns_public_user_history_without_private_orchestration_state(
         self, mock_user, sample_room, patch_room_center_deps
     ):
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
         private_sentinel = "PRIVATE_SENTINEL_user_history_boundary"
         public_extend_info = {
             "quoted_text": "Public quoted excerpt",
@@ -761,8 +639,8 @@ class TestInquiryRoomMessages:
         )
 
         response = await inquiry_room_messages(
-            mock_request,
-            mock_user,
+            sample_room.room_id,
+            user=mock_user,
             store=patch_room_center_deps["db_service"],
             center=center,
         )
@@ -779,8 +657,6 @@ class TestInquiryRoomMessages:
     async def test_returns_public_agent_message_payload_without_private_dispatch_text(
         self, mock_user, sample_room, sample_user_message, patch_room_center_deps
     ):
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(return_value={"room_id": sample_room.room_id})
 
         private_sentinel = "PRIVATE_SENTINEL_actual_room_runtime_boundary"
         public_label = "Requesting Insurer"
@@ -964,8 +840,8 @@ class TestInquiryRoomMessages:
         )
 
         response = await inquiry_room_messages(
-            mock_request,
-            mock_user,
+            sample_room.room_id,
+            user=mock_user,
             store=patch_room_center_deps["db_service"],
             center=center,
         )
@@ -1022,14 +898,6 @@ class TestSuggestAgents:
     @pytest.mark.asyncio
     async def test_returns_suggestions_for_valid_message(self, mock_user):
         """Should return agent suggestions for valid message."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "message_text": "Help me write some code",
-                "top_k": 3,
-                "user_id": "untrusted-body-user",
-            }
-        )
 
         mock_selection_service = MagicMock()
         mock_selection_service.suggest_agents = AsyncMock(
@@ -1052,7 +920,7 @@ class TestSuggestAgents:
         )
 
         response = await suggest_agents(
-            mock_request,
+            AgentSuggestionBody(message_text="Help me write some code", top_k=3),
             user=mock_user,
             selection_service=mock_selection_service,
         )
@@ -1081,17 +949,10 @@ class TestSuggestAgents:
     @pytest.mark.asyncio
     async def test_returns_error_for_empty_message(self, mock_user):
         """Should return error when message_text is empty."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "message_text": "",
-                "top_k": 3,
-            }
-        )
 
         mock_selection_service = MagicMock()
         response = await suggest_agents(
-            mock_request,
+            AgentSuggestionBody(message_text="", top_k=3),
             user=mock_user,
             selection_service=mock_selection_service,
         )
@@ -1103,13 +964,6 @@ class TestSuggestAgents:
     @pytest.mark.asyncio
     async def test_handles_service_error(self, mock_user):
         """Should handle errors from agent selection service."""
-        mock_request = MagicMock()
-        mock_request.json = AsyncMock(
-            return_value={
-                "message_text": "Test message",
-                "top_k": 3,
-            }
-        )
 
         mock_selection_service = MagicMock()
         mock_selection_service.suggest_agents = AsyncMock(
@@ -1117,7 +971,7 @@ class TestSuggestAgents:
         )
 
         response = await suggest_agents(
-            mock_request,
+            AgentSuggestionBody(message_text="Test message", top_k=3),
             user=mock_user,
             selection_service=mock_selection_service,
         )

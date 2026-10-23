@@ -31,7 +31,6 @@ async def test_send_message_persists_changed_mode_before_execution_and_ack(
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(mode="json"),
             "client_request_id": "scope-v2-1",
             "mode": "supervisor",
@@ -60,6 +59,7 @@ async def test_send_message_persists_changed_mode_before_execution_and_ack(
     patch_room_center_deps["execution_engine"].execute.side_effect = execute
 
     response = await send_message(
+        sample_room.room_id,
         request,
         mock_user,
         store=patch_room_center_deps["db_service"],
@@ -96,7 +96,6 @@ async def test_send_message_stops_before_execution_when_mode_write_fails(
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(mode="json"),
             "client_request_id": "mode-write-failure",
             "mode": "supervisor",
@@ -108,6 +107,7 @@ async def test_send_message_stops_before_execution_when_mode_write_fails(
 
     with pytest.raises(HTTPException) as exc_info:
         await send_message(
+            sample_room.room_id,
             request,
             mock_user,
             store=patch_room_center_deps["db_service"],
@@ -120,7 +120,7 @@ async def test_send_message_stops_before_execution_when_mode_write_fails(
 
 
 @pytest.mark.asyncio
-async def test_send_message_rejects_debate_and_legacy_target_fields(
+async def test_send_message_rejects_debate_mode(
     mock_user,
     sample_room,
     sample_user_message,
@@ -129,16 +129,15 @@ async def test_send_message_rejects_debate_and_legacy_target_fields(
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": sample_room.room_id,
             "message": sample_user_message.model_dump(mode="json"),
             "client_request_id": "scope-v2-2",
             "mode": "debate",
             "agent_scope": {"source": "room_default"},
-            "selected_agent_ids": ["agent-1"],
         }
     )
 
     response = await send_message(
+        sample_room.room_id,
         request,
         mock_user,
         store=patch_room_center_deps["db_service"],

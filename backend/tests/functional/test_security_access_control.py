@@ -22,7 +22,7 @@ async def test_client_request_id_and_mode_validation(
     """Verifies that client_request_id and mode are strictly validated by the gateway."""
     # Create room
     room_resp = await functional_client.post(
-        "/roomCenter/createNewRoom",
+        "/rooms",
         json=test_room_payload("Security Test Room"),
     )
     assert room_resp.status_code == 200
@@ -30,9 +30,8 @@ async def test_client_request_id_and_mode_validation(
 
     # 1. Missing client_request_id
     missing_id_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "message": "Hello",
             "mode": "supervisor",
             "agent_scope": {"source": "room_default"},
@@ -44,9 +43,8 @@ async def test_client_request_id_and_mode_validation(
 
     # 2. Oversized client_request_id (> 128 chars)
     oversized_id_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "message": "Hello",
             "mode": "supervisor",
             "client_request_id": "x" * 150,
@@ -59,9 +57,8 @@ async def test_client_request_id_and_mode_validation(
 
     # 3. Invalid mode (not direct or supervisor)
     invalid_mode_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "message": "Hello",
             "mode": "invalid_mode",
             "client_request_id": str(uuid.uuid4()),

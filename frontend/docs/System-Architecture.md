@@ -988,7 +988,7 @@ two-column drawer, with the same list folding. Agent details retain
 the existing bottom Sheet. Original page content, Room workflows, and
 `client_request_id` correlation are independent of the navigation structure.
 
-Chat history uses the lightweight authenticated `GET /roomCenter/history`
+Chat history uses the lightweight authenticated `GET /rooms`
 resource through the shared `useRoomHistory` TanStack Query hook (also used by
 the Chats badge and the Overview). Each row shows the shared status indicator:
 `queued` is **Queued**, `processing` is **Running** (spinner only without

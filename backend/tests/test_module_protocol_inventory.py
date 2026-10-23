@@ -135,7 +135,6 @@ EXPECTED_METHODS = {
             "inquiry_room_messages_by_room_id",
             "inquiry_room_setting",
             "inquiry_rooms_by_room_owner_id",
-            "update_room_agent_set",
             "update_room_default_mode",
             "update_room_history_fields",
             "update_room_name",

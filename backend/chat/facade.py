@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from common.dto import CreateRoomRequest, MembershipSeed, RoomInfo
+from common.dto import CreateRoomRequest, RoomInfo
 from common.protocols import RoomRepository
 from conversation import ConversationFacade, room_info_from_doc
 
@@ -25,16 +25,6 @@ class ChatFacade:
 
     async def update_room(self, room_id: str, updates: dict) -> RoomInfo | None:
         return await self._conversation.update_room(room_id, updates)
-
-    async def replace_membership(
-        self,
-        room_id: str,
-        seed: MembershipSeed,
-        requesting_user_id: str | None = None,
-    ) -> RoomInfo:
-        return await self._conversation.replace_membership(
-            room_id, seed, requesting_user_id=requesting_user_id
-        )
 
     async def update_room_default_mode(
         self,

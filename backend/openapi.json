@@ -783,235 +783,6 @@
         }
       }
     },
-    "/api/v1/roomCenter/createNewRoom": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Create New Room",
-        "operationId": "create_new_room_api_v1_roomCenter_createNewRoom_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/inquiryRoomSetting": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Room Setting",
-        "description": "Get room settings - PROTECTED (requires room ownership)",
-        "operationId": "inquiry_room_setting_api_v1_roomCenter_inquiryRoomSetting_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/inquiryActiveRuns": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Active Runs",
-        "description": "List non-terminal orchestration runs for a room \u2014 same auth as inquiryRoomSetting.",
-        "operationId": "inquiry_active_runs_api_v1_roomCenter_inquiryActiveRuns_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/history": {
-      "get": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Get Room History",
-        "operationId": "get_room_history_api_v1_roomCenter_history_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomHistoryResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/history/{room_id}": {
-      "patch": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Update Room History Item",
-        "operationId": "update_room_history_item_api_v1_roomCenter_history__room_id__patch",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RoomHistoryUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomHistoryItem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Delete Room History Item",
-        "operationId": "delete_room_history_item_api_v1_roomCenter_history__room_id__delete",
-        "parameters": [
-          {
-            "name": "room_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Room Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/history/pinned-order": {
-      "put": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Reorder Pinned Rooms",
-        "operationId": "reorder_pinned_rooms_api_v1_roomCenter_history_pinned_order_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PinnedRoomOrderUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/updateRoomAgentSet": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Update Room Agent Set",
-        "description": "Update room agent set - PROTECTED (requires room ownership)",
-        "operationId": "update_room_agent_set_api_v1_roomCenter_updateRoomAgentSet_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/rooms/{room_id}/agent-calls/{run_id}/{public_call_id}/detail": {
       "get": {
         "tags": [
@@ -1065,68 +836,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/inquiryRoomMessagesByRoomId": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Inquiry Room Messages",
-        "description": "Read room messages - PROTECTED (requires room ownership)",
-        "operationId": "inquiry_room_messages_api_v1_roomCenter_inquiryRoomMessagesByRoomId_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/sendMessage": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Send Message",
-        "description": "Send message to room - PROTECTED (requires room ownership)\n\nThis endpoint:\n1. Creates the user message and generates agent messages\n2. Persists a changed request mode as the room's next-message default\n3. Automatically queues background processing of agent messages\n\nThe mode write completes before a successful acknowledgement is returned.\nThe frontend no longer needs to call processRoomUserMessage separately.\nProcessing happens atomically to prevent orphaned messages on page refresh.",
-        "operationId": "send_message_api_v1_roomCenter_sendMessage_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomCenterUserMessageResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/roomCenter/suggestAgents": {
-      "post": {
-        "tags": [
-          "room"
-        ],
-        "summary": "Suggest Agents",
-        "description": "Suggest agents for a message based on content analysis.\nUsed for Auto mode to preview which agents will be selected.",
-        "operationId": "suggest_agents_api_v1_roomCenter_suggestAgents_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
               }
             }
           }
@@ -2258,6 +1967,427 @@
               }
             },
             "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/v1/rooms": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Get Room History",
+        "operationId": "get_room_history_api_v1_rooms_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Create New Room",
+        "operationId": "create_new_room_api_v1_rooms_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoomBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Room Setting",
+        "description": "Get room settings - PROTECTED (requires room ownership)",
+        "operationId": "inquiry_room_setting_api_v1_rooms__room_id__get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Update Room History Item",
+        "operationId": "update_room_history_item_api_v1_rooms__room_id__patch",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomHistoryUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomHistoryItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Delete Room History Item",
+        "operationId": "delete_room_history_item_api_v1_rooms__room_id__delete",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}/active-runs": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Active Runs",
+        "description": "List non-terminal orchestration runs for a room \u2014 same auth as room settings.",
+        "operationId": "inquiry_active_runs_api_v1_rooms__room_id__active_runs_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/pinned-order": {
+      "put": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Reorder Pinned Rooms",
+        "operationId": "reorder_pinned_rooms_api_v1_rooms_pinned_order_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PinnedRoomOrderUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{room_id}/messages": {
+      "get": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Inquiry Room Messages",
+        "description": "Read room messages - PROTECTED (requires room ownership)",
+        "operationId": "inquiry_room_messages_api_v1_rooms__room_id__messages_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Send Message",
+        "description": "Send message to room - PROTECTED (requires room ownership)\n\nThis endpoint:\n1. Creates the user message and generates agent messages\n2. Persists a changed request mode as the room's next-message default\n3. Automatically queues background processing of agent messages\n\nThe mode write completes before a successful acknowledgement is returned.\nThe frontend no longer needs to call processRoomUserMessage separately.\nProcessing happens atomically to prevent orphaned messages on page refresh.",
+        "operationId": "send_message_api_v1_rooms__room_id__messages_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomCenterUserMessageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-suggestions": {
+      "post": {
+        "tags": [
+          "room"
+        ],
+        "summary": "Suggest Agents",
+        "description": "Suggest agents for a message based on content analysis.\nUsed for Auto mode to preview which agents will be selected.",
+        "operationId": "suggest_agents_api_v1_agent_suggestions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSuggestionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
         }
       }
@@ -5681,6 +5811,115 @@
         ],
         "title": "AgentView",
         "description": "An agent as the public agent routes return it."
+      },
+      "AgentSuggestionBody": {
+        "properties": {
+          "message_text": {
+            "type": "string",
+            "title": "Message Text",
+            "default": ""
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "title": "AgentSuggestionBody"
+      },
+      "CreateRoomBody": {
+        "properties": {
+          "room_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Name"
+          },
+          "room_owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Owner Name"
+          },
+          "extend_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extend Info"
+          },
+          "membership_seed_input": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "saved_group",
+                  "all_current_agents"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Membership Seed Input"
+          },
+          "room_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Agent Ids"
+          },
+          "seed_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Group Id"
+          },
+          "seed_all_current_agents": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed All Current Agents"
+          }
+        },
+        "type": "object",
+        "title": "CreateRoomBody",
+        "additionalProperties": false
       }
     },
     "securitySchemes": {

@@ -164,10 +164,6 @@ def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches()
         ("chat/service.py", "ChatService", "inquiry_room_history_by_owner_id"): {
             "get_rooms_by_room_owner_id"
         },
-        ("chat/service.py", "ChatService", "update_room_agent_set"): {
-            "get_room_by_room_id",
-            "update_room_by_room_id",
-        },
         ("chat/service.py", "ChatService", "update_room_name"): {
             "get_room_by_room_id",
             "update_room_by_room_id",

@@ -196,19 +196,6 @@ export interface RoomCenterAgentMessageRequest {
   } | null;
   message?: RoomAgentMessage | null;
 }
-export interface RoomCenterRoomMessageRequest {
-  room_id?: string | null;
-  limit?: number | null;
-  cursor?: string | null;
-  message_id?: string | null;
-  message_type?: string | null;
-  message_content?: string | null;
-  message_created_at?: string | null;
-  extend_info?: {
-    [k: string]: unknown;
-  } | null;
-  message?: RoomMessage | null;
-}
 /**
  * Unified room message format for both user and agent messages
  */
@@ -222,25 +209,12 @@ export interface RoomMessage {
   related_message_id?: string | null;
   message_content: MessageContent;
 }
-export interface RoomCenterRoomSettingRequest {
-  room_id?: string | null;
-  room_name?: string | null;
-  room_owner_id?: string | null;
-  room_owner_name?: string | null;
-  room_created_at?: string | null;
+export interface CreateRoomRequest {
+  room_name: string;
+  room_owner_name: string;
   extend_info?: {
     [k: string]: unknown;
   } | null;
-  room?: Room | null;
-
-  // ── Legacy fields (accepted during rollout, canonical wins) ────────────
-  room_agent_set?: {
-    [k: string]: string;
-  } | null;
-  /** @deprecated Use canonical membership_seed_input instead. */
-  applied_from_group?: string | null;
-
-  // ── Canonical membership write input (mutually exclusive union) ────────
   membership_seed_input?: "manual" | "saved_group" | "all_current_agents";
   room_agent_ids?: string[];
   seed_group_id?: string;

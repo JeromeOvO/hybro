@@ -23,7 +23,6 @@ from api_gateway.routes.room_routes import (
     inquiry_room_setting,
     reorder_pinned_rooms,
     send_message,
-    update_room_agent_set,
     update_room_history_item,
 )
 from api_gateway.routes.sse_routes import cancel_message
@@ -158,9 +157,9 @@ async def test_send_message_refuses_session_container():
     engine.execute = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await send_message(
+            "room-1",
             _json_request(
                 {
-                    "room_id": "room-1",
                     "client_request_id": "cr-1",
                     "mode": "direct",
                     "message": {"message_content": {"message_text": "hi"}},
@@ -175,37 +174,6 @@ async def test_send_message_refuses_session_container():
 
     _assert_session_refused(exc_info)
     engine.execute.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_update_room_agent_set_refuses_session_container():
-    center = MagicMock()
-    center.update_room_agent_set = AsyncMock()
-    with pytest.raises(HTTPException) as exc_info:
-        await update_room_agent_set(
-            _json_request({"room_id": "room-1", "room_agent_ids": ["a2"]}),
-            user=_user(),
-            store=_store(_room()),
-            center=center,
-        )
-
-    _assert_session_refused(exc_info)
-    center.update_room_agent_set.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_update_room_agent_set_still_serves_chat_rooms():
-    center = MagicMock()
-    center.update_room_agent_set = AsyncMock(return_value={"success": True})
-
-    result = await update_room_agent_set(
-        _json_request({"room_id": "room-1", "room_agent_ids": ["a2"]}),
-        user=_user(),
-        store=_store(_room("chat")),
-        center=center,
-    )
-
-    assert result == {"success": True}
 
 
 @pytest.mark.asyncio
@@ -320,14 +288,14 @@ async def test_read_routes_serve_session_containers():
     store = _store(_room())
 
     setting = await inquiry_room_setting(
-        _json_request({"room_id": "room-1"}),
+        "room-1",
         user=_user(),
         store=store,
         engine=engine,
         center=center,
     )
     messages = await inquiry_room_messages(
-        _json_request({"room_id": "room-1"}),
+        "room-1",
         user=_user(),
         store=store,
         center=center,

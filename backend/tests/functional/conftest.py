@@ -17,7 +17,7 @@ def _is_backend_available() -> bool:
     """Check if live backend service is reachable."""
     try:
         resp = httpx.get(
-            f"{API_BASE_URL}/roomCenter/inquiryActiveRuns",
+            f"{API_BASE_URL}/rooms",
             timeout=1.0,
         )
         return resp.status_code in {200, 401, 403, 405, 422}
@@ -96,6 +96,7 @@ def test_room_payload(travel_planner_agent_id: str):
         return {
             "room_name": room_name,
             "room_owner_name": "Developer",
+            "membership_seed_input": "manual",
             "room_agent_ids": agent_ids or [travel_planner_agent_id],
             "extend_info": {"use_supervisor": use_supervisor},
         }
@@ -213,9 +214,8 @@ async def wait_for_completion_with_auto_hitl(
         )
         all_hitl_answered.extend(newly_answered)
 
-        history_resp = await client.post(
-            "/roomCenter/inquiryRoomMessagesByRoomId",
-            json={"room_id": room_id},
+        history_resp = await client.get(
+            f"/rooms/{room_id}/messages",
         )
         if history_resp.status_code == 200:
             messages = history_resp.json().get("message_list", [])

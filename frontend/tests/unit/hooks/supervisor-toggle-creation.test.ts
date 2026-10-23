@@ -70,15 +70,12 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
 
     expect(mockCreateNewRoom).toHaveBeenCalledWith(
       'Supervisor Room',
-      'user-1',
       'Test User',
       defaultProps.getToken,
-      { 'agent-1': 'Test Agent' },
       expect.objectContaining({
         use_supervisor: true,
         initialMessage: 'Hello',
       }),
-      undefined,
       {
         membership_seed_input: 'manual',
         room_agent_ids: ['agent-1'],
@@ -100,7 +97,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toHaveProperty('use_supervisor', false)
   })
 
@@ -117,7 +114,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     // When useSupervisor is omitted, default is now true (Ultimate mode)
     expect(extendInfoArg.use_supervisor).toBe(true)
   })
@@ -137,7 +134,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toEqual(expect.objectContaining({
       use_supervisor: true,
       initialMessage: 'Hello',
@@ -158,7 +155,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toHaveProperty('use_supervisor', true)
     expect(mockPush).toHaveBeenCalledWith('/room/room-sv-5')
   })
@@ -177,7 +174,7 @@ describe('useChatRoomCreation — Supervisor Toggle', () => {
       })
     })
 
-    const extendInfoArg = mockCreateNewRoom.mock.calls[0][5]
+    const extendInfoArg = mockCreateNewRoom.mock.calls[0][3]
     expect(extendInfoArg).toHaveProperty('use_supervisor', true)
     expect(mockPush).toHaveBeenCalledWith('/room/room-sv-6')
   })

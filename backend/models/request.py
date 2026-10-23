@@ -139,10 +139,6 @@ class RoomCenterRoomSettingRequest(BaseModel):
     room: Room | None = None
     requesting_user_id: str | None = None
 
-    # Legacy fields — accepted during rollout; canonical fields take precedence.
-    room_agent_set: dict[str, str] | None = None
-    applied_from_group: str | None = None
-
     # Canonical membership write input (mutually exclusive)
     membership_seed_input: str | None = (
         None  # "manual" | "saved_group" | "all_current_agents"

@@ -42,11 +42,6 @@ class ChatRouteAdapter:
     ) -> RoomCenterRoomSettingResponse:
         return await self._chat_service.inquiry_room_history_by_owner_id(request)
 
-    async def update_room_agent_set(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        return await self._chat_service.update_room_agent_set(request)
-
     async def update_room_name(
         self, request: RoomCenterRoomSettingRequest
     ) -> RoomCenterRoomSettingResponse:

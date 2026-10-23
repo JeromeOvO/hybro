@@ -228,7 +228,6 @@ def test_room_route_owner_protocol_covers_room_route_calls():
         "inquiry_rooms_by_room_owner_id",
         "inquiry_room_messages_by_room_id",
         "inquiry_room_setting",
-        "update_room_agent_set",
         "update_room_name",
         "update_room_default_mode",
     }

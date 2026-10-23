@@ -223,7 +223,7 @@ At runtime the system follows this broad layering:
 
 ```mermaid
 flowchart TD
-    Frontend[Next.js frontend] -->|REST sendMessage / room reads| FastAPI[main.py FastAPI app]
+    Frontend[Next.js frontend] -->|REST room messages / room reads| FastAPI[main.py FastAPI app]
     APIClient[Other API clients] --> FastAPI
     FastAPI --> APIGateway[api_gateway routers]
     APIGateway --> ChatRoutes[chat.ChatRouteAdapter / RoomCenterCompatibility]
@@ -494,7 +494,12 @@ bound dependencies.
 
 Important route groups:
 
-- `room_routes.py`: room CRUD, room messages, active runs, `sendMessage`.
+- `room_routes.py`: the canonical `/rooms` resource: create (`POST /rooms`),
+  history list (`GET /rooms`), settings (`GET /rooms/{room_id}`), rename/pin
+  (`PATCH /rooms/{room_id}`), pinned order (`PUT /rooms/pinned-order`), delete
+  (`DELETE /rooms/{room_id}`), active runs (`GET /rooms/{room_id}/active-runs`),
+  timeline reads (`GET /rooms/{room_id}/messages`), sends
+  (`POST /rooms/{room_id}/messages`), and `POST /agent-suggestions`.
 - `agent_routes.py`: agent registration, lookup, update, visibility, and the
   authenticated local-agent discovery trigger.
 - `agent_network_routes.py`: authenticated, caller-visible stored-card discovery,
@@ -1442,10 +1447,10 @@ and the request's newest event or reply. The owner record's
 
 Chat guard: chat history (`get_history_by_owner`) excludes containers with
 `owner_product="session"`. Chat writes refuse them with 409
-(`require_chat_room` in `api_gateway/errors.py`): `sendMessage`,
-`updateRoomAgentSet`, history rename/pin, pinned order, history delete,
+(`require_chat_room` in `api_gateway/errors.py`): message sends,
+room rename/pin, pinned order, room delete,
 `/sse/message/{id}/cancel`, and `/files/upload`. Chat read routes,
-`inquiryActiveRuns`, the room SSE stream, and the HITL routes stay open, so the
+the active-runs read, the room SSE stream, and the HITL routes stay open, so the
 owner's session page renders the record through them and answers approvals
 there.
 
@@ -2012,7 +2017,7 @@ shell adapter.
 The primary product path is:
 
 ```text
-frontend POST /api/v1/roomCenter/sendMessage
+frontend POST /api/v1/rooms/{room_id}/messages
   -> API Gateway -> Execution/Room persists the user message
   -> common.eventing publishes local-only MessageCommitted after persistence
   -> ContextMemoryEventHandler reloads the authoritative Room message
@@ -2635,17 +2640,16 @@ Leader election prevents duplicate job execution in multi-worker deployments.
 
 ## Core Workflow: Frontend Room Message
 
-The primary product workflow begins at `POST /api/v1/roomCenter/sendMessage`.
+The primary product workflow begins at `POST /api/v1/rooms/{room_id}/messages`.
 
 1. The frontend opens `/api/v1/sse/room/{room_id}/stream` to receive live
    room events.
 
-2. The frontend posts a room message to `/roomCenter/sendMessage` with:
-   - `room_id`
+2. The frontend posts a room message to `/rooms/{room_id}/messages` with:
    - `message`
    - `client_request_id`
    - optional attachments or inline file IDs
-   - optional target scope or mentioned agent IDs
+   - `mode` and `agent_scope`
 
 3. `api_gateway.routes.room_routes.send_message`:
    - verifies room ownership,
@@ -2725,7 +2729,7 @@ committed file references.
    message reaches the room through the projection outbox. See "Orchestrator
    A2A runtime" and "Canonical wait semantics".
 
-### `sendMessage` persistence idempotency
+### Room message send persistence idempotency
 
 The persistence key is `(room_id, client_request_id.strip())`. API requests must
 supply a non-empty key of at most 128 characters. The key is room-scoped, so the
@@ -2753,12 +2757,12 @@ fields remain part of the quote semantics. These private fields are not part of
 room API or SSE models.
 
 The authenticated chat-history resource is separate from the full room-setting
-compatibility payload. `GET /api/v1/roomCenter/history` derives ownership from the
+payload. `GET /api/v1/rooms` derives ownership from the
 current principal and returns at most 100 lightweight room summaries. Pinned
 rooms are ordered by persisted `pin_order`; unpinned rooms are ordered by durable
-`last_activity_at`. `PATCH /api/v1/roomCenter/history/{room_id}` updates the title or pinned
-state, `PUT /api/v1/roomCenter/history/pinned-order` validates ownership before
-persisting a complete pinned order, and `DELETE /api/v1/roomCenter/history/{room_id}` delegates
+`last_activity_at`. `PATCH /api/v1/rooms/{room_id}` updates the title or pinned
+state, `PUT /api/v1/rooms/pinned-order` validates ownership before
+persisting a complete pinned order, and `DELETE /api/v1/rooms/{room_id}` delegates
 to the existing room-owned-data deletion workflow. User and newly saved agent
 messages advance `last_activity_at` with a monotonic Mongo `$max` update; streaming
 agent-message status, task, and artifact updates do not rewrite the room document.
@@ -2806,7 +2810,7 @@ established replay or conflict result.
 
 ### Stable Room timeline pagination
 
-`POST /api/v1/roomCenter/inquiryRoomMessagesByRoomId` accepts optional `limit`
+`GET /api/v1/rooms/{room_id}/messages` accepts optional `limit`
 (default and maximum `200`, minimum `1`) and an opaque `cursor`. The first request
 returns the globally newest page across user and Agent collections. A returned
 `next_cursor` loads older data. Each page is projected through the same public
@@ -3002,7 +3006,7 @@ Public active-Run reads use the canonical `orchestrator_runs` aggregate after
 composition binding. `awaiting_user` maps to public `awaiting_input`, other
 nonterminal states map to `processing`, and the Run request's User message is
 the public trigger. The same reader owns send-time exclusion, room settings,
-`inquiryActiveRuns`, and active room-history status; legacy run rows are not a
+`GET /rooms/{room_id}/active-runs`, and active room-history status; legacy run rows are not a
 second lifecycle authority.
 
 `ExecutionFacade` exposes HITL operations through the `HITLManager` protocol so
@@ -3303,7 +3307,7 @@ the full suite before merging.
 
 ## Unified per-message execution contract
 
-`POST /roomCenter/sendMessage` now requires a request-scoped execution contract:
+`POST /rooms/{room_id}/messages` requires a request-scoped execution contract:
 
 ```json
 {

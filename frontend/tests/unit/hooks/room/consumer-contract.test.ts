@@ -26,7 +26,6 @@ vi.mock('@/lib/api/room', () => ({
   }),
   SendMessage: vi.fn().mockResolvedValue({ success: true, message_id: 'msg-1' }),
   inquiryRoomMessagesByRoomId: vi.fn().mockResolvedValue({ success: true, message_list: [] }),
-  updateRoomAgentSet: vi.fn().mockResolvedValue({ success: true }),
 }))
 
 vi.mock('@/lib/api/agent', () => ({

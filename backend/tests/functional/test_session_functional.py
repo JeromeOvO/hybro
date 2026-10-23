@@ -145,19 +145,16 @@ async def test_session_owner_answers_and_client_reads_completed(
     # The owner list shows the session; chat history does not.
     listing = await client.get("/sessions")
     assert session_id in {item["session_id"] for item in listing.json()["sessions"]}
-    history = await client.get("/roomCenter/history")
+    history = await client.get("/rooms")
     assert history.status_code == 200
     assert room_id not in {item["room_id"] for item in history.json()["items"]}
 
     # Chat read routes still serve the container; chat writes are refused.
-    messages = await client.post(
-        "/roomCenter/inquiryRoomMessagesByRoomId", json={"room_id": room_id}
-    )
+    messages = await client.get(f"/rooms/{room_id}/messages")
     assert messages.status_code == 200
     chat_send = await client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "client_request_id": str(uuid.uuid4()),
             "mode": "direct",
             "message": {"message_content": {"message_text": "hello"}},
@@ -165,9 +162,7 @@ async def test_session_owner_answers_and_client_reads_completed(
         },
     )
     assert chat_send.status_code == 409
-    rename = await client.patch(
-        f"/roomCenter/history/{room_id}", json={"title": "Renamed"}
-    )
+    rename = await client.patch(f"/rooms/{room_id}", json={"title": "Renamed"})
     assert rename.status_code == 409
 
     closed = await client.post(f"/sessions/{session_id}/close")

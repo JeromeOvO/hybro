@@ -31,8 +31,6 @@ interface UseChatRoomCreationProps {
 
 interface CreateRoomOptions {
   selectedAgents?: Agent[]
-  /** @deprecated Use membership instead. */
-  appliedFromGroup?: string
   useSupervisor?: boolean
   roomName?: string
   dispatch?: MessageDispatchInput
@@ -91,7 +89,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
   ) => {
     const { 
       selectedAgents = [], 
-      appliedFromGroup,
       useSupervisor = true,
       roomName: customRoomName,
       dispatch: explicitDispatch,
@@ -111,18 +108,6 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
     try {
       setCreating(true)
-
-      // Build room agent set if agents are selected
-      let roomAgentSet: { [k: string]: string } = {}
-      
-      if (selectedAgents.length > 0) {
-        roomAgentSet = Object.fromEntries(
-          selectedAgents.map((agent) => [
-            agent.agent_id,
-            agent.name,
-          ])
-        )
-      }
 
       // Derive membership: Room Settings config (selectedAgents) takes priority,
       // then saved group selection, then empty snapshot.
@@ -172,12 +157,9 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
       const response = await createNewRoom(
         roomName,
-        userId,
         userName,
         getToken,
-        roomAgentSet,
         extendInfo,
-        appliedFromGroup,
         membership,
       )
 
@@ -275,19 +257,11 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
 
     setCreating(true)
     try {
-      const roomAgentSet: Record<string, string> = {}
-      for (const agent of resolvedAgents) {
-        roomAgentSet[agent.agent_id] = agent.name
-      }
-
       const response = await createNewRoom(
         template.title,
-        userId,
         userName,
         getToken,
-        roomAgentSet,
         { use_supervisor: true },
-        undefined,
         {
           membership_seed_input: 'manual' as const,
           room_agent_ids: resolvedAgents.map((a) => a.agent_id),

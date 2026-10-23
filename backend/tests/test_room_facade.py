@@ -352,33 +352,6 @@ async def test_update_membership_add_remove_validation_and_provenance():
 
 
 @pytest.mark.asyncio
-async def test_replace_membership_compatibility_helper_replaces_full_seed():
-    facade, _, _, _, _ = _facade(
-        room_docs=[
-            {
-                "room_id": "r1",
-                "room_name": "Room",
-                "room_owner_id": "owner",
-                "room_owner_name": "Owner",
-                "room_agent_set": {"old": "Old Agent"},
-                "membership_origin": "manual",
-                "membership_origin_status": "manual",
-            }
-        ],
-        agents=[AgentInfo(agent_id="a1", name="Agent One")],
-    )
-
-    room = await facade.replace_membership(
-        "r1",
-        MembershipSeed(mode="manual", agent_ids=["a1"]),
-        requesting_user_id="owner",
-    )
-
-    assert list(room.agent_ids) == ["a1"]
-    assert dict(room.agent_set) == {"a1": "Agent One"}
-
-
-@pytest.mark.asyncio
 async def test_save_user_message_verifies_room_persists_raw_doc_and_returns_saved_dto():
     facade, _, messages, _, _ = _facade(
         room_docs=[

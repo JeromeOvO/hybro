@@ -71,7 +71,6 @@ async def test_saved_group_rejects_reserved_group_ids(group_id: str) -> None:
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "message": "hello",
             "client_request_id": "request-1",
             "mode": "direct",
@@ -80,6 +79,7 @@ async def test_saved_group_rejects_reserved_group_ids(group_id: str) -> None:
     )
 
     response = await send_message(
+        "room-1",
         request,
         MagicMock(user_id="user-1"),
         store=MagicMock(),
@@ -104,7 +104,6 @@ async def test_send_message_schedules_each_canonical_scope(agent_scope) -> None:
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "message": {"message_content": {"message_text": "hello"}},
             "client_request_id": "request-1",
             "mode": "supervisor",
@@ -128,7 +127,7 @@ async def test_send_message_schedules_each_canonical_scope(agent_scope) -> None:
         schedule_orchestration=MagicMock(),
     )
 
-    response = await send_message(request, user, store=store, engine=engine)
+    response = await send_message("room-1", request, user, store=store, engine=engine)
 
     assert response.success is True
     execution_request = engine.execute.await_args.args[0]
@@ -141,7 +140,6 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "message": {"message_content": {"message_text": "hello"}},
             "client_request_id": "request-replay",
             "mode": "direct",
@@ -167,6 +165,7 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
 
     center = SimpleNamespace(update_room_default_mode=AsyncMock(return_value=True))
     response = await send_message(
+        "room-1",
         request,
         user,
         store=store,

@@ -5,7 +5,7 @@ Verifies:
 - Automatic dispatch of answers if human input is requested
 - Final synthesis response rendering (system:hybro)
 - Persistence of user messages, agent cards, and synthesis in MongoDB
-- Message store hydration simulation (/roomCenter/inquiryRoomMessagesByRoomId)
+- Message store hydration simulation (GET /rooms/{room_id}/messages)
 """
 
 import uuid
@@ -28,7 +28,7 @@ async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
     """Verifies that multi-agent delegation produces synthesis and hydrates completely on reload."""
     # 1. Create Room with Travel Team (Travel Planner + Weather Agent)
     room_resp = await functional_client.post(
-        "/roomCenter/createNewRoom",
+        "/rooms",
         json=test_room_payload(
             room_name="Multi-Agent Synthesis Room",
             agent_ids=[travel_planner_agent_id, weather_agent_id],
@@ -43,9 +43,8 @@ async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
     client_req_id = str(uuid.uuid4())
     user_prompt = "Plan a 3-day trip to San Francisco from Sept 1 to Sept 3 with a $2000 budget. Include the itinerary and weather."
     send_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "user_input": user_prompt,
             "message": {
                 "room_id": room_id,
@@ -78,9 +77,8 @@ async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
     )
 
     # 4. Simulate Page Refresh (Re-query room messages hydration)
-    refresh_resp = await functional_client.post(
-        "/roomCenter/inquiryRoomMessagesByRoomId",
-        json={"room_id": room_id},
+    refresh_resp = await functional_client.get(
+        f"/rooms/{room_id}/messages",
     )
     assert refresh_resp.status_code == 200
     refreshed_messages = refresh_resp.json().get("message_list", [])

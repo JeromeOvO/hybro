@@ -10,7 +10,6 @@ from common.dto import (
     AgentInfo,
     AgentMessageInput,
     CreateRoomRequest,
-    MembershipSeed,
     MembershipUpdateRequest,
     RoomInfo,
     RoomMessageInfo,
@@ -201,42 +200,6 @@ class ConversationFacade:
             membership_origin_status=status,
             source_group_id=room.source_group_id,
             source_group_name=room.source_group_name,
-        )
-        if updated is None:
-            raise ValueError("Room not found")
-        return room_info_from_doc(updated)
-
-    async def replace_membership(
-        self,
-        room_id: str,
-        seed: MembershipSeed,
-        requesting_user_id: str | None = None,
-    ) -> RoomInfo:
-        doc = await self._repository.get_by_id(room_id)
-        if doc is None:
-            raise ValueError("Room not found")
-        room = room_info_from_doc(doc)
-        resolved_seed = seed
-        if requesting_user_id is not None:
-            resolved_seed = MembershipSeed(
-                mode=seed.mode,
-                agent_ids=list(seed.agent_ids) if seed.agent_ids is not None else None,
-                group_id=seed.group_id,
-                requesting_user_id=requesting_user_id,
-            )
-        resolved = await resolve_membership_seed(
-            seed=resolved_seed,
-            owner_id=room.owner_id,
-            agent_registry=self._agent_registry,
-            membership_source=self._membership_source,
-        )
-        updated = await self._repository.set_membership(
-            room_id,
-            agent_set=resolved.agent_set,
-            membership_origin=resolved.membership_origin,
-            membership_origin_status=resolved.membership_origin_status,
-            source_group_id=resolved.source_group_id,
-            source_group_name=resolved.source_group_name,
         )
         if updated is None:
             raise ValueError("Room not found")

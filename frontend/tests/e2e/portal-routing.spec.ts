@@ -40,7 +40,7 @@ test.describe('Unified portal routing', () => {
     await page.route('**/agent/getAllAgents**', route => route.fulfill({ json: { success: true, agents: [] } }))
     await page.route('**/agent/getAgent/me', route => route.fulfill({ json: { success: true, agents: [] } }))
     await page.route('**/agentGroups**', route => route.fulfill({ json: { success: true, groups: [] } }))
-    await page.route('**/roomCenter/history**', route => route.fulfill({ json: { items: [] } }))
+    await page.route('**/api/v1/rooms', route => route.request().method() === 'GET' ? route.fulfill({ json: { items: [] } }) : route.fallback())
     await page.goto('/')
     await expect(page).toHaveURL(/\/$/)
     await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeAttached()
@@ -69,14 +69,14 @@ test.describe('Unified portal routing', () => {
       await page.route('**/agent/getAllAgents**', route => route.fulfill({ json: { success: true, agents: [] } }))
       await page.route('**/agent/getAgent/me', route => route.fulfill({ json: { success: true, agents: [] } }))
       await page.route('**/agentGroups**', route => route.fulfill({ json: { success: true, groups: [] } }))
-      await page.route('**/roomCenter/history**', route => route.fulfill({ json: { items: [{
+      await page.route('**/api/v1/rooms', route => route.request().method() === 'GET' ? route.fulfill({ json: { items: [{
         room_id: 'navigation-history',
         title: 'Navigation history',
         last_activity_at: '2026-08-01T00:00:00Z',
         is_pinned: false,
         pin_order: null,
         status: 'idle',
-      }] } }))
+      }] } }) : route.fallback())
 
       const openNavigation = async () => {
         if (width < 768) await page.getByRole('button', { name: 'Toggle Sidebar', exact: true }).click()

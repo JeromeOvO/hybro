@@ -1,6 +1,8 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agent.protocols import AgentSuggestionService, serialize_agent_suggestion_result
 from api_gateway.dependencies import (
@@ -44,6 +46,25 @@ class RoomHistoryUpdate(BaseModel):
 
 class PinnedRoomOrderUpdate(BaseModel):
     room_ids: list[str] = Field(max_length=100)
+
+
+class CreateRoomBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    room_name: str | None = None
+    room_owner_name: str | None = None
+    extend_info: dict | None = None
+    membership_seed_input: (
+        Literal["manual", "saved_group", "all_current_agents"] | None
+    ) = None
+    room_agent_ids: list[str] | None = None
+    seed_group_id: str | None = None
+    seed_all_current_agents: bool | None = None
+
+
+class AgentSuggestionBody(BaseModel):
+    message_text: str = ""
+    top_k: int = 3
 
 
 def _run_info_to_active_run_ref(run: RunInfo) -> ActiveRunRef:
@@ -189,44 +210,36 @@ async def _persist_room_mode_if_changed(
         )
 
 
-@router.post("/roomCenter/createNewRoom")
+@router.post("/rooms")
 async def create_new_room(
-    request: Request,
+    payload: CreateRoomBody,
     user: ClerkUser = Depends(get_current_user),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
-    request_data = await request.json()
     room_center_request = RoomCenterRoomSettingRequest(
-        room_name=request_data.get("room_name"),
+        room_name=payload.room_name,
         room_owner_id=user.user_id,
-        room_owner_name=request_data.get("room_owner_name"),
-        extend_info=request_data.get("extend_info"),
+        room_owner_name=payload.room_owner_name,
+        extend_info=payload.extend_info,
         requesting_user_id=user.user_id,
-        # Legacy fields (accepted during rollout)
-        room_agent_set=request_data.get("room_agent_set"),
-        applied_from_group=request_data.get("applied_from_group"),
-        # Canonical membership write input
-        membership_seed_input=request_data.get("membership_seed_input"),
-        room_agent_ids=request_data.get("room_agent_ids"),
-        seed_group_id=request_data.get("seed_group_id"),
-        seed_all_current_agents=request_data.get("seed_all_current_agents"),
+        membership_seed_input=payload.membership_seed_input,
+        room_agent_ids=payload.room_agent_ids,
+        seed_group_id=payload.seed_group_id,
+        seed_all_current_agents=payload.seed_all_current_agents,
     )
     room_center_response = await center.create_new_room(room_center_request)
     return room_center_response
 
 
-@router.post("/roomCenter/inquiryRoomSetting")
+@router.get("/rooms/{room_id}")
 async def inquiry_room_setting(
-    request: Request,
+    room_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Get room settings - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-
     # Verify user owns the room
     await verify_room_ownership(room_id, user, store)
 
@@ -242,17 +255,14 @@ async def inquiry_room_setting(
     return room_center_response
 
 
-@router.post("/roomCenter/inquiryActiveRuns")
+@router.get("/rooms/{room_id}/active-runs")
 async def inquiry_active_runs(
-    request: Request,
+    room_id: str,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     engine: ExecutionEngine = Depends(get_execution_engine),
 ):
-    """List non-terminal orchestration runs for a room — same auth as inquiryRoomSetting."""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-
+    """List non-terminal orchestration runs for a room — same auth as room settings."""
     await verify_room_ownership(room_id, user, store)
 
     return RoomCenterActiveRunsResponse(
@@ -264,7 +274,7 @@ async def inquiry_active_runs(
     )
 
 
-@router.get("/roomCenter/history", response_model=RoomHistoryResponse)
+@router.get("/rooms", response_model=RoomHistoryResponse)
 async def get_room_history(
     user: ClerkUser = Depends(get_current_user),
     engine: ExecutionEngine = Depends(get_execution_engine),
@@ -304,7 +314,7 @@ async def get_room_history(
     return RoomHistoryResponse(items=items)
 
 
-@router.patch("/roomCenter/history/{room_id}", response_model=RoomHistoryItem)
+@router.patch("/rooms/{room_id}", response_model=RoomHistoryItem)
 async def update_room_history_item(
     room_id: str,
     payload: RoomHistoryUpdate,
@@ -366,7 +376,7 @@ async def update_room_history_item(
     )
 
 
-@router.put("/roomCenter/history/pinned-order")
+@router.put("/rooms/pinned-order")
 async def reorder_pinned_rooms(
     payload: PinnedRoomOrderUpdate,
     user: ClerkUser = Depends(get_current_user),
@@ -416,7 +426,7 @@ async def reorder_pinned_rooms(
     return {"success": True}
 
 
-@router.delete("/roomCenter/history/{room_id}")
+@router.delete("/rooms/{room_id}")
 async def delete_room_history_item(
     room_id: str,
     user: ClerkUser = Depends(get_current_user),
@@ -433,36 +443,6 @@ async def delete_room_history_item(
     )
     _raise_room_center_error(response)
     return {"success": True}
-
-
-@router.post("/roomCenter/updateRoomAgentSet")
-async def update_room_agent_set(
-    request: Request,
-    user: ClerkUser = Depends(get_current_user),
-    store: RoomRouteReader = Depends(get_room_store),
-    center: RoomCenterCompatibility = Depends(get_room_center),
-):
-    """Update room agent set - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
-
-    room = await _get_verified_room(room_id, user, store)
-    require_chat_room(room)
-
-    room_center_request = RoomCenterRoomSettingRequest(
-        room_id=room_id,
-        requesting_user_id=user.user_id,
-        # Legacy fields (accepted during rollout)
-        room_agent_set=request_data.get("room_agent_set"),
-        applied_from_group=request_data.get("applied_from_group"),
-        # Canonical membership write input
-        membership_seed_input=request_data.get("membership_seed_input"),
-        room_agent_ids=request_data.get("room_agent_ids"),
-        seed_group_id=request_data.get("seed_group_id"),
-        seed_all_current_agents=request_data.get("seed_all_current_agents"),
-    )
-    room_center_response = await center.update_room_agent_set(room_center_request)
-    return room_center_response
 
 
 @router.get(
@@ -495,25 +475,26 @@ async def get_canonical_agent_call_detail(
     return detail
 
 
-@router.post("/roomCenter/inquiryRoomMessagesByRoomId")
+@router.get("/rooms/{room_id}/messages")
 async def inquiry_room_messages(
-    request: Request,
+    room_id: str,
+    limit: int | None = None,
+    cursor: str | None = None,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
     center: RoomCenterCompatibility = Depends(get_room_center),
 ):
     """Read room messages - PROTECTED (requires room ownership)"""
-    request_data = await request.json()
-    room_id = request_data.get("room_id")
 
-    # Authorization intentionally precedes pagination validation so an invalid
-    # cursor cannot reveal whether another user's room has timeline data.
+    # Authorization precedes cursor and limit-range validation so an invalid
+    # cursor cannot reveal whether another user's room has timeline data. A
+    # non-integer limit is rejected by FastAPI first; that reveals nothing.
     await verify_room_ownership(room_id, user, store)
 
     room_center_request = RoomCenterRoomMessageRequest(
         room_id=room_id,
-        limit=request_data.get("limit"),
-        cursor=request_data.get("cursor"),
+        limit=limit,
+        cursor=cursor,
     )
     room_center_response = await center.inquiry_room_messages_by_room_id(
         room_center_request
@@ -521,8 +502,9 @@ async def inquiry_room_messages(
     return room_center_response
 
 
-@router.post("/roomCenter/sendMessage")
+@router.post("/rooms/{room_id}/messages")
 async def send_message(
+    room_id: str,
     request: Request,
     user: ClerkUser = Depends(get_current_user),
     store: RoomRouteReader = Depends(get_room_store),
@@ -541,7 +523,6 @@ async def send_message(
     Processing happens atomically to prevent orphaned messages on page refresh.
     """
     request_data = await request.json()
-    room_id = request_data.get("room_id")
     message = request_data.get("message")
     client_request_id = request_data.get("client_request_id")
     mode = request_data.get("mode")
@@ -571,29 +552,6 @@ async def send_message(
             error=(
                 "client_request_id exceeds maximum length of "
                 f"{MAX_CLIENT_REQUEST_ID_LENGTH} characters"
-            ),
-            status_code=400,
-        )
-
-    legacy_fields = {
-        "selected_agent_ids",
-        "candidate_scope_mode",
-        "candidate_scope_group_id",
-        "message_target_mode",
-        "target_group_id",
-        "target_group",
-        "target_agent_ids",
-        "mentioned_agent_ids",
-    }
-    supplied_legacy_fields = sorted(legacy_fields.intersection(request_data))
-    if supplied_legacy_fields:
-        return RoomCenterUserMessageResponse(
-            message_id=None,
-            message=None,
-            success=False,
-            error=(
-                "legacy targeting fields are no longer supported; use agent_scope: "
-                + ", ".join(supplied_legacy_fields)
             ),
             status_code=400,
         )
@@ -760,9 +718,9 @@ async def send_message(
     return RoomCenterUserMessageResponse(**ack.model_dump())
 
 
-@router.post("/roomCenter/suggestAgents")
+@router.post("/agent-suggestions")
 async def suggest_agents(
-    request: Request,
+    payload: AgentSuggestionBody,
     user: ClerkUser = Depends(get_current_user),
     selection_service: AgentSuggestionService = Depends(get_agent_selection_service),
 ):
@@ -770,9 +728,8 @@ async def suggest_agents(
     Suggest agents for a message based on content analysis.
     Used for Auto mode to preview which agents will be selected.
     """
-    request_data = await request.json()
-    message_text = request_data.get("message_text", "")
-    top_k = request_data.get("top_k", 3)
+    message_text = payload.message_text
+    top_k = payload.top_k
 
     if not message_text:
         return {

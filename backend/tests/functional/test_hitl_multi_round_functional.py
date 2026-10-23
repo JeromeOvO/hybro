@@ -27,7 +27,7 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
     """Verifies that HITL triggers questionnaires, accepts answers automatically, and resumes."""
     # 1. Create Room
     room_resp = await functional_client.post(
-        "/roomCenter/createNewRoom",
+        "/rooms",
         json=test_room_payload(
             "Multi-Round HITL Functional Room",
             agent_ids=[travel_planner_agent_id],
@@ -41,9 +41,8 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
     client_req_id = str(uuid.uuid4())
     user_prompt = "Generate a travel plan"
     send_resp = await functional_client.post(
-        "/roomCenter/sendMessage",
+        f"/rooms/{room_id}/messages",
         json={
-            "room_id": room_id,
             "user_input": user_prompt,
             "message": {
                 "room_id": room_id,

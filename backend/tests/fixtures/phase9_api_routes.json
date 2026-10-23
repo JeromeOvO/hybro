@@ -667,10 +667,11 @@
     "module": "api_gateway.routes.room_routes",
     "name": "create_new_room",
     "openapi_response_codes": [
-      "200"
+      "200",
+      "422"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/createNewRoom",
+    "path": "/api/v1/rooms",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -694,7 +695,7 @@
       "200"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history",
+    "path": "/api/v1/rooms",
     "response_class": null,
     "response_model": "RoomHistoryResponse",
     "status_code": null,
@@ -722,7 +723,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history/pinned-order",
+    "path": "/api/v1/rooms/pinned-order",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -750,7 +751,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history/{room_id}",
+    "path": "/api/v1/rooms/{room_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -778,7 +779,7 @@
       "422"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/history/{room_id}",
+    "path": "/api/v1/rooms/{room_id}",
     "response_class": null,
     "response_model": "RoomHistoryItem",
     "status_code": null,
@@ -797,15 +798,16 @@
       "get_room_store"
     ],
     "methods": [
-      "POST"
+      "GET"
     ],
     "module": "api_gateway.routes.room_routes",
     "name": "inquiry_active_runs",
     "openapi_response_codes": [
-      "200"
+      "200",
+      "422"
     ],
     "owning_protocol": "common.protocols.ExecutionEngine",
-    "path": "/api/v1/roomCenter/inquiryActiveRuns",
+    "path": "/api/v1/rooms/{room_id}/active-runs",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -824,15 +826,16 @@
       "get_room_store"
     ],
     "methods": [
-      "POST"
+      "GET"
     ],
     "module": "api_gateway.routes.room_routes",
     "name": "inquiry_room_messages",
     "openapi_response_codes": [
-      "200"
+      "200",
+      "422"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/inquiryRoomMessagesByRoomId",
+    "path": "/api/v1/rooms/{room_id}/messages",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -852,15 +855,16 @@
       "get_room_store"
     ],
     "methods": [
-      "POST"
+      "GET"
     ],
     "module": "api_gateway.routes.room_routes",
     "name": "inquiry_room_setting",
     "openapi_response_codes": [
-      "200"
+      "200",
+      "422"
     ],
     "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/inquiryRoomSetting",
+    "path": "/api/v1/rooms/{room_id}",
     "response_class": null,
     "response_model": null,
     "status_code": null,
@@ -886,10 +890,11 @@
     "module": "api_gateway.routes.room_routes",
     "name": "send_message",
     "openapi_response_codes": [
-      "200"
+      "200",
+      "422"
     ],
     "owning_protocol": "common.protocols.ExecutionEngine",
-    "path": "/api/v1/roomCenter/sendMessage",
+    "path": "/api/v1/rooms/{room_id}/messages",
     "response_class": null,
     "response_model": "RoomCenterUserMessageResponse",
     "status_code": null,
@@ -913,41 +918,15 @@
     "module": "api_gateway.routes.room_routes",
     "name": "suggest_agents",
     "openapi_response_codes": [
-      "200"
+      "200",
+      "422"
     ],
     "owning_protocol": "agent.protocols.AgentSuggestionService",
-    "path": "/api/v1/roomCenter/suggestAgents",
+    "path": "/api/v1/agent-suggestions",
     "response_class": null,
     "response_model": null,
     "status_code": null,
     "streaming_response": null
-  },
-  {
-    "auth_dependencies": [
-      "get_current_user"
-    ],
-    "dependencies": [
-      "get_current_user",
-      "get_room_center",
-      "get_room_store"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "module": "api_gateway.routes.room_routes",
-    "name": "update_room_agent_set",
-    "openapi_response_codes": [
-      "200"
-    ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
-    "path": "/api/v1/roomCenter/updateRoomAgentSet",
-    "response_class": null,
-    "response_model": null,
-    "status_code": null,
-    "streaming_response": null,
-    "supporting_protocols": [
-      "common.protocols.RoomRouteReader"
-    ]
   },
   {
     "auth_dependencies": [

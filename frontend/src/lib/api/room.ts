@@ -6,8 +6,7 @@ import type {
   RoomCenterRoomMessageResponse
 } from '@/lib/types/response'
 import type {
-  RoomCenterRoomSettingRequest,
-  RoomCenterRoomMessageRequest,
+  CreateRoomRequest,
   SendMessagePayload,
   AgentScopeInput,
   ExecutionMode,
@@ -16,9 +15,13 @@ import { type RoomMembershipWriteInput } from '@/lib/types/agent-group'
 import type { RoomQuoteWire } from '@/lib/types/quote'
 
 import { getApiUrl } from '../utils'
-import { apiClient, apiPost } from '../api-client'
+import { apiClient, apiGet, apiPost } from '../api-client'
 
-const API_BASE_URL = getApiUrl('roomCenter')
+const ROOMS_URL = getApiUrl('rooms')
+
+function roomUrl(roomId: string, suffix = ''): string {
+  return `${ROOMS_URL}/${encodeURIComponent(roomId)}${suffix}`
+}
 
 export type RoomHistoryStatus = 'idle' | 'queued' | 'processing' | 'awaiting_input'
 
@@ -39,7 +42,7 @@ export function listRoomHistory(
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
 ): Promise<RoomHistoryResponse> {
-  return apiClient<RoomHistoryResponse>(getApiUrl('roomCenter/history'), {
+  return apiClient<RoomHistoryResponse>(ROOMS_URL, {
     getToken,
     signal,
   })
@@ -50,7 +53,7 @@ export function updateRoomHistoryItem(
   update: { title?: string; is_pinned?: boolean },
   getToken?: () => Promise<string | null>,
 ): Promise<RoomHistoryItem> {
-  return apiClient<RoomHistoryItem>(getApiUrl(`roomCenter/history/${roomId}`), {
+  return apiClient<RoomHistoryItem>(roomUrl(roomId), {
     method: 'PATCH',
     body: update,
     getToken,
@@ -61,7 +64,7 @@ export function reorderPinnedRooms(
   roomIds: string[],
   getToken?: () => Promise<string | null>,
 ): Promise<{ success: boolean }> {
-  return apiClient<{ success: boolean }>(getApiUrl('roomCenter/history/pinned-order'), {
+  return apiClient<{ success: boolean }>(`${ROOMS_URL}/pinned-order`, {
     method: 'PUT',
     body: { room_ids: roomIds },
     getToken,
@@ -72,64 +75,27 @@ export function deleteRoomHistoryItem(
   roomId: string,
   getToken?: () => Promise<string | null>,
 ): Promise<{ success: boolean }> {
-  return apiClient<{ success: boolean }>(getApiUrl(`roomCenter/history/${roomId}`), {
+  return apiClient<{ success: boolean }>(roomUrl(roomId), {
     method: 'DELETE',
     getToken,
   })
 }
 
-export interface CreateRoomParams {
-  room_name: string
-  room_owner_id: string
-  room_owner_name: string
-  getToken?: () => Promise<string | null>
-  extend_info?: { [k: string]: unknown } | null
-  membership?: RoomMembershipWriteInput
-  /** @deprecated Use membership instead. */
-  room_agent_set?: { [k: string]: string }
-  /** @deprecated Use membership.seed_group_id instead. */
-  applied_from_group?: string
-}
-
 export async function createNewRoom(
   room_name: string,
-  room_owner_id: string,
   room_owner_name: string,
   getToken?: () => Promise<string | null>,
-  room_agent_set?: { [k: string]: string },
   extend_info?: { [k: string]: unknown } | null,
-  applied_from_group?: string,
   membership?: RoomMembershipWriteInput,
 ): Promise<RoomCenterRoomSettingResponse> {
-  const requestData: RoomCenterRoomSettingRequest = {
+  const requestData: CreateRoomRequest = {
     room_name,
-    room_owner_id,
     room_owner_name,
     extend_info,
-    // Legacy fields (still sent during rollout)
-    room_agent_set,
-    applied_from_group,
+    ...membership,
   }
 
-  // Overlay canonical membership fields when provided
-  if (membership) {
-    requestData.membership_seed_input = membership.membership_seed_input
-    if ('room_agent_ids' in membership) {
-      requestData.room_agent_ids = membership.room_agent_ids
-    }
-    if ('seed_group_id' in membership) {
-      requestData.seed_group_id = membership.seed_group_id
-    }
-    if ('seed_all_current_agents' in membership) {
-      requestData.seed_all_current_agents = membership.seed_all_current_agents
-    }
-  }
-
-  return apiPost<RoomCenterRoomSettingResponse>(
-    `${API_BASE_URL}/createNewRoom`,
-    requestData,
-    getToken
-  )
+  return apiPost<RoomCenterRoomSettingResponse>(ROOMS_URL, requestData, getToken)
 }
 
 // Inquiry room setting
@@ -138,16 +104,7 @@ export async function inquiryRoomSetting(
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal
 ): Promise<RoomCenterRoomSettingResponse> {
-  const requestData: RoomCenterRoomSettingRequest = {
-    room_id
-  }
-
-  return apiPost<RoomCenterRoomSettingResponse>(
-    `${API_BASE_URL}/inquiryRoomSetting`,
-    requestData,
-    getToken,
-    signal
-  )
+  return apiGet<RoomCenterRoomSettingResponse>(roomUrl(room_id), getToken, signal)
 }
 
 export async function inquiryActiveRuns(
@@ -155,44 +112,10 @@ export async function inquiryActiveRuns(
   getToken?: () => Promise<string | null>,
   signal?: AbortSignal,
 ): Promise<RoomCenterActiveRunsResponse> {
-  const requestData: RoomCenterRoomSettingRequest = { room_id }
-
-  return apiPost<RoomCenterActiveRunsResponse>(
-    `${API_BASE_URL}/inquiryActiveRuns`,
-    requestData,
+  return apiGet<RoomCenterActiveRunsResponse>(
+    roomUrl(room_id, '/active-runs'),
     getToken,
     signal
-  )
-}
-
-export async function updateRoomAgentSet(
-  room_id: string,
-  room_agent_set: { [k: string]: string },
-  getToken?: () => Promise<string | null>,
-  membership?: RoomMembershipWriteInput,
-): Promise<RoomCenterRoomSettingResponse> {
-  const requestData: RoomCenterRoomSettingRequest = {
-    room_id,
-    room_agent_set,
-  }
-
-  if (membership) {
-    requestData.membership_seed_input = membership.membership_seed_input
-    if ('room_agent_ids' in membership) {
-      requestData.room_agent_ids = membership.room_agent_ids
-    }
-    if ('seed_group_id' in membership) {
-      requestData.seed_group_id = membership.seed_group_id
-    }
-    if ('seed_all_current_agents' in membership) {
-      requestData.seed_all_current_agents = membership.seed_all_current_agents
-    }
-  }
-
-  return apiPost<RoomCenterRoomSettingResponse>(
-    `${API_BASE_URL}/updateRoomAgentSet`,
-    requestData,
-    getToken
   )
 }
 
@@ -208,15 +131,13 @@ export async function inquiryRoomMessagesByRoomId(
   signal?: AbortSignal,
   pagination?: RoomTimelinePagination
 ): Promise<RoomCenterRoomMessageResponse> {
-  const requestData: RoomCenterRoomMessageRequest = {
-    room_id,
-    ...(pagination?.limit !== undefined ? { limit: pagination.limit } : {}),
-    ...(pagination?.cursor !== undefined ? { cursor: pagination.cursor } : {})
-  }
+  const query = new URLSearchParams()
+  if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit))
+  if (pagination?.cursor) query.set('cursor', pagination.cursor)
+  const search = query.toString()
 
-  return apiPost<RoomCenterRoomMessageResponse>(
-    `${API_BASE_URL}/inquiryRoomMessagesByRoomId`,
-    requestData,
+  return apiGet<RoomCenterRoomMessageResponse>(
+    roomUrl(room_id, `/messages${search ? `?${search}` : ''}`),
     getToken,
     signal
   )
@@ -240,7 +161,6 @@ export interface SendMessageParams {
 }
 
 type SendMessageRequestBody = SendMessagePayload & {
-  room_id: string
   user_id: string
   user_name: string
   user_input: string
@@ -287,7 +207,6 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
   }
 
   const requestData: SendMessageRequestBody = {
-    room_id: roomId,
     user_id: userId || "",
     user_name: userName || "",
     user_input: userInput,
@@ -303,7 +222,7 @@ export async function SendMessage(params: SendMessageParams): Promise<RoomCenter
 
   try {
     const result = await apiPost<RoomCenterUserMessageResponse>(
-      `${API_BASE_URL}/sendMessage`,
+      roomUrl(roomId, '/messages'),
       requestData,
       getToken
     )
@@ -336,7 +255,7 @@ export async function suggestAgents(
   getToken?: () => Promise<string | null>
 ): Promise<SuggestAgentsResponse> {
   return apiPost<SuggestAgentsResponse>(
-    `${API_BASE_URL}/suggestAgents`,
+    getApiUrl('agent-suggestions'),
     { message_text, top_k },
     getToken
   )

@@ -13,11 +13,6 @@ from conversation import RoomDeletionService
 from models.request import RoomCenterRoomSettingRequest
 
 
-@pytest.fixture
-def chat_service():
-    return ChatService()
-
-
 @pytest.mark.asyncio
 async def test_chat_service_delegated_methods_fail_before_bind():
     svc = ChatService()
@@ -44,7 +39,6 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     facade.get_room.return_value = facade.create_room.return_value
     facade.list_rooms_for_owner.return_value = [facade.create_room.return_value]
     facade.list_room_history_for_owner.return_value = [facade.create_room.return_value]
-    facade.replace_membership.return_value = facade.create_room.return_value
     facade.update_room.return_value = facade.create_room.return_value
     facade.get_room_owner.return_value = "owner"
     facade.delete_room.return_value = True
@@ -63,7 +57,8 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
             room_name="Room",
             room_owner_id="owner",
             room_owner_name="Owner",
-            room_agent_set={"a1": "Agent One"},
+            membership_seed_input="manual",
+            room_agent_ids=["a1"],
             extend_info={"debateMode": True, "use_supervisor": True},
             requesting_user_id="owner",
         )
@@ -77,13 +72,6 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     history_response = await svc.inquiry_room_history_by_owner_id(
         RoomCenterRoomSettingRequest(room_owner_id="owner")
     )
-    replace_response = await svc.update_room_agent_set(
-        RoomCenterRoomSettingRequest(
-            room_id="r1",
-            room_agent_set={"a1": "Agent One"},
-            requesting_user_id="owner",
-        )
-    )
     rename_response = await svc.update_room_name(
         RoomCenterRoomSettingRequest(room_id="r1", room_name="Renamed")
     )
@@ -96,16 +84,16 @@ async def test_chat_service_bind_facade_delegates_room_lifecycle_methods():
     assert inquiry_response.room.room_agent_set == {"a1": "Agent One"}
     assert list_response.room_list[0].room_id == "r1"
     assert history_response.room_list[0].room_id == "r1"
-    assert replace_response.success is True
     assert rename_response.success is True
     assert delete_response.success is True
     facade.create_room.assert_awaited_once()
     create_request = facade.create_room.await_args.args[0]
     assert create_request.extend_info == {"debateMode": True, "use_supervisor": True}
+    assert create_request.membership_seed.mode == "manual"
+    assert create_request.membership_seed.agent_ids == ["a1"]
     facade.get_room.assert_awaited()
     facade.list_rooms_for_owner.assert_awaited_once_with("owner")
     facade.list_room_history_for_owner.assert_awaited_once_with("owner", limit=100)
-    facade.replace_membership.assert_awaited_once()
     facade.update_room.assert_awaited_once_with("r1", {"room_name": "Renamed"})
     facade.delete_room.assert_awaited_once_with("r1", "owner")
 
@@ -182,70 +170,25 @@ async def test_delete_room_success_when_post_delete_context_memory_cleanup_fails
     facade.delete_room.assert_awaited_once_with("r1", "owner")
 
 
-# =============================================================================
-# _looks_like_agent_id Tests
-# =============================================================================
-
-
-class TestLooksLikeAgentId:
-    """Tests for UUID-style agent ID detection."""
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "550e8400-e29b-41d4-a716-446655440000",
-            "550e8400e29b41d4a716446655440000",
-        ],
+@pytest.mark.asyncio
+async def test_create_room_without_membership_input_seeds_empty_manual_membership():
+    svc = ChatService()
+    facade = AsyncMock()
+    facade.create_room.return_value = RoomInfo(
+        room_id="r1", room_name="Room", owner_id="owner", owner_name="Owner"
     )
-    def test_recognizes_valid_uuids(self, value):
-        assert ChatService._looks_like_agent_id(value) is True
+    svc.bind_facade(facade)
 
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "MyAgent",
-            "agent-name",
-            "",
-            "not-a-uuid-at-all",
-        ],
+    response = await svc.create_new_room(
+        RoomCenterRoomSettingRequest(
+            room_name="Room",
+            room_owner_id="owner",
+            room_owner_name="Owner",
+            requesting_user_id="owner",
+        )
     )
-    def test_rejects_non_uuid_strings(self, value):
-        assert ChatService._looks_like_agent_id(value) is False
 
-    def test_rejects_non_string(self):
-        assert ChatService._looks_like_agent_id(123) is False
-        assert ChatService._looks_like_agent_id(None) is False
-
-
-# =============================================================================
-# _normalize_room_agent_set Tests
-# =============================================================================
-
-
-class TestNormalizeRoomAgentSet:
-    """Tests for room_agent_set normalization."""
-
-    def test_returns_empty_for_none(self, chat_service):
-        assert chat_service._normalize_room_agent_set(None) == {}
-
-    def test_returns_empty_for_empty(self, chat_service):
-        assert chat_service._normalize_room_agent_set({}) == {}
-
-    def test_preserves_correct_shape(self, chat_service):
-        """Keys are UUIDs, values are names -- already canonical."""
-        data = {"550e8400e29b41d4a716446655440000": "MyAgent"}
-        result = chat_service._normalize_room_agent_set(data)
-        assert result == data
-
-    def test_flips_inverted_shape(self, chat_service):
-        """Keys are names, values are UUIDs -- needs flipping."""
-        data = {"MyAgent": "550e8400e29b41d4a716446655440000"}
-        result = chat_service._normalize_room_agent_set(data)
-        assert "550e8400e29b41d4a716446655440000" in result
-        assert result["550e8400e29b41d4a716446655440000"] == "MyAgent"
-
-    def test_handles_ambiguous_data(self, chat_service):
-        """When keys and values both look like IDs, preserves original."""
-        data = {"550e8400e29b41d4a716446655440000": "660e8400e29b41d4a716446655440000"}
-        result = chat_service._normalize_room_agent_set(data)
-        assert result == data
+    assert response.success is True
+    seed = facade.create_room.await_args.args[0].membership_seed
+    assert seed.mode == "manual"
+    assert seed.agent_ids is None

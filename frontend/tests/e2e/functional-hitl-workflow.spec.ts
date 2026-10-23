@@ -77,9 +77,7 @@ async function fetchRoomMessages(
   request: APIRequestContext,
   roomId: string,
 ): Promise<Record<string, unknown>[]> {
-  const historyResp = await request.post(`${BACKEND_URL}/roomCenter/inquiryRoomMessagesByRoomId`, {
-    data: { room_id: roomId },
-  })
+  const historyResp = await request.get(`${BACKEND_URL}/rooms/${encodeURIComponent(roomId)}/messages`)
   if (!historyResp.ok()) {
     return []
   }
@@ -164,10 +162,11 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     test.setTimeout(120_000)
     const travelAgentId = await getTravelPlannerAgentId(request)
 
-    const createResp = await request.post(`${BACKEND_URL}/roomCenter/createNewRoom`, {
+    const createResp = await request.post(`${BACKEND_URL}/rooms`, {
       data: {
         room_name: 'E2E Functional Test Room',
         room_owner_name: 'Developer Local',
+        membership_seed_input: 'manual',
         room_agent_ids: [travelAgentId],
         extend_info: { use_supervisor: true },
       },
@@ -180,9 +179,8 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     const promptText = `Generate a travel plan e2e-${Date.now()}`
     const answerText = 'Kyoto, 3 days, $1500 budget'
     const clientRequestId = `e2e-req-${Date.now()}`
-    const sendResp = await request.post(`${BACKEND_URL}/roomCenter/sendMessage`, {
+    const sendResp = await request.post(`${BACKEND_URL}/rooms/${encodeURIComponent(roomId)}/messages`, {
       data: {
-        room_id: roomId,
         user_input: promptText,
         message: {
           room_id: roomId,

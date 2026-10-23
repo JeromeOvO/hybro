@@ -61,6 +61,7 @@ class TestRoomLifecycleFlow:
         behind the endpoint are mocked.
         """
         from api_gateway.routes.room_routes import (
+            CreateRoomBody,
             create_new_room,
             inquiry_room_messages,
             inquiry_room_setting,
@@ -118,27 +119,27 @@ class TestRoomLifecycleFlow:
 
         # Step 1: Create room (real endpoint parses request JSON,
         # builds RoomCenterRoomSettingRequest, calls room_center)
-        req1 = MagicMock()
-        req1.json = AsyncMock(
-            return_value={
-                "room_name": "Flow Test Room",
-                "room_owner_name": "Flow User",
-                "room_agent_set": {"agent-1": "TestAgent"},
-            }
+        create_resp = await create_new_room(
+            CreateRoomBody(
+                room_name="Flow Test Room",
+                room_owner_name="Flow User",
+                membership_seed_input="manual",
+                room_agent_ids=["agent-1"],
+            ),
+            flow_user,
+            center=mock_rc,
         )
-        create_resp = await create_new_room(req1, flow_user, center=mock_rc)
         assert create_resp.success is True
         assert create_resp.room_id == room_id
 
         # Verify endpoint set room_owner_id from auth user
         create_call = mock_rc.create_new_room.call_args[0][0]
         assert create_call.room_owner_id == flow_user.user_id
+        assert create_call.room_agent_ids == ["agent-1"]
 
         # Step 2: Query room setting (real endpoint verifies ownership)
-        req2 = MagicMock()
-        req2.json = AsyncMock(return_value={"room_id": room_id})
         setting_resp = await inquiry_room_setting(
-            req2,
+            room_id,
             flow_user,
             store=mock_db,
             engine=mock_execution_engine,
@@ -152,7 +153,6 @@ class TestRoomLifecycleFlow:
         req3 = MagicMock()
         req3.json = AsyncMock(
             return_value={
-                "room_id": room_id,
                 "message": user_msg.model_dump(),
                 "mode": "direct",
                 "agent_scope": {"source": "room_default"},
@@ -160,6 +160,7 @@ class TestRoomLifecycleFlow:
             }
         )
         send_resp = await send_message(
+            room_id,
             req3,
             flow_user,
             store=mock_db,
@@ -171,11 +172,9 @@ class TestRoomLifecycleFlow:
         mock_execution_engine.schedule_orchestration.assert_called_once()
 
         # Step 4: Query messages
-        req4 = MagicMock()
-        req4.json = AsyncMock(return_value={"room_id": room_id})
         msgs_resp = await inquiry_room_messages(
-            req4,
-            flow_user,
+            room_id,
+            user=flow_user,
             store=mock_db,
             center=mock_rc,
         )
@@ -216,22 +215,19 @@ class TestRoomLifecycleFlow:
             inquiry_active_runs,
             inquiry_room_messages,
         ]:
-            req = MagicMock()
-            req.json = AsyncMock(return_value={"room_id": "guarded-room"})
-            kwargs = {"store": mock_db}
+            kwargs = {"user": other_user, "store": mock_db}
             if endpoint_fn is not inquiry_active_runs:
                 kwargs["center"] = MagicMock()
             if endpoint_fn is not inquiry_room_messages:
                 kwargs["engine"] = MagicMock()
             with pytest.raises(HTTPException) as exc:
-                await endpoint_fn(req, other_user, **kwargs)
+                await endpoint_fn("guarded-room", **kwargs)
             assert exc.value.status_code == 403
 
         # send_message verifies ownership before executing.
         req = MagicMock()
         req.json = AsyncMock(
             return_value={
-                "room_id": "guarded-room",
                 "message": {"message_text": "x"},
                 "mode": "direct",
                 "agent_scope": {"source": "room_default"},
@@ -239,7 +235,9 @@ class TestRoomLifecycleFlow:
             }
         )
         with pytest.raises(HTTPException) as exc:
-            await send_message(req, other_user, store=mock_db, engine=MagicMock())
+            await send_message(
+                "guarded-room", req, other_user, store=mock_db, engine=MagicMock()
+            )
         assert exc.value.status_code == 403
 
 

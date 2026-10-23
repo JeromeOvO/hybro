@@ -547,10 +547,6 @@ def test_room_center_route_inventory_records_live_protocol_owners():
             "owner": "chat.protocols.RoomCenterCompatibility",
             "supporting": {"common.protocols.RoomRouteReader"},
         },
-        "update_room_agent_set": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
-            "supporting": {"common.protocols.RoomRouteReader"},
-        },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
             "supporting": {

@@ -110,7 +110,8 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.route('**/api/v1/roomCenter/inquiryRoomSetting', async route => {
+  await page.route(`**/api/v1/rooms/${ROOM_ID}`, async route => {
+    if (route.request().method() !== 'GET') return route.fallback()
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -132,19 +133,8 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.route('**/api/v1/roomCenter/inquiryRoomMessagesByRoomId', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        success: true,
-        room_id: ROOM_ID,
-        message_list: [],
-      }),
-    })
-  })
 
-  await page.route('**/api/v1/roomCenter/inquiryActiveRuns', async route => {
+  await page.route(`**/api/v1/rooms/${ROOM_ID}/active-runs`, async route => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -164,7 +154,20 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
     })
   })
 
-  await page.route('**/api/v1/roomCenter/sendMessage', async route => {
+  await page.route(`**/api/v1/rooms/${ROOM_ID}/messages*`, async route => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          room_id: ROOM_ID,
+          message_list: [],
+        }),
+      })
+      return
+    }
+
     const payload = route.request().postDataJSON() as { client_request_id?: unknown }
     const clientRequestId = typeof payload.client_request_id === 'string'
       ? payload.client_request_id
@@ -248,7 +251,10 @@ test('streaming agent turn never displays internal dispatch prompt', async ({ pa
   await expect(page.getByTestId('send-button')).toBeEnabled()
   await expectInternalPromptNeverRendered(page)
 
-  const sendRequestPromise = page.waitForRequest('**/api/v1/roomCenter/sendMessage')
+  const sendRequestPromise = page.waitForRequest(
+    request => request.method() === 'POST'
+      && new URL(request.url()).pathname.endsWith(`/api/v1/rooms/${ROOM_ID}/messages`),
+  )
   await page.getByTestId('send-button').click()
   const sendRequest = await sendRequestPromise
   const sendPayload = sendRequest.postDataJSON() as { client_request_id?: unknown }

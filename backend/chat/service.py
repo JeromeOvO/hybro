@@ -1,7 +1,5 @@
 """Chat product operations on rooms: create, list, rename, members, delete."""
 
-import uuid
-
 from common.dto import (
     CreateRoomRequest,
     MembershipSeed,
@@ -116,20 +114,7 @@ class ChatService:
                 mode="all_current_agents",
                 requesting_user_id=requesting_user_id,
             )
-        if request.applied_from_group:
-            return MembershipSeed(
-                mode="saved_group",
-                group_id=request.applied_from_group,
-                requesting_user_id=requesting_user_id,
-            )
-        agent_ids = None
-        if request.room_agent_set is not None:
-            agent_ids = list(self._normalize_room_agent_set(request.room_agent_set))
-        return MembershipSeed(
-            mode="manual",
-            agent_ids=agent_ids,
-            requesting_user_id=requesting_user_id,
-        )
+        return MembershipSeed(mode="manual", requesting_user_id=requesting_user_id)
 
     @staticmethod
     def _room_error_response(
@@ -153,55 +138,6 @@ class ChatService:
             error=error,
             status_code=status_code,
         )
-
-    # === room_agent_set normalization helpers ===
-    @staticmethod
-    def _looks_like_agent_id(value: str) -> bool:
-        """
-        Heuristic check to determine if a string looks like an agent_id (UUID style).
-        """
-        if not isinstance(value, str):
-            return False
-        try:
-            uuid.UUID(value)
-            return True
-        except Exception:
-            return False
-
-    def _normalize_room_agent_set(self, room_agent_set: dict | None) -> dict[str, str]:
-        """
-        Normalize room_agent_set to the canonical shape: {agent_id: agent_name}.
-
-        Historically some data used {agent_name: agent_id}. This method detects
-        the dominant pattern and returns a mapping keyed by agent_id so that:
-        - Multiple agents with the same name are supported
-        - Backend logic can rely on agent_id keys.
-        """
-        if not room_agent_set:
-            return {}
-
-        # Count how many keys/values look like IDs
-        keys_look_like_ids = sum(
-            1 for k in room_agent_set.keys() if self._looks_like_agent_id(k)
-        )
-        values_look_like_ids = sum(
-            1 for v in room_agent_set.values() if self._looks_like_agent_id(v)
-        )
-
-        # If keys already look like IDs (or it's ambiguous), assume correct shape
-        if keys_look_like_ids >= values_look_like_ids:
-            # Cast to concrete type for callers
-            return dict(room_agent_set)
-
-        # Otherwise we likely have {agent_name: agent_id} and should flip it
-        normalized: dict[str, str] = {}
-        for agent_name, agent_id in room_agent_set.items():
-            if not isinstance(agent_id, str):
-                # Skip malformed entries
-                continue
-            normalized[agent_id] = str(agent_name)
-
-        return normalized
 
     # room setting management
     async def create_new_room(
@@ -314,44 +250,6 @@ class ChatService:
             error=None,
             status_code=200,
         )
-
-    async def update_room_agent_set(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        facade = self._require_facade()
-        if request.room_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        has_membership_input = (
-            request.membership_seed_input is not None
-            or request.room_agent_set is not None
-            or request.seed_all_current_agents
-            or request.applied_from_group is not None
-        )
-        if not has_membership_input:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room agent set or canonical membership input is required",
-                status_code=400,
-            )
-        try:
-            info = await facade.replace_membership(
-                room_id,
-                self._membership_seed_from_request(request),
-                requesting_user_id=request.requesting_user_id,
-            )
-        except ValueError as exc:
-            return self._room_error_response(room_id=room_id, error=str(exc))
-        return self._room_setting_response_from_info(info)
 
     async def update_room_name(
         self, request: RoomCenterRoomSettingRequest

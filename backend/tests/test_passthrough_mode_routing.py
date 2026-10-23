@@ -294,7 +294,6 @@ async def test_chat_route_still_rejects_passthrough_mode():
     request = MagicMock()
     request.json = AsyncMock(
         return_value={
-            "room_id": "room-1",
             "client_request_id": "cr-1",
             "mode": "passthrough",
             "message": {"message_content": {"message_text": "hi"}},
@@ -303,6 +302,7 @@ async def test_chat_route_still_rejects_passthrough_mode():
     )
 
     response = await send_message(
+        "room-1",
         request,
         user=SimpleNamespace(user_id="owner-1"),
         store=MagicMock(),

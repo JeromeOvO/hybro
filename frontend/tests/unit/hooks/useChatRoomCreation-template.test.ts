@@ -94,14 +94,9 @@ describe("useChatRoomCreation.createFromTemplate", () => {
     expect(mockCreateNewRoom).toHaveBeenCalledOnce()
     const args = mockCreateNewRoom.mock.calls[0]
     expect(args[0]).toBe("Travel Planner")
-    expect(args[1]).toBe("user-1")
-    expect(args[2]).toBe("Test User")
+    expect(args[1]).toBe("Test User")
+    expect(args[3]).toEqual({ use_supervisor: true })
     expect(args[4]).toEqual({
-      "weather-1": "Weather Agent",
-      "travel-1": "Travel Planner Agent",
-    })
-    expect(args[5]).toEqual({ use_supervisor: true })
-    expect(args[7]).toEqual({
       membership_seed_input: "manual",
       room_agent_ids: ["weather-1", "travel-1"],
     })
