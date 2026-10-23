@@ -21,7 +21,7 @@ def _deps(**overrides):
         "room_ownership_reader": MagicMock(),
         "hitl_manager": MagicMock(),
         "inspection_center": MagicMock(),
-        "room_center": MagicMock(),
+        "chat_rooms": MagicMock(),
         "room_store": MagicMock(),
         "agent_selection_service": MagicMock(),
         "execution_engine": MagicMock(),
@@ -53,7 +53,7 @@ PROVIDER_FIELD_NAMES = [
     ("get_room_ownership_reader", "room_ownership_reader"),
     ("get_hitl_manager", "hitl_manager"),
     ("get_inspection_center", "inspection_center"),
-    ("get_room_center", "room_center"),
+    ("get_chat_rooms", "chat_rooms"),
     ("get_room_store", "room_store"),
     ("get_agent_selection_service", "agent_selection_service"),
     ("get_execution_engine", "execution_engine"),
@@ -111,9 +111,9 @@ def test_bind_api_gateway_deps_rejects_incomplete_bindings():
     from api_gateway.dependencies import bind_api_gateway_deps
 
     app = SimpleNamespace(state=SimpleNamespace())
-    deps = _deps(room_center=None)
+    deps = _deps(chat_rooms=None)
 
-    with pytest.raises(RuntimeError, match="room_center"):
+    with pytest.raises(RuntimeError, match="chat_rooms"):
         bind_api_gateway_deps(app, deps)
     assert not hasattr(app.state, "api_gateway_deps")
 

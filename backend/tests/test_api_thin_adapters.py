@@ -537,21 +537,21 @@ def test_room_center_route_inventory_records_live_protocol_owners():
             "supporting": {"common.protocols.RoomRouteReader"},
         },
         "inquiry_room_setting": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.ChatRooms",
             "supporting": {
                 "common.protocols.ExecutionEngine",
                 "common.protocols.RoomRouteReader",
             },
         },
         "inquiry_room_messages": {
-            "owner": "chat.protocols.RoomCenterCompatibility",
+            "owner": "chat.protocols.ChatRooms",
             "supporting": {"common.protocols.RoomRouteReader"},
         },
         "send_message": {
             "owner": "common.protocols.ExecutionEngine",
             "supporting": {
                 "common.protocols.RoomRouteReader",
-                "chat.protocols.RoomCenterCompatibility",
+                "chat.protocols.ChatRooms",
             },
         },
         "suggest_agents": {
@@ -750,17 +750,14 @@ def test_route_owner_protocols_match_handler_calls():
 def test_route_bound_adapters_satisfy_protocols():
     from agent.catalog import AgentCatalogService
     from agent.protocols import AgentCatalog
-    from chat.protocols import RoomCenterCompatibility
-    from chat.route_adapter import ChatRouteAdapter
+    from chat.protocols import ChatRooms
+    from chat.service import ChatService
 
     assert isinstance(
         AgentCatalogService(facade=object(), liveness_checker=object()),
         AgentCatalog,
     )
-    assert isinstance(
-        ChatRouteAdapter(chat_service=object(), conversation_runtime=object()),
-        RoomCenterCompatibility,
-    )
+    assert isinstance(ChatService(), ChatRooms)
 
 
 def test_agent_routes_expose_typed_dependency_providers():

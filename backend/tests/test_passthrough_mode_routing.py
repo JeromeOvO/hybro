@@ -307,7 +307,7 @@ async def test_chat_route_still_rejects_passthrough_mode():
         user=SimpleNamespace(user_id="owner-1"),
         store=MagicMock(),
         engine=engine,
-        center=MagicMock(),
+        rooms=MagicMock(),
     )
 
     assert response.success is False

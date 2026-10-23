@@ -186,8 +186,8 @@ async def test_history_uses_repository_order_and_bulk_status():
         _room("recent-new", activity_day=3),
         _room("recent-old", activity_day=1),
     ]
-    center = SimpleNamespace(
-        inquiry_room_history_by_owner_id=AsyncMock(
+    chat_rooms = SimpleNamespace(
+        list_room_history=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         )
     )
@@ -201,7 +201,7 @@ async def test_history_uses_repository_order_and_bulk_status():
         )
     )
 
-    response = await get_room_history(user=_user(), engine=engine, center=center)
+    response = await get_room_history(user=_user(), engine=engine, rooms=chat_rooms)
 
     assert [item.room_id for item in response.items] == [
         "pinned-one",
@@ -218,9 +218,7 @@ async def test_history_uses_repository_order_and_bulk_status():
     engine.get_latest_runs_for_rooms.assert_awaited_once_with(
         ["pinned-one", "pinned-two", "recent-new", "recent-old"]
     )
-    request = center.inquiry_room_history_by_owner_id.await_args.args[0]
-    assert request.room_owner_id == "owner"
-    assert request.requesting_user_id == "owner"
+    chat_rooms.list_room_history.assert_awaited_once_with("owner")
 
 
 @pytest.mark.asyncio
@@ -229,11 +227,11 @@ async def test_reorder_requires_complete_owned_pinned_set_before_writing():
         _room("p1", pinned=True, pin_order=1),
         _room("p2", pinned=True, pin_order=2),
     ]
-    center = SimpleNamespace(
-        inquiry_rooms_by_room_owner_id=AsyncMock(
+    chat_rooms = SimpleNamespace(
+        list_rooms_for_owner=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         ),
-        update_room_history_fields=AsyncMock(),
+        update_history_fields=AsyncMock(),
     )
     store = SimpleNamespace(get_room_by_room_id=AsyncMock())
 
@@ -242,12 +240,12 @@ async def test_reorder_requires_complete_owned_pinned_set_before_writing():
             payload=PinnedRoomOrderUpdate(room_ids=["p1"]),
             user=_user(),
             store=store,
-            center=center,
+            rooms=chat_rooms,
         )
 
     assert exc_info.value.status_code == 409
     store.get_room_by_room_id.assert_not_awaited()
-    center.update_room_history_fields.assert_not_awaited()
+    chat_rooms.update_history_fields.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -259,53 +257,48 @@ async def test_reorder_persists_complete_manual_order_after_ownership_checks():
     store = SimpleNamespace(
         get_room_by_room_id=AsyncMock(side_effect=[rooms[1], rooms[0]])
     )
-    center = SimpleNamespace(
-        inquiry_rooms_by_room_owner_id=AsyncMock(
+    chat_rooms = SimpleNamespace(
+        list_rooms_for_owner=AsyncMock(
             return_value=SimpleNamespace(success=True, room_list=rooms)
         ),
-        update_room_history_fields=AsyncMock(
-            return_value=SimpleNamespace(success=True)
-        ),
+        update_history_fields=AsyncMock(return_value=SimpleNamespace(success=True)),
     )
 
     result = await reorder_pinned_rooms(
         payload=PinnedRoomOrderUpdate(room_ids=["p2", "p1"]),
         user=_user(),
         store=store,
-        center=center,
+        rooms=chat_rooms,
     )
 
     assert result == {"success": True}
-    requests = [
-        call.args[0] for call in center.update_room_history_fields.await_args_list
+    assert [
+        (call.args, call.kwargs)
+        for call in chat_rooms.update_history_fields.await_args_list
+    ] == [
+        (("p2",), {"is_pinned": True, "pin_order": 1.0}),
+        (("p1",), {"is_pinned": True, "pin_order": 2.0}),
     ]
-    assert [(request.room_id, request.pin_order) for request in requests] == [
-        ("p2", 1.0),
-        ("p1", 2.0),
-    ]
-    assert all(request.requesting_user_id == "owner" for request in requests)
 
 
 @pytest.mark.asyncio
 async def test_delete_history_checks_ownership_and_delegates_to_deletion_service():
     room = _room("r1")
     store = SimpleNamespace(get_room_by_room_id=AsyncMock(return_value=room))
-    center = SimpleNamespace(
-        delete_room_by_room_id=AsyncMock(return_value=SimpleNamespace(success=True))
+    chat_rooms = SimpleNamespace(
+        delete_room=AsyncMock(return_value=SimpleNamespace(success=True))
     )
 
     result = await delete_room_history_item(
-        "r1", user=_user(), store=store, center=center
+        "r1", user=_user(), store=store, rooms=chat_rooms
     )
 
     assert result == {"success": True}
-    request = center.delete_room_by_room_id.await_args.args[0]
-    assert request.room_id == "r1"
-    assert request.requesting_user_id == "owner"
+    chat_rooms.delete_room.assert_awaited_once_with("r1", requesting_user_id="owner")
 
     with pytest.raises(HTTPException) as exc_info:
         await delete_room_history_item(
-            "r1", user=_user("other"), store=store, center=center
+            "r1", user=_user("other"), store=store, rooms=chat_rooms
         )
     assert exc_info.value.status_code == 403
-    assert center.delete_room_by_room_id.await_count == 1
+    assert chat_rooms.delete_room.await_count == 1

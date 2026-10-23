@@ -127,16 +127,16 @@ EXPECTED_METHODS = {
         },
     },
     "chat.protocols": {
-        "RoomCenterCompatibility": {
-            "create_new_room",
-            "delete_room_by_room_id",
-            "inquiry_room_history_by_owner_id",
-            "inquiry_room_messages_by_room_id",
-            "inquiry_room_setting",
-            "inquiry_rooms_by_room_owner_id",
+        "ChatRooms": {
+            "create_room",
+            "delete_room",
+            "get_room",
+            "list_room_history",
+            "list_rooms_for_owner",
+            "read_messages",
+            "rename_room",
+            "update_history_fields",
             "update_room_default_mode",
-            "update_room_history_fields",
-            "update_room_name",
         },
     },
     "session.protocols": {

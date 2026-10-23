@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from models.request import (
-    RoomCenterRoomMessageRequest,
-    RoomCenterRoomSettingRequest,
-)
+from common.json_types import JsonValue
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -13,30 +10,35 @@ from models.response import (
 
 
 @runtime_checkable
-class RoomCenterCompatibility(Protocol):
-    async def create_new_room(
-        self, request: RoomCenterRoomSettingRequest
+class ChatRooms(Protocol):
+    async def create_room(
+        self,
+        *,
+        owner_id: str,
+        owner_name: str | None,
+        room_name: str | None,
+        extend_info: dict[str, JsonValue] | None,
+        membership_seed_input: str | None,
+        room_agent_ids: list[str] | None,
+        seed_group_id: str | None,
+        seed_all_current_agents: bool | None,
     ) -> RoomCenterRoomSettingResponse: ...
-    async def inquiry_rooms_by_room_owner_id(
-        self, request: RoomCenterRoomSettingRequest
+    async def get_room(self, room_id: str) -> RoomCenterRoomSettingResponse: ...
+    async def list_rooms_for_owner(
+        self, owner_id: str
     ) -> RoomCenterRoomSettingResponse: ...
-    async def inquiry_room_history_by_owner_id(
-        self, request: RoomCenterRoomSettingRequest
+    async def list_room_history(
+        self, owner_id: str
     ) -> RoomCenterRoomSettingResponse: ...
-    async def inquiry_room_messages_by_room_id(
-        self, request: RoomCenterRoomMessageRequest
-    ) -> RoomCenterRoomMessageResponse: ...
-    async def inquiry_room_setting(
-        self, request: RoomCenterRoomSettingRequest
+    async def rename_room(
+        self, room_id: str, room_name: str
     ) -> RoomCenterRoomSettingResponse: ...
-    async def delete_room_by_room_id(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse: ...
-    async def update_room_name(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse: ...
-    async def update_room_history_fields(
-        self, request: RoomCenterRoomSettingRequest
+    async def update_history_fields(
+        self,
+        room_id: str,
+        *,
+        is_pinned: bool | None,
+        pin_order: float | None,
     ) -> RoomCenterRoomSettingResponse: ...
     async def update_room_default_mode(
         self,
@@ -44,6 +46,16 @@ class RoomCenterCompatibility(Protocol):
         *,
         use_supervisor: bool,
     ) -> bool: ...
+    async def delete_room(
+        self, room_id: str, *, requesting_user_id: str
+    ) -> RoomCenterRoomSettingResponse: ...
+    async def read_messages(
+        self,
+        room_id: str,
+        *,
+        limit: int | None,
+        cursor: str | None,
+    ) -> RoomCenterRoomMessageResponse: ...
 
 
-__all__ = ["RoomCenterCompatibility"]
+__all__ = ["ChatRooms"]

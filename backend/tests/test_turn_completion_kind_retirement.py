@@ -7,28 +7,26 @@ import inspect
 from conversation.timeline_projection import _public_user_message_extend_info
 
 
-def test_active_runs_response_and_request_drop_the_completion_lookup():
-    from models.request import RoomCenterRoomSettingRequest
+def test_active_runs_response_drops_the_completion_lookup():
     from models.response import RoomCenterActiveRunsResponse
 
     assert "turn_completion_kind" not in RoomCenterActiveRunsResponse.model_fields
-    assert "trigger_message_id" not in RoomCenterRoomSettingRequest.model_fields
 
 
 def test_active_runs_route_reads_only_execution():
     from api_gateway.routes.room_routes import inquiry_active_runs
 
-    assert "center" not in inspect.signature(inquiry_active_runs).parameters
+    assert "rooms" not in inspect.signature(inquiry_active_runs).parameters
 
 
 def test_conversation_no_longer_looks_up_completion_kind():
-    from chat.protocols import RoomCenterCompatibility
-    from chat.route_adapter import ChatRouteAdapter
+    from chat.protocols import ChatRooms
+    from chat.service import ChatService
     from conversation.facade import ConversationFacade
     from conversation.runtime import ConversationRuntime
 
     assert not hasattr(ConversationFacade, "get_turn_completion_kind")
-    for owner in (ConversationRuntime, ChatRouteAdapter, RoomCenterCompatibility):
+    for owner in (ConversationRuntime, ChatService, ChatRooms):
         assert not hasattr(owner, "inquiry_active_runs"), owner
 
 

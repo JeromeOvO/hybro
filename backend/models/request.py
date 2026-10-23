@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
 from common.types import Message, MessageRole, Part, Task, TextPart
 from models.room import (
-    Room,
     RoomAgentMessage,
     RoomMessage,
     RoomUserMessage,
@@ -127,29 +126,6 @@ class ChatRequest(BaseModel):
     user_name: str
     user_input: str
     session_id: str | None = None
-
-
-class RoomCenterRoomSettingRequest(BaseModel):
-    room_id: str | None = None
-    room_name: str | None = None
-    room_owner_id: str | None = None
-    room_owner_name: str | None = None
-    room_created_at: datetime | None = None
-    extend_info: dict[str, Any] | None = None
-    room: Room | None = None
-    requesting_user_id: str | None = None
-
-    # Canonical membership write input (mutually exclusive)
-    membership_seed_input: str | None = (
-        None  # "manual" | "saved_group" | "all_current_agents"
-    )
-    room_agent_ids: list[str] | None = None
-    seed_group_id: str | None = None
-    seed_all_current_agents: bool | None = None
-
-    # Chat history presentation metadata
-    is_pinned: bool | None = None
-    pin_order: float | None = None
 
 
 class UserAttachmentRequest(BaseModel):

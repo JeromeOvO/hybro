@@ -6,7 +6,6 @@ from typing import Any, Protocol
 from common.protocols import RoomMemoryCleanupPort
 from common.utils.logger import get_logger
 from common.utils.time import utcnow
-from models.request import RoomCenterRoomSettingRequest
 from models.response import RoomCenterRoomSettingResponse
 
 logger = get_logger(__name__)
@@ -72,18 +71,8 @@ class RoomDeletionService:
         self._orchestrator_epoch_cleanup = orchestrator_epoch_cleanup
 
     async def delete_room_by_room_id(
-        self, request: RoomCenterRoomSettingRequest
+        self, room_id: str, *, requesting_user_id: str
     ) -> RoomCenterRoomSettingResponse:
-        if request.room_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
         actual_owner_id = await self._room_lifecycle.get_room_owner(room_id)
         if actual_owner_id is None:
             return RoomCenterRoomSettingResponse(
@@ -93,10 +82,7 @@ class RoomDeletionService:
                 error="Room not found",
                 status_code=404,
             )
-        requested_owner_id = (
-            request.requesting_user_id or request.room_owner_id or actual_owner_id
-        )
-        if requested_owner_id != actual_owner_id:
+        if requesting_user_id != actual_owner_id:
             return RoomCenterRoomSettingResponse(
                 room_id=room_id,
                 room=None,

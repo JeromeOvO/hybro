@@ -169,7 +169,7 @@ async def test_send_message_refuses_session_container():
             user=_user(),
             store=_store(_room()),
             engine=engine,
-            center=MagicMock(),
+            rooms=MagicMock(),
         )
 
     _assert_session_refused(exc_info)
@@ -178,25 +178,25 @@ async def test_send_message_refuses_session_container():
 
 @pytest.mark.asyncio
 async def test_history_patch_refuses_session_container():
-    center = MagicMock()
-    center.update_room_name = AsyncMock()
+    rooms = MagicMock()
+    rooms.rename_room = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await update_room_history_item(
             "room-1",
             RoomHistoryUpdate(title="Renamed"),
             user=_user(),
             store=_store(_room()),
-            center=center,
+            rooms=rooms,
         )
 
     _assert_session_refused(exc_info)
-    center.update_room_name.assert_not_called()
+    rooms.rename_room.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_pinned_order_refuses_session_container():
-    center = MagicMock()
-    center.inquiry_rooms_by_room_owner_id = AsyncMock(
+    rooms = MagicMock()
+    rooms.list_rooms_for_owner = AsyncMock(
         return_value=SimpleNamespace(
             success=True,
             status_code=200,
@@ -204,30 +204,30 @@ async def test_pinned_order_refuses_session_container():
             room_list=[SimpleNamespace(room_id="room-1", is_pinned=True)],
         )
     )
-    center.update_room_history_fields = AsyncMock()
+    rooms.update_history_fields = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await reorder_pinned_rooms(
             PinnedRoomOrderUpdate(room_ids=["room-1"]),
             user=_user(),
             store=_store(_room()),
-            center=center,
+            rooms=rooms,
         )
 
     _assert_session_refused(exc_info)
-    center.update_room_history_fields.assert_not_called()
+    rooms.update_history_fields.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_history_delete_refuses_session_container():
-    center = MagicMock()
-    center.delete_room_by_room_id = AsyncMock()
+    rooms = MagicMock()
+    rooms.delete_room = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
         await delete_room_history_item(
-            "room-1", user=_user(), store=_store(_room()), center=center
+            "room-1", user=_user(), store=_store(_room()), rooms=rooms
         )
 
     _assert_session_refused(exc_info)
-    center.delete_room_by_room_id.assert_not_called()
+    rooms.delete_room.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -280,11 +280,11 @@ async def test_file_upload_refuses_session_container():
 async def test_read_routes_serve_session_containers():
     engine = MagicMock()
     engine.get_runs_for_room = AsyncMock(return_value=[])
-    center = MagicMock()
-    center.inquiry_room_setting = AsyncMock(
+    rooms = MagicMock()
+    rooms.get_room = AsyncMock(
         return_value=SimpleNamespace(success=True, active_runs=None)
     )
-    center.inquiry_room_messages_by_room_id = AsyncMock(return_value={"success": True})
+    rooms.read_messages = AsyncMock(return_value={"success": True})
     store = _store(_room())
 
     setting = await inquiry_room_setting(
@@ -292,13 +292,13 @@ async def test_read_routes_serve_session_containers():
         user=_user(),
         store=store,
         engine=engine,
-        center=center,
+        rooms=rooms,
     )
     messages = await inquiry_room_messages(
         "room-1",
         user=_user(),
         store=store,
-        center=center,
+        rooms=rooms,
     )
 
     assert setting.success is True

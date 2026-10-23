@@ -320,10 +320,10 @@ def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
     assert omitted.correlation_id is None
 
 
-def test_room_info_preserves_legacy_membership_status_default():
+def test_room_info_defaults_to_manual_membership_status():
     room = RoomInfo(room_id="r1", room_name="Room", owner_id="u1")
 
-    assert room.membership_origin_status == "active"
+    assert room.membership_origin_status == "manual"
 
 
 def test_protocols_are_runtime_checkable():

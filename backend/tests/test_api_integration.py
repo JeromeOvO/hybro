@@ -113,7 +113,7 @@ class TestRoomCenterHTTPIntegration:
     ):
         """POST /rooms should return well-formed JSON."""
         mock_rc = MagicMock()
-        mock_rc.create_new_room = AsyncMock(
+        mock_rc.create_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(
                 success=True, room_id="room-http-001"
             )
@@ -121,7 +121,7 @@ class TestRoomCenterHTTPIntegration:
 
         from api_gateway.routes import room_routes as room_api
 
-        integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
+        integration_app.dependency_overrides[room_api.get_chat_rooms] = lambda: mock_rc
         try:
             resp = await http_client.post(
                 "/api/v1/rooms",
@@ -132,7 +132,7 @@ class TestRoomCenterHTTPIntegration:
                 },
             )
         finally:
-            integration_app.dependency_overrides.pop(room_api.get_room_center, None)
+            integration_app.dependency_overrides.pop(room_api.get_chat_rooms, None)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -154,8 +154,14 @@ class TestRoomCenterHTTPIntegration:
         integration_user,
         pagination,
     ):
+        from chat.service import ChatService
         from conversation.runtime import ConversationRuntime
         from models.room import Room
+
+        chat_rooms = ChatService()
+        chat_rooms.bind_message_reader(
+            ConversationRuntime().inquiry_room_messages_by_room_id
+        )
 
         mock_room = Room(
             room_id="room-http-invalid-page",
@@ -170,8 +176,8 @@ class TestRoomCenterHTTPIntegration:
         from api_gateway.routes import room_routes as room_api
 
         integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
-        integration_app.dependency_overrides[room_api.get_room_center] = (
-            ConversationRuntime
+        integration_app.dependency_overrides[room_api.get_chat_rooms] = lambda: (
+            chat_rooms
         )
         try:
             resp = await http_client.get(
@@ -180,7 +186,7 @@ class TestRoomCenterHTTPIntegration:
             )
         finally:
             integration_app.dependency_overrides.pop(room_api.get_room_store, None)
-            integration_app.dependency_overrides.pop(room_api.get_room_center, None)
+            integration_app.dependency_overrides.pop(room_api.get_chat_rooms, None)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -209,19 +215,19 @@ class TestRoomCenterHTTPIntegration:
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
         mock_rc = MagicMock()
-        mock_rc.inquiry_room_messages_by_room_id = AsyncMock(
+        mock_rc.read_messages = AsyncMock(
             return_value=RoomCenterRoomMessageResponse(success=True, message_list=[])
         )
 
         from api_gateway.routes import room_routes as room_api
 
         integration_app.dependency_overrides[room_api.get_room_store] = lambda: mock_db
-        integration_app.dependency_overrides[room_api.get_room_center] = lambda: mock_rc
+        integration_app.dependency_overrides[room_api.get_chat_rooms] = lambda: mock_rc
         try:
             resp = await http_client.get("/api/v1/rooms/room-http-002/messages")
         finally:
             integration_app.dependency_overrides.pop(room_api.get_room_store, None)
-            integration_app.dependency_overrides.pop(room_api.get_room_center, None)
+            integration_app.dependency_overrides.pop(room_api.get_chat_rooms, None)
 
         assert resp.status_code == 200
         body = resp.json()

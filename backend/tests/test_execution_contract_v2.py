@@ -163,14 +163,14 @@ async def test_send_message_replay_does_not_schedule_again() -> None:
         schedule_orchestration=MagicMock(),
     )
 
-    center = SimpleNamespace(update_room_default_mode=AsyncMock(return_value=True))
+    rooms = SimpleNamespace(update_room_default_mode=AsyncMock(return_value=True))
     response = await send_message(
         "room-1",
         request,
         user,
         store=store,
         engine=engine,
-        center=center,
+        rooms=rooms,
     )
 
     assert response.message_id == "message-1"

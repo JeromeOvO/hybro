@@ -586,9 +586,9 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_execution_engine",
-      "get_room_center"
+      "get_execution_engine"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -608,8 +608,8 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_current_user",
-      "get_room_center"
+      "get_chat_rooms",
+      "get_current_user"
     ],
     "auth_dependencies": [
       "get_current_user"
@@ -629,8 +629,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -651,8 +651,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -673,9 +673,9 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -696,8 +696,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -830,8 +830,8 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [
@@ -852,9 +852,9 @@
     ],
     "status_code": null,
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "auth_dependencies": [

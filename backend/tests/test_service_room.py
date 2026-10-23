@@ -154,17 +154,17 @@ def test_room_services_bind_store_sets_runtime_store():
 
 def test_room_services_migrated_crud_methods_do_not_keep_legacy_store_branches():
     forbidden_by_method = {
-        ("chat/service.py", "ChatService", "inquiry_room_setting"): {
+        ("chat/service.py", "ChatService", "get_room"): {
             "get_room_by_room_id",
             "update_room_by_room_id",
         },
-        ("chat/service.py", "ChatService", "inquiry_rooms_by_room_owner_id"): {
+        ("chat/service.py", "ChatService", "list_rooms_for_owner"): {
             "get_rooms_by_room_owner_id"
         },
-        ("chat/service.py", "ChatService", "inquiry_room_history_by_owner_id"): {
+        ("chat/service.py", "ChatService", "list_room_history"): {
             "get_rooms_by_room_owner_id"
         },
-        ("chat/service.py", "ChatService", "update_room_name"): {
+        ("chat/service.py", "ChatService", "rename_room"): {
             "get_room_by_room_id",
             "update_room_by_room_id",
         },

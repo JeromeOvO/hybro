@@ -433,15 +433,18 @@ def mock_agent_catalog():
 
 
 @pytest.fixture
-def mock_room_center():
-    """Create a mock room center."""
+def mock_chat_rooms():
+    """Create a mock ChatRooms port."""
     mock = MagicMock()
-    mock.create_new_room = AsyncMock()
-    mock.inquiry_room_setting = AsyncMock()
-    mock.inquiry_rooms_by_room_owner_id = AsyncMock()
-    mock.update_room_name = AsyncMock()
+    mock.create_room = AsyncMock()
+    mock.get_room = AsyncMock()
+    mock.list_rooms_for_owner = AsyncMock()
+    mock.list_room_history = AsyncMock()
+    mock.rename_room = AsyncMock()
+    mock.update_history_fields = AsyncMock()
     mock.update_room_default_mode = AsyncMock(return_value=True)
-    mock.inquiry_room_messages_by_room_id = AsyncMock()
+    mock.delete_room = AsyncMock()
+    mock.read_messages = AsyncMock()
     return mock
 
 
@@ -498,7 +501,7 @@ def create_mock_response(success: bool = True, data: Any = None, error: str = No
 def make_api_gateway_deps(
     mock_db_service,
     mock_agent_catalog,
-    mock_room_center,
+    mock_chat_rooms,
     mock_sse_transport,
     mock_hitl_service,
     mock_s3_service,
@@ -544,7 +547,7 @@ def make_api_gateway_deps(
             "room_ownership_reader": room_ownership_reader,
             "hitl_manager": mock_hitl_service,
             "inspection_center": MagicMock(),
-            "room_center": mock_room_center,
+            "chat_rooms": mock_chat_rooms,
             "room_store": mock_db_service,
             "agent_selection_service": agent_selection_service,
             "execution_engine": execution_engine,
@@ -585,8 +588,8 @@ def patch_sse_deps(
 
 
 @pytest.fixture
-def patch_room_center_deps(mock_db_service, mock_room_center, make_api_gateway_deps):
-    """Return explicit room center endpoint dependencies."""
+def patch_chat_rooms_deps(mock_db_service, mock_chat_rooms, make_api_gateway_deps):
+    """Return explicit room endpoint dependencies."""
     from common.dto import ExecutionAck
 
     execution_engine = MagicMock()
@@ -598,11 +601,11 @@ def patch_room_center_deps(mock_db_service, mock_room_center, make_api_gateway_d
     execution_engine.cancel = AsyncMock(return_value=True)
     return {
         "db_service": mock_db_service,
-        "room_center": mock_room_center,
+        "chat_rooms": mock_chat_rooms,
         "execution_engine": execution_engine,
         "deps": make_api_gateway_deps(
             room_store=mock_db_service,
-            room_center=mock_room_center,
+            chat_rooms=mock_chat_rooms,
             execution_engine=execution_engine,
         ),
     }

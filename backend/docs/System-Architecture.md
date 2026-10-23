@@ -20,12 +20,15 @@ and jobs until the production cutover. Contracts pinned before wiring:
   `user_messages_missing_idempotency_fingerprint`,
   `orchestrator_hitl_interactions_missing_published`,
   `rooms_applied_from_group_without_source_group_id`,
+  `rooms_with_active_membership_origin_status`,
   `agents_missing_is_public`, `tool_bindings_missing_authorization_kind`, and
   `orchestrator_runs_missing_authorization_basis`. HITL requests have no
   `processing` status; orchestrator HITL interactions must carry `published`;
   Agents must carry `is_public`; every candidate scope carries an
   `authorization_basis`, and every Agent tool binding carries its
-  `authorization_kind`. Rooms read provenance only from `source_group_id`.
+  `authorization_kind`. Rooms read provenance only from `source_group_id`, and a
+  room's `membership_origin_status` must be `manual`, `seeded_never_edited`, or
+  `seeded_edited`.
 - `ProfileConfiguration.initial_routing` and `finalization` are frozen per Run
   but reserved: no code consumes them yet. Production composition pins
   `explicit_agent_first` (API pre-filters the candidate scope) and
@@ -238,11 +241,11 @@ flowchart TD
     Frontend[Next.js frontend] -->|REST room messages / room reads| FastAPI[main.py FastAPI app]
     APIClient[Other API clients] --> FastAPI
     FastAPI --> APIGateway[api_gateway routers]
-    APIGateway --> ChatRoutes[chat.ChatRouteAdapter / RoomCenterCompatibility]
+    APIGateway --> ChatRoutes[chat.protocols.ChatRooms / chat.ChatService]
     APIGateway --> OwnerPorts[owner protocols / facades]
     APIGateway --> Execution[execution.ExecutionFacade.execute]
-    ChatRoutes --> Chat[chat.ChatService / ChatFacade]
-    ChatRoutes --> Conversation
+    ChatRoutes --> Chat[chat.ChatFacade]
+    ChatRoutes -->|bound message reader| Conversation
     Chat --> Conversation[conversation.ConversationRuntime / ConversationFacade]
 
     Container[container.py composition root] --> ExecutionPorts[Execution ports]
@@ -267,7 +270,7 @@ flowchart TD
 
 | Layer | Module | Owns |
 |---|---|---|
-| Product | `chat` | The owner's rooms as a product: create, read settings, list, history, rename, pin, membership, default mode, delete. `ChatService` (process singleton `chat_service`), `ChatFacade`, `ChatRouteAdapter`, and the route contract `chat.protocols.RoomCenterCompatibility`. |
+| Product | `chat` | The owner's rooms as a product: create, read settings, list, history, rename, pin, membership, default mode, delete. `ChatService` (process singleton `chat_service`), `ChatFacade`, and the route contract `chat.protocols.ChatRooms`, which `ChatService` implements. |
 | Product | `session` | A client's conversation with the owner's agents, opened through `POST /sessions/messages` or MCP: the session record (collection `sessions`), the bounded event-based wait, and the client projection. `SessionFacade`, `BoundSessionAccess`, `MongoSessionRepository`, and the route contract `session.protocols.SessionAccess`. |
 | Core | `conversation` | The conversation container: room and message persistence, membership, timeline and its public projection, attachments, user-message commit and preflight, quotes, deletion, and candidate scope. `ConversationRuntime` (one instance per application lifespan, built by `container.py` and kept on `app.state.conversation_runtime`), `ConversationFacade`, and the Mongo repositories. Collections keep their `room_*` names. |
 | Core | `execution` | The engine: the canonical orchestrator kernel, the A2A tool runtime, HITL, cancellation, and run lifecycle. Its Mongo persistence adapters (run, event, call-ledger, epoch, HITL-application, artifact, and projection stores) live in `execution.repository.orchestrator`. |
@@ -281,9 +284,10 @@ product in `rooms.owner_product` (`chat` by default, `session` for session
 containers). Execution imports
 Conversation only through the `conversation` package exports. Execution's
 `RoomCenterPort` (persist, preflight, discard, and idempotent replay) is bound to the
-lifespan's `ConversationRuntime`; the chat routes receive `ChatRouteAdapter`, which
-serves room settings from `chat_service` and room message reads from that same
-runtime; active runs
+lifespan's `ConversationRuntime`; the chat routes receive `chat_service` as
+`ChatRooms`. It serves room settings itself and room message reads through the
+reader `container.py` binds with `chat_service.bind_message_reader`, which is that
+same runtime's timeline page read; active runs
 come from the execution engine. `container.py` and `orchestrator_composition.py` are
 the composition root. Startup binding validation reports a missing runtime as
 `app.state.conversation_runtime` and missing bindings as `conversation.<name>` and
@@ -355,8 +359,8 @@ route -> protocol/facade -> repository/DAL -> external service
 
 Examples:
 
-- Room settings, listing, membership changes, and deletion are served by
-  `chat.service.ChatService` through `chat.route_adapter.ChatRouteAdapter`.
+- Room settings, listing, renaming, pinning, deletion, and room message reads are
+  served by `chat.service.ChatService` through the `chat.protocols.ChatRooms` port.
   User-message persistence/preflight, room message reads, and membership seeding
   live in `conversation.runtime.ConversationRuntime` and
   `conversation.membership_source`. From the former compatibility execution-service
@@ -845,7 +849,7 @@ consumers and implementations sit in the owner's package.
 | `HITLLifecyclePersistencePort` | `approval.protocols` | `approval.repository.hitl_lifecycle_store.HITLLifecycleStore` | internal to `approval` |
 | `HITLPersistencePort` | `approval.protocols` | the `hitl_runtime_store` `SimpleNamespace` port in `container.py` | crosses to composition root |
 | `HITLTerminalLifecyclePort` | `approval.protocols` | `approval.adapters.HITLTerminalLifecycleAdapter` | internal to `approval` |
-| `RoomCenterCompatibility` | `chat.protocols` | `chat.route_adapter.ChatRouteAdapter` | crosses to `api_gateway` |
+| `ChatRooms` | `chat.protocols` | `chat.service.ChatService` | crosses to `api_gateway` |
 | `InternalEventBus` | `common.eventing.protocols` | `common.eventing.bus.BoundedInternalEventBus` | crosses to composition root |
 | `InternalEventPublisher` | `common.eventing.protocols` | `common.eventing.bus.BoundedInternalEventBus` | crosses to composition root; `conversation` |
 | `InternalEventTransport` | `common.eventing.protocols` | `dal.redis.internal_eventing.RedisInternalEventTransport` | crosses to `dal` |

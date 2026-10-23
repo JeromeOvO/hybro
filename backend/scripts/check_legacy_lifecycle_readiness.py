@@ -205,6 +205,12 @@ CHECKS = (
         },
     ),
     _Check(
+        name="rooms_with_active_membership_origin_status",
+        gates="strict readers (Room.membership_origin_status enum)",
+        collections=("rooms",),
+        query={"membership_origin_status": "active"},
+    ),
+    _Check(
         name="agents_missing_is_public",
         gates="strict readers (agent visibility is_public)",
         collections=("agents",),

@@ -472,7 +472,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.liveness import AgentLivenessService
             from agent.matcher import AgentMatcher
             from agent.selection_service import AgentSelectionService
-            from chat.route_adapter import ChatRouteAdapter
             from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
             from context_memory.config import ContextMemoryLLMConfig
@@ -545,10 +544,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 or app.state.memory_search_index_ready
             )
 
-            route_room_center = ChatRouteAdapter(
-                chat_service=chat_service,
-                conversation_runtime=conversation_runtime,
-            )
             _delivery_config = create_delivery_config(runtime.settings)
             runtime_instance_id = get_instance_id()
             delivery_redis_kv, delivery_redis_pubsub = create_delivery_redis_clients(
@@ -1179,6 +1174,9 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 )
             )
             chat_service.bind_facade(_room_deps.chat_facade)
+            chat_service.bind_message_reader(
+                conversation_runtime.inquiry_room_messages_by_room_id
+            )
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
                 llm_provider=llm_provider,
@@ -1400,7 +1398,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 room_ownership_reader=_room_deps.room_registry,
                 hitl_manager=_execution_deps.hitl_manager,
                 inspection_center=route_inspection_center,
-                room_center=route_room_center,
+                chat_rooms=chat_service,
                 room_store=route_room_reader,
                 agent_selection_service=agent_selection_service,
                 execution_engine=_execution_deps.execution_engine,

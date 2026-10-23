@@ -90,18 +90,18 @@ class TestRoomLifecycleFlow:
         mock_db.get_room_by_room_id = AsyncMock(return_value=mock_room)
 
         mock_rc = MagicMock()
-        mock_rc.create_new_room = AsyncMock(
+        mock_rc.create_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(
                 success=True,
                 room_id=room_id,
                 room=mock_room,
             )
         )
-        mock_rc.inquiry_room_setting = AsyncMock(
+        mock_rc.get_room = AsyncMock(
             return_value=RoomCenterRoomSettingResponse(success=True, room=mock_room)
         )
         mock_rc.update_room_default_mode = AsyncMock(return_value=True)
-        mock_rc.inquiry_room_messages_by_room_id = AsyncMock(
+        mock_rc.read_messages = AsyncMock(
             return_value=RoomCenterRoomMessageResponse(
                 success=True,
                 message_list=[user_msg],
@@ -118,7 +118,7 @@ class TestRoomLifecycleFlow:
         mock_execution_engine.get_runs_for_room = AsyncMock(return_value=[])
 
         # Step 1: Create room (real endpoint parses request JSON,
-        # builds RoomCenterRoomSettingRequest, calls room_center)
+        # passes typed arguments to the ChatRooms port)
         create_resp = await create_new_room(
             CreateRoomBody(
                 room_name="Flow Test Room",
@@ -127,15 +127,15 @@ class TestRoomLifecycleFlow:
                 room_agent_ids=["agent-1"],
             ),
             flow_user,
-            center=mock_rc,
+            rooms=mock_rc,
         )
         assert create_resp.success is True
         assert create_resp.room_id == room_id
 
         # Verify endpoint set room_owner_id from auth user
-        create_call = mock_rc.create_new_room.call_args[0][0]
-        assert create_call.room_owner_id == flow_user.user_id
-        assert create_call.room_agent_ids == ["agent-1"]
+        create_call = mock_rc.create_room.await_args.kwargs
+        assert create_call["owner_id"] == flow_user.user_id
+        assert create_call["room_agent_ids"] == ["agent-1"]
 
         # Step 2: Query room setting (real endpoint verifies ownership)
         setting_resp = await inquiry_room_setting(
@@ -143,7 +143,7 @@ class TestRoomLifecycleFlow:
             flow_user,
             store=mock_db,
             engine=mock_execution_engine,
-            center=mock_rc,
+            rooms=mock_rc,
         )
         assert setting_resp.success is True
         assert setting_resp.room.room_id == room_id
@@ -165,7 +165,7 @@ class TestRoomLifecycleFlow:
             flow_user,
             store=mock_db,
             engine=mock_execution_engine,
-            center=mock_rc,
+            rooms=mock_rc,
         )
         assert send_resp.success is True
         assert send_resp.message_id == message_id
@@ -176,7 +176,7 @@ class TestRoomLifecycleFlow:
             room_id,
             user=flow_user,
             store=mock_db,
-            center=mock_rc,
+            rooms=mock_rc,
         )
         assert msgs_resp.success is True
         assert len(msgs_resp.message_list) == 1
@@ -217,7 +217,7 @@ class TestRoomLifecycleFlow:
         ]:
             kwargs = {"user": other_user, "store": mock_db}
             if endpoint_fn is not inquiry_active_runs:
-                kwargs["center"] = MagicMock()
+                kwargs["rooms"] = MagicMock()
             if endpoint_fn is not inquiry_room_messages:
                 kwargs["engine"] = MagicMock()
             with pytest.raises(HTTPException) as exc:

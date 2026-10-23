@@ -16,7 +16,7 @@ from agent.protocols import (
     AgentNetworkAccess,
     AgentSuggestionService,
 )
-from chat.protocols import RoomCenterCompatibility
+from chat.protocols import ChatRooms
 from common.auth import ClerkUser, get_current_user
 from common.protocols import (
     AgentMatcher,
@@ -47,7 +47,7 @@ class APIGatewayDeps:
     room_ownership_reader: RoomOwnershipReader
     hitl_manager: HITLManager
     inspection_center: AgentInspection
-    room_center: RoomCenterCompatibility
+    chat_rooms: ChatRooms
     room_store: RoomRouteReader
     agent_selection_service: AgentSuggestionService
     execution_engine: ExecutionEngine
@@ -147,10 +147,10 @@ def get_inspection_center(
     return deps.inspection_center
 
 
-def get_room_center(
+def get_chat_rooms(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> RoomCenterCompatibility:
-    return deps.room_center
+) -> ChatRooms:
+    return deps.chat_rooms
 
 
 def get_room_store(

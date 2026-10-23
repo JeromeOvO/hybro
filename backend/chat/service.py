@@ -1,15 +1,25 @@
-"""Chat product operations on rooms: create, list, rename, members, delete."""
+"""Chat product operations on rooms: create, list, rename, delete, read."""
+
+from collections.abc import Awaitable, Callable
 
 from common.dto import (
     CreateRoomRequest,
     MembershipSeed,
     RoomInfo,
 )
+from common.json_types import JsonValue
 from common.utils.time import utcnow
 from conversation import RoomDeletionService
-from models.request import RoomCenterRoomSettingRequest
-from models.response import RoomCenterRoomSettingResponse
-from models.room import MembershipOriginStatus, Room
+from models.request import RoomCenterRoomMessageRequest
+from models.response import (
+    RoomCenterRoomMessageResponse,
+    RoomCenterRoomSettingResponse,
+)
+from models.room import Room
+
+RoomMessagePageReader = Callable[
+    [RoomCenterRoomMessageRequest], Awaitable[RoomCenterRoomMessageResponse]
+]
 
 
 class ChatService:
@@ -17,6 +27,7 @@ class ChatService:
         self._facade = None
         self._bound = False
         self._room_deletion: RoomDeletionService | None = None
+        self._message_reader: RoomMessagePageReader | None = None
 
     def reset_bindings(self) -> None:
         """Clear process-global composition state before a new lifespan starts."""
@@ -28,6 +39,16 @@ class ChatService:
 
     def bind_room_deletion(self, service: RoomDeletionService) -> None:
         self._room_deletion = service
+
+    def bind_message_reader(self, reader: RoomMessagePageReader) -> None:
+        """Bind the conversation timeline page reader that serves room messages."""
+        self._message_reader = reader
+
+    def _require_message_reader(self) -> RoomMessagePageReader:
+        reader = getattr(self, "_message_reader", None)
+        if reader is None:
+            raise RuntimeError("ChatService message reader has not been bound")
+        return reader
 
     def _require_room_deletion(self) -> RoomDeletionService:
         service = getattr(self, "_room_deletion", None)
@@ -42,6 +63,10 @@ class ChatService:
                 "room_deletion",
                 getattr(self, "_room_deletion", None) is not None,
             ),
+            (
+                "message_reader",
+                getattr(self, "_message_reader", None) is not None,
+            ),
         )
         return [name for name, is_bound in checks if not is_bound]
 
@@ -53,7 +78,7 @@ class ChatService:
         return self._facade
 
     @staticmethod
-    def _legacy_room_from_info(info: RoomInfo) -> Room:
+    def _room_from_info(info: RoomInfo) -> Room:
         return Room(
             room_id=info.room_id,
             room_name=info.room_name,
@@ -67,19 +92,11 @@ class ChatService:
             is_pinned=info.is_pinned,
             pin_order=info.pin_order,
             membership_origin=info.membership_origin,
-            membership_origin_status=ChatService._legacy_membership_origin_status(
-                info.membership_origin_status
-            ),
+            membership_origin_status=info.membership_origin_status,
             source_group_id=info.source_group_id,
             source_group_name=info.source_group_name,
             extend_info=info.extend_info,
         )
-
-    @staticmethod
-    def _legacy_membership_origin_status(status: str | None) -> str:
-        if status == "active":
-            return MembershipOriginStatus.MANUAL.value
-        return status or MembershipOriginStatus.MANUAL.value
 
     def _room_setting_response_from_info(
         self,
@@ -87,7 +104,7 @@ class ChatService:
         *,
         active_runs: list[dict] | None = None,
     ) -> RoomCenterRoomSettingResponse:
-        room = self._legacy_room_from_info(info)
+        room = self._room_from_info(info)
         return RoomCenterRoomSettingResponse(
             room_id=room.room_id,
             room=room,
@@ -97,24 +114,38 @@ class ChatService:
             status_code=200,
         )
 
-    def _membership_seed_from_request(
-        self,
-        request: RoomCenterRoomSettingRequest,
+    @staticmethod
+    def _membership_seed(
+        *,
+        owner_id: str,
+        membership_seed_input: str | None,
+        room_agent_ids: list[str] | None,
+        seed_group_id: str | None,
+        seed_all_current_agents: bool | None,
     ) -> MembershipSeed:
-        requesting_user_id = request.requesting_user_id or request.room_owner_id
-        if request.membership_seed_input is not None:
+        if membership_seed_input is not None:
             return MembershipSeed(
-                mode=request.membership_seed_input,
-                agent_ids=request.room_agent_ids,
-                group_id=request.seed_group_id,
-                requesting_user_id=requesting_user_id,
+                mode=membership_seed_input,
+                agent_ids=room_agent_ids,
+                group_id=seed_group_id,
+                requesting_user_id=owner_id,
             )
-        if request.seed_all_current_agents:
+        if seed_all_current_agents:
             return MembershipSeed(
                 mode="all_current_agents",
-                requesting_user_id=requesting_user_id,
+                requesting_user_id=owner_id,
             )
-        return MembershipSeed(mode="manual", requesting_user_id=requesting_user_id)
+        return MembershipSeed(mode="manual", requesting_user_id=owner_id)
+
+    def _room_list_response(
+        self, infos: list[RoomInfo]
+    ) -> RoomCenterRoomSettingResponse:
+        return RoomCenterRoomSettingResponse(
+            room_list=[self._room_from_info(info) for info in infos],
+            success=True,
+            error=None,
+            status_code=200,
+        )
 
     @staticmethod
     def _room_error_response(
@@ -140,25 +171,27 @@ class ChatService:
         )
 
     # room setting management
-    async def create_new_room(
-        self, room_create_request: RoomCenterRoomSettingRequest
+    async def create_room(
+        self,
+        *,
+        owner_id: str,
+        owner_name: str | None,
+        room_name: str | None,
+        extend_info: dict[str, JsonValue] | None,
+        membership_seed_input: str | None,
+        room_agent_ids: list[str] | None,
+        seed_group_id: str | None,
+        seed_all_current_agents: bool | None,
     ) -> RoomCenterRoomSettingResponse:
         facade = self._require_facade()
-        if room_create_request.room_name is None:
+        if room_name is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
                 success=False,
                 error="Room name is required",
                 status_code=400,
             )
-        if room_create_request.room_owner_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                success=False,
-                error="Room owner id is required",
-                status_code=400,
-            )
-        if room_create_request.room_owner_name is None:
+        if owner_name is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
                 success=False,
@@ -169,34 +202,25 @@ class ChatService:
         try:
             info = await facade.create_room(
                 CreateRoomRequest(
-                    owner_id=room_create_request.room_owner_id,
-                    owner_name=room_create_request.room_owner_name,
-                    room_name=room_create_request.room_name,
-                    membership_seed=self._membership_seed_from_request(
-                        room_create_request
+                    owner_id=owner_id,
+                    owner_name=owner_name,
+                    room_name=room_name,
+                    membership_seed=self._membership_seed(
+                        owner_id=owner_id,
+                        membership_seed_input=membership_seed_input,
+                        room_agent_ids=room_agent_ids,
+                        seed_group_id=seed_group_id,
+                        seed_all_current_agents=seed_all_current_agents,
                     ),
-                    extend_info=room_create_request.extend_info or None,
+                    extend_info=extend_info or None,
                 )
             )
         except ValueError as exc:
             return self._room_error_response(error=str(exc))
         return self._room_setting_response_from_info(info)
 
-    async def inquiry_room_setting(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        facade = self._require_facade()
-        if request.room_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        info = await facade.get_room(room_id)
+    async def get_room(self, room_id: str) -> RoomCenterRoomSettingResponse:
+        info = await self._require_facade().get_room(room_id)
         if info is None:
             return RoomCenterRoomSettingResponse(
                 room_id=None,
@@ -207,74 +231,25 @@ class ChatService:
             )
         return self._room_setting_response_from_info(info)
 
-    async def inquiry_rooms_by_room_owner_id(
-        self, request: RoomCenterRoomSettingRequest
+    async def list_rooms_for_owner(
+        self, owner_id: str
     ) -> RoomCenterRoomSettingResponse:
-        facade = self._require_facade()
-        if request.room_owner_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_list=None,
-                success=False,
-                error="Room owner id is required",
-                status_code=400,
-            )
+        infos = await self._require_facade().list_rooms_for_owner(owner_id)
+        return self._room_list_response(infos)
 
-        room_owner_id = request.room_owner_id
-        infos = await facade.list_rooms_for_owner(room_owner_id)
-        return RoomCenterRoomSettingResponse(
-            room_list=[self._legacy_room_from_info(info) for info in infos],
-            success=True,
-            error=None,
-            status_code=200,
-        )
-
-    async def inquiry_room_history_by_owner_id(
-        self, request: RoomCenterRoomSettingRequest
-    ) -> RoomCenterRoomSettingResponse:
-        facade = self._require_facade()
-        if request.room_owner_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_list=None,
-                success=False,
-                error="Room owner id is required",
-                status_code=400,
-            )
-
-        infos = await facade.list_room_history_for_owner(
-            request.room_owner_id,
+    async def list_room_history(self, owner_id: str) -> RoomCenterRoomSettingResponse:
+        infos = await self._require_facade().list_room_history_for_owner(
+            owner_id,
             limit=100,
         )
-        return RoomCenterRoomSettingResponse(
-            room_list=[self._legacy_room_from_info(info) for info in infos],
-            success=True,
-            error=None,
-            status_code=200,
-        )
+        return self._room_list_response(infos)
 
-    async def update_room_name(
-        self, request: RoomCenterRoomSettingRequest
+    async def rename_room(
+        self, room_id: str, room_name: str
     ) -> RoomCenterRoomSettingResponse:
         facade = self._require_facade()
-        if request.room_id is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room id is required",
-                status_code=400,
-            )
-
-        room_id = request.room_id
-        if request.room_name is None:
-            return RoomCenterRoomSettingResponse(
-                room_id=None,
-                room=None,
-                success=False,
-                error="Room name is required",
-                status_code=400,
-            )
         try:
-            info = await facade.update_room(room_id, {"room_name": request.room_name})
+            info = await facade.update_room(room_id, {"room_name": room_name})
         except ValueError as exc:
             return self._room_error_response(room_id=room_id, error=str(exc))
         if info is None:
@@ -285,34 +260,34 @@ class ChatService:
             )
         return self._room_setting_response_from_info(info)
 
-    async def update_room_history_fields(
-        self, request: RoomCenterRoomSettingRequest
+    async def update_history_fields(
+        self,
+        room_id: str,
+        *,
+        is_pinned: bool | None,
+        pin_order: float | None,
     ) -> RoomCenterRoomSettingResponse:
         facade = self._require_facade()
-        if request.room_id is None:
-            return self._room_error_response(
-                room_id=None, error="Room id is required", status_code=400
-            )
         updates: dict = {}
-        if request.is_pinned is not None:
-            updates["is_pinned"] = request.is_pinned
-            if not request.is_pinned:
+        if is_pinned is not None:
+            updates["is_pinned"] = is_pinned
+            if not is_pinned:
                 updates["pin_order"] = None
-        if request.pin_order is not None:
-            updates["pin_order"] = request.pin_order
+        if pin_order is not None:
+            updates["pin_order"] = pin_order
         if not updates:
             return self._room_error_response(
-                room_id=request.room_id,
+                room_id=room_id,
                 error="No history fields supplied",
                 status_code=400,
             )
         try:
-            info = await facade.update_room(request.room_id, updates)
+            info = await facade.update_room(room_id, updates)
         except ValueError as exc:
-            return self._room_error_response(room_id=request.room_id, error=str(exc))
+            return self._room_error_response(room_id=room_id, error=str(exc))
         if info is None:
             return self._room_error_response(
-                room_id=request.room_id, error="Room not found", status_code=404
+                room_id=room_id, error="Room not found", status_code=404
             )
         return self._room_setting_response_from_info(info)
 
@@ -329,10 +304,23 @@ class ChatService:
             )
         )
 
-    async def delete_room_by_room_id(
-        self, request: RoomCenterRoomSettingRequest
+    async def delete_room(
+        self, room_id: str, *, requesting_user_id: str
     ) -> RoomCenterRoomSettingResponse:
-        return await self._require_room_deletion().delete_room_by_room_id(request)
+        return await self._require_room_deletion().delete_room_by_room_id(
+            room_id, requesting_user_id=requesting_user_id
+        )
+
+    async def read_messages(
+        self,
+        room_id: str,
+        *,
+        limit: int | None,
+        cursor: str | None,
+    ) -> RoomCenterRoomMessageResponse:
+        return await self._require_message_reader()(
+            RoomCenterRoomMessageRequest(room_id=room_id, limit=limit, cursor=cursor)
+        )
 
 
 # Singleton export

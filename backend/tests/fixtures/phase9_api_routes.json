@@ -658,8 +658,8 @@
       "get_current_user"
     ],
     "dependencies": [
-      "get_current_user",
-      "get_room_center"
+      "get_chat_rooms",
+      "get_current_user"
     ],
     "methods": [
       "POST"
@@ -670,7 +670,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms",
     "response_class": null,
     "response_model": null,
@@ -682,9 +682,9 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_execution_engine",
-      "get_room_center"
+      "get_execution_engine"
     ],
     "methods": [
       "GET"
@@ -694,7 +694,7 @@
     "openapi_response_codes": [
       "200"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms",
     "response_class": null,
     "response_model": "RoomHistoryResponse",
@@ -709,8 +709,8 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -722,7 +722,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms/pinned-order",
     "response_class": null,
     "response_model": null,
@@ -737,8 +737,8 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -750,7 +750,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms/{room_id}",
     "response_class": null,
     "response_model": null,
@@ -765,8 +765,8 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -778,7 +778,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms/{room_id}",
     "response_class": null,
     "response_model": "RoomHistoryItem",
@@ -821,8 +821,8 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -834,7 +834,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms/{room_id}/messages",
     "response_class": null,
     "response_model": null,
@@ -849,9 +849,9 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -863,7 +863,7 @@
       "200",
       "422"
     ],
-    "owning_protocol": "chat.protocols.RoomCenterCompatibility",
+    "owning_protocol": "chat.protocols.ChatRooms",
     "path": "/api/v1/rooms/{room_id}",
     "response_class": null,
     "response_model": null,
@@ -879,9 +879,9 @@
       "get_current_user"
     ],
     "dependencies": [
+      "get_chat_rooms",
       "get_current_user",
       "get_execution_engine",
-      "get_room_center",
       "get_room_store"
     ],
     "methods": [
@@ -901,7 +901,7 @@
     "streaming_response": null,
     "supporting_protocols": [
       "common.protocols.RoomRouteReader",
-      "chat.protocols.RoomCenterCompatibility"
+      "chat.protocols.ChatRooms"
     ]
   },
   {

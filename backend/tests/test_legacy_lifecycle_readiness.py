@@ -543,3 +543,26 @@ async def test_agents_without_a_normalized_url_count():
     )
 
     assert report["agents_missing_normalized_url"].count == 1
+
+
+@pytest.mark.asyncio
+async def test_rooms_with_active_membership_origin_status_count():
+    report = _by_name(
+        await collect_readiness(
+            FakeDatabase(
+                {
+                    "rooms": [
+                        {"room_id": "r1", "membership_origin_status": "active"},
+                        {"room_id": "r2", "membership_origin_status": "manual"},
+                        {
+                            "room_id": "r3",
+                            "membership_origin_status": "seeded_never_edited",
+                        },
+                        {"room_id": "r4"},
+                    ]
+                }
+            )
+        )
+    )
+
+    assert report["rooms_with_active_membership_origin_status"].count == 1
