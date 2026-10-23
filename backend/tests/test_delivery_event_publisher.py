@@ -510,7 +510,9 @@ async def test_run_event_checked_emit_distinguishes_inflight_and_confirmed():
         delivery_id="terminal:evt-1:run-event",
         run_id="run-1",
         seq=2,
-        run_event_type="run_failed",
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="client-1",
     )
 
     assert await publisher.emit_checked(event) == DeliveryEmitStatus.IN_FLIGHT

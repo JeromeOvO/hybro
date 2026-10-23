@@ -214,7 +214,7 @@ async function foldDelta(deps: SSEHandlerDeps, roomMessage: DeltaMessage): Promi
       handleHitlResponse(deps, roomMessage, clientReqId)
       break
     case 'run_event':
-      handleRunEvent(deps, deps.lifecycle, roomMessage)
+      handleRunEvent(deps.lifecycle, roomMessage)
       break
     case 'cancellation':
       handleCancellation(deps, roomMessage)

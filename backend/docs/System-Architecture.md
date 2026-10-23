@@ -1987,8 +1987,10 @@ room-event acknowledgement, and terminal projection cannot overtake open
 children.
 
 Canonical Runs use the closed `run_started`, internal-turn, Assistant-message,
-Tool, retry, input, and `run_settled` `run_event` family; the DTO boundary
-rejects unknown nested fields and contradictory terminal shapes. Recovery
+Tool, retry, input, and `run_settled` `run_event` family. `RunEventNotification`
+accepts only these kinds, each with its typed payload and a `correlation_id`;
+the DTO boundary rejects other kinds, unknown nested fields, and contradictory
+terminal shapes. Recovery
 restores missing `turn_start` and `message_start` parents before terminal
 children.
 
@@ -2000,12 +2002,12 @@ a fresh fold). Builds are serialized per room and replace checkpoints
 monotonically; a DTO or fold violation stops before that event's watermark and is
 surfaced instead of publishing a partial snapshot. Reads page through the
 complete contiguous prefix. The snapshot holds `room_seq`, `messages`, `tasks`,
-`runs`, `hitl` (`requests`, `resolved`), `streaming`, `trace`,
-`turn_lifecycle_schema: 1`, and `turns`. Canonical `turns` carry exact
+`hitl` (`requests`, `resolved`), `streaming`, `turn_lifecycle_schema: 1`, and
+`turns`. Stored `run_event` rows of retired non-canonical kinds are skipped. Canonical `turns` carry exact
 run/client/User root binding, offset-checked Assistant text, opaque Tool
 identity, child closure, and exact provisional-final/`agent_response`
-commitment. Messages, processing logs, and trace stay in their own sections and
-never become canonical Turn activity. Canonical roots emit only the content-free
+commitment. Messages and processing logs stay in their own sections and never
+become canonical Turn activity. Canonical roots emit only the content-free
 `processing_status` (allowlisted status, exact User/client roots,
 `details: null`, no Agent or free-text fields), which the snapshot folds into the
 User message status. Settled terminal frames force a boundary snapshot fan-out.
@@ -2474,7 +2476,9 @@ or `is_public`, `processing` HITL requests, user messages missing
 an idempotency fingerprint, orchestrator HITL interactions missing `published`,
 rooms with `applied_from_group` but no `source_group_id` or with
 `membership_origin_status: active`, tool bindings missing
-`authorization_kind`, and Runs missing `authorization_basis`. The corresponding
+`authorization_kind`, Runs missing `authorization_basis`, and stored
+non-canonical `run_event` rows (`non_canonical_run_events`; those old turns keep
+their messages but have no trace). The corresponding
 invariants: HITL requests have no `processing` status; orchestrator HITL
 interactions carry `published`; Agents carry `is_public`; every candidate scope
 carries an `authorization_basis` and every Agent tool binding its

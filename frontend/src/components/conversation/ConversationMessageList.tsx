@@ -57,7 +57,6 @@ function PendingUserTurn({ messageId, live }: { messageId: string; live: boolean
       {live ? (
         <div className="conversation-body-frame conversation-turn-content flex flex-col">
           <TurnTracePanel
-            nodes={[]}
             statusEntries={entity.processingStatusLogs ?? []}
             isRunning
             startedAt={entity.timestamp}

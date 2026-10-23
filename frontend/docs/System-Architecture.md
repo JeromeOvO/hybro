@@ -263,7 +263,8 @@ The current room UI is centered on `src/components/conversation/`:
 
 - `ConversationMessageList.tsx`: top-level message/timeline list.
 - `TurnRenderer.tsx`, `TurnBody.tsx`: turn-level rendering. `TurnRenderer` selects `CanonicalTurnRenderer` for a turn with an exact canonical root and the message-store renderer otherwise.
-- `CanonicalTurnRenderer.tsx`, `CanonicalTurnTrace.tsx`, `TurnTracePanel.tsx`, `turn-trace-time.ts`: the canonical Turn (User, Trace, Final Answer, Agent Cards) and its Work Logs trace.
+- `CanonicalTurnRenderer.tsx`, `CanonicalTurnTrace.tsx`, `turn-trace-time.ts`: the canonical Turn (User, Trace, Final Answer, Agent Cards).
+- `TurnTracePanel.tsx`: Work Logs (or a Running/Preparing header when there are none) for pending and non-canonical Turns.
 - `ProcessingStatusLog.tsx`: progress entries for turns without a canonical root.
 - `UserMessageBlock.tsx`, `UserAttachmentCard.tsx`, `UserAnswerCard.tsx`: user-side turn content.
 - `AgentCard.tsx`, `AgentContentBlock.tsx`, `AgentResultContent.tsx`, `AgentIndex.tsx`: agent response presentation. In the message-store renderer, multi-agent turns with LLM synthesis (`llm_synthesis`) show the combined answer in the primary surface and compact per-agent index rows below. Supervisor DONE without synthesis (`deterministic_done`) shows the digest intro in the primary surface and full per-agent bodies in the expanded `AgentIndex`. Substantive `summary-*` content classifies as `llm_synthesis`; the short coordinator digest stub (`"N agents responded. Expand below…"`) classifies as `deterministic`.
@@ -393,8 +394,7 @@ Key files:
 
 Other stores: `turn-store.ts` (the server-owned canonical Turn projection),
 `turn-presentation-store.ts` (per-Turn Trace disclosure and scroll-follow
-state), `trace-store/` (diagnostic trace hydrated from snapshots for turns without
-a canonical root), `streaming-store/` (below), and `room-ui-store.ts`.
+state), `streaming-store/` (below), and `room-ui-store.ts`.
 
 ### Snapshot-driven room sync (`src/lib/room-sync/room-reducer.ts`)
 
@@ -427,9 +427,9 @@ a missed `run_settled` at or below the snapshot watermark. Wrong-root,
 nonterminal, invalid, and stale snapshots cannot unlock unrelated work.
 
 The backend always sends both capability fields. A snapshot that advertises
-only one of them is rejected; one with neither is folded only into the message,
-streaming, and trace stores. The snapshot's `messages`, `trace`, and `hitl`
-sections still hydrate those stores for User requests that have no canonical
+only one of them is rejected; one with neither is folded only into the message
+and streaming stores. The snapshot's `messages` and `hitl` sections still
+hydrate those stores for User requests that have no canonical
 root (room history written before canonical Runs); suppression is exact-root
 only. Canonical `awaiting_input` restores every actionable request-scoped HITL
 entity plus the dispatcher-owned `hitlRequestIndex` through the `RoomReducer`
@@ -438,7 +438,7 @@ Agent Card message identity but never their client-side projection identity. A
 HITL request row without `run_id` may recreate only its composer message
 projection when its `client_request_id` and related User message exactly match
 one canonical Turn; it never infers or mutates Turn lifecycle state. Canonical
-renderers never consume message-store prose or diagnostic trace nodes. This is a
+renderers never consume message-store prose. This is a
 per-User-request boundary: exact `run_started`/snapshot root binding selects the
 canonical renderer; otherwise the message-store renderer is used.
 
@@ -487,12 +487,13 @@ Card; only delegated Agent executions appear as Agent Cards.
 
 Turns without a canonical root show progress entries through `ProcessingStatusLog`, including
 logs restored from stream snapshots. The compact log remains readable without
-expanding it. When public tool events also exist, their trace remains available
-alongside the logs; a progress-only turn does not render an empty trace header.
+expanding it. These Turns have no per-turn Tool trace: retired non-canonical
+`run_event` kinds are not folded, so old history renders its messages and logs
+only.
 
 Trace and Agent Cards are separate UI projections of the same canonical
 `TurnProjection.activity` Tool row selected by `(run_id, tool_call_id)`;
-neither MessageStore task entities nor TraceStore nodes own execution state.
+MessageStore task entities never own execution state.
 Repeated calls remain separate and activity summaries count calls, not unique
 Agent names. Both surfaces expose the same `data-call-id` and normalized
 `data-status`, including cancellation.
@@ -650,8 +651,8 @@ src/hooks/room/sse-handlers/
 `user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_update` frames are not part of the handled room SSE contract. Unknown frame types are ignored after a debug log.
 
 `createSSEDispatcher` first offers ordered deltas to the canonical fold. Known
-canonical `run_event` payloads are closed runtime-validated unions; unknown subtypes are tolerated and continue only through the message-store
-handler. Canonical `processing_status` frames are ignored only
+canonical `run_event` payloads are closed runtime-validated unions; unknown subtypes are tolerated
+and only clear the matching pending send acknowledgement. Canonical `processing_status` frames are ignored only
 after their allowlisted status, exact nonempty User/client roots,
 `details: null`, and absence of Agent/free-text fields validate; malformed
 adapters request snapshot recovery.

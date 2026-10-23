@@ -533,3 +533,31 @@ async def test_rooms_with_active_membership_origin_status_count():
     )
 
     assert report["rooms_with_active_membership_origin_status"].count == 1
+
+
+@pytest.mark.asyncio
+async def test_non_canonical_run_events_count():
+    def run_event(kind: str | None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"run_id": "run-1"}
+        if kind is not None:
+            payload["type"] = kind
+        return {"kind": "run_event", "payload_public": payload}
+
+    report = _by_name(
+        await collect_readiness(
+            FakeDatabase(
+                {
+                    "room_events": [
+                        run_event("llm_call_completed"),
+                        run_event("run_completed"),
+                        run_event(None),
+                        run_event("run_started"),
+                        run_event("run_settled"),
+                        {"kind": "processing_status", "payload_public": {}},
+                    ]
+                }
+            )
+        )
+    )
+
+    assert report["non_canonical_run_events"].count == 3

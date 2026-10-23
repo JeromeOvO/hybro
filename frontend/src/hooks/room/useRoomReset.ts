@@ -3,7 +3,6 @@ import type { MutableRefObject } from 'react'
 import type { ProcessingLifecycle } from './processing-lifecycle'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
-import { useTraceStore } from '@/stores/trace-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useTurnStore } from '@/stores/turn-store'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
@@ -31,7 +30,6 @@ export function useRoomReset(
 
     // Initialize normalized store for this room.
     useMessageStore.getState().setRoom(conversationId)
-    useTraceStore.getState().setRoom(conversationId)
 
     // Clear stale buffers from any prior visit to this room. This is distinct
     // from the cleanup below: the cleanup (which runs with the old conversationId in
@@ -45,7 +43,6 @@ export function useRoomReset(
       // this effect registered), so both calls target the correct room.
       useRoomUiStore.getState().resetRoom(conversationId)
       useStreamingStore.getState().clearRoom(conversationId)
-      useTraceStore.getState().clearRoom()
       useTurnStore.getState().clearRoom(conversationId)
       useTurnPresentationStore.getState().clear()
     }

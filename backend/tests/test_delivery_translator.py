@@ -93,8 +93,9 @@ def test_run_event_translation_always_includes_correlation_id():
         event_id="evt-1",
         run_id="run-1",
         seq=2,
-        run_event_type="agent_started",
-        payload={"agent_id": "agent-1"},
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="client-1",
     )
 
     assert to_sse_frame(event, timestamp=NOW) == {
@@ -105,9 +106,9 @@ def test_run_event_translation_always_includes_correlation_id():
             "event_id": "evt-1",
             "run_id": "run-1",
             "seq": 2,
-            "type": "agent_started",
-            "payload": {"agent_id": "agent-1"},
-            "correlation_id": None,
+            "type": "turn_start",
+            "payload": {"internal_turn_id": "turn-1", "attempt": 1},
+            "correlation_id": "client-1",
         },
     }
 

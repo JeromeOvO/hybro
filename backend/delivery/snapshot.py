@@ -39,22 +39,6 @@ _TERMINAL_TASK_STATUSES = frozenset(
 _TERMINAL_PROCESSING_STATUSES = frozenset(
     {"completed", "failed", "canceled", "rejected", "rate_limited", "error"}
 )
-_TRACE_KINDS = frozenset(
-    {
-        "llm_call_completed",
-        "llm_retry_scheduled",
-        "orchestrator_decision",
-        "tool_call_accepted",
-        "tool_call_completed",
-    }
-)
-
-
-def _as_int(value: Any) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 def _first_present(data: dict[str, Any], *keys: str) -> Any:
@@ -91,11 +75,9 @@ class RoomEventFold:
     def __init__(self) -> None:
         self.messages: dict[str, dict[str, Any]] = {}
         self.tasks: dict[str, dict[str, Any]] = {}
-        self.runs: dict[str, dict[str, Any]] = {}
         self.hitl_requests: dict[str, dict[str, Any]] = {}
         self.hitl_resolved: list[dict[str, Any]] = []
         self.streaming: dict[str, dict[str, Any]] = {}
-        self.trace: dict[str, dict[str, Any]] = {}
         self.turns: dict[str, dict[str, Any]] = {}
 
     def apply(self, record: dict[str, Any]) -> bool:
@@ -448,78 +430,43 @@ class RoomEventFold:
         message["task_status"] = "canceled"
 
     def _run_event(self, data: dict[str, Any], record: dict[str, Any]) -> bool:
-        run_id = str(data.get("run_id") or "")
-        sub_type = data.get("type")
-        if sub_type in CANONICAL_RUN_EVENT_KINDS:
-            allowed = {
-                "event_id",
-                "run_id",
-                "seq",
-                "type",
-                "payload",
-                "correlation_id",
-                "room_seq",
-                "room_event_id",
-                "parent_event_id",
-                "delivery_id",
-                "trace_id",
-            }
-            if set(data) - allowed:
-                raise ValueError("canonical run event contains unknown public fields")
-            try:
-                validated = RunEventNotification(
-                    conversation_id=str(record.get("room_id") or "snapshot"),
-                    event_id=data.get("event_id"),
-                    delivery_id=data.get("delivery_id"),
-                    trace_id=data.get("trace_id"),
-                    run_id=data.get("run_id"),
-                    seq=data.get("seq"),
-                    run_event_type=data.get("type"),
-                    payload=data.get("payload"),
-                    correlation_id=data.get("correlation_id"),
-                )
-            except (TypeError, ValueError) as exc:
-                raise ValueError("invalid canonical run event payload") from exc
-            data = {
-                **data,
-                "payload": (
-                    validated.payload
-                    if isinstance(validated.payload, dict)
-                    else validated.payload.model_dump(mode="json")
-                ),
-            }
-            run_id = validated.run_id
-            sub_type = validated.run_event_type
-        if sub_type in {"run_completed", "run_failed", "run_canceled"} and run_id:
-            trace_run = self.trace.get(run_id) or {}
-            self.runs[run_id] = {
-                "run_id": run_id,
-                "status": str(sub_type).removeprefix("run_"),
-                "client_request_id": (
-                    data.get("correlation_id") or trace_run.get("client_request_id")
-                ),
-                "ts": str(record.get("ts") or ""),
-            }
-        if sub_type in _TRACE_KINDS and run_id:
-            self._fold_trace(run_id, sub_type, data, record)
-        if run_id and sub_type in {
-            "run_started",
-            "turn_start",
-            "message_start",
-            "message_update",
-            "message_end",
-            "tool_execution_start",
-            "tool_execution_update",
-            "tool_execution_end",
-            "turn_end",
-            "retry_scheduled",
-            "model_decision",
-            "run_waiting_input",
-            "run_resumed",
-            "run_settled",
-        }:
-            return self._fold_canonical_turn(run_id, str(sub_type), data, record)
-        return True
+        # Only canonical kinds carry a projection; any other stored kind is
+        # retired history without a snapshot section.
+        if data.get("type") not in CANONICAL_RUN_EVENT_KINDS:
+            return True
+        allowed = {
+            "event_id",
+            "run_id",
+            "seq",
+            "type",
+            "payload",
+            "correlation_id",
+            "room_seq",
+            "room_event_id",
+            "parent_event_id",
+            "delivery_id",
+            "trace_id",
+        }
+        if set(data) - allowed:
+            raise ValueError("canonical run event contains unknown public fields")
+        try:
+            validated = RunEventNotification(
+                conversation_id=str(record.get("room_id") or "snapshot"),
+                event_id=data.get("event_id"),
+                delivery_id=data.get("delivery_id"),
+                trace_id=data.get("trace_id"),
+                run_id=data.get("run_id"),
+                seq=data.get("seq"),
+                run_event_type=data.get("type"),
+                payload=data.get("payload"),
+                correlation_id=data.get("correlation_id"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid canonical run event payload") from exc
+        data = {**data, "payload": validated.payload.model_dump(mode="json")}
+        return self._fold_canonical_turn(
+            validated.run_id, validated.run_event_type, data, record
+        )
 
     def _fold_canonical_turn(  # noqa: C901
         self,
@@ -949,108 +896,6 @@ class RoomEventFold:
             turn["terminal_summary"] = payload.get("error_summary")
         return True
 
-    def _fold_trace(
-        self,
-        run_id: str,
-        sub_type: str,
-        data: dict[str, Any],
-        record: dict[str, Any],
-    ) -> None:
-        trace_run = self.trace.setdefault(
-            run_id,
-            {
-                "run_id": run_id,
-                "client_request_id": None,
-                "nodes": [],
-                "usage": None,
-                "duration_ms": 0,
-            },
-        )
-        correlation_id = data.get("correlation_id")
-        if correlation_id:
-            trace_run["client_request_id"] = correlation_id
-        payload = data.get("payload") or {}
-        node_id = f"{run_id}:{sub_type}:{data.get('event_id') or ''}"
-        node_base = {
-            "id": node_id,
-            "client_request_id": correlation_id or trace_run["client_request_id"],
-            "ts": str(record.get("ts") or ""),
-        }
-        if sub_type == "llm_call_completed":
-            node = {
-                **node_base,
-                "kind": "llm_call",
-                "model": payload.get("model"),
-                "provider": payload.get("provider"),
-                "attempt": _as_int(payload.get("attempt")),
-                "outcome": payload.get("outcome"),
-                "duration_ms": _as_int(payload.get("duration_ms")),
-                "usage": payload.get("usage"),
-                "finish_reason": payload.get("finish_reason"),
-            }
-            trace_run["nodes"].append(node)
-            duration = _as_int(payload.get("duration_ms")) or 0
-            trace_run["duration_ms"] = int(trace_run["duration_ms"]) + duration
-            if payload.get("usage"):
-                trace_run["usage"] = payload["usage"]
-        elif sub_type == "llm_retry_scheduled":
-            trace_run["nodes"].append(
-                {
-                    **node_base,
-                    "kind": "retry",
-                    "attempt": _as_int(payload.get("attempt")),
-                    "error_class": payload.get("error_class"),
-                    "retry_delay_ms": _as_int(payload.get("retry_delay_ms")),
-                }
-            )
-        elif sub_type == "orchestrator_decision":
-            trace_run["nodes"].append(
-                {
-                    **node_base,
-                    "kind": "decision",
-                    "chosen_agents": payload.get("chosen_agents"),
-                    "plan_steps": payload.get("plan_steps"),
-                    "reason": payload.get("reason"),
-                }
-            )
-        elif sub_type in {"tool_call_accepted", "tool_call_completed"}:
-            tool_name = payload.get("tool_name") or "unknown"
-            call_id = payload.get("call_id") or tool_name
-            merged_id = f"{run_id}:tool_call:{call_id}"
-            existing = next(
-                (
-                    node
-                    for node in trace_run["nodes"]
-                    if node.get("kind") == "tool_call" and node.get("id") == merged_id
-                ),
-                None,
-            )
-            if existing is None:
-                existing = {
-                    **node_base,
-                    "id": merged_id,
-                    "kind": "tool_call",
-                    "call_id": payload.get("call_id"),
-                    "tool_name": tool_name,
-                    "status": None,
-                    "arg_summary": None,
-                    "result_summary": None,
-                    "exit_code": None,
-                    "duration_ms": None,
-                }
-                trace_run["nodes"].append(existing)
-            if correlation_id:
-                existing["client_request_id"] = correlation_id
-            existing["ts"] = str(record.get("ts") or "")
-            if sub_type == "tool_call_accepted":
-                existing["status"] = "accepted"
-                existing["arg_summary"] = payload.get("arg_summary")
-            else:
-                existing["status"] = "completed"
-                existing["result_summary"] = payload.get("result_summary")
-                existing["exit_code"] = _as_int(payload.get("exit_code"))
-                existing["duration_ms"] = _as_int(payload.get("duration_ms"))
-
     def _hitl_request(self, data: dict[str, Any], record: dict[str, Any]) -> bool:
         if data.get("run_id") is not None:
             try:
@@ -1231,13 +1076,11 @@ class RoomEventFold:
             "room_seq": room_seq,
             "messages": list(self.messages.values()),
             "tasks": list(self.tasks.values()),
-            "runs": list(self.runs.values()),
             "hitl": {
                 "requests": list(self.hitl_requests.values()),
                 "resolved": list(self.hitl_resolved),
             },
             "streaming": self.streaming,
-            "trace": self.trace,
         }
         # Canonical authority is explicit even before the first Run. The
         # frontend never falls back to a second lifecycle/card projection.

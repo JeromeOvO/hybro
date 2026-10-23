@@ -54,11 +54,12 @@ async def test_non_terminal_retry_reuses_same_sequence():
     publisher = make_publisher(transport=transport, room_events=store)
     event = RunEventNotification(
         conversation_id="room-1",
-        event_id="public:run-1:llm_call_completed:3",
+        event_id="public:run-1:turn_start:3",
         run_id="run-1",
         seq=3,
-        run_event_type="llm_call_completed",
-        payload={"model": "gpt-4o"},
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="client-1",
     )
 
     first_status, first_id = await publisher.emit_checked_identified(event)
@@ -179,11 +180,12 @@ async def test_parent_event_id_flows_through_persist_and_frame():
     decision_status, decision_id = await publisher.emit_checked_identified(
         RunEventNotification(
             conversation_id="room-1",
-            event_id="public:run-1:orchestrator_decision:2",
+            event_id="public:run-1:turn_start:2",
             run_id="run-1",
             seq=2,
-            run_event_type="orchestrator_decision",
-            payload={"chosen_agents": ["Weather Agent"]},
+            run_event_type="turn_start",
+            payload={"internal_turn_id": "turn-1", "attempt": 1},
+            correlation_id="client-1",
         )
     )
     assert decision_status == DeliveryEmitStatus.DELIVERED
@@ -191,11 +193,12 @@ async def test_parent_event_id_flows_through_persist_and_frame():
     child_status, _ = await publisher.emit_checked_identified(
         RunEventNotification(
             conversation_id="room-1",
-            event_id="public:run-1:tool_call_accepted:4",
+            event_id="public:run-1:message_start:4",
             run_id="run-1",
             seq=4,
-            run_event_type="tool_call_accepted",
-            payload={"tool_name": "weather_lookup"},
+            run_event_type="message_start",
+            payload={"internal_turn_id": "turn-1", "message_id": "assistant-1"},
+            correlation_id="client-1",
         ),
         parent_event_id=decision_id,
     )

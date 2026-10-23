@@ -54,11 +54,7 @@ def to_sse_frame(
             "run_id": event.run_id,
             "seq": event.seq,
             "type": event.run_event_type,
-            "payload": (
-                event.payload
-                if isinstance(event.payload, dict)
-                else event.payload.model_dump(mode="json")
-            ),
+            "payload": event.payload.model_dump(mode="json"),
             "correlation_id": event.correlation_id,
         }
         _add_optional(data, "delivery_id", event.delivery_id)

@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '../../../utils/test-utils'
+import { cleanup, render, screen } from '../../../utils/test-utils'
 import { TurnRenderer } from '@/components/conversation/TurnRenderer'
 import { useMessageStore } from '@/stores/message-store'
-import { useTraceStore } from '@/stores/trace-store'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
 
 beforeEach(() => {
   useMessageStore.getState().clearRoom()
   useMessageStore.getState().setRoom('room-1')
-  useTraceStore.getState().setRoom('room-1')
 })
 
 afterEach(() => {
@@ -45,7 +43,7 @@ function makeTurn(overrides: Partial<TurnViewModel> = {}): TurnViewModel {
 
 describe('TurnRenderer', () => {
 
-  it('keeps accepted Tool activity live while the parent Turn awaits input', () => {
+  it('renders a legacy Turn awaiting input with its work logs and no trace header', () => {
     useMessageStore.getState().upsertMessage({
       id: 'user-1',
       conversationId: 'room-1',
@@ -55,13 +53,6 @@ describe('TurnRenderer', () => {
       timestamp: '2026-06-04T01:00:00.000Z',
       clientRequestId: 'request-1',
     }, 'db')
-    useTraceStore.getState().applyRunEvent({
-      eventId: 'event-1',
-      runId: 'run-1',
-      type: 'tool_call_accepted',
-      correlationId: 'request-1',
-      payload: { call_id: 'call-1', tool_name: 'Weather Agent' },
-    })
 
     const { container } = render(<TurnRenderer turn={makeTurn({
       status: 'awaiting_input',
@@ -69,10 +60,10 @@ describe('TurnRenderer', () => {
       finalAnswer: { kind: 'hitl', label: 'Needs input' },
     })} />)
 
-    expect(screen.getByRole('button', { name: /waiting for input,/i })).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('Called Weather Agent')).toBeInTheDocument()
-    expect(screen.getByText('Running')).toBeInTheDocument()
-    expect(screen.queryByText('Outcome unavailable')).not.toBeInTheDocument()
+    expect(screen.getByText('weather?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /work logs/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /waiting for input,/i })).not.toBeInTheDocument()
+    expect(container.querySelector('.conversation-trace')).not.toBeInTheDocument()
     expect(container.querySelector('.conversation-trace-separator')).not.toBeInTheDocument()
   })
 
@@ -143,59 +134,26 @@ describe('TurnRenderer', () => {
     expect(screen.getAllByRole('status', { name: 'Weather Agent — Completed' })).toHaveLength(2)
   })
 
-  it('uses terminal Turn authority for accepted-only history when run status is absent', () => {
+  it('renders a settled legacy Turn with its agent results and no trace panel', () => {
     useMessageStore.getState().upsertMessage({
       id: 'user-1', conversationId: 'room-1', messageType: 'user', content: 'weather?',
       senderName: 'Test', timestamp: '2026-06-04T01:00:00.000Z', clientRequestId: 'cr-1',
     }, 'db')
-    useTraceStore.getState().applyRunEvent({
-      eventId: 'event-1', runId: 'run-without-status', type: 'tool_call_accepted',
-      correlationId: 'cr-1', payload: { call_id: 'call-1', tool_name: 'Weather Agent' },
-    })
 
-    const { container } = render(<TurnRenderer turn={makeTurn({
+    const { container } = render(<TurnRenderer isLastTurn turn={makeTurn({
       status: 'completed', phase: 'completed', processingStatusLogs: [],
       finalAnswer: { kind: 'deterministic_done', label: 'Combined agent responses' },
+      agentResults: [{
+        agentId: 'weather-agent', agentName: 'Weather Agent', messageId: 'call-1',
+        status: 'completed', content: 'Sunny', artifacts: [],
+        isSummaryAgent: false, isEphemeral: false,
+      }],
     })} />)
 
-    expect(container.querySelector('.conversation-trace-separator')).toHaveAttribute('data-slot', 'separator')
-    fireEvent.click(screen.getByRole('button', { name: /finished,/i }))
-    expect(screen.getByText('Outcome unavailable')).toBeInTheDocument()
-    expect(screen.queryByText('Waiting for tool output…')).not.toBeInTheDocument()
-  })
-
-  it('shows Tool activity without Model response or Progress metadata', () => {
-    useMessageStore.getState().upsertMessage({
-      id: 'user-1',
-      conversationId: 'room-1',
-      messageType: 'user',
-      content: 'how are you?',
-      senderName: 'Test',
-      timestamp: '2026-06-04T01:00:00.000Z',
-      clientRequestId: 'cr-1',
-    }, 'db')
-    useTraceStore.getState().applyRunEvent({
-      eventId: 'event-1',
-      runId: 'run-1',
-      type: 'llm_call_completed',
-      correlationId: 'cr-1',
-      payload: { model: 'gpt-5-mini', duration_ms: 120 },
-    })
-    useTraceStore.getState().applyRunEvent({
-      eventId: 'event-2',
-      runId: 'run-1',
-      type: 'tool_call_accepted',
-      correlationId: 'cr-1',
-      payload: { call_id: 'call-1', tool_name: 'Weather Agent' },
-    })
-
-    render(<TurnRenderer turn={makeTurn()} />)
-
-    expect(screen.getByRole('button', { name: /running,/i })).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('Called Weather Agent')).toBeInTheDocument()
-    expect(screen.queryByText('HYBRO AI')).not.toBeInTheDocument()
-    expect(screen.queryByText('Model response')).not.toBeInTheDocument()
-    expect(screen.queryByText('gpt-5-mini')).not.toBeInTheDocument()
-    expect(screen.queryByText('Progress')).not.toBeInTheDocument()
+    expect(screen.getByText('weather?')).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Weather Agent — Completed' })).toBeInTheDocument()
+    expect(container.querySelector('.conversation-trace')).not.toBeInTheDocument()
+    expect(container.querySelector('.conversation-trace-separator')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /finished,/i })).not.toBeInTheDocument()
   })
 })

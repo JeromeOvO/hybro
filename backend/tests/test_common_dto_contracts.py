@@ -97,7 +97,9 @@ def test_common_dtos_can_be_instantiated():
         event_id="e1",
         run_id="run1",
         seq=1,
-        run_event_type="agent_started",
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
+        correlation_id="cr1",
     )
     AgentMessagePartial(
         conversation_id="r1",

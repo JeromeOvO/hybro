@@ -1,96 +1,46 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '../../../utils/test-utils'
 import { TurnTracePanel } from '@/components/conversation/TurnTracePanel'
-import type { TraceNode } from '@/stores/trace-store'
 
 afterEach(cleanup)
 
 describe('TurnTracePanel', () => {
-it('renders accepted-only tool history as neutral when its Turn is terminal', () => {
-  const node: TraceNode = {
-    id: 'run-1:tool:call-1',
-    kind: 'tool_call',
-    runId: 'run-1',
-    clientRequestId: 'request-1',
-    receivedAt: 1,
-    status: 'accepted',
-    callId: 'call-1',
-    toolName: 'Weather Agent',
-  }
+it('shows a preparing marker while a Turn runs without progress logs', () => {
+  render(<TurnTracePanel statusEntries={[]} isRunning />)
+
+  expect(screen.getByRole('button', { name: /running,/i })).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByText('Preparing a response')).toBeVisible()
+  expect(screen.getByRole('log')).toBeInTheDocument()
+})
+
+it('renders a finished header without activity once the Turn settles', () => {
   render(
-    <TurnTracePanel
-      nodes={[node]}
-      statusEntries={[]}
-      isRunning={false}
-      turnTerminal
-    />,
+    <TurnTracePanel statusEntries={[]} startedAt="1970-01-01T00:00:00.000Z" />,
   )
 
-  fireEvent.click(screen.getByRole('button', { name: /finished, 0\.0s/i }))
-  expect(screen.getByText('Called Weather Agent')).toBeInTheDocument()
-  expect(screen.getByText('Outcome unavailable')).toBeInTheDocument()
-  expect(screen.queryByText('Running')).not.toBeInTheDocument()
-  expect(screen.queryByText('Input')).not.toBeInTheDocument()
-  expect(screen.queryByText('Output')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Finished, 0.0s' }))
+  expect(screen.queryByText('Preparing a response')).not.toBeInTheDocument()
   expect(screen.queryByRole('log')).not.toBeInTheDocument()
 })
 
-it('uses every durable node timestamp for terminal Turn duration without rendering hidden LLM metadata', () => {
-  const startedAt = '1970-01-01T00:00:00.000Z'
-  const nodes: TraceNode[] = [
-    {
-      id: 'run-1:tool:call-1', kind: 'tool_call', runId: 'run-1',
-      clientRequestId: 'request-1', receivedAt: 1000, status: 'completed',
-      callId: 'call-1', toolName: 'Weather Agent', exitCode: 0,
-    },
-    {
-      id: 'run-1:llm:2', kind: 'llm_call', runId: 'run-1',
-      clientRequestId: 'request-1', receivedAt: 5000, model: 'private-model',
-    },
-  ]
-
-  const { container } = render(
-    <TurnTracePanel
-      nodes={nodes}
-      statusEntries={[]}
-      startedAt={startedAt}
-      turnTerminal
-    />,
-  )
-
-  expect(screen.getByRole('button', { name: 'Finished, 5.0s' })).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Finished, 5.0s' }))
-  expect(screen.queryByText('private-model')).not.toBeInTheDocument()
-  const tool = container.querySelector('[data-kind="tool_call"]')
-  expect(tool).toHaveClass('conversation-trace-action-success')
-  expect(tool?.querySelector('[data-slot="marker-icon"] svg')).toHaveClass('lucide-bot')
-})
-it('keeps progress logs available as tool activity arrives and the turn settles', () => {
+it('keeps progress logs available as the turn settles', () => {
   const statusEntries = [{
     id: 'log-1',
     message: 'Collecting source material',
     timestamp: '2030-01-01T00:00:00.000Z',
   }]
   const { rerender } = render(
-    <TurnTracePanel nodes={[]} statusEntries={statusEntries} isRunning />,
+    <TurnTracePanel statusEntries={statusEntries} isRunning />,
   )
   const workLogs = screen.getByRole('button', { name: /work logs/i })
   expect(screen.getByText('Collecting source material')).toBeVisible()
+  expect(screen.queryByText('Preparing a response')).not.toBeInTheDocument()
   fireEvent.click(workLogs)
   expect(workLogs).toHaveAttribute('aria-expanded', 'true')
 
-  const node: TraceNode = {
-    id: 'run-1:tool:call-1', kind: 'tool_call', runId: 'run-1',
-    clientRequestId: 'request-1', receivedAt: 1, status: 'completed',
-    callId: 'call-1', toolName: 'Research Agent', exitCode: 0,
-  }
-  rerender(<TurnTracePanel nodes={[node]} statusEntries={statusEntries} turnTerminal />)
+  rerender(<TurnTracePanel statusEntries={statusEntries} />)
   expect(screen.getByText('Collecting source material')).toBeVisible()
   expect(screen.getByRole('button', { name: /work logs/i })).toHaveAttribute('aria-expanded', 'true')
-  fireEvent.click(screen.getByRole('button', { name: /finished,/i }))
-  expect(screen.getByText('Collecting source material')).toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: /finished,/i }))
-  expect(screen.getByText('Called Research Agent')).toBeVisible()
-  expect(screen.getByText('Collecting source material')).toBeVisible()
+  expect(screen.queryByRole('button', { name: /finished,/i })).not.toBeInTheDocument()
 })
 })

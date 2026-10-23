@@ -10,7 +10,6 @@ import {
 } from '../room-reducer'
 import { useMessageStore } from '@/stores/message-store'
 import { useStreamingStore } from '@/stores/streaming-store'
-import { useTraceStore } from '@/stores/trace-store'
 import { selectCanonicalComposerAuthority, useTurnStore } from '@/stores/turn-store'
 import { useTurnPresentationStore } from '@/stores/turn-presentation-store'
 import {
@@ -41,10 +40,8 @@ function emptySnapshot(roomSeq: number) {
     room_seq: roomSeq,
     messages: [],
     tasks: [],
-    runs: [],
     hitl: { requests: [], resolved: [] },
     streaming: {},
-    trace: {},
     turn_lifecycle_schema: 1,
     turns: [],
   }
@@ -105,7 +102,6 @@ describe('RoomReducer', () => {
     useRoomUiStore.getState().resetAll()
     useMessageStore.getState().clearRoom()
     useStreamingStore.getState().clearRoom('room-1')
-    useTraceStore.getState().clearRoom()
     useTurnStore.getState().clear()
     useTurnPresentationStore.getState().clear()
   })
@@ -333,7 +329,6 @@ describe('applySnapshotToStores', () => {
   beforeEach(() => {
     useMessageStore.getState().clearRoom()
     useStreamingStore.getState().clearRoom('room-1')
-    useTraceStore.getState().clearRoom()
     useTurnStore.getState().clear()
     useTurnPresentationStore.getState().clear()
   })
@@ -350,18 +345,11 @@ describe('applySnapshotToStores', () => {
         created_at: null, ts: '2030-01-01T00:00:01.000Z', artifacts: null,
         status_logs: [],
       }],
-      tasks: [], runs: [], hitl: { requests: [], resolved: [] }, streaming: {},
-      trace: {
-        'legacy-run': {
-          run_id: 'legacy-run', client_request_id: 'client-1', nodes: [],
-          usage: null, duration_ms: 0,
-        },
-      },
+      tasks: [], hitl: { requests: [], resolved: [] }, streaming: {},
     }
 
     expect(applySnapshotToStores('room-1', snapshot, new Map())).toBe(true)
     expect(useMessageStore.getState().entities['legacy-agent-1']?.content).toBe('Sunny')
-    expect(useTraceStore.getState().runOrder['legacy-run']).toEqual([])
     expect(useTurnStore.getState().rooms['room-1']).toBeUndefined()
   })
 
@@ -389,10 +377,8 @@ describe('applySnapshotToStores', () => {
         status_logs: [],
       }],
       tasks: [],
-      runs: [],
       hitl: { requests: [], resolved: [] },
       streaming: {},
-      trace: {},
       turn_lifecycle_schema: 1 as const,
       turns: [{
         hybro_turn_id: 'run-1',
@@ -763,7 +749,6 @@ describe('applySnapshotToStores', () => {
         },
       ],
       tasks: [],
-      runs: [],
       hitl: { requests: [], resolved: [] },
       streaming: {
         m2: {
@@ -776,7 +761,6 @@ describe('applySnapshotToStores', () => {
           last_chunk: false,
         },
       },
-      trace: {},
     })
 
     const messages = useMessageStore.getState().entities
@@ -826,10 +810,8 @@ describe('applySnapshotToStores', () => {
         },
       ],
       tasks: [],
-      runs: [],
       hitl: { requests: [], resolved: [] },
       streaming: {},
-      trace: {},
     })
 
     expect(useMessageStore.getState().entities['user-1']).toMatchObject({
@@ -860,44 +842,5 @@ describe('applySnapshotToStores', () => {
         expect.objectContaining({ message: 'Planning the next actions' }),
       ],
     })
-  })
-
-  it('does not hydrate the deprecated trace store from canonical snapshots', () => {
-    applySnapshotToStores('room-1', {
-      room_seq: 2,
-      turn_lifecycle_schema: 1,
-      turns: [],
-      messages: [],
-      tasks: [],
-      runs: [{ run_id: 'run-1', status: 'completed', client_request_id: null, ts: '' }],
-      hitl: { requests: [], resolved: [] },
-      streaming: {},
-      trace: {
-        'run-1': {
-          run_id: 'run-1',
-          client_request_id: 'cr-1',
-          nodes: [
-            {
-              id: 'run-1:llm_call:e1',
-              kind: 'llm_call',
-              model: 'gpt-4o',
-              provider: 'openai',
-              attempt: 1,
-              outcome: 'completed',
-              duration_ms: 800,
-              usage: { input: 10, output: 2 },
-              finish_reason: 'stop',
-            },
-          ],
-          usage: { input: 10, output: 2 },
-          duration_ms: 800,
-        },
-      },
-    })
-
-    const trace = useTraceStore.getState()
-    expect(trace.runStatuses).toEqual({})
-    expect(trace.nodes).toEqual({})
-    expect(trace.runOrder).toEqual({})
   })
 })

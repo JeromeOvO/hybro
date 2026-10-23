@@ -82,7 +82,13 @@ def test_pinned_delta_frame_type_strings(event_type):
             conversation_id="r", message_id="m", status="processing"
         ),
         "run_event": RunEventNotification(
-            conversation_id="r", event_id="e", run_id="run", seq=1, run_event_type="x"
+            conversation_id="r",
+            event_id="e",
+            run_id="run",
+            seq=1,
+            run_event_type="turn_start",
+            payload={"internal_turn_id": "turn-1", "attempt": 1},
+            correlation_id="c",
         ),
         "agent_response_partial": AgentMessagePartial(
             conversation_id="r", message_id="m", agent_id="a", content_delta="d"

@@ -296,20 +296,15 @@ def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
         event_id="evt-1",
         run_id="run-1",
         seq=1,
-        run_event_type="agent_started",
+        run_event_type="turn_start",
+        payload={"internal_turn_id": "turn-1", "attempt": 1},
         correlation_id="cr-1",
-    )
-    omitted = RunEventNotification(
-        conversation_id="room-1",
-        event_id="evt-2",
-        run_id="run-1",
-        seq=2,
-        run_event_type="agent_finished",
+        trace_id="trace-3",
     )
 
     assert base.trace_id == "trace-2"
     assert run_event.correlation_id == "cr-1"
-    assert omitted.correlation_id is None
+    assert run_event.trace_id == "trace-3"
 
 
 def test_room_info_defaults_to_manual_membership_status():
@@ -565,6 +560,7 @@ def test_delivery_event_schemas_match_design_doc():
             "run_id",
             "seq",
             "run_event_type",
+            "payload",
         },
         AgentMessagePartial: {
             "conversation_id",

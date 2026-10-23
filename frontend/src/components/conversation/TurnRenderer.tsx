@@ -1,9 +1,7 @@
 'use client'
 
 import { memo, type Ref } from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import { useMessageStore } from '@/stores/message-store'
-import { useTraceStore } from '@/stores/trace-store'
 import { Separator } from '@/components/ui/separator'
 import type { TurnProjection } from '@/lib/turn-lifecycle/types'
 import type { TurnViewModel } from '@/lib/room-timeline/types'
@@ -31,14 +29,7 @@ function LegacyTurnRenderer({
   const userEntity = useMessageStore((state) => (
     turn.userMessageId ? state.entities[turn.userMessageId] : undefined
   ))
-  const clientRequestId = userEntity?.clientRequestId
-  const traceNodes = useTraceStore(useShallow((state) => {
-    if (!clientRequestId) return []
-    return Object.values(state.nodes)
-      .filter((node) => node.clientRequestId === clientRequestId)
-      .sort((a, b) => a.receivedAt - b.receivedAt)
-  }))
-  const hasActivity = turn.processingStatusLogs.length > 0 || traceNodes.length > 0
+  const hasActivity = turn.processingStatusLogs.length > 0
   const hasAssistantSurface = turn.agentResults.length > 0 || hasActivity
   const isActivityRunning = turn.status === 'active'
     && turn.phase !== 'completed'
@@ -62,17 +53,10 @@ function LegacyTurnRenderer({
         <div className="conversation-body-frame conversation-turn-content flex flex-col">
           {hasActivity ? (
             <TurnTracePanel
-              nodes={traceNodes}
               statusEntries={turn.processingStatusLogs}
               isRunning={isActivityRunning}
               isWaiting={turn.status === 'awaiting_input' && turn.finalAnswer.kind === 'hitl'}
               startedAt={turn.timestamp}
-              turnTerminal={
-                turn.status === 'completed'
-                || turn.status === 'failed'
-                || turn.status === 'partial'
-                || (turn.status === 'active' && turn.phase === 'completed')
-              }
             />
           ) : null}
           {hasActivity && hasFollowingContent ? (

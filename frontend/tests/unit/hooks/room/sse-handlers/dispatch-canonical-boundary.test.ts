@@ -36,7 +36,7 @@ describe('canonical dispatcher exact-root boundary', () => {
     await dispatch({
       type: 'snapshot', conversation_id: 'room-1', timestamp,
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)

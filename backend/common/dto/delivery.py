@@ -52,11 +52,10 @@ class ProcessingStatusEvent(DeliveryEventBase):
 
 
 class RunEventNotification(DeliveryEventBase):
-    """Run event with strict canonical payload validation.
+    """Canonical run event with strict payload validation.
 
-    Non-canonical run event kinds carry dictionary payloads. Canonical kinds
-    can only cross this boundary as the matching closed DTO and require
-    complete Turn-root correlation.
+    Only canonical run event kinds cross this boundary, each as its matching
+    closed DTO, and every event requires complete Turn-root correlation.
     """
 
     event_type: Literal["run_event"] = "run_event"
@@ -65,7 +64,7 @@ class RunEventNotification(DeliveryEventBase):
     run_id: str = Field(min_length=1)
     seq: int = Field(ge=0)
     run_event_type: str = Field(min_length=1)
-    payload: CanonicalRunEventPayload | dict[str, Any] = Field(default_factory=dict)
+    payload: CanonicalRunEventPayload
     correlation_id: str | None = None
 
     @model_validator(mode="before")
@@ -74,22 +73,18 @@ class RunEventNotification(DeliveryEventBase):
         if not isinstance(value, dict):
             return value
         kind = value.get("run_event_type")
-        if kind in CANONICAL_RUN_EVENT_KINDS:
-            copied = dict(value)
-            copied["payload"] = validate_canonical_payload(
-                str(kind), copied.get("payload") or {}
-            )
-            return copied
-        return value
+        if kind not in CANONICAL_RUN_EVENT_KINDS:
+            raise ValueError(f"unknown canonical run event type: {kind}")
+        copied = dict(value)
+        copied["payload"] = validate_canonical_payload(
+            str(kind), copied.get("payload") or {}
+        )
+        return copied
 
     @model_validator(mode="after")
     def _validate_canonical_root(self) -> RunEventNotification:
-        if self.run_event_type not in CANONICAL_RUN_EVENT_KINDS:
-            return self
         if not self.correlation_id:
             raise ValueError("canonical run events require correlation_id")
-        if isinstance(self.payload, dict):
-            raise ValueError("canonical run events require a typed payload")
         if isinstance(self.payload, RunStartedPayload):
             if self.payload.hybro_turn_id != self.run_id:
                 raise ValueError("hybro_turn_id must equal run_id")

@@ -20,7 +20,6 @@ const OWNED_DIRS = [
   'src/lib/room-sync',
   'src/lib/api',
   'src/lib/types',
-  'src/stores/trace-store',
   'src/stores/message-store',
   'src/stores/streaming-store',
 ]

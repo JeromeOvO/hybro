@@ -109,7 +109,7 @@ describe('ComposerShell', () => {
     await dispatcher({
       type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 2, messages: [], tasks: [], streaming: {},
         turn_lifecycle_schema: 1,
         turns: [{
           hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
@@ -197,7 +197,7 @@ describe('ComposerShell', () => {
     await dispatcher({
       type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
@@ -222,7 +222,7 @@ describe('ComposerShell', () => {
     await dispatcher({
       type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 2, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
         turns: [{
           hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'user-1',
@@ -267,7 +267,7 @@ describe('ComposerShell', () => {
     await dispatcher({
       type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
@@ -323,7 +323,7 @@ describe('ComposerShell', () => {
     await dispatcher({
       type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 0, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 0, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1, turns: [],
       },
     } as AnySSEFrame)
@@ -373,7 +373,7 @@ describe('ComposerShell', () => {
     await dispatcher({
       type: 'snapshot', timestamp: ts, conversation_id: 'test-room',
       data: {
-        room_seq: 2, messages: [], tasks: [], runs: [], streaming: {}, trace: {},
+        room_seq: 2, messages: [], tasks: [], streaming: {},
         hitl: { requests: [], resolved: [] }, turn_lifecycle_schema: 1,
         turns: [{
           hybro_turn_id: 'run-1', run_id: 'run-1', user_message_id: 'canonical-user',

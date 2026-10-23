@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from common.a2a_constants import NON_TERMINAL_STATES
+from common.dto.turn_lifecycle import CANONICAL_RUN_EVENT_KINDS
 from models.hitl import HITLInteractionStatus
 
 _CLOSED_INTERACTION_STATUSES = [
@@ -221,6 +222,17 @@ CHECKS = (
         gates="strict readers (AgentToolBindingRecord.authorization_kind)",
         collections=("orchestrator_agent_tool_bindings",),
         query={"authorization_kind": None},
+    ),
+    # Retired run_event kinds (llm_call_completed, tool_call_*, run_completed,
+    # ...). The snapshot ignores them, so these turns render without a trace.
+    _Check(
+        name="non_canonical_run_events",
+        gates="retired non-canonical run-event trace and runs snapshot folds",
+        collections=("room_events",),
+        query={
+            "kind": "run_event",
+            "payload_public.type": {"$nin": sorted(CANONICAL_RUN_EVENT_KINDS)},
+        },
     ),
     _Check(
         name="orchestrator_runs_missing_authorization_basis",

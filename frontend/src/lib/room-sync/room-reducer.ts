@@ -30,7 +30,6 @@ import { useMessageStore } from '@/stores/message-store'
 import { useTurnStore } from '@/stores/turn-store'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import { useStreamingStore } from '@/stores/streaming-store'
-import { useTraceStore } from '@/stores/trace-store'
 import type { ArtifactData, MessageEntity } from '@/stores/message-store/types'
 import type { ProcessingLifecycle } from '@/hooks/room/processing-lifecycle'
 import { specificPublicAgentName } from '@/lib/agent-display-name'
@@ -834,10 +833,6 @@ function applySnapshotHitl(
   }
 }
 
-function applyLegacySnapshotTrace(conversationId: string, snapshot: SnapshotData): void {
-  useTraceStore.getState().hydrateFromSnapshot(conversationId, snapshot)
-}
-
 /** Snapshot replace: fold every snapshot section into the stores. */
 export function applySnapshotToStores(
   conversationId: string,
@@ -850,7 +845,6 @@ export function applySnapshotToStores(
   if (!hasCanonicalSnapshotCapability(snapshot)) {
     applySnapshotMessages(conversationId, snapshot, new Set())
     applySnapshotStreaming(conversationId, snapshot)
-    applyLegacySnapshotTrace(conversationId, snapshot)
     if (hitlRequestIndex) applySnapshotHitl(conversationId, snapshot, hitlRequestIndex)
     return true
   }

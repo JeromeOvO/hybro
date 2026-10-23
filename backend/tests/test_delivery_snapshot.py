@@ -196,137 +196,30 @@ def test_fold_stringifies_non_json_processing_details():
     ]
 
 
-def test_fold_projects_runs_and_trace_nodes():
+def test_fold_ignores_stored_non_canonical_run_events():
     fold = RoomEventFold()
-    fold.apply(
-        _record(
-            "run_event",
-            {
-                "run_id": "run-1",
-                "event_id": "public:run-1:llm_call_completed:3",
-                "seq": 3,
-                "type": "llm_call_completed",
-                "payload": {
-                    "model": "gpt-4o",
-                    "provider": "openai",
-                    "attempt": 1,
-                    "outcome": "completed",
-                    "duration_ms": 812,
-                    "usage": {"input": 100, "output": 20},
-                    "finish_reason": "stop",
-                },
-                "correlation_id": "cr-1",
-            },
-        )
-    )
-    fold.apply(
-        _record(
-            "run_event",
-            {
-                "run_id": "run-1",
-                "event_id": "public:run-1:tool_call_accepted:5",
-                "seq": 5,
-                "type": "tool_call_accepted",
-                "payload": {
-                    "call_id": "call-1",
-                    "tool_name": "weather_lookup",
-                    "arg_summary": {"city": "SH"},
-                },
-            },
-        )
-    )
-    fold.apply(
-        _record(
-            "run_event",
-            {
-                "run_id": "run-1",
-                "event_id": "public:run-1:tool_call_completed:8",
-                "seq": 8,
-                "type": "tool_call_completed",
-                "payload": {
-                    "call_id": "call-1",
-                    "tool_name": "weather_lookup",
-                    "result_summary": "Sunny",
-                    "exit_code": 0,
-                    "duration_ms": 120,
-                },
-            },
-        )
-    )
-    fold.apply(
-        _record(
-            "run_event",
-            {
-                "run_id": "run-1",
-                "event_id": "terminal-1",
-                "seq": 10,
-                "type": "run_completed",
-                "payload": {},
-                "correlation_id": "cr-1",
-            },
-        )
-    )
-
-    state = fold.state(room_seq=4)
-    assert state["runs"] == [
-        {
-            "run_id": "run-1",
-            "status": "completed",
-            "client_request_id": "cr-1",
-            "ts": NOW.isoformat(),
-        }
-    ]
-    trace_run = state["trace"]["run-1"]
-    assert trace_run["client_request_id"] == "cr-1"
-    nodes = trace_run["nodes"]
-    assert [node["kind"] for node in nodes] == ["llm_call", "tool_call"]
-    assert nodes[0]["client_request_id"] == "cr-1"
-    assert nodes[0]["ts"] == NOW.isoformat()
-    assert nodes[1]["status"] == "completed"
-    assert nodes[1]["call_id"] == "call-1"
-    assert nodes[1]["client_request_id"] == "cr-1"
-    assert nodes[1]["result_summary"] == "Sunny"
-    assert state["trace"]["run-1"]["duration_ms"] == 812
-
-
-def test_fold_keeps_repeated_calls_to_same_tool_separate():
-    fold = RoomEventFold()
-    for seq, call_id in enumerate(("call-1", "call-2"), start=1):
-        fold.apply(
+    for room_seq, kind in enumerate(
+        ("llm_call_completed", "tool_call_accepted", "run_completed"), start=1
+    ):
+        assert fold.apply(
             _record(
                 "run_event",
                 {
                     "run_id": "run-1",
-                    "event_id": f"accepted-{call_id}",
-                    "type": "tool_call_accepted",
-                    "payload": {
-                        "call_id": call_id,
-                        "tool_name": "weather_lookup",
-                    },
+                    "event_id": f"public:run-1:{kind}:{room_seq}",
+                    "seq": room_seq,
+                    "type": kind,
+                    "payload": {"tool_name": "weather_lookup"},
+                    "correlation_id": "cr-1",
                 },
-                room_seq=seq * 2 - 1,
-            )
-        )
-        fold.apply(
-            _record(
-                "run_event",
-                {
-                    "run_id": "run-1",
-                    "event_id": f"completed-{call_id}",
-                    "type": "tool_call_completed",
-                    "payload": {
-                        "call_id": call_id,
-                        "tool_name": "weather_lookup",
-                        "result_summary": call_id,
-                    },
-                },
-                room_seq=seq * 2,
+                room_seq=room_seq,
             )
         )
 
-    nodes = fold.state(room_seq=4)["trace"]["run-1"]["nodes"]
-    assert len(nodes) == 2
-    assert [node["call_id"] for node in nodes] == ["call-1", "call-2"]
+    state = fold.state(room_seq=3)
+    assert "runs" not in state
+    assert "trace" not in state
+    assert state["turns"] == []
 
 
 def test_fold_projects_hitl_requests_and_responses():

@@ -112,10 +112,8 @@ describe('final room SSE types', () => {
         room_seq: 7,
         messages: [],
         tasks: [],
-        runs: [],
         hitl: { requests: [], resolved: [] },
         streaming: {},
-        trace: {},
       },
     } satisfies RoomSSEFrameMap['snapshot']
     expect(snapshot.data.room_seq).toBe(7)
