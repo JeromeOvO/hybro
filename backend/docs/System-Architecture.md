@@ -1320,9 +1320,12 @@ metadata, and the orchestrator's final message), implemented by
 `ConversationMessageStore`; and
 `ClientRequestIdResolver`, implemented by `ClientRequestIdStore` and consumed by
 the SSE `client_request_id` resolver.
-`conversation.runtime.ConversationRuntime` holds the message engine methods:
-mention parsing, user-message persistence and preflight, agent-message creation,
-message and timeline reads, and orchestration-status projection.
+`conversation.runtime.ConversationRuntime` implements Execution's `RoomCenterPort`
+and the chat message reads: user-message persistence and idempotent replay,
+preflight, candidate and explicit target-scope resolution, and room timeline
+reads. `conversation.mentions` parses `<@agent_id|name>` mentions of room members
+and builds canonical mentions, rejecting invalid or unauthorized targets with a
+`unauthorized_mention` scope error.
 
 ### `session`
 

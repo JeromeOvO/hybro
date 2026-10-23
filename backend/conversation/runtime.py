@@ -1,4 +1,3 @@
-import re
 from dataclasses import dataclass
 
 from agent import sanitize_routing_agent_ids
@@ -22,6 +21,7 @@ from conversation.idempotency import (
     UserMessagePersistenceError,
     stored_fingerprint_matches,
 )
+from conversation.mentions import canonical_mentions_or_error, parse_agent_mentions
 from conversation.timeline import (
     TimelineCursorError,
     decode_timeline_cursor,
@@ -214,50 +214,6 @@ class ConversationRuntime:
             user_message=user_message,
             attachment_reader=getattr(self, "_attachment_metadata_reader", None),
         )
-
-    # room user message management
-    def parse_agent_mentions(
-        self, message_text: str, room_agent_set: dict
-    ) -> list[dict]:
-        """
-        Parse @agent mentions in format "<@agent-id|agentname>"
-
-        Args:
-            message_text: User input text with format "<@agent-id|agentname>"
-            room_agent_set: Agent set in the room {agent_id: agent_name}
-
-        Returns:
-            list[dict]: Parsed mentions [{"agent_id": "xxx", "agent_name": "yyy", "mention_text": "<@xxx|yyy>"}]
-        """
-        mentions = []
-
-        # pattern: <@agent_id|agent_name>
-        slack_pattern = r"<@([^|]+)\|([^>]+)>"
-
-        for match in re.finditer(slack_pattern, message_text):
-            agent_id = match.group(1).strip()
-            position = match.start()
-
-            # Check if agent exists in room by agent_id
-            if agent_id in room_agent_set:
-                # Agent found in room
-                room_agent_name = room_agent_set[agent_id]
-                mentions.append(
-                    {
-                        "agent_id": agent_id,
-                        "agent_name": room_agent_name,  # Use the name from room_agent_set
-                        "mention_text": match.group(0),
-                        "position": position,
-                    }
-                )
-            else:
-                logger.warning(
-                    "Inline mention %s not in room agent set — ignored", agent_id
-                )
-
-        # Sort by position to maintain order
-        mentions.sort(key=lambda x: x["position"])
-        return mentions
 
     @staticmethod
     def _orchestration_request_info(
@@ -971,7 +927,7 @@ class ConversationRuntime:
             else:
                 effective_agent_set = room.room_agent_set
 
-            mentions = self.parse_agent_mentions(message_text, effective_agent_set)
+            mentions = parse_agent_mentions(message_text, effective_agent_set)
 
             if mentions:
                 mention_agents, _rejected = await self._sanitize_routing_scope(
@@ -1206,37 +1162,7 @@ class ConversationRuntime:
             sender_user_id=sender_user_id,
             required_input_modes=required_input_modes,
         )
-        canonical_mentions = [
-            (
-                {
-                    "agent_id": agent.agent_id,
-                    "agent_name": agent.agent_card.name,
-                    "mention_text": (f"<@{agent.agent_id}|{agent.agent_card.name}>"),
-                }
-            )
-            for agent in agents
-        ]
-
-        if invalid_ids:
-            error_msg = (
-                f"Invalid or unauthorized mention targets: {', '.join(invalid_ids)}"
-            )
-            logger.warning(
-                "Canonical mention targets rejected (invalid/unauthorized): %s",
-                invalid_ids,
-            )
-            return RoomCenterUserMessageResponse(
-                message_id=None,
-                message=None,
-                success=False,
-                error=error_msg,
-                scope_resolution_error=ScopeResolutionError(
-                    code="unauthorized_mention",
-                    message=error_msg,
-                ),
-                status_code=400,
-            )
-        return canonical_mentions
+        return canonical_mentions_or_error(agents, invalid_ids)
 
     async def _resolve_explicit_target_scope(
         self,

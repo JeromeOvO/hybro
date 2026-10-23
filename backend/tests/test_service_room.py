@@ -25,6 +25,7 @@ from conversation.idempotency import (
     IdempotencyConflictError,
     UserMessagePersistenceError,
 )
+from conversation.mentions import parse_agent_mentions
 from conversation.runtime import ConversationRuntime
 from conversation.user_message_persistence import (
     UserMessageCommitCommand,
@@ -906,7 +907,7 @@ class TestParseAgentMentions:
     def test_parses_single_mention(self, room_center):
         text = "Hello <@agent-1|AgentOne> please help"
         agent_set = {"agent-1": "AgentOne"}
-        result = room_center.parse_agent_mentions(text, agent_set)
+        result = parse_agent_mentions(text, agent_set)
 
         assert len(result) == 1
         assert result[0]["agent_id"] == "agent-1"
@@ -916,7 +917,7 @@ class TestParseAgentMentions:
     def test_parses_multiple_mentions(self, room_center):
         text = "<@a1|Alpha> do X and <@a2|Beta> do Y"
         agent_set = {"a1": "Alpha", "a2": "Beta"}
-        result = room_center.parse_agent_mentions(text, agent_set)
+        result = parse_agent_mentions(text, agent_set)
 
         assert len(result) == 2
         assert result[0]["agent_id"] == "a1"
@@ -926,19 +927,19 @@ class TestParseAgentMentions:
         """Agent not in room should be silently ignored."""
         text = "<@unknown|Ghost> do something"
         agent_set = {}
-        result = room_center.parse_agent_mentions(text, agent_set)
+        result = parse_agent_mentions(text, agent_set)
 
         assert len(result) == 0
 
     def test_returns_empty_for_no_mentions(self, room_center):
         text = "Just a normal message with no mentions"
-        result = room_center.parse_agent_mentions(text, {"a1": "Alpha"})
+        result = parse_agent_mentions(text, {"a1": "Alpha"})
         assert result == []
 
     def test_preserves_position_order(self, room_center):
         text = "<@b|Beta> then <@a|Alpha>"
         agent_set = {"a": "Alpha", "b": "Beta"}
-        result = room_center.parse_agent_mentions(text, agent_set)
+        result = parse_agent_mentions(text, agent_set)
 
         assert result[0]["agent_id"] == "b"
         assert result[1]["agent_id"] == "a"

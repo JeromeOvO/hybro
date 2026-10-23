@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from common.dto import UserMessageInsertResult
+from conversation.mentions import parse_agent_mentions
 from conversation.runtime import ConversationRuntime
 from models.agent import Agent, AgentStatus
 from models.response import (
@@ -482,7 +483,7 @@ class TestInlineMentionBehavior:
         """parse_agent_mentions silently drops agents not in room — no error."""
         text = "<@unknown-agent|Ghost> do something"
         agent_set = {"a1": "Alpha"}
-        result = room_center.parse_agent_mentions(text, agent_set)
+        result = parse_agent_mentions(text, agent_set)
         assert len(result) == 0
 
     @pytest.mark.asyncio
