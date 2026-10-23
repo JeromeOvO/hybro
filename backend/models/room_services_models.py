@@ -14,7 +14,7 @@ class ResolvedRoutingScope:
 
 @dataclass
 class ParseResult:
-    """Result of the orchestration preflight ``_prepare_orchestration_envelope``.
+    """Result of the orchestration preflight `MessagePreflight.prepare_orchestration_envelope`.
 
     ``canceled`` lets the caller distinguish cancellation from failure.
     """

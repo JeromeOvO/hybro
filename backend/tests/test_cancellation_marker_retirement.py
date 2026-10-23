@@ -163,7 +163,8 @@ def test_cancellation_settings_are_retired():
 
 
 def test_conversation_runtime_needs_no_cancellation_control():
-    from conversation.runtime import ConversationRuntime, RoomMessagePreflightContext
+    from conversation.preflight import RoomMessagePreflightContext
+    from conversation.runtime import ConversationRuntime
 
     runtime = ConversationRuntime()
 

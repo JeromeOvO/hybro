@@ -26,6 +26,7 @@ from conversation.idempotency import (
     UserMessagePersistenceError,
 )
 from conversation.mentions import parse_agent_mentions
+from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
 from conversation.target_scope import TargetScopeResolver
 from conversation.user_message_persistence import (
@@ -83,8 +84,8 @@ def _bind_user_message_commit(
 
 
 @pytest.mark.asyncio
-async def test_preflight_token_lifecycle_always_releases_identity_owner():
-    svc = object.__new__(ConversationRuntime)
+async def test_preflight_token_lifecycle_always_releases_identity_owner(monkeypatch):
+    svc = ConversationRuntime()
     token = object()
     context = SimpleNamespace(
         user_message=SimpleNamespace(message_id="msg-1"), token=token
@@ -92,12 +93,12 @@ async def test_preflight_token_lifecycle_always_releases_identity_owner():
 
     for outcome in ("failed", "canceled", "completed"):
         response = SimpleNamespace(preflight_outcome=outcome)
-        svc._run_message_preflight_to_room = AsyncMock(return_value=response)
+        monkeypatch.setattr(MessagePreflight, "run", AsyncMock(return_value=response))
 
         assert await svc.run_message_preflight_to_room(context) is response
 
     ready_response = SimpleNamespace(preflight_outcome="ready")
-    svc._run_message_preflight_to_room = AsyncMock(return_value=ready_response)
+    monkeypatch.setattr(MessagePreflight, "run", AsyncMock(return_value=ready_response))
 
     assert await svc.run_message_preflight_to_room(context) is ready_response
 
@@ -106,13 +107,15 @@ async def test_preflight_token_lifecycle_always_releases_identity_owner():
 @pytest.mark.parametrize(
     "failure", [RuntimeError("parse failed"), asyncio.CancelledError()]
 )
-async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(failure):
-    svc = object.__new__(ConversationRuntime)
+async def test_preflight_token_lifecycle_removes_on_exception_or_cancellation(
+    failure, monkeypatch
+):
+    svc = ConversationRuntime()
     token = object()
     context = SimpleNamespace(
         user_message=SimpleNamespace(message_id="msg-1"), token=token
     )
-    svc._run_message_preflight_to_room = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(MessagePreflight, "run", AsyncMock(side_effect=failure))
 
     with pytest.raises(type(failure)):
         await svc.run_message_preflight_to_room(context)

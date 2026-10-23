@@ -1321,8 +1321,12 @@ metadata, and the orchestrator's final message), implemented by
 `ClientRequestIdResolver`, implemented by `ClientRequestIdStore` and consumed by
 the SSE `client_request_id` resolver.
 `conversation.runtime.ConversationRuntime` implements Execution's `RoomCenterPort`
-and the chat message reads: user-message persistence and idempotent replay,
-preflight, and room timeline reads. `conversation.target_scope.TargetScopeResolver`,
+and the chat message reads: user-message persistence and idempotent replay, the
+preflight port methods, and room timeline reads. `conversation.preflight.MessagePreflight`
+builds the orchestration envelope for a persisted user message (resolving the
+mention or target-group scope and storing the candidate agents and execution mode
+on the message), and `persisted_execution_mode` keeps the stored mode to
+`direct`, `supervisor`, or `passthrough`. `conversation.target_scope.TargetScopeResolver`,
 built from the runtime's store and capability-issue reader, sanitizes routing
 targets (excluding agents with open capability issues), validates candidate-scope
 metadata and canonical mentions, and resolves explicit target groups.

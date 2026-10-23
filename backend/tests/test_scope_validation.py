@@ -14,6 +14,7 @@ import pytest
 
 from common.dto import UserMessageInsertResult
 from conversation.mentions import parse_agent_mentions
+from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
 from conversation.target_scope import TargetScopeResolver
 from models.agent import Agent, AgentStatus
@@ -506,7 +507,7 @@ class TestInlineMentionBehavior:
 
     @pytest.mark.asyncio
     async def test_supervisor_inline_mention_is_planner_intent_not_hard_route(
-        self, room_center
+        self, room_center, monkeypatch
     ):
         room = _make_room(
             agent_set={"a1": "Alpha"},
@@ -546,7 +547,9 @@ class TestInlineMentionBehavior:
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
         prepare_orchestration = AsyncMock(return_value=ParseResult(success=True))
-        room_center._prepare_orchestration_envelope = prepare_orchestration
+        monkeypatch.setattr(
+            MessagePreflight, "prepare_orchestration_envelope", prepare_orchestration
+        )
 
         result = await _send(
             room_center,

@@ -20,6 +20,7 @@ from api_gateway.routes.room_routes import send_message
 from common.config.loader import Settings
 from common.dto import ExecutionAck, ExecutionRequest, UserMessageInsertResult
 from common.dto.turn_lifecycle import RunStartedPayload
+from conversation.preflight import MessagePreflight
 from conversation.runtime import ConversationRuntime
 from execution.adapters.profiles import OrchestratorProfileResolver
 from execution.facade import ExecutionFacade
@@ -243,9 +244,8 @@ async def test_persist_message_stores_request_mode(requested, stored):
     ],
 )
 async def test_orchestration_envelope_persists_request_mode(requested, stored):
-    svc = object.__new__(ConversationRuntime)
-    svc._store = MagicMock()
-    svc._store.update_room_user_message_by_message_id = AsyncMock(return_value=True)
+    store = MagicMock()
+    store.update_room_user_message_by_message_id = AsyncMock(return_value=True)
     extend_info = {"agent_scope": {"source": "mention", "agent_ids": ["agent-1"]}}
     if requested is not None:
         extend_info["execution_mode"] = requested
@@ -258,7 +258,9 @@ async def test_orchestration_envelope_persists_request_mode(requested, stored):
     )
     user_message = _user_message({"execution_mode": stored, "quoted_text": "q"})
 
-    result = await svc._prepare_orchestration_envelope(
+    result = await MessagePreflight(
+        store=store, target_scope=None
+    ).prepare_orchestration_envelope(
         request,
         user_message,
         {"agent-1": "Agent One"},
@@ -267,7 +269,7 @@ async def test_orchestration_envelope_persists_request_mode(requested, stored):
     )
 
     assert result.success is True
-    persisted = svc._store.update_room_user_message_by_message_id.await_args.args[1]
+    persisted = store.update_room_user_message_by_message_id.await_args.args[1]
     assert persisted.extend_info["execution_mode"] == stored
     assert persisted.extend_info["candidate_agent_ids"] == ["agent-1"]
     assert persisted.extend_info["quoted_text"] == "q"
