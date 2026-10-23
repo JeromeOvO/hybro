@@ -156,7 +156,6 @@ class HITLRequest(FrozenDTO):
     question_index: int = 0
     status: Literal[
         "pending",
-        "processing",
         "answer_recorded",
         "responded",
         "resolved",

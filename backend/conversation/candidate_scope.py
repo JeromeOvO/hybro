@@ -54,7 +54,7 @@ class CandidateScopeSnapshot(BaseModel):
     room_membership_version: str | None = None
     group_version: str | None = None
     resolved_at: datetime = Field(default_factory=utcnow)
-    authorization_basis: AuthorizationBasis | None = None
+    authorization_basis: AuthorizationBasis
 
     @field_validator("revision")
     @classmethod

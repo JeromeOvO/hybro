@@ -239,7 +239,6 @@ def sample_room(mock_user, sample_agent) -> Room:
         room_owner_name="Test User",
         room_agent_set={sample_agent.agent_id: sample_agent.agent_card.name},
         room_created_at=FROZEN_TIME,
-        applied_from_group="test-group-001",
         extend_info={
             "debateMode": False,
             "use_supervisor": False,

@@ -46,6 +46,7 @@ def _make_agent(
         defaultOutputModes=["text"],
     )
     return Agent(
+        is_public=True,
         agent_id=agent_id,
         agent_card=card,
         agent_status=AgentStatus.active,

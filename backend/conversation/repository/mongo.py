@@ -18,7 +18,6 @@ from common.idempotency import (
     normalize_client_request_id,
 )
 from common.protocols import MongoDAL
-from common.utils.logger import get_logger
 from common.utils.mongo_indexes import create_index
 from common.utils.room_state import delete_room_rows
 from conversation.idempotency import (
@@ -38,7 +37,6 @@ from conversation.timeline import (
     timeline_sort_us_from_value,
 )
 
-logger = get_logger(__name__)
 _TASK_STATE_PATH = "message_content.message_task.status.state"
 _TERMINAL_TASK_STATES = tuple(sorted(state.value for state in TERMINAL_STATES))
 
@@ -330,19 +328,6 @@ class MessageMongoRepository:
                 raise UnexpectedUserMessageDuplicateError(
                     "Conflicting idempotency record has no valid message_id"
                 ) from exc
-            if existing.get("idempotency_fingerprint") is None:
-                logger.warning(
-                    "Legacy idempotency replay without fingerprint "
-                    "room_id=%s client_request_id=%s message_id=%s",
-                    room_id,
-                    client_request_id,
-                    existing_message_id,
-                )
-                return UserMessageInsertResult(
-                    message_id=existing_message_id,
-                    created=False,
-                    document=deepcopy(existing),
-                )
             if stored_fingerprint_matches(
                 existing,
                 fingerprint=fingerprint,

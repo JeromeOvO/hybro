@@ -14,6 +14,7 @@ from execution.orchestrator.a2a_runtime.in_memory import (
     InMemoryRoomEpochStore,
 )
 from execution.orchestrator.models import (
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     RunResourceManifestSnapshot,
 )
@@ -300,6 +301,7 @@ async def test_multiskill_card_freezes_only_skill_bindings_and_model_tools():
             source="test",
             room_id="room-1",
             agent_ids=["broker-agent"],
+            authorization_basis=AuthorizationBasis(kind="room_member"),
         ),
         resource_manifest=RunResourceManifestSnapshot(
             manifest_id="resources", refs=[], content_digest="empty"

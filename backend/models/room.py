@@ -50,11 +50,7 @@ class Room(BaseModel):
     # The product that owns this conversation container: "chat" or "session".
     owner_product: str = "chat"
 
-    # Legacy provenance field — kept for backward compatibility during rollout.
-    # Canonical fields below take precedence when present.
-    applied_from_group: str | None = None
-
-    # Canonical provenance fields
+    # Provenance fields
     membership_origin: MembershipOrigin | None = None
     membership_origin_status: MembershipOriginStatus | None = None
     source_group_id: str | None = None

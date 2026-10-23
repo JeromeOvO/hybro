@@ -2,8 +2,9 @@
 """Count the legacy data that gates each C2 and C8 cleanup step. Read-only.
 
 Each count must be zero (or migrated) before the plan step it names deletes the
-code that reads that data. The script only runs ``count_documents`` and
-``distinct``; it never writes.
+code that reads that data, or before deploying code whose strict readers reject
+that data. The script only runs ``count_documents`` and ``distinct``; it never
+writes.
 """
 
 from __future__ import annotations
@@ -171,6 +172,56 @@ CHECKS = (
         gates="C8 (normalized-url scan in AgentMongoRepository)",
         collections=("agents",),
         query={"normalized_url": {"$exists": False}},
+    ),
+    # Stored-data tolerances that strict readers no longer accept.
+    _Check(
+        name="processing_hitl_requests",
+        gates="strict readers (HITLStatus.PROCESSING delivery lease)",
+        collections=("hitl_requests",),
+        query={"status": "processing"},
+    ),
+    _Check(
+        name="user_messages_missing_idempotency_fingerprint",
+        gates="strict readers (fingerprint-less idempotency replay)",
+        collections=("room_user_messages",),
+        query={
+            "client_request_id": {"$type": "string"},
+            "idempotency_fingerprint": None,
+        },
+    ),
+    _Check(
+        name="orchestrator_hitl_interactions_missing_published",
+        gates="strict readers (orchestrator HITL published flag)",
+        collections=("orchestrator_hitl_interactions",),
+        query={"published": {"$nin": [True, False]}},
+    ),
+    _Check(
+        name="rooms_applied_from_group_without_source_group_id",
+        gates="strict readers (Room.applied_from_group provenance)",
+        collections=("rooms",),
+        query={
+            "applied_from_group": {"$nin": [None, ""]},
+            "source_group_id": {"$in": [None, ""]},
+        },
+    ),
+    _Check(
+        name="agents_missing_is_public",
+        gates="strict readers (agent visibility is_public)",
+        collections=("agents",),
+        query={"is_public": {"$nin": [True, False]}},
+    ),
+    _Check(
+        name="tool_bindings_missing_authorization_kind",
+        gates="strict readers (AgentToolBindingRecord.authorization_kind)",
+        collections=("orchestrator_agent_tool_bindings",),
+        query={"authorization_kind": None},
+    ),
+    _Check(
+        name="orchestrator_runs_missing_authorization_basis",
+        gates="strict readers (CandidateScopeSnapshot.authorization_basis)",
+        collections=("orchestrator_runs",),
+        query={"candidate_scope.authorization_basis": None},
+        by_status=True,
     ),
 )
 

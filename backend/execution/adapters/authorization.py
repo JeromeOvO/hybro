@@ -54,8 +54,8 @@ class MembershipAuthorizationRefresh:
         # Per-turn explicit scopes already authorized the agent when the
         # candidate catalog was assembled (visibility-filtered listing). Room
         # membership only gates scopes that are derived from the room/group
-        # roster (room_member / saved_group_member / unspecified legacy).
-        if getattr(binding, "authorization_kind", None) not in {
+        # roster (room_member / saved_group_member).
+        if binding.authorization_kind not in {
             "all_active_agents",
             "mention",
             "explicit_selection",
@@ -75,7 +75,7 @@ class MembershipAuthorizationRefresh:
         if info is None or str(getattr(info, "status", "") or "") != "active":
             return "denied"
         if not (
-            getattr(info, "is_public", True)
+            info.is_public
             or getattr(info, "provider_id", None) == requesting_subject_id
         ):
             return "denied"

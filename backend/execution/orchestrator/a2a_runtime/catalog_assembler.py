@@ -78,11 +78,7 @@ class AgentToolCatalogAssembler:
             if candidate.active and candidate.authorized and not candidate.excluded
         ]
         subject_digest = _digest(requesting_subject_id)
-        authorization_kind = (
-            candidate_scope.authorization_basis.kind
-            if candidate_scope.authorization_basis is not None
-            else None
-        )
+        authorization_kind = candidate_scope.authorization_basis.kind
         bindings: list[AgentToolBindingRecord] = []
         entries: list[FrozenToolCatalogEntry] = []
         used_names: set[str] = set()

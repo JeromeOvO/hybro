@@ -80,7 +80,7 @@ class Agent(BaseModel):
     rate_limit_system_per_hour: int | None = None
 
     # Visibility: True = public (everyone can see/use), False = private (owner only)
-    is_public: bool = True
+    is_public: bool
 
     # Origin: cloud (registered) or local (host-discovered).
     source: str = "cloud"

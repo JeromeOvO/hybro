@@ -92,7 +92,6 @@ EXPECTED_METHODS = {
             "get_pending_hitl_requests_strict",
             "get_room_agent_message_by_message_id",
             "get_room_user_message_by_message_id",
-            "iter_stale_processing_hitl_requests",
             "persist_hitl_interaction_metadata",
             "persist_hitl_request_id_on_message",
             "persist_hitl_user_answer",

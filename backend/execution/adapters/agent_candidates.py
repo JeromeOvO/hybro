@@ -107,7 +107,7 @@ class AgentServiceCandidateSource:
             raw_card = dict(getattr(info, "raw_card", None) or {})
             active = str(getattr(info, "status", "") or "") == "active"
             authorized = bool(
-                getattr(info, "is_public", True)
+                info.is_public
                 or getattr(info, "provider_id", None) == requesting_subject_id
             )
             transport_kind = "direct"

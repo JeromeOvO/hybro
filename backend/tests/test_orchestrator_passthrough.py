@@ -22,6 +22,7 @@ from execution.orchestrator.kernel import (
 from execution.orchestrator.lifecycle import SessionEvent
 from execution.orchestrator.models import (
     AssistantMessage,
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     OrchestratorProfile,
     TextPart,
@@ -100,6 +101,7 @@ def make_passthrough_run(*, agent_ids=("agent-1",), source="mention", text="hell
             source=source,
             room_id="room-1",
             agent_ids=list(agent_ids),
+            authorization_basis=AuthorizationBasis(kind="mention"),
         ),
         room_epoch=1,
         requesting_subject_id="user-1",

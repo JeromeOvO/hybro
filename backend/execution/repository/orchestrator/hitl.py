@@ -83,15 +83,12 @@ class MongoHITLApplicationStore:
     async def get_published_interactions(
         self, room_id: str
     ) -> list[StoredHITLInteraction]:
-        # ``published`` defaults true for documents written before the flag
-        # existed (legacy auto-publish behavior), so ``$ne: False`` includes
-        # both explicit True and the missing field.
         cursor = self._collection.find(
             {
                 "route.room_id": room_id,
                 "eligible": True,
                 "abandoned": None,
-                "published": {"$ne": False},
+                "published": True,
             }
         )
         docs = await cursor.to_list(None)
@@ -123,7 +120,7 @@ class MongoHITLApplicationStore:
         doc = await self._collection.find_one({"interaction_id": interaction_id})
         if doc is None:
             return "error"
-        if doc.get("published", True):
+        if doc["published"]:
             return "replayed"
         result = await self._collection.update_one(
             {"interaction_id": interaction_id, "published": False},
@@ -134,7 +131,7 @@ class MongoHITLApplicationStore:
         winner = await self._collection.find_one({"interaction_id": interaction_id})
         if winner is None:
             return "error"
-        return "replayed" if winner.get("published", True) else "conflict"
+        return "replayed" if winner["published"] else "conflict"
 
     async def abandon(
         self, interaction_id: str, *, call_record_id: str, reason: str
@@ -283,9 +280,7 @@ def _interaction_from_doc(doc: dict[str, Any]) -> StoredHITLInteraction:
         fingerprint=str(doc.get("fingerprint") or ""),
         eligible=bool(doc.get("eligible")),
         abandoned=abandoned_tuple,
-        # Documents written before the flag existed were auto-published;
-        # treat a missing flag as published to preserve legacy behavior.
-        published=bool(doc.get("published", True)),
+        published=bool(doc["published"]),
     )
 
 

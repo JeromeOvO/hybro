@@ -8,6 +8,7 @@ from execution.orchestrator.budget import BudgetPolicy
 from execution.orchestrator.context import ContextCompiler
 from execution.orchestrator.kernel import OrchestratorKernel
 from execution.orchestrator.models import (
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     ModelStreamEvent,
     OrchestratorRunState,
@@ -128,7 +129,11 @@ def session_config(**profile_kwargs) -> RoomAgentSessionConfig:
         room_id="room-1",
         profile=profile(**profile_kwargs),
         candidate_scope=CandidateScopeSnapshot(
-            snapshot_id="scope-1", source="test", room_id="room-1", agent_ids=[]
+            snapshot_id="scope-1",
+            source="test",
+            room_id="room-1",
+            agent_ids=[],
+            authorization_basis=AuthorizationBasis(kind="room_member"),
         ),
         room_epoch=1,
         requesting_subject_id="user-1",

@@ -1498,7 +1498,7 @@ def _published_interaction_doc(
     room_id: str,
     interaction_id: str,
     *,
-    published: bool | None,
+    published: bool,
     eligible: bool = True,
 ) -> dict:
     spec = A2AInteractionSpec(
@@ -1535,9 +1535,8 @@ def _published_interaction_doc(
         "eligible": eligible,
         "abandoned": None,
         "answers": {},
+        "published": published,
     }
-    if published is not None:
-        doc["published"] = published
     return doc
 
 
@@ -1552,8 +1551,6 @@ async def test_mongo_hitl_published_flag_filter_and_transitions():
             _published_interaction_doc("room-1", "published-true", published=True),
             answered,
             _published_interaction_doc("room-1", "published-false", published=False),
-            # Missing flag = legacy auto-published document; must still surface.
-            _published_interaction_doc("room-1", "published-missing", published=None),
             _published_interaction_doc(
                 "room-1", "not-eligible", published=True, eligible=False
             ),
@@ -1565,20 +1562,18 @@ async def test_mongo_hitl_published_flag_filter_and_transitions():
     visible = [
         item.interaction_id for item in await store.get_published_interactions("room-1")
     ]
-    # published=False is suppressed; missing (legacy) and True are visible;
-    # non-eligible interactions and other rooms are excluded.
-    assert visible == ["published-true", "published-missing"]
+    # published=False is suppressed and True is visible; non-eligible
+    # interactions and other rooms are excluded.
+    assert visible == ["published-true"]
 
     assert await store.mark_published("published-false") == "accepted"
     assert await store.mark_published("published-false") == "replayed"
-    # Legacy docs with no flag are already treated as published.
-    assert await store.mark_published("published-missing") == "replayed"
     assert await store.mark_published("does-not-exist") == "error"
 
     visible_after = [
         item.interaction_id for item in await store.get_published_interactions("room-1")
     ]
-    assert visible_after == ["published-true", "published-false", "published-missing"]
+    assert visible_after == ["published-true", "published-false"]
 
 
 async def test_mongo_hitl_answer_reads_back_as_the_applied_marker():

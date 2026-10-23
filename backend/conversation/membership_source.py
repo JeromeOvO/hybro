@@ -77,7 +77,7 @@ def _agent_info_from_record(agent: Any) -> AgentInfo:
         status=resolved_status,
         capabilities=[],
         source=getattr(agent, "source", "cloud"),
-        is_public=getattr(agent, "is_public", True),
+        is_public=agent.is_public,
         public_url=getattr(agent, "public_url", None),
         raw_card=card.model_dump(mode="json") if hasattr(card, "model_dump") else {},
     )

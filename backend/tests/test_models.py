@@ -229,6 +229,7 @@ class TestAgentModel:
     def test_creates_agent_with_defaults(self, sample_agent_card):
         """Should create agent with default values."""
         agent = Agent(
+            is_public=True,
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
         )
@@ -241,6 +242,7 @@ class TestAgentModel:
     def test_agent_status_serialization(self, sample_agent_card):
         """Should serialize agent status to string."""
         agent = Agent(
+            is_public=True,
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
             agent_status=AgentStatus.inactive,
@@ -252,6 +254,7 @@ class TestAgentModel:
     def test_agent_rate_limits(self, sample_agent_card):
         """Should support rate limit configuration."""
         agent = Agent(
+            is_public=True,
             agent_id=str(uuid4()),
             agent_card=sample_agent_card,
             rate_limit_per_user_per_hour=100,
@@ -354,7 +357,7 @@ class TestHITLStatus:
     def test_hitl_status_values(self):
         """Should have expected status values."""
         assert HITLStatus.PENDING.value == "pending"
-        assert HITLStatus.PROCESSING.value == "processing"
+        assert "PROCESSING" not in HITLStatus.__members__
         assert HITLStatus.RESPONDED.value == "responded"
         assert HITLStatus.EXPIRED.value == "expired"
         assert HITLStatus.CANCELED.value == "canceled"

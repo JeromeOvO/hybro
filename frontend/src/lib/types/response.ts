@@ -215,8 +215,6 @@ export interface Room {
     [k: string]: string;
   };
   room_created_at?: string;
-  /** @deprecated Use source_group_id from canonical provenance fields. */
-  applied_from_group?: string | null;
   extend_info?: unknown;
 
   // ── Canonical provenance fields ────────────────────────────────────────

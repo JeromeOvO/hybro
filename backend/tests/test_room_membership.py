@@ -188,7 +188,7 @@ async def test_membership_source_logs_agent_registry_fallback():
 
 
 def test_membership_source_warns_for_missing_critical_agent_fields():
-    agent = SimpleNamespace(agent_id="a1", agent_card=None)
+    agent = SimpleNamespace(agent_id="a1", agent_card=None, is_public=True)
 
     with patch("conversation.membership_source.logger", create=True) as logger:
         info = RepositoryRoomMembershipSeedSource.agent_info_from_record(agent)

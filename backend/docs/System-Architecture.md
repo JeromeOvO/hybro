@@ -14,6 +14,18 @@ and jobs until the production cutover. Contracts pinned before wiring:
   again with `--apply`; it deletes those Runs with their run events, recovery
   leases, Agent calls, and Agent tool bindings, without an archive. Every
   lifecycle event awaits its listeners before the Kernel continues.
+- Stored-data readers are strict. Before deploying, run
+  `uv run python -m scripts.check_legacy_lifecycle_readiness` and require zero
+  for `processing_hitl_requests`,
+  `user_messages_missing_idempotency_fingerprint`,
+  `orchestrator_hitl_interactions_missing_published`,
+  `rooms_applied_from_group_without_source_group_id`,
+  `agents_missing_is_public`, `tool_bindings_missing_authorization_kind`, and
+  `orchestrator_runs_missing_authorization_basis`. HITL requests have no
+  `processing` status; orchestrator HITL interactions must carry `published`;
+  Agents must carry `is_public`; every candidate scope carries an
+  `authorization_basis`, and every Agent tool binding carries its
+  `authorization_kind`. Rooms read provenance only from `source_group_id`.
 - `ProfileConfiguration.initial_routing` and `finalization` are frozen per Run
   but reserved: no code consumes them yet. Production composition pins
   `explicit_agent_first` (API pre-filters the candidate scope) and
@@ -531,7 +543,8 @@ stable local developer identity.
 `get_current_user` and constructs a network service bound to that user's ID.
 Clerk-mode requests without a valid session receive `401`; mock mode uses the
 existing `user_local_developer` override. Discovery and sends use the registry's
-public-or-owner visibility query, and saved groups require matching ownership.
+public-or-owner visibility query (`is_public: true` or owned by the caller), and
+saved groups require matching ownership.
 Private foreign targets return `404` without exposing their active status or Card.
 Mock-auth deployments still require a trusted-network boundary. Card credential
 stripping does not sanitize arbitrary metadata secrets. Existing room-chat
@@ -2624,8 +2637,7 @@ SSE status and cancellation lookup.
 Background jobs start only after infrastructure and multi-worker safety checks
 pass:
 
-- `stale_task_checker`: runs the HITL lifecycle reconciliation passes and
-  recovers HITL requests stuck in processing.
+- `stale_task_checker`: runs the HITL lifecycle reconciliation passes.
 - `compaction_sweep`: runs context memory compaction for eligible rooms.
 - `orphaned_upload_cleaner`: removes uploaded files that were never attached.
 - `agent.health.AgentHealthService`: periodic health/liveness support for
@@ -2792,10 +2804,9 @@ historical messages. Index creation failure is fatal.
 A replay with the same versioned fingerprint returns success and the original
 `message_id`, but no `dispatch_root_message_id`; therefore it does not publish,
 preflight, emit processing/terminal SSE, or schedule orchestration again. Reusing
-the key with a different new fingerprint returns body-level status `409`.
-Historical rows that have a request key but no fingerprint are treated as legacy
-replays: the original `message_id` is returned, a metadata-only warning is logged,
-and no fingerprint is inferred or backfilled.
+the key with a different new fingerprint returns body-level status `409`. A
+stored row that has the request key but no fingerprint takes the same conflict
+path; no fingerprint is inferred or backfilled.
 
 This is persistent uniqueness plus retry-side-effect control, not an arbitrary
 crash-point exactly-once protocol. Pending RoomFiles claims retain their existing
@@ -3022,8 +3033,8 @@ interactions in `orchestrator_hitl_interactions` carry no expiry.
 HITL storage is exposed through a focused startup adapter over the
 `approval.repository` HITL stores, the conversation message store, and the
 `client_request_id` store instead of raw `database_service` or Mongo access. `HITLService` uses store ports
-for request creation, CAS/fenced updates, group routing claims, continuation
-persistence, and stale processing iteration.
+for request creation, CAS/fenced updates, group routing claims, and continuation
+persistence.
 
 ### Agent call counts
 
@@ -3330,7 +3341,9 @@ given to the model.
 At A2A call acceptance, `MembershipAuthorizationRefresh` re-checks live agent
 visibility. Per-turn explicit scopes (`mention`, `explicit_selection`,
 `all_active_agents`) do not require the agent to already be in `room_agent_set`;
-roster-derived scopes (`room_member`, `saved_group_member`) do.
+roster-derived scopes (`room_member`, `saved_group_member`) do. The scope kind is
+the required `authorization_kind` copied onto each Agent tool binding from the
+Run's required `candidate_scope.authorization_basis`.
 
 The resolved `execution_mode` is persisted in the user-message orchestration
 envelope. `mode=supervisor` is the only Supervisor gate. Before handing a valid,

@@ -389,24 +389,12 @@ class TestRepositoryStoreHITL:
         )
 
     @pytest.mark.asyncio
-    async def test_stale_processing_iterator_and_indexes_use_hitl_collection(self):
-        docs = [{"request_id": "h1"}]
-        hitl_requests = RecordingCollection([docs])
+    async def test_indexes_use_hitl_collection(self):
+        hitl_requests = RecordingCollection([])
         store = _store(hitl_collection=hitl_requests)
 
-        result = [
-            doc
-            async for doc in store.iter_stale_processing_hitl_requests("cutoff-time")
-        ]
         await store.ensure_indexes()
 
-        assert result == docs
-        assert hitl_requests.find_calls == [
-            (
-                {"status": "processing", "responded_at": {"$lt": "cutoff-time"}},
-                {},
-            )
-        ]
         assert hitl_requests.create_index_calls == [
             ([("request_id", 1)], {"unique": True}),
             ([("room_id", 1), ("status", 1)], {}),

@@ -109,9 +109,6 @@ class HITLPersistencePort(Protocol):
         self, message_id: str
     ) -> str | None: ...
     async def reset_last_notified_state(self, message_id: str) -> None: ...
-    async def iter_stale_processing_hitl_requests(
-        self, cutoff: Any
-    ) -> AsyncIterator[dict[str, Any]]: ...
     async def cas_update_hitl_request(
         self,
         request_id: str,

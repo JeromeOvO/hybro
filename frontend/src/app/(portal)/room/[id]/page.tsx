@@ -79,9 +79,7 @@ export default function RoomChatPage() {
   // room_team with room_default routing; All Agents is reserved for broadcast.
   const roomAgentEntries = Object.entries(room?.room_agent_set || {})
   const hasRoomAgents = roomAgentEntries.length > 0
-  const roomDefaultTeamId = room?.source_group_id
-    ?? room?.applied_from_group
-    ?? undefined
+  const roomDefaultTeamId = room?.source_group_id ?? undefined
   const manualRoomLabel = !roomDefaultTeamId && hasRoomAgents
     ? (roomAgentEntries.length === 1
       ? roomAgentEntries[0][1]

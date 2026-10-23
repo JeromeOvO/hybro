@@ -52,7 +52,7 @@ class AgentMongoRepository:
 
     async def get_public(self, limit: int = 50) -> list[dict]:
         return await self._agents.find(
-            {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
+            {"is_public": True},
             limit=limit,
         )
 
@@ -82,7 +82,7 @@ class AgentMongoRepository:
         limit: int = 0,
         exhaust: bool = False,
     ) -> list[dict]:
-        visibility = [{"is_public": True}, {"is_public": {"$exists": False}}]
+        visibility: list[dict] = [{"is_public": True}]
         if user_id is not None:
             visibility.append({"provider_id": user_id})
 

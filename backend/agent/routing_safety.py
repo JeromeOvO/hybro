@@ -23,12 +23,7 @@ def is_routing_agent_eligible(
     status_value = getattr(status, "value", status)
     if status_value != AgentStatus.active.value:
         return False
-    # Legacy records without ``is_public`` are treated as public by existing
-    # visibility queries; preserve the same rule at this in-process boundary.
-    if (
-        getattr(agent, "is_public", True) is False
-        and getattr(agent, "provider_id", None) != user_id
-    ):
+    if not agent.is_public and getattr(agent, "provider_id", None) != user_id:
         return False
     return agent_accepts_required_input_modes(
         agent.agent_card,

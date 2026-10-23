@@ -26,7 +26,7 @@ def room_info_from_doc(doc: dict[str, Any]) -> RoomInfo:
         membership_origin_status=(
             _string_value(doc.get("membership_origin_status")) or "manual"
         ),
-        source_group_id=doc.get("source_group_id") or doc.get("applied_from_group"),
+        source_group_id=doc.get("source_group_id"),
         source_group_name=doc.get("source_group_name"),
         created_at=doc.get("room_created_at") or doc.get("created_at"),
         last_activity_at=(

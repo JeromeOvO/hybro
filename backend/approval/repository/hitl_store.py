@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -45,7 +44,7 @@ def _user_visible_interaction_query(**identity: Any) -> dict[str, Any]:
             _pending_actionable_query(**identity),
             {
                 **identity,
-                "status": {"$in": ["answer_recorded", "processing"]},
+                "status": "answer_recorded",
             },
         ]
     }
@@ -553,22 +552,6 @@ class HITLRequestStore:
             question_count=question_count,
             question_index=question_index,
         )
-
-    async def iter_stale_processing_hitl_requests(
-        self,
-        cutoff: Any,
-    ) -> AsyncIterator[dict]:
-        try:
-            docs = await self._hitl_requests.find(
-                {"status": "processing", "responded_at": {"$lt": cutoff}},
-            )
-        except Exception:
-            logger.error(
-                "Failed to iterate stale processing HITL requests", exc_info=True
-            )
-            docs = []
-        for doc in docs:
-            yield doc
 
     async def ensure_indexes(self) -> None:
         noncritical_indexes = [

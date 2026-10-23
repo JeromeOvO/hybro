@@ -690,7 +690,7 @@ class CandidateScopeSnapshot(ContractModel):
     room_membership_version: str | None = None
     group_version: str | None = None
     resolved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    authorization_basis: AuthorizationBasis | None = None
+    authorization_basis: AuthorizationBasis
 
 
 CancellationCause = Literal["user_requested", "room_closed", "shutdown", "policy"]

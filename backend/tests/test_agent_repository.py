@@ -141,20 +141,17 @@ async def test_get_by_ids_and_provider_keep_dict_outputs():
 
 
 @pytest.mark.asyncio
-async def test_get_public_includes_missing_is_public_with_limit():
+async def test_get_public_requires_explicit_is_public_with_limit():
     repo, collection = _repo(
         [
+            {"agent_id": "missing"},
             {"agent_id": "public", "is_public": True},
-            {"agent_id": "legacy"},
             {"agent_id": "private", "is_public": False},
         ]
     )
 
     assert await repo.get_public(limit=1) == [{"agent_id": "public", "is_public": True}]
-    assert collection.find_calls[-1] == (
-        {"$or": [{"is_public": True}, {"is_public": {"$exists": False}}]},
-        {"limit": 1},
-    )
+    assert collection.find_calls[-1] == ({"is_public": True}, {"limit": 1})
 
 
 @pytest.mark.asyncio
@@ -162,7 +159,7 @@ async def test_list_visible_filters_public_owned_and_active_agents():
     repo, _ = _repo(
         [
             {"agent_id": "public-active", "is_public": True, "agent_status": "active"},
-            {"agent_id": "legacy-active", "agent_status": "active"},
+            {"agent_id": "missing-flag-active", "agent_status": "active"},
             {
                 "agent_id": "owned-private",
                 "is_public": False,
@@ -182,13 +179,9 @@ async def test_list_visible_filters_public_owned_and_active_agents():
     unauthenticated = await repo.list_visible(active_only=True)
     authenticated = await repo.list_visible(user_id="u1", active_only=True)
 
-    assert [doc["agent_id"] for doc in unauthenticated] == [
-        "public-active",
-        "legacy-active",
-    ]
+    assert [doc["agent_id"] for doc in unauthenticated] == ["public-active"]
     assert [doc["agent_id"] for doc in authenticated] == [
         "public-active",
-        "legacy-active",
         "owned-private",
     ]
 

@@ -23,12 +23,6 @@ from models.hitl import (
     HITLStatus,
 )
 
-
-async def _iter_docs(docs):
-    for doc in docs:
-        yield doc
-
-
 # =============================================================================
 # HITL Service Fixtures
 # =============================================================================
@@ -69,7 +63,6 @@ def mock_hitl_db_service():
     mock.complete_hitl_open_projection = AsyncMock(return_value=None)
     mock.release_hitl_open_projection = AsyncMock(return_value=True)
     mock.reset_last_notified_state = AsyncMock()
-    mock.iter_stale_processing_hitl_requests = MagicMock(return_value=_iter_docs([]))
     return mock
 
 

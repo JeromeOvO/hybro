@@ -123,16 +123,13 @@ class AgentToolBindingRecord(A2ADurableModel):
     # scope semantics without re-resolving the Run. Per-turn explicit scopes
     # (all_active_agents, mention, explicit_selection) skip the room-membership
     # gate; roster-derived kinds (room_member, saved_group_member) require it.
-    authorization_kind: (
-        Literal[
-            "room_member",
-            "saved_group_member",
-            "explicit_selection",
-            "mention",
-            "all_active_agents",
-        ]
-        | None
-    ) = None
+    authorization_kind: Literal[
+        "room_member",
+        "saved_group_member",
+        "explicit_selection",
+        "mention",
+        "all_active_agents",
+    ]
     requesting_subject_digest: str
     input_modes: list[str]
     output_modes: list[str]

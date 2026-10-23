@@ -40,7 +40,7 @@ def binding(
     run_id: str = "run-1",
     transport_kind: str = "direct",
     agent_id: str = "agent-1",
-    authorization_kind: str | None = None,
+    authorization_kind: str = "room_member",
 ) -> AgentToolBindingRecord:
     tool = definition()
     return AgentToolBindingRecord(

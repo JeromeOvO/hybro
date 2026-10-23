@@ -338,6 +338,97 @@ async def test_report_names_each_count_and_the_step_it_gates():
     assert "orchestration_runs: 0" in text
 
 
+@pytest.mark.asyncio
+async def test_strict_reader_shapes_are_counted():
+    report = _by_name(
+        await collect_readiness(
+            FakeDatabase(
+                {
+                    "hitl_requests": [
+                        {"application_route": "supervisor_run", "status": "processing"},
+                        {"status": "pending"},
+                    ],
+                    "room_user_messages": [
+                        {"client_request_id": "request-1"},
+                        {
+                            "client_request_id": "request-2",
+                            "idempotency_fingerprint": None,
+                        },
+                        {
+                            "client_request_id": "request-3",
+                            "idempotency_fingerprint": "fingerprint",
+                        },
+                        {},
+                    ],
+                    "orchestrator_hitl_interactions": [
+                        {"interaction_id": "missing"},
+                        {"interaction_id": "false", "published": False},
+                        {"interaction_id": "true", "published": True},
+                    ],
+                    "rooms": [
+                        {"applied_from_group": "group-1"},
+                        {"applied_from_group": "group-1", "source_group_id": ""},
+                        {"applied_from_group": "group-1", "source_group_id": "g"},
+                        {"applied_from_group": None},
+                        {},
+                    ],
+                    "agents": [
+                        {"agent_id": "missing", "normalized_url": "u"},
+                        {"agent_id": "null", "is_public": None, "normalized_url": "u"},
+                        {
+                            "agent_id": "public",
+                            "is_public": True,
+                            "normalized_url": "u",
+                        },
+                        {
+                            "agent_id": "private",
+                            "is_public": False,
+                            "normalized_url": "u",
+                        },
+                    ],
+                    "orchestrator_agent_tool_bindings": [
+                        {"binding_id": "missing"},
+                        {"binding_id": "null", "authorization_kind": None},
+                        {"binding_id": "set", "authorization_kind": "room_member"},
+                    ],
+                    "orchestrator_runs": [
+                        {
+                            "status": "running",
+                            "lifecycle_family": "canonical",
+                            "schema_version": 6,
+                            "candidate_scope": {"authorization_basis": None},
+                        },
+                        {
+                            "status": "completed",
+                            "lifecycle_family": "canonical",
+                            "schema_version": 6,
+                            "candidate_scope": {},
+                        },
+                        {
+                            "status": "running",
+                            "lifecycle_family": "canonical",
+                            "schema_version": 6,
+                            "candidate_scope": {
+                                "authorization_basis": {"kind": "room_member"}
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    assert report["processing_hitl_requests"].count == 1
+    assert report["user_messages_missing_idempotency_fingerprint"].count == 2
+    assert report["orchestrator_hitl_interactions_missing_published"].count == 1
+    assert report["rooms_applied_from_group_without_source_group_id"].count == 2
+    assert report["agents_missing_is_public"].count == 2
+    assert report["tool_bindings_missing_authorization_kind"].count == 2
+    runs = report["orchestrator_runs_missing_authorization_basis"]
+    assert runs.count == 2
+    assert runs.by_status == {"running": 1, "completed": 1}
+
+
 def test_cli_help_runs_without_a_configured_install():
     result = subprocess.run(
         # As documented: a module run from backend/, so imports resolve from the

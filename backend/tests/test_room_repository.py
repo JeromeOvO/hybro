@@ -427,19 +427,18 @@ def _idempotent_message_repo(
 
 
 @pytest.mark.asyncio
-async def test_legacy_save_and_canonical_insert_share_normalized_unique_key():
+async def test_unfingerprinted_row_conflicts_on_shared_normalized_unique_key():
     repo, user_messages = _idempotent_message_repo()
-    legacy = _idempotent_message(client_request_id=" request-1 ")
-    legacy.pop("idempotency_fingerprint")
-    legacy.pop("idempotency_fingerprint_version")
+    unfingerprinted = _idempotent_message(client_request_id=" request-1 ")
+    unfingerprinted.pop("idempotency_fingerprint")
+    unfingerprinted.pop("idempotency_fingerprint_version")
 
-    await repo.save_user_message(legacy)
-    replayed = await repo.insert_user_message_idempotently(
-        _idempotent_message(message_id="message-2")
-    )
+    await repo.save_user_message(unfingerprinted)
+    with pytest.raises(IdempotencyConflictError):
+        await repo.insert_user_message_idempotently(
+            _idempotent_message(message_id="message-2")
+        )
 
-    assert replayed.created is False
-    assert replayed.message_id == "message-1"
     assert len(user_messages.docs) == 1
     assert user_messages.docs[0]["client_request_id"] == "request-1"
 

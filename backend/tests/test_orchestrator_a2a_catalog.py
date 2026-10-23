@@ -15,6 +15,7 @@ from execution.orchestrator.a2a_runtime.preparation import (
     RunPreparedInvocationSnapshotReader,
 )
 from execution.orchestrator.models import (
+    AuthorizationBasis,
     CandidateScopeSnapshot,
     PreparedResourceRef,
     RunResourceManifestSnapshot,
@@ -89,6 +90,7 @@ async def prepare(values, *, resource_manifest=None):
             source="test",
             room_id="room-1",
             agent_ids=[item.agent_id for item in values],
+            authorization_basis=AuthorizationBasis(kind="room_member"),
         ),
         resource_manifest=manifest,
         authorization_basis_digest="auth-basis",
@@ -292,6 +294,7 @@ async def test_preparation_fails_closed_for_inactive_epoch():
                 source="test",
                 room_id="room-1",
                 agent_ids=["agent-1"],
+                authorization_basis=AuthorizationBasis(kind="room_member"),
             ),
             resource_manifest=RunResourceManifestSnapshot(
                 manifest_id="empty", refs=[], content_digest="empty"

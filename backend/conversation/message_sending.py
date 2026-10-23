@@ -110,16 +110,7 @@ class RoomMessageSender:
                 "Idempotency record is missing a valid message_id"
             )
 
-        stored_fingerprint = existing.get("idempotency_fingerprint")
-        if stored_fingerprint is None:
-            logger.warning(
-                "Legacy idempotency replay without fingerprint "
-                "room_id=%s client_request_id=%s message_id=%s",
-                room_id,
-                client_request_id,
-                message_id,
-            )
-        elif not stored_fingerprint_matches(
+        if not stored_fingerprint_matches(
             existing,
             fingerprint=idempotency_fingerprint,
             fingerprint_version=idempotency_fingerprint_version,

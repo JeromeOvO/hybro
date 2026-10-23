@@ -62,9 +62,7 @@ class Repository:
         if agent_ids is not None:
             docs = [doc for doc in docs if doc["agent_id"] in agent_ids]
         return [
-            doc
-            for doc in docs
-            if doc.get("is_public", True) or doc.get("provider_id") == user_id
+            doc for doc in docs if doc["is_public"] or doc.get("provider_id") == user_id
         ]
 
     async def text_search(self, agent_ids, query, limit):

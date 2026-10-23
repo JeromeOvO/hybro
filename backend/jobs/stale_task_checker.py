@@ -1,9 +1,8 @@
 """
 Stale Task Checker Background Job
 
-This module provides a leader-gated background job that:
-1. Runs the durable HITL lifecycle reconciliation passes
-2. Recovers HITL requests stuck in "processing"
+This module provides a leader-gated background job that runs the durable
+HITL lifecycle reconciliation passes.
 """
 
 from __future__ import annotations
@@ -28,8 +27,7 @@ class LeaderGate(Protocol):
 
 @dataclass(frozen=True)
 class StaleHITLDeps:
-    recover_stale_processing: Callable[[], Awaitable[Any]]
-    reconcile_lifecycle: Callable[[], Awaitable[Any]] | None = None
+    reconcile_lifecycle: Callable[[], Awaitable[Any]]
 
 
 class StaleTaskChecker:
@@ -107,25 +105,13 @@ class StaleTaskChecker:
 
     async def check_stale_tasks(self) -> None:
         """Run one reconciliation pass; called periodically by the loop."""
-        # Aggregate deadlines, durable applications, and command uncertainty are
-        # authoritative and converge first.
-        if self._hitl_deps and self._hitl_deps.reconcile_lifecycle is not None:
-            try:
-                await self._hitl_deps.reconcile_lifecycle()
-            except Exception:
-                logger.exception("HITL lifecycle reconciliation failed")
-
-        # Recover HITL requests stuck in "processing" (worker crashed between
-        # CAS claim and finalization).
+        if self._hitl_deps is None:
+            logger.warning("Skipped HITL reconciliation: HITL deps are not bound")
+            return
         try:
-            if self._hitl_deps is None:
-                logger.warning(
-                    "Skipped stale HITL processing recovery: HITL deps are not bound"
-                )
-            else:
-                await self._hitl_deps.recover_stale_processing()
-        except Exception as e:
-            logger.error("Failed to recover stale HITL processing requests: %s", e)
+            await self._hitl_deps.reconcile_lifecycle()
+        except Exception:
+            logger.exception("HITL lifecycle reconciliation failed")
 
 
 # Singleton instance. Application startup binds runtime dependencies.

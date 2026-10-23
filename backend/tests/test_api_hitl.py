@@ -168,7 +168,7 @@ class TestGetPendingHitlRequests:
                 interaction_id="interaction-public-1",
                 question_count=3,
                 question_index=2,
-                status="processing",
+                status="answer_recorded",
                 expires_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
                 created_at=datetime(2026, 1, 2, 2, 4, 5, tzinfo=UTC),
                 user_input="private answer",

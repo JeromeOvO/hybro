@@ -824,9 +824,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 cas_update_hitl_request_strict=(
                     hitl_store.cas_update_hitl_request_strict
                 ),
-                iter_stale_processing_hitl_requests=(
-                    hitl_store.iter_stale_processing_hitl_requests
-                ),
             )
             room_runtime_store = SimpleNamespace(
                 add_room_agent_message=message_store.add_room_agent_message,
@@ -1341,7 +1338,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
 
             stale_task_checker.set_hitl_deps(
                 StaleHITLDeps(
-                    recover_stale_processing=hitl_manager.recover_stale_processing,
                     reconcile_lifecycle=hitl_reconciler.reconcile_lifecycle,
                 )
             )

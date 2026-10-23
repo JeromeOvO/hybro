@@ -20,11 +20,13 @@ from common.types import AgentCard
 from models.agent import Agent
 
 
-def _card_payload(**overrides):
+def _card_payload(url: str = "https://agent.example", **overrides):
     payload = {
         "name": "Health Agent",
         "description": "Checks health",
-        "url": "https://agent.example",
+        "supportedInterfaces": [
+            {"url": url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+        ],
         "version": "1.0.0",
         "capabilities": {},
         "defaultInputModes": ["text"],
@@ -223,20 +225,21 @@ async def test_sync_agent_card_preserves_blocklisted_fields():
     service = AgentHealthService(repository=repo)
     agent = Agent(
         agent_id="agent-1",
+        is_public=True,
         agent_card=AgentCard(
             **_card_payload(
                 name="Stored Agent",
-                url="https://registered.example",
                 iconUrl="https://registered.example/icon.png",
-            )
+            ),
+            url="https://registered.example",
         ),
     )
     fetched = AgentCard(
         **_card_payload(
             name="Live Agent",
-            url="https://live.example",
             iconUrl="https://live.example/icon.png",
-        )
+        ),
+        url="https://live.example",
     )
 
     await service.sync_agent_card(
@@ -262,6 +265,7 @@ async def test_sync_agent_card_syncs_extra_sdk_card_fields():
     service = AgentHealthService(repository=repo)
     agent = Agent(
         agent_id="agent-1",
+        is_public=True,
         agent_card=AgentCard(**_card_payload()),
     )
     fetched = AgentCard(

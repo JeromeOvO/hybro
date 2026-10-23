@@ -581,30 +581,29 @@ async def test_sequential_replay_skips_quote_attachment_claim_event_and_token(
 
 
 @pytest.mark.asyncio
-async def test_legacy_idempotency_row_replays_without_backfilling_fingerprint(caplog):
+async def test_idempotency_row_without_fingerprint_is_conflict():
     svc = ConversationRuntime()
     svc._bound = False
     svc._facade = None
     facade = AsyncMock()
     facade.get_user_message_by_idempotency_key.return_value = {
         "room_id": "r1",
-        "message_id": "legacy-message",
-        "client_request_id": "request-legacy",
+        "message_id": "unfingerprinted-message",
+        "client_request_id": "request-1",
     }
     svc.bind_facade(facade)
 
     response = await svc.get_idempotent_user_message(
         room_id="r1",
-        client_request_id="request-legacy",
-        idempotency_fingerprint="new-fingerprint-cannot-be-proven",
+        client_request_id="request-1",
+        idempotency_fingerprint="fingerprint-1",
         idempotency_fingerprint_version=1,
     )
 
     assert response is not None
-    assert response.success is True
-    assert response.message_id == "legacy-message"
-    assert response.dispatch_root_message_id is None
-    assert "Legacy idempotency replay without fingerprint" in caplog.text
+    assert response.success is False
+    assert response.status_code == 409
+    assert response.message_id is None
     facade.update_user_message.assert_not_awaited()
 
 

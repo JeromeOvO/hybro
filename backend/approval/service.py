@@ -933,7 +933,6 @@ class HITLService:
         }
         visible_member_statuses = {
             HITLStatus.PENDING.value,
-            HITLStatus.PROCESSING.value,
             HITLStatus.ANSWER_RECORDED.value,
         }
         for interaction_id in interaction_ids:
@@ -1129,7 +1128,6 @@ class HITLService:
         proven: list[tuple[dict[str, Any], HITLRequest]] = []
         eligible = {
             HITLStatus.PENDING.value,
-            HITLStatus.PROCESSING.value,
             HITLStatus.ANSWER_RECORDED.value,
             member_status,
         }
@@ -1317,7 +1315,6 @@ class HITLService:
             return
         if request.status not in {
             HITLStatus.PENDING,
-            HITLStatus.PROCESSING,
             HITLStatus.ANSWER_RECORDED,
         }:
             return
@@ -1370,158 +1367,6 @@ class HITLService:
                     req.request_id,
                     failure_reason=failure_reason,
                 )
-
-    PROCESSING_TIMEOUT_SECONDS = 600
-    LEASE_HEARTBEAT_SECONDS = 120
-
-    async def _find_pending_followup_for_stale_agent_hitl(
-        self, doc: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        if doc.get("public_source") != HITLPublicSource.AGENT.value:
-            return None
-
-        room_id = doc.get("room_id")
-        display_message_id = doc.get("display_message_id")
-        continuation_message_id = doc.get("continuation_message_id")
-        if not room_id or not (display_message_id or continuation_message_id):
-            return None
-
-        find_pending = getattr(
-            self.persistence, "find_pending_hitl_request_for_agent_message", None
-        )
-        if not callable(find_pending):
-            return None
-
-        try:
-            maybe_pending = find_pending(
-                room_id=room_id,
-                display_message_id=display_message_id,
-                continuation_message_id=continuation_message_id,
-                agent_id=doc.get("agent_id"),
-                a2a_task_id=doc.get("a2a_task_id"),
-                a2a_context_id=doc.get("a2a_context_id"),
-            )
-            pending = (
-                await maybe_pending
-                if inspect.isawaitable(maybe_pending)
-                else maybe_pending
-            )
-        except Exception:
-            logger.warning(
-                "Failed to check pending follow-up HITL during stale recovery",
-                extra={
-                    "hitl_request_id": doc.get("request_id"),
-                    "room_id": room_id,
-                    "display_message_id": display_message_id,
-                    "continuation_message_id": continuation_message_id,
-                },
-                exc_info=True,
-            )
-            return None
-
-        if not isinstance(pending, dict):
-            return None
-        if pending.get("request_id") == doc.get("request_id"):
-            return None
-        return pending
-
-    async def recover_stale_processing(self) -> int:
-        """Recover HITL requests stuck in 'processing' after a crash.
-
-        For each stale request, checks the ``routing_completed_at`` field
-        (no current path sets it; older documents may carry it):
-        - Field is set   -> finalize to 'responded' (routing succeeded,
-          only the status write was lost)
-        - Field is absent -> revert to 'pending' (routing never completed,
-          safe to let the user retry)
-
-        All writes use CAS (expected_status='processing') to prevent
-        overwriting a newer state. Reverts also clear ``claim_id`` so the
-        original worker's fenced writes become no-ops.
-        """
-        from datetime import timedelta
-
-        cutoff = utcnow() - timedelta(seconds=self.PROCESSING_TIMEOUT_SECONDS)
-        recovered = 0
-        async for doc in self.persistence.iter_stale_processing_hitl_requests(cutoff):
-            req_id = doc.get("request_id")
-            routing_done = doc.get("routing_completed_at") is not None
-
-            if routing_done:
-                ok = await self.persistence.cas_update_hitl_request(
-                    req_id,
-                    expected_status=HITLStatus.PROCESSING.value,
-                    status=HITLStatus.RESPONDED.value,
-                )
-                if ok:
-                    logger.warning(
-                        "Finalized stale PROCESSING HITL request %s to RESPONDED "
-                        "(routing_completed_at is set)",
-                        req_id,
-                    )
-                    recovered += 1
-                else:
-                    logger.info(
-                        "Skipped recovery of HITL request %s — status already changed",
-                        req_id,
-                    )
-            else:
-                pending_followup = (
-                    await self._find_pending_followup_for_stale_agent_hitl(doc)
-                )
-                if pending_followup:
-                    ok = await self.persistence.cas_update_hitl_request(
-                        req_id,
-                        expected_status=HITLStatus.PROCESSING.value,
-                        status=HITLStatus.RESPONDED.value,
-                        routing_completed_at=utcnow(),
-                    )
-                    if ok:
-                        logger.warning(
-                            "Finalized stale PROCESSING HITL request %s to "
-                            "RESPONDED because pending follow-up request %s "
-                            "already exists",
-                            req_id,
-                            pending_followup.get("request_id"),
-                        )
-                        recovered += 1
-                    else:
-                        logger.info(
-                            "Skipped recovery of HITL request %s — status already changed",
-                            req_id,
-                        )
-                    continue
-
-                ok = await self.persistence.cas_update_hitl_request(
-                    req_id,
-                    expected_status=HITLStatus.PROCESSING.value,
-                    status=HITLStatus.PENDING.value,
-                    claim_id=None,
-                    routing_completed_at=None,
-                    user_input=None,
-                    responded_at=None,
-                    responded_by_user_id=None,
-                )
-                if ok:
-                    logger.warning(
-                        "Reverted stale PROCESSING HITL request %s to PENDING "
-                        "(routing never completed)",
-                        req_id,
-                    )
-                    recovered += 1
-                else:
-                    logger.info(
-                        "Skipped recovery of HITL request %s — status already changed",
-                        req_id,
-                    )
-
-        if recovered:
-            logger.warning(
-                "Recovered %d stale PROCESSING HITL requests (threshold: %ds)",
-                recovered,
-                self.PROCESSING_TIMEOUT_SECONDS,
-            )
-        return recovered
 
     # ------------------------------------------------------------------
     # SSE emission helper

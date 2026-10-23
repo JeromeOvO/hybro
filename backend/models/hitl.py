@@ -1,7 +1,6 @@
 """Human-in-the-Loop (HITL) data models.
 
-Defines the models for HITL request/response lifecycle, event types,
-and the InterruptKind enum used as the routing key in continuation payloads.
+Defines the models for HITL request/response lifecycle and event types.
 
 See docs/HITL_DESIGN.md for full design details.
 """
@@ -28,24 +27,6 @@ from common.dto.hitl import (
     HITLRouteSnapshot,
 )
 from common.utils.time import utcnow
-
-# ---------------------------------------------------------------------------
-# InterruptKind — routing key for _resume_supervisor()
-# ---------------------------------------------------------------------------
-
-
-class InterruptKind(str, Enum):
-    """The interrupt_kind field in every continuation payload is the single
-    routing signal for _resume_supervisor().
-
-    Backward compatibility: if the field is absent (legacy push-notification
-    continuations saved before this design), assume PUSH_NOTIFICATION.
-    """
-
-    PUSH_NOTIFICATION = "push_notification"
-    HITL_AGENT = "hitl_agent"
-    HITL_SUPERVISOR = "hitl_supervisor"
-
 
 # ---------------------------------------------------------------------------
 # HITL lifecycle enums
@@ -80,7 +61,6 @@ class HITLStatus(str, Enum):
     """Lifecycle status of a single HITL request."""
 
     PENDING = "pending"
-    PROCESSING = "processing"  # Legacy request-level delivery lease.
     ANSWER_RECORDED = "answer_recorded"
     RESPONDED = "responded"
     EXPIRED = "expired"

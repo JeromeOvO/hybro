@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from conversation.candidate_scope import (
+    AuthorizationBasis,
     CandidateAgentSnapshot,
     CandidateScopeSnapshot,
     candidate_scope_from_envelope,
@@ -112,6 +113,7 @@ def test_normalize_candidate_scope_object_snapshot_preserves_all_agent_ids():
         source="explicit_selection",
         room_id="room-1",
         agent_ids=["agent-a", "agent-b"],
+        authorization_basis=AuthorizationBasis(kind="explicit_selection"),
         agents=[
             CandidateAgentSnapshot(
                 agent_id="agent-a",

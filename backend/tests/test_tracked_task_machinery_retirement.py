@@ -96,20 +96,17 @@ def test_stale_checker_keeps_only_hitl_reconciliation():
 
 
 @pytest.mark.asyncio
-async def test_stale_checker_iteration_runs_hitl_reconcile_and_recovery():
+async def test_stale_checker_iteration_runs_hitl_reconcile():
     from jobs.stale_task_checker import StaleHITLDeps, StaleTaskChecker
 
-    hitl = StaleHITLDeps(
-        recover_stale_processing=AsyncMock(),
-        reconcile_lifecycle=AsyncMock(),
-    )
+    hitl = StaleHITLDeps(reconcile_lifecycle=AsyncMock())
     checker = StaleTaskChecker()
     checker.set_hitl_deps(hitl)
 
     await checker.check_stale_tasks()
 
     hitl.reconcile_lifecycle.assert_awaited_once()
-    hitl.recover_stale_processing.assert_awaited_once()
+    assert not hasattr(StaleHITLDeps, "recover_stale_processing")
 
 
 def test_conversation_facade_has_no_stale_card_auto_fail():
