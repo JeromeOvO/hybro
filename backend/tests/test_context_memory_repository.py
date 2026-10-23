@@ -1380,3 +1380,59 @@ def _find_operator(expression: dict, operator: str) -> dict:
                     except KeyError:
                         pass
     raise KeyError(operator)
+
+
+class _IndexedCollection:
+    def __init__(self, indexes: dict, *, fail_drop: bool = False):
+        self.indexes = dict(indexes)
+        self.fail_drop = fail_drop
+        self.dropped: list[str] = []
+        self.created: list[str] = []
+
+    async def index_information(self):
+        return dict(self.indexes)
+
+    async def drop_index(self, name: str):
+        if self.fail_drop:
+            raise RuntimeError("drop failed")
+        self.dropped.append(name)
+        self.indexes.pop(name, None)
+
+    async def create_index(self, keys, **kwargs):
+        self.created.append(kwargs["name"])
+        return kwargs["name"]
+
+
+class _IndexedMongo:
+    def __init__(self, content):
+        self.content = content
+
+    def collection(self, name: str):
+        return self.content
+
+
+async def test_ensure_indexes_drops_obsolete_turn_notes_text_index():
+    content = _IndexedCollection({"_id_": {}, "turn_notes_text": {}})
+
+    await ContentStorageMongoRepository(mongo=_IndexedMongo(content)).ensure_indexes()
+
+    assert content.dropped == ["turn_notes_text"]
+    assert "turn_notes_text" not in content.created
+    assert "room_turn_unique" in content.created
+
+
+async def test_ensure_indexes_skips_drop_when_obsolete_index_is_absent():
+    content = _IndexedCollection({"_id_": {}})
+
+    await ContentStorageMongoRepository(mongo=_IndexedMongo(content)).ensure_indexes()
+
+    assert content.dropped == []
+
+
+async def test_obsolete_index_drop_failure_does_not_block_startup(caplog):
+    content = _IndexedCollection({"turn_notes_text": {}}, fail_drop=True)
+
+    await ContentStorageMongoRepository(mongo=_IndexedMongo(content)).ensure_indexes()
+
+    assert "room_turn_unique" in content.created
+    assert "Obsolete index removal failed" in caplog.text

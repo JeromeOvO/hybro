@@ -2339,7 +2339,9 @@ and generates no turn notes. The orchestrator reads canonical history directly
 through `MemoryRepository.get_room_memory`. There is no context assembly, memory
 search, room-summary update, synthesis append, or compacted content expansion
 path; compacted content in `conversation_content` is written but not read back at
-runtime, and that collection has no text index. Compaction configuration is
+runtime, and that collection has no text index; startup drops the retired
+`turn_notes_text` index if an older deployment still has it, logging a warning
+instead of failing when the drop does not succeed. Compaction configuration is
 validated when `CompactionConfig` is constructed at startup. The retired
 `context_*` token-budget and `memory_search_*` settings are in
 `loader.REMOVED_FIELDS`.

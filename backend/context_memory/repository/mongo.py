@@ -10,6 +10,9 @@ from common.utils.room_state import delete_room_rows
 
 logger = get_logger(__name__)
 
+# Memory search was removed; its text index is no longer read.
+OBSOLETE_CONTENT_INDEXES = ("turn_notes_text",)
+
 
 class MemoryMongoRepository:
     def __init__(
@@ -216,6 +219,7 @@ class ContentStorageMongoRepository:
         return await delete_room_rows((self._content,), conversation_id)
 
     async def ensure_indexes(self) -> None:
+        await self._drop_obsolete_indexes()
         await create_index(
             self._content,
             "conversation_content",
@@ -246,6 +250,21 @@ class ContentStorageMongoRepository:
             expireAfterSeconds=0,
             sparse=True,
         )
+
+    async def _drop_obsolete_indexes(self) -> None:
+        """Drop indexes whose readers were removed; failure never blocks startup."""
+        existing = await self._content.index_information()
+        for name in OBSOLETE_CONTENT_INDEXES:
+            if name not in existing:
+                continue
+            try:
+                await self._content.drop_index(name)
+            except Exception as exc:
+                logger.warning(
+                    "Obsolete index removal failed for conversation_content.%s",
+                    name,
+                    extra={"error_type": type(exc).__name__},
+                )
 
     async def upsert_full_content(
         self,
