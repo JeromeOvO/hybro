@@ -27,6 +27,7 @@ from conversation.idempotency import (
 )
 from conversation.mentions import parse_agent_mentions
 from conversation.runtime import ConversationRuntime
+from conversation.target_scope import TargetScopeResolver
 from conversation.user_message_persistence import (
     UserMessageCommitCommand,
     UserMessageCommitService,
@@ -348,7 +349,9 @@ async def test_room_services_assigns_message_id_before_claiming_file_references(
 
 
 @pytest.mark.asyncio
-async def test_room_services_persist_message_to_room_passes_room_agent_set_to_user_commit_event():
+async def test_room_services_persist_message_to_room_passes_room_agent_set_to_user_commit_event(
+    monkeypatch,
+):
     svc = object.__new__(ConversationRuntime)
     svc._store = MagicMock()
     svc._store.get_room_by_room_id = AsyncMock(
@@ -365,7 +368,9 @@ async def test_room_services_persist_message_to_room_passes_room_agent_set_to_us
     svc._facade = None
     svc._validate_send_message_request = MagicMock(return_value=None)
     svc._resolve_and_apply_attachments = AsyncMock(return_value=None)
-    svc._resolve_explicit_target_scope = AsyncMock()
+    monkeypatch.setattr(
+        TargetScopeResolver, "resolve_explicit_target_scope", AsyncMock()
+    )
     svc._materialize_room_quote = AsyncMock(return_value=None)
     publisher = RecordingEventPublisher()
     facade = AsyncMock()

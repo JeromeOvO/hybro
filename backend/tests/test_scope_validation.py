@@ -2,8 +2,8 @@
 Tests for scope validation and stale member handling.
 
 Covers:
-- _validate_canonical_mentions rejects invalid/unauthorized agents
-- _resolve_explicit_target_scope rejects empty room_team, missing/empty saved groups
+- validate_canonical_mentions rejects invalid/unauthorized agents
+- resolve_explicit_target_scope rejects empty room_team, missing/empty saved groups
 - Pre-persist scope validation: rejected messages never reach the database
 - Inline mentions persist-first behavior (pinned)
 """
@@ -15,6 +15,7 @@ import pytest
 from common.dto import UserMessageInsertResult
 from conversation.mentions import parse_agent_mentions
 from conversation.runtime import ConversationRuntime
+from conversation.target_scope import TargetScopeResolver
 from models.agent import Agent, AgentStatus
 from models.response import (
     RoomCenterUserMessageResponse,
@@ -79,7 +80,7 @@ async def _send(
 
 
 # =============================================================================
-# _validate_canonical_mentions Tests
+# validate_canonical_mentions Tests
 # =============================================================================
 
 
@@ -89,7 +90,7 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", "Alpha")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(
+        result = await room_center._target_scope.validate_canonical_mentions(
             ["agent-1"], sender_user_id="user-1"
         )
         assert isinstance(result, list)
@@ -100,7 +101,7 @@ class TestValidateCanonicalMentions:
     async def test_nonexistent_agent_returns_error(self, room_center):
         room_center.database_service.get_agent_by_agent_id.return_value = None
 
-        result = await room_center._validate_canonical_mentions(
+        result = await room_center._target_scope.validate_canonical_mentions(
             ["ghost-agent"], sender_user_id="user-1"
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -112,7 +113,7 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", status=AgentStatus.inactive)
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(
+        result = await room_center._target_scope.validate_canonical_mentions(
             ["agent-1"], sender_user_id="user-1"
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -123,7 +124,7 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", is_public=False, provider_id="other-user")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(
+        result = await room_center._target_scope.validate_canonical_mentions(
             ["agent-1"], sender_user_id="user-1"
         )
         assert isinstance(result, RoomCenterUserMessageResponse)
@@ -135,7 +136,7 @@ class TestValidateCanonicalMentions:
         agent = _make_agent("agent-1", is_public=False, provider_id="user-1")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._validate_canonical_mentions(
+        result = await room_center._target_scope.validate_canonical_mentions(
             ["agent-1"], sender_user_id="user-1"
         )
         assert isinstance(result, list)
@@ -143,7 +144,7 @@ class TestValidateCanonicalMentions:
 
 
 # =============================================================================
-# _resolve_explicit_target_scope Tests
+# resolve_explicit_target_scope Tests
 # =============================================================================
 
 
@@ -154,7 +155,7 @@ class TestResolveExplicitTargetScope:
         agent = _make_agent("a1", "Alpha")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "hello",
             "room_team",
@@ -179,7 +180,7 @@ class TestResolveExplicitTargetScope:
             "image": image_agent,
         }.get
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "inspect this",
             "room_team",
@@ -207,7 +208,7 @@ class TestResolveExplicitTargetScope:
             "broken"
         }
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "hello",
             "room_team",
@@ -238,7 +239,7 @@ class TestResolveExplicitTargetScope:
             "pdf": pdf_agent,
         }.get
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "summarize this",
             "group-1",
@@ -254,7 +255,7 @@ class TestResolveExplicitTargetScope:
     async def test_room_team_empty_returns_scope_error(self, room_center):
         room = _make_room(agent_set={})
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "hello",
             "room_team",
@@ -269,7 +270,7 @@ class TestResolveExplicitTargetScope:
         room = _make_room()
         room_center.database_service.get_agent_group_by_id.return_value = None
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "hello",
             "nonexistent-group-id",
@@ -288,7 +289,7 @@ class TestResolveExplicitTargetScope:
         group.agents = ["a1"]
         room_center.database_service.get_agent_group_by_id.return_value = group
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "hello",
             "group-1",
@@ -308,7 +309,7 @@ class TestResolveExplicitTargetScope:
         group.name = "Empty Group"
         room_center.database_service.get_agent_group_by_id.return_value = group
 
-        result = await room_center._resolve_explicit_target_scope(
+        result = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "hello",
             "group-1",
@@ -324,7 +325,7 @@ async def test_workflow_candidate_scope_returns_named_locked_scope(room_center):
     agent = _make_agent("agent-1", "Agent One")
     room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-    result = await room_center._resolve_selected_candidate_scope(
+    result = await room_center._target_scope.resolve_selected_candidate_scope(
         ["agent-1"],
         sender_user_id="user-1",
     )
@@ -343,7 +344,7 @@ async def test_workflow_candidate_scope_rejects_unsupported_attachment_agent(
     text_agent.agent_card.default_input_modes = ["text"]
     room_center.database_service.get_agent_by_agent_id.return_value = text_agent
 
-    result = await room_center._resolve_selected_candidate_scope(
+    result = await room_center._target_scope.resolve_selected_candidate_scope(
         ["text"],
         sender_user_id="user-1",
         required_input_modes=["application/pdf"],
@@ -365,7 +366,7 @@ async def test_workflow_candidate_scope_rejects_agent_with_capability_issue(
         "broken"
     }
 
-    result = await room_center._resolve_selected_candidate_scope(
+    result = await room_center._target_scope.resolve_selected_candidate_scope(
         ["broken"],
         sender_user_id="user-1",
     )
@@ -488,14 +489,14 @@ class TestInlineMentionBehavior:
 
     @pytest.mark.asyncio
     async def test_pre_persist_skipped_when_no_canonical_mentions(self, room_center):
-        """When mentioned_agent_ids is empty/None, _validate_canonical_mentions
-        is NOT called. The code path for room_team goes through _resolve_explicit_target_scope
+        """When mentioned_agent_ids is empty/None, validate_canonical_mentions
+        is NOT called. The code path for room_team goes through resolve_explicit_target_scope
         instead, which runs pre-persist. Inline mentions only run post-persist."""
         room = _make_room(agent_set={"a1": "Alpha"})
         agent = _make_agent("a1", "Alpha")
         room_center.database_service.get_agent_by_agent_id.return_value = agent
 
-        scope = await room_center._resolve_explicit_target_scope(
+        scope = await room_center._target_scope.resolve_explicit_target_scope(
             room,
             "<@unknown|Ghost> hello",
             "room_team",
@@ -576,7 +577,9 @@ class TestAllAgentsPostPersistMessageId:
     an already-persisted user message."""
 
     @pytest.mark.asyncio
-    async def test_all_agents_exception_returns_persisted_message_id(self, room_center):
+    async def test_all_agents_exception_returns_persisted_message_id(
+        self, room_center, monkeypatch
+    ):
         room = _make_room(agent_set={"a1": "Alpha"})
         room_center.database_service.get_room_by_room_id.return_value = room
 
@@ -603,7 +606,7 @@ class TestAllAgentsPostPersistMessageId:
         )
         room_center._initialize_room_memory = AsyncMock(return_value=None)
 
-        # Make _resolve_explicit_target_scope return an error (simulating selector failure)
+        # Make resolve_explicit_target_scope return an error (simulating selector failure)
         error_response = RoomCenterUserMessageResponse(
             message_id=None,
             message=None,
@@ -615,8 +618,10 @@ class TestAllAgentsPostPersistMessageId:
             ),
             status_code=500,
         )
-        room_center._resolve_explicit_target_scope = AsyncMock(
-            return_value=error_response
+        monkeypatch.setattr(
+            TargetScopeResolver,
+            "resolve_explicit_target_scope",
+            AsyncMock(return_value=error_response),
         )
         result = await _send(
             room_center,
@@ -644,7 +649,7 @@ class TestClientRequestIdPropagation:
 
     @pytest.mark.asyncio
     async def test_send_preserves_client_request_id_for_execution_preflight(
-        self, room_center
+        self, room_center, monkeypatch
     ):
         room = _make_room(agent_set={"a1": "Alpha"})
         room_center.database_service.get_room_by_room_id.return_value = room
@@ -685,8 +690,10 @@ class TestClientRequestIdPropagation:
             ),
             status_code=500,
         )
-        room_center._resolve_explicit_target_scope = AsyncMock(
-            return_value=error_response
+        monkeypatch.setattr(
+            TargetScopeResolver,
+            "resolve_explicit_target_scope",
+            AsyncMock(return_value=error_response),
         )
 
         result = await _send(

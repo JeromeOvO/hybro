@@ -1322,8 +1322,11 @@ metadata, and the orchestrator's final message), implemented by
 the SSE `client_request_id` resolver.
 `conversation.runtime.ConversationRuntime` implements Execution's `RoomCenterPort`
 and the chat message reads: user-message persistence and idempotent replay,
-preflight, candidate and explicit target-scope resolution, and room timeline
-reads. `conversation.mentions` parses `<@agent_id|name>` mentions of room members
+preflight, and room timeline reads. `conversation.target_scope.TargetScopeResolver`,
+built from the runtime's store and capability-issue reader, sanitizes routing
+targets (excluding agents with open capability issues), validates candidate-scope
+metadata and canonical mentions, and resolves explicit target groups.
+`conversation.mentions` parses `<@agent_id|name>` mentions of room members
 and builds canonical mentions, rejecting invalid or unauthorized targets with a
 `unauthorized_mention` scope error.
 

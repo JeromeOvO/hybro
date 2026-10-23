@@ -85,7 +85,7 @@ class AgentSelectionService:
         )
 
         # Delegate to AgentMatcher — let exceptions propagate so callers
-        # (e.g. _resolve_explicit_target_scope) can surface a proper 500.
+        # (e.g. TargetScopeResolver.resolve_explicit_target_scope) can surface a proper 500.
         match_result = await self._matcher.match(
             message_text=message_text,
             user_id=user_id,
