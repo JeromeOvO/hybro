@@ -1,8 +1,8 @@
 # Hybro Frontend Architecture
 
-> Last scanned: 2026-10-10
+> Last scanned: 2026-10-23
 >
-> Source of truth: current repository files under `src/`, `tests/`, and root config files. Historical design notes in `docs/` are not treated as current architecture.
+> Source of truth: current repository files under `src/`, `tests/`, and root config files.
 
 ## 1. Overview
 
@@ -14,15 +14,15 @@ The app talks to the backend through REST APIs and room-scoped Server-Sent Event
 
 | Area | Current count / source |
 |---|---|
-| Source files | 319 files under `src/` |
-| Test/support files | 156 files under `tests/` |
-| App Router files | 34 files under `src/app/` |
-| Component files | 118 files under `src/components/` |
-| shadcn/ui primitives | 28 files under `src/components/ui/` |
-| Conversation components | 17 files under `src/components/conversation/` |
-| Hooks | 46 files under `src/hooks/` |
-| Library modules | 98 files under `src/lib/` |
-| Stores | 19 files under `src/stores/` |
+| Source files | 324 files under `src/` |
+| Test/support files | 166 files under `tests/` |
+| App Router files | 36 files under `src/app/` |
+| Component files | 113 files under `src/components/` |
+| shadcn/ui primitives | 27 files under `src/components/ui/` |
+| Conversation components | 22 files under `src/components/conversation/` |
+| Hooks | 48 files under `src/hooks/` |
+| Library modules | 104 files under `src/lib/` |
+| Stores | 23 files under `src/stores/` |
 
 ## 3. Tech Stack
 
@@ -96,7 +96,6 @@ refuses to change (`config set backend.api_prefix`); everything else applies on
 Neither dotenv files nor `auth.json` are browser configuration inputs. Server
 credentials are runtime-only and never build arguments. A browser gets a new
 projection on its next page load; an already-open tab keeps the one it loaded.
-See [configuration architecture](../../docs/Configuration-Architecture.md).
 
 Available package scripts:
 
@@ -154,7 +153,7 @@ src/app/
     |-- networks/page.tsx        # redirect -> /network
     |-- access/mcp/page.tsx      # redirect -> /connect/mcp
     |-- access/api/page.tsx      # redirect -> /connect/api
-    `-- manage/                  # redirect-only legacy paths
+    `-- manage/                  # redirect-only paths
         |-- page.tsx
         |-- agents/page.tsx
         |-- agents/[id]/page.tsx
@@ -174,10 +173,10 @@ The application exposes one unprefixed route tree with four destinations:
   error page. Search updates replace the history entry; other params push one.
 - `/network/agents/[id]` and `/network/agents/new`: agent detail and remote
   agent registration.
-- `/chat` and `/room/[id]`: Chats (unchanged chat home and room workspace).
+- `/chat` and `/room/[id]`: Chats (chat home and room workspace).
 - `/connect/mcp` and `/connect/api`: Connect pages (MCP and API tabs).
 
-There is no host-based route rewrite. Legacy `/agents*`, `/networks`,
+There is no host-based route rewrite. `/agents*`, `/networks`,
 `/access/*`, and `/manage*` paths are page-level `redirect()` routes to their
 canonical equivalents. `src/lib/routes.ts` is the canonical route vocabulary
 (`overview`, `network`, `networkWith(query)`, `networkAgent(id)`,
@@ -210,7 +209,7 @@ not toasted; they render in the conversation as part of the agent's turn.
 Every portal route shares `PortalSidebar` and `SidebarInset`; the inset contains `PortalHeader` and the route content.
 There is no separate workspace shell or route-classified navigation renderer.
 
-The original authentication behavior is retained: signed-out marketing pages
+Signed-out marketing pages
 use their public header; signed-in pages share the side menu. Desktop pages have
 no additional header, while mobile pages use the existing header and sidebar
 trigger. Individual pages own their sizing, scrolling, and business content.
@@ -224,6 +223,7 @@ src/components/
 |-- composer/                 # chat composer shell and HITL response bar
 |-- portal/                   # shared sidebar, header, footer, ChatHistory
 |-- overview/                 # Overview page and static mini topology
+|-- sessions/                 # Sessions list (SessionsTablePage) and ticket (SessionRecordView)
 |-- networks/                 # Network workspace: toolbar, SVG graph, structure view, details panel, add-to-subnet menu, Agent picker
 |-- subnets/                  # one subnet dialog (create/edit), delete confirmation, room/chat dialog host
 |-- connect/                  # Connect pages, per-assistant setups, copyable access materials
@@ -231,12 +231,15 @@ src/components/
 |-- settings/                 # settings dialog sections and helpers
 |-- room-page-shell.tsx       # room workspace shell
 |-- room-chat-input.tsx       # composer input, mentions, uploads
+|-- file-attachment-button.tsx
 |-- group-selector.tsx
 |-- status-indicator.tsx      # shared status dot and label (src/lib/status.ts mapping)
 |-- page-header.tsx           # shared page title and one-line description
+|-- agent-source-badge.tsx
 |-- artifact-list.tsx
 |-- artifact-renderer.tsx
 |-- attachment-preview.tsx
+|-- image-lightbox.tsx
 |-- markdown-content.tsx
 |-- part-renderer.tsx
 |-- mode-selector.tsx
@@ -246,12 +249,12 @@ src/components/
 |-- nav-discord-button.tsx
 |-- require-auth.tsx
 |-- use-case-card.tsx
+|-- fade-in-section.tsx
 |-- cookie-banner.tsx
 |-- theme-provider.tsx
 |-- theme-toggle.tsx
 |-- logo.tsx
-|-- icons.tsx
-`-- video-embed.tsx
+`-- icons.tsx
 ```
 
 ### Conversation renderer
@@ -259,9 +262,11 @@ src/components/
 The current room UI is centered on `src/components/conversation/`:
 
 - `ConversationMessageList.tsx`: top-level message/timeline list.
-- `TurnRenderer.tsx`, `TurnBody.tsx`: turn-level rendering.
+- `TurnRenderer.tsx`, `TurnBody.tsx`: turn-level rendering. `TurnRenderer` selects `CanonicalTurnRenderer` for a turn with an exact canonical root and the message-store renderer otherwise.
+- `CanonicalTurnRenderer.tsx`, `CanonicalTurnTrace.tsx`, `TurnTracePanel.tsx`, `turn-trace-time.ts`: the canonical Turn (User, Trace, Final Answer, Agent Cards) and its Work Logs trace.
+- `ProcessingStatusLog.tsx`: progress entries for turns without a canonical root.
 - `UserMessageBlock.tsx`, `UserAttachmentCard.tsx`, `UserAnswerCard.tsx`: user-side turn content.
-- `AgentCard.tsx`, `AgentContentBlock.tsx`, `AgentResultContent.tsx`, `AgentIndex.tsx`: agent response presentation. Multi-agent turns with LLM synthesis (`llm_synthesis`) show the combined answer in the primary surface and compact per-agent index rows below. Supervisor DONE without synthesis (`deterministic_done`) shows the digest intro in the primary surface and full per-agent bodies in the expanded `AgentIndex`. Substantive `summary-*` content classifies as `llm_synthesis`; the short coordinator digest stub (`"N agents responded. Expand below…"`) classifies as `deterministic`.
+- `AgentCard.tsx`, `AgentContentBlock.tsx`, `AgentResultContent.tsx`, `AgentIndex.tsx`: agent response presentation. In the message-store renderer, multi-agent turns with LLM synthesis (`llm_synthesis`) show the combined answer in the primary surface and compact per-agent index rows below. Supervisor DONE without synthesis (`deterministic_done`) shows the digest intro in the primary surface and full per-agent bodies in the expanded `AgentIndex`. Substantive `summary-*` content classifies as `llm_synthesis`; the short coordinator digest stub (`"N agents responded. Expand below…"`) classifies as `deterministic`.
 - `FinalAnswerSurface.tsx`, `SynthesisContent.tsx`: final/synthesis answer surfaces.
 - `AgentResponseDetailPane.tsx`: right-side detail pane for a selected agent response.
 - `ScrollToBottomButton.tsx`, `scroll-state.ts`: scroll affordances and state.
@@ -284,7 +289,11 @@ src/hooks/
 |-- useNetworkUrlState.ts      # Network workspace URL state bound to the router
 |-- useGraphDisplayPrefs.ts    # graph label switches persisted in localStorage
 |-- useRoomHistory.ts          # shared room history query (sidebar, Chats badge, Overview)
+|-- useRoomFile.ts             # authenticated room-file blob and preview lifecycle
 |-- useSessions.ts             # owner session list, polled every 15 s (sidebar badge, Overview, /sessions)
+|-- useSessionListUrlState.ts  # Sessions list view state bound to the URL
+|-- useHitlInteractionController.ts # HITL questionnaire state reducer (lib/hitl/interaction-controller)
+|-- useDetailPaneScroll.ts     # Agent detail pane scroll restore and tail follow
 |-- useMcpStatus.ts            # shared /hybro-mcp gateway status query
 |-- useScrollUserMessageOnSend.ts # one-time scroll into sticky zone on send
 |-- usePrimaryStreamScroll.ts
@@ -305,6 +314,8 @@ src/hooks/room/
 |-- useSendMessage.ts
 |-- useRoomActions.ts
 |-- processing-lifecycle.ts
+|-- processing-status-log.ts
+|-- hitl-submission-fence.ts   # per-room, per-interaction submit fencing
 |-- types.ts
 `-- sse-handlers/
 ```
@@ -380,9 +391,10 @@ Key files:
 - `stale-detection.ts`
 - `resolve-display-type.ts`
 
-Turn-terminal state now arrives as durable-confirmed frames over the
-snapshot-driven room stream; the former `infer-turn-terminal-status.ts`
-inference module has been removed.
+Other stores: `turn-store.ts` (the server-owned canonical Turn projection),
+`turn-presentation-store.ts` (per-Turn Trace disclosure and scroll-follow
+state), `trace-store/` (diagnostic trace hydrated from snapshots for turns without
+a canonical root), `streaming-store/` (below), and `room-ui-store.ts`.
 
 ### Snapshot-driven room sync (`src/lib/room-sync/room-reducer.ts`)
 
@@ -414,24 +426,21 @@ timeout, clears `cancelling`, and removes/dismisses the placeholder. This repair
 a missed `run_settled` at or below the snapshot watermark. Wrong-root,
 nonterminal, invalid, and stale snapshots cannot unlock unrelated work.
 
-Snapshots without both capability fields remain pure legacy snapshots and
-continue to hydrate the incumbent message, streaming, and diagnostic trace
-stores. Mixed snapshots still hydrate legacy logs/trace/HITL for historical
-legacy roots; suppression is exact-root only, and canonical `awaiting_input`
-restores every actionable request-scoped HITL entity plus the dispatcher-owned
-`hitlRequestIndex` through the production `RoomReducer` snapshot path, without
-recency inference. Multiple requests may retain the same canonical Agent Card
-message identity but never share their client-side projection identity. During
-rolling-deploy recovery, an older legacy-shaped HITL
-request may recreate only its composer message projection when its
-`client_request_id` and related User message exactly match one canonical Turn;
-it never infers or mutates canonical Turn lifecycle state. This keeps rooms
-written before the producer upgrade answerable while new events use the strict
-canonical contract.
-Canonical renderers never consume legacy prose or diagnostic trace nodes. This
-is a per-User-request mutual-exclusion boundary:
-exact `run_started`/snapshot root binding selects the canonical renderer;
-otherwise the legacy renderer remains in use.
+The backend always sends both capability fields. A snapshot that advertises
+only one of them is rejected; one with neither is folded only into the message,
+streaming, and trace stores. The snapshot's `messages`, `trace`, and `hitl`
+sections still hydrate those stores for User requests that have no canonical
+root (room history written before canonical Runs); suppression is exact-root
+only. Canonical `awaiting_input` restores every actionable request-scoped HITL
+entity plus the dispatcher-owned `hitlRequestIndex` through the `RoomReducer`
+snapshot path, without recency inference. Multiple requests may share a canonical
+Agent Card message identity but never their client-side projection identity. A
+HITL request row without `run_id` may recreate only its composer message
+projection when its `client_request_id` and related User message exactly match
+one canonical Turn; it never infers or mutates Turn lifecycle state. Canonical
+renderers never consume message-store prose or diagnostic trace nodes. This is a
+per-User-request boundary: exact `run_started`/snapshot root binding selects the
+canonical renderer; otherwise the message-store renderer is used.
 
 The backend room stream sends `Cache-Control: no-cache, no-transform` and
 `X-Accel-Buffering: no`. These headers must survive the frontend API rewrite:
@@ -465,21 +474,18 @@ Failed and canceled terminal Runs also display `Finished`; child action rows
 retain their truthful failure/cancellation state.
 The current Assistant safely renders through `MarkdownContent` in the final slot;
 `message_end(final)` remains provisional until the exact durable response commits
-it. Canonical terminal duration is server-authoritative; live canonical and legacy
-durations tick from the Turn start, while terminal legacy duration uses its last
-durable observation. Active traces initialize open, historical terminal snapshots
-initialize collapsed, and focus-safe auto-collapse is consumed once. Canonical and
-legacy Trace surfaces use the answer body's 1rem/1.75 typography and left edge,
+it. Canonical terminal duration is server-authoritative; live durations tick from the Turn start, while a terminal turn without a
+canonical root uses its last durable observation. Active traces initialize open, historical terminal snapshots
+initialize collapsed, and focus-safe auto-collapse is consumed once. Both Trace surfaces use the answer body's 1rem/1.75 typography and left edge,
 with no internal card borders. Tool/Agent-call rows use the Bot marker icon;
 completed rows and the terminal `Finished` status use the shared success green.
 Trace and Agent-call lists grow within the conversation's single scroll owner;
 they do not create clipped nested scroll regions when a Turn has many calls.
 Only active content is live-announced, and motion has reduced-motion fallbacks.
-HYBRO AI summary/presenter entities still own final-answer data but no
-longer render an Agent Card; only actual delegated Agent executions appear as
-Agent Cards.
+HYBRO AI summary/presenter entities own final-answer data but render no Agent
+Card; only delegated Agent executions appear as Agent Cards.
 
-Legacy turns retain their progress entries through `ProcessingStatusLog`, including
+Turns without a canonical root show progress entries through `ProcessingStatusLog`, including
 logs restored from stream snapshots. The compact log remains readable without
 expanding it. When public tool events also exist, their trace remains available
 alongside the logs; a progress-only turn does not render an empty trace header.
@@ -495,8 +501,8 @@ Canonical `model_decision` events fold into `TurnProjection.activity` entries of
 `kind:"decision"` (validated in `contract.ts`, folded in `fold.ts`, rendered by
 `CanonicalTurnTrace`). Current decisions make the model-first HITL loop visible
 through `interaction_received`, `answered_from_context`, `no_progress`, and
-explicit `forwarded_to_user` events. Historical `degraded_to_user` records remain
-readable, but the backend no longer produces them. Only backend-computed summaries
+explicit `forwarded_to_user` events; `degraded_to_user` is accepted by the
+contract but no backend producer emits it. Only backend-computed summaries
 and sanitized Agent labels are projected; raw model reasoning is never surfaced.
  Cards prefer the durable sanitized root
 Agent name, and generic,
@@ -505,15 +511,14 @@ snapshot, or database hydration. For old records only, the exact opaque-call
 Tool activity label is the final safe fallback. Live and snapshot guards require
 `run_id + opaque_public_call_id` and
 the exact derived `orchestrator:{run_id}:{opaque_public_call_id}` message
-identity. Any `task_*`, partial-agent, raw artifact, or compatibility processing
-frame is excluded from canonical lifecycle state only when it matches an exact
+identity. Any `task_*`, partial-agent, raw artifact, or `processing_status` frame is excluded from canonical lifecycle state only when it matches an exact
 canonical User/client root; canonical capability elsewhere in the same room does
-not suppress unrelated legacy activity. Malformed duplicate status owners
+not suppress unrelated message-store activity. Malformed duplicate status owners
 trigger snapshot recovery. Before `run_started`, the latest optimistic User root
 renders a preparation or Work Logs surface while no Agent responses are available.
-Received legacy Agent responses remain visible even while that User message is
-optimistic. An exact canonical root atomically takes ownership of the matching
-turn, so legacy cards do not duplicate canonical cards. Memoized Turn boundaries
+Received message-store Agent responses remain visible even while that User
+message is optimistic. An exact canonical root atomically takes ownership of the
+matching turn, so message-store cards do not duplicate canonical cards. Memoized Turn boundaries
 and card-ID-scoped selectors keep
 active deltas from rerendering historical Turns. Canonical cards without a
 real Agent profile ID render a non-link label (never a fabricated
@@ -578,25 +583,25 @@ snapshot request. Recovery failure does not turn an accepted cancellation into a
 request failure, and no second Stop request is sent. A rejected HITL cancellation
 clears `cancelling` after any conflict reconciliation. The HTTP response and
 child-task updates cannot otherwise clear that state. Durable terminal
-`run_settled` or an accepted exact-root terminal snapshot (canonical), or
-`processing_status` (legacy), owns cleanup. After
+`run_settled` or an accepted exact-root terminal snapshot (canonical turns), or terminal `processing_status` (turns without a canonical
+root), owns cleanup. After
 refresh, the existing room `active_runs` response restores `canceling` and
 hydrates both message and client-request correlation from the triggering user
-message; the canonical room-event snapshot schema is unchanged.
+message.
 
 ### `src/stores/streaming-store/`
 
 The streaming store contains transient live artifact/text buffers. It is intentionally separate from `message-store`: streaming artifacts are displayed live, then cleared after DB reconcile or task checkpoint persistence.
 
-Live buffer text is derived via `extractStreamTextFromArtifacts`, which concatenates all text-only artifacts in emission order (matching backend final assembly). Persisted entity text still uses `extractTextFromArtifacts` (last text-only artifact) for thinking + answer agents — this asymmetry is intentional today and disappears under the AG-UI roadmap (`REASONING_*` events split thinking from answer at the wire layer).
+Live buffer text is derived via `extractStreamTextFromArtifacts`, which concatenates all text-only artifacts in emission order (matching backend final assembly). Persisted entity text uses `extractTextFromArtifacts` (last text-only artifact) for thinking + answer agents; this asymmetry is intentional.
 
-**Streaming invariants** (enforced after the convergence plan in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md)):
+**Streaming invariants:**
 
-- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` is a compat shim that first creates a correlation-preserving message shell, then maps `content_delta` to a synthetic artifact and calls the same append; a live buffer is never left without a renderable turn entity.
+- **I1** — One live ingest pipeline. All live streaming text flows through `streaming-store.append(message_id, …)`. `agent_response_partial` first creates a correlation-preserving message shell, then maps `content_delta` to a synthetic artifact and calls the same append; a live buffer is never left without a renderable turn entity.
 - **I2** — Live buffer key is always `message_id`. `client_request_id` is correlation/cleanup metadata, never a buffer key or display merge dimension.
 - **I3** — Live text equals persisted text. `extractStreamTextFromArtifacts` over the live artifact list equals backend `extract_parts_from_artifacts` over the persisted artifact list at terminal.
 - **I4** — Detail pane content for terminal entities comes from `message-store`, never from the live buffer (strict terminal guard in `selectAgentResponseDetail`).
-- **I5** — Per-agent terminal SSE clears that message's buffer only. Legacy Turn-level clear remains owned by terminal `processing_status`; canonical Turns do not use that frame for lifecycle or content.
+- **I5** — Per-agent terminal SSE clears that message's buffer only. For turns without a canonical root, turn-level clear is owned by terminal `processing_status`; canonical Turns do not use that frame for lifecycle or content.
 - **I6** — `streaming-store/append` does not import `mergeArtifacts` from `message-store/upsert`. Live merge is `mergeStreamArtifacts` (disjoint-segment push, prefix-relation replace).
 - **I7** — Streaming UI (badge, cursor, Streamdown caret) is driven only by an incomplete live buffer while the agent view-model status is `working`. Terminal agent status always wins over a stale buffer. Late `artifact_update` frames after terminal `task_update` are ignored and any leftover buffer for that `message_id` is cleared.
 
@@ -605,16 +610,14 @@ Live buffer text is derived via `extractStreamTextFromArtifacts`, which concaten
 - **Pre-parse** (`preprocessConversationMarkdown` in `normalize-conversation.ts`, `normalize-agent-list-markers.ts`, and `split-inline-ordered.ts`) runs before Streamdown: rewrites common agent list-marker mistakes (`1. • …` and bare `•` lines → `-` bullets; skips fenced code); inline ordered split for run-on `1. foo 2. bar` lines on list-item lines only (skips prose like `See step 1. For details`); supervisor-shaped lines (`3. **#3 — …`) only split before the next `N. **#N` marker so prose like `adoption in 4. The era` stays one item; inline splits are deferred while `isStreaming` is true; ATX heading lines and fenced code are skipped; bare `###` markers on their own line are folded into the next content line. Section-label promotion and list renumbering are **not** done in pre-parse.
 - **Render-time remark plugins** (`conversation-remark-plugins.ts`, passed to Streamdown `remarkPlugins`) operate on the mdast tree Streamdown actually renders — no remark-stringify/reparse gap. The bundle includes `remark-gfm` because Streamdown replaces (not merges) default plugins when `remarkPlugins` is set. For conversation markdown, `parseMarkdownIntoBlocksFn={(md) => [md]}` parses the full message in one pass (including during streaming) so section/list surgery is not split across Streamdown blocks. Plugin order: `remark-gfm` → `remarkSplitSectionLists` → `remarkNestAdjacentBulletLists` → `remarkCoalesceOrderedLists` → `remarkAssignOrderedListStarts`.
 - **Rehype pipeline** (`markdown-content.tsx`): custom `rehypePlugins` must include Streamdown's `defaultRehypePlugins` (`rehype-raw`, `rehype-sanitize`, `rehype-harden`) before `rehype-highlight`, because passing `rehypePlugins` replaces rather than merges defaults.
-- Agent `message_text` is stored and returned by the backend as produced; markdown repair is client-side only. The frontend AST pipeline is the universal compatibility layer for third-party agents.
-- Completed agent tasks treat backend-projected `message_text` as the human-readable response and render non-text Task artifacts alongside it. Raw `TaskStatus.message` and Task history are never promoted by the client; when public `message_text` is absent, a completed text-only artifact remains the compatibility fallback.
-- Agent entities retain the backend-published `extend_info.public_dispatch_text` separately from the short `public_task_label`. The main Agent Card keeps the compact label; the expanded response detail prefers the full dispatch text in its existing collapsible task region, followed by the agent `message_text` and artifacts.
+- Agent `message_text` is stored and returned by the backend as produced; markdown repair is client-side only. The frontend AST pipeline normalizes third-party agent markdown.
+- Completed agent tasks treat backend-projected `message_text` as the human-readable response and render non-text Task artifacts alongside it. Raw `TaskStatus.message` and Task history are never promoted by the client; when public `message_text` is absent, a completed text-only artifact is the fallback.
+- Agent entities keep `extend_info.public_dispatch_text`, when a stored message carries it, separately from the short `public_task_label`. The main Agent Card keeps the compact label; the expanded response detail prefers the full dispatch text in its existing collapsible task region, followed by the agent `message_text` and artifacts.
 - The renderer maps top-level `<ol>` elements to `style.counterReset = 'conv-section-ol <start - 1>'` from the mdast `start` prop. CSS counters in `conversation-tokens.css` provide visible `N.` markers for ordinary lists; items that already start with `#N` (supervisor-style `**#1 — …` rows) get `conv-hash-numbered-item` and suppress the extra counter.
 
 Display helpers in `src/lib/streaming/display.ts` split live **text** (buffer) from **non-text artifacts** (files/data) during stream so the detail pane and activity strip can show file attachments while text is still growing. `AgentResponseDetailPane` uses `useDetailPaneScroll` with ChatGPT-aligned behavior: first open scrolls to top; reopening the same message restores saved scroll from `room-ui-store.detailScrollByMessageId`; optional tail-follow when pinned near bottom during stream; no scroll reset on stream complete; detail body uses `overflow-anchor: none`.
 
-**Main feed scroll (`ConversationMessageList`):** The logical bottom of the feed is the `[data-content-end]` sentinel after the last turn — not the full `scrollHeight`, which includes the fixed `[data-scroll-spacer]` below it. `content-end-scroll.ts` centralizes `scrollToContentEnd`, `isNearContentEnd`, and snapshot `atBottom` detection. On first open (no saved position), the list scrolls to content-end. When revisiting a room, the last scroll position is restored from `room-ui-store.conversationScrollByRoom` (including an `atBottom` flag so rooms left pinned to the latest message still land at content-end). Scroll snapshots persist across `resetRoom` and are cleared on `resetAll`. Every user message bubble uses native CSS sticky (`.conversation-user-sticky { position: sticky; top: 0 }`) for both live and completed turns. On send (`localSendSeq`), `useScrollUserMessageOnSend` scrolls the sticky wrapper into the top of the scrollport once so sticky engages; CSS sticky then holds the question visible while HYBRO/agent content grows below. While the room is processing (`turnLive`), `tailFollowRef` (detail-pane-style sticky follow flag) stays true once the user reaches content-end and only clears on explicit user scroll (wheel/touchmove with movement, or `scrollTop` decrease while not programmatic), not when content growth temporarily moves the viewport away from the threshold. The 150ms programmatic-scroll suppress window only skips scroll-position re-enable inference and snapshot writes — it does not block user cancel. `usePrimaryStreamScroll` and layout-driven follow scroll whenever `tailFollowRef` is set. `.conversation-scroll-area` and `.conversation-frame` use `overflow-anchor: none`. Users who scroll away see the scroll-to-bottom button, which re-enables tail follow.
-
-Known issues and the convergence plan are in [`docs/STREAMING_UI_ISSUES_AND_FIXES.md`](STREAMING_UI_ISSUES_AND_FIXES.md).
+**Main feed scroll (`ConversationMessageList`):** The logical bottom of the feed is the `[data-content-end]` sentinel after the last turn — not the full `scrollHeight`, which includes the fixed `[data-scroll-spacer]` below it. `src/lib/conversation/content-end-scroll.ts` centralizes `scrollToContentEnd`, `isNearContentEnd`, and snapshot `atBottom` detection. On first open (no saved position), the list scrolls to content-end. When revisiting a room, the last scroll position is restored from `room-ui-store.conversationScrollByRoom` (including an `atBottom` flag so rooms left pinned to the latest message still land at content-end). Scroll snapshots persist across `resetRoom` and are cleared on `resetAll`. Every user message bubble uses native CSS sticky (`.conversation-user-sticky { position: sticky; top: 0 }`) for both live and completed turns. On send (`localSendSeq`), `useScrollUserMessageOnSend` scrolls the sticky wrapper into the top of the scrollport once so sticky engages; CSS sticky then holds the question visible while HYBRO/agent content grows below. While the room is processing (`turnLive`), `tailFollowRef` (detail-pane-style sticky follow flag) stays true once the user reaches content-end and only clears on explicit user scroll (wheel/touchmove with movement, or `scrollTop` decrease while not programmatic), not when content growth temporarily moves the viewport away from the threshold. The 150ms programmatic-scroll suppress window only skips scroll-position re-enable inference and snapshot writes — it does not block user cancel. `usePrimaryStreamScroll` and layout-driven follow scroll whenever `tailFollowRef` is set. `.conversation-scroll-area` and `.conversation-frame` use `overflow-anchor: none`. Users who scroll away see the scroll-to-bottom button, which re-enables tail follow.
 
 ## 10. SSE And Room Sync
 
@@ -623,8 +626,7 @@ SSE handling is split into small handlers under `src/hooks/room/sse-handlers/`.
 ```text
 src/hooks/room/sse-handlers/
 |-- dispatch.ts
-|-- correlation.ts
-|-- pending-turn-buffer.ts
+|-- client-request.ts           # client_request_id extraction and user-message lookup
 |-- apply-commands.ts
 |-- artifacts.ts
 |-- types.ts
@@ -645,12 +647,11 @@ src/hooks/room/sse-handlers/
 - Agent output: `agent_response_partial`, `agent_response`.
 - HITL and orchestration: `hitl_request`, `hitl_response`.
 
-Legacy `user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_update` frames are not part of the handled room SSE contract. Unknown frame types are ignored after a debug log.
+`user_message`, `turn_event`, `hitl_input_requested`, and `hitl_status_update` frames are not part of the handled room SSE contract. Unknown frame types are ignored after a debug log.
 
 `createSSEDispatcher` first offers ordered deltas to the canonical fold. Known
-canonical `run_event` payloads are closed runtime-validated unions; unknown
-subtypes remain rolling-deploy tolerant and continue only through the legacy
-handler. Canonical `processing_status` compatibility frames are ignored only
+canonical `run_event` payloads are closed runtime-validated unions; unknown subtypes are tolerated and continue only through the message-store
+handler. Canonical `processing_status` frames are ignored only
 after their allowlisted status, exact nonempty User/client roots,
 `details: null`, and absence of Agent/free-text fields validate; malformed
 adapters request snapshot recovery.
@@ -664,7 +665,7 @@ ID, and durable interaction/request/question identities. The ordered
 state change explicit; they reconstruct Turn-owned HITL history without recency
 or REST inference. The producer persists responses and `run_resumed` before it
 can dispatch a continuation that might immediately ask a follow-up question.
-The legacy handler and pending REST overlay remain rolling-deploy recovery only.
+The message-store handler and pending REST overlay serve HITL rows without a canonical root.
 Snapshot HITL applies canonical claims only after exact-root validation even when
 a message entity already exists, and canceled/expired/error members hydrate as
 resolved so they cannot replace the normal composer.
@@ -703,33 +704,45 @@ owns processing and that no new send or pending run-event acknowledgement has
 started. This preserves the send-race guard while allowing backend-confirmed
 failures with zero agent tasks to recover without a page refresh.
 
-**Multi-agent turn completion fallback:** Per-agent terminal SSE alone does not complete a multi-agent turn. The backend no longer sends a completion kind; the frontend records `turnCompletionKind: 'deterministic'` on the user `MessageEntity` only when backend-truth stamping confirms a non-synthesis completion.
+**Message-store turn completion.** Turns without a canonical root (room history
+written before canonical Runs) are completed from message-store evidence. The
+backend sends no completion kind; per-agent terminal SSE alone does not complete
+a multi-agent turn. Backend-truth stamping (`turn-terminal-stamp.ts`) checks
+`inquiryActiveRuns` and, when no Run is active and
+`isBackendRunConfirmedNonSynthesisCompletion` holds, records
+`turnTerminalStatus` together with `turnCompletionKind: 'deterministic'`.
+`shouldScheduleTurnTerminalRecovery` schedules that check 1.5 s after a terminal
+`FAILED`/`REJECTED`/`CANCELED`, or `COMPLETED` once all real agents are terminal;
+summary-agent `agent_response` frames never schedule it. `deriveFinalAnswer`
+returns `llm_synthesis` whenever a non-deterministic `summary-*` entity has
+substantive content (`turnHasSubstantiveLlmSynthesis` also blocks stamping over
+it), promotes to `deterministic_done` on a deterministic stamp, a deterministic
+`summary-*` digest, or mixed terminal agents without synthesis
+(`isDeterministicCompletionExpected` gates live promotion), and otherwise keeps
+the turn `pending`/`synthesizing`. `hasActiveSynthesisGap` treats positive
+synthesis evidence (`turnPhase: 'synthesizing'` logs, "synthesiz" or "compiling
+summary" log lines, synthesis ephemerals, or a working non-deterministic summary
+agent) as synthesis in progress; stale synthesis logs are ignored once all real
+agents are terminal and one failed. Hydrated turns without live-run evidence stay
+`completed`. When `turnTerminalStatus === 'completed'` and the summary agent has
+content, `buildAgentResult` treats a `submitted` `system:hybro` entity as
+completed.
 
-`deriveFinalAnswer` promotes to `deterministic_done` when `turnCompletionKind === 'deterministic'`, a deterministic `summary-*` digest entity is present, or mixed terminal agents resolve without synthesis. When synthesis is actively in flight — processing logs, synthesis ephemerals, or a working empty LLM summary — the turn stays `pending`/`synthesizing` until content arrives. When `turnCompletionKind` is absent, supervisor turns stay pending until backend truth stamps or synthesis signals arrive; non-supervisor and mixed-failure paths use entity evidence and `isDeterministicCompletionExpected`.
-
-`hasActiveSynthesisGap` treats positive synthesis evidence (`turnPhase: 'synthesizing'` on processing logs, log lines containing "synthesiz" or "compiling summary", synthesis ephemerals, or a working non-deterministic summary agent) as synthesis in progress and drives `phase: synthesizing`. Stale synthesis logs are ignored once all real agents are terminal and at least one failed without an in-flight LLM summary entity — partial-failure turns promote to `deterministic_done` instead of staying on **Working**. While the room run is still open (`!turnTerminalStatus`) and live-run evidence exists (transient processing logs, an active run trigger id, or room processing still active on the latest turn), multi-agent turns with all real agents terminal stay `status: active` and show **Synthesizing** until terminal processing_status or final answer content arrives. Hydrated historical turns without live-run evidence remain `completed`. Supervisor turns without `turnCompletionKind` stay pending in `deriveFinalAnswer` until synthesis resolves or backend truth stamps — preventing a flash of expanded `deterministic_done` bodies before synthesizing starts. Delegation logs alone on hydrated turns are **not** synthesis evidence.
-
-**Entity-first invariant:** When a non-deterministic `summary-*` entity has substantive LLM content, `deriveFinalAnswer` returns `llm_synthesis` even if `turnCompletionKind` was incorrectly stamped or inferred as `deterministic`. `turnHasSubstantiveLlmSynthesis` blocks backend-truth stamping and debounced recovery from overwriting synthesis turns.
-
-Backend-truth stamping (`turn-terminal-stamp.ts`) uses `isBackendRunConfirmedNonSynthesisCompletion` when `inquiryActiveRuns` reports no active run: broader than `isDeterministicCompletionExpected` so supervisor no-synthesis turns can stamp; it records `turnCompletionKind: 'deterministic'` on stamp. `isDeterministicCompletionExpected` still gates live `deriveFinalAnswer` promotion to avoid premature expand. Backend-truth writes `turnCompletionKind` atomically alongside `turnTerminalStatus` when the SSE path was missed.
-
-**Debounced recovery (`shouldScheduleTurnTerminalRecovery`):** schedules the 1.5s backend-truth check on terminal `FAILED`/`REJECTED`/`CANCELED`, or `COMPLETED` when all real agents are terminal. Summary-agent `agent_response` frames (`summary-*` / coordinator summary agent id) never schedule recovery.
-
-Terminal `processing_status` details include `turn_phase: 'terminal'`; synthesis stage emits `turn_phase: 'synthesizing'`. The frontend stores `turnPhase` on `ProcessingStatusLogEntry` when appending logs from SSE `details`.
-
-**Hydrate repair for stuck `system:hybro`:** Older runs could leave `system:hybro` with answer text while task state stayed `submitted`. When `turnTerminalStatus === 'completed'` and the summary agent has non-empty content, `buildAgentResult` treats it as completed so refresh does not spin on Synthesizing. Live turns (no terminal stamp yet) keep contentful `submitted`/`working` as working so mid-stream synthesis still shows Synthesizing. `deriveFinalAnswer` returns `llm_synthesis` / Synthesized when the orchestrator has answer text and either its status or `turnTerminalStatus` is completed.
-
-**Live streaming (target):** `artifact_update` is the primary path into `streaming-store.append(message_id, …)`. `agent_response_partial` (rare in production; delivery-layer alias) should shim into the same message-keyed append — not a separate turn-level buffer. **Checkpoints:** terminal `task_update` and final `agent_response` write to `message-store`, read the message-scoped buffer for fallback text, then clear that message's stream buffer (turn-level clear only on turn complete).
+**Live streaming checkpoints:** `artifact_update` is the primary path into
+`streaming-store.append(message_id, …)`, and `agent_response_partial` shims into
+the same message-keyed append. Terminal `task_update` and final `agent_response`
+write to `message-store`, read the message-scoped buffer for fallback text, then
+clear that message's buffer.
 
 SSE artifact conversion is defensive at the client boundary. `task_update`
-`parts` and `artifact_update` payloads drop legacy inline `file.bytes`; file
+`parts` and `artifact_update` payloads drop inline `file.bytes`; file
 parts are renderable when they carry a durable `file_id` or a URI. Canonical
 artifact events and synthetic terminal `${messageId}-parts` projections are
 reconciled by stable part identity (`file_id`, then SHA-256, URI, or canonical
 data), so live detail matches post-refresh hydration without collapsing distinct
 same-name files. `file_unavailable` data renders as a safe unavailable-output
 notice and is not counted as a file. `PartRenderer` does not create `data:` URLs
-from inline bytes, so stale or malicious legacy SSE cannot surface private file
+from inline bytes, so stale or malicious SSE cannot surface private file
 content in message state or rendered media.
 
 Room DB synchronization lives under `src/lib/room-sync/`:
@@ -744,9 +757,10 @@ Room DB synchronization lives under `src/lib/room-sync/`:
 - Mirrors SSE connection state into `room-ui-store`.
 - Rehydrates pending HITL requests on reconnect.
 - Reconciles with DB after reconnect gaps.
-- While a turn is processing, polls backend run truth every five seconds until a
-  terminal state is observed. A transient poll/reconcile failure does not stop
-  later checks, so a missed terminal SSE cannot leave the turn spinning until refresh.
+- On reconnect while a turn is processing, checks whether the backend still has
+  an active Run; if not, it reconciles with the DB and recovers the turn's
+  terminal state from backend truth. There is no periodic poll: missed events are
+  recovered by the reducer's gap detection and snapshot re-request.
 
 ## 11. Timeline And View Models
 
@@ -759,8 +773,11 @@ src/lib/room-timeline/
 |-- event-log.ts
 |-- map-result-display.ts
 |-- message-groups.ts
+|-- multi-agent-turn-complete.ts
+|-- stamp-live-turn-terminal.ts
 |-- turn-agent-terminal.ts
 |-- turn-live-shell.ts
+|-- turn-terminal-stamp.ts
 `-- types.ts
 ```
 
@@ -792,6 +809,8 @@ feature:
 src/lib/api/
 |-- agent.ts
 |-- agent-group.ts
+|-- agent-call-detail.ts       # canonical Agent call detail request and parsing
+|-- canonical-agent-call-detail-query.ts # shared TanStack Query identity for call detail
 |-- room.ts
 |-- session.ts                 # owner session list, record, close, event replay
 |-- sse.ts
@@ -809,7 +828,7 @@ quote.ts, request.ts, response.ts, sse.ts
 
 Other library modules:
 
-- `auth.ts`: local self-hosted identity and authentication-header adapter.
+- `auth.tsx`: local self-hosted identity and authentication-header adapter.
 - `routes.ts`: canonical public and management route vocabulary.
 - `utils.ts`: `cn`, `getApiUrl`, and formatting helpers.
 - `consumer-nav.ts`, `nav-items.ts`: top-level navigation configuration.
@@ -839,8 +858,7 @@ probe failures become unavailable. It never forwards tool traffic, browser
 credentials, upstream errors, or Agent Cards, and cannot control services or
 bypass backend authentication. MCP's own health check performs a bounded,
 read-only backend discovery request, never Agent execution. Clerk rejection is
-reported as unsupported authentication. Existing backend endpoints, OpenAPI,
-Execution ownership, and `client_request_id` correlation are unchanged.
+reported as unsupported authentication.
 
 ### Send Message Routing
 
@@ -854,7 +872,7 @@ canonical `agent_scope` discriminated union:
 - Saved group: `{ source: 'saved_group', group_id }`; the Backend expands and
   authorizes membership, so the Frontend never sends group member IDs.
 
-The Frontend does not emit legacy `mentioned_agent_ids`, `message_target_mode`,
+The Frontend does not emit `mentioned_agent_ids`, `message_target_mode`,
 `target_group_id`, `target_group`, or candidate-scope fields. Fast maps to
 `direct`, Ultimate maps to `supervisor`, and room settings only provide the UI
 default.
@@ -879,7 +897,7 @@ segment.
   in `src/lib/overview.ts`. Call counts are the agent's `call_count`, which
   counts every orchestrator agent call from Chat and Sessions once it finishes.
 - The header logo links to the Overview at `/`. The public product page is not
-  part of this app; `/core` is retired and returns 404.
+  part of this app; `/core` has no route and returns 404.
 - `/chat` and `/room/[id]`: chat creation and real-time room workspace.
 - `/sessions` and `/sessions/[id]`: client sessions opened through MCP or
   `POST /sessions/messages`, shown as a work-ticket system on two pages. The
@@ -917,8 +935,7 @@ segment.
   unconditionally every 15 s because sessions are created outside the app.
   Chat history and the Overview Chats tile exclude session containers because
   the backend history filters them out.
-- `/network`: the Network workspace (see below), replacing the former Agents
-  card grid and Subnets page.
+- `/network`: the Network workspace (see below).
 - `/network/agents/[id]`: AgentCard detail with Chat, Documentation, Share, and
   Remote-only Unregister actions, plus a Subnets section with **Add to subnet**.
 - `/network/agents/new`: Remote agent registration.
@@ -948,8 +965,7 @@ when it is absent. Creation includes an owner-scoped `preset_key`, so the Backen
 also guarantees idempotency across concurrent tabs. Existing preset membership
 is reconciled to the template's current Agent IDs before selection. The card then
 selects the saved subnet in the group selector and prefills the composer; room creation and
-navigation do not occur until the user sends the message. Failed creates perform
-one catalog refresh as a compatibility fallback.
+navigation do not occur until the user sends the message. A failed create re-reads the saved groups once and selects a subnet a concurrent tab created.
 
 The shared side menu is `PortalSidebar`, a 14.5rem Sidebar with a 4rem
 icon-only collapsed state. `NavAgent` renders the five flat `CONSUMER_NAV`
@@ -975,16 +991,15 @@ Network and Connect do not add a second column. The Logo, primary collapse contr
 Documentation, Discord/community, and full user panel retain their original
 shared components.
 
-`NavAgentItem` still supports grouped links (`Collapsible` and `SidebarMenuSub`)
-for type compatibility, but `CONSUMER_NAV` uses only direct links. Link
+`NavAgentItem` supports grouped links (`Collapsible` and `SidebarMenuSub`), but
+`CONSUMER_NAV` uses only direct links. Link
 selection closes the mobile Sheet. The existing mobile header and Sidebar-owned
 Sheet are shared across routes rather than replaced by a workspace-specific drawer.
 
 Opening an Agent response detail collapses only the primary sidebar; the History
 column remains visible. Closing the detail restores the primary sidebar state.
 On mobile, History is shown inside the existing navigation Sheet to avoid a
-two-column drawer, with the same list folding. Agent details retain
-the existing bottom Sheet. Original page content, Room workflows, and
+two-column drawer, with the same list folding. Agent details use a bottom Sheet. Page content, Room workflows, and
 `client_request_id` correlation are independent of the navigation structure.
 
 Chat history uses the lightweight authenticated `GET /rooms`
@@ -1011,9 +1026,8 @@ invalidates the authenticated user-scoped query immediately. Sending a message
 similarly cancels an in-flight history read before optimistically advancing that
 room's activity and status, then invalidates the query after a successful
 acknowledgement. These paths share the user-scoped `ROOM_HISTORY_QUERY_KEY`
-prefix. The former global `rooms:refresh` browser event
-is no longer used. Legacy `/agents*`, `/networks`, `/access/*`, and
-`/manage*` routes are redirect-only compatibility paths. `src/lib/routes.ts` is
+prefix. `/agents*`, `/networks`, `/access/*`, and `/manage*` routes are
+redirect-only paths. `src/lib/routes.ts` is
 the canonical route vocabulary for application links.
 
 ### Network workspace
@@ -1026,7 +1040,7 @@ input, **Add agent** menu with **Add Remote Agent** and **Scan Local
 Agent**, and the single primary **Create subnet** button), and either the
 topology stage (`NetworkCanvas` plus canvas controls and `GraphDisplayMenu`) or
 `StructureView`. The shared `NetworkDetailsPanel` renders in both views while
-`select` is set. `useNetworks` is the only data source; no backend API changed.
+`select` is set. `useNetworks` is the only data source.
 
 URL state (`src/lib/network-url-state.ts`, bound by `useNetworkUrlState`) is
 parsed, serialized with defaults omitted, and resolved against the loaded
@@ -1102,8 +1116,7 @@ the UI; the room membership snapshot (`room_team`) is **Room agents**.
 Loading, failed reads, and successful empty lists are distinct states; a failed
 catalog read with saved data shows an inline alert with Retry. Writes apply the
 server's canonical result and cancel in-flight reads. Dragging a node fixes only
-that node's `fx/fy` until release. Node positions are transient. Backend APIs
-and persistence schemas are unchanged.
+that node's `fx/fy` until release. Node positions are transient and not persisted.
 
 ### Connect workspace
 
@@ -1207,9 +1220,9 @@ Important generated/local-only files:
 - Prefer the existing shadcn/ui primitives in `src/components/ui/`.
 - Use `src/lib/api-client.ts` for backend requests instead of raw fetch wrappers.
 - Keep permanent room message data in `message-store`; keep transient stream display data in `streaming-store`.
-- Add room realtime behavior through `src/hooks/room/sse-handlers/` and preserve correlation buffering rules.
+- Add room realtime behavior through `src/hooks/room/sse-handlers/` and preserve `client_request_id` correlation; ordering belongs to the `RoomReducer`.
 - Add turn/timeline display logic under `src/lib/room-timeline/` or `src/lib/selectors/` instead of inside rendering components.
-- Do not document files from deleted or historical docs as current source structure.
+- Document only files that exist under `src/` as current source structure.
 
 ## Request-scoped execution mode and Agent scope
 
@@ -1233,14 +1246,12 @@ persists a changed mode as `room.extend_info.use_supervisor` without replacing o
 room metadata. The mode write completes before any Execution acknowledgement, so a
 hard refresh initializes the selector from the most recent send attempt, even when
 that attempt is an idempotent replay or is later rejected by Execution. A missing
-flag still defaults to Ultimate. Saved-team member IDs are expanded and authorized
-by the backend. Existing `client_request_id` optimistic-message replacement and
-early SSE buffering remain unchanged.
+flag defaults to Ultimate. Saved-team member IDs are expanded and authorized
+by the backend. `client_request_id` drives optimistic-message replacement.
 
 Debate is not a `ChatMode`, Room setting, request flag, or handled SSE event. The
 ModeSelector retains one disabled `Debate (Coming Soon)` row as display-only UI;
-it has no selection handler and can never create a Debate request. Historical room
-`debateMode` metadata is ignored when selecting the Fast/Ultimate UI default.
+it has no selection handler and can never create a Debate request.
 
 ## HITL questionnaire composer
 
@@ -1262,14 +1273,13 @@ confirms the submitted answers, but resumes processing only if the current exact
 User/client root and interaction still permit it. Terminal canonical state, a
 subsequent waiting interaction, pending cancellation, or a newer processing root
 cannot be overwritten by a late HTTP acknowledgement; an acknowledgement for a
-room already left cannot mutate the newly selected room. Legacy roots retain
-their existing resume path, subject to current-root and terminal-state checks.
+room already left cannot mutate the newly selected room. Roots without a canonical Turn resume through the message-store path, subject to
+current-root and terminal-state checks.
 When several questions share one A2A
 Agent `message_id`, each question receives a deterministic interaction-and-request-scoped
 MessageStore identity while retaining the wire message identity separately. This is
 also mandatory for singleton interactions: sequential one-question rounds from one
-Agent call never overwrite the prior round's entity. A rolling-deploy raw-message
-projection for the same request is resolved when the scoped entity arrives, avoiding
+Agent call never overwrite the prior round's entity. A raw-message projection for the same request is resolved when the scoped entity arrives, avoiding
 a duplicate composer item without mutating the canonical Agent Card.
 SSE, snapshot, and `/hitl/pending` overlays use the same composite projection and
 request index, so sibling questions—and later interactions that reuse a stable
@@ -1284,10 +1294,9 @@ snapshot reconnect, but is never inferred as success from local state; identical
 durable retries already return success from the backend, so typed conflicts remain
 visible. A failed pending read is an explicit refresh error. Delivery uncertainty,
 routing failure, timeout, and applying states remain explicit. The frontend has no single-request response
-pipeline; even singleton interactions use the batch endpoint. File-upload
-instructions arrive in the ordinary terminal HYBRO summary message, so they do
-not replace the composer. Historical `file` and `unknown` prompt records remain
-wire-compatible but share one unsupported-state renderer.
+pipeline; even singleton interactions use the batch endpoint. `file` and
+`unknown` prompt types are accepted on the wire and share one unsupported-state
+renderer.
 
 Pending HITL hydration is authoritative only after a successful `/pending` read.
 `HydrateRoomResult.hitlFetchFailed` distinguishes a degraded read from a real empty
@@ -1324,8 +1333,7 @@ Reject, or Confirm and Decline) that send the answer in one click. Presentation 
 `hitlPresentation`. On other cards the red Reject asks for confirmation before
 canceling the interaction. While the Turn awaits input,
 the canonical Final slot stays empty and the Conversation Body retains only the
-truthful `Asking you · Waiting for input` Trace event. Compatibility legacy HITL
-projections for the same active canonical interaction are suppressed from the Body so
+truthful `Asking you · Waiting for input` Trace event. Message-store HITL projections for the same active canonical interaction are suppressed from the Body so
 question content is never duplicated.
 
 Canonical cards use their opaque message identity only to derive the authenticated
