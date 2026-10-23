@@ -157,7 +157,7 @@ def test_scanner_resolves_both_import_forms_to_submodules(tmp_path):
             "execution/__init__.py": "",
             "execution/engine.py": (
                 "import llm_gateway.errors\n"
-                "from llm_gateway import gateway, LLMServiceNotBoundError\n"
+                "from llm_gateway import gateway, LLMGatewayImpl\n"
                 "from agent import protocols\n"
                 "from agent import AgentFacade\n"
             ),

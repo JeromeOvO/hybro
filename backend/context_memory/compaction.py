@@ -1,16 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
 from common.utils.context_utils import estimate_tokens
 from context_memory.config import CompactionConfig
-from context_memory.content_storage import (
-    ContentExpiredError,
-    expand_mongodb_reference,
-    hash_content,
-    store_full_content,
-)
+from context_memory.content_storage import hash_content, store_full_content
 from context_memory.ports import ContentStorageRepository, MemoryRepository
 from context_memory.translators import (
     compaction_result_dto,
@@ -43,13 +37,6 @@ def safe_tokens_full(turn) -> int:
     return 0
 
 
-async def should_compact(
-    repository: MemoryRepository, conversation_id: str, config: CompactionConfig
-) -> bool:
-    doc = await repository.get_room_memory(conversation_id)
-    return _doc_should_compact(doc, config)
-
-
 def _doc_should_compact(doc: dict | None, config: CompactionConfig) -> bool:
     if not config.enabled or not doc:
         return False
@@ -80,7 +67,6 @@ async def compact_if_needed(
         room_memory_doc=doc,
         config=config,
         now=now,
-        threshold_gate=False,
     )
 
 
@@ -107,7 +93,6 @@ async def run_compaction(
         room_memory_doc=doc,
         config=config,
         now=now,
-        threshold_gate=False,
     )
 
 
@@ -119,7 +104,6 @@ async def compact_room_memory(
     room_memory_doc: dict | None,
     config: CompactionConfig,
     now,
-    threshold_gate: bool = False,
 ):
     if not config.enabled:
         return compaction_result_dto(
@@ -135,13 +119,6 @@ async def compact_room_memory(
             compacted_count=0,
             tokens_saved=0,
             metadata={"errors": [f"Room memory not found for room {conversation_id}"]},
-        )
-    if threshold_gate and not await should_compact(repository, conversation_id, config):
-        return compaction_result_dto(
-            conversation_id=conversation_id,
-            compacted_count=0,
-            tokens_saved=0,
-            metadata={"skipped": True, "reason": "below_threshold"},
         )
 
     state = normalize_room_memory(doc)
@@ -176,7 +153,6 @@ async def compact_room_memory(
                     turn_id=turn.turn_id,
                     content=turn.content,
                     content_type=turn.content_type,
-                    turn_notes=turn.turn_notes,
                     turn_timestamp=turn.timestamp,
                     now=now(),
                     config=config,
@@ -253,107 +229,3 @@ async def _compaction_write_was_stale_noop(
         turn.turn_id in target_ids and turn.representation == "full"
         for turn in state.conversation_history
     )
-
-
-async def expand_turn_content_from_turn(
-    content_repository: ContentStorageRepository,
-    turn_doc: dict,
-    *,
-    now: datetime | None = None,
-) -> str:
-    turn = turn_from_dict(turn_doc)
-    if turn.representation == "full":
-        return turn.content or ""
-    if turn.content_ref is None:
-        raise ValueError(f"Compact turn {turn.turn_id} missing content reference")
-    if turn.content_ref.storage_type != "mongodb":
-        raise NotImplementedError(turn.content_ref.storage_type)
-    return await expand_mongodb_reference(
-        content_repository,
-        turn.content_ref.to_dict(),
-        turn.turn_id,
-        now=now,
-    )
-
-
-async def expand_turn_content(
-    repository: MemoryRepository,
-    content_repository: ContentStorageRepository,
-    conversation_id: str,
-    turn_id: str,
-    *,
-    now: datetime | None = None,
-) -> str | None:
-    doc = await repository.get_room_memory(conversation_id)
-    if not doc:
-        return None
-    state = normalize_room_memory(doc)
-    for turn in state.conversation_history:
-        if turn.turn_id == turn_id:
-            return await expand_turn_content_from_turn(
-                content_repository,
-                turn.to_dict(),
-                now=now,
-            )
-    return None
-
-
-async def fetch_turn_content(
-    repository: MemoryRepository,
-    content_repository: ContentStorageRepository,
-    *,
-    turn_id: str,
-    conversation_id: str,
-    now: datetime | None = None,
-) -> str:
-    doc = await repository.get_room_memory(conversation_id)
-    if not doc:
-        return f"[Error: Room {conversation_id} not found]"
-    state = normalize_room_memory(doc)
-    turn = next(
-        (item for item in state.conversation_history if item.turn_id == turn_id), None
-    )
-    if turn is None:
-        return f"[Error: Turn {turn_id} not found in room history]"
-    try:
-        return await expand_turn_content_from_turn(
-            content_repository, turn.to_dict(), now=now
-        )
-    except ContentExpiredError:
-        return f"[Error: Content for turn {turn_id} is no longer available (expired)]"
-    except NotImplementedError as exc:
-        return f"[Error: Content for turn {turn_id} uses unsupported storage: {exc}]"
-    except ValueError as exc:
-        return f"[Error: {exc}]"
-
-
-async def get_compaction_stats(
-    repository: MemoryRepository,
-    content_repository: ContentStorageRepository,
-    conversation_id: str,
-) -> dict:
-    doc = await repository.get_room_memory(conversation_id)
-    if not doc:
-        return {"error": f"Room {conversation_id} not found"}
-    state = normalize_room_memory(doc)
-    full_turns = [
-        turn for turn in state.conversation_history if turn.representation == "full"
-    ]
-    compact_turns = [
-        turn for turn in state.conversation_history if turn.representation == "compact"
-    ]
-    return {
-        "conversation_id": conversation_id,
-        "total_turns": len(state.conversation_history),
-        "full_turns": len(full_turns),
-        "compact_turns": len(compact_turns),
-        "full_tokens": sum(safe_tokens_full(turn) for turn in full_turns),
-        "tokens_saved_by_compaction": sum(
-            max(0, safe_tokens_full(turn) - turn.estimated_tokens_compact)
-            for turn in compact_turns
-        ),
-        "total_compactions": state.total_compactions,
-        "content_storage": await content_repository.get_content_stats_for_room(
-            conversation_id
-        ),
-    }

@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
-from common.utils.context_utils import LLM_TURN_NOTES_THRESHOLD
 from context_memory import projection
-from context_memory.config import ContextMemoryLLMConfig
 from context_memory.translators import normalize_room_memory
 from conversation.translators import message_info_from_doc
 
@@ -21,7 +18,6 @@ class StateMemoryRepository:
         self.duplicate = duplicate
         self.created: list[dict] = []
         self.pushed: list[dict] = []
-        self.updated_notes: list[tuple[str, str, dict]] = []
 
     async def get_room_memory(self, conversation_id: str) -> dict | None:
         return (
@@ -40,15 +36,6 @@ class StateMemoryRepository:
             self.doc = defaults
         return self.doc
 
-    async def push_and_trim_conversation_turn(
-        self, conversation_id: str, turn: dict, **kwargs
-    ):
-        if not self.doc:
-            return False, False
-        self.pushed.append(turn)
-        self.doc.setdefault("conversation_history", []).append(turn)
-        return True, True
-
     async def push_and_trim_conversation_turn_if_absent(
         self, conversation_id: str, turn: dict, **kwargs
     ):
@@ -60,12 +47,6 @@ class StateMemoryRepository:
         self.doc.setdefault("conversation_history", []).append(turn)
         return True, True, False
 
-    async def update_turn_notes(
-        self, conversation_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        self.updated_notes.append((conversation_id, turn_id, turn_notes))
-        return True
-
 
 class FakeHistoryReader:
     def __init__(self, messages):
@@ -75,30 +56,6 @@ class FakeHistoryReader:
         return [
             message for message in self.messages if message.message_id in message_ids
         ]
-
-
-class FakeLLM:
-    async def generate_structured(self, messages, schema, model=None):
-        return SimpleNamespace(
-            data={
-                "keywords": ["alpha"],
-                "entities": ["Hybro"],
-                "tags": ["memory"],
-                "one_liner": "Enriched turn notes",
-            }
-        )
-
-
-class RaisingLLM:
-    async def generate_structured(self, messages, schema, model=None):
-        raise RuntimeError("turn notes llm failed")
-
-
-class FailingNotesMemoryRepository(StateMemoryRepository):
-    async def update_turn_notes(
-        self, conversation_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        raise RuntimeError("notes write failed")
 
 
 def id_factory(values=("id-1", "id-2", "id-3")):
@@ -276,12 +233,11 @@ async def test_project_message_from_history_user_cleans_mentions_before_attachme
 
 
 @pytest.mark.asyncio
-async def test_project_message_from_history_agent_uses_event_metadata_and_enriches_notes():
+async def test_project_message_from_history_agent_uses_event_metadata():
     repo = StateMemoryRepository(
         projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
     )
-    background_tasks = []
-    response_text = "agent response " * (LLM_TURN_NOTES_THRESHOLD * 4)
+    response_text = "agent response " * 400
     reader = FakeHistoryReader(
         [
             message_info_from_doc(
@@ -306,9 +262,6 @@ async def test_project_message_from_history_agent_uses_event_metadata_and_enrich
         now=now,
         agent_name="Agent One",
         was_successful=True,
-        llm_provider=FakeLLM(),
-        llm_config=ContextMemoryLLMConfig(),
-        background_task_runner=background_tasks.append,
     )
 
     assert result == {"projected": True, "reason": "projected"}
@@ -317,20 +270,7 @@ async def test_project_message_from_history_agent_uses_event_metadata_and_enrich
     assert turn["agent_id"] == "agent-1"
     assert turn["agent_name"] == "Agent One"
     assert turn["was_successful"] is True
-    assert len(background_tasks) == 1
-    await background_tasks[0]
-    assert repo.updated_notes == [
-        (
-            "r1",
-            "message:agent-msg-1",
-            {
-                "keywords": ["alpha"],
-                "entities": ["Hybro"],
-                "tags": ["memory"],
-                "one_liner": "Enriched turn notes",
-            },
-        )
-    ]
+    assert "turn_notes" not in turn
 
 
 @pytest.mark.asyncio
@@ -368,81 +308,6 @@ async def test_project_message_from_history_agent_falls_back_to_translated_metad
     turn = repo.pushed[0]
     assert turn["agent_name"] == "Agent One"
     assert turn["was_successful"] is True
-
-
-@pytest.mark.asyncio
-async def test_enrich_turn_notes_swallows_persistence_failures(monkeypatch):
-    monkeypatch.setattr(
-        projection,
-        "extract_turn_notes_llm",
-        AsyncMock(return_value={"one_liner": "new notes"}),
-    )
-
-    await projection.enrich_turn_notes(
-        repository=FailingNotesMemoryRepository(),
-        llm_provider=FakeLLM(),
-        llm_config=ContextMemoryLLMConfig(),
-        conversation_id="r1",
-        turn_id="t1",
-        heuristic_notes={"one_liner": "old notes"},
-        content="long enough content for enrichment",
-    )
-
-
-@pytest.mark.asyncio
-async def test_extract_turn_notes_llm_logs_fallback_failure(caplog):
-    caplog.set_level("DEBUG")
-
-    notes = await projection.extract_turn_notes_llm(
-        "long enough content for heuristic fallback",
-        llm_provider=RaisingLLM(),
-        llm_config=ContextMemoryLLMConfig(),
-    )
-
-    assert notes["one_liner"] == "long enough content for heuristic fallback"
-    assert "LLM turn note extraction failed; using heuristic notes" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_add_synthesis_to_history():
-    repo = StateMemoryRepository(
-        projection.new_room_memory_doc(conversation_id="r1", memory_id="m1", now=NOW)
-    )
-
-    turn_id = await projection.add_synthesis_to_history(
-        repository=repo,
-        conversation_id="r1",
-        synthesis_text="Summary",
-        trajectory=None,
-        id_factory=id_factory(),
-        now=now,
-        llm_provider=FakeLLM(),
-        llm_config=ContextMemoryLLMConfig(),
-        background_task_runner=lambda coro: None,
-    )
-
-    assert turn_id == "id-1"
-    assert repo.pushed[0]["role"] == "supervisor"
-
-
-def test_enrich_synthesis_with_trajectory():
-    trajectory = SimpleNamespace(
-        entries=[
-            SimpleNamespace(
-                results=[
-                    SimpleNamespace(
-                        success=True, agent_name="Builder", task="implement tests"
-                    ),
-                    SimpleNamespace(success=False, agent_name="Skip", task="ignore"),
-                ]
-            )
-        ]
-    )
-
-    enriched = projection.enrich_synthesis_with_trajectory("Summary", trajectory)
-
-    assert "Builder: implement tests" in enriched
-    assert "Skip" not in enriched
 
 
 def test_extract_message_text_string():

@@ -1063,8 +1063,7 @@ async def test_health_check_service_fails_closed_when_index_state_is_missing():
     assert response.status_code == 503
     kwargs = compute_health_status.call_args.kwargs
     assert kwargs["agent_search_index_ready"] is False
-    assert kwargs["memory_search_index_ready"] is False
-    assert kwargs["search_indexes_ready"] is False
+    assert "memory_search_index_ready" not in kwargs
 
 
 def test_route_protocol_surfaces_are_specific():

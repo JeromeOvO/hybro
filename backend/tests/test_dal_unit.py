@@ -220,25 +220,11 @@ async def test_ensure_runtime_indexes_uses_mongo_dal_specs():
         unique=True,
         name="room_turn_unique",
     )
-    assert _has_create_index(
-        collections["conversation_content"],
-        [
-            ("content", "text"),
-            ("turn_notes.keywords", "text"),
-            ("turn_notes.entities", "text"),
-            ("turn_notes.tags", "text"),
-            ("turn_notes.one_liner", "text"),
-        ],
-        unique=False,
-        name="turn_notes_text",
-        weights={
-            "content": 1,
-            "turn_notes.keywords": 1,
-            "turn_notes.entities": 1,
-            "turn_notes.tags": 1,
-            "turn_notes.one_liner": 1,
-        },
-    )
+    content_index_names = {
+        call.kwargs.get("name")
+        for call in collections["conversation_content"].create_index.call_args_list
+    }
+    assert "turn_notes_text" not in content_index_names
     assert "cancelled_messages" not in collections
     task_index_names = {
         call.kwargs.get("name")
@@ -667,29 +653,8 @@ async def test_text_index_with_scalar_prefix_is_rebuilt_even_when_weights_match(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("failed_name", "expected"),
-    [
-        (
-            "agent_lexical_text",
-            {
-                "agent_search_index_ready": False,
-                "memory_search_index_ready": True,
-            },
-        ),
-        (
-            "turn_notes_text",
-            {
-                "agent_search_index_ready": True,
-                "memory_search_index_ready": False,
-            },
-        ),
-    ],
-)
-async def test_search_index_failures_are_reported_independently(
-    failed_name,
-    expected,
-):
+async def test_agent_search_index_failure_is_reported():
+    failed_name = "agent_lexical_text"
     from container import ensure_runtime_indexes
 
     collections: dict[str, MagicMock] = {}
@@ -715,7 +680,9 @@ async def test_search_index_failures_are_reported_independently(
     mongo = MagicMock()
     mongo.collection.side_effect = _collection
 
-    assert await ensure_runtime_indexes(mongo=mongo) == expected
+    assert await ensure_runtime_indexes(mongo=mongo) == {
+        "agent_search_index_ready": False
+    }
 
 
 @pytest.mark.asyncio

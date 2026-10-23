@@ -242,15 +242,6 @@ class Settings(BaseModel):
     # See docs/System-Architecture.md for the current architecture
     # ===========================================
 
-    # Token Budget Settings
-    context_model_window: int = 128000  # Model's max context window
-    context_system_prompt_tokens: int = 2000  # Reserved for system prompt
-    context_tool_schema_tokens: int = 3000  # Reserved for tool schemas
-    context_response_reserve_tokens: int = 4000  # Reserved for response
-    context_room_pct: float = 0.15  # % of remaining for room context
-    context_history_pct: float = 0.60  # % of remaining for conversation history
-    context_task_pct: float = 0.25  # % of remaining for current task
-
     # Compaction Settings (LOSSLESS - pointer-based, not summarization)
     compaction_enabled: bool = True  # Enable/disable auto-compaction
     compaction_max_full_turns: int = 20  # Max turns to keep in FULL representation
@@ -259,14 +250,6 @@ class Settings(BaseModel):
     )
     compaction_preserve_recent: int = 10  # Always keep this many recent turns FULL
     compaction_content_ttl_days: int = 0  # TTL for stored content (0 = forever)
-
-    # Memory Search Settings
-    memory_search_enabled: bool = True  # Enable/disable memory search
-    memory_search_temporal_decay_enabled: bool = True  # Enable recency boost
-    memory_search_half_life_days: int = 30  # Half-life for temporal decay
-    memory_search_max_results: int = 10  # Max results to return
-    memory_search_max_candidates: int = 1000  # Max keyword candidates to rank
-    memory_search_max_snippet_chars: int = 300  # Max chars per snippet
 
     # Local room file storage
     hybro_file_dir: str = Field(
@@ -466,6 +449,19 @@ REMOVED_FIELDS = frozenset(
         "webhook_base_url",
         "webhook_signing_key",
         "feature_run_event_sse",
+        "context_model_window",
+        "context_system_prompt_tokens",
+        "context_tool_schema_tokens",
+        "context_response_reserve_tokens",
+        "context_room_pct",
+        "context_history_pct",
+        "context_task_pct",
+        "memory_search_enabled",
+        "memory_search_temporal_decay_enabled",
+        "memory_search_half_life_days",
+        "memory_search_max_results",
+        "memory_search_max_candidates",
+        "memory_search_max_snippet_chars",
     }
 )
 ROUTE_FIELDS = frozenset(

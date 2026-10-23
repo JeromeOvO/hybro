@@ -46,6 +46,19 @@ RETIRED = {
     "webhook_base_url",
     "webhook_signing_key",
     "feature_run_event_sse",
+    "context_model_window",
+    "context_system_prompt_tokens",
+    "context_tool_schema_tokens",
+    "context_response_reserve_tokens",
+    "context_room_pct",
+    "context_history_pct",
+    "context_task_pct",
+    "memory_search_enabled",
+    "memory_search_temporal_decay_enabled",
+    "memory_search_half_life_days",
+    "memory_search_max_results",
+    "memory_search_max_candidates",
+    "memory_search_max_snippet_chars",
 }
 
 

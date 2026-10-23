@@ -13,15 +13,6 @@ class MemoryRepository(Protocol):
     async def ensure_room_memory(
         self, conversation_id: str, defaults: dict
     ) -> dict: ...
-    async def push_and_trim_conversation_turn(
-        self,
-        conversation_id: str,
-        turn: dict,
-        *,
-        max_turns: int,
-        summary_stub: str,
-        max_summary_chars: int,
-    ) -> tuple[bool, bool]: ...
     async def push_and_trim_conversation_turn_if_absent(
         self,
         conversation_id: str,
@@ -32,20 +23,6 @@ class MemoryRepository(Protocol):
         summary_stub: str,
         max_summary_chars: int,
     ) -> tuple[bool, bool, bool]: ...
-    async def update_turn_notes(
-        self, conversation_id: str, turn_id: str, turn_notes: dict
-    ) -> bool: ...
-    async def get_room_summary_projection(
-        self, conversation_id: str
-    ) -> dict | None: ...
-    async def update_room_summary_atomic(
-        self,
-        conversation_id: str,
-        room_summary: dict,
-        *,
-        new_facts: list[dict] | None = None,
-        max_facts: int = 50,
-    ) -> bool: ...
     async def compact_turns_bulk(
         self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool: ...
@@ -68,9 +45,7 @@ class ContentStorageRepository(Protocol):
         stored_at: datetime,
         turn_timestamp: datetime | str | None = None,
         expires_at: datetime | None = None,
-        turn_notes: dict | None = None,
     ) -> str: ...
-    async def get_content_by_document_id(self, document_id: str) -> dict | None: ...
     async def get_content_by_turn_id(
         self, conversation_id: str, turn_id: str
     ) -> dict | None: ...
@@ -78,20 +53,6 @@ class ContentStorageRepository(Protocol):
         self, conversation_id: str, turn_id: str
     ) -> bool: ...
     async def delete_content_by_room_id(self, conversation_id: str) -> int: ...
-    async def get_content_stats_for_room(self, conversation_id: str) -> dict: ...
-    async def text_search(
-        self,
-        conversation_id: str,
-        query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> list[dict]: ...
-    async def scan_text_search(
-        self, conversation_id: str, query: str, limit: int
-    ) -> list[dict]: ...
-    async def hydrate_turn_content(
-        self, conversation_id: str, turn_ids: list[str]
-    ) -> list[dict]: ...
 
 
 __all__ = [

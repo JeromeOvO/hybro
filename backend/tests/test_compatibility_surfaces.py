@@ -16,8 +16,6 @@ def test_health_body_drops_the_legacy_redis_key():
         redis_runtime_connected=True,
         redis_url="redis://localhost:6379/0",
         agent_search_index_ready=True,
-        memory_search_index_ready=True,
-        search_indexes_ready=True,
     )
 
     assert "legacy_redis_service_connected" not in result["body"]

@@ -29,10 +29,6 @@ class UnsupportedConfiguredProvider(LLMProviderConfigurationError):
     code = "unsupported_configured_provider"
 
 
-class LLMServiceNotBoundError(LLMGatewayError):
-    """Raised when a legacy compatibility adapter is used before binding."""
-
-
 class LLMProviderFailure(LLMGatewayError):
     """Sanitized failure retaining only retry classification and correlation."""
 

@@ -133,9 +133,7 @@ def test_messages_no_longer_carry_a_webhook_token_hash():
 
 def test_a2a_adapter_has_no_legacy_webhook_configuration():
     import a2a_adapter.client_facade as client_facade
-    from a2a_adapter.runtime_service import A2ARuntimeConfig
 
-    assert "webhook_base_url" not in A2ARuntimeConfig.__dataclass_fields__
     assert not hasattr(client_facade, "send_hitl_reply")
 
 
@@ -169,7 +167,7 @@ def test_ensure_service_credentials_stops_generating_and_prunes_signing_key(
 
 
 def test_webhook_route_group_and_install_script_are_gone():
-    from api_gateway.policies import ROUTE_POLICIES
+    from api_gateway.registry import route_group_for_path
 
-    assert "webhook" not in ROUTE_POLICIES
+    assert route_group_for_path("/api/v1/webhook") == "unknown"
     assert not (BACKEND / "scripts" / "ensure_webhook_signing_key.sh").exists()

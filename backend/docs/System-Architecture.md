@@ -159,8 +159,6 @@ Isolates the A2A protocol and SDK:
 - `artifact_storage` materializes inline or remote file artifacts into
   room-owned storage through the `A2AArtifactFiles` contract.
 - `docker_host_fallback` owns the request-local Docker host fallback (below).
-- `runtime_service.A2AService` is a process singleton bound to the agent call
-  counter in `container.py`.
 
 Writes no collections directly. Exposes: implements `AgentCardResolver`,
 `A2AArtifactFiles`, and Execution's `DirectA2AClient` / `DirectA2AStream`.
@@ -179,9 +177,7 @@ Thin HTTP adapters. `api_gateway/router.py` registers the route modules;
 `dependencies.py` defines `APIGatewayDeps` (assembled once at startup and stored
 on `app.state.api_gateway_deps`) and the FastAPI providers that expose it;
 `errors.py` holds shared HTTP error helpers such as `require_chat_room`;
-`registry.py` records route ownership metadata for every route module;
-`policies.py` declares a route-policy matrix that only tests check, not enforced
-at runtime.
+`registry.py` records route ownership metadata for every route module.
 Route modules do not import runtime implementation packages, own mutable
 dependency globals, or define `bind_*` functions.
 
@@ -274,8 +270,8 @@ The only runtime owner of room-memory projection, canonical conversation history
 compaction, and room-memory deletion (see
 [Context memory workflow](#context-memory-workflow)). `container.py` builds one
 `ContextMemoryFacade` over `MemoryMongoRepository`,
-`ContentStorageMongoRepository`, the Conversation-owned `RoomHistoryReader`, and
-the LLM gateway, and registers `ContextMemoryEventHandler` on the internal event
+`ContentStorageMongoRepository`, and the Conversation-owned `RoomHistoryReader`,
+and registers `ContextMemoryEventHandler` on the internal event
 bus.
 
 - Writes: `room_memories` (`context_memory.repository.MemoryMongoRepository`)
@@ -285,8 +281,7 @@ bus.
   `CompactionPort` (`jobs.compaction_sweep`), and `RoomStateOwner`
   (`room_files.service`); declares `MemoryRepository` and
   `ContentStorageRepository` in `context_memory.ports`.
-- Consumes: `RoomHistoryReader`, `LLMGateway`, `LLMStructuredGateway`,
-  `MongoDAL`, and `MongoCollection`.
+- Consumes: `RoomHistoryReader`, `MongoDAL`, and `MongoCollection`.
 
 ### `conversation`
 
@@ -447,8 +442,7 @@ bundled-agent proxy (`agent_proxy.AgentLLMProxy`) also live here.
 - Writes no collections; setup and OAuth write `config.json` and `auth.json`
   under `HYBRO_HOME`.
 - Exposes: implements `LLMTextGateway`, `LLMStructuredGateway`,
-  `LLMStreamGateway`, `LLMEmbeddingGateway`, and `TurnNotesLLMProvider`;
-  declares `LLMTurnGateway` (used by Execution) and `_AgentLLMProxyPort` (used by
+  `LLMStreamGateway`, and `LLMEmbeddingGateway`; declares `LLMTurnGateway` (used by Execution) and `_AgentLLMProxyPort` (used by
   the proxy route).
 - Consumes no other package's protocols.
 
@@ -597,7 +591,7 @@ orchestrator and room-file collections use
 `room_files.ensure_room_file_indexes`. `create_index` (critical indexes abort
 startup) and `ensure_text_index` live in `common.utils.mongo_indexes`.
 `container.py::ensure_runtime_indexes` calls each owner in order and reports
-search-index readiness. Because MongoDB permits one text index per collection, a
+agent search-index readiness, which `/health` requires. Because MongoDB permits one text index per collection, a
 text index whose keys or weights differ from the required shape is dropped
 before its replacement is created; `/health` returns 503 if recreation fails.
 On a shared database, other replicas briefly lose text search during that
@@ -727,9 +721,9 @@ port, or facade port, update the exact method inventory in
 | `HITLManager` | `common.protocols.execution_protocols` | `execution.facade.ExecutionFacade` | crosses to `api_gateway`; composition root; `execution`; `session` |
 | `RoomDistributedLock` | `common.protocols.execution_protocols` | `dal.redis.lock.RoomRedisDistributedLock` | crosses to composition root; `dal` |
 | `LLMEmbeddingGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
-| `LLMGateway` | `common.protocols.llm_protocols` | attribute shape (records read by attribute) | crosses to composition root; `context_memory` |
+| `LLMGateway` | `common.protocols.llm_protocols` | attribute shape (records read by attribute) | no production consumer; tests pin the full gateway shape |
 | `LLMStreamGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
-| `LLMStructuredGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `context_memory`; `llm_gateway` |
+| `LLMStructuredGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
 | `LLMTextGateway` | `common.protocols.llm_protocols` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
 | `FileStorage` | `common.protocols.platform_protocols` | `room_files.service.RoomFiles` | crosses to `api_gateway`; composition root; `room_files` |
 | `HealthCheck` | `common.protocols.platform_protocols` | `common.health_check.RuntimeHealthCheck` | crosses to composition root |
@@ -740,7 +734,6 @@ port, or facade port, update the exact method inventory in
 | `A2AArtifactFiles` | `common.utils.a2a_helpers` | the `a2a_adapter.artifact_storage` module | crosses to `a2a_adapter` |
 | `MemoryContentLike` | `common.utils.context_utils` | attribute shape (records read by attribute) | internal to `common` |
 | `RoomMemoryLike` | `common.utils.context_utils` | attribute shape (records read by attribute) | internal to `common` |
-| `TurnNotesLLMProvider` | `common.utils.context_utils` | `llm_gateway.gateway.LLMGatewayImpl` | crosses to `llm_gateway` |
 | `ProjectionPort` | `context_memory.events` | `context_memory.facade.ContextMemoryFacade` | internal to `context_memory` |
 | `ContentStorageRepository` | `context_memory.ports` | `context_memory.repository.mongo.ContentStorageMongoRepository` | crosses to composition root |
 | `MemoryRepository` | `context_memory.ports` | `context_memory.repository.mongo.MemoryMongoRepository` | crosses to composition root |
@@ -2283,8 +2276,8 @@ room_memories {
   room_id,
   memory_content: { summary, ... },
   conversation_history: [
-    { turn_id, role, timestamp, representation: "full", content, ..., turn_notes },
-    { turn_id, role, timestamp, representation: "compact", content_ref, ..., turn_notes }
+    { turn_id, role, timestamp, representation: "full", content, ... },
+    { turn_id, role, timestamp, representation: "compact", content_ref, ... }
   ]
 }
 ```
@@ -2316,25 +2309,22 @@ duplicate, missing, empty, or room-mismatched projections do not. The periodic
 waiting room is not compacted while it waits; its lookup fails closed and its
 worker pool is reaped on success, failure, and cancellation. Compaction writes
 tolerate already-compacted stale targets, but there is no cross-worker
-single-flight compaction and no compare-and-set for concurrent room-summary
-refreshes.
+single-flight compaction.
 
 ### Facade operations
 
-`ContextMemoryFacade` also provides bounded context assembly
-(`context_memory.assembly`; `max_turns=0` includes no history and reports
-`turn_count_exceeded`, a negative value raises `ValueError`, and truncation
-reasons rank `token_budget_exceeded`, then `turn_count_exceeded`, then
-`char_limit_exceeded`), typed keyword search (`search_memory` returns
-`MemorySearchResult`s from at most `memory_search_max_candidates` ranked
-records, hydrated in bounded batches), incremental room-summary updates (a
-non-empty `current_goal` replaces the previous one; `key_decisions` and
-`important_constraints` append with case-insensitive dedup; non-empty
-`open_questions` and `recent_agent_contributions` replace their lists; new
-`room_facts` append under the retention bound), synthesis appends, and content
-expansion. The orchestrator path calls none of these. Context-memory
-configuration is validated when the typed config objects are constructed at
-startup.
+`ContextMemoryFacade` exposes only the operations production calls:
+`project_message_for_event` (event handler and orchestrator final-message
+projection), `run_compaction` (event handler), `compact_if_needed` (compaction
+sweep), and `delete_room_memory` (room deletion). Projection makes no LLM calls
+and generates no turn notes. The orchestrator reads canonical history directly
+through `MemoryRepository.get_room_memory`. There is no context assembly, memory
+search, room-summary update, synthesis append, or compacted content expansion
+path; compacted content in `conversation_content` is written but not read back at
+runtime, and that collection has no text index. Compaction configuration is
+validated when `CompactionConfig` is constructed at startup. The retired
+`context_*` token-budget and `memory_search_*` settings are in
+`loader.REMOVED_FIELDS`.
 
 ## Internal Eventing
 
@@ -2494,7 +2484,7 @@ Focused tests are organized by module and workflow:
 - `tests/test_orchestrator_*` and `tests/test_execution_*`: the orchestrator,
   A2A runtime, and execution flows.
 - `tests/test_hitl*` and `tests/test_session*`: HITL and sessions.
-- `tests/test_context_memory_*`: projection, assembly, compaction, search.
+- `tests/test_context_memory_*`: projection, compaction, repository, events.
 - `tests/test_delivery_*`: SSE, event bus, delivery protocols.
 - `tests/test_module_boundaries.py`, `tests/test_module_protocol_inventory.py`,
   `tests/test_protocol_inventory_doc.py`, and `tests/test_sdk_confinement_*.py`:

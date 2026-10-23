@@ -89,8 +89,6 @@ def test_health_status_has_no_change_stream_key():
         redis_runtime_connected=True,
         redis_url="redis://localhost:6379/0",
         agent_search_index_ready=True,
-        memory_search_index_ready=True,
-        search_indexes_ready=True,
     )
 
     assert result["status_code"] == 200

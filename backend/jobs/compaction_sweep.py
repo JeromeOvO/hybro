@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from common.config import settings
 from common.dto import CompactionResult
@@ -32,15 +32,9 @@ MAX_CONCURRENT_COMPACTIONS = 5
 
 @runtime_checkable
 class CompactionPort(Protocol):
-    async def should_compact(self, conversation_id: str) -> bool: ...
     async def compact_if_needed(
         self, conversation_id: str
     ) -> CompactionResult | None: ...
-    async def compact_room_memory(
-        self,
-        conversation_id: str,
-        room_memory_doc: Any | None = None,
-    ) -> CompactionResult: ...
 
 
 class LeaderGate(Protocol):

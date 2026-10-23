@@ -1,24 +1,16 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from common.dto import CompactionResult
-from common.observability import NoopTracingProvider, traced_create_task
-from common.protocols import LLMGateway, RoomHistoryReader
+from common.observability import NoopTracingProvider
+from common.protocols import RoomHistoryReader
 from common.utils.logger import get_logger
-from context_memory import assembly, compaction, projection, search, summary
-from context_memory.config import (
-    CompactionConfig,
-    ContextMemoryLLMConfig,
-    MemorySearchConfig,
-    TokenBudgetConfig,
-)
-from context_memory.models import AssembledContext, MemorySearchResult
+from context_memory import compaction, projection
+from context_memory.config import CompactionConfig
 from context_memory.ports import ContentStorageRepository, MemoryRepository
-from context_memory.translators import normalize_room_memory
 
 logger = get_logger(__name__)
 
@@ -30,98 +22,18 @@ class ContextMemoryFacade:
         memory_repository: MemoryRepository,
         content_repository: ContentStorageRepository,
         room_history_reader: RoomHistoryReader,
-        llm_provider: LLMGateway,
         id_factory: Callable[[], str],
         now: Callable[[], datetime],
-        token_budget: TokenBudgetConfig | None = None,
         compaction_config: CompactionConfig | None = None,
-        search_config: MemorySearchConfig | None = None,
-        llm_config: ContextMemoryLLMConfig | None = None,
-        background_task_runner: Callable[[Awaitable[Any]], None] | None = None,
         tracer: Any | None = None,
     ) -> None:
         self.memory_repository = memory_repository
         self.content_repository = content_repository
         self.room_history_reader = room_history_reader
-        self.llm_provider = llm_provider
         self.id_factory = id_factory
         self.now = now
-        self.token_budget = token_budget or TokenBudgetConfig()
         self.compaction_config = compaction_config or CompactionConfig()
-        self.search_config = search_config or MemorySearchConfig()
-        self.llm_config = llm_config or ContextMemoryLLMConfig()
-        self.background_task_runner = background_task_runner or _background_task
         self.tracer = tracer or NoopTracingProvider()
-
-    async def assemble_context(
-        self,
-        conversation_id: str,
-        message_id: str,
-        token_budget: int,
-        agent_id: str | None = None,
-    ) -> AssembledContext:
-        doc = await self.memory_repository.get_room_memory(conversation_id)
-        if not doc:
-            doc = projection.new_room_memory_doc(
-                conversation_id=conversation_id,
-                memory_id=self.id_factory(),
-                now=self.now(),
-            )
-        state = normalize_room_memory(doc)
-        current_task = None
-        projected_turn_id = f"message:{message_id}"
-        for turn in state.conversation_history:
-            if turn.turn_id == projected_turn_id:
-                current_task = turn.content
-                break
-        if current_task is None:
-            messages = await self.room_history_reader.get_messages_by_ids([message_id])
-            message = next(
-                (
-                    item
-                    for item in messages
-                    if getattr(item, "message_id", None) == message_id
-                    and getattr(item, "conversation_id", None) == conversation_id
-                ),
-                None,
-            )
-            if message is None:
-                raise ValueError(
-                    f"Message {message_id} not found in room {conversation_id}"
-                )
-            current_task = projection.extract_message_text(
-                getattr(message, "content", None)
-            )
-
-        budget = self.token_budget.with_model_window(token_budget)
-        if agent_id is None:
-            result = assembly.assemble_supervisor_context_from_memory(
-                doc,
-                current_task or "",
-                token_budget=budget,
-            )
-        else:
-            result = assembly.assemble_agent_execution_context_from_memory(
-                doc,
-                current_task or "",
-                token_budget=budget,
-                agent_id=agent_id,
-            )
-        metadata = dict(result.metadata)
-        metadata.update({"message_id": message_id, "agent_id": agent_id})
-        return result.model_copy(update={"metadata": metadata})
-
-    async def search_memory(
-        self, conversation_id: str, query: str, limit: int = 10
-    ) -> list[MemorySearchResult]:
-        results = await search.search_memory(
-            conversation_id=conversation_id,
-            query=query,
-            limit=limit,
-            content_repository=self.content_repository,
-            config=self.search_config,
-        )
-        return results
 
     async def delete_room_memory(self, conversation_id: str) -> bool:
         existed = await self.memory_repository.get_room_memory(conversation_id)
@@ -142,9 +54,6 @@ class ContextMemoryFacade:
             cleanup_ok = False
         return cleanup_ok
 
-    async def project_message(self, conversation_id: str, message_id: str) -> None:
-        await self.project_message_for_event(conversation_id, message_id)
-
     async def project_message_for_event(
         self,
         conversation_id: str,
@@ -164,9 +73,6 @@ class ContextMemoryFacade:
             room_agent_set=room_agent_set,
             agent_name=agent_name,
             was_successful=was_successful,
-            llm_provider=self.llm_provider,
-            llm_config=self.llm_config,
-            background_task_runner=self.background_task_runner,
         )
 
     async def run_compaction(self, conversation_id: str) -> CompactionResult:
@@ -178,88 +84,6 @@ class ContextMemoryFacade:
             now=self.now,
         )
 
-    def assemble_supervisor_context_from_memory(
-        self,
-        room_memory_doc: Any,
-        current_task: str,
-        *,
-        agent_registry: list[dict[str, Any]] | None = None,
-        max_turns: int = 5,
-        memory_search_results: list[MemorySearchResult] | None = None,
-    ) -> AssembledContext:
-        return assembly.assemble_supervisor_context_from_memory(
-            room_memory_doc,
-            current_task,
-            token_budget=self.token_budget,
-            agent_registry=agent_registry,
-            max_turns=max_turns,
-            memory_search_results=memory_search_results,
-        )
-
-    def assemble_agent_execution_context_from_memory(
-        self,
-        room_memory_doc: Any,
-        current_task: str,
-        *,
-        agent_id: str | None = None,
-        agent_name: str | None = None,
-        room_awareness: str | None = None,
-        quoted_text: str | None = None,
-        agent_task: str | None = None,
-        include_system_instruction: bool = True,
-    ) -> AssembledContext:
-        return assembly.assemble_agent_execution_context_from_memory(
-            room_memory_doc,
-            current_task,
-            token_budget=self.token_budget,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            room_awareness=room_awareness,
-            quoted_text=quoted_text,
-            agent_task=agent_task,
-            include_system_instruction=include_system_instruction,
-        )
-
-    def get_budget_summary(self) -> dict[str, int]:
-        return self.token_budget.get_budget_summary()
-
-    async def add_synthesis_to_history(
-        self, conversation_id: str, synthesis_text: str, trajectory: Any | None = None
-    ) -> str | None:
-        return await projection.add_synthesis_to_history(
-            repository=self.memory_repository,
-            conversation_id=conversation_id,
-            synthesis_text=synthesis_text,
-            trajectory=trajectory,
-            id_factory=self.id_factory,
-            now=self.now,
-            llm_provider=self.llm_provider,
-            llm_config=self.llm_config,
-            background_task_runner=self.background_task_runner,
-        )
-
-    async def update_room_summary(
-        self,
-        conversation_id: str,
-        synthesis_text: str,
-        synthesis_turn_id: str | None = None,
-    ) -> bool:
-        return await summary.update_room_summary(
-            repository=self.memory_repository,
-            llm_provider=self.llm_provider,
-            llm_config=self.llm_config,
-            conversation_id=conversation_id,
-            synthesis_text=synthesis_text,
-            synthesis_turn_id=synthesis_turn_id,
-            id_factory=self.id_factory,
-            now=self.now,
-        )
-
-    async def should_compact(self, conversation_id: str) -> bool:
-        return await compaction.should_compact(
-            self.memory_repository, conversation_id, self.compaction_config
-        )
-
     async def compact_if_needed(self, conversation_id: str):
         return await compaction.compact_if_needed(
             repository=self.memory_repository,
@@ -268,73 +92,3 @@ class ContextMemoryFacade:
             config=self.compaction_config,
             now=self.now,
         )
-
-    async def compact_room_memory(
-        self,
-        conversation_id: str,
-        room_memory_doc: object | None = None,
-        *,
-        room_memory: object | None = None,
-    ):
-        if room_memory is not None:
-            if room_memory_doc is not None:
-                raise ValueError(
-                    "compact_room_memory accepts either room_memory_doc or "
-                    "room_memory, not both"
-                )
-            room_memory_doc = room_memory
-        return await compaction.compact_room_memory(
-            repository=self.memory_repository,
-            content_repository=self.content_repository,
-            conversation_id=conversation_id,
-            room_memory_doc=room_memory_doc,
-            config=self.compaction_config,
-            now=self.now,
-        )
-
-    async def expand_turn_content(
-        self, conversation_id: str, turn_id: str
-    ) -> str | None:
-        return await compaction.expand_turn_content(
-            self.memory_repository,
-            self.content_repository,
-            conversation_id,
-            turn_id,
-            now=self.now(),
-        )
-
-    async def expand_turn_content_from_turn(self, turn_doc: dict) -> str:
-        return await compaction.expand_turn_content_from_turn(
-            self.content_repository,
-            turn_doc,
-            now=self.now(),
-        )
-
-    async def fetch_turn_content(self, turn_id: str, conversation_id: str) -> str:
-        return await compaction.fetch_turn_content(
-            self.memory_repository,
-            self.content_repository,
-            turn_id=turn_id,
-            conversation_id=conversation_id,
-        )
-
-    async def get_compaction_stats(self, conversation_id: str) -> dict:
-        return await compaction.get_compaction_stats(
-            self.memory_repository,
-            self.content_repository,
-            conversation_id,
-        )
-
-
-def _background_task(coro: Awaitable[Any]) -> None:
-    task = traced_create_task(coro, name="context-memory-background-task")
-    task.add_done_callback(_log_background_task_exception)
-
-
-def _log_background_task_exception(task: asyncio.Task) -> None:
-    if task.cancelled():
-        return
-    try:
-        task.result()
-    except Exception:
-        logger.exception("Context memory background task failed")

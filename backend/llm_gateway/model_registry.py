@@ -107,7 +107,6 @@ class ModelRegistryImpl:
                 4096,
                 1,
             ),
-            ("context_memory_json_model", "gpt-4o-mini", 128000, 4096, 1),
             (
                 "supervisor_model",
                 self._settings.supervisor_model or self._settings.lead_ai_model,

@@ -222,3 +222,16 @@ def test_public_api_routes_do_not_use_old_api_endpoint_modules():
             bad.append((row["path"], row["name"], endpoint_module))
 
     assert bad == []
+
+
+def test_route_group_matching_is_segment_bounded():
+    from api_gateway.registry import route_group_for_path
+
+    assert route_group_for_path("/api/v1/local-agents/discovery") == "agent"
+    assert route_group_for_path("/api/v1/agent/getAgent/abc") == "agent"
+    assert route_group_for_path("/api/v1/agents/discovery") == "agent"
+    assert route_group_for_path("/api/v1/agentGroups") == "agent_group"
+    assert route_group_for_path("/api/v1/local-agents-something") == "unknown"
+    assert route_group_for_path("/api/v1/agentGroups-v2") == "unknown"
+    assert route_group_for_path("/api/v1/agentish") == "unknown"
+    assert route_group_for_path("/api/v1/agents-something") == "unknown"

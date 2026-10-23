@@ -199,12 +199,7 @@ CONSUMER_PORT_METHODS = {
     ("context_memory.ports", "ContentStorageRepository"): {
         "delete_content_by_room_id",
         "delete_content_by_turn_id",
-        "get_content_by_document_id",
         "get_content_by_turn_id",
-        "get_content_stats_for_room",
-        "hydrate_turn_content",
-        "scan_text_search",
-        "text_search",
         "upsert_full_content",
     },
     ("context_memory.ports", "MemoryRepository"): {
@@ -213,12 +208,8 @@ CONSUMER_PORT_METHODS = {
         "delete_room_memory",
         "ensure_room_memory",
         "get_room_memory",
-        "get_room_summary_projection",
         "list_room_ids_with_memory",
-        "push_and_trim_conversation_turn",
         "push_and_trim_conversation_turn_if_absent",
-        "update_room_summary_atomic",
-        "update_turn_notes",
         "upsert_room_memory",
     },
     ("agent.facade", "AgentRepository"): {

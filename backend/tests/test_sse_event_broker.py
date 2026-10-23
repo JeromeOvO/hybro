@@ -44,8 +44,6 @@ class TestHealthStatus:
             redis_runtime_connected=False,
             redis_url="",
             agent_search_index_ready=True,
-            memory_search_index_ready=True,
-            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "ok"
@@ -63,8 +61,6 @@ class TestHealthStatus:
             redis_runtime_connected=True,
             redis_url="redis://localhost:6379/0",
             agent_search_index_ready=True,
-            memory_search_index_ready=True,
-            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "degraded"
@@ -83,8 +79,6 @@ class TestHealthStatus:
             redis_runtime_connected=True,
             redis_url="redis://localhost:6379/0",
             agent_search_index_ready=True,
-            memory_search_index_ready=True,
-            search_indexes_ready=True,
         )
 
         assert result["body"]["delivery_pubsub_connected"] is True
@@ -101,8 +95,6 @@ class TestHealthStatus:
             redis_runtime_connected=True,
             redis_url="redis://localhost:6379/0",
             agent_search_index_ready=True,
-            memory_search_index_ready=True,
-            search_indexes_ready=True,
         )
 
         assert result["body"]["status"] == "ok"
@@ -111,7 +103,7 @@ class TestHealthStatus:
         assert result["body"]["redis_runtime_connected"] is True
         assert result["body"]["redis_service_connected"] is True
 
-    def test_health_status_degraded_when_either_search_index_is_unready(self):
+    def test_health_status_degraded_when_agent_search_index_is_unready(self):
         from main import compute_health_status
 
         result = compute_health_status(
@@ -120,28 +112,10 @@ class TestHealthStatus:
             redis_runtime_connected=False,
             redis_url="",
             agent_search_index_ready=False,
-            memory_search_index_ready=True,
-            search_indexes_ready=False,
         )
 
         assert result["status_code"] == 503
         assert result["body"]["status"] == "degraded"
         assert result["body"]["agent_search_index_ready"] is False
-        assert result["body"]["memory_search_index_ready"] is True
-
-    def test_disabled_memory_search_can_keep_aggregate_readiness_healthy(self):
-        from main import compute_health_status
-
-        result = compute_health_status(
-            delivery_pubsub_connected=False,
-            delivery_kv_connected=False,
-            redis_runtime_connected=False,
-            redis_url="",
-            agent_search_index_ready=True,
-            memory_search_index_ready=False,
-            search_indexes_ready=True,
-        )
-
-        assert result["status_code"] == 200
-        assert result["body"]["memory_search_index_ready"] is False
-        assert result["body"]["search_indexes_ready"] is True
+        assert "memory_search_index_ready" not in result["body"]
+        assert "search_indexes_ready" not in result["body"]

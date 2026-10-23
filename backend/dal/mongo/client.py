@@ -116,22 +116,6 @@ class MongoCollectionAdapter:
         result = await self._collection.bulk_write(operations, **kwargs)
         return result.raw_result if hasattr(result, "raw_result") else result
 
-    async def find_one_by_stable_or_native_id(
-        self, stable_id_field: str, id_value: str
-    ) -> dict | None:
-        doc = await self._collection.find_one({stable_id_field: id_value})
-        if doc is not None:
-            return doc
-
-        try:
-            from bson import ObjectId
-
-            if ObjectId.is_valid(id_value):
-                return await self._collection.find_one({"_id": ObjectId(id_value)})
-        except Exception:
-            return None
-        return None
-
     async def distinct(self, key: str, query: dict | None = None) -> list:
         return await self._collection.distinct(key, query or {})
 

@@ -1010,10 +1010,8 @@ def test_model_registry_looks_up_models_capabilities_and_lists_unique_models(
     assert [m.logical_name for m in registry.list_models("embedding")] == [
         "embedding_model"
     ]
-    assert len(registry.list_models()) == 5
+    assert len(registry.list_models()) == 4
     assert registry.get_model("supervisor_model").logical_name == "supervisor_model"
-    assert registry.get_model("context_memory_json_model").model_id == "gpt-4o-mini"
-    assert registry.supports_capability("context_memory_json_model", "json_schema")
 
 
 def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
@@ -1031,7 +1029,6 @@ def test_model_registry_routes_generation_to_deepseek_but_not_embeddings():
     for logical_name in (
         "lead_ai_model",
         "classifier_ai_model",
-        "context_memory_json_model",
         "supervisor_model",
     ):
         model = registry.get_model(logical_name)

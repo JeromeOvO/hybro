@@ -32,21 +32,6 @@ def test_tracked_task_modules_are_gone(module):
         importlib.import_module(module)
 
 
-def test_a2a_service_has_no_tracked_task_surface():
-    from a2a_adapter import runtime_service
-    from a2a_adapter.runtime_service import A2AService
-
-    assert not hasattr(runtime_service, "A2ATaskTrackingPort")
-    for name in (
-        "bind_task_tracking",
-        "create_task_for_tracking",
-        "send_message_to_tracked_agent",
-        "reply_to_task",
-        "_webhook_base_url",
-    ):
-        assert not hasattr(A2AService, name), name
-
-
 def test_execution_ports_drop_tracked_task_and_continuation_contracts():
     import execution.ports as ports
     from approval.protocols import HITLPersistencePort

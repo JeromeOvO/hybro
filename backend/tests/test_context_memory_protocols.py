@@ -60,24 +60,6 @@ class FakeMemoryRepository:
     ) -> tuple[bool, bool, bool]:
         return True, True, False
 
-    async def update_turn_notes(
-        self, conversation_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        return True
-
-    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
-        return None
-
-    async def update_room_summary_atomic(
-        self,
-        conversation_id: str,
-        room_summary: dict,
-        *,
-        new_facts: list[dict] | None = None,
-        max_facts: int = 50,
-    ) -> bool:
-        return True
-
     async def compact_turns_bulk(
         self, conversation_id: str, compacted_turns: list[dict]
     ) -> bool:
@@ -91,9 +73,6 @@ class FakeContentRepository:
     async def upsert_full_content(self, **kwargs) -> str:
         return kwargs["document_id"]
 
-    async def get_content_by_document_id(self, document_id: str) -> dict | None:
-        return None
-
     async def get_content_by_turn_id(
         self, conversation_id: str, turn_id: str
     ) -> dict | None:
@@ -106,28 +85,6 @@ class FakeContentRepository:
 
     async def delete_content_by_room_id(self, conversation_id: str) -> int:
         return 0
-
-    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
-        return {"room_id": conversation_id}
-
-    async def text_search(
-        self,
-        conversation_id: str,
-        query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> list[dict]:
-        return []
-
-    async def scan_text_search(
-        self, conversation_id: str, query: str, limit: int
-    ) -> list[dict]:
-        return []
-
-    async def hydrate_turn_content(
-        self, conversation_id: str, turn_ids: list[str]
-    ) -> list[dict]:
-        return []
 
 
 class FakeRoomHistoryReader:
@@ -143,20 +100,6 @@ class FakeRoomHistoryReader:
         return []
 
 
-class FakeLLM:
-    async def generate(self, request):
-        return None
-
-    async def generate_structured(self, messages, schema, model=None):
-        return type("Response", (), {"data": {}})()
-
-    async def embed(self, text):
-        return [0.1]
-
-    async def embed_batch(self, texts):
-        return [[0.1] for _ in texts]
-
-
 def _facade():
     from datetime import datetime
 
@@ -166,7 +109,6 @@ def _facade():
         memory_repository=FakeMemoryRepository(),
         content_repository=FakeContentRepository(),
         room_history_reader=FakeRoomHistoryReader(),
-        llm_provider=FakeLLM(),
         id_factory=lambda: "id-1",
         now=lambda: datetime.now(UTC),
     )
@@ -304,14 +246,9 @@ def test_context_memory_protocol_method_sets():
 
     assert public_methods(protocols.ContentStorageRepository) == {
         "upsert_full_content",
-        "get_content_by_document_id",
         "get_content_by_turn_id",
         "delete_content_by_turn_id",
         "delete_content_by_room_id",
-        "get_content_stats_for_room",
-        "text_search",
-        "scan_text_search",
-        "hydrate_turn_content",
     }
 
 
@@ -323,7 +260,6 @@ def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch)
 
     facade = create_context_memory_facade(
         mongo=FakeMongo(),
-        llm_provider=FakeLLM(),
         room_history_reader=FakeRoomHistoryReader(),
     )
 
@@ -332,45 +268,23 @@ def test_context_memory_facade_uses_settings_compaction_concurrency(monkeypatch)
 
 def test_context_memory_config_defaults_read_common_settings(monkeypatch):
     from common.config import settings
-    from context_memory.config import (
-        CompactionConfig,
-        MemorySearchConfig,
-        TokenBudgetConfig,
-    )
+    from context_memory.config import CompactionConfig
 
-    monkeypatch.setattr(settings, "context_model_window", 12345)
-    monkeypatch.setattr(settings, "context_system_prompt_tokens", 101)
-    monkeypatch.setattr(settings, "context_tool_schema_tokens", 102)
-    monkeypatch.setattr(settings, "context_response_reserve_tokens", 103)
-    monkeypatch.setattr(settings, "context_room_pct", 0.2)
-    monkeypatch.setattr(settings, "context_history_pct", 0.5)
-    monkeypatch.setattr(settings, "context_task_pct", 0.3)
     monkeypatch.setattr(settings, "compaction_enabled", False)
     monkeypatch.setattr(settings, "compaction_max_full_turns", 7)
     monkeypatch.setattr(settings, "compaction_max_total_tokens", 777)
     monkeypatch.setattr(settings, "compaction_preserve_recent", 3)
     monkeypatch.setattr(settings, "compaction_content_ttl_days", 9)
     monkeypatch.setattr(settings, "compaction_concurrency", 4)
-    monkeypatch.setattr(settings, "memory_search_enabled", False)
 
-    token_budget = TokenBudgetConfig()
     compaction = CompactionConfig()
-    search = MemorySearchConfig()
 
-    assert token_budget.model_context_window == 12345
-    assert token_budget.system_prompt == 101
-    assert token_budget.tool_schemas == 102
-    assert token_budget.response_reserve == 103
-    assert token_budget.room_context_pct == 0.2
-    assert token_budget.conversation_history_pct == 0.5
-    assert token_budget.current_task_pct == 0.3
     assert compaction.enabled is False
     assert compaction.max_full_turns == 7
     assert compaction.max_total_tokens == 777
     assert compaction.preserve_recent_turns == 3
     assert compaction.content_ttl_days == 9
     assert compaction.concurrency == 4
-    assert search.enabled is False
 
 
 def test_context_memory_setting_helper_does_not_swallow_import_failures(monkeypatch):

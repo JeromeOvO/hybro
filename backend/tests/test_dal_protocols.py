@@ -51,7 +51,6 @@ def test_mongo_collection_protocol_covers_repository_operations():
         "drop_index",
         "bulk_write",
         "distinct",
-        "find_one_by_stable_or_native_id",
         "watch",
     }
     assert required.issubset(set(MongoCollection.__dict__))

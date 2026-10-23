@@ -940,7 +940,6 @@ async def test_route_without_bound_receiver_is_unavailable():
 def test_route_is_registered_with_push_token_policy():
     from fastapi.routing import APIRoute
 
-    from api_gateway.policies import ROUTE_POLICIES
     from api_gateway.registry import resolve_declared_owner, route_group_for_path
     from main import app
 
@@ -953,9 +952,7 @@ def test_route_is_registered_with_push_token_policy():
     assert route.methods == {"POST"}
     assert route.status_code == 202
     assert route_group_for_path(route.path) == "a2a_push"
-    policy = ROUTE_POLICIES["a2a_push"]
-    assert policy.auth == "push-token-route-level"
-    assert set(policy.tags) <= set(route.tags)
+    assert "a2a_push" in route.tags
     assert resolve_declared_owner(route) == "api_gateway.routes.a2a_push_routes"
     assert "get_current_user" not in {
         dependency.call.__name__ for dependency in route.dependant.dependencies

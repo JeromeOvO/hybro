@@ -44,7 +44,6 @@ from common.protocols import (
     FileStorage,
     HITLManager,
     LeaderElector,
-    LLMGateway,
     MongoCollection,
     MongoDAL,
     RedisKV,
@@ -59,12 +58,7 @@ from context_memory import (
     ContextMemoryFacade,
     MemoryMongoRepository,
 )
-from context_memory.config import (
-    CompactionConfig,
-    ContextMemoryLLMConfig,
-    MemorySearchConfig,
-    TokenBudgetConfig,
-)
+from context_memory.config import CompactionConfig
 from context_memory.ports import ContentStorageRepository, MemoryRepository
 from conversation import ConversationFacade, MessageMongoRepository, RoomMongoRepository
 from conversation.attachments import AttachmentMetadataReader
@@ -470,7 +464,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.selection_service import AgentSelectionService
             from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
-            from context_memory.config import ContextMemoryLLMConfig
             from conversation.deletion import RoomDeletionService
             from conversation.runtime import ConversationRuntime
             from conversation.timeline_projection import RoomTimelineProjector
@@ -532,13 +525,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.agent_search_index_ready = index_readiness[
                 "agent_search_index_ready"
             ]
-            app.state.memory_search_index_ready = index_readiness[
-                "memory_search_index_ready"
-            ]
-            app.state.search_indexes_ready = app.state.agent_search_index_ready and (
-                not runtime.settings.memory_search_enabled
-                or app.state.memory_search_index_ready
-            )
 
             _delivery_config = create_delivery_config(runtime.settings)
             runtime_instance_id = get_instance_id()
@@ -596,9 +582,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             app.state.eventing_deps = _eventing_deps
             app.state.eventing_connected = False
 
-            from a2a_adapter.runtime_service import (
-                a2a_service,
-            )
             from approval.factory import create_hitl_service
 
             agent_capability_issue_repository = (
@@ -830,7 +813,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
 
             membership_source.bind_store(agent_runtime_store)
-            a2a_service.bind_call_counter(agent_runtime_store)
             execution_client_request_id_resolver = SSEClientRequestIdResolver(
                 resolver=client_request_id_store,
             )
@@ -1177,25 +1159,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             context_memory_facade = create_context_memory_facade(
                 mongo=mongo_dal,
-                llm_provider=llm_provider,
                 room_history_reader=_room_deps.room_history_reader,
-                search_config=MemorySearchConfig(
-                    enabled=(
-                        runtime.settings.memory_search_enabled
-                        and app.state.memory_search_index_ready
-                    ),
-                    temporal_decay_enabled=(
-                        runtime.settings.memory_search_temporal_decay_enabled
-                    ),
-                    half_life_days=runtime.settings.memory_search_half_life_days,
-                    max_results=runtime.settings.memory_search_max_results,
-                    max_candidates=runtime.settings.memory_search_max_candidates,
-                    max_snippet_chars=runtime.settings.memory_search_max_snippet_chars,
-                ),
-                llm_config=ContextMemoryLLMConfig(
-                    turn_notes_model="context_memory_json_model",
-                    summary_model="context_memory_json_model",
-                ),
             )
             room_deletion = RoomDeletionService(
                 room_lifecycle=SimpleNamespace(
@@ -2195,9 +2159,7 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
         agent_groups=mongo.collection("agent_groups"),
         agent_repository=agent_repository,
     ).ensure_indexes()
-    memory_search_index_ready = await ContentStorageMongoRepository(
-        mongo=mongo
-    ).ensure_indexes()
+    await ContentStorageMongoRepository(mongo=mongo).ensure_indexes()
     await MemoryMongoRepository(mongo=mongo).ensure_indexes()
     await create_agent_capability_issue_repository(mongo).ensure_indexes()
     await ensure_orchestrator_indexes(mongo)
@@ -2207,7 +2169,6 @@ async def ensure_runtime_indexes(*, mongo: MongoDAL) -> dict[str, bool]:
     await ensure_room_file_indexes(mongo)
     return {
         "agent_search_index_ready": agent_search_index_ready,
-        "memory_search_index_ready": memory_search_index_ready,
     }
 
 
@@ -2494,28 +2455,14 @@ def create_room_deps(
 def create_context_memory_facade(
     *,
     mongo: MongoDAL,
-    llm_provider: LLMGateway,
     room_history_reader: RoomHistoryReader,
     memory_repository: MemoryRepository | None = None,
     content_repository: ContentStorageRepository | None = None,
-    token_budget: TokenBudgetConfig | None = None,
     compaction_config: CompactionConfig | None = None,
-    search_config: MemorySearchConfig | None = None,
-    llm_config: ContextMemoryLLMConfig | None = None,
-    background_task_runner: Callable[[Awaitable[Any]], None] | None = None,
 ) -> ContextMemoryFacade:
     memory_repository = memory_repository or MemoryMongoRepository(mongo=mongo)
     content_repository = content_repository or ContentStorageMongoRepository(
         mongo=mongo
-    )
-    token_budget = token_budget or TokenBudgetConfig(
-        model_context_window=settings.context_model_window,
-        system_prompt=settings.context_system_prompt_tokens,
-        tool_schemas=settings.context_tool_schema_tokens,
-        response_reserve=settings.context_response_reserve_tokens,
-        room_context_pct=settings.context_room_pct,
-        conversation_history_pct=settings.context_history_pct,
-        current_task_pct=settings.context_task_pct,
     )
     compaction_config = compaction_config or CompactionConfig(
         enabled=settings.compaction_enabled,
@@ -2525,26 +2472,13 @@ def create_context_memory_facade(
         content_ttl_days=settings.compaction_content_ttl_days,
         concurrency=settings.compaction_concurrency,
     )
-    search_config = search_config or MemorySearchConfig(
-        enabled=settings.memory_search_enabled,
-        temporal_decay_enabled=settings.memory_search_temporal_decay_enabled,
-        half_life_days=settings.memory_search_half_life_days,
-        max_results=settings.memory_search_max_results,
-        max_candidates=settings.memory_search_max_candidates,
-        max_snippet_chars=settings.memory_search_max_snippet_chars,
-    )
     return ContextMemoryFacade(
         memory_repository=memory_repository,
         content_repository=content_repository,
         room_history_reader=room_history_reader,
-        llm_provider=llm_provider,
         id_factory=lambda: str(uuid4()),
         now=utcnow,
-        token_budget=token_budget,
         compaction_config=compaction_config,
-        search_config=search_config,
-        llm_config=llm_config,
-        background_task_runner=background_task_runner,
     )
 
 

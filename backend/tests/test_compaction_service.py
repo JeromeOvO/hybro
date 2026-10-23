@@ -11,12 +11,8 @@ from datetime import UTC, datetime
 import pytest
 
 from context_memory import ContextMemoryFacade, compaction
-from context_memory.config import CompactionConfig, MemorySearchConfig
-from context_memory.content_storage import (
-    ContentExpiredError,
-    hash_content,
-    make_document_id,
-)
+from context_memory.config import CompactionConfig
+from context_memory.content_storage import hash_content, make_document_id
 
 NOW = datetime(2026, 5, 13, tzinfo=UTC)
 
@@ -33,26 +29,6 @@ def full_turn(turn_id: str, content: str, *, tokens: int = 100) -> dict:
         "content_type": "text",
         "representation": "full",
         "estimated_tokens_full": tokens,
-        "estimated_tokens_compact": 20,
-        "turn_notes": {"one_liner": content[:40]},
-        "timestamp": NOW,
-    }
-
-
-def compact_turn(turn_id: str, document_id: str) -> dict:
-    return {
-        "turn_id": turn_id,
-        "role": "user",
-        "content": None,
-        "content_type": "text",
-        "representation": "compact",
-        "content_ref": {
-            "storage_type": "mongodb",
-            "collection": "conversation_content",
-            "document_id": document_id,
-            "created_at": NOW,
-        },
-        "estimated_tokens_full": 100,
         "estimated_tokens_compact": 20,
         "timestamp": NOW,
     }
@@ -117,9 +93,6 @@ class ContentRepositorySpy:
         self.docs[kwargs["document_id"]] = kwargs
         return kwargs["document_id"]
 
-    async def get_content_by_document_id(self, document_id: str) -> dict | None:
-        return self.docs.get(document_id)
-
     async def get_content_by_turn_id(
         self, conversation_id: str, turn_id: str
     ) -> dict | None:
@@ -130,24 +103,6 @@ class ContentRepositorySpy:
 
     async def delete_content_by_room_id(self, _conversation_id: str) -> int:
         return 0
-
-    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
-        docs = [doc for doc in self.docs.values() if doc["room_id"] == conversation_id]
-        return {"room_id": conversation_id, "total_documents": len(docs)}
-
-    async def text_search(
-        self,
-        _conversation_id: str,
-        _query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ):
-        return []
-
-    async def scan_text_search(
-        self, _conversation_id: str, _query: str, _limit: int
-    ) -> list[dict]:
-        return []
 
 
 class RoomHistoryReaderStub:
@@ -161,20 +116,6 @@ class RoomHistoryReaderStub:
 
     async def get_message_thread(self, _parent_message_id: str):
         return []
-
-
-class LLMStub:
-    async def generate(self, _request):
-        return None
-
-    async def generate_structured(self, _messages, _schema, model=None):
-        return type("Response", (), {"data": {}})()
-
-    async def embed(self, text: str):
-        return [float(len(text)), 1.0]
-
-    async def embed_batch(self, texts: list[str]):
-        return [[float(len(text)), 1.0] for text in texts]
 
 
 def config(**overrides) -> CompactionConfig:
@@ -200,11 +141,9 @@ def facade(
         memory_repository=memory_repository,
         content_repository=content_repository,
         room_history_reader=RoomHistoryReaderStub(),
-        llm_provider=LLMStub(),
         id_factory=lambda: "id-1",
         now=now,
         compaction_config=compaction_config or config(),
-        search_config=MemorySearchConfig(enabled=True),
     )
 
 
@@ -222,11 +161,15 @@ async def test_should_compact_uses_context_memory_thresholds() -> None:
         room_doc([full_turn("t1", "one"), full_turn("t2", "two")])
     )
 
-    assert await compaction.should_compact(
-        repo, "r1", config(max_full_turns=1, max_total_tokens=999)
+    doc = await repo.get_room_memory("r1")
+
+    assert compaction._doc_should_compact(
+        doc, config(max_full_turns=1, max_total_tokens=999)
     )
-    assert not await compaction.should_compact(repo, "missing", config())
-    assert not await compaction.should_compact(repo, "r1", config(enabled=False))
+    assert not compaction._doc_should_compact(
+        await repo.get_room_memory("missing"), config()
+    )
+    assert not compaction._doc_should_compact(doc, config(enabled=False))
 
 
 @pytest.mark.asyncio
@@ -295,85 +238,3 @@ async def test_facade_compact_if_needed_returns_none_below_threshold() -> None:
     )
 
     assert await service.compact_if_needed("r1") is None
-
-
-@pytest.mark.asyncio
-async def test_expand_turn_content_returns_full_and_mongodb_content() -> None:
-    content_repo = ContentRepositorySpy()
-    await content_repo.upsert_full_content(
-        document_id="doc1",
-        conversation_id="r1",
-        turn_id="t1",
-        content="stored content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=NOW,
-    )
-
-    assert (
-        await compaction.expand_turn_content_from_turn(
-            content_repo, full_turn("t-full", "inline content")
-        )
-        == "inline content"
-    )
-    assert (
-        await compaction.expand_turn_content_from_turn(
-            content_repo, compact_turn("t1", "doc1"), now=NOW
-        )
-        == "stored content"
-    )
-
-
-@pytest.mark.asyncio
-async def test_expand_turn_content_raises_when_stored_content_expired() -> None:
-    content_repo = ContentRepositorySpy()
-    await content_repo.upsert_full_content(
-        document_id="doc1",
-        conversation_id="r1",
-        turn_id="t1",
-        content="expired content",
-        content_type="text",
-        content_hash="hash",
-        stored_at=datetime(2026, 5, 1, tzinfo=UTC),
-        expires_at=datetime(2026, 5, 12, tzinfo=UTC),
-    )
-
-    with pytest.raises(ContentExpiredError):
-        await compaction.expand_turn_content_from_turn(
-            content_repo, compact_turn("t1", "doc1"), now=NOW
-        )
-
-
-@pytest.mark.asyncio
-async def test_fetch_turn_content_returns_graceful_fallback_errors() -> None:
-    missing_room = await compaction.fetch_turn_content(
-        MemoryRepositorySpy(None),
-        ContentRepositorySpy(),
-        turn_id="t1",
-        conversation_id="missing",
-    )
-    missing_turn = await compaction.fetch_turn_content(
-        MemoryRepositorySpy(room_doc([full_turn("t1", "one")])),
-        ContentRepositorySpy(),
-        turn_id="t2",
-        conversation_id="r1",
-    )
-    unsupported = await compaction.fetch_turn_content(
-        MemoryRepositorySpy(
-            room_doc(
-                [
-                    {
-                        **compact_turn("t3", "doc3"),
-                        "content_ref": {"storage_type": "url", "url": "https://x.test"},
-                    }
-                ]
-            )
-        ),
-        ContentRepositorySpy(),
-        turn_id="t3",
-        conversation_id="r1",
-    )
-
-    assert missing_room == "[Error: Room missing not found]"
-    assert missing_turn == "[Error: Turn t2 not found in room history]"
-    assert "unsupported storage" in unsupported

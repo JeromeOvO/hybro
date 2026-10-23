@@ -33,7 +33,6 @@ from common.dto import (
     TaskSubmittedEvent,
     TaskUpdateEvent,
 )
-from context_memory.models import ContextBlock, MemorySearchResult
 from llm_gateway.model_registry import ModelInfo
 
 
@@ -91,15 +90,7 @@ def test_common_dtos_can_be_instantiated():
         source="agent",
     )
     HITLResponse(request_id="hitl1", response_text="yes", responder_id="u1")
-    ContextBlock(block_id="b1", conversation_id="r1", content="context", token_count=3)
     CompactionResult(conversation_id="r1", compacted_count=1, tokens_saved=10)
-    MemorySearchResult(
-        conversation_id="r1",
-        content="memory",
-        keyword_score=0.5,
-        relevance_score=0.5,
-        temporal_decay_factor=1.0,
-    )
     ProcessingStatusEvent(conversation_id="r1", message_id="m1", status="processing")
     RunEventNotification(
         conversation_id="r1",

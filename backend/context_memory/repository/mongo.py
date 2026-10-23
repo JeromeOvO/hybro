@@ -5,9 +5,8 @@ from typing import Any
 
 from common.protocols import MongoCollection, MongoDAL
 from common.utils.logger import get_logger
-from common.utils.mongo_indexes import create_index, ensure_text_index
+from common.utils.mongo_indexes import create_index
 from common.utils.room_state import delete_room_rows
-from common.utils.time import utcnow
 
 logger = get_logger(__name__)
 
@@ -77,26 +76,6 @@ class MemoryMongoRepository:
             doc = await self.get_room_memory(conversation_id)
         return doc or defaults
 
-    async def push_and_trim_conversation_turn(
-        self,
-        conversation_id: str,
-        turn: dict,
-        *,
-        max_turns: int,
-        summary_stub: str,
-        max_summary_chars: int,
-    ) -> tuple[bool, bool]:
-        if max_turns <= 0:
-            return False, False
-        max_summary_chars = max(max_summary_chars, 10)
-        doc = await self._push_turn(
-            conversation_id, turn, max_turns, summary_stub, max_summary_chars
-        )
-        matched = doc is not None
-        # Returns (matched, modified). The append pipeline always changes a
-        # matched room by adding the new turn, so both values are equal.
-        return matched, matched
-
     async def push_and_trim_conversation_turn_if_absent(
         self,
         conversation_id: str,
@@ -145,34 +124,6 @@ class MemoryMongoRepository:
         if _history_contains_turn(existing, turn_id):
             return False, True, True
         raise RuntimeError(f"Could not determine projection state for turn {turn_id}")
-
-    async def update_turn_notes(
-        self, conversation_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        return await self._memories.update_one(
-            {"room_id": conversation_id, "conversation_history.turn_id": turn_id},
-            {"$set": {"conversation_history.$[turn].turn_notes": turn_notes}},
-            array_filters=[{"turn.turn_id": turn_id}],
-        )
-
-    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
-        return await self._memories.find_one(
-            {"room_id": conversation_id},
-            projection={"room_summary": 1, "room_facts": 1, "room_id": 1},
-        )
-
-    async def update_room_summary_atomic(
-        self,
-        conversation_id: str,
-        room_summary: dict,
-        *,
-        new_facts: list[dict] | None = None,
-        max_facts: int = 50,
-    ) -> bool:
-        update: dict[str, Any] = {"$set": {"room_summary": room_summary}}
-        if new_facts:
-            update["$push"] = {"room_facts": {"$each": new_facts, "$slice": -max_facts}}
-        return await self._memories.update_one({"room_id": conversation_id}, update)
 
     async def compact_turns_bulk(
         self, conversation_id: str, compacted_turns: list[dict]
@@ -264,8 +215,7 @@ class ContentStorageMongoRepository:
     async def delete_room_state(self, conversation_id: str) -> bool:
         return await delete_room_rows((self._content,), conversation_id)
 
-    async def ensure_indexes(self) -> bool:
-        """Create the content indexes; return turn-notes search readiness."""
+    async def ensure_indexes(self) -> None:
         await create_index(
             self._content,
             "conversation_content",
@@ -288,17 +238,6 @@ class ContentStorageMongoRepository:
             [("room_id", 1), ("stored_at", -1)],
             name="room_stored_at",
         )
-        memory_search_ready = await ensure_text_index(
-            self._content,
-            name="turn_notes_text",
-            weights={
-                "content": 1,
-                "turn_notes.keywords": 1,
-                "turn_notes.entities": 1,
-                "turn_notes.tags": 1,
-                "turn_notes.one_liner": 1,
-            },
-        )
         await create_index(
             self._content,
             "conversation_content",
@@ -307,7 +246,6 @@ class ContentStorageMongoRepository:
             expireAfterSeconds=0,
             sparse=True,
         )
-        return memory_search_ready
 
     async def upsert_full_content(
         self,
@@ -321,7 +259,6 @@ class ContentStorageMongoRepository:
         stored_at: datetime,
         turn_timestamp: datetime | str | None = None,
         expires_at: datetime | None = None,
-        turn_notes: dict | None = None,
     ) -> str:
         fields = {
             "document_id": document_id,
@@ -333,7 +270,6 @@ class ContentStorageMongoRepository:
             "stored_at": stored_at,
             "turn_timestamp": turn_timestamp,
             "expires_at": expires_at,
-            "turn_notes": turn_notes,
         }
         doc = await self._content.find_one_and_update(
             {"room_id": conversation_id, "turn_id": turn_id},
@@ -344,14 +280,6 @@ class ContentStorageMongoRepository:
         if doc and doc.get("document_id"):
             return doc["document_id"]
         return document_id
-
-    async def get_content_by_document_id(self, document_id: str) -> dict | None:
-        doc = await self._content.find_one({"document_id": document_id})
-        if doc is not None:
-            return doc
-        return await self._content.find_one_by_stable_or_native_id(
-            "document_id", document_id
-        )
 
     async def get_content_by_turn_id(
         self, conversation_id: str, turn_id: str
@@ -370,120 +298,6 @@ class ContentStorageMongoRepository:
     async def delete_content_by_room_id(self, conversation_id: str) -> int:
         return await self._content.delete_many({"room_id": conversation_id})
 
-    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
-        pipeline = [
-            {"$match": {"room_id": conversation_id}},
-            {
-                "$group": {
-                    "_id": "$content_type",
-                    "count": {"$sum": 1},
-                    "total_size": {"$sum": {"$strLenBytes": "$content"}},
-                }
-            },
-        ]
-        rows = await self._content.aggregate(pipeline)
-        stats = {
-            "conversation_id": conversation_id,
-            "by_type": {},
-            "total_documents": 0,
-            "total_size_bytes": 0,
-        }
-        for row in rows:
-            content_type = row.get("_id")
-            count = row.get("count", 0)
-            size = row.get("total_size", 0)
-            stats["by_type"][content_type] = {"count": count, "size_bytes": size}
-            stats["total_documents"] += count
-            stats["total_size_bytes"] += size
-        return stats
-
-    async def text_search(
-        self,
-        conversation_id: str,
-        query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> list[dict]:
-        return await self._content.find(
-            {
-                "room_id": conversation_id,
-                "$text": {"$search": query},
-                **_unexpired_content_query(),
-            },
-            projection={
-                "score": {"$meta": "textScore"},
-                "turn_id": 1,
-                "turn_notes": 1,
-                "content_type": 1,
-                "stored_at": 1,
-                "turn_timestamp": 1,
-                "expires_at": 1,
-            },
-            sort=[
-                ("score", {"$meta": "textScore"}),
-                ("turn_timestamp", -1),
-                ("stored_at", -1),
-                ("turn_id", 1),
-            ],
-            limit=limit,
-            skip=skip,
-        )
-
-    async def scan_text_search(
-        self, conversation_id: str, query: str, limit: int
-    ) -> list[dict]:
-        """Read a bounded set of lightweight keyword candidates.
-
-        Full content remains excluded and is hydrated separately in bounded
-        batches by the search service.
-        """
-        return await self._content.find(
-            {
-                "room_id": conversation_id,
-                "$text": {"$search": query},
-                **_unexpired_content_query(),
-            },
-            projection={
-                "score": {"$meta": "textScore"},
-                "turn_id": 1,
-                "turn_notes": 1,
-                "content_type": 1,
-                "stored_at": 1,
-                "turn_timestamp": 1,
-                "expires_at": 1,
-            },
-            sort=[
-                ("score", {"$meta": "textScore"}),
-                ("turn_timestamp", -1),
-                ("stored_at", -1),
-                ("turn_id", 1),
-            ],
-            limit=max(1, int(limit)),
-        )
-
-    async def hydrate_turn_content(
-        self, conversation_id: str, turn_ids: list[str]
-    ) -> list[dict]:
-        if not turn_ids:
-            return []
-        return await self._content.find(
-            {
-                "room_id": conversation_id,
-                "turn_id": {"$in": turn_ids},
-                **_unexpired_content_query(),
-            },
-            projection={
-                "turn_id": 1,
-                "turn_notes": 1,
-                "content": 1,
-                "content_type": 1,
-                "turn_timestamp": 1,
-                "stored_at": 1,
-                "expires_at": 1,
-            },
-            limit=len(turn_ids),
-        )
-
 
 def _canonicalize_memory_document(memory: dict) -> dict:
     doc = dict(memory)
@@ -500,16 +314,6 @@ def _sanitize_update(updates: dict) -> dict:
     immutable = {"_id", "room_id", "memory_id"}
     canonical = _canonicalize_memory_document(updates)
     return {key: value for key, value in canonical.items() if key not in immutable}
-
-
-def _unexpired_content_query() -> dict:
-    return {
-        "$or": [
-            {"expires_at": {"$exists": False}},
-            {"expires_at": None},
-            {"expires_at": {"$gt": utcnow()}},
-        ]
-    }
 
 
 def _history_contains_turn(doc: dict, turn_id: str) -> bool:

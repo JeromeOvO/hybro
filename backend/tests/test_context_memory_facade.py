@@ -6,11 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from common.observability import NoopTracingProvider
-from context_memory.config import (
-    CompactionConfig,
-    MemorySearchConfig,
-    TokenBudgetConfig,
-)
+from context_memory.config import CompactionConfig
 from context_memory.facade import ContextMemoryFacade
 from context_memory.projection import new_room_memory_doc
 
@@ -57,17 +53,6 @@ class StateMemoryRepository:
             self.doc = defaults
         return self.doc
 
-    async def push_and_trim_conversation_turn(
-        self, conversation_id: str, turn: dict, **kwargs
-    ):
-        if not self.doc:
-            return False, False
-        self.doc.setdefault("conversation_history", []).append(turn)
-        self.doc.setdefault("memory_content", {}).setdefault(
-            "conversation_history", []
-        ).append(turn)
-        return True, True
-
     async def push_and_trim_conversation_turn_if_absent(
         self, conversation_id: str, turn: dict, **kwargs
     ):
@@ -78,22 +63,6 @@ class StateMemoryRepository:
             "conversation_history", []
         ).append(turn)
         return True, True, False
-
-    async def update_turn_notes(
-        self, conversation_id: str, turn_id: str, turn_notes: dict
-    ) -> bool:
-        return True
-
-    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
-        return self.doc
-
-    async def update_room_summary_atomic(
-        self, conversation_id: str, room_summary: dict, **kwargs
-    ) -> bool:
-        if self.doc:
-            self.doc["room_summary"] = room_summary
-            return True
-        return False
 
     async def compact_turns_bulk(
         self, conversation_id: str, compacted_turns: list[dict]
@@ -114,9 +83,6 @@ class StateContentRepository:
     async def upsert_full_content(self, **kwargs) -> str:
         self.docs[kwargs["document_id"]] = kwargs
         return kwargs["document_id"]
-
-    async def get_content_by_document_id(self, document_id: str) -> dict | None:
-        return self.docs.get(document_id)
 
     async def get_content_by_turn_id(
         self, conversation_id: str, turn_id: str
@@ -150,44 +116,6 @@ class StateContentRepository:
             self.docs.pop(key)
         return len(keys)
 
-    async def get_content_stats_for_room(self, conversation_id: str) -> dict:
-        return {"room_id": conversation_id, "total_documents": len(self.docs)}
-
-    async def text_search(
-        self,
-        conversation_id: str,
-        query: str,
-        limit: int = 50,
-        skip: int = 0,
-    ) -> list[dict]:
-        return [
-            {
-                "turn_id": "t1",
-                "score": 1.0,
-                "turn_notes": {"one_liner": "matched"},
-                "content": "matched",
-                "content_type": "text",
-                "stored_at": NOW,
-            }
-        ]
-
-    async def scan_text_search(
-        self, conversation_id: str, query: str, limit: int
-    ) -> list[dict]:
-        return await self.text_search(conversation_id, query, limit=limit)
-
-    async def hydrate_turn_content(
-        self, conversation_id: str, turn_ids: list[str]
-    ) -> list[dict]:
-        return [
-            {
-                "turn_id": "t1",
-                "turn_notes": {"one_liner": "matched"},
-                "content": "matched",
-                "content_type": "text",
-            }
-        ]
-
 
 class FakeHistoryReader:
     def __init__(self, messages=None):
@@ -199,69 +127,13 @@ class FakeHistoryReader:
         ]
 
 
-class FakeLLM:
-    async def embed(self, text: str):
-        return [0.1]
-
-    async def generate_structured(self, messages, schema, model=None):
-        return SimpleNamespace(
-            data={
-                "current_goal": None,
-                "key_decisions": [],
-                "open_questions": [],
-                "recent_agent_contributions": [],
-                "important_constraints": [],
-                "room_facts": [],
-            }
-        )
-
-
-class RaisingLLM(FakeLLM):
-    async def generate_structured(self, messages, schema, model=None):
-        raise RuntimeError("summary llm failed")
-
-
-class NonDictLLM(FakeLLM):
-    async def generate_structured(self, messages, schema, model=None):
-        return SimpleNamespace(data="not a dict")
-
-
-class RecordingLLM(FakeLLM):
-    def __init__(self):
-        self.generate_calls = 0
-
-    async def generate_structured(self, messages, schema, model=None):
-        self.generate_calls += 1
-        return await super().generate_structured(messages, schema, model=model)
-
-
-class MissingSummaryProjectionRepository(StateMemoryRepository):
-    async def get_room_summary_projection(self, conversation_id: str) -> dict | None:
-        return None
-
-
-class FailingSummaryWriteRepository(StateMemoryRepository):
-    async def update_room_summary_atomic(
-        self, conversation_id: str, room_summary: dict, **kwargs
-    ) -> bool:
-        return False
-
-
 def facade(memory_repo=None, content_repo=None, history=None, **overrides):
-    llm_provider = overrides.pop("llm_provider", FakeLLM())
     return ContextMemoryFacade(
         memory_repository=memory_repo or StateMemoryRepository(),
         content_repository=content_repo or StateContentRepository(),
         room_history_reader=history or FakeHistoryReader(),
-        llm_provider=llm_provider,
         id_factory=lambda: "id-1",
         now=now,
-        token_budget=TokenBudgetConfig(
-            model_context_window=300,
-            system_prompt=10,
-            tool_schemas=10,
-            response_reserve=10,
-        ),
         compaction_config=CompactionConfig(
             enabled=True,
             max_full_turns=0,
@@ -270,38 +142,8 @@ def facade(memory_repo=None, content_repo=None, history=None, **overrides):
             content_ttl_days=0,
             concurrency=1,
         ),
-        search_config=MemorySearchConfig(enabled=True, temporal_decay_enabled=False),
         **overrides,
     )
-
-
-def test_token_budget_with_model_window_rejects_window_below_fixed_reserve():
-    budget = TokenBudgetConfig(
-        model_context_window=128000,
-        system_prompt=2000,
-        tool_schemas=3000,
-        response_reserve=4000,
-    )
-
-    with pytest.raises(
-        ValueError,
-        match="fixed_reserve_tokens must not exceed model_context_window",
-    ):
-        budget.with_model_window(5000)
-
-
-def test_token_budget_with_model_window_accepts_fixed_reserve_boundary():
-    budget = TokenBudgetConfig(
-        model_context_window=128000,
-        system_prompt=2000,
-        tool_schemas=3000,
-        response_reserve=4000,
-    )
-
-    scoped = budget.with_model_window(9000)
-
-    assert scoped.model_context_window == 9000
-    assert scoped.available_for_content == 0
 
 
 def test_facade_uses_noop_tracer_by_default():
@@ -326,81 +168,16 @@ def existing_doc():
 
 
 @pytest.mark.asyncio
-async def test_facade_compact_room_memory_accepts_protocol_keyword():
+async def test_facade_compact_if_needed_compacts_over_threshold_room():
     doc = existing_doc()
     memory_repo = StateMemoryRepository(doc)
     service = facade(memory_repo=memory_repo)
 
-    result = await service.compact_room_memory("r1", room_memory=doc)
+    result = await service.compact_if_needed("r1")
 
     assert result.conversation_id == "r1"
     assert result.compacted_count == 1
     assert memory_repo.compacted
-
-
-@pytest.mark.asyncio
-async def test_facade_assemble_context_creates_transient_doc():
-    service = facade(
-        history=FakeHistoryReader(
-            [
-                SimpleNamespace(
-                    message_id="m1", conversation_id="r1", content="transient task"
-                )
-            ]
-        )
-    )
-
-    result = await service.assemble_context("r1", "m1", token_budget=300)
-
-    assert result.conversation_id == "r1"
-    assert "transient task" in result.metadata["context"]
-    assert result.metadata["message_id"] == "m1"
-
-
-@pytest.mark.asyncio
-async def test_facade_assemble_context_with_existing_memory():
-    service = facade(memory_repo=StateMemoryRepository(existing_doc()))
-
-    result = await service.assemble_context("r1", "m1", token_budget=300)
-
-    assert "Finish tests" in result.metadata["context"]
-    assert "hello" in result.metadata["context"]
-
-
-@pytest.mark.asyncio
-async def test_facade_assemble_context_agent_path_does_not_use_agent_id_as_name():
-    service = facade(memory_repo=StateMemoryRepository(existing_doc()))
-
-    result = await service.assemble_context(
-        "r1",
-        "m1",
-        token_budget=300,
-        agent_id="agent-1",
-    )
-
-    assert result.metadata["agent_id"] == "agent-1"
-    assert "You are agent-1" not in result.metadata["context"]
-
-
-@pytest.mark.asyncio
-async def test_facade_assemble_context_rejects_budget_below_fixed_reserve():
-    service = facade(memory_repo=StateMemoryRepository(existing_doc()))
-
-    with pytest.raises(
-        ValueError,
-        match="fixed_reserve_tokens must not exceed model_context_window",
-    ):
-        await service.assemble_context("r1", "m1", token_budget=0)
-
-
-@pytest.mark.asyncio
-async def test_facade_search_memory():
-    results = await facade(content_repo=StateContentRepository()).search_memory(
-        "r1", "matched"
-    )
-
-    assert results[0].content == "matched"
-    assert results[0].metadata["turn_id"] == "t1"
 
 
 def test_facade_does_not_expose_legacy_search():
@@ -477,7 +254,6 @@ async def test_facade_delete_room_memory_preserves_backing_when_memory_delete_fa
         content_type="text",
         content_hash="hash",
         stored_at=NOW,
-        turn_notes={},
     )
 
     assert (
@@ -527,56 +303,3 @@ async def test_facade_run_compaction():
 
     assert result.compacted_count == 1
     assert repo.compacted[0]["turn_id"] == "message:m1"
-
-
-@pytest.mark.asyncio
-async def test_facade_update_room_summary_logs_llm_failure(caplog):
-    caplog.set_level("WARNING")
-
-    result = await facade(
-        memory_repo=StateMemoryRepository(existing_doc()),
-        llm_provider=RaisingLLM(),
-    ).update_room_summary("r1", "synthesis", "s1")
-
-    assert result is False
-    assert "Failed to extract room summary" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_facade_update_room_summary_logs_invalid_llm_payload(caplog):
-    caplog.set_level("WARNING")
-
-    result = await facade(
-        memory_repo=StateMemoryRepository(existing_doc()),
-        llm_provider=NonDictLLM(),
-    ).update_room_summary("r1", "synthesis", "s1")
-
-    assert result is False
-    assert "Room summary extraction returned invalid payload" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_facade_update_room_summary_logs_missing_projection(caplog):
-    caplog.set_level("WARNING")
-    llm = RecordingLLM()
-
-    result = await facade(
-        memory_repo=MissingSummaryProjectionRepository(existing_doc()),
-        llm_provider=llm,
-    ).update_room_summary("r1", "synthesis", "s1")
-
-    assert result is False
-    assert llm.generate_calls == 0
-    assert "Room summary projection missing" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_facade_update_room_summary_logs_persistence_failure(caplog):
-    caplog.set_level("WARNING")
-
-    result = await facade(
-        memory_repo=FailingSummaryWriteRepository(existing_doc()),
-    ).update_room_summary("r1", "synthesis", "s1")
-
-    assert result is False
-    assert "Failed to persist room summary" in caplog.text

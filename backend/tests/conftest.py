@@ -461,19 +461,11 @@ def mock_settings():
         mock.mongodb_uri = "mongodb://localhost:27017"
         mock.mongodb_database = "test_db"
         mock.openai_api_key = "test_openai_key"
-        mock.context_model_window = 128000
-        mock.context_system_prompt_tokens = 2000
-        mock.context_tool_schema_tokens = 3000
-        mock.context_response_reserve_tokens = 4000
-        mock.context_room_pct = 0.15
-        mock.context_history_pct = 0.60
-        mock.context_task_pct = 0.25
         mock.compaction_enabled = True
         mock.compaction_max_full_turns = 20
         mock.compaction_max_total_tokens = 80000
         mock.compaction_preserve_recent = 10
         mock.compaction_content_ttl_days = 0
-        mock.memory_search_enabled = True
         yield mock
 
 

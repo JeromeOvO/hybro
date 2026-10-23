@@ -710,7 +710,6 @@ def test_protocol_methods_match_design_doc():
             "drop_index",
             "bulk_write",
             "distinct",
-            "find_one_by_stable_or_native_id",
             "watch",
         },
         protocols.RedisKV: {

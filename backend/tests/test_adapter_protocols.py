@@ -35,7 +35,6 @@ def test_adapter_top_level_exports_are_explicit():
     assert set(a2a_adapter.__all__) == {"AgentCardResolverImpl"}
     assert set(llm_gateway.__all__) == {
         "LLMGatewayImpl",
-        "LLMServiceNotBoundError",
         "ModelRegistryImpl",
     }
 
@@ -95,33 +94,6 @@ def test_a2a_adapter_import_boundary():
 
     _assert_import_boundary(
         Path("a2a_adapter"),
-        allowed_roots,
-        forbidden_roots,
-        excluded_paths={Path("a2a_adapter/runtime_service.py")},
-    )
-
-
-def test_a2a_runtime_service_import_boundary():
-    allowed_roots = set(sys.stdlib_module_names) | {
-        "__future__",
-        "a2a_adapter",
-        "common",
-        "models",
-    }
-    forbidden_roots = {
-        ("app_" + "shell"),
-        "config",
-        "container",
-        "database",
-        "execution",
-        "infrastructure",
-        "main",
-        "modules",
-        "services",
-    }
-
-    _assert_import_boundary(
-        Path("a2a_adapter/runtime_service.py"),
         allowed_roots,
         forbidden_roots,
     )
@@ -191,7 +163,6 @@ def _assert_import_boundary(
     package_path: Path,
     allowed_roots: set[str],
     forbidden_roots: set[str],
-    excluded_paths: set[Path] | None = None,
 ) -> None:
     assert package_path.exists(), f"{package_path} does not exist"
 
@@ -199,8 +170,6 @@ def _assert_import_boundary(
         [package_path] if package_path.is_file() else sorted(package_path.rglob("*.py"))
     )
     for path in paths:
-        if path in (excluded_paths or set()):
-            continue
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):
             imported_roots: set[str] = set()
