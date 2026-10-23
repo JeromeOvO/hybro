@@ -23,29 +23,6 @@ class DeliveryEmitStatus(StrEnum):
     FAILED = "failed"
 
 
-class DeliveryEnvelope(FrozenDTO):
-    room_id: str
-    event_type: str
-    payload: dict[str, Any]
-    event_id: str | None = None
-    timestamp: datetime | None = None
-    trace_id: str | None = None
-
-
-class SSEEvent(FrozenDTO):
-    event: str
-    data: dict[str, Any]
-    id: str | None = None
-    retry: int | None = None
-
-
-class NotificationPayload(FrozenDTO):
-    room_id: str
-    message: str
-    title: str | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
-
-
 class DeliveryEventBase(FrozenDTO):
     room_id: str
     timestamp: datetime | None = None
@@ -391,16 +368,13 @@ __all__ = [
     "AgentMessagePartial",
     "ArtifactUpdateEvent",
     "CancellationEvent",
-    "DeliveryEnvelope",
     "DeliveryEvent",
     "DeliveryEventBase",
     "ErrorEvent",
     "HITLRequestEvent",
     "HITLResolvedEvent",
-    "NotificationPayload",
     "ProcessingStatusEvent",
     "RunEventNotification",
-    "SSEEvent",
     "TaskSubmittedEvent",
     "TaskUpdateEvent",
 ]

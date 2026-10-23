@@ -61,23 +61,6 @@ class ExecutionRequest(FrozenDTO):
     )
 
 
-class ExecutionResult(FrozenDTO):
-    success: bool
-    run_id: str | None = None
-    message_id: str | None = None
-    error: str | None = None
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class WorkflowState(FrozenDTO):
-    run_id: str
-    room_id: str
-    state: str
-    updated_at: datetime
-    current_agent_id: str | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
 class ExecutionAck(FrozenDTO):
     room_id: str | None = None
     message_id: str | None = None
@@ -197,7 +180,6 @@ __all__ = [
     "AllAgentsScope",
     "ExecutionAck",
     "ExecutionRequest",
-    "ExecutionResult",
     "HITLRequest",
     "MentionAgentScope",
     "HITLResponse",
@@ -205,5 +187,4 @@ __all__ = [
     "RunInfo",
     "RunState",
     "SavedGroupAgentScope",
-    "WorkflowState",
 ]

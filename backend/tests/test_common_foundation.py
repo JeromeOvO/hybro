@@ -16,7 +16,6 @@ from common.dto import (
     AgentMessagePartial,
     ArtifactUpdateEvent,
     CancellationEvent,
-    DeliveryEnvelope,
     DeliveryEvent,
     DeliveryEventBase,
     ErrorEvent,
@@ -43,18 +42,18 @@ def test_frozen_dto_is_immutable():
 
 def test_frozen_dto_container_fields_are_immutable():
     agent = AgentInfo(agent_id="a1", capabilities=["search"])
-    delivery = DeliveryEnvelope(room_id="r1", event_type="message", payload={"x": 1})
+    delivery = AgentInfo(agent_id="a2", raw_card={"x": 1})
 
     with pytest.raises(TypeError):
         agent.capabilities += ("write",)
 
     with pytest.raises(TypeError):
-        delivery.payload["x"] = 2
+        delivery.raw_card["x"] = 2
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert '"capabilities":["search"]' in agent.model_dump_json()
-        assert '"payload":{"x":1}' in delivery.model_dump_json()
+        assert '"raw_card":{"x":1}' in delivery.model_dump_json()
 
 
 def test_common_foundation_subpackages_are_packaged():
@@ -286,12 +285,6 @@ async def test_auth_config_binds_authorized_parties(monkeypatch):
 
 
 def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
-    envelope = DeliveryEnvelope(
-        room_id="room-1",
-        event_type="processing_status",
-        payload={},
-        trace_id="trace-1",
-    )
     base = ProcessingStatusEvent(
         room_id="room-1",
         message_id="msg-1",
@@ -314,7 +307,6 @@ def test_delivery_dtos_accept_optional_trace_and_correlation_fields():
         run_event_type="agent_finished",
     )
 
-    assert envelope.trace_id == "trace-1"
     assert base.trace_id == "trace-2"
     assert run_event.correlation_id == "cr-1"
     assert omitted.correlation_id is None

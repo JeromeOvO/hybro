@@ -6,21 +6,6 @@ from pydantic import Field
 from common.dto.base import FrozenDTO
 
 
-class RoomSummary(FrozenDTO):
-    room_id: str
-    room_name: str
-    owner_id: str
-    owner_name: str | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    agent_ids: list[str] = Field(default_factory=list)
-
-
-class RoomMembership(FrozenDTO):
-    room_id: str
-    agent_ids: list[str] = Field(default_factory=list)
-
-
 class MessageRecord(FrozenDTO):
     room_id: str
     message_id: str
@@ -118,9 +103,7 @@ __all__ = [
     "MembershipUpdateRequest",
     "MessageRecord",
     "RoomInfo",
-    "RoomMembership",
     "RoomMessageInfo",
-    "RoomSummary",
     "SavedUserMessage",
     "UserMessageInput",
 ]

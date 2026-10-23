@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -10,17 +10,6 @@ class InternalDomainEvent(FrozenDTO):
     event_type: str = "internal"
     timestamp: datetime
     payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class AgentRegistered(InternalDomainEvent):
-    event_type: Literal["agent_registered"] = "agent_registered"
-    agent_id: str
-
-
-class RoomCreated(InternalDomainEvent):
-    event_type: Literal["room_created"] = "room_created"
-    room_id: str
-    owner_id: str
 
 
 class MessageCommitted(InternalDomainEvent):
@@ -42,17 +31,8 @@ class RunStateChanged(InternalDomainEvent):
     new_state: str
 
 
-InternalEvent = Annotated[
-    MessageCommitted | RunStateChanged,
-    Field(discriminator="event_type"),
-]
-
-
 __all__ = [
-    "AgentRegistered",
     "InternalDomainEvent",
-    "InternalEvent",
     "MessageCommitted",
-    "RoomCreated",
     "RunStateChanged",
 ]

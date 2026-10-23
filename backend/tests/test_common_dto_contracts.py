@@ -8,42 +8,30 @@ from common.dto import (
     AgentInfo,
     AgentMessageFinal,
     AgentMessagePartial,
-    AgentRegistered,
     ArtifactUpdateEvent,
     CancellationEvent,
     CompactionResult,
     CreateRoomRequest,
-    DeliveryEnvelope,
-    EmbeddingResult,
     ErrorEvent,
     ExecutionAck,
     ExecutionRequest,
-    ExecutionResult,
-    FileMetadata,
     HITLRequest,
     HITLRequestEvent,
     HITLResolvedEvent,
     HITLResponse,
     InternalDomainEvent,
-    LLMRequest,
     LLMResponse,
     MembershipSeed,
     MembershipUpdateRequest,
     MessageRecord,
-    NotificationPayload,
     ProcessingStatusEvent,
-    RoomCreated,
     RoomInfo,
-    RoomMembership,
-    RoomSummary,
     RunEventNotification,
     RunInfo,
     RunState,
     SavedUserMessage,
-    SSEEvent,
     TaskSubmittedEvent,
     TaskUpdateEvent,
-    WorkflowState,
 )
 from context_memory.models import ContextBlock, MemorySearchResult
 from llm_gateway.model_registry import ModelInfo
@@ -54,14 +42,6 @@ def test_common_dtos_can_be_instantiated():
 
     AgentInfo(agent_id="a1", name="Agent", status="active")
     AgentCardSnapshot(agent_id="a1", url="http://agent", name="Agent", raw_card={})
-    RoomSummary(
-        room_id="r1",
-        room_name="Room",
-        owner_id="u1",
-        owner_name="User",
-        created_at=now,
-    )
-    RoomMembership(room_id="r1", agent_ids=["a1"])
     MessageRecord(
         room_id="r1",
         message_id="m1",
@@ -102,8 +82,6 @@ def test_common_dtos_can_be_instantiated():
         user_name="User",
         message={},
     )
-    ExecutionResult(success=True)
-    WorkflowState(run_id="run1", room_id="r1", state="queued", updated_at=now)
     RunInfo(run_id="run1", room_id="r1", state=RunState.PROCESSING)
     HITLRequest(
         request_id="hitl1",
@@ -122,8 +100,6 @@ def test_common_dtos_can_be_instantiated():
         relevance_score=0.5,
         temporal_decay_factor=1.0,
     )
-    DeliveryEnvelope(room_id="r1", event_type="processing_status", payload={})
-    SSEEvent(event="message", data={})
     ProcessingStatusEvent(room_id="r1", message_id="m1", status="processing")
     RunEventNotification(
         room_id="r1",
@@ -163,10 +139,7 @@ def test_common_dtos_can_be_instantiated():
     TaskUpdateEvent(room_id="r1", message_id="m1", status="working")
     ArtifactUpdateEvent(room_id="r1", message_id="m1", agent_id="a1", artifact={})
     ErrorEvent(room_id="r1", error="failed")
-    NotificationPayload(room_id="r1", message="notice")
-    LLMRequest(messages=[{"role": "user", "content": "hi"}])
     LLMResponse(content="ok", model="test")
-    EmbeddingResult(text="hi", embedding=[0.1])
     ModelInfo(
         model_id="m1",
         logical_name="test",
@@ -174,39 +147,40 @@ def test_common_dtos_can_be_instantiated():
         capabilities=[],
         max_context_tokens=1,
     )
-    FileMetadata(
-        file_id="f1",
-        room_id="r1",
-        owner_id="u1",
-        source="user_upload",
-        mime_type="text/plain",
-        file_name="x.txt",
-        size_bytes=1,
-        sha256="0" * 64,
-        status="ready",
-    )
     InternalDomainEvent(timestamp=now)
-    AgentRegistered(agent_id="a1", timestamp=now)
-    RoomCreated(room_id="r1", owner_id="u1", timestamp=now)
 
 
-def test_removed_gateway_discovery_and_rate_limit_dtos_are_not_exported():
+def test_removed_dtos_are_not_exported():
     import common.dto as dto
 
     removed_names = {
+        "AgentRegistered",
+        "DeliveryEnvelope",
+        "EmbeddingResult",
+        "ExecutionResult",
+        "FileMetadata",
         "GatewayDiscoveryAgentResult",
         "GatewayDiscoveryResponse",
         "GatewayRequest",
         "GatewayResponse",
         "GatewayRoute",
+        "InternalEvent",
+        "LLMRequest",
+        "NotificationPayload",
         "RateLimitInfo",
         "RateLimitResult",
+        "RoomCreated",
+        "RoomMembership",
+        "RoomMemoryGenerationInput",
+        "RoomMessageSummary",
+        "RoomSummary",
+        "SSEEvent",
+        "WorkflowState",
     }
 
     assert removed_names.isdisjoint(dto.__all__)
     assert removed_names.isdisjoint(vars(dto))
     assert dto.FileInfo
-    assert dto.FileMetadata
 
 
 def test_create_room_request_requires_membership_seed():
