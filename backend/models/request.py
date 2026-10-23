@@ -2,11 +2,10 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from common.idempotency import MAX_CLIENT_REQUEST_ID_LENGTH
-from common.types import AgentCard, Message, MessageRole, Part, Task, TextPart
-from models.agent import Agent, coerce_legacy_agent_card
+from common.types import Message, MessageRole, Part, Task, TextPart
 from models.room import (
     Room,
     RoomAgentMessage,
@@ -122,28 +121,6 @@ class InspectionCenterRequest(BaseModel):
 
 class DebatationCenterRequest(BaseModel):
     task_id: str
-
-
-class AgentCenterRequest(BaseModel):
-    agent_id: str | None = None
-    agent_url: str | None = None
-    provider_id: str | None = None
-    user_id: str | None = None  # For visibility filtering (optional auth)
-    query: dict[str, Any] | None = None
-    limit: int = 0
-    agent_card: AgentCard | None = None
-    call_increment: int | None = 0
-    call_success_increment: int | None = 0
-    like_increment: int | None = 0
-    dislike_increment: int | None = 0
-    query_text: str | None = None
-    agent: Agent | None = None
-    agent_count: int | None = 0
-
-    @field_validator("agent_card", mode="before")
-    @classmethod
-    def _coerce_agent_card(cls, value: Any) -> Any:
-        return coerce_legacy_agent_card(value)
 
 
 class ChatRequest(BaseModel):

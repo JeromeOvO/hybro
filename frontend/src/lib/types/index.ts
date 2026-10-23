@@ -32,7 +32,8 @@ export type {
 } from './response'
 
 export type {
-  AgentCenterRequest,
+  AgentRegisterRequest,
+  AgentDeleteRequest,
   InspectionCenterRequest,
   TaskCenterRequest,
   UserInput,

@@ -18,7 +18,7 @@ import { inspectA2AConnection, inspectAgentCard } from "@/lib/api/inspection"
 import { ApiError } from "@/lib/api-client"
 import type {
   AgentRouteResponse,
-  AgentCenterRequest,
+  AgentRegisterRequest,
   InspectionCenterResponse,
   InsepectionCenterConnectionValidationResponse
 } from "@/lib/types"
@@ -229,13 +229,8 @@ export default function RegisterAgentPage() {
 
     setRegistering(true)
 
-    const providerId = user.id
-
     try {
-      const registerRequest: AgentCenterRequest = {
-        agent_url: url,
-        provider_id: providerId
-      }
+      const registerRequest: AgentRegisterRequest = { agent_url: url }
 
       const response = await registerAgent(registerRequest)
 

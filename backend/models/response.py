@@ -1,11 +1,10 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from common.a2a_constants import CommonTaskState
 from common.types import AgentCard
-from models.agent import Agent, coerce_legacy_agent_card
 from models.room import Room, RoomAgentMessage, RoomMessage, RoomUserMessage
 
 
@@ -44,11 +43,6 @@ class InspectionCenterResponse(BaseModel):
     result: list[str]
     status_code: int = 200
 
-    @field_validator("agent_card", mode="before")
-    @classmethod
-    def _coerce_agent_card(cls, value: Any) -> Any:
-        return coerce_legacy_agent_card(value)
-
 
 class InsepectionCenterConnectionValidationResponse(BaseModel):
     agent_url: str
@@ -56,11 +50,6 @@ class InsepectionCenterConnectionValidationResponse(BaseModel):
     is_valid: bool
     result: list[str] | None = None
     status_code: int = 200
-
-    @field_validator("agent_card", mode="before")
-    @classmethod
-    def _coerce_agent_card(cls, value: Any) -> Any:
-        return coerce_legacy_agent_card(value)
 
 
 class OrchestrationResponse(BaseModel):
@@ -81,24 +70,6 @@ class DebatationCenterResponse(BaseModel):
     result: Any | None = None
     error: str | None = None
     status_code: int = 200
-
-
-class AgentCenterResponse(BaseModel):
-    agent_url: str | None = None
-    agent_id: str | None = None
-    provider_id: str | None = None
-    agent_card: AgentCard | None = None
-    agent: Agent | None = None
-    agents: list[Agent] | None = None
-    public_url: str | None = None
-    success: bool
-    error: str | None = None
-    status_code: int = 200
-
-    @field_validator("agent_card", mode="before")
-    @classmethod
-    def _coerce_agent_card(cls, value: Any) -> Any:
-        return coerce_legacy_agent_card(value)
 
 
 class ChatResponse(BaseModel):

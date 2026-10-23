@@ -1,6 +1,7 @@
 // Agent-related API functions
 import type { 
-  AgentCenterRequest, 
+  AgentRegisterRequest,
+  AgentDeleteRequest,
   AgentRouteResponse,
   InspectionCenterRequest,
 } from '@/lib/types'
@@ -37,7 +38,7 @@ export async function discoverLocalAgents(
 
 // Register agent
 export async function registerAgent(
-  request: AgentCenterRequest,
+  request: AgentRegisterRequest,
   getToken?: () => Promise<string | null>
 ): Promise<AgentRouteResponse> {
   return apiPost<AgentRouteResponse>(
@@ -59,7 +60,7 @@ export async function getAgentsByProviderId(
 
 // Delete agent
 export async function deleteAgent(
-  request: AgentCenterRequest,
+  request: AgentDeleteRequest,
   getToken?: () => Promise<string | null>
 ): Promise<AgentRouteResponse> {
   return apiPost<AgentRouteResponse>(

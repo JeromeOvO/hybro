@@ -60,47 +60,15 @@ export type In = "cookie" | "header" | "query";
  */
 export type Role = "agent" | "user";
 
-export type AgentStatus = "active" | "inactive" | "deleted";
-
-export interface Agent {
+export interface AgentRegisterRequest {
+  agent_url: string;
+}
+export interface AgentDeleteRequest {
   agent_id: string;
-  provider_id?: string | null;
-  agent_card: AgentCard;
-  public_url?: string | null;
-  agent_status?: AgentStatus | null;
-  call_count?: number;
-  call_success_count?: number;
-  like_count?: number;
-  dislike_count?: number;
 }
-export interface AgentCenterRequest {
-  agent_id?: string | null;
-  agent_url?: string | null;
-  provider_id?: string | null;
-  agent_card?: AgentCard | null;
-  call_increment?: number | null;
-  call_success_increment?: number | null;
-  like_increment?: number | null;
-  dislike_increment?: number | null;
-  query_text?: string | null;
-  agent?: Agent | null;
-  agent_count?: number | null;
-}
+
 export interface APIKeyCreateRequest {
   name: string;
-}
-export interface AgentCreate {
-  agent_url: string;
-  agent_card: AgentCard;
-  call_count?: number | null;
-  call_success_count?: number | null;
-  like_count?: number | null;
-  dislike_count?: number | null;
-  agent_status?: AgentStatus | null;
-  /**
-   * Must be a valid UUID string
-   */
-  agent_id?: string | null;
 }
 export interface AgentGroupCreateRequest {
   name: string;
@@ -121,15 +89,6 @@ export interface AgentGroupUpdateRequest {
   description?: string | null;
   agents?: string[] | null;
 }
-export interface AgentPatch {
-  agent_url?: string | null;
-  agent_card?: AgentCard | null;
-  call_count?: number | null;
-  call_success_count?: number | null;
-  like_count?: number | null;
-  dislike_count?: number | null;
-  agent_status?: AgentStatus | null;
-}
 export interface AgentTaskRequest {
   task_id: string;
   agent_id: string;
@@ -139,25 +98,6 @@ export interface AgentTaskRequest {
     [k: string]: unknown;
   } | null;
   message?: Message | null;
-}
-export interface AgentUpdate {
-  agent_url?: string | null;
-  agent_card: AgentCard | null;
-  call_count: number | null;
-  call_success_count: number | null;
-  like_count: number | null;
-  dislike_count: number | null;
-  agent_status: AgentStatus | null;
-  agent_id: string | null;
-}
-export interface BaseAgent {
-  agent_url?: string | null;
-  agent_card?: AgentCard | null;
-  call_count?: number | null;
-  call_success_count?: number | null;
-  like_count?: number | null;
-  dislike_count?: number | null;
-  agent_status?: AgentStatus | null;
 }
 /**
  * A BaseTask represents a complete user request and serves as the top-level container.

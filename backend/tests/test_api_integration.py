@@ -17,8 +17,8 @@ from common.auth import (
     get_current_user_or_service,
     get_optional_user,
 )
+from common.dto import AgentRouteResponse
 from models.response import (
-    AgentCenterResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
@@ -244,7 +244,7 @@ class TestAgentHTTPIntegration:
         """GET /agent/getAllAgents?active_only=true should serialize correctly."""
         mock_ac = MagicMock()
         mock_ac.list_visible = AsyncMock(
-            return_value=AgentCenterResponse(success=True, agents=[])
+            return_value=AgentRouteResponse(success=True, agents=[])
         )
 
         from api_gateway.routes import agent_routes as agent_api
