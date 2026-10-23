@@ -23,12 +23,6 @@ import pytest
 from common.auth import ClerkUser
 from common.dto import ExecutionAck
 from common.dto.agent import AgentInfo
-from common.types import (
-    AgentCapabilities,
-    AgentCard,
-    AgentSkill,
-)
-from models.agent import Agent, AgentStatus
 from models.response import (
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
@@ -255,145 +249,87 @@ class TestRoomLifecycleFlow:
 
 
 class TestAgentLifecycleFlow:
-    """Flow tests that exercise real agent endpoint functions."""
+    """Agent routes through the real AgentCatalogService over a mocked facade."""
+
+    @staticmethod
+    def _catalog(facade):
+        from agent.catalog import AgentCatalogService
+
+        async def unchanged(info):
+            return info
+
+        return AgentCatalogService(facade, liveness_checker=unchanged)
+
+    @staticmethod
+    def _info(agent_id: str, provider_id: str, *, is_public: bool = True):
+        return AgentInfo(
+            agent_id=agent_id,
+            provider_id=provider_id,
+            name="Flow Agent",
+            url="https://flow-agent.example.com",
+            is_public=is_public,
+            raw_card={
+                "name": "Flow Agent",
+                "url": "https://flow-agent.example.com",
+                "provider": {"organization": "Flow Org"},
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_register_query_and_delete_agent_flow(self, flow_user):
         """register_agent -> get_agent -> delete_agent through real endpoints."""
-        from agent.views import agent_view
         from api_gateway.routes.agent_routes import (
             delete_agent,
             get_agent,
             register_agent,
         )
-        from common.dto import AgentRouteResponse
 
         agent_id = "flow-agent-001"
+        info = self._info(agent_id, flow_user.user_id)
+        facade = MagicMock()
+        facade.register_agent = AsyncMock(return_value=info)
+        facade.get_agent = AsyncMock(return_value=info)
+        facade.delete_agent = AsyncMock(return_value=True)
+        catalog = self._catalog(facade)
 
-        mock_agent_card = AgentCard(
-            name="Flow Agent",
-            description="Agent for flow testing",
-            url="https://flow-agent.example.com/.well-known/agent.json",
-            version="1.0.0",
-            skills=[
-                AgentSkill(
-                    id="s1",
-                    name="Skill",
-                    description="Test",
-                    tags=["test"],
-                )
-            ],
-            capabilities=AgentCapabilities(streaming=True),
-            defaultInputModes=["text"],
-            defaultOutputModes=["text"],
-        )
-
-        mock_agent = Agent(
-            agent_id=agent_id,
-            provider_id=flow_user.user_id,
-            agent_card=mock_agent_card,
-            agent_status=AgentStatus.active,
-            is_public=True,
-        )
-
-        mock_ac = MagicMock()
-        mock_ac.register_agent_from_route = AsyncMock(
-            return_value=AgentRouteResponse(success=True, agent=agent_view(mock_agent))
-        )
-        mock_ac.get_visible_agent_for_route = AsyncMock(
-            return_value=AgentRouteResponse(success=True, agent=agent_view(mock_agent))
-        )
-        mock_ac.delete_agent_from_route = AsyncMock(
-            return_value=AgentRouteResponse(success=True)
-        )
-
-        # Step 1: Register (real endpoint extracts agent_url,
-        # sets provider_id from auth user, calls agent_center)
         req1 = MagicMock()
         req1.json = AsyncMock(
-            return_value={
-                "agent_url": "https://flow-agent.example.com/.well-known/agent.json",
-            }
+            return_value={"agent_url": "https://flow-agent.example.com"}
         )
-        reg_resp = await register_agent(req1, flow_user, center=mock_ac)
-        assert reg_resp.success is True
+        reg_resp = await register_agent(req1, flow_user, catalog=catalog)
         assert reg_resp.agent.agent_id == agent_id
-
-        assert (
-            mock_ac.register_agent_from_route.call_args.kwargs["provider_id"]
-            == flow_user.user_id
+        facade.register_agent.assert_awaited_once_with(
+            "https://flow-agent.example.com", flow_user.user_id
         )
 
-        # Step 2: Query (real endpoint delegates visibility to adapter)
-        query_resp = await get_agent(
-            agent_id,
-            user=flow_user,
-            center=mock_ac,
-        )
-        assert query_resp.success is True
+        query_resp = await get_agent(agent_id, user=flow_user, catalog=catalog)
         assert query_resp.agent.agent_id == agent_id
+        assert "flow-agent.example.com" not in query_resp.model_dump_json()
 
-        assert (
-            mock_ac.get_visible_agent_for_route.call_args.kwargs["user_id"]
-            == flow_user.user_id
-        )
-
-        # Step 3: Delete (real endpoint verifies ownership,
-        # then calls agent_center.delete_agent_from_route)
         req3 = MagicMock()
         req3.json = AsyncMock(return_value={"agent_id": agent_id})
-        del_resp = await delete_agent(req3, flow_user, center=mock_ac)
+        del_resp = await delete_agent(req3, flow_user, catalog=catalog)
         assert del_resp.success is True
+        facade.delete_agent.assert_awaited_once_with(agent_id, flow_user.user_id)
 
     @pytest.mark.asyncio
     async def test_private_agent_visibility(self, flow_user):
         """Private agent: owner sees it, others get 404."""
-        from agent.service import AgentService
-        from models.request import AgentCenterRequest
+        from api_gateway.routes.agent_routes import get_agent
 
         agent_id = "private-flow-001"
-
-        private_agent = Agent(
-            agent_id=agent_id,
-            provider_id=flow_user.user_id,
-            agent_card=AgentCard(
-                name="Private Agent",
-                description="Private",
-                url="https://private.example.com",
-                version="1.0.0",
-                skills=[],
-                capabilities=AgentCapabilities(),
-                defaultInputModes=["text"],
-                defaultOutputModes=["text"],
-            ),
-            agent_status=AgentStatus.active,
-            is_public=False,
-        )
-
         facade = MagicMock()
         facade.get_agent = AsyncMock(
-            return_value=AgentInfo(
-                agent_id=private_agent.agent_id,
-                provider_id=private_agent.provider_id,
-                name=private_agent.agent_card.name,
-                description=private_agent.agent_card.description,
-                url=private_agent.agent_card.url,
-                status=private_agent.agent_status.value,
-                is_public=False,
-            )
+            return_value=self._info(agent_id, flow_user.user_id, is_public=False)
         )
-        svc = AgentService(facade=facade)
+        catalog = self._catalog(facade)
+        stranger = ClerkUser(user_id="stranger", session_id="s", claims={})
 
-        owner_resp = await svc.query_agent_by_agent_id(
-            AgentCenterRequest(agent_id=agent_id, user_id=flow_user.user_id)
-        )
+        owner_resp = await get_agent(agent_id, user=flow_user, catalog=catalog)
+        stranger_resp = await get_agent(agent_id, user=stranger, catalog=catalog)
+
         assert owner_resp.success is True
-
-        stranger_resp = await svc.query_agent_by_agent_id(
-            AgentCenterRequest(agent_id=agent_id, user_id="stranger")
-        )
-        assert stranger_resp.success is False
-        assert stranger_resp.status_code == 404
+        assert (stranger_resp.success, stranger_resp.status_code) == (False, 404)
 
 
 # =============================================================================
@@ -469,16 +405,15 @@ class TestErrorHandlingFlow:
 
     @pytest.mark.asyncio
     async def test_graceful_db_error_handling(self):
-        from agent.service import AgentService
-        from models.request import AgentCenterRequest
+        from agent.catalog import AgentCatalogService
 
         facade = MagicMock()
         facade.list_visible_agents = AsyncMock(
             side_effect=Exception("Database connection failed"),
         )
-        svc = AgentService(facade=facade)
+        catalog = AgentCatalogService(facade, liveness_checker=AsyncMock())
 
-        result = await svc.get_all_active_agents(AgentCenterRequest())
+        result = await catalog.list_visible(user_id=None, active_only=True)
         assert result.success is False
         assert result.status_code == 500
         assert "failed" in result.error.lower()

@@ -672,7 +672,7 @@ def test_legacy_410_routes_are_not_bound_to_legacy_execution_centers_at_startup(
 def test_route_owner_protocols_match_handler_calls():
     from agent.protocols import (
         AgentCapabilityIssueStore,
-        AgentCenterCompatibility,
+        AgentCatalog,
         AgentGroupStore,
         AgentInspection,
         AgentNetworkAccess,
@@ -693,13 +693,13 @@ def test_route_owner_protocols_match_handler_calls():
             "resolve_all_for_agent",
             "resolve_issue",
         },
-        AgentCenterCompatibility: {
-            "delete_agent_from_route",
-            "get_agent_card_from_url_for_route",
-            "get_agents_by_provider_for_route",
-            "get_visible_agent_for_route",
-            "list_visible_agents_for_route",
-            "register_agent_from_route",
+        AgentCatalog: {
+            "delete",
+            "get_visible",
+            "list_for_provider",
+            "list_visible",
+            "register",
+            "resolve_card",
         },
         AgentRegistry: {
             "get_agent",
@@ -751,49 +751,20 @@ def test_route_owner_protocols_match_handler_calls():
     assert not missing, "Route owner protocol methods missing:\n" + "\n".join(missing)
 
 
-def test_agent_center_route_protocol_excludes_legacy_internal_methods():
-    from agent.protocols import AgentCenterCompatibility
-
-    forbidden = {
-        "_mask_sensitive_information",
-        "get_agent_card_from_url",
-        "get_agents_by_provider_id",
-        "get_agents_with_conditions",
-        "get_all_active_agents",
-        "get_all_agents",
-        "query_agent_by_agent_id",
-        "register_agent",
-        "remove_agent",
-        "update_agent",
-    }
-
-    assert forbidden.isdisjoint(AgentCenterCompatibility.__dict__)
-
-
-def test_route_bound_compatibility_adapters_satisfy_protocols():
-    from agent.protocols import AgentCenterCompatibility
-    from agent.route_adapter import AgentRouteAdapter
+def test_route_bound_adapters_satisfy_protocols():
+    from agent.catalog import AgentCatalogService
+    from agent.protocols import AgentCatalog
     from chat.protocols import RoomCenterCompatibility
     from chat.route_adapter import ChatRouteAdapter
 
     assert isinstance(
-        AgentRouteAdapter(service=object(), liveness_checker=object()),
-        AgentCenterCompatibility,
+        AgentCatalogService(facade=object(), liveness_checker=object()),
+        AgentCatalog,
     )
     assert isinstance(
         ChatRouteAdapter(chat_service=object(), conversation_runtime=object()),
         RoomCenterCompatibility,
     )
-
-
-def test_agent_route_adapter_accepts_service():
-    from agent.route_adapter import AgentRouteAdapter
-
-    service = object()
-
-    center = AgentRouteAdapter(service=service, liveness_checker=object())
-
-    assert center.agent_service is service
 
 
 def test_agent_routes_expose_typed_dependency_providers():
@@ -802,13 +773,13 @@ def test_agent_routes_expose_typed_dependency_providers():
 
     from agent.protocols import (
         AgentCapabilityIssueStore,
-        AgentCenterCompatibility,
+        AgentCatalog,
     )
     from api_gateway.routes import agent_routes as agent
     from common.protocols import AgentRegistry
 
     provider_expectations = {
-        agent.get_agent_center: AgentCenterCompatibility,
+        agent.get_agent_catalog: AgentCatalog,
         agent.get_agent_service: AgentRegistry,
         agent.get_capability_issue_service: AgentCapabilityIssueStore,
     }
@@ -816,11 +787,9 @@ def test_agent_routes_expose_typed_dependency_providers():
         assert get_type_hints(provider)["return"] is expected_type
 
     route_expectations = {
-        agent.register_agent: {"center": AgentCenterCompatibility},
-        agent.get_agent_by_provider: {"center": AgentCenterCompatibility},
-        agent.delete_agent: {
-            "center": AgentCenterCompatibility,
-        },
+        agent.register_agent: {"catalog": AgentCatalog},
+        agent.get_agent_by_provider: {"catalog": AgentCatalog},
+        agent.delete_agent: {"catalog": AgentCatalog},
         agent.get_capability_issues: {
             "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
@@ -833,9 +802,9 @@ def test_agent_routes_expose_typed_dependency_providers():
             "agent_lookup": AgentRegistry,
             "issue_store": AgentCapabilityIssueStore,
         },
-        agent.get_agent_card_from_url: {"center": AgentCenterCompatibility},
-        agent.get_agent: {"center": AgentCenterCompatibility},
-        agent.get_agent_list: {"center": AgentCenterCompatibility},
+        agent.get_agent_card_from_url: {"catalog": AgentCatalog},
+        agent.get_agent: {"catalog": AgentCatalog},
+        agent.get_agent_list: {"catalog": AgentCatalog},
     }
     missing: list[str] = []
     for handler, expected_params in route_expectations.items():
@@ -863,14 +832,14 @@ def test_agent_route_inventory_records_live_protocol_owners():
     }
     expectations = {
         "delete_agent": (
-            "agent.protocols.AgentCenterCompatibility",
+            "agent.protocols.AgentCatalog",
             set(),
         ),
-        "get_agent_by_provider": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent_card_from_url": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent_list": ("agent.protocols.AgentCenterCompatibility", set()),
-        "register_agent": ("agent.protocols.AgentCenterCompatibility", set()),
+        "get_agent_by_provider": ("agent.protocols.AgentCatalog", set()),
+        "get_agent": ("agent.protocols.AgentCatalog", set()),
+        "get_agent_card_from_url": ("agent.protocols.AgentCatalog", set()),
+        "get_agent_list": ("agent.protocols.AgentCatalog", set()),
+        "register_agent": ("agent.protocols.AgentCatalog", set()),
         "get_capability_issues": (
             "agent.protocols.AgentCapabilityIssueStore",
             {"common.protocols.AgentRegistry"},

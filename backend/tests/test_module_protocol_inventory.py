@@ -22,13 +22,13 @@ EXPECTED_METHODS = {
             "resolve_all_for_agent",
             "resolve_issue",
         },
-        "AgentCenterCompatibility": {
-            "delete_agent_from_route",
-            "get_agent_card_from_url_for_route",
-            "get_agents_by_provider_for_route",
-            "get_visible_agent_for_route",
-            "list_visible_agents_for_route",
-            "register_agent_from_route",
+        "AgentCatalog": {
+            "delete",
+            "get_visible",
+            "list_for_provider",
+            "list_visible",
+            "register",
+            "resolve_card",
         },
         "AgentGroupStore": {
             "add_agent_group",

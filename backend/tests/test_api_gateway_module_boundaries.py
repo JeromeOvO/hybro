@@ -91,7 +91,7 @@ def test_gateway_routes_import_only_module_protocol_surfaces():
 def test_gateway_route_modules_do_not_hold_business_dependency_globals():
     dependency_global_names = {
         "agent_avatar_manager",
-        "agent_center",
+        "agent_catalog",
         "agent_group_store",
         "agent_selection_service",
         "agent_service",

@@ -29,23 +29,19 @@ class AgentNetworkAccess(AgentNetworkTargetResolver, Protocol):
 
 
 @runtime_checkable
-class AgentCenterCompatibility(Protocol):
-    async def register_agent_from_route(
+class AgentCatalog(Protocol):
+    async def register(
         self, *, agent_url: str, provider_id: str
     ) -> AgentRouteResponse: ...
-    async def get_agents_by_provider_for_route(
-        self, *, provider_id: str
-    ) -> AgentRouteResponse: ...
-    async def delete_agent_from_route(
+    async def list_for_provider(self, *, provider_id: str) -> AgentRouteResponse: ...
+    async def delete(
         self, *, agent_id: str, provider_id: str
     ) -> AgentRouteResponse: ...
-    async def get_agent_card_from_url_for_route(
-        self, *, agent_url: str
-    ) -> AgentRouteResponse: ...
-    async def get_visible_agent_for_route(
+    async def resolve_card(self, *, agent_url: str) -> AgentRouteResponse: ...
+    async def get_visible(
         self, *, agent_id: str, user_id: str | None
     ) -> AgentRouteResponse: ...
-    async def list_visible_agents_for_route(
+    async def list_visible(
         self, *, user_id: str | None, active_only: bool = False
     ) -> AgentRouteResponse: ...
 
@@ -142,7 +138,7 @@ class AgentInspection(Protocol):
 
 __all__ = [
     "AgentCapabilityIssueStore",
-    "AgentCenterCompatibility",
+    "AgentCatalog",
     "AgentGroupStore",
     "AgentInspection",
     "AgentNetworkAccess",

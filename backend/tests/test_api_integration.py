@@ -243,24 +243,24 @@ class TestAgentHTTPIntegration:
     async def test_get_active_agents_returns_json(self, http_client, integration_app):
         """GET /agent/getAllAgents?active_only=true should serialize correctly."""
         mock_ac = MagicMock()
-        mock_ac.list_visible_agents_for_route = AsyncMock(
+        mock_ac.list_visible = AsyncMock(
             return_value=AgentCenterResponse(success=True, agents=[])
         )
 
         from api_gateway.routes import agent_routes as agent_api
 
-        integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
+        integration_app.dependency_overrides[agent_api.get_agent_catalog] = lambda: (
             mock_ac
         )
         try:
             resp = await http_client.get("/api/v1/agent/getAllAgents?active_only=true")
         finally:
-            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
+            integration_app.dependency_overrides.pop(agent_api.get_agent_catalog, None)
 
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
-        mock_ac.list_visible_agents_for_route.assert_awaited_once_with(
+        mock_ac.list_visible.assert_awaited_once_with(
             user_id="integ_user_001",
             active_only=True,
         )
@@ -272,7 +272,7 @@ class TestAgentHTTPIntegration:
         """POST /agent/registerAgent should 400 when agent_url missing."""
         from api_gateway.routes import agent_routes as agent_api
 
-        integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
+        integration_app.dependency_overrides[agent_api.get_agent_catalog] = lambda: (
             MagicMock()
         )
         try:
@@ -281,7 +281,7 @@ class TestAgentHTTPIntegration:
                 json={},
             )
         finally:
-            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
+            integration_app.dependency_overrides.pop(agent_api.get_agent_catalog, None)
 
         assert resp.status_code == 400
         body = resp.json()
@@ -292,13 +292,13 @@ class TestAgentHTTPIntegration:
         """GET /agent/getAgent/ with whitespace ID returns error response."""
         from api_gateway.routes import agent_routes as agent_api
 
-        integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
+        integration_app.dependency_overrides[agent_api.get_agent_catalog] = lambda: (
             MagicMock()
         )
         try:
             resp = await http_client.get("/api/v1/agent/getAgent/%20")
         finally:
-            integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
+            integration_app.dependency_overrides.pop(agent_api.get_agent_catalog, None)
 
         # Through HTTP, whitespace is URL-decoded to " " which is truthy,
         # so the endpoint proceeds and the service returns success=False.

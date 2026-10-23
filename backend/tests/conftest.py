@@ -421,79 +421,15 @@ def mock_room_message_center():
 
 
 @pytest.fixture
-def mock_agent_center():
-    """Create a mock agent center."""
+def mock_agent_catalog():
+    """Create a mock agent catalog."""
     mock = MagicMock()
-    mock.register_agent = AsyncMock()
-    mock.get_agent_card_from_url = AsyncMock()
-    mock.query_agent_by_agent_id = AsyncMock()
-    mock.get_agents_by_provider_id = AsyncMock()
-    mock.get_all_agents = AsyncMock()
-    mock.get_all_active_agents = AsyncMock()
-    mock.remove_agent = AsyncMock()
-    mock.finalize_agent_response_for_route = MagicMock(
-        side_effect=lambda response: response
-    )
-
-    async def register_agent_from_route(*, agent_url: str, provider_id: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.register_agent(
-            AgentCenterRequest(agent_url=agent_url, provider_id=provider_id)
-        )
-
-    async def get_agents_by_provider_for_route(*, provider_id: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.get_agents_by_provider_id(
-            AgentCenterRequest(provider_id=provider_id)
-        )
-
-    async def delete_agent_from_route(*, agent_id: str, provider_id: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.remove_agent(
-            AgentCenterRequest(agent_id=agent_id, provider_id=provider_id)
-        )
-
-    async def get_agent_card_from_url_for_route(*, agent_url: str):
-        from models.request import AgentCenterRequest
-
-        return await mock.get_agent_card_from_url(
-            AgentCenterRequest(agent_url=agent_url)
-        )
-
-    async def get_visible_agent_for_route(*, agent_id: str, user_id: str | None):
-        from models.request import AgentCenterRequest
-
-        return await mock.query_agent_by_agent_id(
-            AgentCenterRequest(agent_id=agent_id, user_id=user_id)
-        )
-
-    async def list_visible_agents_for_route(
-        *, user_id: str | None, active_only: bool = False
-    ):
-        from models.request import AgentCenterRequest
-
-        request = AgentCenterRequest(user_id=user_id)
-        if active_only:
-            return await mock.get_all_active_agents(request)
-        return await mock.get_all_agents(request)
-
-    mock.register_agent_from_route = AsyncMock(side_effect=register_agent_from_route)
-    mock.get_agents_by_provider_for_route = AsyncMock(
-        side_effect=get_agents_by_provider_for_route
-    )
-    mock.delete_agent_from_route = AsyncMock(side_effect=delete_agent_from_route)
-    mock.get_agent_card_from_url_for_route = AsyncMock(
-        side_effect=get_agent_card_from_url_for_route
-    )
-    mock.get_visible_agent_for_route = AsyncMock(
-        side_effect=get_visible_agent_for_route
-    )
-    mock.list_visible_agents_for_route = AsyncMock(
-        side_effect=list_visible_agents_for_route
-    )
+    mock.register = AsyncMock()
+    mock.list_for_provider = AsyncMock()
+    mock.delete = AsyncMock()
+    mock.resolve_card = AsyncMock()
+    mock.get_visible = AsyncMock()
+    mock.list_visible = AsyncMock()
     return mock
 
 
@@ -563,7 +499,7 @@ def create_mock_response(success: bool = True, data: Any = None, error: str = No
 @pytest.fixture
 def make_api_gateway_deps(
     mock_db_service,
-    mock_agent_center,
+    mock_agent_catalog,
     mock_room_center,
     mock_sse_transport,
     mock_hitl_service,
@@ -601,7 +537,7 @@ def make_api_gateway_deps(
         agent_selection_service.suggest_agents = AsyncMock()
 
         defaults = {
-            "agent_center": mock_agent_center,
+            "agent_catalog": mock_agent_catalog,
             "agent_service": agent_service,
             "agent_matcher": MagicMock(),
             "capability_issue_service": capability_issue_service,
@@ -675,12 +611,9 @@ def patch_room_center_deps(mock_db_service, mock_room_center, make_api_gateway_d
 
 
 @pytest.fixture
-def patch_agent_deps(mock_agent_center):
-    """Return agent center endpoint dependency with auto-masking."""
-    mock_agent_center._mask_sensitive_information = MagicMock(
-        side_effect=lambda r, _: r
-    )
-    return mock_agent_center
+def patch_agent_deps(mock_agent_catalog):
+    """Return the agent catalog dependency used by the agent routes."""
+    return mock_agent_catalog
 
 
 # =============================================================================

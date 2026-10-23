@@ -466,13 +466,12 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             from agent.capability_issue import (
                 CapabilityIssueExclusionReader,
             )
+            from agent.catalog import AgentCatalogService
             from agent.health import AgentHealthService
             from agent.inspection import AgentInspectionService
             from agent.liveness import AgentLivenessService
             from agent.matcher import AgentMatcher
-            from agent.route_adapter import AgentRouteAdapter
             from agent.selection_service import AgentSelectionService
-            from agent.service import AgentService
             from chat.route_adapter import ChatRouteAdapter
             from chat.service import chat_service
             from common.utils.a2a_helpers import bind_a2a_artifact_files
@@ -693,7 +692,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 writer=_agent_deps.agent_registry_writer,
             )
             app.state.local_agent_service = _local_agent_service
-            agent_compat_service = AgentService(facade=_agent_facade)
             agent_matcher = AgentMatcher(facade=_agent_facade)
             agent_selection_service = AgentSelectionService(
                 matcher=agent_matcher,
@@ -702,17 +700,15 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_health_service = AgentHealthService(
                 repository=_agent_deps.agent_repository
             )
-            agent_liveness_checker = AgentLivenessService(
-                health_service=agent_health_service,
-                agent_registry_writer=_agent_deps.agent_registry_writer,
-            )
-            route_agent_center = AgentRouteAdapter(
-                service=agent_compat_service,
-                liveness_checker=agent_liveness_checker,
+            agent_catalog = AgentCatalogService(
+                _agent_facade,
+                liveness_checker=AgentLivenessService(
+                    health_service=agent_health_service
+                ),
             )
             route_inspection_center = AgentInspectionService()
             membership_source = RepositoryRoomMembershipSeedSource(
-                agent_service_adapter=agent_compat_service
+                agent_registry=_agent_facade
             )
             _room_deps = create_room_deps(
                 mongo=mongo_dal,
@@ -1401,7 +1397,7 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
         bind_api_gateway_deps(
             app,
             APIGatewayDeps(
-                agent_center=route_agent_center,
+                agent_catalog=agent_catalog,
                 agent_service=_agent_deps.agent_registry,
                 agent_matcher=_agent_deps.agent_matcher,
                 capability_issue_service=agent_capability_issue_service,

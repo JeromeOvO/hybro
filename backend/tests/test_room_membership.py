@@ -160,7 +160,7 @@ def test_user_message_doc_from_input_preserves_metadata():
 
 
 @pytest.mark.asyncio
-async def test_membership_source_logs_agent_service_fallback():
+async def test_membership_source_logs_agent_registry_fallback():
     agent = SimpleNamespace(
         agent_id="a1",
         agent_card=SimpleNamespace(name="Agent One", description=None, url=None),
@@ -175,8 +175,8 @@ async def test_membership_source_logs_agent_service_fallback():
         membership_store=SimpleNamespace(
             get_all_active_agents=AsyncMock(return_value=[agent])
         ),
-        agent_service_adapter=SimpleNamespace(
-            get_agents_with_conditions=AsyncMock(side_effect=RuntimeError("boom"))
+        agent_registry=SimpleNamespace(
+            list_visible_agents=AsyncMock(side_effect=RuntimeError("boom"))
         ),
     )
 
@@ -424,3 +424,15 @@ class _FakeMembershipSource:
     async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]:
         self.list_current_agents_calls.append(user_id)
         return list(self.current_agents)
+
+
+@pytest.mark.asyncio
+async def test_membership_source_lists_active_visible_agents_from_registry():
+    info = AgentInfo(agent_id="a1", name="Agent One")
+    registry = SimpleNamespace(list_visible_agents=AsyncMock(return_value=[info]))
+    source = RepositoryRoomMembershipSeedSource(agent_registry=registry)
+
+    assert await source.list_current_agents("owner") == [info]
+    registry.list_visible_agents.assert_awaited_once_with(
+        user_id="owner", active_only=True
+    )

@@ -375,14 +375,14 @@ Examples:
   `orchestrator_hitl_interactions`, `orchestrator_recovery_leases`,
   `room_events`, `room_event_seq`, `sessions`, `migration_markers`, and
   `agent_capability_issues` are retained, with no deletion or TTL.
-- Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
-  and `agent.service.AgentService`, both constructed directly by `container.py`
-  over `agent.AgentFacade`. The `/agent/*` routes return
-  `common.dto.AgentRouteResponse`: `agent`/`agents` carry flat snake_case
-  `AgentView` records and `card` carries an `AgentCardView` for card fetches.
-  `agent.views` builds these from the internal Agent and Card models and never
-  includes transport URLs or security data. The adapter applies
-  `AgentLivenessService` to single-agent reads before projecting the view.
+- The `/agent/*` routes are served by `agent.catalog.AgentCatalogService`
+  (the `agent.protocols.AgentCatalog` port), constructed by `container.py`
+  over `agent.AgentFacade`. They return `common.dto.AgentRouteResponse`:
+  `agent`/`agents` carry flat snake_case `AgentView` records and `card`
+  carries an `AgentCardView` for card fetches. `agent.views` builds these from
+  `AgentInfo` and the stored A2A card JSON and never includes transport URLs
+  or security data. Single-agent reads run `AgentLivenessService` on the
+  `AgentInfo` before projecting the view.
 - A2A compatibility-shaped runtime behavior lives in
   `a2a_adapter.runtime_service`. A2A SDK transport/coercion work stays in
   `a2a_adapter`; `a2a_adapter` does not import `execution`, so the package
@@ -461,7 +461,7 @@ supervisor, dispatch, HITL, and cancellation paths receive only
 the methods they call through execution-owned protocols in `execution/ports.py`.
 
 Agent dependency assembly is also container-owned. `container.py` constructs
-`AgentService`, `AgentRouteAdapter`, `AgentMatcher`, `AgentSelectionService`,
+`AgentCatalogService`, `AgentMatcher`, `AgentSelectionService`,
 `AgentHealthService`, `AgentLivenessService`, and
 `AgentInspectionService` from `agent/`; `APIGatewayDeps` receives these
 Agent-owned protocol implementations directly. Agent runtime behavior is owned
@@ -801,9 +801,10 @@ consumers and implementations sit in the owner's package.
 | `_DispatchCommand` | `a2a_adapter.orchestrator_direct_client` | attribute shape (records read by attribute) | internal to `a2a_adapter` |
 | `_ModelReplyCommand` | `a2a_adapter.orchestrator_direct_client` | attribute shape (records read by attribute) | internal to `a2a_adapter` |
 | `AgentHealthRepositoryPort` | `agent.health` | `agent.repository.mongo.AgentMongoRepository` | internal to `agent` |
+| `AgentHealthProbe` | `agent.liveness` | `agent.health.AgentHealthService` | internal to `agent` |
 | `AgentMessageMatcher` | `agent.matcher` | `agent.facade.AgentFacade` | internal to `agent` |
 | `AgentCapabilityIssueStore` | `agent.protocols` | `agent.capability_issue.AgentCapabilityIssueService` | crosses to `api_gateway` |
-| `AgentCenterCompatibility` | `agent.protocols` | `agent.route_adapter.AgentRouteAdapter` | crosses to `api_gateway` |
+| `AgentCatalog` | `agent.protocols` | `agent.catalog.AgentCatalogService` | crosses to `api_gateway` |
 | `AgentGroupStore` | `agent.protocols` | `agent.repository.runtime_store.AgentRuntimeStore` | crosses to `api_gateway` |
 | `AgentInspection` | `agent.protocols` | `agent.inspection.AgentInspectionService` | crosses to `api_gateway` |
 | `AgentNetworkAccess` | `agent.protocols` | `agent.network.AgentNetworkService` | crosses to `api_gateway` |

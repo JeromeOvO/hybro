@@ -34,7 +34,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -55,7 +55,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_current_user"
     ],
     "auth_dependencies": [
@@ -76,7 +76,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_optional_user"
     ],
     "auth_dependencies": [
@@ -97,7 +97,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center"
+      "get_agent_catalog"
     ],
     "auth_dependencies": [],
     "include_in_schema": true
@@ -115,7 +115,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_optional_user"
     ],
     "auth_dependencies": [
@@ -136,7 +136,7 @@
     ],
     "status_code": null,
     "dependencies": [
-      "get_agent_center",
+      "get_agent_catalog",
       "get_current_user_or_service"
     ],
     "auth_dependencies": [

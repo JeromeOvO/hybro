@@ -10,8 +10,7 @@ from agent.matching import (
     select_top_matches,
     supports_files,
 )
-from agent.service import _agent_info_to_legacy_agent
-from models.agent import Agent
+from common.dto import AgentInfo
 
 
 @runtime_checkable
@@ -27,17 +26,16 @@ class AgentMessageMatcher(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
-def _agent_to_dict(agent: Agent) -> dict:
-    card = agent.agent_card.model_dump(mode="json")
-    return {"agent_id": agent.agent_id, "agent_card": card}
+def _agent_to_dict(agent: AgentInfo) -> dict:
+    return {"agent_id": agent.agent_id, "agent_card": dict(agent.raw_card)}
 
 
-def _agent_supports_files(agent: Agent) -> bool:
+def _agent_supports_files(agent: AgentInfo) -> bool:
     return supports_files(_agent_to_dict(agent))
 
 
 def accepts_input_modes(
-    agent: Agent,
+    agent: AgentInfo,
     required_input_modes: list[str] | None = None,
 ) -> bool:
     return _accepts_input_modes(_agent_to_dict(agent), required_input_modes)
@@ -45,7 +43,7 @@ def accepts_input_modes(
 
 @dataclass
 class MatchedAgent:
-    agent: Agent
+    agent: AgentInfo
     lexical_score: float
     final_score: float
 
@@ -117,10 +115,7 @@ class AgentMatcher:
 
 def _to_matched_agent(match) -> MatchedAgent | None:
     if isinstance(match, dict):
-        agent_info = match.get("agent")
-        if agent_info is None:
-            return None
-        agent = _agent_info_to_legacy_agent(agent_info)
+        agent = match.get("agent")
         if agent is None:
             return None
         return MatchedAgent(
@@ -134,11 +129,8 @@ def _to_matched_agent(match) -> MatchedAgent | None:
 
     if getattr(match, "agent", None) is None:
         return None
-    agent = _agent_info_to_legacy_agent(match.agent)
-    if agent is None:
-        return None
     return MatchedAgent(
-        agent=agent,
+        agent=match.agent,
         lexical_score=getattr(match, "score", 0.0),
         final_score=getattr(match, "score", 0.0),
     )

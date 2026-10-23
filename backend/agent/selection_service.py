@@ -10,7 +10,7 @@ from enum import StrEnum
 
 from agent.matcher import AgentMatcher
 from agent.protocols import AgentSuggestion, AgentSuggestionResult
-from common.dto import AgentRoutingCandidate
+from common.dto import AgentInfo, AgentRoutingCandidate
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -114,7 +114,7 @@ class AgentSelectionService:
         agent_selections = [
             AgentSelection(
                 agent_id=matched.agent.agent_id,
-                agent_name=matched.agent.agent_card.name,
+                agent_name=matched.agent.name or "",
                 reason=f"Lexical match score: {matched.lexical_score:.2f}",
                 score=matched.final_score,
             )
@@ -221,21 +221,21 @@ class AgentSelectionService:
         ]
 
 
-def _routing_candidate(agent) -> AgentRoutingCandidate:
-    card = agent.agent_card
+def _routing_candidate(agent: AgentInfo) -> AgentRoutingCandidate:
+    card = agent.raw_card
     skills = [
         str(
             (skill.get("name") or skill.get("id") or "Unknown")
             if isinstance(skill, dict)
-            else getattr(skill, "name", None) or skill
+            else skill
         )
-        for skill in (card.skills or [])
+        for skill in (card.get("skills") or [])
     ]
-    capabilities = card.capabilities if isinstance(card.capabilities, dict) else {}
+    capabilities = card.get("capabilities")
     return AgentRoutingCandidate(
         agent_id=str(agent.agent_id),
-        name=str(card.name),
-        description=str(card.description or ""),
-        capabilities=capabilities,
+        name=str(agent.name or ""),
+        description=str(agent.description or ""),
+        capabilities=capabilities if isinstance(capabilities, dict) else {},
         skills=skills,
     )

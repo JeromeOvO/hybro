@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from agent.protocols import (
     AgentCapabilityIssueStore,
-    AgentCenterCompatibility,
+    AgentCatalog,
 )
 from api_gateway.dependencies import (
-    get_agent_center,
+    get_agent_catalog,
     get_agent_service,
     get_capability_issue_service,
     get_local_agent_discovery,
@@ -48,7 +48,7 @@ async def discover_local_agents(
 async def register_agent(
     request: Request,
     user: ClerkUser = Depends(get_current_user_or_service),
-    center: AgentCenterCompatibility = Depends(get_agent_center),
+    catalog: AgentCatalog = Depends(get_agent_catalog),
 ) -> AgentRouteResponse:
     """Register a new agent - PROTECTED (Clerk user or default-agent registrar service token)"""
     request_data = await request.json()
@@ -58,39 +58,39 @@ async def register_agent(
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
-    agent_center_response = await center.register_agent_from_route(
+    response = await catalog.register(
         agent_url=agent_url,
         provider_id=provider_id,
     )
 
     # Handle duplicate error from service layer
-    if not agent_center_response.success and agent_center_response.status_code == 400:
+    if not response.success and response.status_code == 400:
         raise HTTPException(
             status_code=400,
-            detail=agent_center_response.error,
+            detail=response.error,
         )
 
-    return agent_center_response
+    return response
 
 
 @router.get("/agent/getAgent/me")
 async def get_agent_by_provider(
     user: ClerkUser = Depends(get_current_user),
-    center: AgentCenterCompatibility = Depends(get_agent_center),
+    catalog: AgentCatalog = Depends(get_agent_catalog),
 ) -> AgentRouteResponse:
     """Get agents by provider id - PROTECTED (requires authentication)"""
     provider_id = user.user_id
     if not provider_id:
         raise HTTPException(status_code=400, detail="provider_id is required")
 
-    return await center.get_agents_by_provider_for_route(provider_id=provider_id)
+    return await catalog.list_for_provider(provider_id=provider_id)
 
 
 @router.post("/agent/deleteAgent")
 async def delete_agent(
     request: Request,
     user: ClerkUser = Depends(get_current_user),
-    center: AgentCenterCompatibility = Depends(get_agent_center),
+    catalog: AgentCatalog = Depends(get_agent_catalog),
 ) -> AgentRouteResponse:
     """Delete an agent - PROTECTED (requires authentication and ownership)"""
     request_data = await request.json()
@@ -98,20 +98,20 @@ async def delete_agent(
 
     if not agent_id or not agent_id.strip():
         raise HTTPException(status_code=400, detail="agent_id is required")
-    agent_center_response = await center.delete_agent_from_route(
+    response = await catalog.delete(
         agent_id=agent_id,
         provider_id=user.user_id,
     )
-    if not agent_center_response.success and agent_center_response.status_code in {
+    if not response.success and response.status_code in {
         403,
         404,
     }:
         raise HTTPException(
-            status_code=agent_center_response.status_code,
-            detail=agent_center_response.error,
+            status_code=response.status_code,
+            detail=response.error,
         )
 
-    return agent_center_response
+    return response
 
 
 # ============= CAPABILITY ISSUE ENDPOINTS (Auth Required) =============
@@ -209,7 +209,7 @@ async def resolve_capability_issue(
 @router.post("/agent/getAgentCardFromUrl")
 async def get_agent_card_from_url(
     request: Request,
-    center: AgentCenterCompatibility = Depends(get_agent_center),
+    catalog: AgentCatalog = Depends(get_agent_catalog),
 ) -> AgentRouteResponse:
     """Get agent card from URL - PUBLIC (no authentication required)"""
     request_data = await request.json()
@@ -217,14 +217,14 @@ async def get_agent_card_from_url(
 
     if not agent_url:
         raise HTTPException(status_code=400, detail="agent_url is required")
-    return await center.get_agent_card_from_url_for_route(agent_url=agent_url)
+    return await catalog.resolve_card(agent_url=agent_url)
 
 
 @router.get("/agent/getAgent/{agent_id}")
 async def get_agent(
     agent_id: str,
     user: ClerkUser | None = Depends(get_optional_user),
-    center: AgentCenterCompatibility = Depends(get_agent_center),
+    catalog: AgentCatalog = Depends(get_agent_catalog),
 ) -> AgentRouteResponse:
     """Get agent by ID - PUBLIC (authentication optional)"""
     if not agent_id:
@@ -237,7 +237,7 @@ async def get_agent(
         )
 
     user_id = user.user_id if user else None
-    return await center.get_visible_agent_for_route(
+    return await catalog.get_visible(
         agent_id=agent_id,
         user_id=user_id,
     )
@@ -250,11 +250,11 @@ async def get_agent_list(
         description="Return only active agents when true",
     ),
     user: ClerkUser | None = Depends(get_optional_user),
-    center: AgentCenterCompatibility = Depends(get_agent_center),
+    catalog: AgentCatalog = Depends(get_agent_catalog),
 ) -> AgentRouteResponse:
     """Get visible agents, optionally filtering to active agents."""
     user_id = user.user_id if user else None
-    return await center.list_visible_agents_for_route(
+    return await catalog.list_visible(
         user_id=user_id,
         active_only=active_only,
     )

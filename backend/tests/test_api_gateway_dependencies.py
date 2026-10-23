@@ -12,7 +12,7 @@ def _deps(**overrides):
     from api_gateway.dependencies import APIGatewayDeps
 
     values = {
-        "agent_center": MagicMock(),
+        "agent_catalog": MagicMock(),
         "agent_service": MagicMock(),
         "agent_matcher": MagicMock(),
         "capability_issue_service": MagicMock(),
@@ -45,7 +45,7 @@ def _request_with_state(**state_values):
 
 
 PROVIDER_FIELD_NAMES = [
-    ("get_agent_center", "agent_center"),
+    ("get_agent_catalog", "agent_catalog"),
     ("get_agent_service", "agent_service"),
     ("get_capability_issue_service", "capability_issue_service"),
     ("get_agent_group_store", "agent_group_store"),

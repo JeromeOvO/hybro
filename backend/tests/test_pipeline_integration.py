@@ -21,6 +21,7 @@ from agent.matcher import (
     select_top_agents,
 )
 from agent.selection_service import AgentSelectionService, RoutingStrategy
+from common.dto import AgentInfo
 from common.types import AgentCapabilities, AgentCard
 from conversation.runtime import ConversationRuntime
 from conversation.target_scope import TargetScopeResolver
@@ -33,7 +34,7 @@ from models.room_services_models import ResolvedRoutingScope
 def _make_agent(
     agent_id: str, name: str, description: str, skills=None, input_modes=None
 ) -> Agent:
-    """Create a test Agent with optional skills and input modes."""
+    """Create a stored test Agent with optional skills and input modes."""
     card = AgentCard(
         name=name,
         description=description,
@@ -51,6 +52,17 @@ def _make_agent(
     )
 
 
+def _make_info(*args, **kwargs) -> AgentInfo:
+    """Create the facade view of a test agent for matcher results."""
+    agent = _make_agent(*args, **kwargs)
+    return AgentInfo(
+        agent_id=agent.agent_id,
+        name=agent.agent_card.name,
+        description=agent.agent_card.description,
+        raw_card=agent.agent_card.model_dump(mode="json", by_alias=True),
+    )
+
+
 # ---- Integration Tests ----
 
 
@@ -58,8 +70,8 @@ def _make_agent(
 async def test_all_agents_uses_agent_matcher():
     """Verify AgentSelectionService delegates to AgentMatcher and converts MatchResult."""
     # Create test agents
-    agent1 = _make_agent("agent1", "TestAgent1", "A test agent")
-    agent2 = _make_agent("agent2", "TestAgent2", "Another test agent")
+    agent1 = _make_info("agent1", "TestAgent1", "A test agent")
+    agent2 = _make_info("agent2", "TestAgent2", "Another test agent")
 
     # Mock MatchResult
     mock_match_result = MatchResult(
@@ -221,8 +233,8 @@ async def test_matcher_error_propagates_to_caller():
 
 def test_lexical_score_determines_ranking():
     """Verify ranking follows deterministic lexical relevance."""
-    agent_high = _make_agent("agent1", "HighLexical", "Best lexical match")
-    agent_low = _make_agent("agent2", "LowLexical", "Poor lexical match")
+    agent_high = _make_info("agent1", "HighLexical", "Best lexical match")
+    agent_low = _make_info("agent2", "LowLexical", "Poor lexical match")
 
     matched_agents = [
         MatchedAgent(
@@ -246,10 +258,10 @@ def test_lexical_score_determines_ranking():
 
 def test_input_modes_are_a_hard_filter():
     """Verify incompatible agents are excluded before lexical scoring."""
-    agent_file = _make_agent(
+    agent_file = _make_info(
         "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
     )
-    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
+    agent_text = _make_info("agent2", "TextAgent", "Text only", input_modes=["text"])
 
     assert accepts_input_modes(agent_file, ["application/pdf"]) is True
     assert accepts_input_modes(agent_text, ["application/pdf"]) is False
@@ -257,10 +269,10 @@ def test_input_modes_are_a_hard_filter():
 
 def test_no_file_penalty_without_attachments():
     """Without attachments, text-only and file-capable agents score equally."""
-    agent_file = _make_agent(
+    agent_file = _make_info(
         "agent1", "FileAgent", "Handles files", input_modes=["text", "file"]
     )
-    agent_text = _make_agent("agent2", "TextAgent", "Text only", input_modes=["text"])
+    agent_text = _make_info("agent2", "TextAgent", "Text only", input_modes=["text"])
 
     assert accepts_input_modes(agent_file, None) is True
     assert accepts_input_modes(agent_text, None) is True
@@ -270,17 +282,17 @@ def test_select_top_agents_preserves_valid_lexical_candidates():
     """Non-debate selection does not apply legacy score-gap thresholds."""
     agents = [
         MatchedAgent(
-            _make_agent("agent1", "Winner", "Top agent"),
+            _make_info("agent1", "Winner", "Top agent"),
             lexical_score=0.9,
             final_score=0.92,
         ),
         MatchedAgent(
-            _make_agent("agent2", "Runner-up", "Second agent"),
+            _make_info("agent2", "Runner-up", "Second agent"),
             lexical_score=0.5,
             final_score=0.58,
         ),
         MatchedAgent(
-            _make_agent("agent3", "Third", "Third agent"),
+            _make_info("agent3", "Third", "Third agent"),
             lexical_score=0.4,
             final_score=0.49,
         ),

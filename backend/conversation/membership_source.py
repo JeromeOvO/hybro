@@ -5,7 +5,6 @@ from typing import Any
 from common.dto import AgentInfo, SavedAgentGroupSnapshot
 from common.utils.logger import get_logger
 from conversation.unbound import UNBOUND_RUNTIME_STORE
-from models.request import AgentCenterRequest
 
 logger = get_logger(__name__)
 
@@ -15,10 +14,10 @@ class RepositoryRoomMembershipSeedSource:
         self,
         *,
         membership_store=None,
-        agent_service_adapter=None,
+        agent_registry=None,
     ) -> None:
         self._store = membership_store or UNBOUND_RUNTIME_STORE
-        self._agent_service = agent_service_adapter
+        self._agent_registry = agent_registry
 
     def bind_store(self, membership_store) -> None:
         self._store = membership_store
@@ -36,19 +35,11 @@ class RepositoryRoomMembershipSeedSource:
         )
 
     async def list_current_agents(self, user_id: str | None) -> list[AgentInfo]:
-        if self._agent_service is not None:
+        if self._agent_registry is not None:
             try:
-                response = await self._agent_service.get_agents_with_conditions(
-                    AgentCenterRequest(
-                        user_id=user_id,
-                        query={"agent_status": "active"},
-                        limit=0,
-                    )
+                return await self._agent_registry.list_visible_agents(
+                    user_id=user_id, active_only=True
                 )
-                if response.success and response.agents is not None:
-                    return [
-                        self.agent_info_from_record(agent) for agent in response.agents
-                    ]
             except Exception as exc:
                 logger.debug(
                     "Room membership source falling back to database active agents: %s",

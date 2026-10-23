@@ -11,8 +11,17 @@ from agent.selection_service import (
     AgentSelectionService,
     RoutingStrategy,
 )
+from common.dto import AgentInfo
 from common.types import AgentCapabilities, AgentCard
-from models.agent import Agent, AgentStatus
+
+
+def _info(agent_id: str, card: AgentCard) -> AgentInfo:
+    return AgentInfo(
+        agent_id=agent_id,
+        name=card.name,
+        description=card.description,
+        raw_card=card.model_dump(mode="json", by_alias=True),
+    )
 
 
 def _create_test_agent_card(name: str, description: str) -> AgentCard:
@@ -34,10 +43,8 @@ def mock_matched_agents():
     """Create mock MatchedAgent instances."""
     agents = []
     for i in range(3):
-        agent = Agent(
-            agent_id=f"agent-{i}",
-            agent_card=_create_test_agent_card(f"Agent {i}", f"Test agent {i}"),
-            agent_status=AgentStatus.active,
+        agent = _info(
+            f"agent-{i}", _create_test_agent_card(f"Agent {i}", f"Test agent {i}")
         )
         matched = MatchedAgent(
             agent=agent,
@@ -161,10 +168,8 @@ async def test_facade_empty_result():
 async def test_llm_reranks_only_head_and_preserves_lexical_tail():
     matched_agents = []
     for index in range(7):
-        agent = Agent(
-            agent_id=f"agent-{index}",
-            agent_card=_create_test_agent_card(f"Agent {index}", "Test"),
-            agent_status=AgentStatus.active,
+        agent = _info(
+            f"agent-{index}", _create_test_agent_card(f"Agent {index}", "Test")
         )
         matched_agents.append(
             MatchedAgent(

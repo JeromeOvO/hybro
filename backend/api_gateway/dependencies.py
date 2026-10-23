@@ -10,7 +10,7 @@ from fastapi import Depends, Request
 from agent.network import AgentNetworkService
 from agent.protocols import (
     AgentCapabilityIssueStore,
-    AgentCenterCompatibility,
+    AgentCatalog,
     AgentGroupStore,
     AgentInspection,
     AgentNetworkAccess,
@@ -38,7 +38,7 @@ from session.protocols import SessionAccess, SessionOwner, SessionService
 
 @dataclass(frozen=True, slots=True)
 class APIGatewayDeps:
-    agent_center: AgentCenterCompatibility
+    agent_catalog: AgentCatalog
     agent_service: AgentRegistry
     agent_matcher: AgentMatcher
     capability_issue_service: AgentCapabilityIssueStore
@@ -93,10 +93,10 @@ def is_bound(app: Any) -> bool:
     return deps is not None and not missing_required_deps(deps)
 
 
-def get_agent_center(
+def get_agent_catalog(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentCenterCompatibility:
-    return deps.agent_center
+) -> AgentCatalog:
+    return deps.agent_catalog
 
 
 def get_agent_service(
