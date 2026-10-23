@@ -528,10 +528,8 @@ Operator tools, run from `backend/` as `uv run python -m scripts.<name>`:
 - `check_no_legacy_imports`: fails when Python files import any of the root
   packages passed as arguments.
 - `report_orphan_modules`: lists production modules no entry point reaches.
-- `create_room_file_indexes.sh`, `ensure_frontend_env.sh`, and
-  `ensure_registrar_token.sh`: shell helpers for `room_files` indexes, a
-  filtered non-Docker `frontend/.env.local`, and registrar token setup in an env
-  file.
+- `create_room_file_indexes.sh`: shell helper that creates the `room_files`
+  indexes.
 
 ### Composition roots
 
