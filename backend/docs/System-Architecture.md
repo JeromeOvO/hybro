@@ -1321,8 +1321,10 @@ metadata, and the orchestrator's final message), implemented by
 `ClientRequestIdResolver`, implemented by `ClientRequestIdStore` and consumed by
 the SSE `client_request_id` resolver.
 `conversation.runtime.ConversationRuntime` implements Execution's `RoomCenterPort`
-and the chat message reads; it keeps the port methods and the room timeline
-reads and delegates the rest to collaborators built from its current bindings.
+and the chat message reads. It holds the startup bindings and the port methods
+only, and delegates each call to a collaborator built from its current bindings:
+`conversation.message_reads.RoomMessageReader` reads one cursor-paginated page of
+the room's public timeline through the facade and the timeline projector.
 `conversation.message_sending.RoomMessageSender` validates a send request,
 materializes its quote, resolves attachments and the target scope, persists the
 user message through the commit service, and answers idempotent replays and

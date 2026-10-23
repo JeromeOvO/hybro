@@ -53,3 +53,32 @@ async def test_runtime_delegates_idempotent_replay(monkeypatch):
         idempotency_fingerprint="fp",
         idempotency_fingerprint_version=1,
     )
+
+
+def test_runtime_is_a_thin_port_over_its_collaborators():
+    import inspect
+
+    from conversation.message_reads import RoomMessageReader
+
+    public = {
+        name
+        for name, member in inspect.getmembers(ConversationRuntime)
+        if callable(member) and not name.startswith("_")
+    }
+    assert public == {
+        "bind_attachment_metadata_reader",
+        "bind_capability_issue_reader",
+        "bind_context_memory",
+        "bind_facade",
+        "bind_room_files",
+        "bind_store",
+        "bind_timeline_projector",
+        "bind_user_message_commit",
+        "discard_message_preflight",
+        "get_idempotent_user_message",
+        "inquiry_room_messages_by_room_id",
+        "missing_required_bindings",
+        "persist_message_to_room",
+        "run_message_preflight_to_room",
+    }
+    assert hasattr(RoomMessageReader, "inquiry_room_messages_by_room_id")
