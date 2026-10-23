@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any, Literal
 
+from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
+from common.utils.logger import get_logger
 from execution.orchestrator.a2a_runtime.errors import RecoverableAdapterError
 from execution.orchestrator.models import (
     CancellationCause,
@@ -24,6 +27,8 @@ from .stores import (
     _to_list,
     _without_mongo_id,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,9 +104,8 @@ class MongoOrchestratorRunStore:
         )
         if not value:
             return None
-        run = _run_from_document(value)
-        claim = await self._load_recovery_claim(run_id)
-        return run.model_copy(update={"recovery_claim": claim}) if claim else run
+        # The dedicated row is authoritative; validate with it, not the mirror.
+        return _run_from_document(value, await self._load_recovery_claim(run_id))
 
     async def _load_recovery_claim(self, run_id: str) -> RecoveryClaim | None:
         if self._recovery_collection is None:
@@ -120,9 +124,18 @@ class MongoOrchestratorRunStore:
         )
 
     async def _mirror_recovery_claim(self, run_id: str, claim: RecoveryClaim) -> None:
-        """Refresh denormalized due-query fields without advancing Run CAS."""
+        """Refresh denormalized due-query fields without advancing Run CAS.
+
+        The mirror is not version-fenced, so a writer that loaded the Run before
+        a concurrent cancellation could otherwise put its execution claim onto
+        the canceling aggregate. The status predicate is evaluated atomically
+        with the write; ``canceling`` only leaves via a validated CAS.
+        """
+        query: dict[str, object] = {"run_id": run_id}
+        if claim.kind != "cancellation":
+            query["status"] = {"$ne": "canceling"}
         await self.collection.update_one(
-            {"run_id": run_id},
+            query,
             {"$set": {"recovery_claim": claim.model_dump(mode="python")}},
         )
 
@@ -384,7 +397,14 @@ class MongoOrchestratorRunStore:
                             "as": "scheduling_rows",
                         }
                     },
-                    {"$match": {"scheduling_rows.kind": {"$ne": "cancellation"}}},
+                    {
+                        "$match": {
+                            "$or": [
+                                {"scheduling_rows.kind": {"$ne": "cancellation"}},
+                                {"recovery_claim.kind": {"$ne": "cancellation"}},
+                            ]
+                        }
+                    },
                     {"$limit": limit},
                     {"$project": {"scheduling_rows": 0}},
                 ]
@@ -397,11 +417,19 @@ class MongoOrchestratorRunStore:
                 continue
             claim = await self._load_recovery_claim(run_id)
             if claim is not None and claim.kind == "cancellation":
-                continue
-            requested_at = value.get("cancellation_requested_at")
-            if not isinstance(requested_at, datetime):
-                requested_at = datetime.now(UTC)
-            await self._replace_cancellation_recovery(run_id, requested_at=requested_at)
+                mirror = value.get("recovery_claim")
+                if isinstance(mirror, dict) and mirror.get("kind") == "cancellation":
+                    continue
+                # Only the aggregate mirror is stale; keep the authoritative row
+                # (and its backoff) and restore the mirror from it.
+                await self._mirror_recovery_claim(run_id, claim)
+            else:
+                requested_at = value.get("cancellation_requested_at")
+                if not isinstance(requested_at, datetime):
+                    requested_at = datetime.now(UTC)
+                await self._replace_cancellation_recovery(
+                    run_id, requested_at=requested_at
+                )
             repaired += 1
             if repaired >= limit:
                 break
@@ -713,28 +741,26 @@ class MongoOrchestratorRunStore:
                 },
             ],
         }
-        never_leased_candidates = [
-            _run_from_document(value)
-            for value in await _to_list(
-                self.collection.aggregate(
-                    [
-                        {"$match": never_leased_query},
-                        {"$sort": {"updated_at": 1, "run_id": 1}},
-                    ]
-                )
+        never_leased_documents = await _to_list(
+            self.collection.aggregate(
+                [
+                    {"$match": never_leased_query},
+                    {"$sort": {"updated_at": 1, "run_id": 1}},
+                ]
             )
-        ]
+        )
         due_by_id: dict[str, OrchestratorRunState] = {}
-        for run in never_leased_candidates:
+        for value in never_leased_documents:
             # A dedicated row created between scans owns scheduling. Skipping it
             # here is safe; if due it is selected by this or the next dedicated
             # scan, while a new backoff can never be bypassed.
-            claim = await self._load_recovery_claim(run.run_id)
-            if claim is not None:
-                if self._recovery_collection is not None:
-                    continue
-                run = run.model_copy(update={"recovery_claim": claim})
-            if _recovery_claim_is_due(run.recovery_claim, due_at=due_at):
+            claim = await self._load_recovery_claim(str(value.get("run_id")))
+            if claim is not None and self._recovery_collection is not None:
+                continue
+            run = _listed_run_or_none(value, claim)
+            if run is not None and _recovery_claim_is_due(
+                run.recovery_claim, due_at=due_at
+            ):
                 due_by_id[run.run_id] = run
 
         # Fetch dedicated-due aggregates independently; stale aggregate mirrors
@@ -745,14 +771,14 @@ class MongoOrchestratorRunStore:
             )
             if value is None:
                 continue
-            run = _run_from_document(value)
             dedicated = await self._load_recovery_claim(run_id)
-            if (
-                run.status in RECOVERY_ELIGIBLE_RUN_STATUSES
-                and dedicated is not None
-                and _recovery_claim_is_due(dedicated, due_at=due_at)
+            if dedicated is None or not _recovery_claim_is_due(
+                dedicated, due_at=due_at
             ):
-                due_by_id[run_id] = run.model_copy(update={"recovery_claim": dedicated})
+                continue
+            run = _listed_run_or_none(value, dedicated)
+            if run is not None and run.status in RECOVERY_ELIGIBLE_RUN_STATUSES:
+                due_by_id[run_id] = run
         due = list(due_by_id.values())
         due.sort(
             key=lambda run: (
@@ -915,12 +941,14 @@ class MongoOrchestratorRunStore:
             intent_value = value.get("projection_outbox")
             if not isinstance(run_id, str) or not isinstance(intent_value, dict):
                 continue
-            results.append(
-                (
-                    run_id,
-                    ProjectionIntent.model_validate(_without_mongo_id(intent_value)),
+            try:
+                intent = ProjectionIntent.model_validate(
+                    _without_mongo_id(intent_value)
                 )
-            )
+            except ValidationError as exc:
+                _log_skipped_invalid_document("projection intent", run_id, exc)
+                continue
+            results.append((run_id, intent))
         return results
 
     async def _intent(
@@ -999,9 +1027,55 @@ def _truncate_datetimes_to_bson_precision(value: Any) -> Any:
     return value
 
 
-def _run_from_document(value: dict[str, Any]) -> OrchestratorRunState:
-    return OrchestratorRunState.model_validate(
-        _restore_utc_datetimes(_without_mongo_id(value))
+def _run_from_document(
+    value: dict[str, Any], recovery_claim: RecoveryClaim | None = None
+) -> OrchestratorRunState:
+    """Validate a stored Run, overlaying the authoritative dedicated claim.
+
+    Once a dedicated recovery row exists the embedded claim is only a query
+    mirror, so validation must use the row rather than a stale mirror. The one
+    exception is a canceling aggregate: its cancellation claim is written by
+    the version-fenced CAS, and a non-cancellation row only lags until
+    ``_replace_cancellation_recovery`` or ``repair_canceling_recovery`` runs.
+    """
+    document = _restore_utc_datetimes(_without_mongo_id(value))
+    row_lags_cancellation = (
+        document.get("status") == "canceling"
+        and recovery_claim is not None
+        and recovery_claim.kind != "cancellation"
+    )
+    if recovery_claim is not None and not row_lags_cancellation:
+        document["recovery_claim"] = recovery_claim.model_dump(mode="python")
+    return OrchestratorRunState.model_validate(document)
+
+
+def _listed_run_or_none(
+    value: dict[str, Any], recovery_claim: RecoveryClaim | None
+) -> OrchestratorRunState | None:
+    """Validate one listed Run; an invalid document must not stop the listing."""
+    try:
+        return _run_from_document(value, recovery_claim)
+    except ValidationError as exc:
+        _log_skipped_invalid_document("Run", value.get("run_id"), exc)
+        return None
+
+
+def _log_skipped_invalid_document(
+    kind: str, run_id: object, exc: ValidationError
+) -> None:
+    # Locations and error types only: stored input values may hold user data.
+    signature = sorted(
+        f"{'.'.join(str(part) for part in error['loc'])}:{error['type']}"
+        for error in exc.errors()
+    )
+    fingerprint = sha256("|".join(signature).encode()).hexdigest()[:16]
+    logger.error(
+        "Skipping invalid stored orchestrator %s %s during recovery listing "
+        "(error_fingerprint=%s, errors=%s)",
+        kind,
+        run_id,
+        fingerprint,
+        signature,
     )
 
 

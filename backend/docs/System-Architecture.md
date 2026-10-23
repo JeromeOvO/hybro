@@ -1774,7 +1774,8 @@ locally before terminalizing it as `failed`. User cancellation of an
 orchestrator HITL interaction abandons the interaction and cancels the Run. Late
 Agent observations remain audit evidence and cannot overwrite the canceled call,
 Tool, Turn, or Run. Generic recovery repairs missing or wrong-kind dedicated
-cancellation rows before due selection; its cancellation branch terminalizes
+cancellation rows, and a canceling aggregate whose embedded claim mirror is not
+`cancellation`, before due selection; its cancellation branch terminalizes
 every local call as `canceled`, then closes Tool entries, the active Turn, and the
 root through the Kernel terminalizer. A `(updated_at, run_id)` partial index
 supports the repair scan. Active-Run reads expose `canceling` with the
@@ -1806,7 +1807,14 @@ fences claim, renewal, and release by a per-attempt owner token; an expired row
 may transfer ownership while stale tokens cannot mutate it. Once created, the row
 is authoritative for due time, lease expiry, consecutive failure count, and
 quarantine; due inventory unions never-leased aggregates with due rows and limits
-after filtering. BSON timestamps are restored to aware UTC before comparison.
+after filtering. Reads validate the aggregate with the row overlaid, except that
+a non-cancellation row on a `canceling` aggregate is treated as lagging the
+cancellation CAS. The aggregate's embedded claim is an unfenced query mirror; a
+mirror write never places a non-cancellation claim on a `canceling` aggregate.
+Due listings skip a stored Run or projection intent that still fails validation
+and log its id with a fingerprint of the error locations and types, so one bad
+document cannot block other recovery. BSON timestamps are restored to aware UTC
+before comparison.
 Three consecutive `KernelConflict` failures quarantine an irreparable history,
 exclude it from scans, and log one sanitized warning without changing the Run
 winner.

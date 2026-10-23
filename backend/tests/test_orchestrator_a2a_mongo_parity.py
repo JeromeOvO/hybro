@@ -1614,3 +1614,201 @@ async def test_mongo_hitl_answer_reads_back_as_the_applied_marker():
     assert await store.ensure_answer(
         interaction_id="interaction-1", interaction_revision=1, record=record
     ) in {"accepted", "replayed"}
+
+
+def _canceling_with_stale_execution_mirror(run_id: str) -> dict:
+    """The stored shape left by the lease-release/cancellation mirror race."""
+    run = make_run().model_copy(
+        update={
+            "run_id": run_id,
+            "client_request_id": f"request-{run_id}",
+            "state_version": 1,
+        }
+    )
+    document = run.model_dump(mode="python")
+    document.update(
+        {
+            "status": "canceling",
+            "cancellation_command_id": f"cancel:{run_id}:user_requested",
+            "cancellation_requested_at": NOW,
+            "cancellation_cause": "user_requested",
+            "recovery_claim": RecoveryClaim(
+                kind="execution", next_attempt_at=NOW + timedelta(minutes=5)
+            ).model_dump(mode="python"),
+        }
+    )
+    return document
+
+
+async def test_mongo_lease_release_cannot_mirror_execution_over_cancellation(
+    monkeypatch,
+):
+    """Regression: driver lease release racing a user cancel.
+
+    Order: the driver acquires the dedicated lease at v0, the cancel CAS wins
+    v0->v1, the driver's claim CAS conflicts and releases its row, the cancel
+    replaces the row and mirrors ``cancellation``, and the driver's unfenced
+    mirror then lands its stale ``execution`` claim on the canceling aggregate.
+    """
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    created = await store.create(make_run(), command_id="create:race")
+    assert created.run is not None
+    run = created.run
+    cancel_cas_done = asyncio.Event()
+    driver_row_released = asyncio.Event()
+    cancel_mirrored = asyncio.Event()
+
+    original_cas = store.cas_mutate
+    original_release_row = store._update_dedicated_recovery_lease
+    original_replace = store._replace_cancellation_recovery
+    original_mirror = store._mirror_recovery_claim
+
+    async def gated_cas(candidate, *, expected_state_version, command_id):
+        if command_id.startswith("claim:"):
+            await cancel_cas_done.wait()
+        result = await original_cas(
+            candidate,
+            expected_state_version=expected_state_version,
+            command_id=command_id,
+        )
+        if command_id.startswith("cancel:"):
+            cancel_cas_done.set()
+        return result
+
+    async def tracked_release_row(run_id, *, owner_id, claim):
+        released = await original_release_row(run_id, owner_id=owner_id, claim=claim)
+        driver_row_released.set()
+        return released
+
+    async def gated_replace(run_id, *, requested_at):
+        await driver_row_released.wait()
+        await original_replace(run_id, requested_at=requested_at)
+        cancel_mirrored.set()
+
+    async def gated_mirror(run_id, claim):
+        if claim.kind == "execution":
+            await cancel_mirrored.wait()
+        await original_mirror(run_id, claim)
+
+    monkeypatch.setattr(store, "cas_mutate", gated_cas)
+    monkeypatch.setattr(store, "_update_dedicated_recovery_lease", tracked_release_row)
+    monkeypatch.setattr(store, "_replace_cancellation_recovery", gated_replace)
+    monkeypatch.setattr(store, "_mirror_recovery_claim", gated_mirror)
+
+    requested_at = NOW + timedelta(milliseconds=16)
+    driver, cancel = await asyncio.wait_for(
+        asyncio.gather(
+            store.claim_recovery(
+                run.run_id,
+                expected_state_version=run.state_version,
+                owner_id="driver:token",
+                lease_expires_at=NOW + timedelta(minutes=1),
+                claimed_at=NOW,
+                allow_scheduled=True,
+            ),
+            store.request_cancellation(
+                run.run_id,
+                expected_state_version=run.state_version,
+                command_id=f"cancel:{run.run_id}:user_requested",
+                cause="user_requested",
+                requested_at=requested_at,
+            ),
+        ),
+        timeout=5,
+    )
+
+    assert driver.outcome == "conflict"
+    assert cancel.outcome == "accepted"
+    assert runs.values[0]["status"] == "canceling"
+    assert runs.values[0]["recovery_claim"]["kind"] == "cancellation"
+    assert leases.values[0]["kind"] == "cancellation"
+    # The raw aggregate is valid on its own, not only through the overlay.
+    assert type(run).model_validate(
+        {key: value for key, value in runs.values[0].items() if key != "_id"}
+    )
+    due = await store.list_due_runs(due_at=requested_at, limit=10)
+    assert [item.run_id for item in due] == [run.run_id]
+    assert due[0].recovery_claim.kind == "cancellation"
+
+
+async def test_memory_store_driver_claim_and_cancel_keep_cancellation_claim():
+    store = InMemoryOrchestratorRunStore()
+    created = await store.create(make_run(), command_id="create:race")
+    assert created.run is not None
+    run = created.run
+    canceled = await store.request_cancellation(
+        run.run_id,
+        expected_state_version=run.state_version,
+        command_id=f"cancel:{run.run_id}:user_requested",
+        cause="user_requested",
+        requested_at=NOW,
+    )
+    stale_driver = await store.claim_recovery(
+        run.run_id,
+        expected_state_version=run.state_version,
+        owner_id="driver:token",
+        lease_expires_at=NOW + timedelta(minutes=1),
+        claimed_at=NOW,
+        allow_scheduled=True,
+    )
+
+    assert canceled.outcome == "accepted"
+    assert stale_driver.outcome == "conflict"
+    latest = await store.load(run.run_id)
+    assert latest is not None and latest.recovery_claim.kind == "cancellation"
+
+
+async def test_mongo_invalid_stored_run_does_not_block_other_due_runs(caplog):
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    valid = make_run().model_copy(
+        update={"recovery_claim": RecoveryClaim(next_attempt_at=NOW)}
+    )
+    assert (await store.create(valid, command_id="create:valid")).outcome == (
+        "accepted"
+    )
+    # No dedicated row: nothing authoritative can make this document valid.
+    await runs.insert_one(_canceling_with_stale_execution_mirror("run-invalid"))
+    # Dedicated cancellation row: the live production shape.
+    await runs.insert_one(_canceling_with_stale_execution_mirror("run-stale-mirror"))
+    await leases.insert_one(
+        {
+            "run_id": "run-stale-mirror",
+            **RecoveryClaim(kind="cancellation", next_attempt_at=NOW).model_dump(
+                mode="python"
+            ),
+        }
+    )
+
+    due = await store.list_due_runs(due_at=NOW + timedelta(minutes=10), limit=10)
+
+    assert {item.run_id for item in due} == {valid.run_id, "run-stale-mirror"}
+    stale = next(item for item in due if item.run_id == "run-stale-mirror")
+    assert stale.recovery_claim.kind == "cancellation"
+    assert "run-invalid" in caplog.text
+    assert "error_fingerprint=" in caplog.text
+    loaded = await store.load("run-stale-mirror")
+    assert loaded is not None and loaded.status == "canceling"
+
+
+async def test_mongo_repair_restores_stale_mirror_from_cancellation_row():
+    runs = FakeCollection()
+    leases = FakeCollection()
+    store = MongoOrchestratorRunStore(runs, leases)
+    await runs.insert_one(_canceling_with_stale_execution_mirror("run-stale-mirror"))
+    row = RecoveryClaim(kind="cancellation", next_attempt_at=NOW, failure_count=2)
+    await leases.insert_one({"run_id": "run-stale-mirror", **row.model_dump()})
+    await runs.insert_one(_canceling_with_stale_execution_mirror("run-no-row"))
+
+    assert await store.repair_canceling_recovery(limit=10) == 2
+
+    by_id = {item["run_id"]: item for item in runs.values}
+    assert by_id["run-stale-mirror"]["recovery_claim"] == row.model_dump()
+    assert by_id["run-no-row"]["recovery_claim"]["kind"] == "cancellation"
+    assert next(
+        item for item in leases.values if item["run_id"] == "run-stale-mirror"
+    ) == {"run_id": "run-stale-mirror", **row.model_dump()}
+    assert await store.repair_canceling_recovery(limit=10) == 0
