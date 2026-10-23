@@ -22,6 +22,7 @@ from a2a.types import (
 
 JSONRPC_BINDING = "JSONRPC"
 PROTOCOL_VERSION_1_0 = "1.0"
+PROTOCOL_VERSION_0_3 = "0.3"
 
 
 def make_agent_card(
@@ -81,6 +82,58 @@ def make_skill(**overrides: Any) -> AgentSkill:
     return AgentSkill(**data)
 
 
+def make_legacy_card(
+    *,
+    name: str = "LegacyAgent",
+    url: str = "https://legacy-agent.example.com",
+    version: str = "0.0.1",
+    protocol_version: str = PROTOCOL_VERSION_0_3,
+    **overrides: Any,
+) -> AgentCard:
+    """Build a card that advertises a pre-1.0 interface.
+
+    The card object itself is 1.0 shaped; only the advertised protocol version
+    is old, which is what selects the SDK's compatibility transport.
+    """
+    return make_agent_card(
+        name=name,
+        url=url,
+        version=version,
+        protocol_version=protocol_version,
+        **overrides,
+    )
+
+
+def make_v03_card_json(
+    *,
+    url: str = "https://legacy-agent.example.com/a2a",
+    preferred_transport: str = JSONRPC_BINDING,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Return an agent card exactly as an A2A 0.3 agent serves it on the wire."""
+    data: dict[str, Any] = {
+        "protocolVersion": "0.3.0",
+        "name": "Legacy Agent",
+        "description": "An A2A 0.3 agent",
+        "url": url,
+        "preferredTransport": preferred_transport,
+        "version": "0.0.1",
+        "capabilities": {"streaming": True, "pushNotifications": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": [
+            {
+                "id": "echo",
+                "name": "Echo",
+                "description": "Echoes input",
+                "tags": ["echo"],
+            }
+        ],
+    }
+    data.update(overrides)
+    return data
+
+
 def text_part(text: str) -> Part:
     part = Part()
     part.text = text
@@ -98,9 +151,12 @@ def user_message(*parts: Part, message_id: str = "msg-1") -> Any:
 
 __all__ = [
     "JSONRPC_BINDING",
+    "PROTOCOL_VERSION_0_3",
     "PROTOCOL_VERSION_1_0",
     "make_agent_card",
+    "make_legacy_card",
     "make_skill",
+    "make_v03_card_json",
     "text_part",
     "user_message",
 ]

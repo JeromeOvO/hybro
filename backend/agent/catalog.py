@@ -8,7 +8,6 @@ from agent.facade import AgentFacade
 from agent.views import agent_card_view, agent_view
 from common.auth import resolve_provider_name
 from common.dto import AgentInfo, AgentRouteResponse, AgentView
-from common.errors import UnsupportedAgentProtocolError
 from common.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,8 +28,6 @@ class AgentCatalogService:
     async def register(self, *, agent_url: str, provider_id: str) -> AgentRouteResponse:
         try:
             info = await self._facade.register_agent(agent_url, provider_id)
-        except UnsupportedAgentProtocolError as exc:
-            return AgentRouteResponse(success=False, error=str(exc), status_code=400)
         except ValueError as exc:
             status = 400 if "already registered" in str(exc).lower() else 500
             return AgentRouteResponse(success=False, error=str(exc), status_code=status)
@@ -58,10 +55,7 @@ class AgentCatalogService:
         return AgentRouteResponse(success=True)
 
     async def resolve_card(self, *, agent_url: str) -> AgentRouteResponse:
-        try:
-            card = await self._facade.resolve_agent_card_from_url(agent_url)
-        except UnsupportedAgentProtocolError as exc:
-            return AgentRouteResponse(success=False, error=str(exc), status_code=400)
+        card = await self._facade.resolve_agent_card_from_url(agent_url)
         if card is None:
             return AgentRouteResponse(
                 success=False,

@@ -6,10 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from a2a_adapter.card_data import build_agent_card
+from a2a_adapter.translators import a2a_card_to_snapshot
 from agent.catalog import AgentCatalogService
 from agent.liveness import AgentLivenessService
 from common.dto import AgentCardSnapshot, AgentInfo
 from models.agent import AgentStatus
+from tests.fakes.a2a_v1 import make_v03_card_json
 
 
 def _info(**overrides) -> AgentInfo:
@@ -208,21 +211,46 @@ async def test_liveness_skips_local_agents():
     health.check_agent_health.assert_not_awaited()
 
 
-async def test_unsupported_protocol_is_reported_as_400_on_register_and_preview():
-    from common.errors import UnsupportedAgentProtocolError
-
-    error = UnsupportedAgentProtocolError(
-        "agent card advertises A2A protocol version '0.3.0'; "
-        "Hybro requires A2A 1.0 or later"
+@pytest.mark.parametrize(
+    "card_json",
+    [
+        make_v03_card_json(url="https://legacy.example/a2a"),
+        make_v03_card_json(
+            url="https://legacy.example/a2a",
+            supportedInterfaces=[
+                {
+                    "url": "https://legacy.example/v03",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.3.0",
+                },
+                {
+                    "url": "https://legacy.example/v1",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                },
+            ],
+        ),
+    ],
+    ids=["v03", "mixed"],
+)
+async def test_v03_and_mixed_cards_register_and_preview(card_json):
+    snapshot = a2a_card_to_snapshot(
+        build_agent_card(card_json), "https://legacy.example"
     )
+    info = _info(url=snapshot.url, raw_card=snapshot.raw_card)
     facade = MagicMock(
-        register_agent=AsyncMock(side_effect=error),
-        resolve_agent_card_from_url=AsyncMock(side_effect=error),
+        register_agent=AsyncMock(return_value=info),
+        resolve_agent_card_from_url=AsyncMock(return_value=snapshot),
     )
 
-    registered = await _catalog(facade).register(agent_url="u", provider_id="owner")
-    previewed = await _catalog(facade).resolve_card(agent_url="u")
+    registered = await _catalog(facade).register(
+        agent_url="https://legacy.example", provider_id="owner"
+    )
+    previewed = await _catalog(facade).resolve_card(agent_url="https://legacy.example")
 
-    for response in (registered, previewed):
-        assert (response.success, response.status_code) == (False, 400)
-        assert "A2A 1.0 or later" in response.error
+    assert registered.success is True
+    assert registered.agent.name == "Legacy Agent"
+    assert previewed.success is True
+    assert previewed.card.name == "Legacy Agent"
+    assert [skill.id for skill in previewed.card.skills] == ["echo"]
+    assert previewed.card.capabilities.streaming is True

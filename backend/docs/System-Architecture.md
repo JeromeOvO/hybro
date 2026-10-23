@@ -145,8 +145,8 @@ continuation coordinator stays in Execution.
 
 Isolates the A2A protocol and SDK:
 
-- Resolves and validates Agent Cards (`card_resolver`, `card_data`) and rejects
-  pre-1.0 interfaces (see [A2A protocol boundary](#a2a-protocol-boundary)).
+- Resolves and validates Agent Cards (`card_resolver`, `card_data`), including
+  A2A 0.3 cards (see [A2A protocol boundary](#a2a-protocol-boundary)).
 - `message_factory` is the single conversion point between internal models and
   protobuf; `client_facade` sends, streams, cancels, and fetches tasks and
   returns the SDK-free `{"kind", "result", "error"}` envelope.
@@ -251,8 +251,7 @@ Cross-cutting primitives with no domain imports:
   [Internal eventing](#internal-eventing)).
 - `common.config`: the configuration loader, runtime credential store, and
   setup model (see [Runtime configuration](#runtime-configuration)).
-- `common.errors`: typed domain and platform errors, including
-  `UnsupportedAgentProtocolError`.
+- `common.errors`: typed domain and platform errors.
 - `common.observability`: process logging, correlation context, tracing, and
   metrics helpers.
 - `common.middleware`: request logging, request-size, and request-concurrency
@@ -1874,15 +1873,20 @@ identity, de-duplication, and the health probe use; it is also copied into
 from the same card, so a continuation lands on the binding that accepted the
 task. Two bindings are accepted, in client order: JSON-RPC, then HTTP+JSON.
 
-Hybro speaks A2A 1.0 only. `a2a_adapter.card_data.build_agent_card` rejects any
-card with a `supportedInterfaces` entry whose `protocolVersion` major version is
-below 1, and `client_facade` applies the same check to cards fetched for
-inspection. One pre-1.0 interface rejects the card, because the SDK could
-otherwise select it. A card stating only a top-level `url` is rejected too: the
-SDK parser maps it to `protocolVersion` `0.3.0`. Empty or unparseable versions
-are not rejected. The check raises `common.errors.UnsupportedAgentProtocolError`;
-registration and card preview answer `400`, while local discovery and capability
-checks treat the agent as having no card. Deploy the backend and bundled agents
+Hybro speaks A2A 1.0 natively and reaches A2A 0.3 agents through the a2a-sdk's
+compatibility transport; it keeps no second protocol implementation.
+`a2a_adapter.card_data.build_agent_card` parses every card with the SDK's
+`parse_agent_card`, which maps a 0.3 card's top-level `url`,
+`preferredTransport`, `additionalInterfaces`, and `protocolVersion` onto
+`supportedInterfaces` entries carrying that protocol version (`0.3.0` when the
+card omits it). The SDK `ClientFactory` then picks the transport per selected
+interface: `CompatJsonRpcTransport` or `CompatRestTransport` for a 0.3
+interface, the 1.0 transport otherwise, preferring a `1.0` interface when a card
+offers both. Responses from either transport come back as 1.0 protobuf objects,
+so everything after `client_facade` sees one normalized shape. An agent's
+identity (`normalized_url`) is its registration or discovery URL for every
+protocol version; a 0.3 card's own top-level `url` is kept as an interface
+endpoint, not used as the identity. Deploy the backend and bundled agents
 together.
 
 `client_facade` distinguishes a rejected request from a failed transport:
@@ -2428,8 +2432,7 @@ run documents (`orchestration_runs`), non-canonical or schema-5
 interactions, requests, and resume commands, `pending_continuation` message
 fields, tracked non-terminal tasks and untracked working cards, webhook token
 hashes, `turn_completion_kind` on user messages, agents missing a normalized URL
-or `is_public`, agents registered with a pre-1.0 card
-(`agents_with_pre_1_0_cards`), `processing` HITL requests, user messages missing
+or `is_public`, `processing` HITL requests, user messages missing
 an idempotency fingerprint, orchestrator HITL interactions missing `published`,
 rooms with `applied_from_group` but no `source_group_id` or with
 `membership_origin_status: active`, tool bindings missing

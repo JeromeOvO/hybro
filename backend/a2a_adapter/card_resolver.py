@@ -4,7 +4,6 @@ import time
 import httpx
 
 from common.dto import AgentCardSnapshot
-from common.errors import UnsupportedAgentProtocolError
 
 from .card_data import build_agent_card
 from .constants import AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH
@@ -33,11 +32,6 @@ class AgentCardResolverImpl:
             await self._client.aclose()
 
     async def resolve_card(self, agent_url: str) -> AgentCardSnapshot | None:
-        """Return the agent's card, or None when it cannot be fetched or parsed.
-
-        Raises ``UnsupportedAgentProtocolError`` when the card is reachable but
-        advertises a pre-1.0 A2A interface, so callers can report the reason.
-        """
         normalized_url = agent_url.rstrip("/")
         cached = self._cache.get(normalized_url)
         now = time.monotonic()
@@ -52,8 +46,6 @@ class AgentCardResolverImpl:
             if fallback_url is not None:
                 snapshot, last_error = await self._resolve_card_from_url(fallback_url)
 
-        if isinstance(last_error, UnsupportedAgentProtocolError):
-            raise last_error
         if snapshot is None and self._log_failures:
             logger.warning(
                 "Failed to resolve A2A agent card for %s: %s",
@@ -92,24 +84,18 @@ class AgentCardResolverImpl:
         return None, last_error
 
     async def supports_push_notifications(self, agent_url: str) -> bool:
-        card = await self._resolve_supported_card(agent_url)
+        card = await self.resolve_card(agent_url)
         if card is None:
             return False
         accepted = {"push_notifications", "push-notifications", "pushNotifications"}
         return bool(accepted & set(card.capabilities))
 
     async def supports_streaming(self, agent_url: str) -> bool:
-        card = await self._resolve_supported_card(agent_url)
+        card = await self.resolve_card(agent_url)
         if card is None:
             return False
         accepted = {"streaming", "stream", "message/stream"}
         return bool(accepted & set(card.capabilities))
-
-    async def _resolve_supported_card(self, agent_url: str) -> AgentCardSnapshot | None:
-        try:
-            return await self.resolve_card(agent_url)
-        except UnsupportedAgentProtocolError:
-            return None
 
 
 __all__ = ["AgentCardResolverImpl"]

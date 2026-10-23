@@ -5,6 +5,7 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
 from agent.facade import AgentFacade
@@ -222,22 +223,46 @@ async def test_card_probe_rejects_card_that_redirects_dispatch_off_host():
 
 
 @pytest.mark.asyncio
-async def test_card_probe_skips_agents_with_unsupported_protocol():
-    from common.errors import UnsupportedAgentProtocolError
+async def test_card_probe_discovers_v03_and_mixed_agents():
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+    from tests.fakes.a2a_v1 import make_v03_card_json
 
-    class CardResolver:
-        async def resolve_card(self, url):
-            if url.endswith(":9002"):
-                raise UnsupportedAgentProtocolError("A2A 1.0 or later")
-            return _card("http://localhost:9001/a2a")
+    host = "host.docker.internal"
+    cards = {
+        9001: make_v03_card_json(url=f"http://{host}:9001/a2a"),
+        9002: make_v03_card_json(
+            supportedInterfaces=[
+                {
+                    "url": f"http://{host}:9002/v03",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "0.3.0",
+                },
+                {
+                    "url": f"http://{host}:9002/v1",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                },
+            ]
+        ),
+    }
 
-    probe = LocalAgentCardProbe(host="host.docker.internal", resolver=CardResolver())
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=cards[request.url.port])
 
-    discovered = await probe.probe_agent_cards([9001, 9002])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        probe = LocalAgentCardProbe(
+            host=host, resolver=AgentCardResolverImpl(client=client)
+        )
+        discovered = await probe.probe_agent_cards([9001, 9002])
 
-    assert [url for url, _card_snapshot in discovered] == [
-        "http://host.docker.internal:9001"
-    ]
+    versions = {
+        url: [item.protocol_version for item in card.interfaces]
+        for url, card in discovered
+    }
+    assert versions == {
+        f"http://{host}:9001": ["0.3.0"],
+        f"http://{host}:9002": ["0.3.0", "1.0"],
+    }
 
 
 @pytest.mark.asyncio

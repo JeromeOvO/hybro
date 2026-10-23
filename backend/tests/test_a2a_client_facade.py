@@ -13,12 +13,24 @@ from typing import Any
 import httpx
 import pytest
 from a2a.client.errors import A2AClientError
+from a2a.client.transports.jsonrpc import JsonRpcTransport
+from a2a.compat.v0_3.jsonrpc_transport import CompatJsonRpcTransport
+from a2a.compat.v0_3.rest_transport import CompatRestTransport
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from a2a_adapter import client_facade, inspection, remote_task
 from a2a_adapter.card_data import build_agent_card
-from a2a_adapter.translators import facade_result_to_model
-from common.types import Message, MessageRole, Task, TaskState
-from tests.fakes.a2a_v1 import JSONRPC_BINDING, make_agent_card
+from a2a_adapter.translators import a2a_card_to_snapshot, facade_result_to_model
+from common.types import AgentCard, Message, MessageRole, Task, TaskState
+from tests.fakes.a2a_v1 import (
+    JSONRPC_BINDING,
+    make_agent_card,
+    make_legacy_card,
+    make_v03_card_json,
+)
 from tests.fakes.a2a_v1_agent import (
     A2A10AgentStub,
     completed_task_payload,
@@ -380,7 +392,7 @@ async def test_fetch_remote_task_returns_none_when_agent_reports_missing(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# Protocol version gate
+# A2A 0.3 compatibility
 # ---------------------------------------------------------------------------
 
 
@@ -388,58 +400,177 @@ def _interface(url: str, version: str, binding: str = JSONRPC_BINDING) -> dict:
     return {"url": url, "protocol_binding": binding, "protocol_version": version}
 
 
-def test_card_with_pre_1_0_interface_is_rejected():
-    card = make_agent_card(interfaces=[_interface("http://agent.test/", "0.3.0")])
+def _transport_for(card_data: Any) -> Any:
+    """Build the facade's SDK client for a card and return its transport."""
+    config = client_facade._client_config(client=httpx.AsyncClient(), streaming=False)
+    client = client_facade._create_client(build_agent_card(card_data), config)
+    return client._transport
 
-    with pytest.raises(ValueError, match=r"'0\.3\.0'.*A2A 1\.0 or later"):
-        build_agent_card(card)
 
-
-def test_card_mixing_pre_1_0_and_1_0_interfaces_is_rejected():
-    """The SDK may pick the 0.3 interface, so any legacy interface rejects."""
-    card = make_agent_card(
-        interfaces=[
-            _interface("http://agent.test/rpc", "0.3"),
-            _interface("http://agent.test/rest", "1.0", binding="HTTP+JSON"),
-        ]
+def test_v03_card_json_parses_onto_versioned_interfaces():
+    """The SDK maps 0.3 ``url``/``additionalInterfaces`` onto interfaces."""
+    card = build_agent_card(
+        make_v03_card_json(
+            url="http://agent.test/a2a",
+            additionalInterfaces=[
+                {"url": "http://agent.test/rest", "transport": "HTTP+JSON"}
+            ],
+        )
     )
 
-    with pytest.raises(ValueError, match="A2A 1.0 or later"):
-        build_agent_card(card)
+    assert [
+        (item.url, item.protocol_binding, item.protocol_version)
+        for item in card.supported_interfaces
+    ] == [
+        ("http://agent.test/a2a", "JSONRPC", "0.3.0"),
+        ("http://agent.test/rest", "HTTP+JSON", "0.3.0"),
+    ]
 
 
-def test_url_only_card_dict_is_rejected_as_pre_1_0():
-    """The SDK maps a top-level ``url`` onto a 0.3.0 interface."""
-    with pytest.raises(ValueError, match="A2A 1.0 or later"):
-        build_agent_card(
-            {
-                "name": "Old",
-                "version": "1",
-                "url": "http://agent.test/",
-                "capabilities": {},
-            }
+def test_card_mixing_0_3_and_1_0_interfaces_parses():
+    card = build_agent_card(
+        make_agent_card(
+            interfaces=[
+                _interface("http://agent.test/rpc", "0.3"),
+                _interface("http://agent.test/rest", "1.0", binding="HTTP+JSON"),
+            ]
+        )
+    )
+
+    assert [item.protocol_version for item in card.supported_interfaces] == [
+        "0.3",
+        "1.0",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("card_data", "transport_type", "url"),
+    [
+        (
+            make_legacy_card(url="http://agent.test/rpc"),
+            CompatJsonRpcTransport,
+            "http://agent.test/rpc",
+        ),
+        (
+            make_v03_card_json(url="http://agent.test/rpc"),
+            CompatJsonRpcTransport,
+            "http://agent.test/rpc",
+        ),
+        (
+            make_v03_card_json(
+                url="http://agent.test/rest", preferredTransport="HTTP+JSON"
+            ),
+            CompatRestTransport,
+            "http://agent.test/rest",
+        ),
+        (
+            make_agent_card(
+                interfaces=[
+                    _interface("http://agent.test/v03", "0.3.0"),
+                    _interface("http://agent.test/v1", "1.0"),
+                ]
+            ),
+            JsonRpcTransport,
+            "http://agent.test/v1",
+        ),
+    ],
+    ids=["legacy-card", "v03-json", "v03-rest", "mixed-prefers-1.0"],
+)
+def test_sdk_client_factory_selects_transport_by_interface_version(
+    card_data, transport_type, url
+):
+    transport = _transport_for(card_data)
+
+    assert type(transport) is transport_type
+    assert transport.url == url
+
+
+def test_registered_v03_card_round_trip_keeps_compat_transport():
+    """Snapshot -> stored internal card -> SDK card stays on the 0.3 transport."""
+    snapshot = a2a_card_to_snapshot(
+        build_agent_card(make_v03_card_json(url="http://agent.test/a2a")),
+        "http://agent.test",
+    )
+    stored = AgentCard.model_validate(snapshot.raw_card)
+
+    transport = _transport_for(stored)
+
+    assert stored.url == "http://agent.test"
+    assert type(transport) is CompatJsonRpcTransport
+    assert transport.url == "http://agent.test/a2a"
+
+
+class _V03Agent:
+    """A minimal A2A 0.3 JSON-RPC agent: 0.3 card and a 0.3 ``message/send``."""
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[dict[str, Any], dict[str, str]]] = []
+        self.app = Starlette(
+            routes=[
+                Route(CARD_PATH, self._card, methods=["GET"]),
+                Route("/a2a", self._rpc, methods=["POST"]),
+            ]
         )
 
+    async def _card(self, request: Request) -> JSONResponse:
+        return JSONResponse(make_v03_card_json(url="http://agent.test/a2a"))
 
-@pytest.mark.parametrize("version", ["1.0", "1.1.0", "2", "", "next"])
-def test_card_with_1_0_or_unparseable_version_is_accepted(version):
-    card = make_agent_card(interfaces=[_interface("http://agent.test/", version)])
-
-    assert build_agent_card(card).supported_interfaces[0].protocol_version == version
+    async def _rpc(self, request: Request) -> JSONResponse:
+        body = await request.json()
+        self.requests.append((body, dict(request.headers)))
+        task = {
+            "kind": "task",
+            "id": "task-1",
+            "contextId": body["params"]["message"].get("contextId", "ctx-1"),
+            "status": {"state": "completed"},
+            "artifacts": [
+                {"artifactId": "a1", "parts": [{"kind": "text", "text": "hi"}]}
+            ],
+        }
+        return JSONResponse({"jsonrpc": "2.0", "id": body["id"], "result": task})
 
 
 @pytest.mark.asyncio
-async def test_inspection_card_fetch_rejects_pre_1_0_card(monkeypatch):
-    card = make_agent_card(interfaces=[_interface("http://agent.test/", "0.3.0")])
-    stub = A2A10AgentStub(card=card)
-    _agent_client(monkeypatch, stub.app)
+async def test_inspection_card_fetch_accepts_v03_card(monkeypatch):
+    _agent_client(monkeypatch, _V03Agent().app)
 
-    with pytest.raises(client_facade.A2AClientFacadeError, match="A2A 1.0 or later"):
-        await client_facade.fetch_agent_card_with_fallback(
-            "http://agent.test", timeout=1
-        )
-    with pytest.raises(client_facade.A2AClientFacadeError, match="A2A 1.0 or later"):
-        await inspection.fetch_agent_card_for_inspection("http://agent.test", timeout=1)
+    result = await client_facade.fetch_agent_card_with_fallback(
+        "http://agent.test", timeout=1
+    )
+    internal = await inspection.fetch_agent_card_for_inspection(
+        "http://agent.test", timeout=1
+    )
+
+    assert result["supportedInterfaces"] == [
+        {
+            "url": "http://agent.test/a2a",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "0.3.0",
+        }
+    ]
+    assert internal.url == "http://agent.test"
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_v03_agent_returns_1_0_shaped_result(monkeypatch):
+    agent = _V03Agent()
+    _agent_client(monkeypatch, agent.app)
+
+    result = await client_facade.send_message(
+        make_v03_card_json(url="http://agent.test/a2a"),
+        _user_message(parts=[{"kind": "text", "text": "hello"}], context_id="ctx-1"),
+        timeout=1,
+    )
+
+    body, headers = agent.requests[-1]
+    assert body["method"] == "message/send"
+    assert body["params"]["message"]["parts"] == [{"kind": "text", "text": "hello"}]
+    assert headers["a2a-version"] == "0.3"
+    assert result["kind"] == "task"
+    assert result["result"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    task = facade_result_to_model(result)
+    assert isinstance(task, Task)
+    assert task.status.state == TaskState.completed
 
 
 # ---------------------------------------------------------------------------

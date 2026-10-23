@@ -14,7 +14,6 @@ from common.errors.platform import (
     GatewayPlatformError,
     PlatformRouteError,
     RetryableFileStoragePlatformError,
-    UnsupportedAgentProtocolError,
 )
 
 __all__ = [
@@ -29,7 +28,6 @@ __all__ = [
     "PlatformRouteError",
     "RetryableFileStoragePlatformError",
     "TransientError",
-    "UnsupportedAgentProtocolError",
     "UpstreamError",
     "ValidationError",
 ]

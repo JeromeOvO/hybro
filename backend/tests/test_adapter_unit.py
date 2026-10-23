@@ -855,27 +855,76 @@ async def test_card_resolver_expires_cached_card_after_ttl():
     assert len(client.requested_urls) == 2
 
 
-@pytest.mark.asyncio
-async def test_card_resolver_rejects_card_with_pre_1_0_interface():
-    from a2a_adapter.card_resolver import AgentCardResolverImpl
-    from common.errors import UnsupportedAgentProtocolError
+def test_v03_card_snapshot_keeps_versioned_interfaces_and_discovery_base():
+    """A 0.3 wire card needs no Hybro fallback: the SDK parser maps it."""
+    from a2a_adapter.card_data import build_agent_card
+    from a2a_adapter.translators import a2a_card_to_snapshot
+    from tests.fakes.a2a_v1 import make_v03_card_json
 
-    resolver = AgentCardResolverImpl(
-        client=_FakeCardClient(
-            [
-                {
-                    "name": "Old Agent",
-                    "url": "https://agent.example/a2a",
-                    "version": "1.0.0",
-                    "capabilities": {},
-                }
-            ]
+    card = build_agent_card(
+        make_v03_card_json(
+            url="https://legacy.example/a2a",
+            additionalInterfaces=[
+                {"url": "https://legacy.example/rest", "transport": "HTTP+JSON"}
+            ],
         )
     )
 
-    with pytest.raises(UnsupportedAgentProtocolError, match="A2A 1.0 or later"):
-        await resolver.resolve_card("https://agent.example")
-    assert await resolver.supports_streaming("https://agent.example") is False
+    snapshot = a2a_card_to_snapshot(card, "https://legacy.example")
+
+    assert snapshot.url == "https://legacy.example"
+    assert snapshot.raw_card["url"] == "https://legacy.example"
+    assert [
+        (item.url, item.protocol_binding, item.protocol_version)
+        for item in snapshot.interfaces
+    ] == [
+        ("https://legacy.example/a2a", "JSONRPC", "0.3.0"),
+        ("https://legacy.example/rest", "HTTP+JSON", "0.3.0"),
+    ]
+    assert {"streaming", "input:text/plain"} <= set(snapshot.capabilities)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("card_json", "versions"),
+    [
+        (None, ["0.3.0"]),
+        (
+            {
+                "name": "Mixed Agent",
+                "version": "1.0.0",
+                "capabilities": {"streaming": True},
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/v03",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "0.3",
+                    },
+                    {
+                        "url": "https://agent.example/v1",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    },
+                ],
+            },
+            ["0.3", "1.0"],
+        ),
+    ],
+    ids=["v03", "mixed"],
+)
+async def test_card_resolver_accepts_v03_and_mixed_cards(card_json, versions):
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+    from tests.fakes.a2a_v1 import make_v03_card_json
+
+    payload = card_json or make_v03_card_json(url="https://agent.example/a2a")
+    resolver = AgentCardResolverImpl(client=_FakeCardClient([payload]))
+
+    snapshot = await resolver.resolve_card("https://agent.example")
+
+    assert snapshot is not None
+    assert snapshot.url == "https://agent.example"
+    assert [item.protocol_version for item in snapshot.interfaces] == versions
+    assert await resolver.supports_streaming("https://agent.example") is True
 
 
 @pytest.mark.asyncio

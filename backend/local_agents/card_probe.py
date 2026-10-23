@@ -5,7 +5,6 @@ from urllib.parse import urlparse
 
 from agent.url_utils import DOCKER_HOST_ALIAS, normalize_agent_url
 from common.dto import AgentCardSnapshot
-from common.errors import UnsupportedAgentProtocolError
 from common.protocols import AgentCardResolver
 from common.url_utils import LOCAL_HOST_ALIASES
 
@@ -43,10 +42,7 @@ class LocalAgentCardProbe:
                     return
                 try:
                     discovery_url = f"http://{self._host}:{port}"
-                    try:
-                        card = await self._resolver.resolve_card(discovery_url)
-                    except UnsupportedAgentProtocolError:
-                        card = None
+                    card = await self._resolver.resolve_card(discovery_url)
                     if card is not None and self._matches_discovered_endpoint(
                         card, port
                     ):
