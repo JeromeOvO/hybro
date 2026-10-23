@@ -116,6 +116,8 @@ test('pins only the dragged Agent while linked nodes react and releases it on po
 })
 
 test('renders one shared Agent node and preserves it when one membership is removed', async ({ page }) => {
+  // Pre-decline cookies so the consent banner never overlays the mobile layout.
+  await page.addInitScript(() => window.localStorage.setItem('cookie_consent', 'declined'))
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 390, height: 844 })
   await installInventory(

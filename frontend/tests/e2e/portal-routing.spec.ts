@@ -44,7 +44,8 @@ test.describe('Unified portal routing', () => {
     await page.goto('/')
     await expect(page).toHaveURL(/\/$/)
     await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeAttached()
-    await expect(page.getByRole('heading', { name: 'Needs attention' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Recent sessions' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Recent chats' })).toBeVisible()
   })
 
   test('does not retain retired routes', async ({ request }) => {

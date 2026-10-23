@@ -7,14 +7,20 @@ test.describe('Authenticated flows', () => {
     const input = page.locator('[data-testid="chat-input"]')
     await input.waitFor({ timeout: 15_000 })
 
-    const bubblesBefore = await page.locator('.agent-message').count()
+    test.setTimeout(120_000)
+    const turns = page.locator('.conversation-turn')
+    const turnsBefore = await turns.count()
 
     await input.fill('Hello, test message')
     await input.press('Enter')
 
-    await expect(page.locator('.agent-message')).toHaveCount(bubblesBefore + 1, {
-      timeout: 30_000,
-    })
+    await expect(turns).toHaveCount(turnsBefore + 1, { timeout: 30_000 })
+    const newTurn = turns.last()
+    await expect(newTurn.getByText('Finished')).toBeVisible({ timeout: 90_000 })
+    // "Finished" also labels failed and canceled turns, so require a real answer.
+    const finalSlot = newTurn.locator('[data-turn-slot="final"]')
+    await expect(finalSlot).not.toBeEmpty()
+    await expect(finalSlot).not.toContainText('Request failed')
   })
 
   test('cancel in-flight message', async ({ roomPath, page }) => {
@@ -65,13 +71,8 @@ test.describe('Authenticated flows', () => {
     const input = page.locator('[data-testid="chat-input"]')
     await input.waitFor({ timeout: 15_000 })
 
-    const attachTrigger = page.locator('button[title="Add attachments"]')
-    await attachTrigger.click()
-
-    const menuItem = page.locator('text=Add photos and files')
-    await menuItem.click()
-
-    const fileInput = page.locator('input[type="file"]')
+    // The attach button opens a hidden file input directly.
+    const fileInput = page.locator('input[type="file"]').first()
     await fileInput.setInputFiles({
       name: fileName,
       mimeType: 'text/plain',
@@ -87,9 +88,18 @@ test.describe('Authenticated flows', () => {
 
     await expect(preview).toBeHidden({ timeout: 10_000 })
 
-    const uploadedLink = page.locator(`a:has-text("${fileName}")`)
-    await expect(uploadedLink).toHaveAttribute('href', /^(?!blob:).+/, {
-      timeout: 15_000,
-    })
+    // Sent attachments render as a download button on the user message.
+    const sentAttachment = page
+      .locator('.conversation-turn')
+      .last()
+      .getByRole('button', { name: new RegExp(fileName.slice(0, 15)) })
+    await expect(sentAttachment).toBeVisible({ timeout: 15_000 })
+
+    // After a reload the attachment comes from the persisted message, not the
+    // optimistic local copy.
+    await page.reload()
+    await expect(
+      page.getByRole('button', { name: new RegExp(fileName.slice(0, 15)) }).last(),
+    ).toBeVisible({ timeout: 15_000 })
   })
 })

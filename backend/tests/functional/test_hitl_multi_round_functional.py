@@ -71,7 +71,7 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
         conversation_id=conversation_id,
         answers=automated_answers,
         client_request_id=client_req_id,
-        timeout_seconds=65.0,
+        timeout_seconds=240.0,
         min_hitl_answers=1,
     )
 
@@ -80,9 +80,9 @@ async def test_multi_round_hitl_questionnaire_and_resumption(
         "Expected at least one HITL interaction to be observed and answered"
     )
     distinct_interactions = {
-        item["request"].get("interaction_id")
+        item["requests"][0].get("interaction_id")
         for item in hitls_answered
-        if item["request"].get("interaction_id")
+        if item["requests"][0].get("interaction_id")
     }
     assert len(distinct_interactions) >= 1
     assert completed_itinerary is not None, (

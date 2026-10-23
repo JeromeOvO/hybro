@@ -89,7 +89,8 @@ async function waitForTerminalSynthesis(
   request: APIRequestContext,
   conversationId: string,
   clientRequestId: string,
-  timeoutMs = 75_000,
+  // Live supervisor runs with real Agents regularly take over a minute.
+  timeoutMs = 240_000,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -150,8 +151,17 @@ function userMessageInTimeline(page: Page, text: string) {
   return page.locator('.conversation-turn .conversation-user-message-text').filter({ hasText: text })
 }
 
-function synthesisInTimeline(page: Page) {
-  return conversationTimeline(page).getByText(/Day 1:|Custom Travel Plan/)
+function synthesisInTimeline(page: Page, synthesisText: string) {
+  // Model wording varies per run, so match a slice of the persisted synthesis.
+  // Markdown-formatted lines render across several elements, so pick a plain
+  // line without inline markup.
+  const plainLine = synthesisText
+    .split('\n')
+    // Drop list markers, which render as bullets rather than text.
+    .map(line => line.trim().replace(/^(?:[-+]|\d+[.)])\s+/, ''))
+    .filter(line => line.length >= 20 && !/[*_`#|\[\]<>]/.test(line))
+    .pop() ?? synthesisText.trim()
+  return conversationTimeline(page).getByText(plainLine.slice(0, 40), { exact: false }).first()
 }
 
 test.describe('Functional HITL & Timeline Hydration Flow', () => {
@@ -159,7 +169,7 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     page,
     request,
   }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(480_000)
     const travelAgentId = await getTravelPlannerAgentId(request)
 
     const createResp = await request.post(`${BACKEND_URL}/rooms`, {
@@ -203,17 +213,34 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
     await page.goto(`/room/${conversationId}`)
     await expect(userMessageInTimeline(page, promptText)).toBeVisible({ timeout: 30000 })
 
+    // Model-first HITL lets the supervisor answer an Agent's question itself,
+    // so a user-facing question is not guaranteed; answer it when one appears.
     const pendingRequests = await pollPendingHitl(request, conversationId)
-    expect(pendingRequests.length).toBeGreaterThan(0)
+    // An interaction may ask several questions; answer each one as a single
+    // batch, as the room UI does.
+    if (pendingRequests.length === 0) {
+      test.info().annotations.push({
+        type: 'hitl',
+        description: 'No user-facing question appeared; the supervisor answered the Agent itself.',
+      })
+    }
+    // Group by interaction id and version, since a later round can reuse the id.
+    const byInteraction = new Map<string, typeof pendingRequests>()
     for (const req of pendingRequests) {
+      const key = `${String(req.interaction_id)}@${String(req.interaction_version)}`
+      byInteraction.set(key, [...(byInteraction.get(key) ?? []), req])
+    }
+    for (const reqs of byInteraction.values()) {
+      const interactionId = String(reqs[0].interaction_id)
       const submitResp = await request.post(`${BACKEND_URL}/rooms/${conversationId}/hitl/respond-batch`, {
         data: {
-          interaction_id: req.interaction_id,
-          answers: [{ request_id: req.request_id, user_input: answerText }],
-          client_request_id: req.client_request_id || clientRequestId,
+          interaction_id: interactionId,
+          answers: reqs.map(req => ({ request_id: req.request_id, user_input: answerText })),
+          client_request_id: reqs[0].client_request_id || clientRequestId,
         },
+        timeout: 180_000,
       })
-      expect(submitResp.ok()).toBeTruthy()
+      expect(submitResp.ok(), `${submitResp.status()} ${await submitResp.text()}`).toBeTruthy()
       const submitBody = await submitResp.json()
       expect(submitBody.status).toMatch(/accepted|applied/)
     }
@@ -230,6 +257,6 @@ test.describe('Functional HITL & Timeline Hydration Flow', () => {
       const messages = await fetchRoomMessages(request, conversationId)
       return findTerminalSynthesis(messages, clientRequestId)
     }, { timeout: 30_000 }).toBeTruthy()
-    await expect(synthesisInTimeline(page)).toBeVisible({ timeout: 30_000 })
+    await expect(synthesisInTimeline(page, synthesisText)).toBeVisible({ timeout: 30_000 })
   })
 })

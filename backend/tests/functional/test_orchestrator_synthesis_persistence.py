@@ -69,7 +69,7 @@ async def test_supervisor_multi_agent_delegation_synthesis_and_hydration(
         conversation_id=conversation_id,
         answers=["San Francisco, 3 days, Sept 1-3, $2000 budget"],
         client_request_id=client_req_id,
-        timeout_seconds=75.0,
+        timeout_seconds=240.0,
     )
 
     assert completed_synthesis is not None, (
