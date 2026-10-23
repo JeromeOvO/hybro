@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react"
 import { useChatRoomCreation } from "@/hooks/useChatRoomCreation"
 import { useRoomUiStore } from "@/stores/room-ui-store"
 import type { UseCaseTemplate } from "@/lib/use-case-templates"
+import { createAgent } from "../../fixtures"
 import type { Agent } from "@/lib/types/agent"
 import { Palmtree } from "lucide-react"
 
@@ -21,21 +22,7 @@ vi.mock("sonner", () => ({
 }))
 
 function makeAgent(id: string, name: string): Agent {
-  return {
-    agent_id: id,
-    agent_card: {
-      name,
-      description: "",
-      url: `https://example.com/${id}`,
-      version: "1.0.0",
-      provider: { organization: "test", url: "https://test.com" },
-      capabilities: {},
-      protocolVersion: "1.0.0",
-      skills: [],
-      defaultInputModes: ["text"],
-      defaultOutputModes: ["text"],
-    },
-  }
+  return createAgent({ agent_id: id, name })
 }
 
 const catalog: Agent[] = [

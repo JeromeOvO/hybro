@@ -93,7 +93,6 @@ def test_gateway_route_modules_do_not_hold_business_dependency_globals():
         "agent_avatar_manager",
         "agent_center",
         "agent_group_store",
-        "agent_liveness_checker",
         "agent_selection_service",
         "agent_service",
         "api_key_store",

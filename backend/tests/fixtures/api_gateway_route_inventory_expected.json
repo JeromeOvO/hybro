@@ -77,7 +77,6 @@
     "status_code": null,
     "dependencies": [
       "get_agent_center",
-      "get_agent_liveness_checker",
       "get_optional_user"
     ],
     "auth_dependencies": [

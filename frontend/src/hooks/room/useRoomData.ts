@@ -43,8 +43,8 @@ export function useRoomData(
         if (allAgentsData) {
           const catalogEntries: Record<string, string> = {}
           allAgentsData.forEach((agent) => {
-            if (agent.agent_id && agent.agent_card?.name) {
-              catalogEntries[agent.agent_id] = agent.agent_card.name
+            if (agent.agent_id && agent.name) {
+              catalogEntries[agent.agent_id] = agent.name
             }
           })
           primeAgentNameCache(catalogEntries)

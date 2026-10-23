@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useNetworks } from '@/hooks/useNetworks'
 import { getAgentsByProviderId, getAllAgents } from '@/lib/api/agent'
 import { createAgentGroup, deleteAgentGroup, listAgentGroups, updateAgentGroup } from '@/lib/api/agent-group'
-import type { Agent, AgentCenterResponse } from '@/lib/types/response'
+import type { Agent, AgentRouteResponse } from '@/lib/types/response'
+import { createAgent } from '../../fixtures'
 import type { AgentGroup, AgentGroupListResponse, AgentGroupResponse } from '@/lib/types/agent-group'
 
 const auth = vi.hoisted(() => ({
@@ -33,22 +34,22 @@ const baseGroup: AgentGroup = {
   agents: ['agent-1', 'missing-agent']
 }
 const catalog: Agent[] = [
-  {
+  createAgent({
     agent_id: 'agent-1',
     provider_id: 'owner-1',
-    agent_status: 'active',
-    agent_card: {
-      name: 'Researcher',
-      description: 'Researches sources',
-      url: 'https://example.test/researcher',
-      version: '1.0.0',
-      protocolVersion: '0.3.0',
-      capabilities: {},
-      defaultInputModes: ['text'],
-      defaultOutputModes: ['text'],
-      skills: [{ id: 'research', name: 'Research', description: 'Find sources', tags: ['research'] }]
-    }
-  }
+    status: 'active',
+    name: 'Researcher',
+    description: 'Researches sources',
+    skills: [
+      {
+        id: 'research',
+        name: 'Research',
+        description: 'Find sources',
+        tags: ['research'],
+        examples: [],
+      },
+    ],
+  }),
 ]
 
 function deferred<T>() {
@@ -81,7 +82,7 @@ beforeEach(() => {
   }))
   vi.mocked(getAllAgents).mockImplementation(async (options) => ({
     success: true,
-    agents: options?.activeOnly ? catalog.filter((agent) => agent.agent_status === 'active') : catalog
+    agents: options?.activeOnly ? catalog.filter((agent) => agent.status === 'active') : catalog
   }))
   vi.mocked(getAgentsByProviderId).mockResolvedValue({ success: true, agents: [] })
   vi.mocked(createAgentGroup).mockImplementation(async (request) => {
@@ -153,7 +154,7 @@ describe('useNetworks', () => {
   })
 
   it('retains registered-only inactive agents when discovery fails and verifies missing members after recovery', async () => {
-    const inactive = { ...catalog[0], agent_id: 'registered-only', agent_status: 'inactive' as const }
+    const inactive = { ...catalog[0], agent_id: 'registered-only', status: 'inactive' as const }
     vi.mocked(getAgentsByProviderId).mockResolvedValue({ success: true, agents: [inactive] })
     vi.mocked(getAllAgents).mockResolvedValueOnce({ success: false, error: 'Catalog unavailable', agents: [] })
     const { result } = mountNetworks()
@@ -186,8 +187,8 @@ describe('useNetworks', () => {
     expect(result.current.agents.find((agent) => agent.id === 'agent-1')?.name).toBe('Researcher')
     expect(result.current.agents.find((agent) => agent.id === 'missing-agent')?.status).toBe('unknown')
 
-    const discoveredRead = deferred<AgentCenterResponse>()
-    const registeredRead = deferred<AgentCenterResponse>()
+    const discoveredRead = deferred<AgentRouteResponse>()
+    const registeredRead = deferred<AgentRouteResponse>()
     vi.mocked(getAllAgents).mockReturnValueOnce(discoveredRead.promise)
     vi.mocked(getAgentsByProviderId).mockReturnValueOnce(registeredRead.promise)
     let refreshing!: Promise<void>
@@ -207,7 +208,7 @@ describe('useNetworks', () => {
     await act(async () => {
       registeredRead.resolve({
         success: true,
-        agents: [{ ...catalog[0], agent_id: 'new-registration', agent_status: 'inactive' }]
+        agents: [{ ...catalog[0], agent_id: 'new-registration', status: 'inactive' }]
       })
       await refreshing
     })
@@ -220,10 +221,10 @@ describe('useNetworks', () => {
   it('deduplicates agents across memberships and uses the authoritative registered record', async () => {
     const registered = {
       ...catalog[0],
-      agent_status: 'inactive' as const,
-      agent_card: { ...catalog[0].agent_card, name: 'Authoritative registration' }
+      status: 'inactive' as const,
+      name: 'Authoritative registration'
     }
-    const orphan = { ...catalog[0], agent_id: 'orphan', agent_status: 'inactive' as const }
+    const orphan = { ...catalog[0], agent_id: 'orphan', status: 'inactive' as const }
     vi.mocked(getAllAgents).mockResolvedValue({ success: true, agents: [...catalog, ...catalog] })
     vi.mocked(getAgentsByProviderId).mockResolvedValue({ success: true, agents: [registered, orphan] })
     serverGroups.push({ ...baseGroup, group_id: 'network-2' })
@@ -240,19 +241,15 @@ describe('useNetworks', () => {
   })
 
   it('matches Agent inventory visibility and retains unavailable saved references separately', async () => {
-    const deleted = { ...catalog[0], agent_id: 'deleted-member', agent_status: 'deleted' as const }
+    const deleted = { ...catalog[0], agent_id: 'deleted-member', status: 'deleted' as const }
     const local = { ...catalog[0], source: 'local' as const }
-    const hub = { ...catalog[0], source: 'hub' as const }
     vi.mocked(getAllAgents).mockResolvedValue({
       success: true,
       agents: [
         ...catalog,
-        { ...deleted, agent_status: 'active' },
+        { ...deleted, status: 'active' as const },
         { ...local, agent_id: 'local-active' },
-        { ...local, agent_id: 'local-inactive', agent_status: 'inactive' },
-        { ...hub, agent_id: 'hub-online', is_hub_online: true },
-        { ...hub, agent_id: 'hub-offline', is_hub_online: false },
-        { ...hub, agent_id: 'hub-inactive', agent_status: 'inactive', is_hub_online: true }
+        { ...local, agent_id: 'local-inactive', status: 'inactive' as const },
       ]
     })
     vi.mocked(getAgentsByProviderId).mockResolvedValue({
@@ -269,18 +266,16 @@ describe('useNetworks', () => {
     expect(result.current.agents.map((agent) => agent.id)).toEqual([
       'agent-1',
       'local-active',
-      'hub-online',
       'missing-agent',
       'deleted-member'
     ])
     expect(result.current.agents.find((agent) => agent.id === 'deleted-member')?.status).toBe('unavailable')
     expect(result.current.agents.some((agent) => agent.id === 'local-inactive')).toBe(false)
-    expect(result.current.agents.some((agent) => agent.id === 'hub-offline')).toBe(false)
     expect(result.current.networks[0].agents).toEqual(['agent-1', 'missing-agent', 'deleted-member', 'deleted-member'])
   })
 
   it('waits for registered inventory and never exposes a previous owner’s late registration', async () => {
-    const registeredRead = deferred<AgentCenterResponse>()
+    const registeredRead = deferred<AgentRouteResponse>()
     vi.mocked(getAgentsByProviderId).mockReturnValueOnce(registeredRead.promise)
     const { result, rerender } = mountNetworks()
     await waitFor(() => {

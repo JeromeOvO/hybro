@@ -377,7 +377,12 @@ Examples:
   `agent_capability_issues` are retained, with no deletion or TTL.
 - Agent route compatibility is owned by `agent.route_adapter.AgentRouteAdapter`
   and `agent.service.AgentService`, both constructed directly by `container.py`
-  over `agent.AgentFacade`.
+  over `agent.AgentFacade`. The `/agent/*` routes return
+  `common.dto.AgentRouteResponse`: `agent`/`agents` carry flat snake_case
+  `AgentView` records and `card` carries an `AgentCardView` for card fetches.
+  `agent.views` builds these from the internal Agent and Card models and never
+  includes transport URLs or security data. The adapter applies
+  `AgentLivenessService` to single-agent reads before projecting the view.
 - A2A compatibility-shaped runtime behavior lives in
   `a2a_adapter.runtime_service`. A2A SDK transport/coercion work stays in
   `a2a_adapter`; `a2a_adapter` does not import `execution`, so the package
@@ -801,7 +806,6 @@ consumers and implementations sit in the owner's package.
 | `AgentCenterCompatibility` | `agent.protocols` | `agent.route_adapter.AgentRouteAdapter` | crosses to `api_gateway` |
 | `AgentGroupStore` | `agent.protocols` | `agent.repository.runtime_store.AgentRuntimeStore` | crosses to `api_gateway` |
 | `AgentInspection` | `agent.protocols` | `agent.inspection.AgentInspectionService` | crosses to `api_gateway` |
-| `AgentLivenessChecker` | `agent.protocols` | `agent.liveness.AgentLivenessService` | crosses to `api_gateway` |
 | `AgentNetworkAccess` | `agent.protocols` | `agent.network.AgentNetworkService` | crosses to `api_gateway` |
 | `AgentSuggestionService` | `agent.protocols` | `agent.selection_service.AgentSelectionService` | crosses to `api_gateway` |
 | `HITLDeliveryPort` | `approval.protocols` | `approval.adapters.HITLDeliveryAdapter` | internal to `approval` |

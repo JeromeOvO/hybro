@@ -694,7 +694,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             )
             app.state.local_agent_service = _local_agent_service
             agent_compat_service = AgentService(facade=_agent_facade)
-            route_agent_center = AgentRouteAdapter(service=agent_compat_service)
             agent_matcher = AgentMatcher(facade=_agent_facade)
             agent_selection_service = AgentSelectionService(
                 matcher=agent_matcher,
@@ -706,6 +705,10 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
             agent_liveness_checker = AgentLivenessService(
                 health_service=agent_health_service,
                 agent_registry_writer=_agent_deps.agent_registry_writer,
+            )
+            route_agent_center = AgentRouteAdapter(
+                service=agent_compat_service,
+                liveness_checker=agent_liveness_checker,
             )
             route_inspection_center = AgentInspectionService()
             membership_source = RepositoryRoomMembershipSeedSource(
@@ -1402,7 +1405,6 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 agent_service=_agent_deps.agent_registry,
                 agent_matcher=_agent_deps.agent_matcher,
                 capability_issue_service=agent_capability_issue_service,
-                agent_liveness_checker=agent_liveness_checker,
                 agent_group_store=agent_runtime_store,
                 file_storage=file_storage,
                 room_ownership_reader=_room_deps.room_registry,

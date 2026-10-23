@@ -1,7 +1,7 @@
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import Request
@@ -16,7 +16,6 @@ def _deps(**overrides):
         "agent_service": MagicMock(),
         "agent_matcher": MagicMock(),
         "capability_issue_service": MagicMock(),
-        "agent_liveness_checker": AsyncMock(),
         "agent_group_store": MagicMock(),
         "file_storage": MagicMock(),
         "room_ownership_reader": MagicMock(),
@@ -49,7 +48,6 @@ PROVIDER_FIELD_NAMES = [
     ("get_agent_center", "agent_center"),
     ("get_agent_service", "agent_service"),
     ("get_capability_issue_service", "capability_issue_service"),
-    ("get_agent_liveness_checker", "agent_liveness_checker"),
     ("get_agent_group_store", "agent_group_store"),
     ("get_file_storage", "file_storage"),
     ("get_room_ownership_reader", "room_ownership_reader"),

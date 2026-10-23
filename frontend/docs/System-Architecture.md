@@ -926,8 +926,10 @@ segment.
 - `/connect/mcp`, `/connect/api`: Connect pages with a scope picker.
 - `/about`, `/pricing`: public pages.
 
-Remote agents use the persisted backend `agent_status` without frontend health
-probing. Directly discovered Local agents are shown only while
+Agent API responses use the backend `AgentRouteResponse` shape (flat
+`AgentView` fields such as `name`, `icon_url`, `status`, and `source`; see
+`src/lib/types/agent.ts`). Remote agents use the persisted backend `status`
+without frontend health probing. Directly discovered Local agents are shown only while
 `source === "local"` and status is active. Agent-detail chat actions
 write a one-shot `pendingChatHandoff` to `room-ui-store` (optional draft text plus
 `seedAgents`) and navigate to `/chat`. That handoff seeds room membership with

@@ -62,15 +62,24 @@ async function expectInternalPromptNeverRendered(page: Page) {
 function agentFixture() {
   return {
     agent_id: 'agent-1',
-    agent_status: 'active',
-    agent_card: {
-      name: 'Insurer Agent',
-      description: 'Quotes insurance submissions',
-      url: 'https://example.test/agent-1',
-      version: '1.0.0',
-      capabilities: {},
-      skills: [],
+    provider_id: 'provider-1',
+    provider_name: 'Example Provider',
+    status: 'active',
+    source: 'cloud',
+    is_public: true,
+    call_count: 0,
+    name: 'Insurer Agent',
+    description: 'Quotes insurance submissions',
+    version: '1.0.0',
+    skills: [],
+    capabilities: {
+      streaming: false,
+      push_notifications: false,
+      state_transition_history: false,
+      extensions: false,
     },
+    default_input_modes: ['text/plain'],
+    default_output_modes: ['text/plain'],
   }
 }
 

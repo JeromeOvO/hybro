@@ -1,7 +1,7 @@
 // Agent-related API functions
 import type { 
   AgentCenterRequest, 
-  AgentCenterResponse,
+  AgentRouteResponse,
   InspectionCenterRequest,
 } from '@/lib/types'
 
@@ -39,8 +39,8 @@ export async function discoverLocalAgents(
 export async function registerAgent(
   request: AgentCenterRequest,
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiPost<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiPost<AgentRouteResponse>(
     `${API_BASE_URL}/registerAgent`,
     request,
     getToken
@@ -50,8 +50,8 @@ export async function registerAgent(
 // Get agents from provider_id
 export async function getAgentsByProviderId(
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiGet<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiGet<AgentRouteResponse>(
     `${API_BASE_URL}/getAgent/me`,
     getToken
   )
@@ -61,8 +61,8 @@ export async function getAgentsByProviderId(
 export async function deleteAgent(
   request: AgentCenterRequest,
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiPost<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiPost<AgentRouteResponse>(
     `${API_BASE_URL}/deleteAgent`,
     request,
     getToken
@@ -74,8 +74,8 @@ export async function deleteAgent(
 // Get agent card from URL - PUBLIC
 export async function getAgentCardFromUrl(
   request: InspectionCenterRequest
-): Promise<AgentCenterResponse> {
-  return apiPost<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiPost<AgentRouteResponse>(
     `${API_BASE_URL}/getAgentCardFromUrl`,
     request
   )
@@ -86,8 +86,8 @@ export async function getAgent(
   agentId: string,
   signal?: AbortSignal,
   getToken?: () => Promise<string | null>
-): Promise<AgentCenterResponse> {
-  return apiGet<AgentCenterResponse>(
+): Promise<AgentRouteResponse> {
+  return apiGet<AgentRouteResponse>(
     `${API_BASE_URL}/getAgent/${agentId}`,
     getToken,
     signal
@@ -104,12 +104,12 @@ export interface GetAllAgentsOptions {
 // Get visible agents, optionally filtering to active agents.
 export async function getAllAgents(
   options: GetAllAgentsOptions = {}
-): Promise<AgentCenterResponse> {
+): Promise<AgentRouteResponse> {
   const url = new URL(`${API_BASE_URL}/getAllAgents`)
   if (options.activeOnly) {
     url.searchParams.set('active_only', 'true')
   }
-  return apiGet<AgentCenterResponse>(
+  return apiGet<AgentRouteResponse>(
     url.toString(),
     options.getToken,
     options.signal,

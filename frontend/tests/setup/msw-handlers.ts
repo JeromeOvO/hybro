@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { getApiUrl } from '@/lib/utils'
+import { createAgent } from '../fixtures'
 
 const roomCenter = getApiUrl('roomCenter')
 const agent = getApiUrl('agent')
@@ -159,7 +160,7 @@ export const handlers = [
 
   // Agent API handlers
   http.post(`${agent}/registerAgent`, async () => {
-    return HttpResponse.json({ success: true, agents: [] })
+    return HttpResponse.json({ success: true, agent: createAgent() })
   }),
 
   http.get(`${agent}/getAgent/me`, async () => {
@@ -171,14 +172,24 @@ export const handlers = [
   }),
 
   http.post(`${agent}/getAgentCardFromUrl`, async () => {
-    return HttpResponse.json({ success: true, agents: [] })
+    const agent = createAgent()
+    const card = {
+      name: agent.name,
+      description: agent.description,
+      version: agent.version,
+      provider_organization: agent.provider_organization,
+      icon_url: agent.icon_url,
+      documentation_url: agent.documentation_url,
+      skills: agent.skills,
+      capabilities: agent.capabilities,
+      default_input_modes: agent.default_input_modes,
+      default_output_modes: agent.default_output_modes,
+    }
+    return HttpResponse.json({ success: true, card })
   }),
 
   http.get(`${agent}/getAgent/:agentId`, async () => {
-    return HttpResponse.json({
-      success: true,
-      agents: [{ agent_id: 'agent-1', agent_status: 'active' }],
-    })
+    return HttpResponse.json({ success: true, agent: createAgent() })
   }),
 
   http.get(`${agent}/getAllAgents`, async () => {

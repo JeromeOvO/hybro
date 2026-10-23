@@ -1,45 +1,56 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from agent.service import AgentService
+from agent.views import agent_route_response
 from common.auth import resolve_provider_name
+from common.dto import AgentRouteResponse
+from models.agent import Agent
 from models.request import AgentCenterRequest
 from models.response import AgentCenterResponse
 
 
 class AgentRouteAdapter:
-    def __init__(self, service: AgentService):
+    """Serve the ``/agent/*`` routes with public ``AgentRouteResponse`` DTOs."""
+
+    def __init__(
+        self,
+        service: AgentService,
+        *,
+        liveness_checker: Callable[[Agent], Awaitable[Agent]],
+    ):
         self.agent_service = service
+        self._liveness_checker = liveness_checker
 
     async def register_agent_from_route(
         self, *, agent_url: str, provider_id: str
-    ) -> AgentCenterResponse:
+    ) -> AgentRouteResponse:
         response = await self.register_agent(
             AgentCenterRequest(agent_url=agent_url, provider_id=provider_id)
         )
-        return self.finalize_agent_response_for_route(response)
+        return agent_route_response(self._finalize(response))
 
     async def get_agents_by_provider_for_route(
         self, *, provider_id: str
-    ) -> AgentCenterResponse:
+    ) -> AgentRouteResponse:
         response = await self.get_agents_by_provider_id(
             AgentCenterRequest(provider_id=provider_id)
         )
-        return self.finalize_agent_response_for_route(response)
+        return agent_route_response(self._finalize(response))
 
     async def delete_agent_from_route(
         self, *, agent_id: str, provider_id: str
-    ) -> AgentCenterResponse:
+    ) -> AgentRouteResponse:
         existing_agent = await self.agent_service.get_agent_by_agent_id(agent_id)
         if not existing_agent:
-            return AgentCenterResponse(
-                agent_id=agent_id,
+            return AgentRouteResponse(
                 success=False,
                 error="Agent not found",
                 status_code=404,
             )
         if existing_agent.provider_id != provider_id:
-            return AgentCenterResponse(
-                agent_id=agent_id,
+            return AgentRouteResponse(
                 success=False,
                 error="You do not have permission to delete this agent",
                 status_code=403,
@@ -47,37 +58,37 @@ class AgentRouteAdapter:
         response = await self.remove_agent(
             AgentCenterRequest(agent_id=agent_id, provider_id=provider_id)
         )
-        return self.finalize_agent_response_for_route(response)
+        return agent_route_response(self._finalize(response))
 
     async def get_agent_card_from_url_for_route(
         self, *, agent_url: str
-    ) -> AgentCenterResponse:
+    ) -> AgentRouteResponse:
         response = await self.get_agent_card_from_url(
             AgentCenterRequest(agent_url=agent_url)
         )
-        return self.finalize_agent_response_for_route(response)
+        return agent_route_response(self._finalize(response))
 
     async def get_visible_agent_for_route(
         self, *, agent_id: str, user_id: str | None
-    ) -> AgentCenterResponse:
+    ) -> AgentRouteResponse:
         response = await self.query_agent_by_agent_id(
             AgentCenterRequest(agent_id=agent_id, user_id=user_id)
         )
-        return response
+        if response.success and response.agent:
+            response.agent = await self._liveness_checker(response.agent)
+        return agent_route_response(self._finalize(response))
 
     async def list_visible_agents_for_route(
         self, *, user_id: str | None, active_only: bool = False
-    ) -> AgentCenterResponse:
+    ) -> AgentRouteResponse:
         request = AgentCenterRequest(user_id=user_id)
         if active_only:
             response = await self.get_all_active_agents(request)
         else:
             response = await self.get_all_agents(request)
-        return self.finalize_agent_response_for_route(response)
+        return agent_route_response(self._finalize(response))
 
-    def finalize_agent_response_for_route(
-        self, response: AgentCenterResponse
-    ) -> AgentCenterResponse:
+    def _finalize(self, response: AgentCenterResponse) -> AgentCenterResponse:
         if response.success and response.agents:
             for agent in response.agents:
                 if (

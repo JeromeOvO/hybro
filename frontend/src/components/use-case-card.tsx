@@ -18,10 +18,10 @@ export function UseCaseCard({ template, catalog, onClick, disabled }: UseCaseCar
 
   const resolvedAvatars = useMemo(() => {
     const idMap = new Map(catalog.map((a) => [a.agent_id, a]))
-    const nameMap = new Map(catalog.map((a) => [a.agent_card.name.toLowerCase(), a]))
+    const nameMap = new Map(catalog.map((a) => [a.name.toLowerCase(), a]))
     return agents.map((ta) => {
       const found = idMap.get(ta.agentId) ?? nameMap.get(ta.agentName.toLowerCase())
-      const iconUrl = found?.agent_card.iconUrl || getAgentAvatarUri(found?.agent_id ?? ta.agentId)
+      const iconUrl = found?.icon_url || getAgentAvatarUri(found?.agent_id ?? ta.agentId)
       return { ...ta, iconUrl }
     })
   }, [agents, catalog])

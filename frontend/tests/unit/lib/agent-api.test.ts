@@ -245,7 +245,7 @@ describe('Agent API', () => {
 
     it('requests only active agents through the shared endpoint', async () => {
       let activeOnly: string | null = null
-      const agents = [{ agent_id: 'a-1', agent_status: 'active' }]
+      const agents = [{ agent_id: 'a-1', status: 'active' }]
       server.use(
         http.get(`${BASE}/getAllAgents`, ({ request }) => {
           activeOnly = new URL(request.url).searchParams.get('active_only')

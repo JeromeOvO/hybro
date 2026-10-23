@@ -17,7 +17,7 @@ import { getAgentCardFromUrl, registerAgent } from "@/lib/api/agent"
 import { inspectA2AConnection, inspectAgentCard } from "@/lib/api/inspection"
 import { ApiError } from "@/lib/api-client"
 import type {
-  AgentCenterResponse,
+  AgentRouteResponse,
   AgentCenterRequest,
   InspectionCenterResponse,
   InsepectionCenterConnectionValidationResponse
@@ -43,7 +43,7 @@ export default function RegisterAgentPage() {
   const [inspecting, setInspecting] = useState(false)
   const [inspectingCard, setInspectingCard] = useState(false)
   const [registering, setRegistering] = useState(false)
-  const [agentData, setAgentData] = useState<AgentCenterResponse | null>(null)
+  const [agentData, setAgentData] = useState<AgentRouteResponse | null>(null)
   const [cardInspectionData, setCardInspectionData] = useState<InspectionCenterResponse | null>(null)
   const [inspectionData, setInspectionData] = useState<InsepectionCenterConnectionValidationResponse | null>(null)
   const [urlError, setUrlError] = useState("")
@@ -78,7 +78,7 @@ export default function RegisterAgentPage() {
 
   // Auto-trigger inspection when agentData is set and auto-inspect is requested
   useEffect(() => {
-    if (agentData?.agent_card && shouldAutoInspect.current) {
+    if (agentData?.card && shouldAutoInspect.current) {
       shouldAutoInspect.current = false
       inspectCard()
       inspectConnection()
@@ -88,7 +88,7 @@ export default function RegisterAgentPage() {
 
   // Scroll to agent card when agent data loads
   useEffect(() => {
-    if (agentData?.agent_card) {
+    if (agentData?.card) {
       setTimeout(() => {
         agentCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }, 100)
@@ -131,7 +131,7 @@ export default function RegisterAgentPage() {
     try {
       const response = await getAgentCardFromUrl({ agent_url: url })
 
-      if (response.agent_card) {
+      if (response.card) {
         shouldAutoInspect.current = true
         setAgentData(response)
       } else {
@@ -207,7 +207,7 @@ export default function RegisterAgentPage() {
 
   // Register Agent
   const registerAgentHandler = async () => {
-    if (!agentData?.agent_card) {
+    if (!agentData?.card) {
       toast.error("Please load agent information first")
       return
     }
@@ -234,7 +234,6 @@ export default function RegisterAgentPage() {
     try {
       const registerRequest: AgentCenterRequest = {
         agent_url: url,
-        agent_card: agentData.agent_card,
         provider_id: providerId
       }
 
@@ -323,7 +322,7 @@ export default function RegisterAgentPage() {
             onClick={loadAgent}
             disabled={loading || !url || !!urlError}
             className="w-full sm:w-auto"
-            variant={agentData?.agent_card ? "secondary" : "default"}
+            variant={agentData?.card ? "secondary" : "default"}
           >
             {loading ? (
               <>
@@ -333,12 +332,12 @@ export default function RegisterAgentPage() {
             ) : (
               <>
                 <CloudDownload className="h-4 w-4 mr-2" />
-                {agentData?.agent_card ? "Reload agent" : "Load agent"}
+                {agentData?.card ? "Reload agent" : "Load agent"}
               </>
             )}
           </Button>
 
-          {!agentData?.agent_card && (
+          {!agentData?.card && (
           <div className="flex flex-col gap-2 rounded-lg border bg-muted/40 p-3">
             <p className="flex items-start gap-2 text-sm text-muted-foreground">
               <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -363,7 +362,7 @@ export default function RegisterAgentPage() {
       </Card>
 
       {/* Agent Card information display */}
-      {agentData?.agent_card && (
+      {agentData?.card && (
         <>
           <Card ref={agentCardRef}>
             <CardHeader>
@@ -376,58 +375,58 @@ export default function RegisterAgentPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-sm font-medium">Name</Label>
-                  <p className="text-sm text-muted-foreground">{agentData.agent_card.name}</p>
+                  <p className="text-sm text-muted-foreground">{agentData.card.name}</p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Version</Label>
-                  <p className="text-sm text-muted-foreground">{agentData.agent_card.version}</p>
+                  <p className="text-sm text-muted-foreground">{agentData.card.version}</p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Provider</Label>
                   <p className="text-sm text-muted-foreground">
-                    {agentData.agent_card.provider?.organization || "Unknown"}
+                    {agentData.card.provider_organization || "Unknown"}
                   </p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Streaming</Label>
-                  <Badge variant="badgeMuted" className={agentData.agent_card.capabilities.streaming ? "text-status-online" : undefined}>
-                    {agentData.agent_card.capabilities.streaming ? "Supported" : "Not supported"}
+                  <Badge variant="badgeMuted" className={agentData.card.capabilities.streaming ? "text-status-online" : undefined}>
+                    {agentData.card.capabilities.streaming ? "Supported" : "Not supported"}
                   </Badge>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Extensions</Label>
-                  <Badge variant="badgeMuted" className={agentData.agent_card.capabilities.extensions ? "text-status-online" : undefined}>
-                    {agentData.agent_card.capabilities.extensions ? "Supported" : "Not supported"}
+                  <Badge variant="badgeMuted" className={agentData.card.capabilities.extensions ? "text-status-online" : undefined}>
+                    {agentData.card.capabilities.extensions ? "Supported" : "Not supported"}
                   </Badge>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">Push Notifications</Label>
-                  <Badge variant="badgeMuted" className={agentData.agent_card.capabilities.pushNotifications ? "text-status-online" : undefined}>
-                    {agentData.agent_card.capabilities.pushNotifications ? "Supported" : "Not supported"}
+                  <Badge variant="badgeMuted" className={agentData.card.capabilities.push_notifications ? "text-status-online" : undefined}>
+                    {agentData.card.capabilities.push_notifications ? "Supported" : "Not supported"}
                   </Badge>
                 </div>
                 <div>
                   <Label className="text-sm font-medium">State Transition History</Label>
-                  <Badge variant="badgeMuted" className={agentData.agent_card.capabilities.stateTransitionHistory ? "text-status-online" : undefined}>
-                    {agentData.agent_card.capabilities.stateTransitionHistory ? "Supported" : "Not supported"}
+                  <Badge variant="badgeMuted" className={agentData.card.capabilities.state_transition_history ? "text-status-online" : undefined}>
+                    {agentData.card.capabilities.state_transition_history ? "Supported" : "Not supported"}
                   </Badge>
                 </div>
               </div>
 
               <div>
                 <Label className="text-sm font-medium">Description</Label>
-                <p className="text-sm text-muted-foreground">{agentData.agent_card.description}</p>
+                <p className="text-sm text-muted-foreground">{agentData.card.description}</p>
               </div>
 
               <div>
                 <Label className="text-sm font-medium">URL</Label>
-                <p className="text-sm text-muted-foreground">{agentData.agent_card.url}</p>
+                <p className="text-sm text-muted-foreground">{url}</p>
               </div>
 
               <div>
                 <Label className="text-sm font-medium">Skills</Label>
                 <div className="flex flex-wrap gap-2 mt-1">
-                  {agentData.agent_card.skills.map((skill, index) => (
+                  {agentData.card.skills.map((skill, index) => (
                     <Badge key={index} variant="badgeMuted">
                       {skill.name}
                     </Badge>
@@ -438,7 +437,7 @@ export default function RegisterAgentPage() {
               <div>
                 <Label className="text-sm font-medium">Input Modes</Label>
                 <div className="flex flex-wrap gap-2 mt-1">
-                  {agentData.agent_card.defaultInputModes.map((mode, index) => (
+                  {agentData.card.default_input_modes.map((mode, index) => (
                     <Badge key={index} variant="badgeMuted">
                       {mode}
                     </Badge>
@@ -449,7 +448,7 @@ export default function RegisterAgentPage() {
               <div>
                 <Label className="text-sm font-medium">Output Modes</Label>
                 <div className="flex flex-wrap gap-2 mt-1">
-                  {agentData.agent_card.defaultOutputModes.map((mode, index) => (
+                  {agentData.card.default_output_modes.map((mode, index) => (
                     <Badge key={index} variant="badgeMuted">
                       {mode}
                     </Badge>
@@ -599,7 +598,7 @@ export default function RegisterAgentPage() {
       )}
 
       {/* Register button - only show after successful inspection */}
-      {agentData?.agent_card && inspectionData?.status_code === 200 && (
+      {agentData?.card && inspectionData?.status_code === 200 && (
         <div ref={registerSectionRef} className="flex justify-end">
           <Button
             onClick={registerAgentHandler}

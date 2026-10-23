@@ -41,7 +41,7 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
   })
 
   const availableAgents = useMemo(
-    () => (allAgentsQuery.data || []).filter(a => a.agent_status === 'active'),
+    () => (allAgentsQuery.data || []).filter(a => a.status === 'active'),
     [allAgentsQuery.data],
   )
 
@@ -55,8 +55,8 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     const agents = allAgentsQuery.data
     if (agents) {
       const found = agents.find(a => a.agent_id === agentId)
-      if (found?.agent_card?.name) {
-        const name = found.agent_card.name
+      if (found?.name) {
+        const name = found.name
         agentNameCache.current[agentId] = name
         return name
       }
@@ -69,10 +69,7 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     const agents = allAgentsQuery.data
     if (!agents) return undefined
     const found = agents.find(a => a.agent_id === agentId)
-    if (found) {
-      if (found.source === 'hub' || found.hub_id) return 'hub'
-      return (found.source as 'cloud' | 'local' | 'hub') || 'cloud'
-    }
+    if (found) return found.source
     return undefined
   }, [allAgentsQuery.data])
 
@@ -81,15 +78,15 @@ export function useAgentCatalog(userId?: string, getToken?: () => Promise<string
     const agents = allAgentsQuery.data
     if (!agents) return null
     const found = agents.find(a => a.agent_id === agentId)
-    return found?.agent_card?.iconUrl ?? null
+    return found?.icon_url ?? null
   }, [allAgentsQuery.data])
 
   // Refresh agent name cache when agent catalog loads
   useEffect(() => {
     if (allAgentsQuery.data) {
       allAgentsQuery.data.forEach((agent: Agent) => {
-        if (agent.agent_id && agent.agent_card?.name) {
-          agentNameCache.current[agent.agent_id] = agent.agent_card.name
+        if (agent.agent_id && agent.name) {
+          agentNameCache.current[agent.agent_id] = agent.name
         }
       })
     }

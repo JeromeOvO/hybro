@@ -1,6 +1,7 @@
 import { StrictMode } from "react"
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react"
+import { createAgent } from "../../fixtures"
 import type { Agent } from "@/lib/types/agent"
 import { useCaseTemplates } from "@/lib/use-case-templates"
 import { useRoomUiStore } from "@/stores/room-ui-store"
@@ -20,15 +21,7 @@ const mockCreateAndNavigate = vi.fn().mockResolvedValue(true)
 const mockLoadAvailableAgents = vi.fn()
 
 function makeAgent(id: string, name: string): Agent {
-  return {
-    agent_id: id,
-    agent_card: {
-      name, description: "", url: `https://ex.com/${id}`,
-      version: "1.0.0", provider: { organization: "test", url: "https://test.com" },
-      capabilities: {}, protocolVersion: "1.0.0",
-      skills: [], defaultInputModes: ["text"], defaultOutputModes: ["text"],
-    },
-  }
+  return createAgent({ agent_id: id, name })
 }
 const agents = [makeAgent("a1", "Weather Agent"), makeAgent("a2", "Travel Planner Agent")]
 const travelPrompt = useCaseTemplates.find(
@@ -201,10 +194,7 @@ describe("Chat page — Use Case Cards integration", () => {
   it("applies a single-agent handoff once under Strict Mode", async () => {
     useRoomUiStore.getState().setPendingChatHandoff({
       draft: "Find creators for my channel",
-      seedAgents: [{
-        agent_id: "a1",
-        agent_card: { name: "YouTube Creator Finder Agent" } as never,
-      }],
+      seedAgents: [createAgent({ agent_id: "a1", name: "YouTube Creator Finder Agent" })],
     })
 
     const { container } = render(
@@ -225,10 +215,7 @@ describe("Chat page — Use Case Cards integration", () => {
   it('clears a single-agent handoff seed when a use case takes over scope', async () => {
     useRoomUiStore.getState().setPendingChatHandoff({
       draft: 'Chat with this agent',
-      seedAgents: [{
-        agent_id: 'handoff-agent',
-        agent_card: { name: 'Handoff Agent' } as never,
-      }],
+      seedAgents: [createAgent({ agent_id: 'handoff-agent', name: 'Handoff Agent' })],
     })
     const handleGroupCreated = vi.fn((team) => {
       gmState = {

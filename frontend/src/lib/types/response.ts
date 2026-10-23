@@ -95,47 +95,8 @@ export type Role = "agent" | "user";
 
 export type AgentStatus = "active" | "inactive" | "deleted";
 
-export interface Agent {
-  agent_id: string;
-  provider_id: string;
-  agent_card: AgentCard;
-  // public_url?: string | null;
-  agent_status?: AgentStatus;
-  call_count?: number;
-  call_success_count?: number;
-  like_count?: number;
-  dislike_count?: number;
-  /** Maximum requests per user per hour (null = unlimited) */
-  rate_limit_per_user_per_hour?: number | null;
-  /** Maximum requests for entire system per hour (null = unlimited) */
-  rate_limit_system_per_hour?: number | null;
-  /** Visibility: true = public (everyone can see/use), false = private (owner only) */
-  is_public?: boolean;
-  /** Agent source: registered Remote, directly discovered Local, or Hub-relayed */
-  source?: "cloud" | "local" | "hub";
-  /** Hub ID if this is a hub-sourced agent */
-  hub_id?: string;
-  /** User ID of the hub owner */
-  hub_owner_id?: string;
-  /** Whether the hub providing this agent is currently online */
-  is_hub_online?: boolean;
-  /** Agent ID on the local hub (maps to the hub's internal registry) */
-  local_agent_id?: string;
-  /** Display name resolved from provider_id when agent_card.provider is absent. */
-  provider_name?: string | null;
-}
+export type { Agent, AgentRouteResponse } from './agent';
 
-export interface AgentCenterResponse {
-  agent_url?: string | null;
-  agent_id?: string | null;
-  provider_id?: string | null;
-  agent_card?: AgentCard | null;
-  agent?: Agent | null;
-  agents?: Agent[] | null;
-  success: boolean;
-  error?: string | null;
-  status_code?: number;
-}
 export interface APIKeyItemResponse {
   key_id: string;
   name: string;

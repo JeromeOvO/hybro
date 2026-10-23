@@ -13,7 +13,6 @@ from agent.protocols import (
     AgentCenterCompatibility,
     AgentGroupStore,
     AgentInspection,
-    AgentLivenessChecker,
     AgentNetworkAccess,
     AgentSuggestionService,
 )
@@ -43,7 +42,6 @@ class APIGatewayDeps:
     agent_service: AgentRegistry
     agent_matcher: AgentMatcher
     capability_issue_service: AgentCapabilityIssueStore
-    agent_liveness_checker: AgentLivenessChecker
     agent_group_store: AgentGroupStore
     file_storage: FileStorage
     room_ownership_reader: RoomOwnershipReader
@@ -111,12 +109,6 @@ def get_capability_issue_service(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> AgentCapabilityIssueStore:
     return deps.capability_issue_service
-
-
-def get_agent_liveness_checker(
-    deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
-) -> AgentLivenessChecker:
-    return deps.agent_liveness_checker
 
 
 def get_agent_group_store(

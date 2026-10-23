@@ -1,9 +1,14 @@
 from common.dto.a2a import AgentStreamEvent, AgentTaskResult, InternalAgentMessage
 from common.dto.agent import (
+    AgentCapabilitiesView,
     AgentCardInterface,
     AgentCardSnapshot,
+    AgentCardView,
     AgentInfo,
     AgentMatchResult,
+    AgentRouteResponse,
+    AgentSkillView,
+    AgentView,
     LocalAgentUpsertResult,
 )
 from common.dto.base import FrozenDTO
@@ -131,6 +136,11 @@ __all__ = [
     "AgentCardSnapshot",
     "AgentEvent",
     "AgentInfo",
+    "AgentView",
+    "AgentSkillView",
+    "AgentRouteResponse",
+    "AgentCardView",
+    "AgentCapabilitiesView",
     "AgentMatchResult",
     "AgentMessageFinal",
     "AgentMessageInput",

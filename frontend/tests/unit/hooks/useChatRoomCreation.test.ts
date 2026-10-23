@@ -34,16 +34,13 @@ import { toast } from 'sonner'
 import { useChatRoomCreation } from '@/hooks/useChatRoomCreation'
 import { useRoomUiStore } from '@/stores/room-ui-store'
 import type { Agent } from '@/lib/types/agent'
+import { createAgent } from '../../fixtures'
 
 const mockCreateNewRoom = createNewRoom as ReturnType<typeof vi.fn>
 const mockGetAllAgents = getAllAgents as ReturnType<typeof vi.fn>
 const mockSuggestAgents = suggestAgents as ReturnType<typeof vi.fn>
 
-const mockAgent: Agent = {
-  agent_id: 'agent-1',
-  agent_card: { name: 'Test Agent' } as Agent['agent_card'],
-  agent_status: 'active' as Agent['agent_status'],
-}
+const mockAgent: Agent = createAgent({ agent_id: 'agent-1', name: 'Test Agent' })
 
 const defaultProps = {
   userId: 'user-1',

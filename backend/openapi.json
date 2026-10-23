@@ -56,7 +56,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRouteResponse"
+                }
               }
             }
           }
@@ -76,7 +78,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRouteResponse"
+                }
               }
             }
           }
@@ -96,7 +100,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRouteResponse"
+                }
               }
             }
           }
@@ -284,7 +290,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRouteResponse"
+                }
               }
             }
           }
@@ -315,7 +323,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRouteResponse"
+                }
               }
             }
           },
@@ -359,7 +369,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRouteResponse"
+                }
               }
             }
           },
@@ -5269,6 +5281,406 @@
         ],
         "title": "SessionHistoryEntry",
         "description": "One client message and what came of it.\n\nIt never carries the owner's decisions: a request waiting for the owner\nonly shows ``waiting_on_owner``."
+      },
+      "AgentCapabilitiesView": {
+        "properties": {
+          "streaming": {
+            "type": "boolean",
+            "title": "Streaming",
+            "default": false
+          },
+          "push_notifications": {
+            "type": "boolean",
+            "title": "Push Notifications",
+            "default": false
+          },
+          "state_transition_history": {
+            "type": "boolean",
+            "title": "State Transition History",
+            "default": false
+          },
+          "extensions": {
+            "type": "boolean",
+            "title": "Extensions",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AgentCapabilitiesView"
+      },
+      "AgentCardView": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "provider_organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Organization"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "documentation_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentation Url"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSkillView"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/AgentCapabilitiesView"
+          },
+          "default_input_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Input Modes"
+          },
+          "default_output_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Output Modes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AgentCardView",
+        "description": "The public part of an agent card. Transport URLs are never included."
+      },
+      "AgentRouteResponse": {
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agents": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AgentView"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agents"
+          },
+          "card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentCardView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "status_code": {
+            "type": "integer",
+            "title": "Status Code",
+            "default": 200
+          }
+        },
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "title": "AgentRouteResponse",
+        "description": "Envelope for the ``/agent/*`` routes."
+      },
+      "AgentSkillView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Examples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "AgentSkillView",
+        "description": "One advertised agent skill, as the public agent routes return it."
+      },
+      "AgentView": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "provider_organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Organization"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "documentation_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Documentation Url"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/AgentSkillView"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/AgentCapabilitiesView"
+          },
+          "default_input_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Input Modes"
+          },
+          "default_output_modes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Output Modes"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "provider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "active"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "cloud"
+          },
+          "is_public": {
+            "type": "boolean",
+            "title": "Is Public",
+            "default": true
+          },
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Url"
+          },
+          "call_count": {
+            "type": "integer",
+            "title": "Call Count",
+            "default": 0
+          },
+          "rate_limit_per_user_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per User Per Hour"
+          },
+          "rate_limit_system_per_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit System Per Hour"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "agent_id"
+        ],
+        "title": "AgentView",
+        "description": "An agent as the public agent routes return it."
       }
     },
     "securitySchemes": {

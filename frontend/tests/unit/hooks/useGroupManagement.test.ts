@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react'
+import { createAgent } from '../../fixtures'
 
 const mockListAgentGroups = vi.fn()
 const mockGetAllAgents = vi.fn()
@@ -221,7 +222,7 @@ describe('useGroupManagement', () => {
     expect(result.current.groups).toEqual([fakeGroup])
 
     await act(async () => {
-      resolveAgents({ success: true, agents: [{ agent_id: 'a1', agent_card: { name: 'A1' } }] })
+      resolveAgents({ success: true, agents: [createAgent({ agent_id: 'a1', name: 'A1' })] })
     })
 
     await waitFor(() => {

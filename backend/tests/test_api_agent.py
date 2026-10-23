@@ -205,7 +205,6 @@ class TestGetAgent:
             sample_agent.agent_id,
             user=None,
             center=patch_agent_deps,
-            liveness_checker=AsyncMock(side_effect=lambda agent: agent),
         )
 
         assert response.success is True
@@ -226,7 +225,6 @@ class TestGetAgent:
             sample_agent.agent_id,
             user=mock_user,
             center=patch_agent_deps,
-            liveness_checker=AsyncMock(side_effect=lambda agent: agent),
         )
 
         # Verify user_id was passed in request
@@ -241,7 +239,6 @@ class TestGetAgent:
                 "",
                 user=mock_user,
                 center=patch_agent_deps,
-                liveness_checker=AsyncMock(side_effect=lambda agent: agent),
             )
 
         assert exc_info.value.status_code == 400

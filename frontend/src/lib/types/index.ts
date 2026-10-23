@@ -40,7 +40,7 @@ export type {
 } from './request'
 
 export type {
-  AgentCenterResponse,
+  AgentRouteResponse,
   APIKeyCreateResponse,
   APIKeyItemResponse,
   APIKeyListResponse,

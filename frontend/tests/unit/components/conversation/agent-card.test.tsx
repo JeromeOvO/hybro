@@ -7,6 +7,7 @@ import { render, screen } from '../../../utils/test-utils'
 import { AgentCard } from '@/components/conversation/AgentCard'
 import { AGENT_THEMES } from '@/lib/selectors/conversation-types'
 import type { Agent } from '@/lib/types/agent'
+import { createAgent } from '../../../fixtures'
 
 vi.mock('next/link', () => ({
   default: ({ children, href, onClick, ...rest }: { children: React.ReactNode; href: string; onClick?: React.MouseEventHandler; [k: string]: unknown }) => (
@@ -101,10 +102,9 @@ describe('AgentCard', () => {
 
     expect(container.querySelector('a[aria-label="View Planner profile"]')).toBeNull()
 
-    queryClient.setQueryData<Agent[]>(['agents', 'all'], [{
-      agent_id: 'agent-late',
-      agent_card: { name: 'Planner' },
-    } as Agent])
+    queryClient.setQueryData<Agent[]>(['agents', 'all'], [
+      createAgent({ agent_id: 'agent-late', name: 'Planner' }),
+    ])
 
     await waitFor(() => {
       expect(container.querySelector('a[aria-label="View Planner profile"]'))

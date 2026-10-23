@@ -295,16 +295,10 @@ class TestAgentHTTPIntegration:
         integration_app.dependency_overrides[agent_api.get_agent_center] = lambda: (
             MagicMock()
         )
-        integration_app.dependency_overrides[agent_api.get_agent_liveness_checker] = (
-            lambda: AsyncMock()
-        )
         try:
             resp = await http_client.get("/api/v1/agent/getAgent/%20")
         finally:
             integration_app.dependency_overrides.pop(agent_api.get_agent_center, None)
-            integration_app.dependency_overrides.pop(
-                agent_api.get_agent_liveness_checker, None
-            )
 
         # Through HTTP, whitespace is URL-decoded to " " which is truthy,
         # so the endpoint proceeds and the service returns success=False.

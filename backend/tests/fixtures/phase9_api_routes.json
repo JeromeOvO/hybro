@@ -46,7 +46,7 @@
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/deleteAgent",
     "response_class": null,
-    "response_model": null,
+    "response_model": "AgentRouteResponse",
     "status_code": null,
     "streaming_response": null
   },
@@ -69,7 +69,7 @@
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgent/me",
     "response_class": null,
-    "response_model": null,
+    "response_model": "AgentRouteResponse",
     "status_code": null,
     "streaming_response": null
   },
@@ -79,7 +79,6 @@
     ],
     "dependencies": [
       "get_agent_center",
-      "get_agent_liveness_checker",
       "get_optional_user"
     ],
     "methods": [
@@ -94,12 +93,10 @@
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgent/{agent_id}",
     "response_class": null,
-    "response_model": null,
+    "response_model": "AgentRouteResponse",
     "status_code": null,
     "streaming_response": null,
-    "supporting_protocols": [
-      "agent.protocols.AgentLivenessChecker"
-    ]
+    "supporting_protocols": []
   },
   {
     "auth_dependencies": [],
@@ -117,7 +114,7 @@
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAgentCardFromUrl",
     "response_class": null,
-    "response_model": null,
+    "response_model": "AgentRouteResponse",
     "status_code": null,
     "streaming_response": null
   },
@@ -141,7 +138,7 @@
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/getAllAgents",
     "response_class": null,
-    "response_model": null,
+    "response_model": "AgentRouteResponse",
     "status_code": null,
     "streaming_response": null
   },
@@ -164,7 +161,7 @@
     "owning_protocol": "agent.protocols.AgentCenterCompatibility",
     "path": "/api/v1/agent/registerAgent",
     "response_class": null,
-    "response_model": null,
+    "response_model": "AgentRouteResponse",
     "status_code": null,
     "streaming_response": null
   },

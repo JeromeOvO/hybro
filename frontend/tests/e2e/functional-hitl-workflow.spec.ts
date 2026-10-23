@@ -14,7 +14,7 @@ async function getTravelPlannerAgentId(request: APIRequestContext): Promise<stri
       const data = await resp.json()
       const agents = data.agents || []
       for (const a of agents) {
-        const name = (a.agent_card?.name || '').toLowerCase()
+        const name = (a.name || '').toLowerCase()
         if (name.includes('travel') || name.includes('planner')) {
           return a.agent_id || DEFAULT_TRAVEL_PLANNER_AGENT_ID
         }

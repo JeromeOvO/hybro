@@ -53,10 +53,73 @@ class LocalAgentUpsertResult(FrozenDTO):
     reactivated: bool = False
 
 
+class AgentSkillView(FrozenDTO):
+    """One advertised agent skill, as the public agent routes return it."""
+
+    id: str
+    name: str
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
+
+
+class AgentCapabilitiesView(FrozenDTO):
+    streaming: bool = False
+    push_notifications: bool = False
+    state_transition_history: bool = False
+    extensions: bool = False
+
+
+class AgentCardView(FrozenDTO):
+    """The public part of an agent card. Transport URLs are never included."""
+
+    name: str
+    description: str | None = None
+    version: str | None = None
+    provider_organization: str | None = None
+    icon_url: str | None = None
+    documentation_url: str | None = None
+    skills: list[AgentSkillView] = Field(default_factory=list)
+    capabilities: AgentCapabilitiesView = Field(default_factory=AgentCapabilitiesView)
+    default_input_modes: list[str] = Field(default_factory=list)
+    default_output_modes: list[str] = Field(default_factory=list)
+
+
+class AgentView(AgentCardView):
+    """An agent as the public agent routes return it."""
+
+    agent_id: str
+    provider_id: str | None = None
+    provider_name: str | None = None
+    status: str = "active"
+    source: str = "cloud"
+    is_public: bool = True
+    public_url: str | None = None
+    call_count: int = 0
+    rate_limit_per_user_per_hour: int | None = None
+    rate_limit_system_per_hour: int | None = None
+
+
+class AgentRouteResponse(FrozenDTO):
+    """Envelope for the ``/agent/*`` routes."""
+
+    agent: AgentView | None = None
+    agents: list[AgentView] | None = None
+    card: AgentCardView | None = None
+    success: bool
+    error: str | None = None
+    status_code: int = 200
+
+
 __all__ = [
+    "AgentCapabilitiesView",
     "AgentCardInterface",
     "AgentCardSnapshot",
+    "AgentCardView",
     "AgentInfo",
+    "AgentRouteResponse",
+    "AgentSkillView",
+    "AgentView",
     "AgentMatchResult",
     "LocalAgentUpsertResult",
 ]

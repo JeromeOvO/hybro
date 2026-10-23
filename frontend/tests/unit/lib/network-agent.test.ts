@@ -1,30 +1,31 @@
 import { describe, expect, it } from 'vitest'
 import { projectAgent } from '@/lib/network-agent'
-import type { Agent } from '@/lib/types/response'
+import { createAgent } from '../../fixtures'
 
 describe('projectAgent', () => {
-  it('projects card fields, tags, source, and room call counters', () => {
-    const agent = {
+  it('projects card fields, tags, source, and room call count', () => {
+    const agent = createAgent({
       agent_id: 'a',
-      agent_status: 'active',
+      status: 'active',
       source: 'local',
       call_count: 7,
-      call_success_count: 6,
-      agent_card: {
-        name: 'Planner', description: 'Plans', version: '1.2.0', iconUrl: 'https://x/icon.png',
-        provider: { organization: 'Acme', url: 'https://acme' },
-        skills: [{ id: 's', name: 'Plan', description: '', tags: ['trip', 'travel'] }],
-      },
-    } as unknown as Agent
+      name: 'Planner',
+      description: 'Plans',
+      version: '1.2.0',
+      icon_url: 'https://x/icon.png',
+      provider_organization: 'Acme',
+      skills: [{ id: 's', name: 'Plan', description: '', tags: ['trip', 'travel'], examples: [] }],
+    })
     expect(projectAgent(agent)).toEqual({
       id: 'a', name: 'Planner', description: 'Plans', skills: ['Plan'], tags: ['trip', 'travel'],
       status: 'active', iconUrl: 'https://x/icon.png', provider: 'Acme', version: '1.2.0', source: 'local',
-      roomCalls: 7, roomCallSuccesses: 6,
+      roomCalls: 7,
     })
   })
 
-  it('marks an offline hub agent unavailable', () => {
-    const agent = { agent_id: 'h', agent_status: 'active', source: 'hub', is_hub_online: false, agent_card: { name: 'H', skills: [] } } as unknown as Agent
-    expect(projectAgent(agent).status).toBe('unavailable')
+  it('falls back to the provider name and agent id when the card is sparse', () => {
+    const agent = createAgent({ agent_id: 'b', name: '', provider_name: 'Owner', version: null })
+
+    expect(projectAgent(agent)).toMatchObject({ name: 'b', provider: 'Owner', version: undefined })
   })
 })

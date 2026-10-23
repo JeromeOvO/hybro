@@ -208,7 +208,7 @@ class TestRegisterAgent:
         service.register_agent = AsyncMock(
             return_value=AgentCenterResponse(success=True, agent_id="agent-123")
         )
-        center = AgentRouteAdapter(service=service)
+        center = AgentRouteAdapter(service=service, liveness_checker=AsyncMock())
         center.a2a_service = MagicMock()
         center.a2a_service.get_agent_card_from_url = AsyncMock()
         request = AgentCenterRequest(agent_url="https://agent.example")

@@ -6,24 +6,27 @@ function catalogAgent(
   id: string,
   name: string,
   source: Agent['source'] = 'cloud',
-  status: Agent['agent_status'] = 'active'
+  status: Agent['status'] = 'active'
 ): Agent {
   return {
     agent_id: id,
     provider_id: 'inventory-fixture',
     source,
-    agent_status: status,
-    agent_card: {
-      name,
-      description: 'Browser topology fixture',
-      url: 'https://example.test/agent',
-      version: '1.0.0',
-      protocolVersion: '0.3.0',
-      capabilities: {},
-      defaultInputModes: ['text'],
-      defaultOutputModes: ['text'],
-      skills: []
-    }
+    status,
+    name,
+    description: 'Browser topology fixture',
+    version: '1.0.0',
+    skills: [],
+    capabilities: {
+      streaming: false,
+      push_notifications: false,
+      state_transition_history: false,
+      extensions: false,
+    },
+    default_input_modes: ['text'],
+    default_output_modes: ['text'],
+    is_public: true,
+    call_count: 0,
   }
 }
 
@@ -178,7 +181,6 @@ test('shows registered and discovered isolated Agents even without any Networks'
     [
       catalogAgent('local-only', 'Discovered standalone', 'local'),
       catalogAgent('inactive-local', 'Inactive local record', 'local', 'inactive'),
-      { ...catalogAgent('hub-offline', 'Offline hub Agent', 'hub'), is_hub_online: false }
     ],
     [catalogAgent('registered-only', 'Registered standalone', 'cloud', 'inactive')]
   )

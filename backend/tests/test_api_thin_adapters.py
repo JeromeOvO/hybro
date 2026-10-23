@@ -675,7 +675,6 @@ def test_route_owner_protocols_match_handler_calls():
         AgentCenterCompatibility,
         AgentGroupStore,
         AgentInspection,
-        AgentLivenessChecker,
         AgentNetworkAccess,
     )
     from common.protocols import (
@@ -696,15 +695,11 @@ def test_route_owner_protocols_match_handler_calls():
         },
         AgentCenterCompatibility: {
             "delete_agent_from_route",
-            "finalize_agent_response_for_route",
             "get_agent_card_from_url_for_route",
             "get_agents_by_provider_for_route",
             "get_visible_agent_for_route",
             "list_visible_agents_for_route",
             "register_agent_from_route",
-        },
-        AgentLivenessChecker: {
-            "__call__",
         },
         AgentRegistry: {
             "get_agent",
@@ -781,7 +776,10 @@ def test_route_bound_compatibility_adapters_satisfy_protocols():
     from chat.protocols import RoomCenterCompatibility
     from chat.route_adapter import ChatRouteAdapter
 
-    assert isinstance(AgentRouteAdapter(service=object()), AgentCenterCompatibility)
+    assert isinstance(
+        AgentRouteAdapter(service=object(), liveness_checker=object()),
+        AgentCenterCompatibility,
+    )
     assert isinstance(
         ChatRouteAdapter(chat_service=object(), conversation_runtime=object()),
         RoomCenterCompatibility,
@@ -793,7 +791,7 @@ def test_agent_route_adapter_accepts_service():
 
     service = object()
 
-    center = AgentRouteAdapter(service=service)
+    center = AgentRouteAdapter(service=service, liveness_checker=object())
 
     assert center.agent_service is service
 
@@ -805,7 +803,6 @@ def test_agent_routes_expose_typed_dependency_providers():
     from agent.protocols import (
         AgentCapabilityIssueStore,
         AgentCenterCompatibility,
-        AgentLivenessChecker,
     )
     from api_gateway.routes import agent_routes as agent
     from common.protocols import AgentRegistry
@@ -814,7 +811,6 @@ def test_agent_routes_expose_typed_dependency_providers():
         agent.get_agent_center: AgentCenterCompatibility,
         agent.get_agent_service: AgentRegistry,
         agent.get_capability_issue_service: AgentCapabilityIssueStore,
-        agent.get_agent_liveness_checker: AgentLivenessChecker,
     }
     for provider, expected_type in provider_expectations.items():
         assert get_type_hints(provider)["return"] is expected_type
@@ -838,10 +834,7 @@ def test_agent_routes_expose_typed_dependency_providers():
             "issue_store": AgentCapabilityIssueStore,
         },
         agent.get_agent_card_from_url: {"center": AgentCenterCompatibility},
-        agent.get_agent: {
-            "center": AgentCenterCompatibility,
-            "liveness_checker": AgentLivenessChecker,
-        },
+        agent.get_agent: {"center": AgentCenterCompatibility},
         agent.get_agent_list: {"center": AgentCenterCompatibility},
     }
     missing: list[str] = []
@@ -874,10 +867,7 @@ def test_agent_route_inventory_records_live_protocol_owners():
             set(),
         ),
         "get_agent_by_provider": ("agent.protocols.AgentCenterCompatibility", set()),
-        "get_agent": (
-            "agent.protocols.AgentCenterCompatibility",
-            {"agent.protocols.AgentLivenessChecker"},
-        ),
+        "get_agent": ("agent.protocols.AgentCenterCompatibility", set()),
         "get_agent_card_from_url": ("agent.protocols.AgentCenterCompatibility", set()),
         "get_agent_list": ("agent.protocols.AgentCenterCompatibility", set()),
         "register_agent": ("agent.protocols.AgentCenterCompatibility", set()),

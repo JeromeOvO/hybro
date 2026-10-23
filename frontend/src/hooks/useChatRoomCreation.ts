@@ -119,7 +119,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
         roomAgentSet = Object.fromEntries(
           selectedAgents.map((agent) => [
             agent.agent_id,
-            agent.agent_card.name,
+            agent.name,
           ])
         )
       }
@@ -277,7 +277,7 @@ export function useChatRoomCreation({ userId, userName, getToken, onRequireAuth 
     try {
       const roomAgentSet: Record<string, string> = {}
       for (const agent of resolvedAgents) {
-        roomAgentSet[agent.agent_id] = agent.agent_card.name
+        roomAgentSet[agent.agent_id] = agent.name
       }
 
       const response = await createNewRoom(

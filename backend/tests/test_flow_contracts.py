@@ -30,7 +30,6 @@ from common.types import (
 )
 from models.agent import Agent, AgentStatus
 from models.response import (
-    AgentCenterResponse,
     RoomCenterRoomMessageResponse,
     RoomCenterRoomSettingResponse,
 )
@@ -261,11 +260,13 @@ class TestAgentLifecycleFlow:
     @pytest.mark.asyncio
     async def test_register_query_and_delete_agent_flow(self, flow_user):
         """register_agent -> get_agent -> delete_agent through real endpoints."""
+        from agent.views import agent_view
         from api_gateway.routes.agent_routes import (
             delete_agent,
             get_agent,
             register_agent,
         )
+        from common.dto import AgentRouteResponse
 
         agent_id = "flow-agent-001"
 
@@ -297,19 +298,14 @@ class TestAgentLifecycleFlow:
 
         mock_ac = MagicMock()
         mock_ac.register_agent_from_route = AsyncMock(
-            return_value=AgentCenterResponse(
-                success=True,
-                agent_id=agent_id,
-                agent=mock_agent,
-            )
+            return_value=AgentRouteResponse(success=True, agent=agent_view(mock_agent))
         )
         mock_ac.get_visible_agent_for_route = AsyncMock(
-            return_value=AgentCenterResponse(success=True, agent=mock_agent)
+            return_value=AgentRouteResponse(success=True, agent=agent_view(mock_agent))
         )
         mock_ac.delete_agent_from_route = AsyncMock(
-            return_value=AgentCenterResponse(success=True)
+            return_value=AgentRouteResponse(success=True)
         )
-        mock_ac.finalize_agent_response_for_route = MagicMock(side_effect=lambda r: r)
 
         # Step 1: Register (real endpoint extracts agent_url,
         # sets provider_id from auth user, calls agent_center)
@@ -321,7 +317,7 @@ class TestAgentLifecycleFlow:
         )
         reg_resp = await register_agent(req1, flow_user, center=mock_ac)
         assert reg_resp.success is True
-        assert reg_resp.agent_id == agent_id
+        assert reg_resp.agent.agent_id == agent_id
 
         assert (
             mock_ac.register_agent_from_route.call_args.kwargs["provider_id"]
@@ -333,7 +329,6 @@ class TestAgentLifecycleFlow:
             agent_id,
             user=flow_user,
             center=mock_ac,
-            liveness_checker=AsyncMock(return_value=mock_agent),
         )
         assert query_resp.success is True
         assert query_resp.agent.agent_id == agent_id

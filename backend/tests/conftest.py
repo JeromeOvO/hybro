@@ -605,7 +605,6 @@ def make_api_gateway_deps(
             "agent_service": agent_service,
             "agent_matcher": MagicMock(),
             "capability_issue_service": capability_issue_service,
-            "agent_liveness_checker": AsyncMock(side_effect=lambda agent: agent),
             "agent_group_store": mock_db_service,
             "file_storage": mock_s3_service,
             "room_ownership_reader": room_ownership_reader,

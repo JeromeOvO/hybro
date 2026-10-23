@@ -24,7 +24,6 @@ EXPECTED_METHODS = {
         },
         "AgentCenterCompatibility": {
             "delete_agent_from_route",
-            "finalize_agent_response_for_route",
             "get_agent_card_from_url_for_route",
             "get_agents_by_provider_for_route",
             "get_visible_agent_for_route",
@@ -39,7 +38,6 @@ EXPECTED_METHODS = {
             "update_agent_group",
         },
         "AgentInspection": {"inspect_a2a_connection", "inspect_agent_card"},
-        "AgentLivenessChecker": {"__call__"},
         "AgentNetworkAccess": {"discover", "get_profile", "list_groups", "search"},
         "AgentSuggestionService": {"suggest_agents"},
     },

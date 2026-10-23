@@ -25,7 +25,7 @@ function useAgentFromCatalog(agentId: string | undefined, agentName: string): Ag
   const agents = useCachedAgentCatalog()
   if (agentId) return agents?.find(a => a.agent_id === agentId)
 
-  const matchingAgents = agents?.filter(a => a.agent_card.name === agentName)
+  const matchingAgents = agents?.filter(a => a.name === agentName)
   return matchingAgents?.length === 1 ? matchingAgents[0] : undefined
 }
 
@@ -125,8 +125,7 @@ function AgentResponseDetailHeader({
 }: AgentResponseDetailPaneProps) {
   const catalogAgent = useAgentFromCatalog(detail.agentId, detail.agentName)
   const profileAgentId = detail.agentId ?? catalogAgent?.agent_id
-  const iconUrl = catalogAgent?.agent_card?.iconUrl || undefined
-  const isHubOnline = catalogAgent?.is_hub_online
+  const iconUrl = catalogAgent?.icon_url || undefined
   const [taskExpanded, setTaskExpanded] = useState(false)
 
   const toneColors: Record<AgentDisplayProps['tone'], string> = {
@@ -169,7 +168,6 @@ function AgentResponseDetailHeader({
           {detail.agentSource != null && (
             <AgentSourceBadge
               source={detail.agentSource}
-              isHubOnline={isHubOnline}
               className="h-3.5 w-3.5 shrink-0"
             />
           )}

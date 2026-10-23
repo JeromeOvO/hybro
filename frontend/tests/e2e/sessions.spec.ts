@@ -10,8 +10,8 @@ const ANSWER = 'Kyoto, Japan, 3 days starting next Monday, budget $1500, mid-ran
 async function travelPlannerId(request: APIRequestContext): Promise<string> {
   const resp = await request.get(`${BACKEND_URL}/agent/getAllAgents?active_only=true`)
   expect(resp.ok()).toBeTruthy()
-  const agents = ((await resp.json()).agents || []) as { agent_id: string; agent_card?: { name?: string } }[]
-  const agent = agents.find(a => /travel|planner/i.test(a.agent_card?.name || ''))
+  const agents = ((await resp.json()).agents || []) as { agent_id: string; name?: string }[]
+  const agent = agents.find(a => /travel|planner/i.test(a.name || ''))
   if (!agent) throw new Error('Travel Planner Agent is not registered')
   return agent.agent_id
 }
