@@ -14,10 +14,11 @@ import httpx
 import pytest
 from a2a.client.errors import A2AClientError
 
-from a2a_adapter import client_facade, remote_task
+from a2a_adapter import client_facade, inspection, remote_task
+from a2a_adapter.card_data import build_agent_card
 from a2a_adapter.translators import facade_result_to_model
 from common.types import Message, MessageRole, Task, TaskState
-from tests.fakes.a2a_v1 import make_agent_card, make_legacy_card
+from tests.fakes.a2a_v1 import JSONRPC_BINDING, make_agent_card
 from tests.fakes.a2a_v1_agent import (
     A2A10AgentStub,
     completed_task_payload,
@@ -379,22 +380,66 @@ async def test_fetch_remote_task_returns_none_when_agent_reports_missing(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# Legacy interface selection
+# Protocol version gate
 # ---------------------------------------------------------------------------
 
 
+def _interface(url: str, version: str, binding: str = JSONRPC_BINDING) -> dict:
+    return {"url": url, "protocol_binding": binding, "protocol_version": version}
+
+
+def test_card_with_pre_1_0_interface_is_rejected():
+    card = make_agent_card(interfaces=[_interface("http://agent.test/", "0.3.0")])
+
+    with pytest.raises(ValueError, match=r"'0\.3\.0'.*A2A 1\.0 or later"):
+        build_agent_card(card)
+
+
+def test_card_mixing_pre_1_0_and_1_0_interfaces_is_rejected():
+    """The SDK may pick the 0.3 interface, so any legacy interface rejects."""
+    card = make_agent_card(
+        interfaces=[
+            _interface("http://agent.test/rpc", "0.3"),
+            _interface("http://agent.test/rest", "1.0", binding="HTTP+JSON"),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="A2A 1.0 or later"):
+        build_agent_card(card)
+
+
+def test_url_only_card_dict_is_rejected_as_pre_1_0():
+    """The SDK maps a top-level ``url`` onto a 0.3.0 interface."""
+    with pytest.raises(ValueError, match="A2A 1.0 or later"):
+        build_agent_card(
+            {
+                "name": "Old",
+                "version": "1",
+                "url": "http://agent.test/",
+                "capabilities": {},
+            }
+        )
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.1.0", "2", "", "next"])
+def test_card_with_1_0_or_unparseable_version_is_accepted(version):
+    card = make_agent_card(interfaces=[_interface("http://agent.test/", version)])
+
+    assert build_agent_card(card).supported_interfaces[0].protocol_version == version
+
+
 @pytest.mark.asyncio
-async def test_legacy_interface_version_is_reported_in_card(monkeypatch):
-    """A pre-1.0 interface stays addressable; the version is not rewritten."""
-    card = make_legacy_card(url="http://agent.test/")
+async def test_inspection_card_fetch_rejects_pre_1_0_card(monkeypatch):
+    card = make_agent_card(interfaces=[_interface("http://agent.test/", "0.3.0")])
     stub = A2A10AgentStub(card=card)
     _agent_client(monkeypatch, stub.app)
 
-    result = await client_facade.fetch_agent_card_with_fallback(
-        "http://agent.test", timeout=1
-    )
-
-    assert result["supportedInterfaces"][0]["protocolVersion"] == "0.3"
+    with pytest.raises(client_facade.A2AClientFacadeError, match="A2A 1.0 or later"):
+        await client_facade.fetch_agent_card_with_fallback(
+            "http://agent.test", timeout=1
+        )
+    with pytest.raises(client_facade.A2AClientFacadeError, match="A2A 1.0 or later"):
+        await inspection.fetch_agent_card_for_inspection("http://agent.test", timeout=1)
 
 
 # ---------------------------------------------------------------------------

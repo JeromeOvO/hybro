@@ -49,28 +49,26 @@ def test_agent_card_data_normalizes_nested_agent_skill_models():
 
     from a2a_adapter.card_data import agent_card_dict, build_agent_card
 
+    interface = {
+        "url": "https://agent.example",
+        "protocolBinding": "JSONRPC",
+        "protocolVersion": "1.0",
+    }
     data = agent_card_dict(
         {
             "name": "Minimal",
-            "url": "https://agent.example",
             "version": "1",
             "capabilities": {},
             "skills": [{"id": "skill-1", "name": "Skill"}],
+            "supportedInterfaces": [interface],
         }
     )
 
-    # The SDK card parser owns normalization: a legacy top-level ``url`` becomes
-    # one advertised interface, and ProtoJSON omits unset optional skill fields
-    # instead of materializing them as ``None``.
+    # The SDK card parser owns normalization: ProtoJSON omits unset optional
+    # skill fields instead of materializing them as ``None``.
     card = MessageToDict(build_agent_card(data))
 
-    assert card["supportedInterfaces"] == [
-        {
-            "url": "https://agent.example",
-            "protocolBinding": "JSONRPC",
-            "protocolVersion": "0.3.0",
-        }
-    ]
+    assert card["supportedInterfaces"] == [interface]
     assert card["skills"] == [{"id": "skill-1", "name": "Skill"}]
     assert card["capabilities"] == {}
     assert "defaultInputModes" not in card
@@ -184,7 +182,7 @@ def _probe_card(**overrides):
             200,
         ),
         # A response with no recognizable event member is malformed.
-        ({}, ["Response from agent is missing required 'kind' field."], 500),
+        ({}, ["Unrecognized A2A response from agent."], 500),
         (
             {"kind": "message", "result": {"kind": "message"}},
             [
@@ -610,7 +608,13 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
             "id": "agent-1",
             "name": "Agent One",
             "description": "Does work",
-            "url": "https://agent.example/a2a",
+            "supportedInterfaces": [
+                {
+                    "url": "https://agent.example/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ],
             "defaultInputModes": ["text/plain"],
             "defaultOutputModes": ["application/json"],
             "capabilities": {
@@ -626,7 +630,7 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
             agent_id="agent-2",
             name="Agent Two",
             description="Does other work",
-            url="https://two.example/a2a",
+            supported_interfaces=[SimpleNamespace(url="https://two.example/a2a")],
             default_input_modes=["text/plain"],
             default_output_modes=["text/markdown"],
             capabilities=SimpleNamespace(
@@ -640,7 +644,10 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
     )
 
     assert dict_snapshot.agent_id == "agent-1"
-    assert dict_snapshot.url == "https://agent.example/a2a"
+    assert dict_snapshot.url == "https://agent.example"
+    assert [item.url for item in dict_snapshot.interfaces] == [
+        "https://agent.example/a2a"
+    ]
     assert set(dict_snapshot.capabilities) >= {
         "streaming",
         "push_notifications",
@@ -649,6 +656,9 @@ def test_translator_a2a_card_to_snapshot_supports_dicts_and_sdk_like_objects():
         "output:application/json",
     }
     assert object_snapshot.agent_id == "agent-2"
+    assert [item.url for item in object_snapshot.interfaces] == [
+        "https://two.example/a2a"
+    ]
     assert set(object_snapshot.capabilities) >= {
         "streaming",
         "push_notifications",
@@ -667,7 +677,13 @@ async def test_card_resolver_fetches_translates_and_caches_agent_card():
             {
                 "name": "Card Agent",
                 "description": "Remote agent",
-                "url": "https://agent.example/a2a",
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/a2a",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
                 "version": "1.0.0",
                 "capabilities": {
                     "streaming": True,
@@ -694,7 +710,7 @@ async def test_card_resolver_fetches_translates_and_caches_agent_card():
         {
             "url": "https://agent.example/a2a",
             "protocolBinding": "JSONRPC",
-            "protocolVersion": "0.3.0",
+            "protocolVersion": "1.0",
         }
     ]
     assert "streaming" in first.capabilities
@@ -714,7 +730,13 @@ async def test_card_resolver_falls_back_to_legacy_agent_json_path():
         {
             "name": "Legacy Card Agent",
             "description": "Remote agent",
-            "url": "https://agent.example/a2a",
+            "supportedInterfaces": [
+                {
+                    "url": "https://agent.example/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ],
             "version": "1.0.0",
             "capabilities": {},
             "defaultInputModes": ["text/plain"],
@@ -750,7 +772,13 @@ async def test_card_resolver_retries_host_gateway_for_loopback_url():
                 {
                     "name": "Gateway Card Agent",
                     "description": "Remote agent",
-                    "url": "http://127.0.0.1:9060",
+                    "supportedInterfaces": [
+                        {
+                            "url": "http://127.0.0.1:9060",
+                            "protocolBinding": "JSONRPC",
+                            "protocolVersion": "1.0",
+                        }
+                    ],
                     "version": "1.0.0",
                     "capabilities": {},
                     "defaultInputModes": ["text/plain"],
@@ -784,7 +812,13 @@ async def test_card_resolver_expires_cached_card_after_ttl():
             {
                 "name": "Card Agent A",
                 "description": "A",
-                "url": "https://agent.example/a2a",
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/a2a",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
                 "version": "1.0.0",
                 "capabilities": {},
                 "defaultInputModes": ["text/plain"],
@@ -794,7 +828,13 @@ async def test_card_resolver_expires_cached_card_after_ttl():
             {
                 "name": "Card Agent B",
                 "description": "B",
-                "url": "https://agent.example/a2a",
+                "supportedInterfaces": [
+                    {
+                        "url": "https://agent.example/a2a",
+                        "protocolBinding": "JSONRPC",
+                        "protocolVersion": "1.0",
+                    }
+                ],
                 "version": "1.0.0",
                 "capabilities": {},
                 "defaultInputModes": ["text/plain"],
@@ -813,6 +853,29 @@ async def test_card_resolver_expires_cached_card_after_ttl():
     assert first.agent_id == "Card Agent A"
     assert second.agent_id == "Card Agent B"
     assert len(client.requested_urls) == 2
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_rejects_card_with_pre_1_0_interface():
+    from a2a_adapter.card_resolver import AgentCardResolverImpl
+    from common.errors import UnsupportedAgentProtocolError
+
+    resolver = AgentCardResolverImpl(
+        client=_FakeCardClient(
+            [
+                {
+                    "name": "Old Agent",
+                    "url": "https://agent.example/a2a",
+                    "version": "1.0.0",
+                    "capabilities": {},
+                }
+            ]
+        )
+    )
+
+    with pytest.raises(UnsupportedAgentProtocolError, match="A2A 1.0 or later"):
+        await resolver.resolve_card("https://agent.example")
+    assert await resolver.supports_streaming("https://agent.example") is False
 
 
 @pytest.mark.asyncio

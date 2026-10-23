@@ -211,6 +211,23 @@ CHECKS = (
         query={"is_public": {"$nin": [True, False]}},
     ),
     _Check(
+        name="agents_with_pre_1_0_cards",
+        gates="A2A 1.0-only card parsing (pre-1.0 agents fail every call)",
+        collections=("agents",),
+        query={
+            "$or": [
+                {"agent_card.supportedInterfaces": {"$in": [None, []]}},
+                {
+                    "agent_card.supportedInterfaces": {
+                        "$elemMatch": {
+                            "protocolVersion": {"$regex": r"^\s*[vV]?0+(\.|$)"}
+                        }
+                    }
+                },
+            ]
+        },
+    ),
+    _Check(
         name="tool_bindings_missing_authorization_kind",
         gates="strict readers (AgentToolBindingRecord.authorization_kind)",
         collections=("orchestrator_agent_tool_bindings",),

@@ -206,3 +206,23 @@ async def test_liveness_skips_local_agents():
 
     assert await AgentLivenessService(health_service=health)(info) is info
     health.check_agent_health.assert_not_awaited()
+
+
+async def test_unsupported_protocol_is_reported_as_400_on_register_and_preview():
+    from common.errors import UnsupportedAgentProtocolError
+
+    error = UnsupportedAgentProtocolError(
+        "agent card advertises A2A protocol version '0.3.0'; "
+        "Hybro requires A2A 1.0 or later"
+    )
+    facade = MagicMock(
+        register_agent=AsyncMock(side_effect=error),
+        resolve_agent_card_from_url=AsyncMock(side_effect=error),
+    )
+
+    registered = await _catalog(facade).register(agent_url="u", provider_id="owner")
+    previewed = await _catalog(facade).resolve_card(agent_url="u")
+
+    for response in (registered, previewed):
+        assert (response.success, response.status_code) == (False, 400)
+        assert "A2A 1.0 or later" in response.error

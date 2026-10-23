@@ -181,14 +181,6 @@ def to_internal_part(part: Any) -> internal.Part:
     root = getattr(part, "root", part)
     metadata = _part_metadata(root)
 
-    # Pre-1.0 wire shape: a discriminated ``kind`` with a nested file object.
-    # Its bytes are already base64 text, which is exactly what the internal
-    # model stores, so they are carried through verbatim. Validation (base64,
-    # size limits) belongs to the materialization step, which owns the failure
-    # semantics for a malformed artifact.
-    if isinstance(root, dict) and _string(root.get("kind")) == "file":
-        return _legacy_file_part(root, metadata)
-
     if isinstance(root, SDKPart):
         content = root.WhichOneof("content")
         text = root.text
@@ -231,23 +223,6 @@ def to_internal_part(part: Any) -> internal.Part:
             )
         )
     return internal.Part(root=internal.TextPart(text=text or "", metadata=metadata))
-
-
-def _legacy_file_part(
-    root: dict[str, Any], metadata: dict[str, Any] | None
-) -> internal.Part:
-    file_content = _field(root, "file") or {}
-    return internal.Part(
-        root=internal.RoomArtifactPart(
-            file=internal.FileContent(
-                name=_string(_field(file_content, "name")),
-                mimeType=_string(_field(file_content, "mime_type", "mimeType")),
-                bytes=_string(_field(file_content, "bytes")),
-                uri=_string(_field(file_content, "uri")),
-            ),
-            metadata=metadata,
-        )
-    )
 
 
 def _new_value():
@@ -323,7 +298,7 @@ def _role_name(value: Any) -> str:
 
 
 def to_sdk_message(value: Any) -> SDKMessage:
-    """Map an internal message (or 0.3 wire dict) onto a 1.0 SDK message."""
+    """Map an internal message or internal message dict onto a 1.0 SDK message."""
     if isinstance(value, SDKMessage):
         return value
 
@@ -448,7 +423,7 @@ def _internal_artifact(artifact: Any) -> internal.Artifact:
 
 
 def to_sdk_task(value: Any) -> SDKTask:
-    """Map an internal task (or 0.3 wire dict) onto a 1.0 SDK task."""
+    """Map an internal task or internal task dict onto a 1.0 SDK task."""
     if isinstance(value, SDKTask):
         return value
 

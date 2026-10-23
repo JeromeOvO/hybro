@@ -52,7 +52,7 @@ async def inspect_a2a_connection(
     if response is None:
         return {
             "agent_card": internal_card,
-            "result": ["Response from agent is missing required 'kind' field."],
+            "result": ["Unrecognized A2A response from agent."],
             "status_code": _STATUS_PROBE_FAILED,
         }
 
@@ -109,11 +109,11 @@ def validate_response_data(result: dict[str, Any]) -> tuple[list[str], bool]:
 def validate_message_data(data: dict[str, Any]) -> list[str]:
     """Validate an incoming SDK-free A2A message payload by event kind."""
     if not isinstance(data, dict) or not data:
-        return ["Response from agent is missing required 'kind' field."]
+        return ["Unrecognized A2A response from agent."]
 
     kind = _event_kind(data)
     if kind is None:
-        return ["Response from agent is missing required 'kind' field."]
+        return ["Unrecognized A2A response from agent."]
 
     validators = {
         "task": _validate_task,
@@ -128,7 +128,12 @@ def validate_message_data(data: dict[str, Any]) -> list[str]:
 
 
 def _event_kind(data: dict[str, Any]) -> str | None:
-    """Identify a response payload by its member, or by a legacy ``kind``."""
+    """Identify a response payload by its event member or envelope ``kind``.
+
+    ``kind`` is the internal envelope tag ``client_facade`` adds to every
+    normalized frame, not a pre-1.0 wire field. Raw 1.0 ``StreamResponse``
+    dicts are identified by the member that wraps the event.
+    """
     for member, kind in (
         ("task", "task"),
         ("statusUpdate", "status-update"),

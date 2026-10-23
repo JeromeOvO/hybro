@@ -2,7 +2,6 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
 
 from a2a_adapter.client_facade import (
     fetch_agent_card_with_fallback as adapter_fetch_card,
@@ -20,21 +19,13 @@ from a2a_adapter.inspection import (
     validate_response_data as adapter_validate_response_data,
 )
 from a2a_adapter.translators import (
-    coerce_parts as adapter_coerce_parts,
-)
-from a2a_adapter.translators import (
     facade_result_to_model,
     resolve_accepted_output_modes,
 )
 from common.types import (
     AgentCard,
     Message,
-    Part,
     Task,
-    TextPart,
-)
-from common.types import (
-    MessageRole as Role,
 )
 from common.utils.logger import get_logger
 from models.error import A2AServiceError, IllgalParameterError
@@ -173,10 +164,6 @@ class A2AService:
             return
 
         logger.warning("Failed to record agent call for %s", agent_id)
-
-    @staticmethod
-    def _coerce_parts(parts: list[Any] | None) -> list[Part]:
-        return adapter_coerce_parts(parts)
 
     def _facade_result_to_model(self, response: dict[str, Any]) -> Message | Task:
         try:
@@ -389,41 +376,6 @@ class A2AService:
 
             except Exception as e:
                 raise A2AServiceError(str(e)) from e
-
-    async def dry_send_message(
-        self, _a2a_client: Any, aegnt_card: AgentCard, message_text: str
-    ) -> InsepectionCenterConnectionValidationResponse:
-        message = Message(
-            role=Role.USER,
-            parts=[Part(root=TextPart(text=str(message_text)))],
-            message_id=str(uuid4()),
-            context_id=str(uuid4()),
-        )
-        try:
-            response = await adapter_send_message(
-                aegnt_card,
-                message,
-                accepted_output_modes=self._resolve_accepted_modes(aegnt_card),
-                blocking=True,
-                timeout=self._default_request_timeout,
-            )
-            inspection_center_response = await self.validate_a2a_response(response)
-            inspection_center_response.agent_url = aegnt_card.url
-            inspection_center_response.agent_card = aegnt_card
-            return inspection_center_response
-
-        except Exception as e:
-            logger.error(
-                "a2a_inspection_send_failed",
-                extra={"error_type": type(e).__name__},
-            )
-            return InsepectionCenterConnectionValidationResponse(
-                agent_url=aegnt_card.url,
-                agent_card=aegnt_card,
-                result=[f"Failed to send message: {e}"],
-                is_valid=False,
-                status_code=500,
-            )
 
     async def validate_a2a_response(
         self, result: dict[str, Any]

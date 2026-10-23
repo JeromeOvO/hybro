@@ -222,6 +222,25 @@ async def test_card_probe_rejects_card_that_redirects_dispatch_off_host():
 
 
 @pytest.mark.asyncio
+async def test_card_probe_skips_agents_with_unsupported_protocol():
+    from common.errors import UnsupportedAgentProtocolError
+
+    class CardResolver:
+        async def resolve_card(self, url):
+            if url.endswith(":9002"):
+                raise UnsupportedAgentProtocolError("A2A 1.0 or later")
+            return _card("http://localhost:9001/a2a")
+
+    probe = LocalAgentCardProbe(host="host.docker.internal", resolver=CardResolver())
+
+    discovered = await probe.probe_agent_cards([9001, 9002])
+
+    assert [url for url, _card_snapshot in discovered] == [
+        "http://host.docker.internal:9001"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_discovery_reuses_an_inflight_cycle():
     started = asyncio.Event()
     release = asyncio.Event()

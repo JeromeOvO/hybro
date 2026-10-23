@@ -128,9 +128,11 @@ class FlakyCardSdk:
             raise self.failures.pop(0)
         return {
             "name": "Agent",
-            "url": url,
             "version": "1.0.0",
             "capabilities": {},
+            "supportedInterfaces": [
+                {"url": url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
+            ],
         }
 
     async def send_message(self, card, message, **kwargs):

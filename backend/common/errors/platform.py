@@ -18,9 +18,14 @@ class RetryableFileStoragePlatformError(FileStoragePlatformError):
     """A transient file backend failure safe to retry with identical bytes."""
 
 
+class UnsupportedAgentProtocolError(ValueError):
+    """An agent card advertises an A2A protocol version Hybro does not speak."""
+
+
 __all__ = [
     "FileStoragePlatformError",
     "GatewayPlatformError",
     "RetryableFileStoragePlatformError",
     "PlatformRouteError",
+    "UnsupportedAgentProtocolError",
 ]

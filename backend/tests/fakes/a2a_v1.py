@@ -22,7 +22,6 @@ from a2a.types import (
 
 JSONRPC_BINDING = "JSONRPC"
 PROTOCOL_VERSION_1_0 = "1.0"
-PROTOCOL_VERSION_0_3 = "0.3"
 
 
 def make_agent_card(
@@ -82,28 +81,6 @@ def make_skill(**overrides: Any) -> AgentSkill:
     return AgentSkill(**data)
 
 
-def make_legacy_card(
-    *,
-    name: str = "LegacyAgent",
-    url: str = "https://legacy-agent.example.com",
-    version: str = "0.0.1",
-    protocol_version: str = PROTOCOL_VERSION_0_3,
-    **overrides: Any,
-) -> AgentCard:
-    """Build a card that advertises a pre-1.0 interface.
-
-    The card object itself is 1.0 shaped; only the advertised protocol version
-    is old, which is what selects the SDK's compatibility transport.
-    """
-    return make_agent_card(
-        name=name,
-        url=url,
-        version=version,
-        protocol_version=protocol_version,
-        **overrides,
-    )
-
-
 def text_part(text: str) -> Part:
     part = Part()
     part.text = text
@@ -121,10 +98,8 @@ def user_message(*parts: Part, message_id: str = "msg-1") -> Any:
 
 __all__ = [
     "JSONRPC_BINDING",
-    "PROTOCOL_VERSION_0_3",
     "PROTOCOL_VERSION_1_0",
     "make_agent_card",
-    "make_legacy_card",
     "make_skill",
     "text_part",
     "user_message",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,12 @@ def _operator_holds(value: Any, operator: str, operand: Any) -> bool:
         return value in operand
     if operator == "$nin":
         return value not in operand
+    if operator == "$regex":
+        return isinstance(value, str) and re.search(operand, value) is not None
+    if operator == "$elemMatch":
+        return isinstance(value, list) and any(
+            isinstance(item, dict) and _matches(item, operand) for item in value
+        )
     raise AssertionError(f"fake does not support {operator}")
 
 
@@ -373,6 +380,30 @@ async def test_strict_reader_shapes_are_counted():
                         {},
                     ],
                     "agents": [
+                        {
+                            "agent_id": "v03-url-only",
+                            "is_public": True,
+                            "agent_card": {"url": "u"},
+                        },
+                        {
+                            "agent_id": "v03-interface",
+                            "is_public": True,
+                            "agent_card": {
+                                "supportedInterfaces": [
+                                    {"url": "u", "protocolVersion": "1.0"},
+                                    {"url": "u", "protocolVersion": "0.3.0"},
+                                ]
+                            },
+                        },
+                        {
+                            "agent_id": "v1",
+                            "is_public": True,
+                            "agent_card": {
+                                "supportedInterfaces": [
+                                    {"url": "u", "protocolVersion": "1.0"}
+                                ]
+                            },
+                        },
                         {"agent_id": "missing", "normalized_url": "u"},
                         {"agent_id": "null", "is_public": None, "normalized_url": "u"},
                         {
@@ -423,6 +454,8 @@ async def test_strict_reader_shapes_are_counted():
     assert report["orchestrator_hitl_interactions_missing_published"].count == 1
     assert report["rooms_applied_from_group_without_source_group_id"].count == 2
     assert report["agents_missing_is_public"].count == 2
+    # Every fixture agent without a 1.0 card counts, including the bare ones.
+    assert report["agents_with_pre_1_0_cards"].count == 6
     assert report["tool_bindings_missing_authorization_kind"].count == 2
     runs = report["orchestrator_runs_missing_authorization_basis"]
     assert runs.count == 2

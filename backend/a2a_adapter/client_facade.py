@@ -30,7 +30,7 @@ from google.protobuf.json_format import ParseError
 from common.observability import get_logger, safe_exception_metadata
 
 from .bounded_http import bounded_client, event_bounded_client
-from .card_data import build_agent_card
+from .card_data import build_agent_card, ensure_supported_protocol
 from .constants import (
     AGENT_CARD_WELL_KNOWN_PATH,
     PREV_AGENT_CARD_WELL_KNOWN_PATH,
@@ -122,7 +122,7 @@ async def send_message(
     timeout: float = 600.0,
     allow_docker_host_fallback: bool = True,
 ) -> dict[str, Any]:
-    """Send once, optionally retaining the legacy Docker-host retry behavior."""
+    """Send once, optionally retrying through the Docker-host URL fallback."""
     started_at = time.perf_counter()
     card: AgentCard | None = None
     try:
@@ -400,7 +400,6 @@ async def _fetch_agent_card_from_url(
         resolver = SDKCardResolver(client, str(agent_url), path)
         try:
             card = await resolver.get_agent_card()
-            return _card_to_dict(card)
         except A2AError as exc:
             status_code = getattr(exc, "status_code", None)
             if status_code == 404 and path == AGENT_CARD_WELL_KNOWN_PATH:
@@ -411,6 +410,11 @@ async def _fetch_agent_card_from_url(
             ) from exc
         except Exception as exc:
             raise A2AClientFacadeError(str(exc)) from exc
+        try:
+            ensure_supported_protocol(card)
+        except ValueError as exc:
+            raise A2AClientFacadeError(str(exc)) from exc
+        return _card_to_dict(card)
     raise A2AClientFacadeError("Agent card not found at any known path")
 
 

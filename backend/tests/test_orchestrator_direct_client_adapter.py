@@ -35,11 +35,8 @@ from common.dto.hitl import (
 from common.types import (
     Artifact,
     DataPart,
-    FileContent,
-    FilePart,
     Message,
     MessageRole,
-    Part,
     Task,
     TaskState,
     TextPart,
@@ -72,14 +69,39 @@ NOW = datetime.now(UTC)
 def _card() -> dict:
     return {
         "name": "Agent",
-        "url": "https://agent.example/a2a",
         "version": "1.0.0",
         "capabilities": {},
+        "supportedInterfaces": [
+            {
+                "url": "https://agent.example/a2a",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
     }
 
 
 def _task_dict(task: Task) -> dict:
     return task.model_dump(mode="json", by_alias=True)
+
+
+def _file_task_result(name: str, encoded_b64: str) -> dict:
+    """A completed task frame as ``client_facade`` yields it (ProtoJSON)."""
+    return {
+        "id": "task-1",
+        "contextId": "ctx-1",
+        "kind": "task",
+        "status": {"state": "TASK_STATE_COMPLETED"},
+        "artifacts": [
+            {
+                "artifactId": "art-1",
+                "name": name,
+                "parts": [
+                    {"raw": encoded_b64, "filename": name, "mediaType": "image/png"}
+                ],
+            }
+        ],
+    }
 
 
 def _dispatch_command(**updates) -> A2ADispatchCommand:
@@ -706,12 +728,9 @@ async def test_open_stream_accumulates_artifact_refs_into_terminal_tool_result()
                     "name": "cover.png",
                     "parts": [
                         {
-                            "kind": "file",
-                            "file": {
-                                "name": "cover.png",
-                                "mimeType": "image/png",
-                                "bytes": encoded_b64,
-                            },
+                            "raw": encoded_b64,
+                            "filename": "cover.png",
+                            "mediaType": "image/png",
                         }
                     ],
                 },
@@ -761,35 +780,14 @@ async def test_open_stream_accumulates_artifact_refs_into_terminal_tool_result()
 
 async def test_send_reraises_recoverable_materialization_errors():
     encoded_b64 = base64.b64encode(b"png-bytes").decode()
-    task = Task(
-        id="task-1",
-        context_id="ctx-1",
-        status=build_task_status(TaskState.completed),
-        artifacts=[
-            Artifact(
-                artifact_id="art-1",
-                name="cover.png",
-                parts=[
-                    Part(
-                        root=FilePart(
-                            file=FileContent(
-                                name="cover.png",
-                                mime_type="image/png",
-                                bytes=encoded_b64,
-                            )
-                        )
-                    )
-                ],
-            )
-        ],
-    )
+    task = _file_task_result("cover.png", encoded_b64)
 
     class StaleEpochOwner:
         async def commit(self, **kwargs):
             raise StaleRoomEpochError("artifact Room epoch is no longer active")
 
     async def send(card, message, kwargs):
-        return {"kind": "task", "result": _task_dict(task)}
+        return {"kind": "task", "result": task}
 
     client = _client(FakeSdk(send=send), epoch_owner=StaleEpochOwner())
     with pytest.raises(StaleRoomEpochError, match="no longer active"):
@@ -806,36 +804,20 @@ async def test_send_reraises_recoverable_materialization_errors():
         await client.send(_dispatch_command())
 
 
-async def test_send_malformed_artifact_stays_terminal_failure():
-    task = Task(
-        id="task-1",
-        context_id="ctx-1",
-        status=build_task_status(TaskState.completed),
-        artifacts=[
-            Artifact(
-                artifact_id="art-1",
-                name="broken.png",
-                parts=[
-                    Part(
-                        root=FilePart(
-                            file=FileContent(
-                                name="broken.png",
-                                mime_type="image/png",
-                                bytes="not-valid-base64@@@",
-                            )
-                        )
-                    )
-                ],
-            )
-        ],
+async def test_send_oversized_artifact_stays_terminal_failure(monkeypatch):
+    from a2a_adapter import artifact_storage
+
+    monkeypatch.setattr(artifact_storage, "MAX_FILE_RAW_BYTES", 4)
+    task = _file_task_result(
+        "broken.png", base64.b64encode(b"more than four bytes").decode()
     )
 
     class EpochOwner:
         async def commit(self, **kwargs):
-            raise AssertionError("commit must not run for invalid base64")
+            raise AssertionError("commit must not run for an oversized file")
 
     async def send(card, message, kwargs):
-        return {"kind": "task", "result": _task_dict(task)}
+        return {"kind": "task", "result": task}
 
     receipt = await _client(FakeSdk(send=send), epoch_owner=EpochOwner()).send(
         _dispatch_command()

@@ -409,7 +409,10 @@ adapter:
 - `a2a_adapter.message_factory` is the single conversion point between internal
   models and protobuf. Protocol objects never reach business code: callers pass
   plain dicts, card data, and internal `common.types` models, and receive the
-  normalized `{"kind", "result", "error"}` envelope.
+  normalized `{"kind", "result", "error"}` envelope. `kind` there (and on
+  `result`) is Hybro's internal envelope tag (`task`, `status-update`,
+  `artifact-update`, `message`, `error`) set by `client_facade`, not a wire
+  field; `result` is the ProtoJSON body of the frame member.
 - Enum spelling differs by direction. Internal states stay lowercase-hyphenated
   (`input-required`) and roles stay `user`/`agent`; the wire uses
   `TASK_STATE_INPUT_REQUIRED` and `ROLE_AGENT`. ProtoJSON renders numbers as
@@ -436,10 +439,20 @@ Two bindings are accepted, in the client's own order: JSON-RPC first, then
 HTTP+JSON. Preference is client-side so an agent offering both keeps using the
 binding Hybro has always used, and an agent that publishes only the REST binding
 is still callable instead of being rejected as having no compatible transport.
-One list drives both directions of the protocol: agents that advertise a pre-1.0
-interface are reached through the SDK's own 0.3 compatibility transport, selected
-from the advertised `protocolVersion` — Hybro keeps no second protocol
-implementation.
+
+Hybro speaks A2A 1.0 only. `a2a_adapter.card_data.build_agent_card` rejects any
+card with a `supportedInterfaces` entry whose `protocolVersion` major version is
+below 1, and `client_facade` applies the same check to cards fetched for
+inspection. One pre-1.0 interface is enough to reject the card, because the
+SDK client could otherwise pick it and switch to its 0.3 compatibility
+transport. A pre-1.0 card that states only a top-level `url` is rejected too:
+the SDK parser maps it onto an interface with `protocolVersion` `0.3.0`. Empty
+or unparseable versions are not rejected. The check raises
+`common.errors.UnsupportedAgentProtocolError`; the card resolver lets it through
+so registration and the card preview answer `400` with the reason, while local
+discovery and capability checks treat such an agent as having no card. Stored
+agents registered with a pre-1.0 card fail every call, so the
+`agents_with_pre_1_0_cards` readiness count must be zero before deploying.
 
 `a2a_adapter.client_facade` distinguishes a rejected request from a failed
 transport: protocol errors (`InvalidParamsError`, `TaskNotFoundError`, ...) are
@@ -449,9 +462,10 @@ a network failure as a definite rejection.
 
 Stream frames are discriminated structurally. A 1.0 frame carries exactly one of
 `task` / `statusUpdate` / `artifactUpdate` / `message`, with no `kind` field and
-no `final` flag; pre-1.0 frames that still carry `kind` remain accepted for
-agents that have not been migrated. `a2a_adapter.webhook_payloads` parses both
-shapes for direct streaming. A status update keeps
+no `final` flag. `client_facade` unwraps that member and tags the body with the
+internal envelope `kind`; `a2a_adapter.webhook_payloads` reads that tag and also
+accepts a raw frame that still wraps the event under its member. A status
+update keeps
 its message on `status.message` and does not synthesize an artifact from that
 text; only a message-only response becomes a response artifact.
 
@@ -2500,9 +2514,10 @@ module boundary.
   for `append` and `lastChunk` the same as omitted values at the shared
   `TaskArtifactUpdateEvent` model boundary; other artifact fields remain
   strictly validated.
-- Parse direct-stream response payloads in both legacy keyed-envelope
-  form (`statusUpdate` / `artifactUpdate`) and current JSON-RPC SSE form with
-  top-level `kind` values (`task`, `status-update`, `artifact-update`, `message`).
+- Parse direct-stream response payloads both as facade frames tagged with the
+  internal envelope `kind` (`task`, `status-update`, `artifact-update`,
+  `message`) and as raw 1.0 frames keyed by member (`statusUpdate` /
+  `artifactUpdate`).
   This preserves remote task/context identity and typed interaction metadata
   before durable observation ingress, so `input-required` can materialize as
   HITL instead of degrading to an identity-less suspended call.
