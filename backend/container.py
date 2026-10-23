@@ -1744,6 +1744,8 @@ async def _runtime_lifespan(app: Any, runtime: ApplicationRuntime):  # noqa: C90
                 raise OrchestratorCompositionError(
                     "Orchestrator runtime composition incomplete: " + ", ".join(missing)
                 )
+            # Served by api_gateway.routes.a2a_push_routes.
+            app.state.a2a_push_receiver = app.state.orchestrator_runtime.push_ingress
             from conversation.agent_call_detail import CanonicalAgentCallDetailService
 
             app.state.canonical_agent_call_detail_reader = (

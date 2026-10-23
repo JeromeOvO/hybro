@@ -1,4 +1,9 @@
-"""C2 step 7: the A2A push-notification webhook ingress is retired."""
+"""C2 retired the unauthenticatable webhook ingress; C12 replaced it.
+
+The old room-message webhook (global signing key, token hash on the message,
+``/webhooks`` routes) stays gone. The only push ingress is the per-call A2A
+route whose token digest lives on the call ledger record.
+"""
 
 from __future__ import annotations
 
@@ -37,6 +42,29 @@ def test_application_serves_no_webhook_route():
     assert not any("/webhooks" in path for path in app.openapi()["paths"])
 
 
+def test_only_push_ingress_is_the_per_call_ledger_authenticated_route():
+    from fastapi.routing import APIRoute
+
+    from main import app
+
+    push_routes = [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and ("push" in route.path or "notification" in route.path)
+    ]
+
+    assert [(route.path, sorted(route.methods)) for route in push_routes] == [
+        ("/api/v1/a2a/push/{call_record_id}", ["POST"])
+    ]
+    dependencies = {
+        dependency.call.__name__ for dependency in push_routes[0].dependant.dependencies
+    }
+    # Authentication belongs to Execution against the ledger digest; the route
+    # only resolves the receiver and never trusts a Clerk session.
+    assert dependencies == {"get_a2a_push_receiver"}
+
+
 def test_routing_has_no_webhook_ingress():
     import execution.orchestrator_routing as routing
     from execution.facade import ExecutionFacade
@@ -61,6 +89,17 @@ def test_webhook_receiver_protocol_is_gone():
     import common.protocols as protocols
 
     assert not hasattr(protocols, "WebhookReceiver")
+
+
+def test_push_authentication_is_bound_to_the_call_ledger_not_a_global_key():
+    import execution.orchestrator.a2a_runtime.push as push
+    from execution.orchestrator.a2a_runtime.models import AgentCallLedgerRecord
+
+    assert "push_token_digest" in AgentCallLedgerRecord.model_fields
+    assert not hasattr(push, "WebhookObservationIngressAuthenticator")
+    source = inspect.getsource(push)
+    assert "hmac.compare_digest" in source
+    assert "webhook_signing_key" not in source
 
 
 def test_task_lifecycle_store_keeps_only_correlation():
@@ -92,7 +131,7 @@ def test_messages_no_longer_carry_a_webhook_token_hash():
     assert "webhook_token_hash" not in RoomAgentMessage.model_fields
 
 
-def test_a2a_adapter_has_no_push_configuration():
+def test_a2a_adapter_has_no_legacy_webhook_configuration():
     import a2a_adapter.client_facade as client_facade
     from a2a_adapter.runtime_service import A2ARuntimeConfig
 

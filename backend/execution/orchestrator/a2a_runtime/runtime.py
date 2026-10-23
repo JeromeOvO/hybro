@@ -58,6 +58,7 @@ from .models import (
     A2ADispatchReceipt,
     A2AJoinBinding,
     A2AModelReplyCommand,
+    A2APushNotificationConfig,
     A2ARuntimePolicy,
     AgentCallLedgerRecord,
     NormalizedA2AObservation,
@@ -72,6 +73,7 @@ from .ports import (
     ResourceMaterializerPort,
     RoomEpochStore,
 )
+from .push import A2APushRegistrar
 from .resources import verify_materialized_digests
 from .terminal_interactions import TerminalInteractionFinalizer
 
@@ -116,6 +118,7 @@ class A2AAgentToolRuntime:
         public_secret_values: tuple[str, ...] = (),
         policy: A2ARuntimePolicy | None = None,
         worker_id: str = "a2a-runtime",
+        push_registrar: A2APushRegistrar | None = None,
     ) -> None:
         self.ledger = ledger
         self.prepared_reader = prepared_reader
@@ -133,6 +136,7 @@ class A2AAgentToolRuntime:
         self.public_secret_values = public_secret_values
         self.policy = policy or A2ARuntimePolicy()
         self.worker_id = worker_id
+        self.push_registrar = push_registrar
 
     async def accept(self, invocation: ToolInvocation) -> ToolAcceptance:
         existing = await self.ledger.load(invocation.run_id, invocation.invocation_id)
@@ -438,11 +442,19 @@ class A2AAgentToolRuntime:
         if record.state != "ready_to_dispatch":
             await self._release(record)
             return _suspension(invocation)
+        # Each attempt sends a fresh push token; the digest is durable before
+        # the send so an early push can already be verified.
+        push = (
+            self.push_registrar.issue(record.call_record_id)
+            if self.push_registrar is not None and record.transport_kind == "direct"
+            else None
+        )
         dispatching = transition_call(
             record,
             to_state="dispatching",
             updated_at=datetime.now(UTC),
             transport_attempts=record.transport_attempts + 1,
+            push_token_digest=push.token_digest if push is not None else None,
         )
         if await self.ledger.cas(
             dispatching, expected_state_version=record.state_version
@@ -453,7 +465,11 @@ class A2AAgentToolRuntime:
         if record is None:
             return _suspension(invocation)
 
-        command = _dispatch_command(record, materialized_resources=materialized)
+        command = _dispatch_command(
+            record,
+            materialized_resources=materialized,
+            push_notification=push.config if push is not None else None,
+        )
         if self.run_store is not None:
             owning_run = await self.run_store.load(invocation.run_id)
             if owning_run is None or owning_run.status in {
@@ -1372,6 +1388,7 @@ def _dispatch_command(
     record: AgentCallLedgerRecord,
     *,
     materialized_resources: list,
+    push_notification: A2APushNotificationConfig | None = None,
 ) -> A2ADispatchCommand:
     return A2ADispatchCommand(
         command_id=record.dispatch_snapshot.command_id,
@@ -1389,6 +1406,7 @@ def _dispatch_command(
         room_id=record.room_id,
         room_epoch=record.room_epoch,
         deadline_at=record.dispatch_snapshot.deadline_at,
+        push_notification=push_notification,
     )
 
 

@@ -202,6 +202,7 @@ async def stream_message(
     message_data: Any,
     *,
     accepted_output_modes: list[str] | None = None,
+    push_notification_config: dict[str, Any] | None = None,
     timeout: float = 600.0,
 ) -> AsyncGenerator[dict[str, Any], None]:
     started_at = time.perf_counter()
@@ -214,6 +215,7 @@ async def stream_message(
         request = build_send_message_request(
             to_sdk_message(message_data),
             accepted_output_modes=accepted_output_modes,
+            push_notification_config=push_notification_config,
             blocking=False,
         )
         async with event_bounded_client(timeout=timeout) as client:
@@ -221,6 +223,7 @@ async def stream_message(
                 client=client,
                 streaming=True,
                 accepted_output_modes=accepted_output_modes,
+                push_notification_config=push_notification_config,
             )
             async with aclosing(
                 stream_with_docker_host_fallback(

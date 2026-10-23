@@ -9,8 +9,9 @@ The backend is a FastAPI monolith that coordinates:
 
 - A web app API for rooms, agents, messages, HITL, files, sessions, and SSE.
 - A2A 1.0 agent communication over synchronous and streaming transports.
-  Dispatch registers no push-notification configuration; late results arrive by
-  `tasks/get` polling.
+  Late results arrive by `tasks/get` polling; when
+  `backend.a2a_push_callback_base_url` is set, dispatch also registers a per-call
+  push-notification config with Agents that advertise `pushNotifications`.
 - A durable orchestrator (the canonical Run) that turns a room message into
   model turns and Agent tool calls.
 - Context memory projection and compaction.
@@ -151,8 +152,8 @@ Isolates the A2A protocol and SDK:
   returns the SDK-free `{"kind", "result", "error"}` envelope.
 - `orchestrator_direct_client.OrchestratorDirectA2AClient` is the direct
   transport used by the orchestrator A2A runtime.
-- `webhook_payloads` parses direct-stream response payloads; `translators` and
-  `remote_task` normalize task status and artifacts.
+- `webhook_payloads` parses direct-stream response payloads and push-notification
+  bodies; `translators` and `remote_task` normalize task status and artifacts.
 - `inspection` probes cards and dry sends; `agent_card_health` serves health
   probes.
 - `artifact_storage` materializes inline or remote file artifacts into
@@ -213,6 +214,8 @@ Route groups:
 - `inspection_routes.py`: Agent Card and A2A connection inspection.
 - `llm_proxy_routes.py`: the bundled-agent inference proxy under
   `/internal/llm`.
+- `a2a_push_routes.py`: `POST /a2a/push/{call_record_id}`, the A2A
+  push-notification ingress (see [Push notifications](#push-notifications)).
 
 Frontend-facing and agent-network routes use Clerk auth when
 `backend.auth_mode="clerk"`. In local `backend.auth_mode="mock"`, `main.py`
@@ -765,7 +768,7 @@ port, or facade port, update the exact method inventory in
 | `NormalizedObservationRecorder` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.ingress.A2AObservationIngress` | internal to `execution` |
 | `ObservationConflictStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoObservationConflictStore` | internal to `execution` |
 | `ObservationInboxStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoObservationInboxStore` | internal to `execution` |
-| `ObservationIngressAuthenticator` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.ingress.RejectExternalIngressAuthenticator` | internal to `execution` |
+| `ObservationIngressAuthenticator` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.ingress.RejectExternalIngressAuthenticator`, `execution.orchestrator.a2a_runtime.push.LedgerPushTokenAuthenticator` | internal to `execution` |
 | `PreparedInvocationSnapshotReader` | `execution.orchestrator.a2a_runtime.ports` | `execution.orchestrator.a2a_runtime.preparation.RunPreparedInvocationSnapshotReader` | internal to `execution` |
 | `ResourceMaterializerPort` | `execution.orchestrator.a2a_runtime.ports` | `execution.adapters.resources.RoomFilesResourceMaterializer` | internal to `execution` |
 | `RoomEpochStore` | `execution.orchestrator.a2a_runtime.ports` | `execution.repository.orchestrator.stores.MongoRoomEpochStore` | internal to `execution` |
@@ -783,6 +786,7 @@ port, or facade port, update the exact method inventory in
 | `ToolRuntime` | `execution.orchestrator.ports` | `execution.orchestrator.a2a_runtime.runtime.A2AAgentToolRuntime` | internal to `execution` |
 | `RunFactory` | `execution.orchestrator.session` | `execution.orchestrator.session.DefaultRunFactory`, `execution.orchestrator_routing._PreparedRunFactory` | internal to `execution` |
 | `RoomEnvelopeSource` | `execution.orchestrator_routing` | `execution.orchestrator_routing.RoomMessageEnvelopeResolver` | internal to `execution` |
+| `A2APushNotificationReceiver` | `execution.ports` | `execution.orchestrator.a2a_runtime.push.A2APushNotificationIngress` (bound as `app.state.a2a_push_receiver`) | crosses to `api_gateway` |
 | `ClientRequestIdResolver` | `execution.ports` | `execution.client_request_id.SSEClientRequestIdResolver` | internal to `execution` |
 | `DirectAgentMessenger` | `execution.ports` | `execution.direct_agent.DirectAgentExecution` | crosses to `api_gateway` |
 | `HITLMessageCancellationPort` | `execution.ports` | `execution.adapters.hitl.HITLMessageCancellationAdapter` | internal to `execution` |
@@ -1529,6 +1533,65 @@ room file store and sent as A2A `FileContent.bytes` (decoded once to protobuf
 `Part.raw`); local paths and authenticated room-file URLs never reach agents.
 These transport fields never enter public room projection.
 
+### Push notifications
+
+Polling is the contract; push only shortens the wait. With
+`backend.a2a_push_callback_base_url` empty (the default) dispatch registers
+nothing. When it is set (an `https` URL with a hostname and no credentials,
+query, or fragment, validated by `common/config/loader.py`; plain `http` is
+accepted only for loopback, `host.docker.internal`, or RFC 1918 hosts, because
+the token is a bearer secret):
+
+- Registration. `A2AAgentToolRuntime` asks `A2APushRegistrar` for a fresh token
+  (`secrets.token_urlsafe(32)`) on every direct dispatch attempt and writes its
+  SHA-256 to `AgentCallLedgerRecord.push_token_digest` in the same CAS that
+  enters `dispatching`, so the digest is durable before the send. The token rides
+  only in the ephemeral `A2ADispatchCommand.push_notification` (`SecretStr`) and
+  is never stored or logged. `OrchestratorDirectA2AClient` puts it in the SDK
+  `TaskPushNotificationConfig` (`url` =
+  `{base}{api_prefix}/a2a/push/{call_record_id}`, `token`) for sync, poll, and
+  stream sends only when the live Agent Card advertises
+  `capabilities.pushNotifications`. A retried attempt replaces the
+  digest, so pushes carrying an older token are rejected and polling covers them.
+- Ingress. `main.py` admits at most `A2A_PUSH_MAX_CONCURRENT` (8) concurrent
+  push requests per worker (`429` beyond). `api_gateway.routes.a2a_push_routes`
+  rejects a declared `Content-Length` above
+  `A2ARuntimePolicy.max_callback_body_bytes` (2 MiB) with `413`, then calls
+  `execution.ports.A2APushNotificationReceiver.authenticate` with only the path
+  call ID and the `X-A2A-Notification-Token` header, and reads the bounded body
+  only after that succeeds; `receive` re-authenticates before accepting it.
+  The receiver is `a2a_runtime.push.A2APushNotificationIngress`; any store or
+  adapter failure, transient or not, answers `503`.
+  `LedgerPushTokenAuthenticator` (the `ObservationIngressAuthenticator`)
+  compares the token digest with the ledger digest using `hmac.compare_digest`.
+  An unknown call, a terminal call, a call without a digest (push disabled or a
+  record written before push registration), and a wrong or missing token all
+  answer the same `401`. The body is parsed by
+  `webhook_payloads.parse_push_notification_payload` (a 1.0 `StreamResponse`
+  holding `task`, `statusUpdate`, or `artifactUpdate`); its task ID must equal
+  the ledger's `a2a_task_id` and its context ID the ledger's `a2a_context_id`
+  before any artifact is materialized, otherwise `400`. A call whose dispatch
+  receipt has not bound the task ID yet also answers `400`.
+- Evidence. Only a terminal `Task` snapshot is complete evidence. It is
+  normalized as a `webhook` observation, recorded through
+  `A2AObservationIngress.record`, and acknowledged with `202`; a background task
+  then runs `A2AObservationProcessor.process`, which applies it to the ledger
+  and delivers through the Run-addressed observation sink. If that fails, inbox
+  recovery retries the pending row. Status and artifact updates are deltas that
+  omit earlier output, so a terminal or input-requesting update only makes a
+  `working` call due for the next `tasks/get` poll; working and artifact updates
+  are acknowledged without effect. Interaction parking therefore stays on the
+  polling path.
+- Idempotency. A repeated push of the same snapshot replays the same inbox row
+  (its identity excludes `observed_at`). Once a push is applied the call is
+  terminal, later pushes answer `401`, and a poll claimed against the earlier
+  ledger version is a no-op. A poll that wins first leaves the push row to the
+  ledger's terminal-winner rule: an equal result is a no-op, a different one is
+  recorded as an observation conflict.
+
+No data migration is needed: existing ledger records have no digest and keep
+being polled.
+
 ### Wait semantics
 
 A Run waits in `awaiting_user` (owner input) or `waiting_external` (a remote
@@ -1549,8 +1612,10 @@ Agent). Waiting is not active time:
 - A late result or answer for a Run with no live driver resumes through
   `RunAddressedToolObservationSink.deliver`, which re-arms the watchdog at the
   extended deadline before re-entry.
-- Calls register no push configuration. Late results arrive by `tasks/get`
-  polling in call recovery, every `retry_backoff_max_seconds`. A `working` or
+- Late results arrive by `tasks/get` polling in call recovery, every
+  `retry_backoff_max_seconds`; an authenticated push can make the poll due
+  sooner or deliver a terminal `Task` directly
+  ([Push notifications](#push-notifications)). A `working` or
   `continuation_pending` call with an authoritative remote task alias
   (`a2a_task_id`) is exempt from `call_deadline_exceeded`, including after a
   continuation returns it to `working`; it expires only after

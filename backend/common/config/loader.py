@@ -1,5 +1,6 @@
 """Typed defaults and JSON startup snapshot. No dotenv or import-time file I/O."""
 
+import ipaddress
 import logging
 import math
 import os
@@ -119,6 +120,11 @@ class Settings(BaseModel):
     # Waits. A suspended Run's deadline clock is stopped; an acknowledged remote
     # Agent call is polled until this ceiling, measured from its acceptance.
     orchestrator_call_wait_ceiling_hours: float = Field(default=168.0, gt=0)
+    # Public base URL at which remote Agents reach this backend, for example
+    # "https://hybro.example.com". When set, canonical dispatch registers an A2A
+    # push-notification config with Agents whose card advertises
+    # pushNotifications; polling remains the fallback. Empty disables push.
+    a2a_push_callback_base_url: str = ""
     # Supervisor ask_user approval deadline; None means no deadline.
     approval_deadline_hours: float | None = Field(default=None, gt=0)
 
@@ -295,6 +301,34 @@ class Settings(BaseModel):
             return None
         return str(value).strip()
 
+    @field_validator("a2a_push_callback_base_url")
+    @classmethod
+    def validate_a2a_push_callback_base_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "\\" in value
+            or any(char.isspace() or ord(char) < 32 for char in value)
+        ):
+            raise ValueError(
+                "a2a_push_callback_base_url must be an HTTP(S) URL with a hostname "
+                "and no credentials, query, or fragment"
+            )
+        if parsed.scheme == "http" and not _is_private_push_host(parsed.hostname):
+            raise ValueError(
+                "a2a_push_callback_base_url must use https unless the host is "
+                "loopback, host.docker.internal, or a private RFC 1918 address"
+            )
+        return value.rstrip("/")
+
     @field_validator("log_level", mode="before")
     @classmethod
     def validate_log_level(cls, value):
@@ -363,6 +397,25 @@ class Settings(BaseModel):
     def is_gunicorn(self) -> bool:
         """Detect gunicorn from server-injected runtime metadata."""
         return os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn")
+
+
+_PRIVATE_PUSH_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in ("127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+
+
+def _is_private_push_host(host: str) -> bool:
+    """Hosts where a push token may travel over plain HTTP."""
+    if host.lower() in {"localhost", "host.docker.internal"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if address.version == 6:
+        return address.is_loopback
+    return any(address in network for network in _PRIVATE_PUSH_NETWORKS)
 
 
 # Credentials and legacy route hints are never user-editable backend JSON fields.

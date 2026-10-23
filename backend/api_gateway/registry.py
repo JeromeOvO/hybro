@@ -40,6 +40,8 @@ def route_group_for_path(path: str) -> str:
 
     if matches("/internal/llm"):
         return "llm_proxy"
+    if matches("/a2a/push"):
+        return "a2a_push"
     if matches("/local-agents"):
         return "agent"
     if matches("/agentGroups"):

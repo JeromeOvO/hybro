@@ -1,4 +1,12 @@
 {
+  "a2a_push": {
+    "api_key": false,
+    "auth": "push-token-route-level",
+    "cors": "default",
+    "tags": [
+      "a2a_push"
+    ]
+  },
   "agent": {
     "api_key": false,
     "auth": "mixed-route-level",

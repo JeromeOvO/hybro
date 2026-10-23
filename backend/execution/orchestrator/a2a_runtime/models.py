@@ -7,7 +7,7 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Annotated, Literal, Self
 
-from pydantic import ConfigDict, Field, StringConstraints, model_validator
+from pydantic import ConfigDict, Field, SecretStr, StringConstraints, model_validator
 
 from common.dto.base import FrozenDTO
 from common.dto.hitl import HITLQuestionAnswer, HITLRouteSnapshot
@@ -253,6 +253,11 @@ class AgentCallLedgerRecord(A2ADurableModel):
     recent_observation_ids: list[str] = Field(default_factory=list, max_length=128)
     terminal_result: ToolResult | None = None
     terminal_result_digest: str | None = None
+    # SHA-256 of the push-notification token sent with the latest dispatch
+    # attempt. The token itself is never stored; a call without a digest
+    # (push disabled, or a record written before push registration existed)
+    # rejects every push and is served by polling.
+    push_token_digest: str | None = None
     cancellation_command: A2ACancellationCommand | None = None
     cancellation_command_id: str | None = None
     cancellation_reason: str | None = None
@@ -379,6 +384,13 @@ class DurableResourceProjection(A2ADurableModel):
     created_at: datetime
 
 
+class A2APushNotificationConfig(ContractModel):
+    """Per-attempt push registration sent with a dispatch; never persisted."""
+
+    url: str
+    token: SecretStr
+
+
 class A2ADispatchCommand(ContractModel):
     command_id: str
     call_record_id: str
@@ -395,6 +407,7 @@ class A2ADispatchCommand(ContractModel):
     room_id: str
     room_epoch: int = Field(ge=1)
     deadline_at: datetime
+    push_notification: A2APushNotificationConfig | None = None
 
 
 class InlineDataArtifact(A2ADurableModel):
@@ -454,6 +467,31 @@ class NormalizedA2AObservation(A2ADurableModel):
                 raise ValueError("inline artifact content index is out of range")
             if not isinstance(self.content[artifact.content_index], DataPart):
                 raise ValueError("inline artifact must address a DataPart")
+        return self
+
+
+class A2APushFrame(ContractModel):
+    """One authenticated push notification, normalized for correlation.
+
+    Only a terminal ``Task`` snapshot carries an observation: status and
+    artifact updates are deltas that omit earlier output, so they are never
+    recorded as call evidence.
+    """
+
+    frame: Literal["task", "status_update", "artifact_update"]
+    task_id: str = Field(min_length=1)
+    context_id: str | None = None
+    event_kind: Literal[
+        "working", "artifact", "input_required", "auth_required", "terminal"
+    ]
+    observation: NormalizedA2AObservation | None = None
+
+    @model_validator(mode="after")
+    def _only_terminal_task_snapshots_carry_evidence(self) -> A2APushFrame:
+        if self.observation is not None and (
+            self.frame != "task" or self.event_kind != "terminal"
+        ):
+            raise ValueError("only a terminal Task snapshot carries an observation")
         return self
 
 

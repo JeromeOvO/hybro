@@ -1,5 +1,27 @@
 [
   {
+    "auth_dependencies": [],
+    "dependencies": [
+      "get_a2a_push_receiver"
+    ],
+    "methods": [
+      "POST"
+    ],
+    "module": "api_gateway.routes.a2a_push_routes",
+    "name": "receive_a2a_push",
+    "openapi_response_codes": [
+      "202",
+      "default"
+    ],
+    "owning_protocol": "execution.ports.A2APushNotificationReceiver",
+    "path": "/api/v1/a2a/push/{call_record_id}",
+    "response_class": "Response",
+    "response_model": null,
+    "status_code": 202,
+    "streaming_response": null,
+    "supporting_protocols": []
+  },
+  {
     "auth_dependencies": [
       "get_current_user"
     ],

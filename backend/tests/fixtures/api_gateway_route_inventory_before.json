@@ -1,5 +1,23 @@
 [
   {
+    "path": "/api/v1/a2a/push/{call_record_id}",
+    "methods": [
+      "POST"
+    ],
+    "name": "receive_a2a_push",
+    "endpoint_module": "api_gateway.routes.a2a_push_routes",
+    "declared_owner": "api_gateway.routes.a2a_push_routes",
+    "tags": [
+      "a2a_push"
+    ],
+    "status_code": 202,
+    "dependencies": [
+      "get_a2a_push_receiver"
+    ],
+    "auth_dependencies": [],
+    "include_in_schema": true
+  },
+  {
     "path": "/api/v1/agent-suggestions",
     "methods": [
       "POST"

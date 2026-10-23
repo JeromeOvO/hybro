@@ -2391,6 +2391,34 @@
           }
         }
       }
+    },
+    "/api/v1/a2a/push/{call_record_id}": {
+      "post": {
+        "tags": [
+          "a2a_push"
+        ],
+        "summary": "Receive A2A Push",
+        "operationId": "receive_a2a_push_api_v1_a2a_push__call_record_id__post",
+        "parameters": [
+          {
+            "name": "call_record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Call Record Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "Rejected push notification (400 invalid, 401 unauthorized, 413 too large, 503 unavailable)."
+          }
+        }
+      }
     }
   },
   "components": {

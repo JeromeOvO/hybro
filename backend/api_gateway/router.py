@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from api_gateway.routes import (
+    a2a_push_routes,
     agent_group_routes,
     agent_network_routes,
     agent_routes,
@@ -34,6 +35,7 @@ def build_api_gateway_router() -> APIRouter:
     gateway_router.include_router(agent_group_routes.router, tags=["agent_group"])
     gateway_router.include_router(files_routes.router, tags=["files"])
     gateway_router.include_router(llm_proxy_routes.router, tags=["internal_llm"])
+    gateway_router.include_router(a2a_push_routes.router, tags=["a2a_push"])
 
     return gateway_router
 

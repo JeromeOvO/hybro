@@ -73,6 +73,11 @@ from execution.orchestrator.a2a_runtime.preparation import (
     RunBackedDispatchRecovery,
     RunPreparedInvocationSnapshotReader,
 )
+from execution.orchestrator.a2a_runtime.push import (
+    A2APushNotificationIngress,
+    A2APushRegistrar,
+    LedgerPushTokenAuthenticator,
+)
 from execution.orchestrator.a2a_runtime.recovery import (
     A2AArtifactRecoveryService,
     A2ACallRecoveryService,
@@ -213,6 +218,7 @@ class OrchestratorRuntime:
     projection_worker: Any
     recovery_cycle: Any
     public_secret_values: tuple[str, ...]
+    push_ingress: A2APushNotificationIngress
 
 
 _RUNTIME_BINDINGS = (
@@ -242,6 +248,7 @@ _RUNTIME_BINDINGS = (
     "projection_worker",
     "recovery_cycle",
     "public_secret_values",
+    "push_ingress",
 )
 
 
@@ -427,8 +434,8 @@ def create_orchestrator_runtime(  # noqa: C901
     hitl_port = DurableHITLApplicationPort(hitl_store=hitl_store)
     terminal_finalizer = TerminalInteractionFinalizer(hitl_port)
 
-    # External ingress stays fully rejected until step 7 wires the per-source
-    # authenticators (webhook HMAC via a2a_adapter, relay identity).
+    # Generic external ingest() stays rejected. A2A push notifications are
+    # authenticated per call by A2APushNotificationIngress below.
     authenticator = observation_authenticator or RejectExternalIngressAuthenticator()
     observation_ingress = A2AObservationIngress(
         inbox=observation_inbox,
@@ -497,6 +504,14 @@ def create_orchestrator_runtime(  # noqa: C901
         run_store=run_store,
         canonical_hitl_control=canonical_hitl_control,
         public_secret_values=public_secret_values,
+        push_registrar=(
+            A2APushRegistrar(
+                callback_base_url=settings_obj.a2a_push_callback_base_url,
+                api_prefix=settings_obj.api_prefix,
+            )
+            if settings_obj.a2a_push_callback_base_url
+            else None
+        ),
     )
 
     model_runtime = GatewayModelRuntime(llm_gateway)
@@ -583,6 +598,13 @@ def create_orchestrator_runtime(  # noqa: C901
     inbox_recovery = A2AInboxRecoveryService(
         processor=observation_processor,
         inbox=observation_inbox,
+    )
+    push_ingress = A2APushNotificationIngress(
+        ledger=call_ledger,
+        authenticator=LedgerPushTokenAuthenticator(call_ledger),
+        observations=observation_ingress,
+        processor=observation_processor,
+        read_push=direct_client.read_push_notification,
     )
 
     recover_dispatch = RunBackedDispatchRecovery(
@@ -879,6 +901,7 @@ def create_orchestrator_runtime(  # noqa: C901
         projection_worker=projection_worker,
         recovery_cycle=recovery_cycle,
         public_secret_values=public_secret_values,
+        push_ingress=push_ingress,
     )
 
 

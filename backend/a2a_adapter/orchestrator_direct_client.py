@@ -53,7 +53,10 @@ from .card_data import agent_card_dict, build_agent_card
 from .client_facade import A2AClientFacadeError
 from .message_factory import to_sdk_message
 from .translators import facade_result_to_model, message_to_completed_task
-from .webhook_payloads import parse_stream_response_payload
+from .webhook_payloads import (
+    parse_push_notification_payload,
+    parse_stream_response_payload,
+)
 
 logger = logging.getLogger(__name__)
 _MAX_INLINE_DATA_ARTIFACTS = 20
@@ -80,6 +83,8 @@ class _DispatchCommand(Protocol):
     room_id: str
     room_epoch: int
     deadline_at: Any
+    # url plus a SecretStr token, or None when push is not configured.
+    push_notification: Any
 
 
 class _ContinuationCommand(Protocol):
@@ -150,6 +155,7 @@ class StreamMessageFn(Protocol):
         message_data: Any,
         *,
         accepted_output_modes: list[str] | None = None,
+        push_notification_config: dict[str, Any] | None = None,
         timeout: float = 600.0,
     ) -> AsyncIterator[dict[str, Any]]: ...
 
@@ -214,6 +220,18 @@ class DirectCallAddress:
 def endpoint_scope_digest(endpoint_scope: str) -> str:
     """Stable binding scope shared with the candidate/binding adapters."""
     return sha256(endpoint_scope.encode()).hexdigest()
+
+
+def _push_notification_config(
+    command: _DispatchCommand, card: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Push config for the send, only when the live card advertises push."""
+    registration = command.push_notification
+    if registration is None:
+        return None
+    if not build_agent_card(card).capabilities.push_notifications:
+        return None
+    return {"url": registration.url, "token": registration.token.get_secret_value()}
 
 
 def _task_state_value(task: Any) -> str:
@@ -1040,6 +1058,7 @@ class OrchestratorDirectA2AClient:
             card,
             to_sdk_message(self._build_user_message(command)),
             accepted_output_modes=self._accepted_output_modes,
+            push_notification_config=_push_notification_config(command, card),
             blocking=True,
             timeout=self._timeout,
         )
@@ -1128,6 +1147,7 @@ class OrchestratorDirectA2AClient:
             card,
             to_sdk_message(self._build_user_message(command)),
             accepted_output_modes=self._accepted_output_modes,
+            push_notification_config=_push_notification_config(command, card),
             blocking=False,
             timeout=self._poll_timeout,
         )
@@ -1145,6 +1165,7 @@ class OrchestratorDirectA2AClient:
             card,
             to_sdk_message(self._build_user_message(command)),
             accepted_output_modes=self._accepted_output_modes,
+            push_notification_config=_push_notification_config(command, card),
             timeout=self._timeout,
         )
         return DirectA2AStream(
@@ -1239,6 +1260,77 @@ class OrchestratorDirectA2AClient:
             context_id=task.context_id,
             terminal_observation=observation,
         )
+
+    async def read_push_notification(
+        self,
+        payload: Any,
+        *,
+        call_record_id: str,
+        endpoint_scope: str,
+        agent_id: str,
+        room_id: str,
+        room_epoch: int,
+        message_id: str,
+        expected_task_id: str,
+        expected_context_id: str | None,
+    ) -> dict[str, Any]:
+        """Normalize one authenticated push body for the call it targets.
+
+        Correlation is checked before any artifact is materialized. Only a
+        terminal ``Task`` snapshot becomes an observation; status and artifact
+        updates are deltas that omit earlier output.
+        """
+        frame, task = parse_push_notification_payload(payload)
+        if task.id != expected_task_id or (
+            task.context_id is not None
+            and expected_context_id is not None
+            and task.context_id != expected_context_id
+        ):
+            raise ValueError("push notification does not correlate with the call")
+        event_kind = "artifact" if frame == "artifact_update" else _event_kind(task)
+        observation = None
+        if frame == "task" and event_kind == "terminal":
+            binding_scope = endpoint_scope_digest(endpoint_scope)
+            try:
+                await _materialize_task_artifacts_epoch_fenced(
+                    task,
+                    epoch_owner=self._epoch_owner,
+                    room_id=room_id,
+                    room_epoch=room_epoch,
+                    call_record_id=call_record_id,
+                    message_id=message_id,
+                )
+            except Exception as exc:
+                if _is_recoverable_materialization_error(exc):
+                    raise
+                logger.error("failed to materialize task artifacts for push: %s", exc)
+                kwargs = _failed_materialization_observation_kwargs(
+                    source_kind="webhook",
+                    call_record_id=call_record_id,
+                    binding_scope=binding_scope,
+                    agent_id=agent_id,
+                    task_id=task.id,
+                    context_id=task.context_id,
+                    error_message=f"Failed to materialize agent file artifact: {exc}",
+                )
+            else:
+                kwargs = _task_to_observation_kwargs(
+                    task,
+                    source_kind="webhook",
+                    call_record_id=call_record_id,
+                    binding_scope=binding_scope,
+                    agent_id=agent_id,
+                    task_id=task.id,
+                    context_id=task.context_id,
+                )
+            observation = self._observation(**kwargs)
+        return {
+            "frame": frame,
+            "task_id": task.id,
+            "context_id": task.context_id,
+            "event_kind": event_kind,
+            "observation": observation,
+        }
 
     def _receipt_from_task(
         self,

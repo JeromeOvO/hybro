@@ -1,6 +1,8 @@
-"""Parse A2A stream frames into internal tasks.
+"""Parse A2A stream frames and push notifications into internal tasks.
 
-Used by the direct stream wrapper and the shared facade-result conversion. An
+Used by the direct stream wrapper, the shared facade-result conversion, and the
+orchestrator's authenticated push ingress (a push body is one ``StreamResponse``
+as the SDK push sender serializes it). An
 A2A 1.0 ``StreamResponse`` is exactly one of ``task`` / ``statusUpdate`` /
 ``artifactUpdate`` / ``message``. Frames produced by ``client_facade`` are
 already unwrapped from that member and tagged with ``kind``, Hybro's internal
@@ -64,6 +66,37 @@ def parse_stream_response_payload(payload: dict[str, Any], message_id: str) -> T
         "Invalid StreamResponse: expected one of 'task', 'statusUpdate', "
         "'artifactUpdate', or 'message'"
     )
+
+
+_PUSH_FRAMES = {
+    "task": "task",
+    "statusUpdate": "status_update",
+    "artifactUpdate": "artifact_update",
+}
+
+
+def parse_push_notification_payload(payload: dict[str, Any]) -> tuple[str, Task]:
+    """Parse one push notification into its frame kind and an internal task.
+
+    A push always concerns an existing task, so a message-only frame or a frame
+    without a task id is rejected; no fallback identity is synthesized.
+    """
+    frame = _unwrap_result(payload)
+    member, event = _resolve_event(frame)
+    if member == "task":
+        task = task_from_task_frame(event)
+    elif member == "statusUpdate":
+        task = task_from_status_update(event, "")
+    elif member == "artifactUpdate":
+        task = task_from_artifact_update(event)
+    else:
+        raise ValueError(
+            "Invalid push notification: expected 'task', 'statusUpdate', or "
+            "'artifactUpdate'"
+        )
+    if not task.id:
+        raise ValueError("Invalid push notification: missing task id")
+    return _PUSH_FRAMES[member], task
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +313,7 @@ def _string(value: Any) -> str | None:
 
 
 __all__ = [
+    "parse_push_notification_payload",
     "parse_stream_response_payload",
     "task_from_artifact_update",
     "task_from_message_frame",

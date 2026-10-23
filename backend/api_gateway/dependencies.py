@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Annotated, Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 
 from agent.network import AgentNetworkService
 from agent.protocols import (
@@ -30,7 +30,7 @@ from common.protocols import (
     SSEStateReader,
 )
 from execution.direct_agent import DirectAgentExecution
-from execution.ports import DirectAgentMessenger
+from execution.ports import A2APushNotificationReceiver, DirectAgentMessenger
 from local_agents.protocols import LocalAgentDiscovery
 from session.access import BoundSessionAccess
 from session.protocols import SessionAccess, SessionOwner, SessionService
@@ -181,6 +181,19 @@ def get_sse_transport(
     deps: APIGatewayDeps = _API_GATEWAY_DEPS_DEPENDENCY,
 ) -> SSERouteTransport:
     return deps.sse_transport
+
+
+def get_a2a_push_receiver(request: Request) -> A2APushNotificationReceiver:
+    """Execution's push ingress, bound after the orchestrator runtime is built."""
+    receiver = getattr(request.app.state, "a2a_push_receiver", None)
+    if receiver is None:
+        raise HTTPException(status_code=503, detail="Push ingress is unavailable")
+    return receiver
+
+
+A2APushReceiverDependency = Annotated[
+    A2APushNotificationReceiver, Depends(get_a2a_push_receiver)
+]
 
 
 def get_agent_network(

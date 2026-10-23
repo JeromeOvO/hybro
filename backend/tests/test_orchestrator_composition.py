@@ -42,6 +42,8 @@ def _deps(*, route=None):
         orchestrator_ultimate_model_route="orchestrator_ultimate",
         orchestrator_fast_prompt_id="orchestrator_fast",
         orchestrator_ultimate_prompt_id="orchestrator_ultimate",
+        a2a_push_callback_base_url="",
+        api_prefix="/api/v1",
     )
     model_registry = MagicMock()
     if route is None:

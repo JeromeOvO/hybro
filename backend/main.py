@@ -36,6 +36,9 @@ AGENT_MESSAGE_MAX_CONCURRENT = 4
 # default), so four concurrent sends also cap session throughput.
 SESSION_MESSAGE_MAX_BYTES = 64 * 1024
 SESSION_MESSAGE_MAX_CONCURRENT = 4
+# Remote Agents post A2A push notifications without a user session; admission
+# bounds how many bodies one worker reads at once.
+A2A_PUSH_MAX_CONCURRENT = 8
 
 
 class _RequestLoggingFastAPI(FastAPI):
@@ -172,6 +175,12 @@ def create_app(
         RequestConcurrencyLimitMiddleware,
         path=f"{settings.api_prefix}/sessions/messages",
         max_concurrent=SESSION_MESSAGE_MAX_CONCURRENT,
+    )
+    app.add_middleware(
+        RequestConcurrencyLimitMiddleware,
+        path=f"{settings.api_prefix}/a2a/push",
+        max_concurrent=A2A_PUSH_MAX_CONCURRENT,
+        include_subpaths=True,
     )
 
     @app.get("/health")
